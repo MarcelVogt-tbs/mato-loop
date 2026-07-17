@@ -1,0 +1,38 @@
+import { configure } from 'quasar/wrappers'
+
+const backendPort = Number(process.env.MATO_LOOP_BIND_BACKEND_PORT || 6020)
+const frontendPort = Number(process.env.MATO_LOOP_BIND_FRONTEND_PORT || 10020)
+const apiProxyTarget = process.env.QUASAR_API_PROXY_TARGET || `http://127.0.0.1:${backendPort}`
+
+export default configure(() => ({
+  boot: ['axios'],
+  css: ['app.scss'],
+  extras: ['roboto-font', 'material-icons'],
+  store: true,
+  build: {
+    target: {
+      browser: ['es2022', 'firefox115', 'chrome115', 'safari14'],
+      node: 'node22'
+    },
+    vueRouterMode: 'history'
+  },
+  devServer: {
+    open: false,
+    port: frontendPort,
+    proxy: {
+      '/api': {
+        target: apiProxyTarget,
+        changeOrigin: true
+      }
+    }
+  },
+  framework: {
+    config: {
+      dark: 'auto',
+      notify: {}
+    },
+    lang: 'de-DE',
+    plugins: ['Dialog', 'Loading', 'Notify']
+  },
+  animations: ['fadeIn', 'fadeOut']
+}))

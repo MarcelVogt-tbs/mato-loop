@@ -1,0 +1,10 @@
+.git
+.idea
+.vscode
+**/.pytest_cache
+**/.ruff_cache
+**/.venv
+**/__pycache__
+apps/frontend/.quasar
+apps/frontend/dist
+apps/frontend/node_modules

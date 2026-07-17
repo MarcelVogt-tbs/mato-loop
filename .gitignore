@@ -1,0 +1,16 @@
+.env.*.override
+.idea/
+.vscode/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+apps/frontend/.quasar/
+apps/frontend/dist/
+apps/frontend/node_modules/
+apps/frontend/.pnp.*
+apps/frontend/.yarn/*
+coverage/
+htmlcov/

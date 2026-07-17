@@ -1,0 +1,104 @@
+name: ${MATO_LOOP_COMPOSE_PROJECT_NAME:-mato-loop}
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file:
+      - path: .env.default
+        required: true
+      - path: .env.dev
+        required: true
+      - path: .env.dev.override
+        required: false
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - mato-loop
+
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    env_file:
+      - path: .env.default
+        required: true
+      - path: .env.dev
+        required: true
+      - path: .env.dev.override
+        required: false
+    environment:
+      UV_PROJECT_ENVIRONMENT: /opt/mato-loop/backend/venv
+      UV_CACHE_DIR: /opt/mato-loop/backend/uv-cache
+    volumes:
+      - .:/workspace
+      - backend_uv_data:/opt/mato-loop/backend
+    ports:
+      - "${MATO_LOOP_HOST_BACKEND_PORT:-6020}:${MATO_LOOP_BIND_BACKEND_PORT:-6020}"
+    depends_on:
+      db:
+        condition: service_healthy
+    working_dir: /workspace/apps/backend
+    command:
+      [
+        "sh",
+        "-c",
+        "uv sync --frozen && uv run alembic upgrade head && exec uv run uvicorn mato_loop_backend.app:app --host 0.0.0.0 --port $${MATO_LOOP_BIND_BACKEND_PORT:-6020} --reload",
+      ]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$${MATO_LOOP_BIND_BACKEND_PORT:-6020}/api/health/live >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    networks:
+      - mato-loop
+
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    env_file:
+      - path: .env.default
+        required: true
+      - path: .env.dev
+        required: true
+      - path: .env.dev.override
+        required: false
+    environment:
+      QUASAR_API_PROXY_TARGET: http://backend:${MATO_LOOP_BIND_BACKEND_PORT:-6020}
+    volumes:
+      - .:/workspace
+      - frontend_node_modules:/workspace/apps/frontend/node_modules
+      - frontend_yarn_cache:/opt/mato-loop/yarn-cache
+    ports:
+      - "${MATO_LOOP_HOST_FRONTEND_PORT:-10020}:${MATO_LOOP_BIND_FRONTEND_PORT:-10020}"
+    depends_on:
+      backend:
+        condition: service_healthy
+    working_dir: /workspace/apps/frontend
+    command:
+      [
+        "sh",
+        "-c",
+        "yarn install --immutable && exec yarn dev --host 0.0.0.0 --port $${MATO_LOOP_BIND_FRONTEND_PORT:-10020}",
+      ]
+    networks:
+      - mato-loop
+
+volumes:
+  db_data:
+  backend_uv_data:
+  frontend_node_modules:
+  frontend_yarn_cache:
+
+networks:
+  mato-loop:
+    name: ${MATO_LOOP_COMPOSE_PROJECT_NAME:-mato-loop}_default
