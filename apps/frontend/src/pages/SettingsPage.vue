@@ -1,26 +1,84 @@
 <template>
-  <q-page class="app-page">
-    <AppPageHeader
-      title="Einstellungen"
-      subtitle="Provider, Modelle, Suche, Memory und Runtime werden hier zentral verwaltet."
-    />
+  <q-page class="app-page settings-page column no-wrap">
+    <AppPageHeader title="Einstellungen" subtitle="Provider, Standardmodelle, Integrationen, Tools und Memory zentral verwalten." />
 
-    <div class="settings-grid">
-      <q-card
-        v-for="section in sections"
-        :key="section.title"
-        flat
-        class="app-surface app-interactive-surface"
-      >
-        <q-card-section class="row no-wrap items-start q-gutter-md">
-          <q-avatar color="primary" text-color="white" :icon="section.icon" />
-          <div class="col">
-            <div class="text-subtitle1 text-weight-bold">{{ section.title }}</div>
-            <div class="text-body2 app-muted q-mt-xs">{{ section.description }}</div>
-            <q-chip dense square class="app-status-chip q-mt-md">Folgt</q-chip>
-          </div>
-        </q-card-section>
-      </q-card>
+    <q-tabs
+      no-caps
+      align="left"
+      active-color="primary"
+      indicator-color="primary"
+      class="settings-category-tabs app-surface q-mb-md"
+      mobile-arrows
+      outside-arrows
+    >
+      <q-route-tab icon="dns" label="Provider" :to="{ name: 'settings-providers' }" />
+      <q-route-tab icon="stars" label="Standardmodelle" :to="{ name: 'settings-default-models' }" />
+      <q-route-tab icon="extension" label="Integrationen" :to="{ name: 'settings-integrations' }" />
+      <q-route-tab icon="build" label="Tools" :to="{ name: 'settings-tools' }" />
+      <q-route-tab icon="psychology" label="Memory" :to="{ name: 'settings-memory' }" />
+    </q-tabs>
+
+    <div class="settings-layout row no-wrap items-stretch col">
+      <nav class="settings-category-nav q-py-xs q-pr-md" aria-label="Einstellungskategorien">
+        <q-list class="settings-category-list">
+          <q-item
+            clickable
+            v-ripple
+            class="q-mb-xs"
+            :to="{ name: 'settings-providers' }"
+            active-class="app-nav-item--active"
+          >
+            <q-item-section avatar><q-icon name="dns" /></q-item-section>
+            <q-item-section>Provider</q-item-section>
+          </q-item>
+          <q-item
+            clickable
+            v-ripple
+            class="q-mb-xs"
+            :to="{ name: 'settings-default-models' }"
+            active-class="app-nav-item--active"
+          >
+            <q-item-section avatar><q-icon name="stars" /></q-item-section>
+            <q-item-section>Standardmodelle</q-item-section>
+          </q-item>
+          <q-item
+            clickable
+            v-ripple
+            class="q-mb-xs"
+            :to="{ name: 'settings-integrations' }"
+            active-class="app-nav-item--active"
+          >
+            <q-item-section avatar><q-icon name="extension" /></q-item-section>
+            <q-item-section>Integrationen</q-item-section>
+          </q-item>
+          <q-item
+            clickable
+            v-ripple
+            class="q-mb-xs"
+            :to="{ name: 'settings-tools' }"
+            active-class="app-nav-item--active"
+          >
+            <q-item-section avatar><q-icon name="build" /></q-item-section>
+            <q-item-section>Tools</q-item-section>
+          </q-item>
+          <q-item
+            clickable
+            v-ripple
+            class="q-mb-xs"
+            :to="{ name: 'settings-memory' }"
+            active-class="app-nav-item--active"
+          >
+            <q-item-section avatar><q-icon name="psychology" /></q-item-section>
+            <q-item-section>Memory</q-item-section>
+          </q-item>
+        </q-list>
+      </nav>
+
+      <q-separator vertical class="settings-category-separator q-mr-lg" />
+
+      <main class="settings-category-content col q-pr-sm">
+        <router-view />
+      </main>
     </div>
   </q-page>
 </template>
@@ -29,13 +87,4 @@
 import AppPageHeader from 'components/AppPageHeader.vue'
 
 defineOptions({ name: 'SettingsPage' })
-
-const sections = [
-  { title: 'LLM-Provider', icon: 'hub', description: 'OpenAI-kompatible Endpunkte und Codex OAuth verwalten.' },
-  { title: 'Modelle', icon: 'smart_toy', description: 'Modelle, Capabilities und Memory-Policies festlegen.' },
-  { title: 'Suchanbieter', icon: 'travel_explore', description: 'Externe SearXNG-Instanzen konfigurieren und testen.' },
-  { title: 'Memory', icon: 'memory', description: 'Globale Defaults und Kontextlimits verwalten.' },
-  { title: 'Agent-Runtime', icon: 'settings_suggest', description: 'Schritt-, Tool- und Zeitlimits kontrollieren.' },
-  { title: 'Sicherheit', icon: 'shield', description: 'Credentials, Sessions und Verbindungsstatus pruefen.' }
-]
 </script>

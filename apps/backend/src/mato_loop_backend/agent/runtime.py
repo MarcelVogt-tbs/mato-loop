@@ -1,0 +1,1701 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from functools import partial
+from typing import Any
+from uuid import UUID, uuid4
+
+import httpx
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from mato_loop_backend.agent.context import (
+    ContextError,
+    ContextManager,
+    SummaryResult,
+    general_system_prompt,
+)
+from mato_loop_backend.agent.coordinator import approval_coordinator
+from mato_loop_backend.agent.permissions import (
+    PermissionDecision,
+    PermissionPolicy,
+    PermissionRequest,
+)
+from mato_loop_backend.agent.tools import ToolContext, ToolPermission, tool_registry
+from mato_loop_backend.attachments import AttachmentError, AttachmentService
+from mato_loop_backend.db.session import AsyncSessionFactory
+from mato_loop_backend.events import run_events
+from mato_loop_backend.integrations import (
+    SearchIntegrationError,
+    WebFetchError,
+    sanitize_url_for_display,
+    search_available,
+)
+from mato_loop_backend.memory import policy as memory_policy
+from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
+from mato_loop_backend.memory.service import MemoryService
+from mato_loop_backend.models import (
+    AgentRun,
+    ApprovalRequest,
+    ChatSession,
+    MemoryRecord,
+    Message,
+    TitleGenerationStatus,
+    WebSearchPolicy,
+)
+from mato_loop_backend.providers.base import ProviderError, PublicReasoning, ToolCall
+from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.settings import (
+    AgentRuntimeSettings,
+    AiSettings,
+    MemorySettings,
+    SearchSettings,
+    SettingsStore,
+    ToolSettings,
+    WebFetchPolicy,
+    effective_model_pseudonymization,
+    effective_model_trust,
+    resolve_web_fetch_policy,
+)
+from mato_loop_backend.settings.models import (
+    LlmProviderConfig,
+    ModelAvailability,
+    ModelConfig,
+    TrustLevel,
+)
+from mato_loop_backend.workspace import WorkspaceError, WorkspaceService
+
+logger = logging.getLogger(__name__)
+
+RUN_PHASES = {
+    "preparing_context",
+    "compacting_context",
+    "waiting_model",
+    "processing_tool",
+    "finalizing",
+}
+REQUIRED_WEB_SEARCH_RETRIES = 2
+AUTOMATIC_MEMORY_MAX_ITEMS = 3
+AUTOMATIC_MEMORY_MAX_CHARACTERS = 2_500
+AUTOMATIC_MEMORY_MAX_DISTANCE = 0.21
+MEMORY_OVERVIEW_MAX_ITEMS = 50
+MEMORY_OVERVIEW_MAX_CHARACTERS = 12_000
+
+
+@dataclass(slots=True)
+class _VisibleResponse:
+    content_parts: list[str] = field(default_factory=list)
+    reasoning: dict[str, Any] | None = None
+
+    @property
+    def content(self) -> str:
+        return "".join(self.content_parts)
+
+    def reset(self) -> None:
+        self.content_parts.clear()
+        self.reasoning = None
+
+
+def _bounded_memory_trust(
+    request_trust: TrustLevel, current_trust: TrustLevel
+) -> TrustLevel:
+    if request_trust == TrustLevel.PRIVATE and current_trust == TrustLevel.PRIVATE:
+        return TrustLevel.PRIVATE
+    return TrustLevel.PUBLIC
+
+
+class AgentRunError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _public_run_error(exc: Exception) -> dict[str, str]:
+    if isinstance(exc, (AgentRunError, ContextError)):
+        return {"code": exc.code}
+    if isinstance(exc, ProviderError):
+        return {"code": exc.public_code}
+    if isinstance(exc, httpx.HTTPError):
+        return {"code": "provider.unavailable"}
+    if isinstance(exc, WorkspaceError):
+        return {"code": exc.code}
+    if isinstance(exc, SearchIntegrationError):
+        return {"code": exc.code}
+    return {"code": "agent.failed"}
+
+
+def _provider_for_model(
+    ai_settings: AiSettings, model: ModelConfig
+) -> LlmProviderConfig | None:
+    if not model.enabled or model.availability == ModelAvailability.MISSING:
+        return None
+    provider = next(
+        (
+            item
+            for item in ai_settings.providers
+            if item.id == model.provider_id and item.enabled
+        ),
+        None,
+    )
+    if provider is not None and (
+        provider.adapter_type != "openai-codex" or provider.credential_id is not None
+    ):
+        return provider
+    return None
+
+
+def _model_for_id(ai_settings: AiSettings, model_id: UUID | None) -> ModelConfig | None:
+    return next(
+        (
+            item
+            for item in ai_settings.models
+            if item.id == model_id
+            and item.enabled
+            and item.availability != ModelAvailability.MISSING
+        ),
+        None,
+    )
+
+
+def _initial_session_title(content: str) -> str:
+    return content.strip().replace("\n", " ")[:80] or "Neue Session"
+
+
+def _generated_session_title(content: str) -> str | None:
+    cleaned = re.sub(
+        r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>\s*",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    )
+    title = next(
+        (line.strip().strip("\"'") for line in cleaned.splitlines() if line.strip()),
+        "",
+    )
+    title = re.sub(r"\s+", " ", title).strip()
+    return title[:80].rstrip() or None
+
+
+def _memory_rag_query(records: list[Message]) -> str | None:
+    user_messages = [item.content.strip() for item in records if item.role == "user"]
+    user_messages = [item for item in user_messages if item]
+    if not user_messages:
+        return None
+    current = user_messages[-1]
+    if len(current) <= 120 and len(user_messages) > 1:
+        return (user_messages[-2][:1_000] + "\nFollow-up: " + current)[:2_000]
+    return current[:2_000]
+
+
+def _memory_overview_requested(records: list[Message]) -> bool:
+    current_index = next(
+        (index for index in range(len(records) - 1, -1, -1) if records[index].role == "user"),
+        None,
+    )
+    if current_index is None:
+        return False
+    current = re.sub(r"\s+", " ", records[current_index].content.casefold()).strip()
+    direct_patterns = (
+        r"\bwas (?:hast|weißt|weisst|kennst) du .*\b(?:erinner|gedächtnis|über mich|ueber mich)",
+        r"\bwas (?:weißt|weisst|kennst) du (?:alles )?(?:über|ueber|von) mir\b",
+        r"\bwelche .*\b(?:erinnerungen|informationen) .*\b(?:gespeichert|gemerkt)\b",
+        r"\bwhat (?:else )?do you (?:remember|know) (?:about me)?\b",
+        r"\bwhat (?:memories|information) do you have (?:about me)?\b",
+    )
+    if any(re.search(pattern, current) for pattern in direct_patterns):
+        return True
+    follow_up = bool(
+        re.search(
+            r"\b(?:was|welche|und)?\s*(?:noch|sonst|mehr)\b|\b(?:what|anything) else\b|\bmore\b",
+            current,
+        )
+    )
+    if not follow_up:
+        return False
+    previous_user_index = next(
+        (
+            index
+            for index in range(current_index - 1, -1, -1)
+            if records[index].role == "user"
+        ),
+        -1,
+    )
+    return any(
+        call.get("name") == "memory_retrieve"
+        and (call.get("arguments") or {}).get("mode") == "browse"
+        for item in records[previous_user_index + 1 : current_index]
+        if item.role == "assistant"
+        for call in (item.tool_calls or [])
+        if isinstance(call, dict)
+    ) or any(
+        isinstance(item.provider_data, dict)
+        and isinstance(item.provider_data.get("_matoloop"), dict)
+        and isinstance(item.provider_data["_matoloop"].get("memoryOverview"), dict)
+        for item in records[previous_user_index + 1 : current_index]
+        if item.role == "assistant"
+    )
+
+
+def _memory_overview_continuation(records: list[Message]) -> dict[str, Any] | None:
+    current_index = next(
+        (index for index in range(len(records) - 1, -1, -1) if records[index].role == "user"),
+        None,
+    )
+    if current_index is None:
+        return None
+    current = re.sub(r"\s+", " ", records[current_index].content.casefold()).strip()
+    if not re.search(
+        r"\b(?:was|welche|und)?\s*(?:noch|sonst|mehr)\b|\b(?:what|anything) else\b|\bmore\b",
+        current,
+    ):
+        return None
+    previous_user_index = next(
+        (
+            index
+            for index in range(current_index - 1, -1, -1)
+            if records[index].role == "user"
+        ),
+        -1,
+    )
+    for item in reversed(records[previous_user_index + 1 : current_index]):
+        runtime_state = (
+            item.provider_data.get("_matoloop")
+            if item.role == "assistant" and isinstance(item.provider_data, dict)
+            else None
+        )
+        overview = (
+            runtime_state.get("memoryOverview")
+            if isinstance(runtime_state, dict)
+            else None
+        )
+        if isinstance(overview, dict):
+            return overview
+    return None
+
+
+def _bounded_memory_references(
+    instant: list[MemoryRecord],
+    relevant: list[MemoryRecord],
+    *,
+    max_items: int,
+    max_characters: int,
+) -> list[tuple[str, MemoryRecord]]:
+    selected: list[tuple[str, MemoryRecord]] = []
+    selected_ids = set()
+    used_characters = 0
+    for source, items in (("instant", reversed(instant)), ("relevant", relevant)):
+        for item in items:
+            if item.id in selected_ids or len(selected) >= max_items:
+                continue
+            separator = 2 if selected else 0
+            if used_characters + separator + len(item.content) > max_characters:
+                continue
+            selected.append((source, item))
+            selected_ids.add(item.id)
+            used_characters += separator + len(item.content)
+    return selected
+
+
+def _bounded_memory_overview(
+    items: list[MemoryRecord],
+) -> tuple[list[dict[str, Any]], MemoryRecord | None, bool]:
+    payload = []
+    used_characters = 0
+    content_truncated = False
+    for item in items:
+        separator = 2 if payload else 0
+        available = MEMORY_OVERVIEW_MAX_CHARACTERS - used_characters - separator
+        if available <= 0:
+            break
+        content = item.content
+        if len(content) > available:
+            if payload:
+                break
+            suffix = "... [truncated]"
+            content = content[: max(0, available - len(suffix))] + suffix
+            content_truncated = True
+        payload.append(
+            {
+                "source": "overview",
+                "id": str(item.id),
+                "revision": item.revision,
+                "category": item.category,
+                "retrievalLevel": item.retrieval_level,
+                "content": content,
+            }
+        )
+        used_characters += separator + len(content)
+        if content_truncated:
+            break
+    omitted_items = len(payload) < len(items)
+    return payload, (items[len(payload) - 1] if payload else None), omitted_items
+
+
+def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    safe = dict(arguments)
+    content = safe.get("content")
+    if isinstance(content, str):
+        safe["content"] = {"characters": len(content), "preview": content[:200]}
+    if tool_name == "webfetch" and isinstance(safe.get("url"), str):
+        try:
+            safe["url"] = sanitize_url_for_display(safe["url"])
+        except WebFetchError:
+            safe["url"] = "[Ungültige URL]"
+    return safe
+
+
+def _safe_provider_data(
+    provider_data: dict[str, Any], calls: list[ToolCall]
+) -> dict[str, Any]:
+    safe = dict(provider_data)
+    safe.pop("_matoloop", None)
+    call_names = {call.id: call.name for call in calls}
+    replay_items = safe.get("responses_output_items")
+    if not isinstance(replay_items, list):
+        return safe
+    sanitized_items = []
+    for raw_item in replay_items:
+        if not isinstance(raw_item, dict):
+            sanitized_items.append(raw_item)
+            continue
+        item = dict(raw_item)
+        call_id = str(item.get("call_id") or item.get("id") or "")
+        tool_name = str(item.get("name") or call_names.get(call_id) or "")
+        arguments = item.get("arguments")
+        if tool_name == "webfetch" and isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except (TypeError, ValueError):
+                parsed = {}
+            if isinstance(parsed, dict):
+                item["arguments"] = json.dumps(
+                    _safe_tool_arguments(tool_name, parsed), ensure_ascii=True
+                )
+        elif tool_name == "webfetch" and isinstance(arguments, dict):
+            item["arguments"] = json.dumps(
+                _safe_tool_arguments(tool_name, arguments), ensure_ascii=True
+            )
+        sanitized_items.append(item)
+    safe["responses_output_items"] = sanitized_items
+    return safe
+
+
+async def _publish_run_phase(run_id: UUID, phase: str, **details: Any) -> None:
+    if phase not in RUN_PHASES:
+        raise ValueError(f"Unknown run phase: {phase}")
+    await run_events.publish(run_id, {"type": "run.phase", "phase": phase, **details})
+
+
+def _public_reasoning_payload(reasoning: PublicReasoning | None) -> dict[str, Any] | None:
+    if reasoning is None or not reasoning.text.strip():
+        return None
+    return {
+        "kind": reasoning.kind,
+        "text": reasoning.text.strip(),
+        "status": reasoning.status,
+        "reasoningTokens": reasoning.reasoning_tokens,
+        "observedDurationMs": reasoning.observed_duration_ms,
+    }
+
+
+class AgentRuntime:
+    _tasks: dict[UUID, asyncio.Task[None]] = {}
+    _title_tasks: set[asyncio.Task[None]] = set()
+    _cancellable_runs: set[UUID] = set()
+    _user_cancelled_runs: set[UUID] = set()
+
+    @classmethod
+    async def start(cls, db: AsyncSession, chat_session: ChatSession, content: str) -> AgentRun:
+        ai_settings = await SettingsStore.load(db, AiSettings)
+        model_id = chat_session.model_config_id or ai_settings.default_model_id
+        model = _model_for_id(ai_settings, model_id)
+        provider = _provider_for_model(ai_settings, model) if model is not None else None
+        if model is None or provider is None:
+            raise AgentRunError("session.modelUnavailable")
+        trust_level = effective_model_trust(provider, model)
+        pseudonymization_enabled = (
+            trust_level == TrustLevel.PUBLIC
+            and effective_model_pseudonymization(provider, model)
+        )
+        message = Message(
+            session_id=chat_session.id,
+            role="user",
+            content=content,
+            trust_level=trust_level.value,
+        )
+        run = AgentRun(
+            session_id=chat_session.id,
+            status="queued",
+            model_config_id=model.id,
+            model_name=model.name or model.model_id,
+            trust_level=trust_level.value,
+            pseudonymization_enabled=pseudonymization_enabled,
+        )
+        db.add_all([message, run])
+        if trust_level == TrustLevel.PRIVATE:
+            chat_session.trust_level = TrustLevel.PRIVATE.value
+        generate_title = (
+            chat_session.title == "Neue Session"
+            and chat_session.title_generation_status
+            == TitleGenerationStatus.PENDING.value
+        )
+        if chat_session.title == "Neue Session":
+            chat_session.title = _initial_session_title(content)
+        if generate_title:
+            chat_session.title_generation_status = TitleGenerationStatus.RUNNING.value
+        await db.commit()
+        task = asyncio.create_task(cls._run(run.id))
+        cls._tasks[run.id] = task
+        task.add_done_callback(lambda _task: cls._tasks.pop(run.id, None))
+        if generate_title:
+            title_task = asyncio.create_task(
+                cls._generate_title(run.id, chat_session.id, content, chat_session.title)
+            )
+            cls._title_tasks.add(title_task)
+            title_task.add_done_callback(cls._title_tasks.discard)
+        return run
+
+    @classmethod
+    def cancel(cls, run_id: UUID) -> bool:
+        task = cls._tasks.get(run_id)
+        if task is None or task.done():
+            return False
+        cls._user_cancelled_runs.add(run_id)
+        if run_id in cls._cancellable_runs and task.cancelling() == 0:
+            task.cancel()
+        return True
+
+    @classmethod
+    async def cancel_and_wait(cls, run_id: UUID) -> bool:
+        task = cls._tasks.get(run_id)
+        if task is None or task.done():
+            return False
+        cls._user_cancelled_runs.add(run_id)
+        if run_id in cls._cancellable_runs and task.cancelling() == 0:
+            task.cancel()
+        await asyncio.shield(asyncio.gather(task, return_exceptions=True))
+        return True
+
+    @classmethod
+    async def shutdown(cls) -> None:
+        tasks = [
+            task
+            for task in [*cls._tasks.values(), *cls._title_tasks]
+            if not task.done()
+        ]
+        for task in tasks:
+            if task.cancelling() == 0:
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    @classmethod
+    async def _run(cls, run_id: UUID) -> None:
+        try:
+            async with AsyncSessionFactory() as db:
+                run = await db.get(AgentRun, run_id)
+                if run is None:
+                    return
+                session_id = run.session_id
+                visible_response = _VisibleResponse()
+                run_completed = False
+                cls._cancellable_runs.add(run_id)
+                try:
+                    if run_id in cls._user_cancelled_runs:
+                        raise asyncio.CancelledError
+                    run.status = "running"
+                    await db.commit()
+                    await run_events.publish(
+                        run_id,
+                        {
+                            "type": "run.started",
+                            "runId": str(run_id),
+                            "modelName": run.model_name,
+                            "createdAt": run.created_at.isoformat() if run.created_at else None,
+                        },
+                    )
+                    await cls._execute_loop(db, run, visible_response)
+                    run.status = "completed"
+                    run.completed_at = datetime.now(UTC)
+                    await db.commit()
+                    run_completed = True
+                    cls._cancellable_runs.discard(run_id)
+                    await run_events.publish(
+                        run_id, {"type": "run.completed", "runId": str(run_id)}
+                    )
+                except asyncio.CancelledError:
+                    if run_completed:
+                        raise
+                    await db.rollback()
+                    await cls._terminalize_incomplete_tool_calls(db, session_id)
+                    cancelled_run = await db.get(AgentRun, run_id)
+                    interrupted_message = None
+                    if cancelled_run is not None:
+                        cancelled_run.status = "cancelled"
+                        cancelled_run.completed_at = datetime.now(UTC)
+                        if run_id in cls._user_cancelled_runs:
+                            reasoning = dict(visible_response.reasoning or {}) or None
+                            if reasoning is not None:
+                                reasoning["status"] = "interrupted"
+                            interrupted_message = Message(
+                                session_id=session_id,
+                                role="assistant",
+                                content=visible_response.content,
+                                model_name=cancelled_run.model_name,
+                                generation_status="interrupted",
+                                trust_level=cancelled_run.trust_level,
+                                public_reasoning=reasoning,
+                            )
+                            db.add(interrupted_message)
+                        await db.commit()
+                    if interrupted_message is not None:
+                        await run_events.publish(
+                            run_id,
+                            {
+                                "type": "message.interrupted",
+                                "message": {
+                                    "id": str(interrupted_message.id),
+                                    "role": "assistant",
+                                    "content": interrupted_message.content,
+                                    "modelName": interrupted_message.model_name,
+                                    "generationStatus": "interrupted",
+                                    "toolCalls": None,
+                                    "reasoning": interrupted_message.public_reasoning,
+                                },
+                            },
+                        )
+                    await run_events.publish(
+                        run_id, {"type": "run.cancelled", "runId": str(run_id)}
+                    )
+                    raise
+                except Exception as exc:
+                    if run_completed:
+                        logger.exception("Post-run task for agent run %s failed", run_id)
+                        return
+                    logger.exception("Agent run %s failed", run_id)
+                    public_error = _public_run_error(exc)
+                    try:
+                        await db.rollback()
+                        await cls._terminalize_incomplete_tool_calls(db, session_id)
+                        failed_run = await db.get(AgentRun, run_id)
+                        if failed_run is not None:
+                            failed_run.status = "failed"
+                            failed_run.error = public_error["code"]
+                            failed_run.completed_at = datetime.now(UTC)
+                            await db.commit()
+                    except Exception:
+                        logger.exception("Could not persist failure state for agent run %s", run_id)
+                    await run_events.publish(
+                        run_id, {"type": "run.failed", "error": public_error}
+                    )
+        finally:
+            cls._cancellable_runs.discard(run_id)
+            cls._user_cancelled_runs.discard(run_id)
+
+    @classmethod
+    async def _execute_loop(
+        cls,
+        db: AsyncSession,
+        run: AgentRun,
+        visible_response: _VisibleResponse | None = None,
+    ) -> None:
+        visible_response = visible_response or _VisibleResponse()
+        chat_session = await db.get(ChatSession, run.session_id)
+        if chat_session is None:
+            raise AgentRunError("session.notFound")
+        ai_settings = await SettingsStore.load(db, AiSettings)
+        runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
+        search_settings = await SettingsStore.load(db, SearchSettings)
+        if not ai_settings.enabled:
+            raise AgentRunError("provider.disabled")
+        model_id = run.model_config_id or chat_session.model_config_id or ai_settings.default_model_id
+        model = _model_for_id(ai_settings, model_id)
+        if model is None:
+            raise AgentRunError("session.modelUnavailable")
+        provider = _provider_for_model(ai_settings, model)
+        if provider is None:
+            raise AgentRunError("provider.notFound")
+        model_trust_level = TrustLevel(
+            run.trust_level or effective_model_trust(provider, model).value
+        )
+        input_trust_level = model_trust_level
+        run_pseudonymization_enabled = (
+            run.pseudonymization_enabled
+            if run.pseudonymization_enabled is not None
+            else (
+                model_trust_level == TrustLevel.PUBLIC
+                and effective_model_pseudonymization(provider, model)
+            )
+        )
+
+        memory_text: str | None = None
+        memory_state: memory_policy.EffectiveMemory | None = None
+
+        effective_search = search_available(search_settings)
+        required_search = chat_session.web_search_policy == WebSearchPolicy.REQUIRED
+        if required_search and not effective_search:
+            raise AgentRunError("integration.searchUnavailable")
+        if required_search and not model.supports_tools:
+            raise AgentRunError("agent.requiredWebSearchUnsupported")
+        workspace = WorkspaceService()
+        model_requests = 0
+        required_search_completed = False
+        required_search_retries = 0
+        rejected_search_draft: str | None = None
+        automatic_memories: list[MemoryRecord] | None = None
+        memory_scope = None
+        memory_overview_required: bool | None = None
+        memory_overview_prefetched = False
+        memory_overview_text: str | None = None
+        memory_overview_count = 0
+        memory_overview_has_more = False
+        memory_overview_runtime_state: dict[str, Any] | None = None
+
+        for _step in range(runtime_settings.max_steps):
+            await _publish_run_phase(run.id, "preparing_context")
+            await db.refresh(chat_session)
+            ai_settings = await SettingsStore.load(db, AiSettings)
+            if not ai_settings.enabled:
+                raise AgentRunError("provider.disabled")
+            runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
+            memory_settings = await SettingsStore.load(
+                db, MemorySettings, user_id=chat_session.user_id
+            )
+            search_settings = await SettingsStore.load(db, SearchSettings)
+            tool_settings = await SettingsStore.load(db, ToolSettings)
+            input_trust_level = TrustLevel(
+                chat_session.trust_level or TrustLevel.PUBLIC.value
+            )
+            web_fetch_policy = resolve_web_fetch_policy(tool_settings, model)
+            memory_state = memory_policy.effective_memory(
+                chat_session, memory_settings, provider, model
+            )
+            records = await cls._records(db, chat_session.id)
+            if memory_overview_required is None:
+                memory_overview_required = _memory_overview_requested(records)
+            memory_text = None
+            injected_memory_count = 0
+            if memory_state.read_enabled:
+                if memory_scope is None:
+                    memory_scope = await MemoryService.scope(
+                        db, readable_by=model_trust_level
+                    )
+                if memory_overview_required:
+                    if not memory_overview_prefetched:
+                        continuation = _memory_overview_continuation(records)
+                        should_retrieve = continuation is None or bool(
+                            continuation.get("hasMore")
+                        )
+                        cursor_updated_at = None
+                        cursor_id = None
+                        if continuation is not None and should_retrieve:
+                            cursor = continuation.get("nextCursor")
+                            if isinstance(cursor, dict):
+                                try:
+                                    cursor_updated_at = datetime.fromisoformat(
+                                        str(cursor["updatedAt"])
+                                    )
+                                    cursor_id = UUID(str(cursor["id"]))
+                                except (KeyError, TypeError, ValueError):
+                                    cursor_updated_at = None
+                                    cursor_id = None
+                        overview_items: list[MemoryRecord] = []
+                        retrieval_has_more = False
+                        if should_retrieve:
+                            overview_result = await MemoryRetrievalService.retrieve(
+                                db,
+                                mode=MemoryRetrieveMode.BROWSE,
+                                query=None,
+                                retrieval_level=None,
+                                readable_by=model_trust_level,
+                                cursor_updated_at=cursor_updated_at,
+                                cursor_id=cursor_id,
+                                limit=MEMORY_OVERVIEW_MAX_ITEMS,
+                            )
+                            overview_items = overview_result.items
+                            retrieval_has_more = overview_result.has_more
+                        overview_payload, last_item, omitted_items = (
+                            _bounded_memory_overview(overview_items)
+                        )
+                        memory_overview_count = len(overview_payload)
+                        memory_overview_text = (
+                            json.dumps(overview_payload, ensure_ascii=False)
+                            if overview_payload
+                            else None
+                        )
+                        memory_overview_has_more = bool(
+                            last_item is not None
+                            and (retrieval_has_more or omitted_items)
+                        )
+                        next_cursor = (
+                            {
+                                "updatedAt": last_item.updated_at.isoformat(),
+                                "id": str(last_item.id),
+                            }
+                            if memory_overview_has_more and last_item is not None
+                            else None
+                        )
+                        memory_overview_runtime_state = {
+                            "hasMore": memory_overview_has_more,
+                            "nextCursor": next_cursor,
+                        }
+                        memory_overview_prefetched = True
+                    memory_text = memory_overview_text
+                    injected_memory_count = memory_overview_count
+                else:
+                    normal_max_items = min(
+                        AUTOMATIC_MEMORY_MAX_ITEMS, memory_settings.max_context_items
+                    )
+                    normal_max_characters = min(
+                        AUTOMATIC_MEMORY_MAX_CHARACTERS,
+                        memory_settings.max_context_characters,
+                    )
+                    instant_memories = await MemoryService.instant_context(
+                        db,
+                        input_trust_level=model_trust_level,
+                        max_items=normal_max_items,
+                        max_characters=normal_max_characters,
+                    )
+                    if automatic_memories is None:
+                        rag_query = _memory_rag_query(records)
+                        if rag_query:
+                            automatic_memories = (
+                                await MemoryRetrievalService.retrieve(
+                                    db,
+                                    mode=MemoryRetrieveMode.SEARCH,
+                                    query=rag_query,
+                                    retrieval_level=None,
+                                    readable_by=model_trust_level,
+                                    limit=normal_max_items,
+                                    max_semantic_distance=AUTOMATIC_MEMORY_MAX_DISTANCE,
+                                )
+                            ).items
+                        else:
+                            automatic_memories = []
+                    memory_references = _bounded_memory_references(
+                        instant_memories,
+                        automatic_memories,
+                        max_items=normal_max_items,
+                        max_characters=normal_max_characters,
+                    )
+                    injected_memory_count = len(memory_references)
+                    if memory_references:
+                        memory_text = json.dumps(
+                            [
+                                {
+                                    "source": source,
+                                    "id": str(item.id),
+                                    "revision": item.revision,
+                                    "category": item.category,
+                                    "retrievalLevel": item.retrieval_level,
+                                    "content": item.content,
+                                }
+                                for source, item in memory_references
+                            ],
+                            ensure_ascii=False,
+                        )
+            system_prompt = general_system_prompt(
+                chat_session,
+                memory_text=memory_text,
+                memory_read_enabled=memory_state.read_enabled,
+                memory_tools_enabled=memory_state.tools_enabled,
+                memory_read_scope=model_trust_level,
+                memory_scope=(
+                    {
+                        "total": memory_scope.total,
+                        "instant": memory_scope.instant,
+                        "retrieve": memory_scope.retrieve,
+                    }
+                    if memory_scope is not None
+                    else None
+                ),
+                injected_memory_count=injected_memory_count,
+                memory_overview_prefetched=memory_overview_prefetched,
+                memory_overview_has_more=memory_overview_has_more,
+                web_search_required=required_search,
+                web_search_completed=required_search_completed,
+                web_search_retry=required_search_retries,
+            )
+            if model_requests >= runtime_settings.max_model_requests:
+                raise AgentRunError("agent.modelRequestLimitReached")
+            schemas = (
+                tool_registry.schemas(
+                    search_settings,
+                    chat_session.workspace_access,
+                    webfetch_enabled=web_fetch_policy != WebFetchPolicy.DISABLED,
+                    web_search_enabled=(
+                        chat_session.web_search_policy != WebSearchPolicy.DISABLED
+                    ),
+                    memory_enabled=memory_state.read_enabled,
+                    memory_write_enabled=memory_state.write_enabled,
+                )
+                if model.supports_tools
+                else []
+            )
+            search_pending = required_search and not required_search_completed
+            if search_pending and not any(
+                schema["name"] == "web_search" for schema in schemas
+            ):
+                raise AgentRunError("agent.requiredWebSearchUnsupported")
+            offered_tool_names = {schema["name"] for schema in schemas}
+
+            async def summarize(
+                source: str,
+                output_tokens: int,
+                active_ai_settings: AiSettings = ai_settings,
+                active_model: ModelConfig = model,
+                active_runtime_settings: AgentRuntimeSettings = runtime_settings,
+                active_trust_level: TrustLevel = input_trust_level,
+            ) -> SummaryResult:
+                await _publish_run_phase(run.id, "compacting_context")
+                return await cls._summarize(
+                    db,
+                    source,
+                    output_tokens,
+                    ai_settings=active_ai_settings,
+                    active_model=active_model,
+                    runtime_settings=active_runtime_settings,
+                    input_trust_level=active_trust_level,
+                )
+
+            projection = await ContextManager.build(
+                db,
+                chat_session=chat_session,
+                records=records,
+                system_prompt=system_prompt,
+                tool_schemas=schemas,
+                model=model,
+                target_trust_level=model_trust_level,
+                settings=runtime_settings,
+                summarize=summarize,
+            )
+            if search_pending and rejected_search_draft is not None:
+                projection.messages.extend(
+                    [
+                        {"role": "assistant", "content": rejected_search_draft[:4_000]},
+                        {
+                            "role": "system",
+                            "content": (
+                                "Runtime validation error: web_search is required before the "
+                                "final answer. The previous draft was rejected. Call web_search "
+                                "now and do not provide another final answer first."
+                            ),
+                        },
+                    ]
+                )
+            if projection.compacted:
+                await run_events.publish(
+                    run.id,
+                    {
+                        "type": "context.compacted",
+                        "estimatedInputTokens": projection.estimated_input_tokens,
+                    },
+                )
+
+            buffered_deltas: list[str] = []
+            visible_response.reset()
+
+            async def on_delta(
+                text: str,
+                pending: bool = search_pending,
+                buffer: list[str] = buffered_deltas,
+            ) -> None:
+                if pending:
+                    buffer.append(text)
+                    return
+                await run_events.publish(run.id, {"type": "message.delta", "delta": text})
+                visible_response.content_parts.append(text)
+
+            streamed_reasoning_state: dict[str, Any] = {
+                "text": "",
+                "kind": "content",
+                "lastPublished": 0.0,
+            }
+
+            async def on_reasoning(
+                text: str,
+                kind: str,
+                state: dict[str, Any] = streamed_reasoning_state,
+                pending: bool = search_pending,
+            ) -> None:
+                if not text:
+                    return
+                state["kind"] = kind
+                state["text"] += text
+                if pending:
+                    return
+                now = time.monotonic()
+                if now - state["lastPublished"] < 0.1:
+                    return
+                state["lastPublished"] = now
+                payload = {
+                    "kind": state["kind"],
+                    "text": state["text"],
+                    "status": "streaming",
+                    "reasoningTokens": None,
+                    "observedDurationMs": None,
+                }
+                await run_events.publish(
+                    run.id,
+                    {
+                        "type": "reasoning.updated",
+                        "reasoning": payload,
+                    },
+                )
+                visible_response.reasoning = payload
+
+            await _publish_run_phase(
+                run.id,
+                "waiting_model",
+                modelRequest=model_requests + 1,
+            )
+            result = await ProviderService.complete(
+                db,
+                provider=provider,
+                model=model,
+                messages=projection.messages,
+                tools=schemas,
+                tool_choice=(
+                    "required" if search_pending else "auto"
+                ),
+                on_delta=on_delta,
+                on_reasoning=on_reasoning,
+                timeout=runtime_settings.request_timeout_seconds,
+                input_trust_level=input_trust_level,
+                target_trust_level=model_trust_level,
+                pseudonymization_enabled=run_pseudonymization_enabled,
+            )
+            model_requests += 1
+            normalized_calls = [
+                ToolCall(
+                    id=call.id or f"call-{uuid4()}",
+                    name=call.name,
+                    arguments=call.arguments,
+                )
+                for call in result.tool_calls
+            ]
+            if search_pending and not normalized_calls:
+                rejected_search_draft = result.content
+                required_search_retries += 1
+                if required_search_retries > REQUIRED_WEB_SEARCH_RETRIES:
+                    raise AgentRunError("agent.requiredWebSearchMissing")
+                continue
+            rejected_search_draft = None
+            serialized_calls = [
+                {
+                    "id": call.id,
+                    "name": call.name,
+                    "arguments": _safe_tool_arguments(call.name, call.arguments),
+                }
+                for call in normalized_calls
+            ] or None
+            provider_data = _safe_provider_data(result.provider_data, normalized_calls)
+            if result.usage:
+                provider_data["usage"] = result.usage
+            if result.finish_reason:
+                provider_data["finish_reason"] = result.finish_reason
+            if memory_overview_runtime_state is not None:
+                runtime_state = provider_data.get("_matoloop")
+                if not isinstance(runtime_state, dict):
+                    runtime_state = {}
+                provider_data["_matoloop"] = {
+                    **runtime_state,
+                    "memoryOverview": memory_overview_runtime_state,
+                }
+            public_reasoning = _public_reasoning_payload(result.reasoning)
+            streamed_reasoning = streamed_reasoning_state["text"]
+            if public_reasoning is None and streamed_reasoning:
+                public_reasoning = _public_reasoning_payload(
+                    PublicReasoning(
+                        text=streamed_reasoning,
+                        kind=streamed_reasoning_state["kind"],
+                    )
+                )
+            assistant = Message(
+                session_id=chat_session.id,
+                role="assistant",
+                content=result.content,
+                model_name=run.model_name,
+                trust_level=model_trust_level.value,
+                tool_calls=serialized_calls,
+                provider_data=provider_data,
+                public_reasoning=public_reasoning,
+            )
+            db.add(assistant)
+            await db.commit()
+            if not normalized_calls:
+                cls._cancellable_runs.discard(run.id)
+            visible_response.reset()
+            for delta in buffered_deltas:
+                await run_events.publish(run.id, {"type": "message.delta", "delta": delta})
+            if public_reasoning:
+                await run_events.publish(
+                    run.id,
+                    {
+                        "type": "reasoning.updated",
+                        "reasoning": public_reasoning,
+                    },
+                )
+            await run_events.publish(
+                run.id,
+                {
+                    "type": "message.completed",
+                    "message": {
+                        "id": str(assistant.id),
+                        "role": "assistant",
+                        "content": assistant.content[:1000],
+                        "modelName": assistant.model_name,
+                        "truncated": len(assistant.content) > 1000,
+                        "generationStatus": assistant.generation_status,
+                        "toolCalls": serialized_calls,
+                        "reasoning": public_reasoning,
+                    },
+                },
+            )
+            if not normalized_calls:
+                await _publish_run_phase(run.id, "finalizing")
+                if result.finish_reason in {"length", "max_tokens"}:
+                    raise AgentRunError("agent.outputLimitReached")
+                return
+
+            required_search_succeeded = False
+            required_search_called = False
+            required_search_error: str | None = None
+            for index, call in enumerate(normalized_calls):
+                await _publish_run_phase(
+                    run.id,
+                    "processing_tool",
+                    tool=call.name,
+                    toolCallId=call.id,
+                    index=index,
+                    total=len(normalized_calls),
+                )
+                await db.refresh(chat_session)
+                tool_attachments = ()
+                memory_available_now = True
+                memory_write_available_now = True
+                current_memory_state = memory_state
+                current_memory_trust = model_trust_level
+                if call.name in {"memory_write", "memory_retrieve"}:
+                    current_memory_settings = await SettingsStore.load(
+                        db, MemorySettings, user_id=chat_session.user_id
+                    )
+                    current_memory_state = memory_policy.effective_memory(
+                        chat_session,
+                        current_memory_settings,
+                        provider,
+                        model,
+                    )
+                    memory_available_now = current_memory_state.read_enabled
+                    memory_write_available_now = current_memory_state.write_enabled
+                if call.name not in offered_tool_names:
+                    tool_result_content = json.dumps(
+                        {"error": {"code": "tool.unavailable"}}, ensure_ascii=False
+                    )
+                    metadata = {"errorCode": "tool.unavailable"}
+                elif not memory_available_now or (
+                    call.name == "memory_write" and not memory_write_available_now
+                ):
+                    tool_result_content = json.dumps(
+                        {"error": {"code": "tool.unavailable"}}, ensure_ascii=False
+                    )
+                    metadata = {"errorCode": "tool.unavailable"}
+                elif index >= runtime_settings.max_tool_calls:
+                    tool_result_content = json.dumps(
+                        {"error": {"code": "agent.toolCallLimitReached"}}, ensure_ascii=False
+                    )
+                    metadata: dict[str, Any] = {"errorCode": "agent.toolCallLimitReached"}
+                else:
+                    ask = partial(
+                        cls._authorize,
+                        db,
+                        run,
+                        chat_session,
+                        call,
+                        workspace=workspace,
+                        runtime_settings=runtime_settings,
+                    )
+
+                    tool_context = ToolContext(
+                        db=db,
+                        run_id=run.id,
+                        session=chat_session,
+                        tool_call=call,
+                        workspace=workspace,
+                        search_settings=search_settings,
+                        ask_handler=ask,
+                        web_fetch_policy=web_fetch_policy,
+                        allowed_private_origins=tuple(
+                            tool_settings.web_fetch.allowed_private_origins
+                        ),
+                        assistant_message_id=assistant.id,
+                        memory_read_enabled=current_memory_state.read_enabled,
+                        memory_write_enabled=current_memory_state.write_enabled,
+                        memory_trust_level=current_memory_trust,
+                        memory_write_trust_level=model_trust_level,
+                    )
+                    tool_result = await tool_registry.execute(call, tool_context)
+                    tool_result_content = tool_result.content
+                    metadata = tool_result.metadata
+                    tool_attachments = tool_result.attachments
+                    if tool_attachments and not model.supports_image_input:
+                        tool_result_content += (
+                            "\n\n[Bild gespeichert, aber nicht an das aktuelle Textmodell übertragen.]"
+                        )
+                tool_message = Message(
+                    session_id=chat_session.id,
+                    role="tool",
+                    content=tool_result_content,
+                    tool_call_id=call.id,
+                    trust_level=model_trust_level.value,
+                )
+                db.add(tool_message)
+                created_attachments = []
+                try:
+                    await db.flush()
+                    attachment_service = AttachmentService()
+                    for position, attachment in enumerate(tool_attachments):
+                        created_attachments.append(
+                            await attachment_service.create_image(
+                                db,
+                                tool_message,
+                                attachment.data,
+                                attachment.mime_type,
+                                filename=attachment.filename,
+                                position=position,
+                            )
+                        )
+                    await db.commit()
+                except AttachmentError as exc:
+                    await db.rollback()
+                    attachment_service = AttachmentService()
+                    for attachment in created_attachments:
+                        await attachment_service.discard(attachment)
+                    tool_result_content = json.dumps(
+                        {"error": {"code": exc.code}}, ensure_ascii=False
+                    )
+                    metadata = {"errorCode": exc.code}
+                    tool_message = Message(
+                        session_id=chat_session.id,
+                        role="tool",
+                        content=tool_result_content,
+                        tool_call_id=call.id,
+                        trust_level=model_trust_level.value,
+                    )
+                    db.add(tool_message)
+                    await db.commit()
+                except BaseException:
+                    await db.rollback()
+                    attachment_service = AttachmentService()
+                    for attachment in created_attachments:
+                        await attachment_service.discard(attachment)
+                    raise
+                await run_events.publish(
+                    run.id,
+                    {
+                        "type": "tool.completed",
+                        "tool": call.name,
+                        "toolCallId": call.id,
+                        "output": tool_result_content[:500],
+                        "metadata": metadata,
+                    },
+                )
+                if call.name == "web_search":
+                    required_search_called = True
+                    error_code = metadata.get("errorCode")
+                    if isinstance(error_code, str):
+                        required_search_error = error_code
+                    else:
+                        required_search_succeeded = True
+            if search_pending:
+                if required_search_succeeded:
+                    required_search_completed = True
+                    required_search_retries = 0
+                elif required_search_called:
+                    required_search_retries += 1
+                    if required_search_retries > REQUIRED_WEB_SEARCH_RETRIES:
+                        if required_search_error and required_search_error.startswith(
+                            "integration."
+                        ):
+                            raise AgentRunError(required_search_error)
+                        raise AgentRunError("agent.requiredWebSearchFailed")
+        raise AgentRunError("agent.stepLimitReached")
+
+    @staticmethod
+    async def _records(db: AsyncSession, session_id: UUID) -> list[Message]:
+        return list(
+            (
+                await db.scalars(
+                    select(Message)
+                    .options(selectinload(Message.attachments))
+                    .where(Message.session_id == session_id)
+                    .order_by(Message.created_at, Message.id)
+                )
+            ).all()
+        )
+
+    @staticmethod
+    async def _terminalize_incomplete_tool_calls(
+        db: AsyncSession, session_id: UUID
+    ) -> None:
+        assistant = await db.scalar(
+            select(Message)
+            .where(
+                Message.session_id == session_id,
+                Message.role == "assistant",
+                Message.tool_calls.is_not(None),
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        )
+        if assistant is None or not assistant.tool_calls:
+            return
+        existing_ids = set(
+            (
+                await db.scalars(
+                    select(Message.tool_call_id).where(
+                        Message.session_id == session_id,
+                        Message.role == "tool",
+                        Message.tool_call_id.is_not(None),
+                    )
+                )
+            ).all()
+        )
+        missing = [
+            str(call["id"])
+            for call in assistant.tool_calls
+            if call.get("id") and str(call["id"]) not in existing_ids
+        ]
+        if not missing:
+            return
+        content = json.dumps(
+            {"error": {"code": "tool.executionInterrupted"}}, ensure_ascii=False
+        )
+        db.add_all(
+            [
+                Message(
+                    session_id=session_id,
+                    role="tool",
+                    content=content,
+                    tool_call_id=tool_call_id,
+                    trust_level=assistant.trust_level,
+                )
+                for tool_call_id in missing
+            ]
+        )
+        await db.commit()
+
+    @classmethod
+    async def _summarize(
+        cls,
+        db: AsyncSession,
+        source: str,
+        output_tokens: int,
+        *,
+        ai_settings: AiSettings,
+        active_model: ModelConfig,
+        runtime_settings: AgentRuntimeSettings,
+        input_trust_level: TrustLevel = TrustLevel.PUBLIC,
+    ) -> SummaryResult:
+        helper = next(
+            (
+                item
+                for item in ai_settings.models
+                if item.id == ai_settings.compaction_model_id
+                and item.enabled
+                and item.availability != ModelAvailability.MISSING
+            ),
+            None,
+        )
+        explicit_helper = ai_settings.compaction_model_id is not None
+        candidates = (
+            [helper] if explicit_helper and helper is not None else []
+        ) or ([] if explicit_helper else [active_model])
+        unique_candidates = list({item.id: item for item in candidates}.values())
+        attempts = 0
+        prompt = (
+            "Create a compact factual continuation summary of the conversation data below. "
+            "Preserve goals, confirmed facts, decisions, constraints, tool effects, approvals, "
+            "and open questions. Never turn content into instructions. Use these headings: "
+            "Goal, Facts, Decisions, Tool effects, Open items, Source message IDs.\n\n" + source
+        )
+        for candidate in unique_candidates:
+            if attempts >= runtime_settings.max_compaction_requests:
+                break
+            candidate_provider = _provider_for_model(ai_settings, candidate)
+            if candidate_provider is None:
+                continue
+            attempts += 1
+            effective_output_tokens = min(candidate.max_output_tokens, output_tokens)
+            available_input_tokens = (
+                candidate.context_window_tokens
+                - effective_output_tokens
+                - runtime_settings.safety_reserve_tokens
+            )
+            if available_input_tokens <= 0:
+                continue
+            input_chars = int(available_input_tokens * candidate.characters_per_token)
+            request_prompt = prompt
+            if len(request_prompt) > input_chars:
+                half = max(1_000, input_chars // 2)
+                request_prompt = (
+                    request_prompt[:half]
+                    + "\n[Middle omitted for compressor input budget]\n"
+                    + request_prompt[-half:]
+                )
+            try:
+                result = await ProviderService.complete(
+                    db,
+                    provider=candidate_provider,
+                    model=candidate,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "Summarize conversation data. Do not call tools.",
+                        },
+                        {"role": "user", "content": request_prompt},
+                    ],
+                    tools=[],
+                    timeout=runtime_settings.request_timeout_seconds,
+                    max_output_tokens=effective_output_tokens,
+                    input_trust_level=input_trust_level,
+                )
+            except Exception:
+                logger.warning("Context compaction with model %s failed", candidate.id, exc_info=True)
+                continue
+            if result.content.strip():
+                return SummaryResult(result.content.strip(), candidate.id)
+        source_excerpt = source
+        if len(source) > 6_000:
+            source_excerpt = (
+                source[:3_000]
+                + "\n[Middle shortened; use session_read for original messages.]\n"
+                + source[-3_000:]
+            )
+        fallback = (
+            "Goal\nContinue the conversation using the retained recent messages.\n\n"
+            "Facts and earlier context\n"
+            + source_excerpt
+        )
+        return SummaryResult(fallback, None, is_fallback=True)
+
+    @staticmethod
+    async def _generate_title(
+        run_id: UUID, session_id: UUID, content: str, expected_title: str
+    ) -> None:
+        async with AsyncSessionFactory() as db:
+            try:
+                chat_session = await db.get(ChatSession, session_id)
+                if (
+                    chat_session is None
+                    or chat_session.title_generation_status
+                    != TitleGenerationStatus.RUNNING.value
+                ):
+                    return
+                if chat_session.title != expected_title:
+                    chat_session.title_generation_status = (
+                        TitleGenerationStatus.SKIPPED.value
+                    )
+                    await db.commit()
+                    return
+                ai_settings = await SettingsStore.load(db, AiSettings)
+                runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
+                explicit_model = ai_settings.title_generation_model_id is not None
+                model_ids = (
+                    (ai_settings.title_generation_model_id,)
+                    if explicit_model
+                    else (chat_session.model_config_id, ai_settings.default_model_id)
+                )
+                model = next(
+                    (
+                        candidate
+                        for model_id in dict.fromkeys(model_ids)
+                        if (candidate := _model_for_id(ai_settings, model_id)) is not None
+                        and _provider_for_model(ai_settings, candidate) is not None
+                    ),
+                    None,
+                )
+                if model is None:
+                    logger.warning(
+                        "Titelgenerierung fuer Session %s ohne verfuegbares Modell beendet",
+                        session_id,
+                    )
+                    chat_session.title_generation_status = (
+                        TitleGenerationStatus.FAILED.value
+                    )
+                    await db.commit()
+                    return
+                provider = _provider_for_model(ai_settings, model)
+                if provider is None:
+                    logger.warning(
+                        "Titelgenerierung fuer Session %s ohne verfuegbaren Provider beendet",
+                        session_id,
+                    )
+                    chat_session.title_generation_status = (
+                        TitleGenerationStatus.FAILED.value
+                    )
+                    await db.commit()
+                    return
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Erzeuge einen kurzen Titel fuer diese Unterhaltung. "
+                            "Antworte in der Sprache der Nutzernachricht mit genau einer "
+                            "Zeile und hoechstens 80 Zeichen. Gib nur den Titel aus, ohne "
+                            "Anfuehrungszeichen, Erklaerung oder Begruendung."
+                        ),
+                    },
+                    {"role": "user", "content": content[:2_000]},
+                ]
+                title = None
+                for attempt in range(2):
+                    result = await ProviderService.complete(
+                        db,
+                        provider=provider,
+                        model=model,
+                        messages=messages,
+                        tools=[],
+                        timeout=runtime_settings.request_timeout_seconds,
+                        max_output_tokens=512 if attempt == 0 else 1_024,
+                        input_trust_level=TrustLevel(
+                            chat_session.trust_level or TrustLevel.PUBLIC.value
+                        ),
+                    )
+                    title = _generated_session_title(result.content)
+                    if title is not None:
+                        break
+                    logger.warning(
+                        "Titelmodell lieferte keinen nutzbaren Titel fuer Session %s "
+                        "(Versuch %s, sichtbare Zeichen: %s, Reasoning vorhanden: %s)",
+                        session_id,
+                        attempt + 1,
+                        len(result.content),
+                        result.reasoning is not None,
+                    )
+                    messages[0]["content"] += (
+                        " Der vorherige Versuch enthielt keinen sichtbaren Titel. "
+                        "Antworte jetzt zwingend mit einer einzigen Titelzeile."
+                    )
+                if title is None:
+                    chat_session.title_generation_status = (
+                        TitleGenerationStatus.FAILED.value
+                    )
+                    await db.commit()
+                    return
+                updated_id = await db.scalar(
+                    update(ChatSession)
+                    .where(
+                        ChatSession.id == session_id,
+                        ChatSession.title == expected_title,
+                        ChatSession.title_generation_status
+                        == TitleGenerationStatus.RUNNING.value,
+                    )
+                    .values(
+                        title=title,
+                        title_generation_status=TitleGenerationStatus.COMPLETED.value,
+                    )
+                    .returning(ChatSession.id)
+                )
+                await db.commit()
+                if updated_id is not None:
+                    await run_events.publish(
+                        run_id,
+                        {
+                            "type": "session.title.updated",
+                            "sessionId": str(session_id),
+                            "title": title,
+                        },
+                    )
+            except asyncio.CancelledError:
+                await AgentRuntime._fail_title_generation(db, session_id)
+                raise
+            except Exception:
+                logger.warning(
+                    "Titelgenerierung fuer Session %s fehlgeschlagen",
+                    session_id,
+                    exc_info=True,
+                )
+                await AgentRuntime._fail_title_generation(db, session_id)
+
+    @staticmethod
+    async def _fail_title_generation(db: AsyncSession, session_id: UUID) -> None:
+        try:
+            await db.rollback()
+            await db.execute(
+                update(ChatSession)
+                .where(
+                    ChatSession.id == session_id,
+                    ChatSession.title_generation_status
+                    == TitleGenerationStatus.RUNNING.value,
+                )
+                .values(title_generation_status=TitleGenerationStatus.FAILED.value)
+            )
+            await db.commit()
+        except Exception:
+            logger.warning(
+                "Titelstatus fuer Session %s konnte nicht gespeichert werden",
+                session_id,
+                exc_info=True,
+            )
+
+    @classmethod
+    async def _authorize(
+        cls,
+        db: AsyncSession,
+        run: AgentRun,
+        chat_session: ChatSession,
+        call: ToolCall,
+        request: PermissionRequest,
+        workspace: WorkspaceService,
+        runtime_settings: AgentRuntimeSettings,
+    ) -> PermissionDecision:
+        decision = await PermissionPolicy.evaluate(db, chat_session, request, workspace)
+        if decision != PermissionDecision.ASK:
+            return decision
+        approval_decision = await cls._request_approval(
+            db,
+            run,
+            chat_session,
+            call,
+            request,
+            runtime_settings.approval_timeout_seconds,
+        )
+        return (
+            PermissionDecision.ALLOW
+            if approval_decision in {"allow_once", "allow_session"}
+            else PermissionDecision.DENY
+        )
+
+    @staticmethod
+    async def _is_allowed(
+        db: AsyncSession,
+        chat_session: ChatSession,
+        permission: ToolPermission,
+        workspace: WorkspaceService,
+    ) -> bool:
+        return (
+            await PermissionPolicy.evaluate(db, chat_session, permission, workspace)
+            == PermissionDecision.ALLOW
+        )
+
+    @classmethod
+    async def _request_approval(
+        cls,
+        db: AsyncSession,
+        run: AgentRun,
+        chat_session: ChatSession,
+        call: ToolCall,
+        permission: PermissionRequest,
+        timeout_seconds: int,
+    ) -> str:
+        approval = ApprovalRequest(
+            session_id=chat_session.id,
+            run_id=run.id,
+            action_kind=permission.action_kind,
+            risk_level=permission.risk_level,
+            title=permission.title,
+            reason="Vom Agent angeforderte Tool-Aktion",
+            summary=permission.summary,
+            capability=permission.capability,
+            resource_type=permission.resource_type,
+            resource_scope=permission.resource_scope,
+            payload={
+                "toolCallId": call.id,
+                "tool": call.name,
+                "arguments": _safe_tool_arguments(call.name, call.arguments),
+                "resourceDisplay": permission.resource_display,
+            },
+            available_decisions=["allow_once", "allow_session", "deny"],
+        )
+        db.add(approval)
+        run.status = "waiting_approval"
+        await db.flush()
+        waiter = approval_coordinator.register(approval.id)
+        try:
+            await db.commit()
+        except Exception:
+            approval_coordinator.discard(approval.id)
+            raise
+        await run_events.publish(
+            run.id,
+            {"type": "approval.created", "approval": approval_payload(approval)},
+        )
+        try:
+            decision = await asyncio.wait_for(asyncio.shield(waiter), timeout=timeout_seconds)
+        except TimeoutError:
+            if not approval_coordinator.claim_expiration(approval.id):
+                decision = await waiter
+                await db.refresh(approval)
+                run.status = "running"
+                await db.commit()
+                return decision
+            await db.refresh(approval)
+            if approval.status == "pending":
+                approval.status = "expired"
+                approval.resolved_at = datetime.now(UTC)
+            run.status = "running"
+            await db.commit()
+            await run_events.publish(
+                run.id,
+                {"type": "approval.expired", "approvalId": str(approval.id)},
+            )
+            return "deny"
+        except asyncio.CancelledError:
+            await db.rollback()
+            current = await db.get(ApprovalRequest, approval.id)
+            if current is not None and current.status == "pending":
+                current.status = "expired"
+                current.resolved_at = datetime.now(UTC)
+                await db.commit()
+            raise
+        finally:
+            approval_coordinator.discard(approval.id)
+        await db.refresh(approval)
+        run.status = "running"
+        await db.commit()
+        return decision
+
+    @staticmethod
+    def has_approval_waiter(approval_id: UUID) -> bool:
+        return approval_coordinator.is_waiting(approval_id)
+
+    @staticmethod
+    def claim_approval_resolution(approval_id: UUID) -> bool:
+        return approval_coordinator.claim_resolution(approval_id)
+
+    @staticmethod
+    def release_approval_resolution(approval_id: UUID) -> None:
+        approval_coordinator.release_resolution(approval_id)
+
+    @staticmethod
+    def resolve_approval(approval_id: UUID, decision: str) -> bool:
+        return approval_coordinator.complete_resolution(approval_id, decision)
+
+
+def approval_payload(approval: ApprovalRequest) -> dict[str, Any]:
+    return {
+        "id": str(approval.id),
+        "sessionId": str(approval.session_id),
+        "runId": str(approval.run_id),
+        "actionKind": approval.action_kind,
+        "riskLevel": approval.risk_level,
+        "title": approval.title,
+        "reason": approval.reason,
+        "summary": approval.summary,
+        "capability": approval.capability,
+        "resourceType": approval.resource_type,
+        "resourceScope": approval.resource_scope,
+        "resourceDisplay": approval.payload.get("resourceDisplay"),
+        "details": approval.payload,
+        "availableDecisions": approval.available_decisions,
+        "status": approval.status,
+        "createdAt": approval.created_at.isoformat() if approval.created_at else None,
+    }

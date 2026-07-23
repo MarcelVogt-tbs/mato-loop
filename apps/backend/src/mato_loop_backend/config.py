@@ -7,7 +7,12 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
+PACKAGE_FILE = Path(__file__).resolve()
+PROJECT_ROOT = PACKAGE_FILE.parents[2]
+for parent in PACKAGE_FILE.parents:
+    if (parent / "docker-compose.dev.yaml").exists():
+        PROJECT_ROOT = parent
+        break
 
 
 def _environment_files() -> tuple[Path, ...]:
@@ -33,10 +38,32 @@ class RuntimeConfig(BaseSettings):
     database_url: str = "postgresql+asyncpg://matoloop:matoloop@localhost:5432/matoloop"
     cors_origins: str = Field(default="http://localhost:10020")
     log_level: str = "INFO"
+    data_dir: Path = PROJECT_ROOT / "data"
+    session_cookie_name: str = "mato_loop_session"
+    session_duration_days: int = 30
+    secure_cookies: bool = False
+    static_dir: Path | None = None
+    embedding_enabled: bool = True
+    embedding_base_url: str = "http://embedding:7997"
+    embedding_query_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    embedding_index_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    embedding_batch_size: int = Field(default=16, ge=1, le=64)
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def agent_home(self) -> Path:
+        return self.data_dir / "home"
+
+    @property
+    def secrets_dir(self) -> Path:
+        return self.data_dir / "secrets"
+
+    @property
+    def attachments_dir(self) -> Path:
+        return self.data_dir / "attachments"
 
 
 @lru_cache

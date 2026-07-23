@@ -3,17 +3,35 @@ from mato_loop_backend.settings.models import (
     AiSettings,
     GeneralSettings,
     MemorySettings,
+    ModelWebFetchPolicy,
     SearchSettings,
+    SettingsScope,
+    ToolSettings,
+    TrustLevel,
     UserPreferences,
+    WebFetchPolicy,
+    WebFetchSettings,
+    effective_model_pseudonymization,
+    effective_model_trust,
 )
 from mato_loop_backend.settings.store import SettingsStore
+from mato_loop_backend.settings.web_fetch import resolve_web_fetch_policy
 
 __all__ = [
     "AgentRuntimeSettings",
     "AiSettings",
     "GeneralSettings",
     "MemorySettings",
+    "ModelWebFetchPolicy",
     "SearchSettings",
+    "SettingsScope",
     "SettingsStore",
+    "ToolSettings",
+    "TrustLevel",
     "UserPreferences",
+    "WebFetchPolicy",
+    "WebFetchSettings",
+    "effective_model_pseudonymization",
+    "effective_model_trust",
+    "resolve_web_fetch_policy",
 ]

@@ -8,3 +8,5 @@
 apps/frontend/.quasar
 apps/frontend/dist
 apps/frontend/node_modules
+data
+db

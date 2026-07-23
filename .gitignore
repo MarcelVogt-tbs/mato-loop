@@ -14,3 +14,5 @@ apps/frontend/.pnp.*
 apps/frontend/.yarn/*
 coverage/
 htmlcov/
+data/
+db/

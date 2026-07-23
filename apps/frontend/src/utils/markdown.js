@@ -1,0 +1,303 @@
+import { tex } from '@mdit/plugin-tex'
+import DOMPurify from 'dompurify'
+import hljs from 'highlight.js/lib/common'
+import katex from 'katex'
+import MarkdownIt from 'markdown-it'
+import taskLists from 'markdown-it-task-lists'
+
+import { safeAttachmentUrl } from './attachments'
+
+const ALLOWED_TAGS = [
+  'a', 'annotation', 'blockquote', 'br', 'button', 'code', 'del', 'div', 'em', 'h1', 'h2',
+  'h3', 'h4', 'h5', 'h6', 'hr', 'img', 'input', 'li', 'math', 'menclose', 'merror',
+  'mfrac', 'mi', 'mn', 'mo', 'mover', 'mpadded', 'mphantom', 'mroot', 'mrow', 'mspace',
+  'msqrt', 'mstyle', 'msub', 'msubsup', 'msup', 'mtable', 'mtd', 'mtext', 'mtr',
+  'munder', 'munderover', 'ol', 'p', 'path', 'pre', 's', 'semantics', 'span', 'strong',
+  'svg', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'
+]
+const ALLOWED_ATTR = [
+  'accent', 'accentunder', 'alt', 'aria-hidden', 'aria-label', 'aria-live', 'checked',
+  'class', 'columnalign', 'columnlines', 'columnspacing', 'd', 'data-markdown-code', 'data-markdown-image',
+  'decoding', 'disabled', 'display', 'displaystyle', 'encoding', 'fence', 'height',
+  'href', 'loading', 'lspace', 'mathbackground', 'mathcolor', 'mathvariant', 'maxsize',
+  'minsize', 'movablelimits', 'preserveaspectratio', 'referrerpolicy', 'rel', 'role',
+  'rowlines', 'rowspacing', 'scriptlevel', 'separator', 'src', 'stretchy', 'style',
+  'symmetric', 'target', 'title', 'type', 'viewbox', 'voffset', 'width', 'xmlns'
+]
+const LINK_PROTOCOL = /^(?:https?:|mailto:)/i
+const IMAGE_PROTOCOL = /^https?:/i
+const SAFE_FRAGMENT = /^#[A-Za-z0-9_-]+$/
+const LANGUAGE_NAME = /^[A-Za-z0-9_+-]+$/
+
+function currentOrigin() {
+  return typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : 'http://localhost'
+}
+
+function normalizedLanguage(value) {
+  const language = String(value || '').trim().split(/\s+/)[0]
+  return language && LANGUAGE_NAME.test(language) ? language : ''
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function highlightedCode(source, languageName) {
+  const language = normalizedLanguage(languageName)
+  if (language && hljs.getLanguage(language)) {
+    try {
+      const result = hljs.highlight(source, { language, ignoreIllegals: true })
+      return `<pre class="chat-markdown__code"><code class="hljs language-${language}">${result.value}</code></pre>`
+    } catch {
+      // Unknown language aliases and malformed snippets remain readable as plain code.
+    }
+  }
+  return `<pre class="chat-markdown__code"><code>${escapeHtml(source)}</code></pre>`
+}
+
+function renderedMath(content, displayMode) {
+  try {
+    return katex.renderToString(content, {
+      displayMode,
+      macros: {},
+      maxExpand: 1000,
+      maxSize: 20,
+      output: 'htmlAndMathml',
+      strict: 'error',
+      throwOnError: true,
+      trust: false
+    })
+  } catch {
+    const delimiter = displayMode ? '$$' : '$'
+    return `<span class="chat-markdown__math-error">${delimiter}${escapeHtml(content)}${delimiter}</span>`
+  }
+}
+
+function precedingBackslashes(source, position, minimum = 0) {
+  let count = 0
+  let index = position - 1
+  while (index >= minimum && source.charCodeAt(index) === 92) {
+    count += 1
+    index -= 1
+  }
+  return count
+}
+
+function dollarBoundary(state, position) {
+  const before = state.src.charCodeAt(position - 1)
+  const after = state.src.charCodeAt(position + 1)
+  return {
+    canClose: !(after >= 48 && after <= 57) && !state.md.utils.isSpace(before),
+    canOpen: !state.md.utils.isSpace(after)
+  }
+}
+
+function literalDollar(state, silent) {
+  if (!silent) state.pending += '$'
+  state.pos += 1
+  return true
+}
+
+function safeInlineDollar(state, silent) {
+  if (state.src[state.pos] !== '$') return false
+  if (!dollarBoundary(state, state.pos).canOpen) return literalDollar(state, silent)
+
+  let candidate = state.pos + 1
+  while ((candidate = state.src.indexOf('$', candidate)) !== -1) {
+    if (precedingBackslashes(state.src, candidate, state.pos + 1) % 2 === 1) {
+      candidate += 1
+      continue
+    }
+    const intervening = state.src.slice(state.pos + 1, candidate)
+    if (intervening.includes('\n') || intervening.includes('`')) {
+      return literalDollar(state, silent)
+    }
+    const boundary = dollarBoundary(state, candidate)
+    if (candidate > state.pos + 1 && boundary.canClose) {
+      if (!silent) {
+        const token = state.push('math_inline', 'math', 0)
+        token.content = intervening
+        token.markup = '$'
+      }
+      state.pos = candidate + 1
+      return true
+    }
+    if (boundary.canOpen) return literalDollar(state, silent)
+    candidate += 1
+  }
+  return literalDollar(state, silent)
+}
+
+const markdown = new MarkdownIt({
+  breaks: true,
+  highlight: highlightedCode,
+  html: false,
+  linkify: true,
+  typographer: false
+})
+  .use(taskLists, { enabled: false })
+  .use(tex, {
+    allowInlineWithSpace: false,
+    delimiters: 'all',
+    mathFence: false,
+    render: renderedMath
+  })
+
+markdown.inline.ruler.at('math_inline_dollar', safeInlineDollar)
+
+DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+  if (data.attrName === 'style' && !node.closest?.('.katex')) data.keepAttr = false
+})
+
+export function safeMarkdownLinkUrl(value) {
+  const raw = String(value || '').trim()
+  if (SAFE_FRAGMENT.test(raw)) return raw
+  if (!LINK_PROTOCOL.test(raw) && !raw.startsWith('//')) return null
+  try {
+    const parsed = new URL(raw, currentOrigin())
+    if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) return null
+    if (parsed.username || parsed.password) return null
+    return parsed.href
+  } catch {
+    return null
+  }
+}
+
+export function classifyMarkdownImageUrl(value) {
+  const raw = String(value || '').trim()
+  const directAttachment = safeAttachmentUrl(raw)
+  if (directAttachment) {
+    return { kind: 'internal', url: directAttachment, origin: currentOrigin(), host: '' }
+  }
+  if (!IMAGE_PROTOCOL.test(raw) && !raw.startsWith('//')) return { kind: 'invalid' }
+  try {
+    const parsed = new URL(raw, currentOrigin())
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+      return { kind: 'invalid' }
+    }
+    if (
+      parsed.origin === currentOrigin()
+      && !parsed.search
+      && !parsed.hash
+      && safeAttachmentUrl(parsed.pathname)
+    ) {
+      return { kind: 'internal', url: parsed.pathname, origin: parsed.origin, host: parsed.host }
+    }
+    return { kind: 'external', url: parsed.href, origin: parsed.origin, host: parsed.host }
+  } catch {
+    return { kind: 'invalid' }
+  }
+}
+
+function imageHtml(image, alt, title, requestId = null) {
+  const safeAlt = markdown.utils.escapeHtml(alt)
+  const safeTitle = title ? ` title="${markdown.utils.escapeHtml(title)}"` : ''
+  const referrerPolicy = image.kind === 'external' ? ' referrerpolicy="no-referrer"' : ''
+  const requestAttribute = requestId === null ? '' : ` data-markdown-image="${requestId}"`
+  return `<img class="chat-markdown__image" src="${markdown.utils.escapeHtml(image.url)}" alt="${safeAlt}"${safeTitle} loading="lazy" decoding="async"${referrerPolicy}${requestAttribute}>`
+}
+
+function configureRenderRules() {
+  markdown.renderer.rules.fence = (tokens, index, options, env) => {
+    const token = tokens[index]
+    const codeIndex = String(env.codeBlocks.length)
+    env.codeBlocks.push(token.content)
+    return `<div class="chat-markdown__code-block">
+      <button type="button" class="chat-markdown__code-copy" data-markdown-code="${codeIndex}" aria-label="Codeblock kopieren">Kopieren</button>
+      ${highlightedCode(token.content, token.info)}
+    </div>`
+  }
+
+  markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
+    const token = tokens[index]
+    const href = safeMarkdownLinkUrl(token.attrGet('href'))
+    if (href) {
+      token.attrSet('href', href)
+      token.attrSet('class', 'chat-markdown__link')
+      if (href.startsWith('http://') || href.startsWith('https://')) {
+        token.attrSet('target', '_blank')
+        token.attrSet('rel', 'noopener noreferrer')
+      }
+    } else {
+      token.attrSet('class', 'chat-markdown__link chat-markdown__link--invalid')
+      const hrefIndex = token.attrIndex('href')
+      if (hrefIndex >= 0) token.attrs.splice(hrefIndex, 1)
+    }
+    return self.renderToken(tokens, index, options)
+  }
+
+  markdown.renderer.rules.image = (tokens, index, options, env) => {
+    const token = tokens[index]
+    const image = classifyMarkdownImageUrl(token.attrGet('src'))
+    const alt = token.content || 'Bild'
+    const title = token.attrGet('title') || ''
+    if (image.kind === 'internal') {
+      return imageHtml(image, alt, title)
+    }
+    if (image.kind !== 'external') {
+      return `<span class="chat-markdown__image-unavailable">[Bild: ${markdown.utils.escapeHtml(alt)}]</span>`
+    }
+
+    const requestId = String(env.externalImages.length)
+    env.externalImages.push({ ...image, alt, title })
+    const safeHost = markdown.utils.escapeHtml(image.host)
+    const safeAlt = markdown.utils.escapeHtml(alt)
+    const state = env.imageStates[image.url]
+    const trusted = env.trustedOrigins.has(image.origin)
+    if (trusted && state === 'ready') return imageHtml(image, alt, title, requestId)
+    if (env.streaming) {
+      return `<span class="chat-markdown__image-placeholder">
+        <span class="chat-markdown__image-title">${safeAlt}</span>
+        <span class="chat-markdown__image-note">Das externe Bild von ${safeHost} kann nach Abschluss der Antwort geprüft werden.</span>
+      </span>`
+    }
+    if (state === 'checking' || (trusted && !state)) {
+      return `<span class="chat-markdown__image-placeholder chat-markdown__image-placeholder--checking" role="status" aria-live="polite">
+        <span class="chat-markdown__image-title">${safeAlt}</span>
+        <span class="chat-markdown__image-note">Bild von ${safeHost} wird geprüft …</span>
+      </span>`
+    }
+    if (state === 'failed') {
+      return `<span class="chat-markdown__image-placeholder chat-markdown__image-placeholder--failed">
+        <span class="chat-markdown__image-title">${safeAlt}</span>
+        <span class="chat-markdown__image-note">Das Bild von ${safeHost} konnte nicht geladen oder decodiert werden.</span>
+        <button type="button" class="chat-markdown__image-button" data-markdown-image="${requestId}" aria-label="Bild von ${safeHost} erneut prüfen">Erneut versuchen</button>
+      </span>`
+    }
+    return `<span class="chat-markdown__image-placeholder">
+      <span class="chat-markdown__image-title">${safeAlt}</span>
+      <span class="chat-markdown__image-note">Externes Bild von ${safeHost} blockiert. Beim Laden wird deine IP-Adresse an diesen Anbieter übertragen.</span>
+      <button type="button" class="chat-markdown__image-button" data-markdown-image="${requestId}" aria-label="Bilder von ${safeHost} in dieser Sitzung laden">Bilder von ${safeHost} laden</button>
+    </span>`
+  }
+}
+
+configureRenderRules()
+
+export function renderMarkdown(
+  content,
+  { imageStates = {}, streaming = false, trustedImageOrigins = [] } = {}
+) {
+  const env = {
+    codeBlocks: [],
+    externalImages: [],
+    imageStates,
+    streaming,
+    trustedOrigins: new Set(trustedImageOrigins)
+  }
+  const rendered = markdown.render(String(content || ''), env)
+  const html = DOMPurify.sanitize(rendered, {
+    ALLOWED_ATTR,
+    ALLOWED_TAGS,
+    ALLOW_DATA_ATTR: false,
+    RETURN_TRUSTED_TYPE: false,
+    SANITIZE_NAMED_PROPS: true
+  })
+  return { codeBlocks: env.codeBlocks, html, externalImages: env.externalImages }
+}

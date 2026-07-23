@@ -1,0 +1,82 @@
+name: ${MATO_LOOP_COMPOSE_PROJECT_NAME:-mato-loop}
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.5-pg17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-matoloop}
+      POSTGRES_USER: ${POSTGRES_USER:-matoloop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-matoloop}
+    volumes:
+      - ./db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  embedding:
+    image: michaelf34/infinity:0.0.77-cpu
+    restart: unless-stopped
+    environment:
+      INFINITY_ANONYMOUS_USAGE_STATS: "0"
+      TOKENIZERS_PARALLELISM: "false"
+    command:
+      [
+        "v2",
+        "--model-id",
+        "intfloat/multilingual-e5-small",
+        "--served-model-name",
+        "matoloop-memory",
+        "--revision",
+        "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "--engine",
+        "torch",
+        "--device",
+        "cpu",
+        "--batch-size",
+        "16",
+        "--model-warmup",
+        "--no-trust-remote-code",
+        "--no-vector-disk-cache",
+        "--port",
+        "7997",
+      ]
+    volumes:
+      - embedding_cache:/app/.cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7997/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10m
+
+  mato-loop:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      MATO_LOOP_ENVIRONMENT: production
+      MATO_LOOP_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-matoloop}:${POSTGRES_PASSWORD:-matoloop}@db:5432/${POSTGRES_DB:-matoloop}
+      MATO_LOOP_DATA_DIR: /data
+      MATO_LOOP_STATIC_DIR: /app/static
+      MATO_LOOP_SECURE_COOKIES: ${MATO_LOOP_SECURE_COOKIES:-false}
+      MATO_LOOP_EMBEDDING_BASE_URL: http://embedding:7997
+    volumes:
+      - ./data:/data
+    ports:
+      - "${MATO_LOOP_HOST_PORT:-10020}:6020"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:6020/api/health >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+volumes:
+  embedding_cache:

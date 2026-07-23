@@ -2,7 +2,7 @@ name: ${MATO_LOOP_COMPOSE_PROJECT_NAME:-mato-loop}
 
 services:
   db:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:0.8.5-pg17-bookworm
     restart: unless-stopped
     env_file:
       - path: .env.default
@@ -21,6 +21,44 @@ services:
     networks:
       - mato-loop
 
+  embedding:
+    image: michaelf34/infinity:0.0.77-cpu
+    restart: unless-stopped
+    environment:
+      INFINITY_ANONYMOUS_USAGE_STATS: "0"
+      TOKENIZERS_PARALLELISM: "false"
+    command:
+      [
+        "v2",
+        "--model-id",
+        "intfloat/multilingual-e5-small",
+        "--served-model-name",
+        "matoloop-memory",
+        "--revision",
+        "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "--engine",
+        "torch",
+        "--device",
+        "cpu",
+        "--batch-size",
+        "16",
+        "--model-warmup",
+        "--no-trust-remote-code",
+        "--no-vector-disk-cache",
+        "--port",
+        "7997",
+      ]
+    volumes:
+      - embedding_cache:/app/.cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7997/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10m
+    networks:
+      - mato-loop
+
   backend:
     build:
       context: ./apps/backend
@@ -36,8 +74,10 @@ services:
     environment:
       UV_PROJECT_ENVIRONMENT: /opt/mato-loop/backend/venv
       UV_CACHE_DIR: /opt/mato-loop/backend/uv-cache
+      MATO_LOOP_DATA_DIR: /data
     volumes:
       - .:/workspace
+      - app_data:/data
       - backend_uv_data:/opt/mato-loop/backend
     ports:
       - "${MATO_LOOP_HOST_BACKEND_PORT:-6020}:${MATO_LOOP_BIND_BACKEND_PORT:-6020}"
@@ -52,7 +92,7 @@ services:
         "uv sync --frozen && uv run alembic upgrade head && exec uv run uvicorn mato_loop_backend.app:app --host 0.0.0.0 --port $${MATO_LOOP_BIND_BACKEND_PORT:-6020} --reload",
       ]
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$${MATO_LOOP_BIND_BACKEND_PORT:-6020}/api/health/live >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$${MATO_LOOP_BIND_BACKEND_PORT:-6020}/api/health >/dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -94,7 +134,9 @@ services:
       - mato-loop
 
 volumes:
+  app_data:
   db_data:
+  embedding_cache:
   backend_uv_data:
   frontend_node_modules:
   frontend_yarn_cache:

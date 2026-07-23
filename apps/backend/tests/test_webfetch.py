@@ -1,0 +1,437 @@
+from __future__ import annotations
+
+import asyncio
+import gzip
+import ipaddress
+import socket
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
+
+import pytest
+
+from mato_loop_backend.integrations import (
+    WebFetchError,
+    canonicalize_url,
+    fetch_web,
+    sanitize_url_for_display,
+    webfetch,
+)
+
+Responder = Callable[[str, dict[str, str]], Awaitable[bytes]]
+
+
+def _response(
+    body: bytes = b"",
+    *,
+    status: int = 200,
+    headers: dict[str, str] | None = None,
+    content_length: bool = True,
+) -> bytes:
+    reasons = {200: "OK", 302: "Found", 404: "Not Found"}
+    response_headers = dict(headers or {})
+    if content_length:
+        response_headers.setdefault("Content-Length", str(len(body)))
+    response_headers.setdefault("Connection", "close")
+    lines = [f"HTTP/1.1 {status} {reasons.get(status, 'Status')}"]
+    lines.extend(f"{name}: {value}" for name, value in response_headers.items())
+    return ("\r\n".join(lines) + "\r\n\r\n").encode() + body
+
+
+@asynccontextmanager
+async def _server(responder: Responder) -> AsyncIterator[int]:
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            request = await reader.readuntil(b"\r\n\r\n")
+            request_lines = request.decode("latin-1").split("\r\n")
+            target = request_lines[0].split(" ", 2)[1]
+            headers = {
+                name.strip().lower(): value.strip()
+                for line in request_lines[1:]
+                if ":" in line
+                for name, value in [line.split(":", 1)]
+            }
+            writer.write(await responder(target, headers))
+            await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    try:
+        yield server.sockets[0].getsockname()[1]
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+def _origin(port: int, host: str = "127.0.0.1") -> str:
+    return f"http://{host}:{port}"
+
+
+async def _error_code(awaitable: Awaitable[object]) -> str:
+    with pytest.raises(WebFetchError) as exc_info:
+        await awaitable
+    assert str(exc_info.value) == exc_info.value.code
+    return exc_info.value.code
+
+
+@pytest.mark.parametrize(
+    ("url", "code"),
+    [
+        ("ftp://example.com/file", "webfetch.unsupportedScheme"),
+        ("https://user:secret@example.com/", "webfetch.userinfoForbidden"),
+        ("/relative", "webfetch.unsupportedScheme"),
+        ("http://./", "webfetch.invalidUrl"),
+        ("https://[::1", "webfetch.invalidUrl"),
+    ],
+)
+async def test_rejects_invalid_urls(url: str, code: str) -> None:
+    assert await _error_code(fetch_web(url)) == code
+
+
+def test_canonicalizes_urls_and_redacts_query_values_for_display() -> None:
+    url = "HTTPS://ExAmPle.com/path?token=very-secret&empty=#fragment"
+
+    assert canonicalize_url(url) == "https://example.com/path?token=very-secret&empty="
+    displayed = sanitize_url_for_display(url)
+    assert displayed == "https://example.com/path?REDACTED"
+    assert "very-secret" not in displayed
+
+
+async def test_authorization_runs_after_normalization_and_before_dns(monkeypatch) -> None:
+    authorize = AsyncMock(side_effect=WebFetchError("permission.denied"))
+    resolve = AsyncMock(side_effect=AssertionError("DNS darf nicht ausgeführt werden"))
+    monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
+
+    assert await _error_code(
+        fetch_web("HTTPS://ExAmPle.com", authorize_url=authorize)
+    ) == "permission.denied"
+    authorize.assert_awaited_once_with("https://example.com/")
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.parametrize("timeout", [0, 121, True, "30"])
+async def test_rejects_invalid_timeouts(timeout: object) -> None:
+    assert await _error_code(fetch_web("https://example.com", timeout=timeout)) == (
+        "webfetch.timeoutInvalid"
+    )
+
+
+async def test_rejects_invalid_format_and_origins() -> None:
+    assert await _error_code(fetch_web("https://example.com", format="json")) == (
+        "webfetch.formatUnsupported"
+    )
+    assert await _error_code(
+        fetch_web("https://example.com", allowed_private_origins=("http://localhost/path",))
+    ) == "webfetch.invalidOrigin"
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["169.254.169.254", "169.254.1.1", "100.100.100.200", "fd00:ec2::254"],
+)
+async def test_metadata_and_link_local_are_never_allowlisted(address: str) -> None:
+    rendered = f"[{address}]" if ":" in address else address
+    url = f"http://{rendered}"
+    assert await _error_code(fetch_web(url, allowed_private_origins=(url,))) == (
+        "webfetch.addressBlocked"
+    )
+
+
+async def test_ipv6_site_local_is_not_treated_as_public() -> None:
+    assert await _error_code(fetch_web("http://[fec0::1]")) == "webfetch.addressBlocked"
+
+
+@pytest.mark.parametrize("address", ["192.0.2.1", "100.64.0.1", "224.0.0.1", "0.0.0.0"])
+async def test_non_public_non_private_addresses_stay_blocked_when_allowlisted(address: str) -> None:
+    url = f"http://{address}"
+    assert await _error_code(fetch_web(url, allowed_private_origins=(url,))) == (
+        "webfetch.addressBlocked"
+    )
+
+
+async def test_private_origin_requires_an_exact_scheme_host_and_port() -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(b"ok", headers={"Content-Type": "text/plain"})
+
+    async with _server(responder) as port:
+        url = f"http://127.0.0.1:{port}/"
+        assert await _error_code(
+            fetch_web(url, allowed_private_origins=("http://127.0.0.1",))
+        ) == "webfetch.addressBlocked"
+        result = await fetch_web(url, allowed_private_origins=(_origin(port),))
+
+    assert result.content == "ok"
+
+
+async def test_dns_answers_are_validated_as_a_set(monkeypatch) -> None:
+    async def resolve(host: str, port: int):
+        return (ipaddress.ip_address("8.8.8.8"), ipaddress.ip_address("127.0.0.1"))
+
+    monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
+    assert await _error_code(fetch_web("http://mixed.example")) == "webfetch.addressBlocked"
+
+
+async def test_dns_is_pinned_and_request_headers_are_safe(monkeypatch) -> None:
+    seen_headers: dict[str, str] = {}
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        seen_headers.update(headers)
+        return _response(b"pinned", headers={"Content-Type": "text/plain"})
+
+    async with _server(responder) as port:
+        async def resolve(host: str, resolved_port: int):
+            assert host == "pinned.test"
+            assert resolved_port == port
+            return (ipaddress.ip_address("127.0.0.1"),)
+
+        monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
+        result = await fetch_web(
+            f"http://pinned.test:{port}/resource",
+            allowed_private_origins=(_origin(port, "pinned.test"),),
+        )
+
+    assert result.content == "pinned"
+    assert seen_headers["host"] == f"pinned.test:{port}"
+    assert seen_headers["user-agent"] == "MatoLoop-WebFetch/1.0"
+    assert seen_headers["accept-encoding"] == "gzip, deflate"
+    assert {"authorization", "cookie", "referer"}.isdisjoint(seen_headers)
+
+
+async def test_redirects_are_resolved_and_each_origin_is_validated() -> None:
+    authorized_urls: list[str] = []
+
+    async def authorize(url: str) -> None:
+        authorized_urls.append(url)
+
+    async def destination(target: str, headers: dict[str, str]) -> bytes:
+        return _response(b"destination", headers={"Content-Type": "text/plain"})
+
+    async with _server(destination) as destination_port:
+        async def source(target: str, headers: dict[str, str]) -> bytes:
+            return _response(
+                status=302,
+                headers={"Location": f"http://127.0.0.1:{destination_port}/target"},
+            )
+
+        async with _server(source) as source_port:
+            source_url = f"http://127.0.0.1:{source_port}/start"
+            assert await _error_code(
+                fetch_web(source_url, allowed_private_origins=(_origin(source_port),))
+            ) == "webfetch.addressBlocked"
+            result = await fetch_web(
+                source_url,
+                allowed_private_origins=(_origin(source_port), _origin(destination_port)),
+                authorize_url=authorize,
+            )
+
+    assert result.final_url == f"http://127.0.0.1:{destination_port}/target"
+    assert result.content == "destination"
+    assert authorized_urls == [
+        f"http://127.0.0.1:{source_port}/start",
+        f"http://127.0.0.1:{destination_port}/target",
+    ]
+
+
+async def test_approval_wait_does_not_consume_network_timeout() -> None:
+    async def authorize(_url: str) -> None:
+        await asyncio.sleep(1.05)
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(b"ok", headers={"Content-Type": "text/plain"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(
+            f"http://127.0.0.1:{port}/",
+            timeout=1,
+            allowed_private_origins=(_origin(port),),
+            authorize_url=authorize,
+        )
+
+    assert result.content == "ok"
+
+
+async def test_redirect_limit_and_invalid_redirect() -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        if target == "/missing":
+            return _response(status=302)
+        number = int(target.removeprefix("/"))
+        return _response(status=302, headers={"Location": f"/{number + 1}"})
+
+    async with _server(responder) as port:
+        allowed = (_origin(port),)
+        assert await _error_code(fetch_web(f"{_origin(port)}/0", allowed_private_origins=allowed)) == (
+            "webfetch.tooManyRedirects"
+        )
+        assert await _error_code(
+            fetch_web(f"{_origin(port)}/missing", allowed_private_origins=allowed)
+        ) == "webfetch.redirectInvalid"
+
+
+async def test_html_conversion_removes_active_content() -> None:
+    document = b"""<!doctype html><html><head><meta charset=utf-8><style>.x{}</style>
+        <script>secret()</script><link href=/track></head><body onload=evil()>
+        <h1>Titel</h1><p>Hallo <a href="javascript:evil()">Welt</a>.</p></body></html>"""
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(document, headers={"Content-Type": "text/html; charset=utf-8"})
+
+    async with _server(responder) as port:
+        url = f"{_origin(port)}/page"
+        allowed = (_origin(port),)
+        markdown_result = await fetch_web(url, allowed_private_origins=allowed)
+        text_result = await fetch_web(url, format="text", allowed_private_origins=allowed)
+        html_result = await fetch_web(url, format="html", allowed_private_origins=allowed)
+
+    assert "# Titel" in markdown_result.content
+    assert "secret" not in markdown_result.content
+    assert text_result.content == "Titel Hallo Welt."
+    assert "<script" not in html_result.content
+    assert "<style" not in html_result.content
+    assert "onload" not in html_result.content
+    assert "javascript:" not in html_result.content
+
+
+async def test_plain_text_is_escaped_for_html() -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(b"<script>alert(1)</script>", headers={"Content-Type": "text/plain"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(
+            f"{_origin(port)}/text", format="html", allowed_private_origins=(_origin(port),)
+        )
+
+    assert result.content == "<pre>&lt;script&gt;alert(1)&lt;/script&gt;</pre>"
+
+
+async def test_active_markup_is_removed_or_escaped_from_markdown() -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        content_type = "text/markdown" if target == "/markdown" else "text/plain"
+        return _response(
+            b"before<script>alert(1)</script>after",
+            headers={"Content-Type": content_type},
+        )
+
+    async with _server(responder) as port:
+        allowed = (_origin(port),)
+        markdown_result = await fetch_web(
+            f"{_origin(port)}/markdown", allowed_private_origins=allowed
+        )
+        plain_result = await fetch_web(f"{_origin(port)}/plain", allowed_private_origins=allowed)
+
+    assert markdown_result.content == "beforeafter"
+    assert plain_result.content == "before&lt;script&gt;alert(1)&lt;/script&gt;after"
+
+
+async def test_supported_image_returns_bytes_and_safe_filename() -> None:
+    image = b"\x89PNG\r\n\x1a\ncontent"
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(
+            image,
+            headers={
+                "Content-Type": "image/png",
+                "Content-Disposition": 'attachment; filename="../../payload.svg"',
+            },
+        )
+
+    async with _server(responder) as port:
+        result = await fetch_web(
+            f"{_origin(port)}/fallback.png", allowed_private_origins=(_origin(port),)
+        )
+
+    assert result.content == image
+    assert result.content_type == "image/png"
+    assert result.is_image is True
+    assert result.image_mime_type == "image/png"
+    assert result.image_filename == "payload.png"
+
+
+@pytest.mark.parametrize(
+    ("content_type", "body", "code"),
+    [
+        ("image/svg+xml", b"<svg/>", "webfetch.contentTypeUnsupported"),
+        ("application/octet-stream", b"binary", "webfetch.contentTypeUnsupported"),
+        ("image/png", b"not a png", "webfetch.contentTypeMismatch"),
+    ],
+)
+async def test_rejects_unsupported_or_spoofed_binary_content(
+    content_type: str, body: bytes, code: str
+) -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(body, headers={"Content-Type": content_type})
+
+    async with _server(responder) as port:
+        assert await _error_code(
+            fetch_web(f"{_origin(port)}/file", allowed_private_origins=(_origin(port),))
+        ) == code
+
+
+async def test_content_length_is_rejected_before_body() -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(
+            headers={
+                "Content-Type": "text/plain",
+                "Content-Length": str(webfetch.MAX_RESPONSE_BYTES + 1),
+            },
+            content_length=False,
+        )
+
+    async with _server(responder) as port:
+        assert await _error_code(
+            fetch_web(f"{_origin(port)}/large", allowed_private_origins=(_origin(port),))
+        ) == "webfetch.responseTooLarge"
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+async def test_streamed_and_decompressed_bodies_are_limited(compressed: bool) -> None:
+    body = b"x" * (webfetch.MAX_RESPONSE_BYTES + 1)
+    wire_body = gzip.compress(body) if compressed else body
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        response_headers = {"Content-Type": "text/plain"}
+        if compressed:
+            response_headers["Content-Encoding"] = "gzip"
+        return _response(
+            wire_body,
+            headers=response_headers,
+            content_length=compressed,
+        )
+
+    async with _server(responder) as port:
+        assert await _error_code(
+            fetch_web(f"{_origin(port)}/large", allowed_private_origins=(_origin(port),))
+        ) == "webfetch.responseTooLarge"
+
+
+async def test_timeout_and_http_errors_have_stable_codes() -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        if target == "/slow":
+            await asyncio.sleep(2)
+            return _response(b"late", headers={"Content-Type": "text/plain"})
+        return _response(b"upstream details", status=404, headers={"Content-Type": "text/plain"})
+
+    async with _server(responder) as port:
+        allowed = (_origin(port),)
+        assert await _error_code(
+            fetch_web(f"{_origin(port)}/slow", timeout=1, allowed_private_origins=allowed)
+        ) == "webfetch.timeout"
+        assert await _error_code(
+            fetch_web(f"{_origin(port)}/missing", allowed_private_origins=allowed)
+        ) == "webfetch.requestFailed"
+
+
+async def test_dns_failures_have_a_stable_code(monkeypatch) -> None:
+    real_loop = asyncio.get_running_loop()
+
+    class FailingLoop:
+        time = real_loop.time
+
+        async def getaddrinfo(self, *args, **kwargs):
+            raise socket.gaierror()
+
+    monkeypatch.setattr(webfetch.asyncio, "get_running_loop", FailingLoop)
+    assert await _error_code(fetch_web("https://does-not-resolve.invalid")) == "webfetch.dnsFailed"

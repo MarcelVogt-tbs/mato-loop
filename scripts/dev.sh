@@ -19,14 +19,16 @@ usage() {
         "" \
         "Commands:" \
         "  up [--build] [-d]   Entwicklungsstack starten" \
-        "  stop                Services stoppen" \
+        "  stop [service]      Services stoppen" \
         "  down                Container entfernen" \
         "  reset-storage       Container und Volumes entfernen" \
         "  logs [service]      Logs anzeigen" \
         "  status              Service-Status anzeigen" \
+        "  doctor              pgvector und Embedding-Index pruefen" \
         "  db [args]           Alembic ausfuehren" \
+        "  lock backend        Backend-Lockdatei aktualisieren" \
         "  check [target]      Backend und/oder Frontend pruefen" \
-        "  test [target]       Backend und/oder Frontend testen"
+        "  test [target]       Backend, Frontend oder lokalen RAG-Stack testen"
 }
 
 run_backend() {
@@ -53,6 +55,11 @@ test_frontend() {
     run_frontend "yarn install --immutable && yarn test"
 }
 
+test_rag() {
+    compose up -d --wait --wait-timeout 600 db embedding
+    run_backend "uv sync --frozen && MATO_LOOP_RAG_INTEGRATION=1 uv run pytest tests/test_memory_rag_integration.py"
+}
+
 run_target() {
     local operation="$1"
     local target="${2:-all}"
@@ -63,6 +70,7 @@ run_target() {
         test:all) test_backend; test_frontend ;;
         test:backend) test_backend ;;
         test:frontend) test_frontend ;;
+        test:rag) test_rag ;;
         *) printf 'Unbekanntes Target: %s\n' "$target" >&2; exit 1 ;;
     esac
 }
@@ -71,12 +79,26 @@ cd "$PROJECT_ROOT"
 
 case "${1:-}" in
     up) shift; compose up "$@" ;;
-    stop) compose stop ;;
-    down) compose down ;;
+    stop) shift; compose stop "$@" ;;
+    down) shift; compose down "$@" ;;
     reset-storage) compose down -v ;;
     logs) shift; compose logs -f "$@" ;;
     status) compose ps ;;
+    doctor)
+        compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT extversion AS vector_version FROM pg_extension WHERE extname = '\''vector'\'';"'
+        compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT format_type(a.atttypid, a.atttypmod) AS embedding_type FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = '\''memory_embeddings'\'' AND a.attname = '\''embedding'\'';"'
+        compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT count(*) AS memory_count FROM memories;"'
+        compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT status, count(*) FROM memory_embeddings GROUP BY status ORDER BY status;"'
+        compose exec -T embedding python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:7997/health', timeout=5).read().decode())"
+        ;;
     db) shift; compose run --rm backend uv run alembic "$@" ;;
+    lock)
+        if [[ "${2:-}" != "backend" ]]; then
+            printf 'Unbekanntes Lock-Target: %s\n' "${2:-}" >&2
+            exit 1
+        fi
+        compose run --rm --no-deps backend uv lock
+        ;;
     check) run_target check "${2:-all}" ;;
     test) run_target test "${2:-all}" ;;
     help|-h|--help|'') usage ;;

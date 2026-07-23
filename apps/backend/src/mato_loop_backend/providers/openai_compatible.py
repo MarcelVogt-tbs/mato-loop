@@ -1,0 +1,793 @@
+from __future__ import annotations
+
+import json
+import logging
+import time
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from typing import Any
+
+import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from mato_loop_backend.providers.base import (
+    DeltaCallback,
+    ProviderError,
+    ProviderMedia,
+    ProviderRequest,
+    ProviderResult,
+    PublicReasoning,
+    ReasoningDeltaCallback,
+    ToolCall,
+)
+from mato_loop_backend.providers.reasoning import (
+    TaggedReasoningStream,
+    split_tagged_reasoning,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class DiscoveredModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(min_length=1)
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        allowed = {
+            "name",
+            "object",
+            "created",
+            "owned_by",
+            "root",
+            "parent",
+            "max_model_len",
+            "supports_image_input",
+            "supports_parallel_tool_calls",
+        }
+        metadata: dict[str, Any] = {}
+        for key, value in self.model_dump(exclude={"id"}).items():
+            if key not in allowed or not isinstance(value, (str, int, float, bool, type(None))):
+                continue
+            metadata[key] = value[:500] if isinstance(value, str) else value
+        return metadata
+
+
+class _ModelListResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    data: list[DiscoveredModel]
+
+
+async def _sse_events(response: httpx.Response) -> AsyncIterator[dict[str, Any]]:
+    async for line in response.aiter_lines():
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            yield event
+
+
+def _tools_payload(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{"type": "function", "function": tool} for tool in tools]
+
+
+def _media_by_message(media: list[ProviderMedia]) -> dict[int, list[ProviderMedia]]:
+    grouped: dict[int, list[ProviderMedia]] = {}
+    for item in media:
+        grouped.setdefault(item.message_index, []).append(item)
+    return grouped
+
+
+def _media_marker(item: ProviderMedia) -> str:
+    if item.status == "unsupported":
+        return "[Bildanhang nicht an dieses Modell uebertragen]"
+    return "[Bildanhang nicht verfuegbar]"
+
+
+def _chat_media_message(media: list[ProviderMedia]) -> dict[str, Any]:
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": "[Bildanhang aus Tool-Ergebnis]"}
+    ]
+    for item in media:
+        if item.data_url:
+            content.append({"type": "image_url", "image_url": {"url": item.data_url}})
+        else:
+            content.append({"type": "text", "text": _media_marker(item)})
+    return {"role": "user", "content": content}
+
+
+def _chat_messages(
+    messages: list[dict[str, Any]],
+    continuation_scope: dict[str, str | None] | None = None,
+    media: list[ProviderMedia] | None = None,
+) -> list[dict[str, Any]]:
+    converted = []
+    grouped_media = _media_by_message(media or [])
+    pending_tool_media: list[list[ProviderMedia]] = []
+    for index, message in enumerate(messages):
+        item = {"role": message["role"], "content": message.get("content") or ""}
+        if message.get("tool_call_id"):
+            item["tool_call_id"] = message["tool_call_id"]
+        if message.get("tool_calls"):
+            item["tool_calls"] = [
+                {
+                    "id": call["id"],
+                    "type": "function",
+                    "function": {
+                        "name": call["name"],
+                        "arguments": json.dumps(call.get("arguments") or {}, ensure_ascii=True),
+                    },
+                }
+                for call in message["tool_calls"]
+            ]
+        provider_data = message.get("provider_data") or {}
+        if (
+            message["role"] == "assistant"
+            and bool(continuation_scope)
+            and provider_data.get("continuation_scope") == continuation_scope
+            and isinstance(provider_data.get("chat_reasoning_details"), list)
+        ):
+            item["reasoning_details"] = provider_data["chat_reasoning_details"]
+        converted.append(item)
+        message_media = grouped_media.get(index)
+        if message["role"] == "tool":
+            if message_media:
+                pending_tool_media.append(message_media)
+            next_is_tool = index + 1 < len(messages) and messages[index + 1]["role"] == "tool"
+            if not next_is_tool:
+                converted.extend(_chat_media_message(items) for items in pending_tool_media)
+                pending_tool_media.clear()
+        elif message_media:
+            converted.append(_chat_media_message(message_media))
+    return converted
+
+
+def _chat_body(request: ProviderRequest) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "model": request.model,
+        "messages": _chat_messages(request.messages, request.continuation_scope, request.media),
+        "stream": request.stream,
+    }
+    if request.max_output_tokens is not None:
+        body["max_tokens"] = request.max_output_tokens
+    if request.temperature is not None:
+        body["temperature"] = request.temperature
+    if request.tools:
+        body["tools"] = _tools_payload(request.tools)
+        body["tool_choice"] = request.tool_choice
+        if request.supports_parallel_tool_calls:
+            body["parallel_tool_calls"] = True
+    return body
+
+
+def _responses_input(
+    messages: list[dict[str, Any]],
+    continuation_scope: dict[str, str | None] | None = None,
+    media: list[ProviderMedia] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    instructions: list[str] = []
+    items: list[dict[str, Any]] = []
+    grouped_media = _media_by_message(media or [])
+    pending_tool_media: list[list[ProviderMedia]] = []
+
+    def append_media(values: list[ProviderMedia]) -> None:
+        content: list[dict[str, Any]] = [
+            {"type": "input_text", "text": "[Bildanhang aus Tool-Ergebnis]"}
+        ]
+        for item in values:
+            if item.data_url:
+                content.append({"type": "input_image", "image_url": item.data_url})
+            else:
+                content.append({"type": "input_text", "text": _media_marker(item)})
+        items.append({"role": "user", "content": content})
+
+    for index, message in enumerate(messages):
+        role = message["role"]
+        content = message.get("content") or ""
+        provider_data = message.get("provider_data") or {}
+        if role == "system":
+            instructions.append(content)
+        elif role == "tool":
+            items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": message.get("tool_call_id"),
+                    "output": content,
+                }
+            )
+        else:
+            scope_matches = bool(continuation_scope) and provider_data.get(
+                "continuation_scope"
+            ) == continuation_scope
+            replay_items = provider_data.get("responses_output_items") if scope_matches else None
+            if role == "assistant" and isinstance(replay_items, list) and replay_items:
+                items.extend(item for item in replay_items if isinstance(item, dict))
+            else:
+                encrypted_reasoning = (
+                    provider_data.get("reasoning_encrypted_content") if scope_matches else None
+                )
+                if role == "assistant" and encrypted_reasoning:
+                    items.append({"type": "reasoning", "encrypted_content": encrypted_reasoning})
+                content_type = "output_text" if role == "assistant" else "input_text"
+                if content:
+                    items.append(
+                        {"role": role, "content": [{"type": content_type, "text": content}]}
+                    )
+                for call in message.get("tool_calls") or []:
+                    items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": call["id"],
+                            "name": call["name"],
+                            "arguments": json.dumps(call.get("arguments") or {}, ensure_ascii=True),
+                        }
+                    )
+        message_media = grouped_media.get(index)
+        if role == "tool":
+            if message_media:
+                pending_tool_media.append(message_media)
+            next_is_tool = index + 1 < len(messages) and messages[index + 1]["role"] == "tool"
+            if not next_is_tool:
+                for values in pending_tool_media:
+                    append_media(values)
+                pending_tool_media.clear()
+        elif message_media:
+            append_media(message_media)
+    return "\n\n".join(instructions), items
+
+
+def _responses_replay_items(raw_output: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_output, list):
+        return []
+    replay: list[dict[str, Any]] = []
+    for item in raw_output:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type == "reasoning" and item.get("encrypted_content"):
+            value: dict[str, Any] = {
+                "type": "reasoning",
+                "encrypted_content": item["encrypted_content"],
+            }
+            if item.get("id"):
+                value["id"] = item["id"]
+            replay.append(value)
+        elif item_type == "function_call":
+            replay.append(
+                {
+                    "type": "function_call",
+                    "call_id": item.get("call_id") or item.get("id"),
+                    "name": item.get("name") or "",
+                    "arguments": item.get("arguments") or "{}",
+                }
+            )
+        elif item_type == "message":
+            content = [
+                {"type": "output_text", "text": part.get("text") or ""}
+                for part in item.get("content") or []
+                if isinstance(part, dict) and part.get("type") == "output_text"
+            ]
+            if content:
+                replay.append({"role": "assistant", "content": content})
+    return replay
+
+
+def _responses_body(
+    request: ProviderRequest, extra_body: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    instructions, input_items = _responses_input(
+        request.messages, request.continuation_scope, request.media
+    )
+    body: dict[str, Any] = {
+        "model": request.model,
+        "input": input_items,
+        "instructions": instructions,
+        "stream": request.stream,
+        "store": False,
+    }
+    if request.max_output_tokens is not None:
+        body["max_output_tokens"] = request.max_output_tokens
+    if request.temperature is not None:
+        body["temperature"] = request.temperature
+    if request.tools:
+        body["tools"] = [{"type": "function", **tool} for tool in request.tools]
+        body["tool_choice"] = request.tool_choice
+        if request.supports_parallel_tool_calls:
+            body["parallel_tool_calls"] = True
+    if request.reasoning_summary:
+        body["reasoning"] = {"summary": "auto"}
+    body["include"] = ["reasoning.encrypted_content"]
+    if extra_body:
+        body.update(extra_body)
+    return body
+
+
+def _normalize_usage(raw_usage: Any) -> dict[str, int]:
+    if not isinstance(raw_usage, dict):
+        return {}
+    aliases = {
+        "input_tokens": ("input_tokens", "prompt_tokens"),
+        "output_tokens": ("output_tokens", "completion_tokens"),
+        "total_tokens": ("total_tokens",),
+    }
+    usage: dict[str, int] = {}
+    for normalized, keys in aliases.items():
+        value = next((raw_usage.get(key) for key in keys if isinstance(raw_usage.get(key), int)), None)
+        if value is not None:
+            usage[normalized] = value
+    output_details = raw_usage.get("output_tokens_details") or raw_usage.get(
+        "completion_tokens_details"
+    )
+    if isinstance(output_details, dict) and isinstance(output_details.get("reasoning_tokens"), int):
+        usage["reasoning_tokens"] = output_details["reasoning_tokens"]
+    return usage
+
+
+def _tool_call(id_: Any, name: Any, arguments: Any) -> ToolCall:
+    if isinstance(arguments, dict):
+        parsed_arguments = arguments
+    else:
+        try:
+            parsed_arguments = json.loads(arguments or "{}")
+        except (json.JSONDecodeError, TypeError):
+            parsed_arguments = {"_raw": str(arguments or "")}
+    return ToolCall(id=str(id_ or ""), name=str(name or ""), arguments=parsed_arguments)
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    value = response.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
+async def _ensure_success(response: httpx.Response) -> None:
+    if response.status_code < 400:
+        return
+    await response.aread()
+    logger.warning("Provider request failed with HTTP status %s", response.status_code)
+    raise ProviderError(
+        f"Provider request failed with HTTP {response.status_code}",
+        status_code=response.status_code,
+        retry_after=_retry_after(response),
+    )
+
+
+async def discover_models(
+    *,
+    base_url: str,
+    api_key: str | None,
+    timeout: float = 30,
+) -> list[DiscoveredModel]:
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(f"{base_url.rstrip('/')}/models", headers=headers)
+            await _ensure_success(response)
+    except httpx.RequestError as exc:
+        raise ProviderError(
+            "Provider model discovery network request failed", code="provider.unavailable"
+        ) from exc
+    try:
+        parsed = _ModelListResponse.model_validate(response.json())
+    except (ValidationError, ValueError, TypeError, UnicodeDecodeError) as exc:
+        raise ProviderError(
+            "Provider returned an invalid model list", code="provider.invalidResponse"
+        ) from exc
+    return parsed.data
+
+
+def _response_json(response: httpx.Response) -> dict[str, Any]:
+    try:
+        data = response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ProviderError("Provider returned invalid JSON", code="provider.invalidResponse") from exc
+    if not isinstance(data, dict):
+        raise ProviderError("Provider returned invalid JSON", code="provider.invalidResponse")
+    return data
+
+
+def _reasoning_summary(item: dict[str, Any]) -> str:
+    parts = item.get("summary") or []
+    if not isinstance(parts, list):
+        return ""
+    return "\n\n".join(
+        str(part.get("text") or "").strip()
+        for part in parts
+        if isinstance(part, dict)
+        and part.get("type") in {"summary_text", "text"}
+        and str(part.get("text") or "").strip()
+    )
+
+
+def _public_reasoning(
+    text: str,
+    *,
+    kind: str,
+    usage: dict[str, int],
+    observed_duration_ms: int | None = None,
+) -> PublicReasoning | None:
+    value = text.strip()
+    if not value:
+        return None
+    return PublicReasoning(
+        text=value,
+        kind=kind,
+        reasoning_tokens=usage.get("reasoning_tokens"),
+        observed_duration_ms=observed_duration_ms,
+    )
+
+
+def _chat_result(data: dict[str, Any]) -> ProviderResult:
+    choices = data.get("choices") or []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    message = choice.get("message") or {}
+    raw_content = message.get("content") or ""
+    content, tagged_reasoning = split_tagged_reasoning(
+        raw_content if isinstance(raw_content, str) else "", final=True
+    )
+    explicit_reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+    reasoning_text = "\n\n".join(
+        item for item in (explicit_reasoning, tagged_reasoning) if isinstance(item, str) and item.strip()
+    )
+    usage = _normalize_usage(data.get("usage"))
+    tool_calls = []
+    for item in message.get("tool_calls") or []:
+        function = item.get("function") or {}
+        tool_calls.append(_tool_call(item.get("id"), function.get("name"), function.get("arguments")))
+    provider_data = {}
+    if isinstance(message.get("reasoning_details"), list):
+        provider_data["chat_reasoning_details"] = message["reasoning_details"]
+    return ProviderResult(
+        content=content,
+        tool_calls=tool_calls,
+        provider_data=provider_data,
+        usage=usage,
+        finish_reason=choice.get("finish_reason"),
+        reasoning=_public_reasoning(reasoning_text, kind="content", usage=usage),
+    )
+
+
+def _responses_finish_reason(data: dict[str, Any]) -> str | None:
+    incomplete_reason = (data.get("incomplete_details") or {}).get("reason")
+    if incomplete_reason == "max_output_tokens":
+        return "length"
+    if incomplete_reason:
+        return str(incomplete_reason)
+    status = data.get("status")
+    if status == "completed":
+        return "stop"
+    return str(status) if status else None
+
+
+def _responses_result(data: dict[str, Any]) -> ProviderResult:
+    status = data.get("status")
+    if status == "failed":
+        raise ProviderError("Provider response failed", code="provider.requestFailed")
+    incomplete_reason = (data.get("incomplete_details") or {}).get("reason")
+    if status == "incomplete" and incomplete_reason not in {None, "max_output_tokens"}:
+        raise ProviderError("Provider response incomplete", code="provider.invalidResponse")
+    content_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    provider_data: dict[str, Any] = {}
+    reasoning_summaries: list[str] = []
+    tagged_reasoning_parts: list[str] = []
+    replay_items = _responses_replay_items(data.get("output"))
+    if replay_items:
+        provider_data["responses_output_items"] = replay_items
+    for item in data.get("output") or []:
+        item_type = item.get("type")
+        if item_type == "message":
+            for part in item.get("content") or []:
+                if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                    content, tagged_reasoning = split_tagged_reasoning(part["text"], final=True)
+                    content_parts.append(content)
+                    if tagged_reasoning:
+                        tagged_reasoning_parts.append(tagged_reasoning)
+        elif item_type == "function_call":
+            tool_calls.append(
+                _tool_call(item.get("call_id") or item.get("id"), item.get("name"), item.get("arguments"))
+            )
+        elif item_type == "reasoning" and item.get("encrypted_content"):
+            provider_data["reasoning_encrypted_content"] = item["encrypted_content"]
+            summary = _reasoning_summary(item)
+            if summary:
+                reasoning_summaries.append(summary)
+        elif item_type == "reasoning":
+            summary = _reasoning_summary(item)
+            if summary:
+                reasoning_summaries.append(summary)
+    usage = _normalize_usage(data.get("usage"))
+    return ProviderResult(
+        content="".join(content_parts),
+        tool_calls=tool_calls,
+        provider_data=provider_data,
+        usage=usage,
+        finish_reason=_responses_finish_reason(data),
+        reasoning=_public_reasoning(
+            "\n\n".join([*reasoning_summaries, *tagged_reasoning_parts]),
+            kind="content" if tagged_reasoning_parts else "summary",
+            usage=usage,
+        ),
+    )
+
+
+async def chat_completions(
+    *,
+    base_url: str,
+    api_key: str | None,
+    request: ProviderRequest,
+    on_delta: DeltaCallback | None,
+    on_reasoning: ReasoningDeltaCallback | None = None,
+) -> ProviderResult:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    body = _chat_body(request)
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    async with httpx.AsyncClient(timeout=request.timeout) as client:
+        if not request.stream:
+            response = await client.post(url, headers=headers, json=body)
+            await _ensure_success(response)
+            result = _chat_result(_response_json(response))
+            if on_reasoning and result.reasoning:
+                await on_reasoning(result.reasoning.text, result.reasoning.kind)
+            if on_delta and result.content:
+                await on_delta(result.content)
+            return result
+
+        content_parts: list[str] = []
+        explicit_reasoning_parts: list[str] = []
+        reasoning_details: list[dict[str, Any]] = []
+        splitter = TaggedReasoningStream()
+        calls: dict[int, dict[str, str]] = {}
+        usage: dict[str, int] = {}
+        finish_reason: str | None = None
+        reasoning_started_at: float | None = None
+        reasoning_finished_at: float | None = None
+        async with client.stream("POST", url, headers=headers, json=body) as response:
+            await _ensure_success(response)
+            async for event in _sse_events(response):
+                if event.get("usage"):
+                    usage = _normalize_usage(event["usage"])
+                choices = event.get("choices") or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                if choice.get("finish_reason"):
+                    finish_reason = str(choice["finish_reason"])
+                delta = choice.get("delta") or {}
+                reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                if isinstance(reasoning_delta, str) and reasoning_delta:
+                    if reasoning_started_at is None:
+                        reasoning_started_at = time.monotonic()
+                    explicit_reasoning_parts.append(reasoning_delta)
+                    if on_reasoning:
+                        await on_reasoning(reasoning_delta, "content")
+                details = delta.get("reasoning_details")
+                if isinstance(details, list):
+                    reasoning_details.extend(item for item in details if isinstance(item, dict))
+                text = delta.get("content")
+                if text:
+                    answer_delta, tagged_reasoning_delta = splitter.add(str(text))
+                    if tagged_reasoning_delta:
+                        if reasoning_started_at is None:
+                            reasoning_started_at = time.monotonic()
+                        if on_reasoning:
+                            await on_reasoning(tagged_reasoning_delta, "content")
+                    if answer_delta:
+                        if reasoning_started_at is not None and reasoning_finished_at is None:
+                            reasoning_finished_at = time.monotonic()
+                        content_parts.append(answer_delta)
+                        if on_delta:
+                            await on_delta(answer_delta)
+                for fragment in delta.get("tool_calls") or []:
+                    index = int(fragment.get("index", 0))
+                    call = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    call["id"] += fragment.get("id") or ""
+                    function = fragment.get("function") or {}
+                    call["name"] += function.get("name") or ""
+                    call["arguments"] += function.get("arguments") or ""
+
+    final_content, tagged_reasoning = splitter.finish()
+    if final_content != "".join(content_parts):
+        content_parts = [final_content]
+    tool_calls = [
+        _tool_call(call["id"], call["name"], call["arguments"]) for call in calls.values()
+    ]
+    reasoning_text = "\n\n".join(
+        item for item in ("".join(explicit_reasoning_parts), tagged_reasoning) if item.strip()
+    )
+    duration_ms = None
+    if reasoning_started_at is not None:
+        reasoning_finished_at = reasoning_finished_at or time.monotonic()
+        duration_ms = round((reasoning_finished_at - reasoning_started_at) * 1000)
+    provider_data = {"chat_reasoning_details": reasoning_details} if reasoning_details else {}
+    return ProviderResult(
+        content="".join(content_parts),
+        tool_calls=tool_calls,
+        provider_data=provider_data,
+        usage=usage,
+        finish_reason=finish_reason,
+        reasoning=_public_reasoning(
+            reasoning_text,
+            kind="content",
+            usage=usage,
+            observed_duration_ms=duration_ms,
+        ),
+    )
+
+
+async def responses_api(
+    *,
+    url: str,
+    headers: dict[str, str],
+    request: ProviderRequest,
+    on_delta: DeltaCallback | None,
+    on_reasoning: ReasoningDeltaCallback | None = None,
+    extra_body: dict[str, Any] | None = None,
+) -> ProviderResult:
+    body = _responses_body(request, extra_body)
+    async with httpx.AsyncClient(timeout=request.timeout) as client:
+        if not request.stream:
+            response = await client.post(url, headers=headers, json=body)
+            await _ensure_success(response)
+            result = _responses_result(_response_json(response))
+            if on_reasoning and result.reasoning:
+                await on_reasoning(result.reasoning.text, result.reasoning.kind)
+            if on_delta and result.content:
+                await on_delta(result.content)
+            return result
+
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        splitter = TaggedReasoningStream()
+        calls: dict[str, dict[str, str]] = {}
+        provider_data: dict[str, Any] = {}
+        usage: dict[str, int] = {}
+        finish_reason: str | None = None
+        replay_items: list[dict[str, Any]] = []
+        reasoning_started_at: float | None = None
+        reasoning_finished_at: float | None = None
+        async with client.stream("POST", url, headers=headers, json=body) as response:
+            await _ensure_success(response)
+            async for event in _sse_events(response):
+                event_type = event.get("type")
+                if event_type == "response.output_text.delta":
+                    text = event.get("delta") or ""
+                    answer_delta, tagged_reasoning_delta = splitter.add(str(text))
+                    if tagged_reasoning_delta:
+                        if reasoning_started_at is None:
+                            reasoning_started_at = time.monotonic()
+                        if on_reasoning:
+                            await on_reasoning(tagged_reasoning_delta, "content")
+                    if answer_delta:
+                        if reasoning_started_at is not None and reasoning_finished_at is None:
+                            reasoning_finished_at = time.monotonic()
+                        content_parts.append(answer_delta)
+                        if on_delta:
+                            await on_delta(answer_delta)
+                elif event_type == "response.reasoning_summary_text.delta":
+                    text = event.get("delta") or ""
+                    if isinstance(text, str) and text:
+                        if reasoning_started_at is None:
+                            reasoning_started_at = time.monotonic()
+                        reasoning_parts.append(text)
+                        if on_reasoning:
+                            await on_reasoning(text, "summary")
+                elif event_type == "response.output_item.added":
+                    item = event.get("item") or {}
+                    if item.get("type") == "function_call":
+                        key = item.get("id") or item.get("call_id")
+                        calls[str(key)] = {
+                            "id": item.get("call_id") or str(key),
+                            "name": item.get("name") or "",
+                            "arguments": item.get("arguments") or "",
+                        }
+                    elif item.get("type") == "reasoning" and item.get("encrypted_content"):
+                        provider_data["reasoning_encrypted_content"] = item["encrypted_content"]
+                elif event_type == "response.function_call_arguments.delta":
+                    key = str(event.get("item_id") or event.get("call_id"))
+                    call = calls.setdefault(
+                        key,
+                        {
+                            "id": event.get("call_id") or key,
+                            "name": event.get("name") or "",
+                            "arguments": "",
+                        },
+                    )
+                    call["arguments"] += event.get("delta") or ""
+                elif event_type == "response.output_item.done":
+                    item = event.get("item") or {}
+                    replay_items.extend(_responses_replay_items([item]))
+                    if item.get("type") == "function_call":
+                        key = str(item.get("id") or item.get("call_id"))
+                        calls[key] = {
+                            "id": item.get("call_id") or key,
+                            "name": item.get("name") or "",
+                            "arguments": item.get("arguments")
+                            or calls.get(key, {}).get("arguments", ""),
+                        }
+                    elif item.get("type") == "reasoning" and item.get("encrypted_content"):
+                        provider_data["reasoning_encrypted_content"] = item["encrypted_content"]
+                elif event_type in {
+                    "response.completed",
+                    "response.incomplete",
+                    "response.failed",
+                }:
+                    response_data = event.get("response") or {}
+                    if event_type == "response.failed":
+                        raise ProviderError(
+                            "Provider response failed", code="provider.requestFailed"
+                        )
+                    incomplete_reason = (response_data.get("incomplete_details") or {}).get(
+                        "reason"
+                    )
+                    if (
+                        event_type == "response.incomplete"
+                        and incomplete_reason not in {None, "max_output_tokens"}
+                    ):
+                        raise ProviderError(
+                            "Provider response incomplete", code="provider.invalidResponse"
+                        )
+                    usage = _normalize_usage(response_data.get("usage"))
+                    finish_reason = _responses_finish_reason(response_data)
+                    completed_replay = _responses_replay_items(response_data.get("output"))
+                    if completed_replay:
+                        replay_items = completed_replay
+                    completed_summaries = [
+                        _reasoning_summary(item)
+                        for item in response_data.get("output") or []
+                        if isinstance(item, dict) and item.get("type") == "reasoning"
+                    ]
+                    if any(completed_summaries):
+                        reasoning_parts = [item for item in completed_summaries if item]
+
+    final_content, tagged_reasoning = splitter.finish()
+    if final_content != "".join(content_parts):
+        content_parts = [final_content]
+    tool_calls = [
+        _tool_call(call["id"], call["name"], call["arguments"]) for call in calls.values()
+    ]
+    if replay_items:
+        provider_data["responses_output_items"] = replay_items
+    reasoning_text = "\n\n".join(
+        item for item in ("".join(reasoning_parts), tagged_reasoning) if item.strip()
+    )
+    duration_ms = None
+    if reasoning_started_at is not None:
+        reasoning_finished_at = reasoning_finished_at or time.monotonic()
+        duration_ms = round((reasoning_finished_at - reasoning_started_at) * 1000)
+    return ProviderResult(
+        content="".join(content_parts),
+        tool_calls=tool_calls,
+        provider_data=provider_data,
+        usage=usage,
+        finish_reason=finish_reason,
+        reasoning=_public_reasoning(
+            reasoning_text,
+            kind="summary" if reasoning_parts else "content",
+            usage=usage,
+            observed_duration_ms=duration_ms,
+        ),
+    )

@@ -5,7 +5,7 @@ const frontendPort = Number(process.env.MATO_LOOP_BIND_FRONTEND_PORT || 10020)
 const apiProxyTarget = process.env.QUASAR_API_PROXY_TARGET || `http://127.0.0.1:${backendPort}`
 
 export default configure(() => ({
-  boot: ['axios'],
+  boot: ['axios', 'confirm'],
   css: ['app.scss'],
   extras: ['roboto-font', 'material-icons'],
   store: true,
@@ -29,7 +29,9 @@ export default configure(() => ({
   framework: {
     config: {
       dark: 'auto',
-      notify: {}
+      notify: {
+        position: 'top-right'
+      }
     },
     lang: 'de-DE',
     plugins: ['Dialog', 'Loading', 'Notify']
