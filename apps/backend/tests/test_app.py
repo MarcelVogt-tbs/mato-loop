@@ -25,6 +25,7 @@ def test_validation_errors_use_stable_codes() -> None:
     assert response.json() == {
         "error": {
             "code": "validation.tooShort",
+            "message": "The request contains invalid data.",
             "field": "password",
             "params": {"minLength": 10},
         }
@@ -36,7 +37,12 @@ def test_domain_errors_use_stable_codes() -> None:
         response = client.get("/api/sessions")
 
     assert response.status_code == 401
-    assert response.json() == {"error": {"code": "auth.notAuthenticated"}}
+    assert response.json() == {
+        "error": {
+            "code": "auth.notAuthenticated",
+            "message": "Authentication failed.",
+        }
+    }
 
 
 def test_attachment_download_requires_authentication() -> None:
@@ -46,7 +52,21 @@ def test_attachment_download_requires_authentication() -> None:
         )
 
     assert response.status_code == 401
-    assert response.json() == {"error": {"code": "auth.notAuthenticated"}}
+    assert response.json() == {
+        "error": {
+            "code": "auth.notAuthenticated",
+            "message": "Authentication failed.",
+        }
+    }
+
+
+def test_general_attachment_routes_replace_audio_only_routes() -> None:
+    paths = app.openapi()["paths"]
+
+    assert "/api/sessions/with-attachments" in paths
+    assert "/api/sessions/{session_id}/messages/with-attachments" in paths
+    assert "/api/sessions/with-audio" not in paths
+    assert "/api/sessions/{session_id}/messages/with-audio" not in paths
 
 
 def test_static_paths_cannot_escape_static_root(tmp_path: Path) -> None:

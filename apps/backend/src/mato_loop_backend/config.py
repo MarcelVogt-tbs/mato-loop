@@ -62,8 +62,8 @@ class RuntimeConfig(BaseSettings):
         return self.data_dir / "secrets"
 
     @property
-    def attachments_dir(self) -> Path:
-        return self.data_dir / "attachments"
+    def sessions_dir(self) -> Path:
+        return self.data_dir / "sessions"
 
 
 @lru_cache

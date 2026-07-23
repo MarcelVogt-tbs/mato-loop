@@ -7,9 +7,25 @@ const defaultWebFetch = () => ({
   allowedPrivateOrigins: []
 })
 
+const defaultMediaPolicy = () => ({ policy: 'disabled', timeoutSeconds: 300 })
+
+function settingsPayload(state) {
+  return {
+    webFetch: state.webFetch,
+    generateImage: state.generateImage,
+    generateSpeech: state.generateSpeech,
+    generateAudio: state.generateAudio,
+    transcribeAudio: state.transcribeAudio
+  }
+}
+
 export const useToolSettingsStore = defineStore('tool-settings', {
   state: () => ({
     webFetch: defaultWebFetch(),
+    generateImage: defaultMediaPolicy(),
+    generateSpeech: defaultMediaPolicy(),
+    generateAudio: defaultMediaPolicy(),
+    transcribeAudio: defaultMediaPolicy(),
     loaded: false,
     loadFailed: false,
     loading: false,
@@ -21,9 +37,9 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       this.loadFailed = false
       try {
         const { data } = await api.get('/tools/settings')
-        this.webFetch = { ...defaultWebFetch(), ...data.webFetch }
+        this.assignSettings(data)
         this.loaded = true
-        return this.webFetch
+        return settingsPayload(this)
       } catch (error) {
         this.loadFailed = true
         throw error
@@ -31,15 +47,28 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         this.loading = false
       }
     },
-    async saveSettings(webFetch) {
+    async saveSettings(settings) {
       this.saving = true
       try {
-        const { data } = await api.put('/tools/settings', { webFetch })
-        this.webFetch = { ...defaultWebFetch(), ...data.webFetch }
+        const payload = {
+          webFetch: settings.webFetch || this.webFetch,
+          generateImage: { ...this.generateImage, ...settings.generateImage },
+          generateSpeech: { ...this.generateSpeech, ...settings.generateSpeech },
+          generateAudio: { ...this.generateAudio, ...settings.generateAudio },
+          transcribeAudio: { ...this.transcribeAudio, ...settings.transcribeAudio }
+        }
+        const { data } = await api.put('/tools/settings', payload)
+        this.assignSettings(data)
         this.loaded = true
-        return this.webFetch
+        return settingsPayload(this)
       } finally {
         this.saving = false
+      }
+    },
+    assignSettings(data) {
+      this.webFetch = { ...defaultWebFetch(), ...data?.webFetch }
+      for (const field of ['generateImage', 'generateSpeech', 'generateAudio', 'transcribeAudio']) {
+        this[field] = { ...defaultMediaPolicy(), ...data?.[field] }
       }
     }
   }

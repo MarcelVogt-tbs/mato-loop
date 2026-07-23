@@ -8,8 +8,14 @@ const TOOL_DISPLAY = {
   write_file: { label: 'Datei schreiben', icon: 'edit_document' },
   create_directory: { label: 'Ordner erstellen', icon: 'create_new_folder' },
   delete_path: { label: 'Pfad löschen', icon: 'delete_outline' },
+  copy_path: { label: 'Pfad kopieren', icon: 'content_copy' },
+  move_path: { label: 'Pfad verschieben', icon: 'drive_file_move' },
   web_search: { label: 'Im Web suchen', icon: 'travel_explore' },
   webfetch: { label: 'Webseite abrufen', icon: 'language' },
+  generate_image: { label: 'Bild erzeugen', icon: 'image' },
+  generate_speech: { label: 'Sprache erzeugen', icon: 'record_voice_over' },
+  generate_audio: { label: 'Audio erzeugen', icon: 'graphic_eq' },
+  transcribe_audio: { label: 'Audio transkribieren', icon: 'mic' },
   session_read: { label: 'Session lesen', icon: 'forum' },
   session_search: { label: 'Sessions durchsuchen', icon: 'manage_search' },
   memory_retrieve: { label: 'Memory abrufen', icon: 'psychology' },
@@ -31,7 +37,24 @@ export function toolSummary(tool) {
   if (tool?.name === 'memory_retrieve' && argumentsValue.mode === 'browse') {
     return argumentsValue.cursor_id ? 'Memory-Übersicht fortsetzen' : 'Memory-Übersicht'
   }
+  if (tool?.name === 'generate_speech' && typeof argumentsValue.text === 'string') {
+    return truncate(argumentsValue.text)
+  }
+  if (['generate_image', 'generate_audio'].includes(tool?.name) && typeof argumentsValue.prompt === 'string') {
+    const duration = Number(argumentsValue.duration_seconds) > 0
+      ? ` (${argumentsValue.duration_seconds} s)`
+      : ''
+    return `${truncate(argumentsValue.prompt)}${duration}`
+  }
+  if (tool?.name === 'transcribe_audio' && typeof argumentsValue.attachment_id === 'string') {
+    return `Audioanhang ${truncate(argumentsValue.attachment_id, 36)}`
+  }
   if (typeof argumentsValue.path === 'string') return truncate(argumentsValue.path)
+  if (typeof argumentsValue.source_path === 'string' && typeof argumentsValue.destination_path === 'string') {
+    const sourceRoot = argumentsValue.source_root ? `${argumentsValue.source_root}:` : ''
+    const destinationRoot = argumentsValue.destination_root ? `${argumentsValue.destination_root}:` : ''
+    return truncate(`${sourceRoot}${argumentsValue.source_path} -> ${destinationRoot}${argumentsValue.destination_path}`)
+  }
   if (typeof argumentsValue.url === 'string') return cleanUrlForDisplay(argumentsValue.url)
   if (typeof argumentsValue.query === 'string') return truncate(argumentsValue.query)
   if (typeof argumentsValue.name === 'string') return truncate(argumentsValue.name)

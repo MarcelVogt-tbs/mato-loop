@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
+from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.memory.embeddings import EmbeddingError, embedding_client
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
 from mato_loop_backend.memory.service import MemoryService
@@ -50,6 +51,7 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     MemoryPolicy,
     ModelAvailability,
+    ModelCapability,
     ModelConfig,
 )
 
@@ -257,7 +259,7 @@ def _assistant_tool_message(result: ProviderResult, calls: list[ToolCall]) -> di
 
 def _tool_error(code: str, instruction: str) -> str:
     return json.dumps(
-        {"error": {"code": code}, "instruction": instruction},
+        {**error_payload(code, fallback_code="memory.dreamingFailed"), "instruction": instruction},
         ensure_ascii=False,
     )
 
@@ -639,6 +641,7 @@ def _model_and_provider(
             if item.id == model_id
             and item.enabled
             and item.availability != ModelAvailability.MISSING
+            and ModelCapability.CHAT in item.capabilities
         ),
         None,
     )
@@ -849,6 +852,7 @@ class DreamingService:
             Message.session_id == session_id,
             Message.role.in_(["user", "assistant"]),
             Message.content != "",
+            Message.error_code.is_(None),
             Message.generation_status == "completed",
         ]
         if checkpoint_id is not None:
@@ -1014,6 +1018,7 @@ class DreamingService:
                         Message.session_id == session.id,
                         Message.role.in_(["user", "assistant"]),
                         Message.content != "",
+                        Message.error_code.is_(None),
                         Message.generation_status == "completed",
                         or_(
                             Message.created_at > first.created_at,

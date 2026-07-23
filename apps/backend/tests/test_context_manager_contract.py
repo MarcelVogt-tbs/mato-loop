@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.context import (
     IMAGE_INPUT_RESERVE_TOKENS,
+    MAX_ATTACHMENT_EXCERPT_CHARACTERS,
     ContextError,
     ContextManager,
     SummaryResult,
@@ -44,7 +45,10 @@ def _message(session_id, role: str, content: str) -> Message:
     )
 
 
-def _attach_image(message: Message, storage_key: str = "ab/abcdef") -> MessageAttachment:
+def _attach_image(
+    message: Message,
+    storage_path: str = "generated/00000000-0000-4000-8000-000000000000/image.png",
+) -> MessageAttachment:
     attachment = MessageAttachment(
         id=uuid4(),
         message_id=message.id,
@@ -53,10 +57,102 @@ def _attach_image(message: Message, storage_key: str = "ab/abcdef") -> MessageAt
         mime_type="image/png",
         size_bytes=123,
         sha256="a" * 64,
-        storage_key=storage_key,
+        storage_path=storage_path,
     )
     message.attachments = [attachment]
     return attachment
+
+
+def test_audio_projection_uses_reference_marker_without_file_data() -> None:
+    message = _message(uuid4(), "user", "Bitte transkribieren")
+    attachment = MessageAttachment(
+        id=uuid4(),
+        message_id=message.id,
+        position=0,
+        kind="audio",
+        mime_type="audio/wav",
+        size_bytes=123,
+        sha256="a" * 64,
+        storage_path=(
+            "attachments/00000000-0000-4000-8000-000000000001/aufnahme.wav"
+        ),
+        filename="aufnahme.wav",
+        duration_ms=1_250,
+    )
+    message.attachments = [attachment]
+
+    projected = message_dict(message)
+
+    assert str(attachment.id) in projected["content"]
+    assert "aufnahme.wav" in projected["content"]
+    assert "audio/wav" in projected["content"]
+    assert attachment.storage_path in projected["content"]
+    assert "1250 ms" in projected["content"]
+    assert projected["attachments"] == []
+    assert "secret-storage-key" not in str(projected)
+    assert "base64" not in str(projected)
+
+
+def test_user_attachment_excerpt_is_untrusted_and_strictly_budgeted() -> None:
+    message = _message(uuid4(), "user", "Bitte zusammenfassen")
+    attachment = MessageAttachment(
+        id=uuid4(),
+        message_id=message.id,
+        position=0,
+        kind="document",
+        processing_status="ready",
+        mime_type="application/pdf",
+        size_bytes=123,
+        sha256="a" * 64,
+        storage_path=f"attachments/{uuid4()}/bericht.pdf",
+        filename="bericht.pdf",
+        metadata_json={"derivedPath": f"derived/{uuid4()}/content.txt"},
+    )
+    message.attachments = [attachment]
+
+    class TextService:
+        def read_derived_text(self, _attachment, _session_id):
+            return "x" * (MAX_ATTACHMENT_EXCERPT_CHARACTERS + 100)
+
+    projected = message_dict(
+        message,
+        include_attachment_text=True,
+        attachment_service=TextService(),  # type: ignore[arg-type]
+    )
+
+    assert "Untrusted attachment text" in projected["content"]
+    assert "truncated by the host" in projected["content"]
+    assert "x" * MAX_ATTACHMENT_EXCERPT_CHARACTERS in projected["content"]
+    assert "x" * (MAX_ATTACHMENT_EXCERPT_CHARACTERS + 1) not in projected["content"]
+
+
+def test_attachment_excerpt_is_never_injected_into_tool_content() -> None:
+    message = _message(uuid4(), "tool", "Tool-Ergebnis")
+    attachment = MessageAttachment(
+        id=uuid4(),
+        message_id=message.id,
+        position=0,
+        kind="text",
+        processing_status="ready",
+        mime_type="text/plain",
+        size_bytes=10,
+        sha256="a" * 64,
+        storage_path=f"generated/{uuid4()}/text.txt",
+        metadata_json={"derivedPath": f"derived/{uuid4()}/content.txt"},
+    )
+    message.attachments = [attachment]
+
+    class FailingService:
+        def read_derived_text(self, _attachment, _session_id):
+            raise AssertionError("Tool-Inhalte dürfen keine Attachment-Projektion laden")
+
+    projected = message_dict(
+        message,
+        include_attachment_text=True,
+        attachment_service=FailingService(),  # type: ignore[arg-type]
+    )
+
+    assert "Untrusted attachment text" not in projected["content"]
 
 
 def test_message_projection_hides_internal_runtime_state() -> None:
@@ -71,6 +167,24 @@ def test_message_projection_hides_internal_runtime_state() -> None:
     assert projected["provider_data"] == {
         "responses_output_items": [{"id": "provider-state"}]
     }
+
+
+def test_runtime_error_message_is_excluded_from_model_projection() -> None:
+    session_id = uuid4()
+    user = _message(session_id, "user", "Weiterarbeiten")
+    error = _message(session_id, "assistant", "must not reach the model")
+    error.error_code = "agent.failed"
+    error.error_run_id = uuid4()
+
+    projected = _projection_messages(
+        "System",
+        None,
+        [user, error],
+        TrustLevel.PUBLIC,
+    )
+
+    assert [item["role"] for item in projected] == ["system", "user"]
+    assert "must not reach the model" not in str(projected)
 
 
 def test_message_projection_restores_redacted_tool_content_as_string() -> None:
@@ -96,6 +210,29 @@ def test_message_projection_restores_redacted_tool_content_as_string() -> None:
         "characters": 22,
         "preview": "Stabiler Selbstkontext",
     }
+
+
+def test_message_projection_never_restores_persisted_write_file_content() -> None:
+    message = _message(uuid4(), "assistant", "Datei schreiben")
+    message.tool_calls = [
+        {
+            "id": "write",
+            "name": "write_file",
+            "arguments": {
+                "root": "session",
+                "path": "files/note.txt",
+                "content": {"characters": 17, "redacted": True},
+            },
+        }
+    ]
+
+    projected = message_dict(message)
+
+    content = projected["tool_calls"][0]["arguments"]["content"]
+    assert content == (
+        "[Persisted file content omitted: 17 characters. Regenerate content before retrying.]"
+    )
+    assert "note.txt" not in content
 
 
 def test_public_projection_redacts_only_private_memory_results() -> None:
@@ -241,6 +378,14 @@ def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
     assert "Workspace mode: read-only" in prompt
     assert "switch Agent-Modus from Lesen to Schreiben" in prompt
     assert "Do not claim that MatoLoop generally cannot perform the action" in prompt
+    assert "two explicit roots: session and workspace" in prompt
+    assert "Use path='.' for the root itself" in prompt
+    assert "paths 'attachments', 'generated', 'downloads', and 'derived'" in prompt
+    assert "managed and read-only but may be read or used as copy sources" in prompt
+    assert "path='files' contains user-managed files" in prompt
+    assert "exact new destination path" in prompt
+    assert "approval cannot make a missing workspace available" in prompt
+    assert "Do not emit stale mutation calls" in prompt
 
 
 def test_read_write_system_prompt_does_not_request_a_mode_switch() -> None:
@@ -401,13 +546,23 @@ def test_message_dict_contains_only_internal_attachment_reference() -> None:
 
     assert projected["attachments"] == [
         {
+            "id": str(message.attachments[0].id),
+            "filename": None,
             "kind": "image",
+            "category": "user_upload",
             "mime_type": "image/png",
             "size_bytes": 123,
             "sha256": "a" * 64,
-            "storage_key": "ab/abcdef",
+            "trust_level": "public",
+            "source_role": "tool",
+            "session_id": str(message.session_id),
+            "storage_path": (
+                "generated/00000000-0000-4000-8000-000000000000/image.png"
+            ),
         }
     ]
+    assert str(message.attachments[0].id) in projected["content"]
+    assert message.attachments[0].storage_path in projected["content"]
     assert "data:" not in str(projected)
 
 
@@ -460,6 +615,42 @@ async def test_active_image_reserves_conservative_context_budget() -> None:
     )
 
 
+async def test_unreferenced_historical_image_does_not_reserve_image_budget() -> None:
+    session = _session()
+    historical = _message(session.id, "user", "Altes Bild")
+    _attach_image(historical)
+    current = _message(session.id, "user", "Neue Frage ohne Bildbezug")
+    records = [historical, current]
+    settings = _settings(compaction_trigger_ratio=0.95)
+
+    text_db = AsyncMock(spec=AsyncSession)
+    text_db.scalar.return_value = None
+    text_projection = await ContextManager.build(
+        text_db,
+        chat_session=session,
+        records=records,
+        system_prompt="System",
+        tool_schemas=[],
+        model=_model(context_window_tokens=10_000, supports_image_input=False),
+        settings=settings,
+        summarize=AsyncMock(),
+    )
+    vision_db = AsyncMock(spec=AsyncSession)
+    vision_db.scalar.return_value = None
+    vision_projection = await ContextManager.build(
+        vision_db,
+        chat_session=session,
+        records=records,
+        system_prompt="System",
+        tool_schemas=[],
+        model=_model(context_window_tokens=10_000, supports_image_input=True),
+        settings=settings,
+        summarize=AsyncMock(),
+    )
+
+    assert vision_projection.estimated_input_tokens == text_projection.estimated_input_tokens
+
+
 async def test_compaction_preserves_history_and_records_stable_summary_boundary() -> None:
     session = _session()
     records = [
@@ -470,7 +661,11 @@ async def test_compaction_preserves_history_and_records_stable_summary_boundary(
     ]
     original_ids = [message.id for message in records]
     original_contents = [message.content for message in records]
-    _attach_image(records[1], "cd/cdef")
+    _attach_image(
+        records[1],
+        "generated/00000000-0000-4000-8000-000000000002/image.png",
+    )
+    records[1].attachments[0].filename = "diagram.png"
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = None
     summarize = AsyncMock(return_value=SummaryResult("Verdichteter Verlauf", None))
@@ -498,10 +693,12 @@ async def test_compaction_preserves_history_and_records_stable_summary_boundary(
     assert str(records[0].id) in source
     assert str(records[1].id) in source
     assert str(records[2].id) not in source
-    assert "[Bildanhang]" in source
+    assert str(records[1].attachments[0].id) in source
+    assert "diagram.png" in source
+    assert "generated/00000000-0000-4000-8000-000000000002/image.png" in source
     assert "cd/cdef" not in source
     assert "base64" not in source
-    assert all(not message.get("attachments") for message in projection.messages)
+    assert projection.messages[0]["attachments"][0]["historical"] is True
 
 
 async def test_large_old_tool_output_is_pruned_without_mutating_message_history() -> None:

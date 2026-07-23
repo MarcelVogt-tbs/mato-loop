@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
+    SendMessageRequest,
     SessionCreateRequest,
     SessionUpdateRequest,
     cancel_run,
@@ -17,10 +19,11 @@ from mato_loop_backend.api.routes.sessions import (
     download_attachment,
     get_session,
     message_payload,
+    send_message,
     session_defaults,
     update_session,
 )
-from mato_loop_backend.attachments import AttachmentStorage
+from mato_loop_backend.attachments import AttachmentService, AttachmentStorage
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -29,6 +32,7 @@ from mato_loop_backend.models import (
     TitleGenerationStatus,
     UserAccount,
 )
+from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import AiSettings, MemorySettings, SettingsStore, TrustLevel
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
@@ -42,6 +46,8 @@ def _user() -> UserAccount:
 
 
 async def test_session_is_created_with_first_message_and_run(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
     user = _user()
     provider_id = uuid4()
     provider = LlmProviderConfig(
@@ -70,8 +76,17 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     start = AsyncMock(return_value=run)
     monkeypatch.setattr(SettingsStore, "load", load_settings)
     monkeypatch.setattr(AgentRuntime, "start", start)
+    storage = MagicMock()
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
     db.add.side_effect = lambda session: setattr(session, "id", uuid4())
+    persisted_message = Message(
+        id=uuid4(),
+        session_id=run.session_id,
+        role="user",
+        content="Erste Nachricht",
+    )
+    db.scalar.return_value = persisted_message
 
     result = await create_session(
         SessionCreateRequest(content="  Erste Nachricht  ", workspace_access="read-write"),
@@ -90,9 +105,12 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert session.title_generation_status == TitleGenerationStatus.PENDING.value
     start.assert_awaited_once_with(db, session, "Erste Nachricht")
     assert result["session"]["id"] == str(session.id)
+    assert result["session"]["titleGenerationStatus"] == "pending"
     assert result["session"]["webSearchPolicy"] == "available"
     assert result["runId"] == str(run.id)
     assert result["modelName"] == "Test"
+    assert result["message"]["id"] == str(persisted_message.id)
+    storage.provision.assert_called_once_with(session.id)
 
 
 async def test_session_defaults_report_effective_memory_state(monkeypatch) -> None:
@@ -132,6 +150,36 @@ async def test_session_is_not_created_for_blank_first_message() -> None:
     assert exc_info.value.code == "validation.required"
     assert exc_info.value.field == "content"
     db.add.assert_not_called()
+
+
+async def test_failed_first_commit_removes_provisioned_session_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="test-model")
+    ai_settings = AiSettings(
+        providers=[provider], models=[model], default_model_id=model.id
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return ai_settings if settings_type is AiSettings else MemorySettings()
+
+    sessions = SessionStorage(tmp_path / "sessions")
+    monkeypatch.setattr(SettingsStore, "load", load_settings)
+    monkeypatch.setattr(
+        AgentRuntime, "start", AsyncMock(side_effect=RuntimeError("commit failed"))
+    )
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: sessions)
+    db = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await create_session(SessionCreateRequest(content="Erste Nachricht"), user, db)
+
+    assert [item for item in sessions.sessions_dir.iterdir() if not item.name.startswith(".")] == []
+    db.rollback.assert_awaited()
 
 
 async def test_session_payload_contains_active_run() -> None:
@@ -259,6 +307,30 @@ def test_message_payload_exposes_only_public_reasoning() -> None:
     assert payload["attachments"] == []
 
 
+def test_message_payload_recreates_safe_english_runtime_error() -> None:
+    secret = "secret upstream response"
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="assistant",
+        content=secret,
+        error_code="provider.requestFailed",
+        error_params={"retryable": True},
+        error_run_id=uuid4(),
+    )
+
+    payload = message_payload(message)
+
+    assert payload["kind"] == "runtime_error"
+    assert payload["content"] == "The model provider request failed."
+    assert payload["error"] == {
+        "code": "provider.requestFailed",
+        "message": "The model provider request failed.",
+        "params": {"retryable": True},
+    }
+    assert secret not in str(payload)
+
+
 def test_message_payload_contains_public_attachment_metadata_only() -> None:
     session_id = uuid4()
     message_id = uuid4()
@@ -275,10 +347,14 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             message_id=message_id,
             position=0,
             kind="image",
+            category="generated",
+            processing_status="ready",
             mime_type="image/png",
             size_bytes=123,
             sha256="a" * 64,
-            storage_key="ab/abcdefabcdefabcdefabcdefabcdefab",
+            storage_path=(
+                "generated/00000000-0000-4000-8000-000000000000/bild.png"
+            ),
             filename="bild.png",
             width=10,
             height=20,
@@ -291,11 +367,15 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
         {
             "id": str(attachment_id),
             "kind": "image",
+            "category": "generated",
+            "processingStatus": "ready",
             "mimeType": "image/png",
             "sizeBytes": 123,
             "filename": "bild.png",
             "width": 10,
             "height": 20,
+            "durationMs": None,
+            "metadata": {},
             "url": (
                 f"/api/sessions/{session_id}/messages/{message_id}"
                 f"/attachments/{attachment_id}"
@@ -315,21 +395,30 @@ async def test_attachment_download_has_secure_headers_and_checks_hierarchy(
     user = _user()
     message_id = uuid4()
     attachment_id = uuid4()
-    storage = AttachmentStorage(tmp_path / "attachments")
-    storage_key = storage.write(b"image-data")
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(session_id)
+    storage = AttachmentStorage(sessions)
+    data = b"image-data"
+    storage_path = storage.write(
+        session_id, attachment_id, data, "bild.png", "user_upload"
+    )
     attachment = MessageAttachment(
         id=attachment_id,
         message_id=message_id,
         position=0,
         kind="image",
+        category="user_upload",
         mime_type="image/png",
         size_bytes=10,
-        sha256="a" * 64,
-        storage_key=storage_key,
+        sha256=hashlib.sha256(data).hexdigest(),
+        storage_path=storage_path,
+        filename="bild.png",
     )
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = attachment
-    monkeypatch.setattr(sessions_route, "AttachmentStorage", lambda: storage)
+    monkeypatch.setattr(
+        sessions_route, "AttachmentService", lambda: AttachmentService(storage)
+    )
 
     response = await download_attachment(
         session_id, message_id, attachment_id, user, db
@@ -341,32 +430,62 @@ async def test_attachment_download_has_secure_headers_and_checks_hierarchy(
     assert response.media_type == "image/png"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["cross-origin-resource-policy"] == "same-origin"
-    assert response.headers["cache-control"] == "private"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["content-disposition"].startswith("inline;")
 
 
-async def test_session_delete_removes_attachment_files_after_database_commit(monkeypatch) -> None:
+async def test_session_delete_trashes_commits_and_purges_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
 
     session_id = uuid4()
     user = _user()
     session = ChatSession(id=session_id, user_id=user.id, title="Test")
+    sessions = SessionStorage(tmp_path / "sessions")
+    session_path = sessions.provision(session_id)
+    (session_path / "files" / "notiz.txt").write_text("Inhalt", encoding="utf-8")
     active_runs_result = MagicMock()
     active_runs_result.all.return_value = []
-    storage_keys_result = MagicMock()
-    storage_keys_result.all.return_value = ["ab/abcdefabcdefabcdefabcdefabcdefab"]
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    db.scalars.side_effect = [active_runs_result, storage_keys_result]
-    delete_files = AsyncMock()
-    service = MagicMock()
-    service.delete_files = delete_files
-    monkeypatch.setattr(sessions_route, "AttachmentService", lambda: service)
+    db.scalar.return_value = session
+    db.scalars.return_value = active_runs_result
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: sessions)
 
     await delete_session(session_id, user, db)
 
     db.delete.assert_awaited_once_with(session)
     db.commit.assert_awaited_once()
-    delete_files.assert_awaited_once_with(["ab/abcdefabcdefabcdefabcdefabcdefab"])
+    assert not session_path.exists()
+    assert list(sessions.trash_dir.iterdir()) == []
+
+
+async def test_session_delete_restores_tree_when_database_commit_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    session_id = uuid4()
+    user = _user()
+    session = ChatSession(id=session_id, user_id=user.id, title="Test")
+    sessions = SessionStorage(tmp_path / "sessions")
+    session_path = sessions.provision(session_id)
+    stored_file = session_path / "files" / "notiz.txt"
+    stored_file.write_text("Inhalt", encoding="utf-8")
+    active_runs_result = MagicMock()
+    active_runs_result.all.return_value = []
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    db.scalars.return_value = active_runs_result
+    db.commit.side_effect = RuntimeError("commit failed")
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: sessions)
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await delete_session(session_id, user, db)
+
+    assert stored_file.read_text(encoding="utf-8") == "Inhalt"
+    assert list(sessions.trash_dir.iterdir()) == []
+    db.rollback.assert_awaited_once()
 
 
 async def test_attachment_download_rejects_incomplete_hierarchy() -> None:
@@ -381,7 +500,7 @@ async def test_attachment_download_rejects_incomplete_hierarchy() -> None:
     assert exc_info.value.code == "attachment.notFound"
 
 
-async def test_session_rejects_model_missing_from_provider(monkeypatch) -> None:
+async def test_session_accepts_message_before_model_availability_failure(monkeypatch) -> None:
     user = _user()
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(
@@ -395,13 +514,61 @@ async def test_session_rejects_model_missing_from_provider(monkeypatch) -> None:
         return settings if settings_type is AiSettings else MemorySettings()
 
     monkeypatch.setattr(SettingsStore, "load", load_settings)
+    run = AgentRun(
+        id=uuid4(),
+        session_id=uuid4(),
+        status="queued",
+        model_config_id=model.id,
+    )
+    start = AsyncMock(return_value=run)
+    monkeypatch.setattr(AgentRuntime, "start", start)
+    from mato_loop_backend.api.routes import sessions as sessions_route
 
-    with pytest.raises(ApiError) as exc_info:
-        await create_session(
-            SessionCreateRequest(content="Test"), user, AsyncMock(spec=AsyncSession)
-        )
+    storage = MagicMock()
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
+    persisted_message = Message(
+        id=uuid4(),
+        session_id=run.session_id,
+        role="user",
+        content="Test",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = persisted_message
 
-    assert exc_info.value.code == "session.modelUnavailable"
+    result = await create_session(SessionCreateRequest(content="Test"), user, db)
+
+    session = db.add.call_args.args[0]
+    start.assert_awaited_once_with(db, session, "Test")
+    assert result["runId"] == str(run.id)
+    assert result["message"]["content"] == "Test"
+
+
+async def test_required_search_unavailability_does_not_reject_user_message(monkeypatch) -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Test",
+        web_search_policy="required",
+    )
+    run = AgentRun(id=uuid4(), session_id=session.id, status="queued")
+    user_message = Message(
+        id=uuid4(), session_id=session.id, role="user", content="Aktuelle Frage"
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, user_message]
+    start = AsyncMock(return_value=run)
+    monkeypatch.setattr(AgentRuntime, "start", start)
+    load = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", load)
+
+    result = await send_message(
+        session.id, SendMessageRequest(content="Aktuelle Frage"), user, db
+    )
+
+    start.assert_awaited_once_with(db, session, "Aktuelle Frage")
+    load.assert_not_awaited()
+    assert result["runId"] == str(run.id)
 
 
 async def test_private_session_can_switch_to_public_model(monkeypatch) -> None:

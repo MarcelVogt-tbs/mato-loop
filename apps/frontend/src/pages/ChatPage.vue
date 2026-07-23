@@ -1,8 +1,38 @@
 <template>
   <q-page :style-fn="chatPageStyle" class="chat-page column no-wrap">
-    <q-scroll-area ref="scrollArea" class="chat-page__content col">
+    <q-scroll-area
+      ref="scrollArea"
+      class="chat-page__content col"
+      :aria-busy="chat.loading ? 'true' : 'false'"
+    >
       <div ref="scrollContent">
-        <div v-if="!chat.current" class="chat-welcome text-center q-pa-lg">
+        <div v-if="chat.loading" class="chat-transcript q-pa-md" aria-label="Session wird geladen">
+          <div v-for="width in ['42%', '86%', '64%']" :key="width" class="chat-session-skeleton">
+            <q-skeleton type="text" width="88px" />
+            <q-skeleton type="text" :width="width" height="24px" />
+            <q-skeleton type="text" width="72%" />
+          </div>
+        </div>
+
+        <div
+          v-else-if="chat.loadError"
+          class="chat-session-state text-center q-pa-lg"
+          role="alert"
+        >
+          <q-icon name="error_outline" color="negative" size="40px" />
+          <div class="text-h6 q-mt-sm">Session konnte nicht geladen werden</div>
+          <p class="app-muted q-mt-sm">{{ sessionLoadErrorMessage }}</p>
+          <q-btn
+            unelevated
+            no-caps
+            color="primary"
+            icon="refresh"
+            label="Erneut versuchen"
+            @click="loadRouteSession"
+          />
+        </div>
+
+        <div v-else-if="!chat.current" class="chat-welcome text-center q-pa-lg">
           <AppLogo :size="72" />
           <h1 class="text-h4 text-weight-bold q-mb-sm">Willkommen bei MatoLoop</h1>
           <p class="text-body1 app-muted q-mx-auto">
@@ -21,8 +51,17 @@
             :key="message.id"
             :class="['chat-message', `chat-message--${message.role}`]"
           >
+            <template v-if="message.kind === 'runtime_error' && message.error">
+              <div class="chat-message__label">MatoLoop</div>
+              <q-banner rounded class="chat-runtime-error app-surface-tonal" role="alert">
+                <template #avatar>
+                  <q-icon name="error_outline" color="negative" />
+                </template>
+                {{ apiErrorMessage(message.error) }}
+              </q-banner>
+            </template>
             <template
-              v-if="message.content || message.reasoning || message.generationStatus === 'interrupted'"
+              v-else-if="message.content || message.reasoning || message.generationStatus === 'interrupted'"
             >
               <div class="chat-message__label">
                 <span>{{ message.role === 'user' ? 'Du' : 'MatoLoop' }}</span>
@@ -49,6 +88,11 @@
               />
               <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
             </template>
+            <MessageAttachments
+              v-if="message.attachments?.length"
+              class="q-mt-sm"
+              :attachments="message.attachments"
+            />
             <div
               v-if="message.toolCalls.length"
               class="tool-timeline"
@@ -109,7 +153,19 @@
       </div>
     </q-scroll-area>
 
-    <div class="chat-composer-region">
+    <div v-if="chat.loading" class="chat-composer-region" aria-hidden="true">
+      <q-card flat bordered class="chat-composer__card chat-composer-skeleton">
+        <q-skeleton type="text" width="52%" height="28px" />
+        <div class="row items-center q-mt-md q-gutter-sm">
+          <q-skeleton type="rect" width="160px" height="40px" />
+          <q-skeleton type="rect" width="180px" height="40px" />
+          <q-space />
+          <q-skeleton type="QBtn" />
+        </div>
+      </q-card>
+    </div>
+
+    <div v-else-if="!chat.loadError" class="chat-composer-region">
       <transition name="chat-scroll-jump">
         <div v-if="chat.current && !followingBottom" class="chat-scroll-to-bottom">
           <q-btn
@@ -132,6 +188,9 @@
         :running="chat.running"
         :stopping="chat.stopping"
         :pending-count="sessionApprovals.length"
+        :attachments="chat.activeAttachmentDraft"
+        @add-attachments="addAttachmentFiles"
+        @remove-attachment="chat.removeAttachmentFile"
         @send="send"
         @stop="chat.stop"
         @update="chat.updateActive"
@@ -143,12 +202,14 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import AgentActivity from 'components/AgentActivity.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
 import MessageContent from 'components/MessageContent.vue'
+import MessageAttachments from 'components/MessageAttachments.vue'
 import ReasoningPanel from 'components/ReasoningPanel.vue'
 import ToolCallItem from 'components/ToolCallItem.vue'
 import { useApprovalStore } from 'stores/approvals'
@@ -156,18 +217,22 @@ import { useChatStore } from 'stores/chat'
 import { useAuthStore } from 'stores/auth'
 import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
+import { useToolSettingsStore } from 'stores/tool-settings'
 import { chatBottomDistance, scrollChatToBottom } from 'src/utils/chat-scroll'
 import { buildChatTranscript } from 'src/utils/chat-transcript'
+import { apiErrorMessage } from 'src/utils/api-errors'
 
 defineOptions({ name: 'ChatPage' })
 
 const route = useRoute()
 const router = useRouter()
+const $q = useQuasar()
 const chat = useChatStore()
 const auth = useAuthStore()
 const approvals = useApprovalStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
+const toolSettings = useToolSettingsStore()
 const scrollArea = ref(null)
 const scrollContent = ref(null)
 const composer = ref(null)
@@ -175,6 +240,9 @@ const trustedImageOriginsBySession = ref(new Map())
 const followingBottom = ref(true)
 const visualViewportHeight = ref(null)
 const bottomThreshold = 64
+const routeSessionId = computed(() => (
+  typeof route.query.session === 'string' ? route.query.session : null
+))
 let resizeObserver = null
 let scrollFrame = null
 let scrollTarget = null
@@ -190,6 +258,9 @@ const transcript = computed(() => buildChatTranscript(
 const trustedImageOrigins = computed(() => (
   trustedImageOriginsBySession.value.get(chat.current?.id) || []
 ))
+const sessionLoadErrorMessage = computed(() => (
+  apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
+))
 
 function trustImageOrigin(origin) {
   const sessionId = chat.current?.id
@@ -200,9 +271,36 @@ function trustImageOrigin(origin) {
 }
 
 async function loadRouteSession() {
-  await chat.loadSession(route.query.session || null)
+  const sessionId = routeSessionId.value
+  const request = chat.loadSession(sessionId).catch(() => null)
+  await composer.value?.cancelAudioActivity?.()
+  await request
+  if (chat.selectedSessionId !== sessionId || chat.loadError) return
   await nextTick()
   composer.value?.focus()
+}
+
+async function loadBackgroundData() {
+  const [providerResult, integrationResult, , defaultsResult] = await Promise.allSettled([
+    providers.fetchAll(),
+    integrations.fetchSearch(),
+    approvals.fetchPending(),
+    chat.fetchDefaults(),
+    toolSettings.fetchSettings()
+  ])
+  if (
+    providerResult.status === 'fulfilled'
+    && providers.lastLoadComplete
+    && integrationResult.status === 'fulfilled'
+    && defaultsResult.status === 'fulfilled'
+  ) {
+    chat.reconcileNewSession(
+      providers.selectionOptions(null)
+        .filter((option) => !option.disable)
+        .map((option) => option.value),
+      integrations.search.effectiveEnabled
+    )
+  }
 }
 
 async function send(content) {
@@ -214,6 +312,12 @@ async function send(content) {
   if (result?.created) {
     await router.replace({ name: 'chat', query: { session: result.sessionId } })
   }
+}
+
+function addAttachmentFiles(files, done) {
+  const result = chat.addAttachmentFiles(files)
+  if (result.error) $q.notify({ type: 'negative', message: result.error })
+  done?.(result)
 }
 
 function updateThinkingExpanded(expanded) {
@@ -321,7 +425,7 @@ function chatPageStyle(offset, height) {
   }
 }
 
-watch(() => route.query.session, loadRouteSession)
+watch(routeSessionId, () => void loadRouteSession(), { immediate: true })
 watch(
   () => chat.current?.id,
   async (sessionId, previousSessionId) => {
@@ -331,25 +435,13 @@ watch(
     scheduleFollowScroll()
   }
 )
-onMounted(async () => {
+onMounted(() => {
   observeChatSize()
   updateVisualViewport()
   window.visualViewport?.addEventListener('resize', updateVisualViewport)
   window.visualViewport?.addEventListener('scroll', updateVisualViewport)
   window.addEventListener('resize', updateVisualViewport)
-  await Promise.all([
-    providers.fetchAll(),
-    integrations.fetchSearch(),
-    approvals.fetchPending(),
-    chat.fetchDefaults()
-  ])
-  chat.reconcileNewSession(
-    providers.selectionOptions(null)
-      .filter((option) => !option.disable)
-      .map((option) => option.value),
-    integrations.search.effectiveEnabled
-  )
-  await loadRouteSession()
+  void loadBackgroundData()
 })
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()

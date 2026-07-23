@@ -57,6 +57,12 @@ class WebFetchPolicy(StrEnum):
     AUTO_ALLOWED = "auto_allowed"
 
 
+class ToolExecutionPolicy(StrEnum):
+    DISABLED = "disabled"
+    ASK = "ask"
+    AUTO = "auto"
+
+
 class ModelWebFetchPolicy(StrEnum):
     INHERIT = "inherit"
     DISABLED = "disabled"
@@ -73,6 +79,14 @@ class ModelOrigin(StrEnum):
 class ModelAvailability(StrEnum):
     AVAILABLE = "available"
     MISSING = "missing"
+
+
+class ModelCapability(StrEnum):
+    CHAT = "chat"
+    IMAGE_GENERATION = "image_generation"
+    SPEECH_GENERATION = "speech_generation"
+    AUDIO_GENERATION = "audio_generation"
+    AUDIO_TRANSCRIPTION = "audio_transcription"
 
 
 class LlmProviderConfig(BaseModel):
@@ -106,6 +120,9 @@ class ModelConfig(BaseModel):
     availability: ModelAvailability = ModelAvailability.AVAILABLE
     last_seen_at: datetime | None = None
     discovery_metadata: dict[str, Any] = Field(default_factory=dict)
+    capabilities: set[ModelCapability] = Field(
+        default_factory=lambda: {ModelCapability.CHAT}
+    )
     memory_policy: MemoryPolicy = MemoryPolicy.INHERIT
     trust_level: TrustLevel | None = Field(
         default=None,
@@ -265,12 +282,38 @@ class WebFetchSettings(BaseModel):
         return origins
 
 
+class MediaToolSettings(BaseModel):
+    policy: ToolExecutionPolicy = ToolExecutionPolicy.DISABLED
+    timeout_seconds: int = Field(
+        default=300,
+        ge=10,
+        le=3_600,
+        validation_alias=AliasChoices("timeout_seconds", "timeoutSeconds"),
+    )
+
+
 class ToolSettings(SettingsDocument):
     settings_key = "tools"
 
     web_fetch: WebFetchSettings = Field(
         default_factory=WebFetchSettings,
         validation_alias=AliasChoices("web_fetch", "webFetch"),
+    )
+    generate_image: MediaToolSettings = Field(
+        default_factory=MediaToolSettings,
+        validation_alias=AliasChoices("generate_image", "generateImage"),
+    )
+    generate_speech: MediaToolSettings = Field(
+        default_factory=MediaToolSettings,
+        validation_alias=AliasChoices("generate_speech", "generateSpeech"),
+    )
+    generate_audio: MediaToolSettings = Field(
+        default_factory=MediaToolSettings,
+        validation_alias=AliasChoices("generate_audio", "generateAudio"),
+    )
+    transcribe_audio: MediaToolSettings = Field(
+        default_factory=MediaToolSettings,
+        validation_alias=AliasChoices("transcribe_audio", "transcribeAudio"),
     )
 
 
@@ -291,6 +334,10 @@ class AiSettings(SettingsDocument):
     compaction_model_id: UUID | None = None
     title_generation_model_id: UUID | None = None
     dreaming_model_id: UUID | None = None
+    image_generation_model_id: UUID | None = None
+    speech_generation_model_id: UUID | None = None
+    audio_generation_model_id: UUID | None = None
+    audio_transcription_model_id: UUID | None = None
 
 
 class SearchSettings(SettingsDocument):

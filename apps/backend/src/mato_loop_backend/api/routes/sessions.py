@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Annotated, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -15,11 +16,16 @@ from sqlalchemy.orm import selectinload
 from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.attachments import (
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    MAX_FILE_ATTACHMENT_BYTES,
+    AttachmentError,
+    AttachmentInput,
     AttachmentService,
-    AttachmentStorage,
-    AttachmentStorageError,
+    classify_attachment,
+    safe_filename,
 )
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
 from mato_loop_backend.integrations import search_available
 from mato_loop_backend.memory import effective_memory
@@ -34,6 +40,7 @@ from mato_loop_backend.models import (
     WebSearchPolicy,
 )
 from mato_loop_backend.security import require_user
+from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
     AiSettings,
     MemorySettings,
@@ -41,7 +48,11 @@ from mato_loop_backend.settings import (
     SettingsStore,
     effective_model_trust,
 )
-from mato_loop_backend.settings.models import ModelAvailability, TrustLevel
+from mato_loop_backend.settings.models import (
+    ModelAvailability,
+    ModelCapability,
+    TrustLevel,
+)
 from mato_loop_backend.workspace import WorkspaceError, WorkspaceService
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
@@ -58,6 +69,7 @@ def _model_available(ai: AiSettings, model_id: UUID | None) -> bool:
             if item.id == model_id
             and item.enabled
             and item.availability != ModelAvailability.MISSING
+            and ModelCapability.CHAT in item.capabilities
         ),
         None,
     )
@@ -72,11 +84,23 @@ def _model_available(ai: AiSettings, model_id: UUID | None) -> bool:
 
 
 def _model_supports_tools(ai: AiSettings, model_id: UUID | None) -> bool:
-    return any(item.id == model_id and item.supports_tools for item in ai.models)
+    return any(
+        item.id == model_id
+        and ModelCapability.CHAT in item.capabilities
+        and item.supports_tools
+        for item in ai.models
+    )
 
 
 def _model_for_session(ai: AiSettings, model_id: UUID | None):
-    return next((item for item in ai.models if item.id == model_id), None)
+    return next(
+        (
+            item
+            for item in ai.models
+            if item.id == model_id and ModelCapability.CHAT in item.capabilities
+        ),
+        None,
+    )
 
 
 def _provider_for_session(ai: AiSettings, model):
@@ -108,6 +132,47 @@ class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=200_000)
 
 
+def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
+    if len(value) > 1_000_000:
+        raise ApiError(413, "validation.tooLong", field="payload")
+    try:
+        return model.model_validate_json(value)
+    except ValidationError as exc:
+        error = exc.errors(include_url=False)[0] if exc.errors() else {}
+        field = next(
+            (part for part in reversed(error.get("loc") or ()) if isinstance(part, str)),
+            "payload",
+        )
+        raise ApiError(422, "validation.invalid", field=field) from exc
+
+
+async def _attachment_uploads(files: list[UploadFile]) -> list[AttachmentInput]:
+    if not files:
+        raise ApiError(422, "validation.required", field="attachments")
+    attachments = []
+    try:
+        if len(files) > MAX_ATTACHMENTS_PER_MESSAGE:
+            raise ApiError(
+                422,
+                "validation.tooManyItems",
+                field="attachments",
+                params={"maxItems": MAX_ATTACHMENTS_PER_MESSAGE},
+            )
+        for upload in files:
+            data = await upload.read(MAX_FILE_ATTACHMENT_BYTES + 1)
+            mime_type = (upload.content_type or "").split(";", 1)[0].strip().lower()
+            try:
+                attachments.append(classify_attachment(data, mime_type, upload.filename))
+            except AttachmentError as exc:
+                raise ApiError(
+                    413 if exc.code == "attachment.tooLarge" else 400, exc.code
+                ) from exc
+    finally:
+        for upload in files:
+            await upload.close()
+    return attachments
+
+
 def session_payload(
     item: ChatSession,
     *,
@@ -118,6 +183,7 @@ def session_payload(
     payload = {
         "id": str(item.id),
         "title": item.title,
+        "titleGenerationStatus": item.title_generation_status,
         "pinned": bool(item.is_pinned),
         "modelId": str(item.model_config_id) if item.model_config_id else None,
         "memoryMode": item.memory_mode,
@@ -175,25 +241,36 @@ async def _owned_session(
 
 
 def message_payload(item: Message) -> dict[str, Any]:
+    error = (
+        describe_error(item.error_code, params=item.error_params)
+        if item.error_code
+        else None
+    )
     return {
         "id": str(item.id),
         "role": item.role,
-        "content": item.content,
+        "kind": "runtime_error" if error else "message",
+        "content": error.message if error else item.content,
         "modelName": item.model_name,
         "generationStatus": item.generation_status or "completed",
         "trustLevel": item.trust_level,
         "toolCallId": item.tool_call_id,
         "toolCalls": item.tool_calls,
         "reasoning": item.public_reasoning,
+        "error": error.payload() if error else None,
         "attachments": [
             {
                 "id": str(attachment.id),
                 "kind": attachment.kind,
+                "category": attachment.category,
+                "processingStatus": attachment.processing_status,
                 "mimeType": attachment.mime_type,
                 "sizeBytes": attachment.size_bytes,
                 "filename": attachment.filename,
                 "width": attachment.width,
                 "height": attachment.height,
+                "durationMs": attachment.duration_ms,
+                "metadata": attachment.metadata_json or {},
                 "url": (
                     f"/api/sessions/{item.session_id}/messages/{item.id}"
                     f"/attachments/{attachment.id}"
@@ -205,13 +282,26 @@ def message_payload(item: Message) -> dict[str, Any]:
     }
 
 
+async def _latest_user_message(db: AsyncSession, session_id: UUID) -> Message:
+    message = await db.scalar(
+        select(Message)
+        .where(Message.session_id == session_id, Message.role == "user")
+        .options(selectinload(Message.attachments))
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    if message is None:
+        raise RuntimeError("Persistierte User-Nachricht fehlt nach Agent-Start")
+    return message
+
+
 def run_payload(run: AgentRun) -> dict[str, Any]:
     return {
         "id": str(run.id),
         "sessionId": str(run.session_id),
         "status": run.status,
         "modelName": run.model_name,
-        "error": {"code": run.error} if run.error else None,
+        "error": describe_error(run.error).payload() if run.error else None,
         "createdAt": run.created_at.isoformat() if run.created_at else None,
     }
 
@@ -234,25 +324,17 @@ async def list_sessions(
     return [await _session_payload(db, item) for item in items]
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
-async def create_session(
+async def _create_session(
     payload: SessionCreateRequest,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: UserAccount,
+    db: AsyncSession,
+    attachments: list[AttachmentInput] | None = None,
 ) -> dict:
     content = payload.content.strip()
     if not content:
         raise ApiError(422, "validation.required", field="content")
     ai = await SettingsStore.load(db, AiSettings)
     model_id = payload.model_id or ai.default_model_id
-    if not _model_available(ai, model_id):
-        raise ApiError(400, "session.modelUnavailable")
-    if payload.web_search_policy == WebSearchPolicy.REQUIRED:
-        if not _model_supports_tools(ai, model_id):
-            raise ApiError(409, "session.modelToolsUnavailable")
-        search = await SettingsStore.load(db, SearchSettings)
-        if not search_available(search):
-            raise ApiError(409, "integration.searchUnavailable")
     working_directory = None
     if payload.working_directory is not None:
         try:
@@ -264,28 +346,72 @@ async def create_session(
         working_directory = WorkspaceService().relative(directory)
     initial_model = _model_for_session(ai, model_id)
     initial_provider = _provider_for_session(ai, initial_model)
-    if initial_model is None or initial_provider is None:
-        raise ApiError(400, "session.modelUnavailable")
     item = ChatSession(
+        id=uuid4(),
         user_id=user.id,
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
         model_config_id=model_id,
         memory_mode=payload.memory_mode.value,
-        trust_level=effective_model_trust(initial_provider, initial_model).value,
+        trust_level=(
+            effective_model_trust(initial_provider, initial_model).value
+            if _model_available(ai, model_id) and initial_model and initial_provider
+            else TrustLevel.PUBLIC.value
+        ),
         web_search_policy=payload.web_search_policy.value,
         working_directory=working_directory,
         workspace_access=payload.workspace_access,
     )
     db.add(item)
     await db.flush()
-    run = await AgentRuntime.start(db, item, content)
+    session_storage = SessionStorage()
+    try:
+        await asyncio.to_thread(session_storage.provision, item.id)
+        run = (
+            await AgentRuntime.start(db, item, content, attachments=attachments)
+            if attachments
+            else await AgentRuntime.start(db, item, content)
+        )
+    except (OSError, SessionStorageError) as exc:
+        await db.rollback()
+        logger.exception("Session-Storage konnte nicht provisioniert werden")
+        raise ApiError(500, "session.storageUnavailable") from exc
+    except Exception:
+        await db.rollback()
+        try:
+            await asyncio.to_thread(session_storage.remove_session, item.id)
+        except Exception:
+            logger.exception("Nicht persistierter Session-Storage konnte nicht entfernt werden")
+        raise
     await db.refresh(item)
+    user_message = await _latest_user_message(db, item.id)
     return {
         "session": await _session_payload(db, item),
+        "message": message_payload(user_message),
         "runId": str(run.id),
         "modelName": run.model_name,
     }
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_session(
+    payload: SessionCreateRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    return await _create_session(payload, user, db)
+
+
+@router.post("/with-attachments", status_code=status.HTTP_201_CREATED)
+async def create_session_with_attachments(
+    payload: Annotated[str, Form()],
+    attachments: Annotated[list[UploadFile], File()],
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    request = _multipart_payload(payload, SessionCreateRequest)
+    assert isinstance(request, SessionCreateRequest)
+    return await _create_session(request, user, db, await _attachment_uploads(attachments))
 
 
 @router.get("/defaults")
@@ -452,7 +578,7 @@ async def delete_session(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
-    item = await _owned_session(db, session_id, user.id)
+    item = await _owned_session(db, session_id, user.id, for_update=True)
     if item is None:
         raise ApiError(404, "session.notFound")
     active_runs = list(
@@ -467,18 +593,50 @@ async def delete_session(
     )
     for run in active_runs:
         await AgentRuntime.cancel_and_wait(run.id)
-    storage_keys = list(
-        (
-            await db.scalars(
-                select(MessageAttachment.storage_key)
-                .join(Message, Message.id == MessageAttachment.message_id)
-                .where(Message.session_id == session_id)
-            )
-        ).all()
-    )
-    await db.delete(item)
-    await db.commit()
-    await AttachmentService().delete_files(storage_keys)
+    session_storage = SessionStorage()
+    try:
+        trashed = await asyncio.to_thread(session_storage.trash_session, session_id)
+    except (OSError, SessionStorageError) as exc:
+        logger.exception("Session-Storage konnte nicht in den Trash verschoben werden")
+        raise ApiError(500, "session.storageUnavailable") from exc
+
+    async def restore_tree() -> None:
+        if trashed is None:
+            return
+        try:
+            await asyncio.to_thread(session_storage.restore_session, session_id, trashed)
+        except Exception:
+            logger.exception("Session-Storage konnte nach DB-Fehler nicht wiederhergestellt werden")
+
+    async def purge_tree() -> None:
+        try:
+            await asyncio.to_thread(session_storage.purge_trashed, trashed)
+        except Exception:
+            logger.exception("Geloeschter Session-Storage konnte nicht aus dem Trash entfernt werden")
+
+    commit_task: asyncio.Task[None] | None = None
+    try:
+        await db.delete(item)
+        commit_task = asyncio.create_task(db.commit())
+        await asyncio.shield(commit_task)
+    except asyncio.CancelledError:
+        if commit_task is None:
+            await db.rollback()
+            await restore_tree()
+            raise
+        try:
+            await commit_task
+        except BaseException:
+            await db.rollback()
+            await restore_tree()
+        else:
+            await purge_tree()
+        raise
+    except BaseException:
+        await db.rollback()
+        await restore_tree()
+        raise
+    await purge_tree()
 
 
 @router.get(
@@ -505,27 +663,31 @@ async def download_attachment(
     if attachment is None:
         raise ApiError(404, "attachment.notFound")
     try:
-        path = AttachmentStorage().path(attachment.storage_key)
-    except AttachmentStorageError as exc:
+        path = await AttachmentService().verified_path(attachment, session_id)
+    except AttachmentError as exc:
         logger.warning("Attachment-Datei fuer vorhandene Metadaten nicht gefunden")
         raise ApiError(404, "attachment.notFound") from exc
+    filename = safe_filename(attachment.filename)
+    inline = attachment.kind in {"image", "audio"}
     return FileResponse(
         path,
         media_type=attachment.mime_type,
+        filename=filename,
+        content_disposition_type="inline" if inline else "attachment",
         headers={
             "X-Content-Type-Options": "nosniff",
             "Cross-Origin-Resource-Policy": "same-origin",
-            "Cache-Control": "private",
+            "Cache-Control": "private, no-store",
         },
     )
 
 
-@router.post("/{session_id}/messages", status_code=status.HTTP_202_ACCEPTED)
-async def send_message(
+async def _send_message(
     session_id: UUID,
     payload: SendMessageRequest,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: UserAccount,
+    db: AsyncSession,
+    attachments: list[AttachmentInput] | None = None,
 ) -> dict[str, str]:
     item = await _owned_session(db, session_id, user.id, for_update=True)
     if item is None:
@@ -541,21 +703,42 @@ async def send_message(
     )
     if active:
         raise ApiError(409, "session.runAlreadyActive")
-    if item.web_search_policy == WebSearchPolicy.REQUIRED:
-        search = await SettingsStore.load(db, SearchSettings)
-        if not search_available(search):
-            raise ApiError(409, "integration.searchUnavailable")
-    ai = await SettingsStore.load(db, AiSettings)
-    model_id = item.model_config_id or ai.default_model_id
-    if not _model_available(ai, model_id):
-        raise ApiError(409, "session.modelUnavailable")
-    if (
-        item.web_search_policy == WebSearchPolicy.REQUIRED
-        and not _model_supports_tools(ai, model_id)
-    ):
-        raise ApiError(409, "session.modelToolsUnavailable")
-    run = await AgentRuntime.start(db, item, content)
-    return {"runId": str(run.id), "modelName": run.model_name}
+    run = (
+        await AgentRuntime.start(db, item, content, attachments=attachments)
+        if attachments
+        else await AgentRuntime.start(db, item, content)
+    )
+    user_message = await _latest_user_message(db, item.id)
+    return {
+        "runId": str(run.id),
+        "modelName": run.model_name,
+        "message": message_payload(user_message),
+    }
+
+
+@router.post("/{session_id}/messages", status_code=status.HTTP_202_ACCEPTED)
+async def send_message(
+    session_id: UUID,
+    payload: SendMessageRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, str]:
+    return await _send_message(session_id, payload, user, db)
+
+
+@router.post("/{session_id}/messages/with-attachments", status_code=status.HTTP_202_ACCEPTED)
+async def send_message_with_attachments(
+    session_id: UUID,
+    payload: Annotated[str, Form()],
+    attachments: Annotated[list[UploadFile], File()],
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, str]:
+    request = _multipart_payload(payload, SendMessageRequest)
+    assert isinstance(request, SendMessageRequest)
+    return await _send_message(
+        session_id, request, user, db, await _attachment_uploads(attachments)
+    )
 
 
 @router.get("/{session_id}/runs/{run_id}")
@@ -609,15 +792,29 @@ async def stream_run_events(
         raise ApiError(404, "session.runNotFound")
     run_status = run.status
     run_error = run.error
+    error_message = (
+        await db.scalar(select(Message).where(Message.error_run_id == run_id).limit(1))
+        if run_status == "failed"
+        else None
+    )
     await db.rollback()
 
     async def events():
         if run_status in {"completed", "failed", "cancelled"}:
-            event = (
-                {"type": "run.failed", "error": {"code": run_error or "agent.failed"}}
-                if run_status == "failed"
-                else {"type": f"run.{run_status}", "runId": str(run_id)}
-            )
+            if run_status == "failed":
+                error = describe_error(
+                    run_error or "agent.failed",
+                    params=error_message.error_params if error_message is not None else None,
+                )
+                if error_message is not None:
+                    event = {
+                        "type": "message.completed",
+                        "message": message_payload(error_message),
+                    }
+                    yield f"event: message.completed\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                event = {"type": "run.failed", "error": error.payload()}
+            else:
+                event = {"type": f"run.{run_status}", "runId": str(run_id)}
             yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
             return
         async for event in run_events.subscribe(run_id):

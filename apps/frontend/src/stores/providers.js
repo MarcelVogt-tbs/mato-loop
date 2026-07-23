@@ -3,6 +3,7 @@ import { api } from 'src/boot/axios'
 import {
   isModelEffective,
   modelOption,
+  modelSupportsCapability,
   selectedModelState
 } from 'src/utils/provider-models'
 
@@ -14,13 +15,29 @@ function assignProviderPayload(store, payload) {
   store.compactionModelId = payload.compactionModelId ?? null
   store.titleGenerationModelId = payload.titleGenerationModelId ?? null
   store.dreamingModelId = payload.dreamingModelId ?? null
+  store.imageGenerationModelId = payload.imageGenerationModelId ?? null
+  store.speechGenerationModelId = payload.speechGenerationModelId ?? null
+  store.audioGenerationModelId = payload.audioGenerationModelId ?? null
+  store.audioTranscriptionModelId = payload.audioTranscriptionModelId ?? null
   store.enabled = payload.enabled !== false
+}
+
+function effectiveModelOptions(state, capability = 'chat', requiresTools = false) {
+  return state.models.flatMap((model) => {
+    const provider = state.providers.find((item) => item.id === model.providerId)
+    return isModelEffective(model, provider, state.codex, state.enabled)
+      && modelSupportsCapability(model, capability)
+      ? [modelOption(model, provider, requiresTools && model.supportsTools === false)]
+      : []
+  })
 }
 
 async function mutateAndRefresh(store, request) {
   const response = await request()
   const payload = response?.data
   if (payload && Array.isArray(payload.providers) && Array.isArray(payload.models)) {
+    store.loadVersion += 1
+    store.loading = false
     assignProviderPayload(store, payload)
   } else {
     await store.fetchAll().catch(() => {})
@@ -36,28 +53,30 @@ export const useProviderStore = defineStore('providers', {
     compactionModelId: null,
     titleGenerationModelId: null,
     dreamingModelId: null,
+    imageGenerationModelId: null,
+    speechGenerationModelId: null,
+    audioGenerationModelId: null,
+    audioTranscriptionModelId: null,
     enabled: true,
     codex: {},
-    loading: false
+    loading: false,
+    loadVersion: 0,
+    lastLoadComplete: false
   }),
   getters: {
-    modelOptions: (state) => state.models.flatMap((model) => {
-      const provider = state.providers.find((item) => item.id === model.providerId)
-      return isModelEffective(model, provider, state.codex, state.enabled) ? [modelOption(model, provider)] : []
-    }),
-    selectionOptions: (state) => (modelId, requiresTools = false) => {
-      const options = state.models.flatMap((model) => {
-        const provider = state.providers.find((item) => item.id === model.providerId)
-        return isModelEffective(model, provider, state.codex, state.enabled)
-          ? [modelOption(
-              model,
-              provider,
-              requiresTools && model.supportsTools === false
-            )]
-          : []
-      })
+    modelOptions: (state) => effectiveModelOptions(state),
+    capabilityOptions: (state) => (capability) => effectiveModelOptions(state, capability),
+    selectionOptions: (state) => (modelId, requiresTools = false, capability = 'chat') => {
+      const options = effectiveModelOptions(state, capability, requiresTools)
       if (!modelId || options.some((option) => option.value === modelId)) return options
-      const selected = selectedModelState(modelId, state.models, state.providers, state.codex)
+      const selected = selectedModelState(
+        modelId,
+        state.models,
+        state.providers,
+        state.codex,
+        state.enabled,
+        capability
+      )
       const selectedModel = state.models.find((model) => model.id === modelId)
       if (selectedModel) {
         const provider = state.providers.find((item) => item.id === selectedModel.providerId)
@@ -65,26 +84,32 @@ export const useProviderStore = defineStore('providers', {
       }
       return [{ label: selected.label, value: modelId, disable: true, trustLevel: 'public', trustIcon: 'public' }, ...options]
     },
-    selectedModelState: (state) => (modelId) => selectedModelState(
+    selectedModelState: (state) => (modelId, capability = 'chat') => selectedModelState(
       modelId,
       state.models,
       state.providers,
       state.codex,
-      state.enabled
+      state.enabled,
+      capability
     )
   },
   actions: {
     async fetchAll() {
+      this.loadVersion += 1
+      const loadVersion = this.loadVersion
       this.loading = true
       try {
-        const [providers, codex] = await Promise.all([
+        const [providers, codex] = await Promise.allSettled([
           api.get('/providers'),
-          api.get('/providers/codex/status')
+          api.get('/providers/codex/status', { suppressErrorToast: true })
         ])
-        assignProviderPayload(this, providers.data)
-        this.codex = codex.data
+        if (this.loadVersion !== loadVersion) return
+        if (providers.status === 'fulfilled') assignProviderPayload(this, providers.value.data)
+        if (codex.status === 'fulfilled') this.codex = codex.value.data
+        this.lastLoadComplete = providers.status === 'fulfilled' && codex.status === 'fulfilled'
+        if (providers.status === 'rejected') throw providers.reason
       } finally {
-        this.loading = false
+        if (this.loadVersion === loadVersion) this.loading = false
       }
     },
     async createOpenAI(payload) {
@@ -103,6 +128,25 @@ export const useProviderStore = defineStore('providers', {
         || null
     },
     async updateOpenAI(id, payload) {
+      await api.put(`/providers/configuration/${id}`, payload)
+      await this.fetchAll()
+    },
+    async createLemonade(payload) {
+      const previousIds = new Set(this.providers.map((provider) => provider.id))
+      const { data } = await api.post('/providers/lemonade', payload)
+      assignProviderPayload(this, data)
+      await this.fetchAll()
+      return data?.providerId
+        || data?.provider?.id
+        || (data?.id && !Array.isArray(data.providers) ? data.id : null)
+        || this.providers.find((provider) => !previousIds.has(provider.id))?.id
+        || this.providers.find((provider) => (
+          provider.name === payload.name
+          && (provider.config?.baseUrl || provider.config?.base_url) === payload.base_url.replace(/\/$/, '')
+        ))?.id
+        || null
+    },
+    async updateLemonade(id, payload) {
       await api.put(`/providers/configuration/${id}`, payload)
       await this.fetchAll()
     },
@@ -142,12 +186,25 @@ export const useProviderStore = defineStore('providers', {
     async testModel(id) {
       return (await api.post(`/providers/models/${id}/test`)).data
     },
-    async setDefaultModels({ defaultModelId, compactionModelId, titleGenerationModelId, dreamingModelId }) {
+    async setDefaultModels({
+      defaultModelId,
+      compactionModelId,
+      titleGenerationModelId,
+      dreamingModelId,
+      imageGenerationModelId,
+      speechGenerationModelId,
+      audioGenerationModelId,
+      audioTranscriptionModelId
+    }) {
       return (await mutateAndRefresh(this, () => api.put('/providers/default-models', {
         default_model_id: defaultModelId || null,
         compaction_model_id: compactionModelId || null,
         title_generation_model_id: titleGenerationModelId || null,
-        dreaming_model_id: dreamingModelId || null
+        dreaming_model_id: dreamingModelId || null,
+        image_generation_model_id: imageGenerationModelId || null,
+        speech_generation_model_id: speechGenerationModelId || null,
+        audio_generation_model_id: audioGenerationModelId || null,
+        audio_transcription_model_id: audioTranscriptionModelId || null
       })))?.data
     },
     async removeProvider(id) {
@@ -158,6 +215,7 @@ export const useProviderStore = defineStore('providers', {
       const provider = this.providers.find((item) => item.id === id)
       const model = this.models.find((item) => (
         item.providerId === id && isModelEffective(item, provider, this.codex, this.enabled)
+        && modelSupportsCapability(item, 'chat')
       ))
       if (!model) return null
       return this.testModel(model.id)

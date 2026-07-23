@@ -4,7 +4,9 @@ import {
   discoveryState,
   isModelEffective,
   modelOption,
+  modelSupportsCapability,
   modelSupportsTrust,
+  normalizeModelCapabilities,
   selectedModelState
 } from '../src/utils/provider-models'
 
@@ -50,6 +52,33 @@ describe('effective model state', () => {
       trustIcon: 'lock'
     })
     expect(modelSupportsTrust(inheritedPrivateModel, 'private')).toBe(true)
+  })
+
+  it('treats legacy models as chat models and keeps media capabilities separate from image input', () => {
+    expect(normalizeModelCapabilities()).toEqual(['chat'])
+    expect(normalizeModelCapabilities(null)).toEqual(['chat'])
+    expect(normalizeModelCapabilities([])).toEqual([])
+    expect(modelSupportsCapability(model, 'chat')).toBe(true)
+    expect(modelSupportsCapability({ ...model, capabilities: [] }, 'chat')).toBe(false)
+
+    const imageInputModel = { ...model, supportsImageInput: true }
+    expect(modelSupportsCapability(imageInputModel, 'image_generation')).toBe(false)
+
+    const imageModel = { ...model, capabilities: ['image_generation'], supportsImageInput: false }
+    expect(modelSupportsCapability(imageModel, 'chat')).toBe(false)
+    expect(modelSupportsCapability(imageModel, 'image_generation')).toBe(true)
+  })
+
+  it('marks a media-only session model unavailable for chat', () => {
+    expect(selectedModelState(
+      model.id,
+      [{ ...model, capabilities: ['audio_transcription'] }],
+      [provider]
+    )).toEqual({
+      available: false,
+      label: 'Qwen Test · Lokal',
+      message: 'Das Modell dieser Session unterstützt keinen Chat.'
+    })
   })
 
   it('distinguishes idle, running, successful and failed discovery', () => {

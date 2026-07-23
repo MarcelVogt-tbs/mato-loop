@@ -98,9 +98,9 @@ Providerabhängige Datentypen dürfen nicht in den Agent-Kern gelangen. Technisc
 
 Ein Provider kann mehrere Modellkonfigurationen besitzen. OpenAI-kompatible Discovery verwendet serverseitig den `/models`-Endpunkt. ChatGPT Codex verwendet nach der Device-Code-Anmeldung den privaten Codex-Modellkatalog. Beide Pfade normalisieren Antworten auf Modell-ID und eine begrenzte Metadatenmenge. Sync-Vorgänge erhalten interne UUIDs und Nutzereinstellungen, markieren verschwundene Discovery-Modelle als nicht verfügbar und verändern manuelle Modelle nicht. Neu entdeckte Modelle werden nicht automatisch aktiviert.
 
-Dateizugriffe laufen über `WorkspaceService`. Alle Pfade bleiben unter `/data/home`; absolute Pfade und Symlink-Ausbrüche sind verboten.
+Agent-Dateizugriffe laufen über `RootFileService` mit den expliziten Roots `session` und `workspace`. Der aktuelle Session-Speicher liegt unter `/data/sessions/<session-id>`, der optionale Workspace unter dem ausgewählten Pfad in `/data/home`. Absolute Pfade, Parent-Segmente und Symlink-Ausbrüche sind verboten. Der Session-Root enthält flach `files`, `attachments`, `generated`, `downloads` und `derived`. Nur `files` ist veränderbar; die vier hostverwalteten Asset-Verzeichnisse sind lesbar und als Copy-Quelle nutzbar.
 
-Webfetch-Zugriffe laufen über einen eigenen gepinnten Resolver und eine vom Modell nicht überschreibbare Netzwerkpolicy. Text- und Bildantworten sind auf 5 MiB begrenzt. Persistente Bilder liegen unter `/data/attachments`, werden über eine authentifizierte Session-URL ausgeliefert und nur für explizit bildfähige Modelle flüchtig in Providerrequests eingebettet.
+Webfetch-Zugriffe laufen über einen eigenen gepinnten Resolver und eine vom Modell nicht überschreibbare Netzwerkpolicy. Persistente Downloads liegen unter `downloads`, Nutzeruploads unter `attachments` und generierte Inhalte unter `generated`. Bilder werden über eine authentifizierte Session-URL ausgeliefert und nur für explizit bildfähige Modelle flüchtig in Providerrequests eingebettet. Text-, Dokument- und Audioableitungen liegen unter `derived`.
 
 ## Checks und Tests
 

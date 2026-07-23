@@ -12,7 +12,9 @@ const { api } = vi.hoisted(() => ({
 
 vi.mock('src/boot/axios', () => ({ api }))
 
-import { useChatStore } from '../src/stores/chat'
+import { MAX_ATTACHMENT_DRAFT_BYTES, useChatStore } from '../src/stores/chat'
+
+const originalURL = globalThis.URL
 
 function createStorage() {
   const values = new Map()
@@ -55,6 +57,7 @@ describe('chat drafts', () => {
     vi.useRealTimers()
     delete global.window
     delete global.EventSource
+    global.URL = originalURL
   })
 
   it('keeps separate drafts for new and existing sessions', () => {
@@ -108,6 +111,160 @@ describe('chat drafts', () => {
     expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
       web_search_policy: 'required'
     }))
+  })
+
+  it('keeps attachments out of local storage and uses the general multipart route', async () => {
+    api.post.mockResolvedValue({
+      data: {
+        session: { id: 'session-audio', messages: [] },
+        message: {
+          id: 'message-audio',
+          role: 'user',
+          content: 'Bitte transkribieren',
+          attachments: [{ id: 'attachment-audio', kind: 'audio', mimeType: 'audio/wav' }]
+        },
+        runId: 'run-audio'
+      }
+    })
+    const audio = new Blob(['RIFF----WAVE'], { type: 'audio/wav' })
+    Object.defineProperty(audio, 'name', { value: 'aufnahme.wav' })
+    const notes = new Blob(['Notizen'], { type: 'text/plain' })
+    Object.defineProperty(notes, 'name', { value: 'notizen.txt' })
+    const chat = useChatStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+
+    expect(chat.addAttachmentFiles([audio, notes])).toMatchObject({ added: 2, error: null })
+    chat.setDraft('Bitte transkribieren')
+    const persisted = window.localStorage.getItem('matoLoopChatDrafts')
+    expect(persisted).not.toContain('aufnahme.wav')
+
+    await chat.send('Bitte transkribieren')
+
+    expect(api.post).toHaveBeenCalledWith('/sessions/with-attachments', expect.any(FormData))
+    const formData = api.post.mock.calls[0][1]
+    expect(JSON.parse(formData.get('payload'))).toMatchObject({ content: 'Bitte transkribieren' })
+    expect(formData.getAll('attachments')).toHaveLength(2)
+    expect(formData.getAll('attachments').map((file) => file.name))
+      .toEqual(['aufnahme.wav', 'notizen.txt'])
+    expect(chat.attachmentDrafts.newSession).toEqual([])
+    expect(chat.current.messages[0].attachments).toHaveLength(1)
+  })
+
+  it('uses the message multipart route and retains a generic file after an API failure', async () => {
+    api.post.mockRejectedValue(new Error('offline'))
+    const document = new Blob(['PDF'], { type: 'application/pdf' })
+    Object.defineProperty(document, 'name', { value: 'fehler.pdf' })
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.addAttachmentFiles([document])
+
+    await expect(chat.send('Bitte prüfen')).rejects.toThrow('offline')
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/sessions/session-1/messages/with-attachments',
+      expect.any(FormData)
+    )
+    expect(chat.activeAttachmentDraft).toHaveLength(1)
+    expect(chat.current.messages).toEqual([])
+  })
+
+  it('accepts generic files and rejects too many, empty and oversized attachments', () => {
+    const chat = useChatStore()
+    const wav = () => {
+      const file = new Blob(['wav'], { type: 'audio/wav' })
+      Object.defineProperty(file, 'name', { value: 'audio.wav' })
+      return file
+    }
+
+    expect(chat.addAttachmentFiles([wav(), wav(), wav(), wav(), wav()]).error).toContain('höchstens vier')
+    expect(chat.addAttachmentFiles([{ name: 'leer.txt', type: 'text/plain', size: 0 }]).error)
+      .toContain('leer')
+    expect(chat.addAttachmentFiles([{
+      name: 'gross.pdf',
+      type: 'application/pdf',
+      size: 64 * 1024 * 1024 + 1
+    }]).error).toContain('64 MiB')
+    expect(chat.addAttachmentFiles([{ name: 'notizen.txt', type: 'text/plain', size: 10 }]))
+      .toMatchObject({ added: 1, error: null })
+    expect(chat.activeAttachmentDraft[0]).toMatchObject({ kind: 'file', mimeType: 'text/plain' })
+    expect(chat.activeAttachmentDraft[0]).not.toHaveProperty('uploadReady')
+  })
+
+  it('sends generic drafts without a temporary upload block', async () => {
+    api.post.mockResolvedValue({
+      data: {
+        session: { id: 'session-file', messages: [] },
+        runId: 'run-file'
+      }
+    })
+    const notes = new Blob(['Inhalt'], { type: 'text/plain' })
+    Object.defineProperty(notes, 'name', { value: 'notizen.txt' })
+    const chat = useChatStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    chat.addAttachmentFiles([notes])
+
+    await expect(chat.send('Bitte lesen')).resolves.toMatchObject({ created: true })
+
+    expect(api.post).toHaveBeenCalledWith('/sessions/with-attachments', expect.any(FormData))
+    expect(chat.activeAttachmentDraft).toHaveLength(0)
+  })
+
+  it('limits attachment drafts across sessions and does not preview non-images', () => {
+    const createObjectURL = vi.fn()
+    global.URL = { createObjectURL, revokeObjectURL: vi.fn() }
+    const chat = useChatStore()
+    const fullFile = (name) => ({
+      name: `${name}.wav`,
+      type: 'audio/wav',
+      size: MAX_ATTACHMENT_DRAFT_BYTES / 4
+    })
+
+    expect(chat.addAttachmentFiles([fullFile('neu')])).toMatchObject({ added: 1, error: null })
+    for (const id of ['session-1', 'session-2', 'session-3']) {
+      chat.current = { id }
+      expect(chat.addAttachmentFiles([fullFile(id)])).toMatchObject({ added: 1, error: null })
+    }
+    chat.current = { id: 'session-4' }
+    expect(chat.addAttachmentFiles([{ name: 'zwei.wav', type: 'audio/wav', size: 1 }]).error)
+      .toContain('256 MiB')
+    expect(createObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('creates image previews and revokes them when removing or clearing drafts', () => {
+    const createObjectURL = vi.fn(() => 'blob:preview')
+    const revokeObjectURL = vi.fn()
+    global.URL = { createObjectURL, revokeObjectURL }
+    const chat = useChatStore()
+
+    chat.addAttachmentFiles([{ name: 'bild.png', type: 'image/png', size: 10 }])
+
+    expect(chat.activeAttachmentDraft[0]).toMatchObject({
+      kind: 'image',
+      objectUrl: 'blob:preview'
+    })
+    expect(chat.activeAttachmentDraft[0]).not.toHaveProperty('uploadReady')
+    chat.removeAttachmentFile(chat.activeAttachmentDraft[0].id)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview')
+  })
+
+  it('clears every attachment draft and revokes preview URLs', () => {
+    const revokeObjectURL = vi.fn()
+    global.URL = { revokeObjectURL }
+    const chat = useChatStore()
+    chat.attachmentDrafts = {
+      newSession: [{ id: 'new', file: { size: 1 }, objectUrl: 'blob:new' }],
+      sessionMessages: {
+        'session-1': [{ id: 'old', file: { size: 1 }, objectUrl: 'blob:old' }]
+      }
+    }
+    chat.setAudioDictation({ file: { size: 2 }, status: 'failed' }, 'session-1')
+
+    chat.clearAllAttachmentDrafts()
+
+    expect(chat.attachmentDrafts).toEqual({ newSession: [], sessionMessages: {} })
+    expect(chat.audioDictations).toEqual({ newSession: null, sessionMessages: {} })
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:new')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:old')
   })
 
   it('keeps the effective memory mode in sync for a new session draft', async () => {
@@ -215,19 +372,125 @@ describe('chat drafts', () => {
 
   it('ignores a stale session response after navigation', async () => {
     const requests = {}
-    api.get.mockImplementation((url) => new Promise((resolve) => {
-      requests[url] = resolve
+    api.get.mockImplementation((url, config) => new Promise((resolve) => {
+      requests[url] = { resolve, config }
+    }))
+    const chat = useChatStore()
+    chat.current = { id: 'previous-session', messages: [{ id: 'old-message' }] }
+
+    const firstLoad = chat.loadSession('session-1')
+    expect(chat.current).toBeNull()
+    const secondLoad = chat.loadSession('session-2')
+    expect(requests['/sessions/session-1'].config.signal.aborted).toBe(true)
+    requests['/sessions/session-2'].resolve({
+      data: { id: 'session-2', messages: [], activeRun: null }
+    })
+    await secondLoad
+    requests['/sessions/session-1'].resolve({
+      data: { id: 'session-1', messages: [], activeRun: null }
+    })
+    await firstLoad
+
+    expect(chat.current.id).toBe('session-2')
+    expect(chat.loading).toBe(false)
+    expect(chat.loadError).toBeNull()
+  })
+
+  it('does not attach a late send response to a newly selected session', async () => {
+    global.EventSource = EventSourceMock
+    let resolveSend
+    api.post.mockReturnValue(new Promise((resolve) => { resolveSend = resolve }))
+    api.get.mockImplementation((url) => Promise.resolve({
+      data: url === '/sessions/session-2'
+        ? { id: 'session-2', messages: [], activeRun: null }
+        : []
+    }))
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+    const watchRun = vi.spyOn(chat, 'watchRun')
+
+    const sending = chat.sendToCurrent('Nachricht an Session 1')
+    await chat.loadSession('session-2')
+    resolveSend({
+      data: {
+        runId: 'run-1',
+        message: { id: 'message-1', role: 'user', content: 'Nachricht an Session 1' }
+      }
+    })
+    await sending
+
+    expect(chat.current.id).toBe('session-2')
+    expect(chat.selectedSessionId).toBe('session-2')
+    expect(chat.running).toBe(false)
+    expect(watchRun).not.toHaveBeenCalled()
+  })
+
+  it('does not navigate back to a late new-session response', async () => {
+    let resolveSend
+    api.post.mockReturnValue(new Promise((resolve) => { resolveSend = resolve }))
+    api.get.mockResolvedValue({
+      data: { id: 'session-2', messages: [], activeRun: null }
+    })
+    const chat = useChatStore()
+    const watchRun = vi.spyOn(chat, 'watchRun')
+
+    const sending = chat.startSession('Neue Nachricht')
+    await chat.loadSession('session-2')
+    resolveSend({
+      data: {
+        session: { id: 'new-session', title: 'Neue Nachricht' },
+        message: { id: 'message-new', role: 'user', content: 'Neue Nachricht' },
+        runId: 'run-new'
+      }
+    })
+    const result = await sending
+
+    expect(result).toEqual({ created: false, sessionId: 'new-session' })
+    expect(chat.current.id).toBe('session-2')
+    expect(chat.selectedSessionId).toBe('session-2')
+    expect(watchRun).not.toHaveBeenCalled()
+  })
+
+  it('does not merge a late settings response into another session', async () => {
+    let resolveUpdate
+    api.patch.mockReturnValue(new Promise((resolve) => { resolveUpdate = resolve }))
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', title: 'Eins' }
+    chat.selectedSessionId = 'session-1'
+
+    const updating = chat.updateCurrent({ title: 'Neu' })
+    chat.current = { id: 'session-2', title: 'Zwei' }
+    chat.selectedSessionId = 'session-2'
+    resolveUpdate({ data: { id: 'session-1', title: 'Neu' } })
+    await updating
+
+    expect(chat.current).toEqual({ id: 'session-2', title: 'Zwei' })
+  })
+
+  it('keeps the latest session loading when an aborted request rejects', async () => {
+    const requests = {}
+    api.get.mockImplementation((url, config) => new Promise((resolve, reject) => {
+      requests[url] = { resolve, reject, config }
     }))
     const chat = useChatStore()
 
     const firstLoad = chat.loadSession('session-1')
     const secondLoad = chat.loadSession('session-2')
-    requests['/sessions/session-2']({ data: { id: 'session-2', messages: [], activeRun: null } })
-    await secondLoad
-    requests['/sessions/session-1']({ data: { id: 'session-1', messages: [], activeRun: null } })
+    await chat.refreshSession('session-2')
+    expect(requests['/sessions/session-2'].config.signal.aborted).toBe(false)
+    requests['/sessions/session-1'].reject(new Error('aborted'))
     await firstLoad
 
+    expect(chat.loading).toBe(true)
+    expect(chat.loadError).toBeNull()
+    requests['/sessions/session-2'].resolve({
+      data: { id: 'session-2', messages: [], activeRun: null }
+    })
+    await secondLoad
+
     expect(chat.current.id).toBe('session-2')
+    expect(chat.loading).toBe(false)
   })
 
   it('resumes the active run when loading a session', async () => {
@@ -293,7 +556,9 @@ describe('chat drafts', () => {
       title: 'Generierter Titel'
     })
     expect(chat.current.title).toBe('Generierter Titel')
+    expect(chat.current.titleGenerationStatus).toBe('completed')
     expect(chat.sessions[0].title).toBe('Generierter Titel')
+    expect(chat.sessions[0].titleGenerationStatus).toBe('completed')
 
     source.emit('approval.created', {
       approval: { id: 'approval-1', details: { tool: 'write_file' } }
@@ -343,18 +608,62 @@ describe('chat drafts', () => {
   it('refreshes a generated title after the first run', async () => {
     vi.useFakeTimers()
     api.get.mockResolvedValue({
-      data: [{ id: 'session-1', title: 'Standardmodelle konfigurieren' }]
+      data: [{
+        id: 'session-1',
+        title: 'Standardmodelle konfigurieren',
+        titleGenerationStatus: 'completed'
+      }]
     })
     const chat = useChatStore()
-    chat.current = { id: 'session-1', title: 'Default Models einbauen', messages: [] }
-    chat.sessions = [{ id: 'session-1', title: 'Default Models einbauen' }]
+    chat.current = {
+      id: 'session-1',
+      title: 'Default Models einbauen',
+      titleGenerationStatus: 'running',
+      messages: []
+    }
+    chat.sessions = [{
+      id: 'session-1',
+      title: 'Default Models einbauen',
+      titleGenerationStatus: 'running'
+    }]
 
-    const refresh = chat.refreshGeneratedTitle('session-1', 'Default Models einbauen')
+    const refresh = chat.refreshGeneratedTitle('session-1')
     await vi.advanceTimersByTimeAsync(1000)
     await refresh
 
     expect(chat.current.title).toBe('Standardmodelle konfigurieren')
+    expect(chat.current.titleGenerationStatus).toBe('completed')
     expect(api.get).toHaveBeenCalledWith('/sessions')
+  })
+
+  it('stops generated title polling after a terminal failure', async () => {
+    vi.useFakeTimers()
+    api.get.mockResolvedValue({
+      data: [{
+        id: 'session-1',
+        title: 'Lokaler Titel',
+        titleGenerationStatus: 'failed'
+      }]
+    })
+    const chat = useChatStore()
+    chat.current = {
+      id: 'session-1',
+      title: 'Lokaler Titel',
+      titleGenerationStatus: 'running',
+      messages: []
+    }
+    chat.sessions = [{
+      id: 'session-1',
+      title: 'Lokaler Titel',
+      titleGenerationStatus: 'running'
+    }]
+
+    const refresh = chat.refreshGeneratedTitle('session-1')
+    await vi.advanceTimersByTimeAsync(1000)
+    await refresh
+
+    expect(chat.current.titleGenerationStatus).toBe('failed')
+    expect(api.get).toHaveBeenCalledTimes(1)
   })
 
   it('renames a session and keeps the list and current session in sync', async () => {
@@ -453,6 +762,42 @@ describe('chat drafts', () => {
     expect(chat.running).toBe(false)
     expect(chat.stopping).toBe(false)
     expect(chat.runId).toBeNull()
+  })
+
+  it('reloads the persisted runtime error after a failed run', async () => {
+    global.EventSource = EventSourceMock
+    api.get.mockImplementation((url) => Promise.resolve({
+      data: url === '/sessions/session-1'
+        ? {
+            id: 'session-1',
+            activeRun: null,
+            messages: [{
+              id: 'error-1',
+              role: 'assistant',
+              kind: 'runtime_error',
+              error: {
+                code: 'agent.requiredWebSearchMissing',
+                message: 'The required web search was not performed.',
+                params: {}
+              }
+            }]
+          }
+        : []
+    }))
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+
+    EventSourceMock.instances[0].emit('run.failed', {
+      error: { code: 'agent.requiredWebSearchMissing' }
+    })
+
+    await vi.waitFor(() => expect(chat.current.messages[0]).toMatchObject({
+      kind: 'runtime_error',
+      error: { code: 'agent.requiredWebSearchMissing' }
+    }))
+    expect(chat.running).toBe(false)
   })
 
   it('promotes the last streamed state before a cancelled run finishes', () => {

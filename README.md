@@ -117,17 +117,17 @@ Unter **Einstellungen > Integrationen** können mehrere Suchintegrationen verwal
 
 Unter **Einstellungen > Tools** wird `webfetch` unabhängig von SearXNG konfiguriert. Das Tool ruft konkrete HTTP(S)-URLs als Markdown, Text oder HTML ab und unterstützt Bildantworten bis 5 MiB. Standardmäßig fragt jeder Abruf nach einer Freigabe. Alternativ können öffentliche Ziele oder öffentliche und explizit erlaubte private Origins automatisch freigegeben werden. Pro Modell ist ein vollständiger Policy-Override möglich; der globale Schalter und die Origin-Allowlist bleiben Hostgrenzen.
 
-Webfetch folgt Redirects nur nach erneuter Prüfung, pinnt validierte DNS-Ziele und blockiert Link-Local-, Metadaten- und andere gefährliche Adressen. Bildantworten werden außerhalb des Agent-Homes unter `/data/attachments` gespeichert. Bildfähige Modelle erhalten sie flüchtig im Providerrequest; für Textmodelle bleiben sie im Chat sichtbar, werden aber nicht an das Modell übertragen.
+Webfetch folgt Redirects nur nach erneuter Prüfung, pinnt validierte DNS-Ziele und blockiert Link-Local-, Metadaten- und andere gefährliche Adressen. Heruntergeladene Dateien werden im geschützten Session-Speicher unter `/data/sessions/<session-id>/downloads` gespeichert. Bildfähige Modelle erhalten aktuelle oder ausdrücklich referenzierte Bilder flüchtig im Providerrequest; Textmodelle erhalten ausschließlich sichere Metadaten und verfügbare Textableitungen.
 
 ## Arbeitsverzeichnisse
 
-Neue Sessions erzeugen keinen Ordner und starten ohne Arbeitsverzeichnis. Der rechte Datei-Explorer verwaltet ausschließlich das Agent-Home unter `/data/home` und kann einen Ordner als Arbeitsverzeichnis setzen.
+Neue Sessions starten ohne Arbeitsverzeichnis. Mit der ersten Nachricht entsteht ein eigener interner Session-Speicher unter `/data/sessions/<session-id>` mit den fünf flachen Verzeichnissen `files`, `attachments`, `generated`, `downloads` und `derived`. Nur `files` ist bearbeitbar; die übrigen Bereiche werden vom Host verwaltet. Dieser Speicher ersetzt keinen Workspace. Der rechte Datei-Explorer verwaltet weiterhin das Agent-Home unter `/data/home` und kann einen Ordner als optionalen Workspace auswählen.
 
 Eine neue Session wird erst mit ihrer ersten Nachricht serverseitig angelegt und erscheint erst dann in der Seitenleiste. Nicht abgesendete Texte bleiben getrennt pro Session ausschließlich im lokalen Browserspeicher.
 
-- `read-only`: Nur lesende Dateitools werden angeboten; Lesen innerhalb des Arbeitsverzeichnisses ist ohne Rückfrage erlaubt.
-- `read-write`: Lesende und schreibende Dateitools werden angeboten; Lesen und Schreiben innerhalb des Arbeitsverzeichnisses ist ohne Rückfrage erlaubt.
-- Kein Arbeitsverzeichnis oder Zugriff außerhalb davon: MatoLoop erzeugt eine Freigabeanfrage.
+- `read-only`: Nur `list_directory` und `read_file` werden für Session-Speicher und optionalen Workspace angeboten.
+- `read-write`: Zusätzlich stehen Schreiben, Erstellen, Löschen, Kopieren und Verschieben zur Verfügung. Im Session-Speicher ist ausschließlich `files` veränderbar; `attachments`, `generated`, `downloads` und `derived` bleiben schreibgeschützt und können nur gelesen oder als Copy-Quelle verwendet werden.
+- Dateitools verwenden ein explizites `root`-Feld mit `session` oder `workspace`. Ohne Arbeitsverzeichnis ist ausschließlich `root=workspace` nicht verfügbar.
 - `Einmal erlauben`: gilt nur für die aktuelle Aktion.
 - `Für Session erlauben`: erzeugt einen separaten, widerrufbaren Permission-Grant.
 - `Später`: lässt die Anfrage ausstehend und den Agent-Run pausiert.

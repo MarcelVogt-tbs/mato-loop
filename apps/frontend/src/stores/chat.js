@@ -5,6 +5,41 @@ import { useApprovalStore } from 'src/stores/approvals'
 import { notifyError } from 'src/utils/notifications'
 
 const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
+const ACTIVE_TITLE_GENERATION_STATUSES = new Set(['pending', 'running'])
+export const MAX_ATTACHMENT_DRAFTS = 4
+export const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
+export const MAX_ATTACHMENT_DRAFT_BYTES = 256 * 1024 * 1024
+
+function normalizedMimeType(file) {
+  return String(file?.type || '').split(';', 1)[0].trim().toLowerCase()
+}
+
+function attachmentKind(file) {
+  const mimeType = normalizedMimeType(file)
+  if (mimeType.startsWith('image/')) return 'image'
+  if (mimeType.startsWith('audio/')) return 'audio'
+  return 'file'
+}
+
+function attachmentPreviewUrl(file) {
+  if (attachmentKind(file) !== 'image' || typeof globalThis.URL?.createObjectURL !== 'function') {
+    return null
+  }
+  try {
+    return globalThis.URL.createObjectURL(file)
+  } catch {
+    return null
+  }
+}
+
+export function buildAttachmentFormData(payload, attachments) {
+  const formData = new FormData()
+  formData.append('payload', JSON.stringify(payload))
+  for (const attachment of attachments) {
+    formData.append('attachments', attachment.file, attachment.file.name || 'datei')
+  }
+  return formData
+}
 
 function defaultSessionOptions() {
   return {
@@ -103,14 +138,27 @@ export const useChatStore = defineStore('chat', {
     reconnectAttempts: 0,
     activity: emptyActivity(),
     sessionLoadVersion: 0,
+    sessionRequestController: null,
+    loadError: null,
     sessionDefaults: defaultSessionOptions(),
-    drafts: loadDrafts()
+    drafts: loadDrafts(),
+    attachmentDrafts: {
+      newSession: [],
+      sessionMessages: {}
+    },
+    audioDictations: {
+      newSession: null,
+      sessionMessages: {}
+    }
   }),
   getters: {
     activeContext: (state) => state.current || state.drafts.newSession.options,
     activeDraft: (state) => state.current
       ? state.drafts.sessionMessages[state.current.id] || ''
-      : state.drafts.newSession.message
+      : state.drafts.newSession.message,
+    activeAttachmentDraft: (state) => state.current
+      ? state.attachmentDrafts.sessionMessages[state.current.id] || []
+      : state.attachmentDrafts.newSession
   },
   actions: {
     setActivity(phase, details = {}) {
@@ -190,7 +238,88 @@ export const useChatStore = defineStore('chat', {
       else this.drafts.newSession.message = message
       this.persistDrafts()
     },
+    addAttachmentFiles(files) {
+      const incoming = Array.from(files || [])
+      if (this.activeAttachmentDraft.length + incoming.length > MAX_ATTACHMENT_DRAFTS) {
+        return { added: 0, error: 'Du kannst höchstens vier Dateien pro Nachricht anhängen.' }
+      }
+      for (const file of incoming) {
+        if (!Number.isFinite(file?.size) || file.size <= 0) {
+          return { added: 0, error: 'Die ausgewählte Datei ist leer.' }
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          return { added: 0, error: 'Eine Datei darf höchstens 64 MiB groß sein.' }
+        }
+      }
+      const draftBytes = [
+        ...this.attachmentDrafts.newSession,
+        ...Object.values(this.attachmentDrafts.sessionMessages).flat()
+      ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
+      const incomingBytes = incoming.reduce((total, file) => total + file.size, 0)
+      if (draftBytes + incomingBytes > MAX_ATTACHMENT_DRAFT_BYTES) {
+        return {
+          added: 0,
+          error: 'Dateianhänge dürfen über alle Sessions zusammen höchstens 256 MiB belegen.'
+        }
+      }
+      if (this.current && !this.attachmentDrafts.sessionMessages[this.current.id]) {
+        this.attachmentDrafts.sessionMessages[this.current.id] = []
+      }
+      const target = this.activeAttachmentDraft
+      for (const file of incoming) {
+        target.push({
+          id: globalThis.crypto?.randomUUID?.() || `attachment-${Date.now()}-${target.length}`,
+          file: markRaw(file),
+          kind: attachmentKind(file),
+          mimeType: normalizedMimeType(file),
+          objectUrl: attachmentPreviewUrl(file)
+        })
+      }
+      return { added: incoming.length, error: null }
+    },
+    removeAttachmentFile(id) {
+      const target = this.activeAttachmentDraft
+      const index = target.findIndex((attachment) => attachment.id === id)
+      if (index < 0) return
+      const [attachment] = target.splice(index, 1)
+      if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
+    },
+    clearAttachmentDraft(sessionId = this.current?.id || null) {
+      const target = sessionId
+        ? this.attachmentDrafts.sessionMessages[sessionId] || []
+        : this.attachmentDrafts.newSession
+      for (const attachment of target) {
+        if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
+      }
+      if (sessionId) delete this.attachmentDrafts.sessionMessages[sessionId]
+      else this.attachmentDrafts.newSession = []
+    },
+    clearAllAttachmentDrafts() {
+      for (const attachment of [
+        ...this.attachmentDrafts.newSession,
+        ...Object.values(this.attachmentDrafts.sessionMessages).flat()
+      ]) {
+        if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
+      }
+      this.attachmentDrafts = { newSession: [], sessionMessages: {} }
+      this.audioDictations = { newSession: null, sessionMessages: {} }
+    },
+    getAudioDictation(sessionId = null) {
+      return sessionId
+        ? this.audioDictations.sessionMessages[sessionId] || null
+        : this.audioDictations.newSession
+    },
+    setAudioDictation(entry, sessionId = null) {
+      const value = entry ? { ...entry, file: markRaw(entry.file) } : null
+      if (sessionId) {
+        if (value) this.audioDictations.sessionMessages[sessionId] = value
+        else delete this.audioDictations.sessionMessages[sessionId]
+      } else {
+        this.audioDictations.newSession = value
+      }
+    },
     resetNewDraft() {
+      this.clearAttachmentDraft(null)
       this.drafts.newSession = {
         message: '',
         options: { ...this.sessionDefaults }
@@ -203,31 +332,44 @@ export const useChatStore = defineStore('chat', {
       for (const id of Object.keys(this.drafts.sessionMessages)) {
         if (!sessionIds.has(id)) delete this.drafts.sessionMessages[id]
       }
+      for (const id of Object.keys(this.attachmentDrafts.sessionMessages)) {
+        if (!sessionIds.has(id)) this.clearAttachmentDraft(id)
+      }
+      for (const id of Object.keys(this.audioDictations.sessionMessages)) {
+        if (!sessionIds.has(id)) delete this.audioDictations.sessionMessages[id]
+      }
       this.persistDrafts()
     },
-    async refreshGeneratedTitle(sessionId, expectedTitle) {
-      if (!expectedTitle) return
+    async refreshGeneratedTitle(sessionId) {
       for (const delay of [1000, 2000, 4000, 8000, 15000, 30000]) {
         await new Promise((resolve) => setTimeout(resolve, delay))
-        const localTitle = this.current?.id === sessionId
-          ? this.current.title
-          : this.sessions.find((item) => item.id === sessionId)?.title
-        if (localTitle && localTitle !== expectedTitle) return
+        const localSession = this.current?.id === sessionId
+          ? this.current
+          : this.sessions.find((item) => item.id === sessionId)
+        if (!ACTIVE_TITLE_GENERATION_STATUSES.has(localSession?.titleGenerationStatus)) return
         try {
           await this.fetchSessions()
         } catch {
           continue
         }
         const session = this.sessions.find((item) => item.id === sessionId)
-        if (!session || session.title === expectedTitle) continue
-        if (this.current?.id === sessionId) this.current.title = session.title
-        return
+        if (!session) continue
+        if (this.current?.id === sessionId) {
+          this.current.title = session.title
+          this.current.titleGenerationStatus = session.titleGenerationStatus
+        }
+        if (!ACTIVE_TITLE_GENERATION_STATUSES.has(session.titleGenerationStatus)) return
       }
     },
     async loadSession(id) {
+      this.sessionRequestController?.abort()
       this.selectedSessionId = id
       this.sessionLoadVersion += 1
       const loadVersion = this.sessionLoadVersion
+      const controller = id ? markRaw(new AbortController()) : null
+      this.sessionRequestController = controller
+      this.current = null
+      this.loadError = null
       if (this.runSessionId !== id) {
         clearTimeout(this.reconnectTimer)
         this.reconnectTimer = null
@@ -245,13 +387,12 @@ export const useChatStore = defineStore('chat', {
         this.clearActivity()
       }
       if (!id) {
-        this.current = null
         this.loading = false
         return
       }
       this.loading = true
       try {
-        const session = (await api.get(`/sessions/${id}`)).data
+        const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
         if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
         this.current = session
         if (session.activeRun && this.runId !== session.activeRun.id) {
@@ -259,17 +400,32 @@ export const useChatStore = defineStore('chat', {
         } else if (!session.activeRun && !this.running) {
           this.clearActivity()
         }
+      } catch (error) {
+        if (controller.signal.aborted || this.sessionLoadVersion !== loadVersion) return
+        this.loadError = error
+        throw error
       } finally {
+        if (this.sessionRequestController === controller) this.sessionRequestController = null
         if (this.sessionLoadVersion === loadVersion) this.loading = false
       }
     },
     async refreshSession(id) {
-      if (this.selectedSessionId !== id) return
+      if (this.selectedSessionId !== id || this.loading) return
+      this.sessionRequestController?.abort()
       this.sessionLoadVersion += 1
       const loadVersion = this.sessionLoadVersion
-      const session = (await api.get(`/sessions/${id}`)).data
-      if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
-        this.current = session
+      const controller = markRaw(new AbortController())
+      this.sessionRequestController = controller
+      try {
+        const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
+        if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
+          this.current = session
+          this.loadError = null
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) throw error
+      } finally {
+        if (this.sessionRequestController === controller) this.sessionRequestController = null
       }
     },
     async updateActive(patch) {
@@ -312,9 +468,12 @@ export const useChatStore = defineStore('chat', {
       this.persistDrafts()
     },
     async updateCurrent(patch) {
-      if (!this.current) return
-      const { data } = await api.patch(`/sessions/${this.current.id}`, patch)
-      this.current = { ...this.current, ...data }
+      const session = this.current
+      if (!session) return
+      const { data } = await api.patch(`/sessions/${session.id}`, patch)
+      if (this.current?.id === session.id && this.selectedSessionId === session.id) {
+        this.current = { ...session, ...data }
+      }
       const index = this.sessions.findIndex((item) => item.id === data.id)
       if (index >= 0) this.sessions[index] = { ...this.sessions[index], ...data }
     },
@@ -336,12 +495,17 @@ export const useChatStore = defineStore('chat', {
       await api.delete(`/sessions/${id}`)
       this.sessions = this.sessions.filter((item) => item.id !== id)
       delete this.drafts.sessionMessages[id]
+      this.clearAttachmentDraft(id)
+      this.setAudioDictation(null, id)
       this.persistDrafts()
       if (this.current?.id === id) this.current = null
     },
     async send(content) {
       if (this.running) return null
-      return this.current ? this.sendToCurrent(content) : this.startSession(content)
+      const attachments = [...this.activeAttachmentDraft]
+      return this.current
+        ? this.sendToCurrent(content, attachments)
+        : this.startSession(content, attachments)
     },
     async stop() {
       if (!this.running || this.stopping) return
@@ -362,7 +526,9 @@ export const useChatStore = defineStore('chat', {
         }
       }
     },
-    async startSession(content) {
+    async startSession(content, attachments = []) {
+      const sessionLoadVersion = this.sessionLoadVersion
+      const selectedSessionId = this.selectedSessionId
       this.running = true
       this.streamContent = ''
       this.streamReasoning = null
@@ -370,33 +536,47 @@ export const useChatStore = defineStore('chat', {
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
       const options = this.drafts.newSession.options
       try {
-        const { data } = await api.post('/sessions', {
+        const payload = {
           content,
           model_id: options.modelId,
           memory_mode: options.memoryMode,
           web_search_policy: options.webSearchPolicy,
           working_directory: options.workingDirectory,
           workspace_access: options.workspaceAccess
-        })
-        const localMessage = { id: `local-${Date.now()}`, role: 'user', content }
-        const session = { ...data.session, messages: [localMessage] }
-        this.current = session
-        this.selectedSessionId = session.id
-        this.sessions.unshift(data.session)
+        }
+        const { data } = attachments.length
+          ? await api.post('/sessions/with-attachments', buildAttachmentFormData(payload, attachments))
+          : await api.post('/sessions', payload)
+        const userMessage = data.message || { id: `local-${Date.now()}`, role: 'user', content }
+        const session = { ...data.session, messages: [userMessage] }
+        const stillSelected = this.sessionLoadVersion === sessionLoadVersion
+          && this.selectedSessionId === selectedSessionId
+          && !this.current
+        this.sessions = [data.session, ...this.sessions.filter((item) => item.id !== session.id)]
         this.resetNewDraft()
-        this.watchRun(session.id, data.runId, { status: 'queued', modelName: data.modelName })
-        await this.cancelActiveRun()
-        return { created: true, sessionId: session.id }
+        if (stillSelected) {
+          this.current = session
+          this.selectedSessionId = session.id
+          this.watchRun(session.id, data.runId, { status: 'queued', modelName: data.modelName })
+          await this.cancelActiveRun()
+        }
+        return { created: stillSelected, sessionId: session.id }
       } catch (error) {
-        this.running = false
-        this.stopping = false
-        this.cancelRequested = false
-        this.clearActivity()
+        if (
+          this.sessionLoadVersion === sessionLoadVersion
+          && this.selectedSessionId === selectedSessionId
+        ) {
+          this.running = false
+          this.stopping = false
+          this.cancelRequested = false
+          this.clearActivity()
+        }
         throw error
       }
     },
-    async sendToCurrent(content) {
+    async sendToCurrent(content, attachments = []) {
       const session = this.current
+      const sessionLoadVersion = this.sessionLoadVersion
       this.running = true
       this.streamContent = ''
       this.streamReasoning = null
@@ -405,18 +585,43 @@ export const useChatStore = defineStore('chat', {
       const localMessage = { id: `local-${Date.now()}`, role: 'user', content }
       session.messages.push(localMessage)
       try {
-        const { data } = await api.post(`/sessions/${session.id}/messages`, { content })
+        const payload = { content }
+        const { data } = attachments.length
+          ? await api.post(
+              `/sessions/${session.id}/messages/with-attachments`,
+              buildAttachmentFormData(payload, attachments)
+            )
+          : await api.post(`/sessions/${session.id}/messages`, payload)
+        if (data.message) {
+          const index = session.messages.findIndex((message) => message.id === localMessage.id)
+          if (index >= 0) session.messages[index] = data.message
+        }
+        this.clearAttachmentDraft(session.id)
         delete this.drafts.sessionMessages[session.id]
         this.persistDrafts()
-        this.watchRun(session.id, data.runId, { status: 'queued', modelName: data.modelName })
-        await this.cancelActiveRun()
+        if (
+          this.sessionLoadVersion === sessionLoadVersion
+          && this.selectedSessionId === session.id
+          && this.current?.id === session.id
+        ) {
+          this.watchRun(session.id, data.runId, { status: 'queued', modelName: data.modelName })
+          await this.cancelActiveRun()
+        } else {
+          void this.fetchSessions().catch(() => {})
+        }
         return { created: false, sessionId: session.id }
       } catch (error) {
         session.messages = session.messages.filter((message) => message.id !== localMessage.id)
-        this.running = false
-        this.stopping = false
-        this.cancelRequested = false
-        this.clearActivity()
+        if (
+          this.sessionLoadVersion === sessionLoadVersion
+          && this.selectedSessionId === session.id
+          && this.current?.id === session.id
+        ) {
+          this.running = false
+          this.stopping = false
+          this.cancelRequested = false
+          this.clearActivity()
+        }
         throw error
       }
     },
@@ -464,9 +669,18 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('session.title.updated', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
-        if (this.current?.id === payload.sessionId) this.current.title = payload.title
+        if (this.current?.id === payload.sessionId) {
+          this.current.title = payload.title
+          this.current.titleGenerationStatus = 'completed'
+        }
         const index = this.sessions.findIndex((session) => session.id === payload.sessionId)
-        if (index >= 0) this.sessions[index] = { ...this.sessions[index], title: payload.title }
+        if (index >= 0) {
+          this.sessions[index] = {
+            ...this.sessions[index],
+            title: payload.title,
+            titleGenerationStatus: 'completed'
+          }
+        }
       })
       source.addEventListener('message.delta', (event) => {
         if (this.eventSource !== source) return
@@ -530,14 +744,9 @@ export const useChatStore = defineStore('chat', {
       const finish = () => {
         if (this.eventSource !== source) return
         const current = this.current?.id === sessionId ? this.current : null
-        const userMessages = current?.messages?.filter((message) => message.role === 'user') || []
-        const firstUserTitle = userMessages[0]?.content
-          ?.trim()
-          .replace(/\n/g, ' ')
-          .slice(0, 80)
-        const expectedTitle = userMessages.length === 1 && current?.title === firstUserTitle
-          ? current.title
-          : null
+        const titleGenerationActive = ACTIVE_TITLE_GENERATION_STATUSES.has(
+          current?.titleGenerationStatus
+        )
         finished = true
         clearTimeout(this.reconnectTimer)
         this.reconnectTimer = null
@@ -556,12 +765,10 @@ export const useChatStore = defineStore('chat', {
         this.refreshSession(sessionId)
         this.fetchSessions()
         useApprovalStore().fetchPending()
-        if (expectedTitle) void this.refreshGeneratedTitle(sessionId, expectedTitle)
+        if (titleGenerationActive) void this.refreshGeneratedTitle(sessionId)
       }
-      source.addEventListener('run.failed', (event) => {
+      source.addEventListener('run.failed', () => {
         if (this.eventSource !== source) return
-        const payload = JSON.parse(event.data)
-        notifyError(payload.error, 'Die Agent-Anfrage ist fehlgeschlagen.')
         finish()
       })
       for (const name of ['run.completed', 'run.cancelled']) {
@@ -580,7 +787,7 @@ export const useChatStore = defineStore('chat', {
         this.setActivity('reconnecting')
         this.reconnectAttempts += 1
 
-        const stopDisconnectedRun = (error = null) => {
+        const stopDisconnectedRun = () => {
           if (this.runId !== runId) return
           clearTimeout(this.reconnectTimer)
           this.reconnectTimer = null
@@ -591,7 +798,6 @@ export const useChatStore = defineStore('chat', {
           this.cancelRequested = false
           this.streamModelName = null
           this.clearActivity()
-          if (error) notifyError(error, 'Die Agent-Anfrage ist fehlgeschlagen.')
           this.refreshSession(sessionId)
           this.fetchSessions()
           useApprovalStore().fetchPending()
@@ -616,7 +822,7 @@ export const useChatStore = defineStore('chat', {
           if (['queued', 'running', 'waiting_approval'].includes(data.status)) {
             scheduleReconnect(data)
           } else {
-            stopDisconnectedRun(data.status === 'failed' ? data.error : null)
+            stopDisconnectedRun()
           }
         } catch {
           scheduleReconnect({ createdAt: this.activity.startedAt })

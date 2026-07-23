@@ -52,6 +52,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.providers import ToolCall
 from mato_loop_backend.providers.base import ProviderError, ProviderResult
 from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AiSettings,
     MemorySettings,
@@ -65,7 +66,18 @@ from mato_loop_backend.settings.models import (
     effective_model_pseudonymization,
     effective_model_trust,
 )
-from mato_loop_backend.workspace import WorkspaceService
+from mato_loop_backend.workspace import RootFileService
+
+
+def _root_files(tmp_path, session: ChatSession) -> RootFileService:
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id)
+    return RootFileService(
+        session.id,
+        session_storage=storage,
+        workspace_home=tmp_path,
+        working_directory=session.working_directory,
+    )
 
 
 def test_trust_defaults_and_inheritance() -> None:
@@ -413,12 +425,13 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
             "retrieval_level": "retrieve",
         },
     )
+    session = ChatSession(id=uuid4(), title="Test", workspace_access="read-only")
     context = ToolContext(
         db=AsyncMock(spec=AsyncSession),
         run_id=uuid4(),
-        session=ChatSession(id=uuid4(), title="Test", workspace_access="read-only"),
+        session=session,
         tool_call=call,
-        workspace=WorkspaceService(tmp_path),
+        root_files=_root_files(tmp_path, session),
         search_settings=SearchSettings(),
         ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW),
         assistant_message_id=uuid4(),
@@ -485,7 +498,7 @@ async def test_public_model_can_read_private_session_after_approval(
         run_id=uuid4(),
         session=source,
         tool_call=call,
-        workspace=WorkspaceService(tmp_path),
+        root_files=_root_files(tmp_path, source),
         search_settings=SearchSettings(),
         ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW),
     )
@@ -626,6 +639,18 @@ async def test_dreaming_restart_requeues_running_without_own_commit() -> None:
     assert any("running" in params and "failed" in params for params in parameters)
     assert all("memory.backendRestarted" in params for params in parameters)
     db.commit.assert_not_awaited()
+
+
+async def test_dreaming_source_query_excludes_runtime_error_messages() -> None:
+    rows = Mock()
+    rows.all.return_value = []
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = rows
+
+    await DreamingService._next_messages(db, uuid4(), None, 20)
+
+    statement = db.scalars.await_args.args[0]
+    assert "messages.error_code IS NULL" in str(statement)
 
 
 async def test_dreaming_failure_reloads_run_by_stable_id_after_rollback(

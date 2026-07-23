@@ -12,6 +12,17 @@ describe('tool display', () => {
   it('uses readable labels and concise resource summaries', () => {
     expect(toolIdentity('read_file')).toEqual({ label: 'Datei lesen', icon: 'description' })
     expect(toolSummary({ name: 'read_file', arguments: { path: 'Projekte/plan.md' } })).toBe('Projekte/plan.md')
+    expect(toolIdentity('copy_path')).toEqual({ label: 'Pfad kopieren', icon: 'content_copy' })
+    expect(toolIdentity('move_path')).toEqual({ label: 'Pfad verschieben', icon: 'drive_file_move' })
+    expect(toolSummary({
+      name: 'copy_path',
+      arguments: {
+        source_root: 'session',
+        source_path: 'generated/bild.png',
+        destination_root: 'workspace',
+        destination_path: 'bild.png'
+      }
+    })).toBe('session:generated/bild.png -> workspace:bild.png')
   })
 
   it('identifies webfetch exactly and hides sensitive URL parameters', () => {
@@ -20,6 +31,23 @@ describe('tool display', () => {
       name: 'webfetch',
       arguments: { url: 'https://user:secret@example.com/private?token=secret' }
     })).toBe('https://example.com/private?…')
+  })
+
+  it('labels media tools and summarizes their relevant arguments', () => {
+    expect(toolIdentity('generate_image')).toEqual({ label: 'Bild erzeugen', icon: 'image' })
+    expect(toolIdentity('generate_speech')).toEqual({ label: 'Sprache erzeugen', icon: 'record_voice_over' })
+    expect(toolIdentity('generate_audio')).toEqual({ label: 'Audio erzeugen', icon: 'graphic_eq' })
+    expect(toolIdentity('transcribe_audio')).toEqual({ label: 'Audio transkribieren', icon: 'mic' })
+    expect(toolSummary({ name: 'generate_image', arguments: { prompt: 'Ein ruhiger See' } }))
+      .toBe('Ein ruhiger See')
+    expect(toolSummary({
+      name: 'generate_audio',
+      arguments: { prompt: 'Leises Meeresrauschen', duration_seconds: 12 }
+    })).toBe('Leises Meeresrauschen (12 s)')
+    expect(toolSummary({
+      name: 'transcribe_audio',
+      arguments: { attachment_id: '550e8400-e29b-41d4-a716-446655440000' }
+    })).toBe('Audioanhang 550e8400-e29b-41d4-a716-446655440000')
   })
 
   it('renders memory retrieval with its visible scope and contents', () => {
@@ -50,8 +78,16 @@ describe('tool display', () => {
   })
 
   it('translates structured tool errors and derives their status', () => {
-    const result = { content: JSON.stringify({ error: { code: 'tool.invalidArguments' } }) }
-    expect(parseToolResult(result.content).errorMessage).toBe('Das Modell hat ungültige Tool-Argumente erzeugt.')
+    const result = {
+      content: JSON.stringify({
+        error: {
+          code: 'provider.timeout',
+          params: { timeoutSeconds: 300, retryable: true }
+        }
+      })
+    }
+    expect(parseToolResult(result.content).errorMessage)
+      .toBe('Der Provider hat nicht innerhalb von 300 Sekunden geantwortet.')
     expect(toolStatus({ result })).toMatchObject({ name: 'failed', color: 'negative' })
   })
 

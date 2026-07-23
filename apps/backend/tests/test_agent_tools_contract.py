@@ -24,10 +24,11 @@ from mato_loop_backend.memory.retrieval import (
     MemoryRetrievalStrategy,
     MemoryRetrieveMode,
 )
-from mato_loop_backend.models import ChatSession, MemoryRecord, Message
+from mato_loop_backend.models import ChatSession, MemoryRecord, Message, MessageAttachment
 from mato_loop_backend.providers import ToolCall
+from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import SearchSettings, TrustLevel, WebFetchPolicy
-from mato_loop_backend.workspace import WorkspaceService
+from mato_loop_backend.workspace import RootFileService
 
 
 class _RequiredArguments(BaseModel):
@@ -62,12 +63,20 @@ def _context(
     web_fetch_policy=WebFetchPolicy.DISABLED,
     allowed_private_origins=(),
 ) -> ToolContext:
+    session = _session()
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id)
     return ToolContext(
         db=AsyncMock(spec=AsyncSession),
         run_id=uuid4(),
-        session=_session(),
+        session=session,
         tool_call=call,
-        workspace=WorkspaceService(tmp_path),
+        root_files=RootFileService(
+            session.id,
+            session_storage=storage,
+            workspace_home=tmp_path,
+            working_directory=session.working_directory,
+        ),
         search_settings=SearchSettings(),
         ask_handler=AsyncMock(return_value=decision),
         web_fetch_policy=web_fetch_policy,
@@ -80,6 +89,7 @@ def _context_with_workdir(
 ) -> ToolContext:
     context = _context(tmp_path, call, decision=decision)
     context.session.working_directory = "project"
+    context.root_files.working_directory = "project"
     return context
 
 
@@ -94,6 +104,153 @@ def test_webfetch_schema_describes_verified_image_attachments() -> None:
 
     assert "Successful images are validated and attached" in webfetch["description"]
     assert "verify exact image URLs" in webfetch["description"]
+
+
+def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
+    schemas = {
+        item["name"]: item
+        for item in tool_registry.schemas(SearchSettings(), "read-write")
+    }
+
+    for name in {
+        "list_directory",
+        "read_file",
+        "write_file",
+        "create_directory",
+        "delete_path",
+    }:
+        parameters = schemas[name]["parameters"]
+        assert "root" in parameters["required"]
+        assert parameters["properties"]["root"]["enum"] == ["session", "workspace"]
+        assert "path" in parameters["properties"]
+    assert schemas["list_directory"]["parameters"]["properties"]["path"]["default"] == "."
+    assert schemas["list_directory"]["parameters"]["properties"]["offset"]["default"] == 0
+    assert schemas["list_directory"]["parameters"]["properties"]["limit"]["default"] == 100
+    assert schemas["read_file"]["parameters"]["properties"]["offset"]["default"] == 1
+    assert schemas["read_file"]["parameters"]["properties"]["limit"]["default"] == 2000
+    assert schemas["delete_path"]["parameters"]["properties"]["recursive"]["default"] is False
+    for name in {"copy_path", "move_path"}:
+        assert set(schemas[name]["parameters"]["required"]) == {
+            "source_root",
+            "source_path",
+            "destination_root",
+            "destination_path",
+        }
+        assert "exact new path" in schemas[name]["description"]
+
+
+async def test_read_only_mode_offers_only_read_file_tools_and_blocks_stale_mutations(
+    tmp_path,
+) -> None:
+    file_tools = {
+        "list_directory",
+        "read_file",
+        "write_file",
+        "create_directory",
+        "delete_path",
+        "copy_path",
+        "move_path",
+    }
+    offered = {
+        item["name"] for item in tool_registry.schemas(SearchSettings(), "read-only")
+    }
+    assert offered & file_tools == {"list_directory", "read_file"}
+
+    call = ToolCall(
+        id="stale",
+        name="write_file",
+        arguments={"root": "session", "path": "files/note.txt", "content": "secret"},
+    )
+    context = _context(tmp_path, call)
+    context.root_files.write_file = Mock(side_effect=AssertionError("must not write"))
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "tool.writeDisabled"}
+    context.root_files.write_file.assert_not_called()
+
+
+async def test_missing_workspace_returns_structured_error_without_approval(tmp_path) -> None:
+    call = ToolCall(
+        id="read",
+        name="read_file",
+        arguments={"root": "workspace", "path": "notes.txt"},
+    )
+    context = _context(tmp_path, call)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "file.workspaceNotSelected"}
+    context.ask_handler.assert_not_awaited()
+
+
+async def test_copy_and_move_handlers_check_both_roots_before_effect(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    copy_call = ToolCall(
+        id="copy",
+        name="copy_path",
+        arguments={
+            "source_root": "session",
+            "source_path": "generated/result.txt",
+            "destination_root": "workspace",
+            "destination_path": "result.txt",
+        },
+    )
+    context = _context_with_workdir(tmp_path, copy_call)
+    context.session.workspace_access = "read-write"
+    session_root = context.root_files.session_storage.session_path(context.session.id)
+    (session_root / "generated" / "result.txt").write_text(
+        "Ergebnis", encoding="utf-8"
+    )
+
+    copied = await tool_registry.execute(copy_call, context)
+
+    assert json.loads(copied.content) == {"root": "workspace", "copied": "result.txt"}
+    assert (project / "result.txt").read_text(encoding="utf-8") == "Ergebnis"
+    assert context.ask_handler.await_count == 2
+
+    move_call = ToolCall(
+        id="move",
+        name="move_path",
+        arguments={
+            "source_root": "workspace",
+            "source_path": "result.txt",
+            "destination_root": "session",
+            "destination_path": "files/result.txt",
+        },
+    )
+    context.tool_call = move_call
+    moved = await tool_registry.execute(move_call, context)
+
+    assert json.loads(moved.content) == {"root": "session", "moved": "files/result.txt"}
+    assert not (project / "result.txt").exists()
+    assert (session_root / "files" / "result.txt").read_text(encoding="utf-8") == "Ergebnis"
+
+
+async def test_copy_denied_destination_has_no_partial_effect(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    call = ToolCall(
+        id="copy",
+        name="copy_path",
+        arguments={
+            "source_root": "session",
+            "source_path": "files/source.txt",
+            "destination_root": "workspace",
+            "destination_path": "destination.txt",
+        },
+    )
+    context = _context_with_workdir(tmp_path, call)
+    context.session.workspace_access = "read-write"
+    context.ask_handler.side_effect = [PermissionDecision.ALLOW, PermissionDecision.DENY]
+    session_root = context.root_files.session_storage.session_path(context.session.id)
+    (session_root / "files" / "source.txt").write_text("Quelle", encoding="utf-8")
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "permission.denied"}
+    assert not (project / "destination.txt").exists()
 
 
 @pytest.mark.parametrize(
@@ -115,7 +272,12 @@ async def test_tool_registry_returns_stable_errors_for_unknown_tools_and_invalid
     result = await ToolRegistry([_definition()]).execute(call, Mock())
 
     assert result.metadata == {"errorCode": expected_error["code"]}
-    assert json.loads(result.content) == {"error": expected_error}
+    assert json.loads(result.content) == {
+        "error": {
+            **expected_error,
+            "message": "The tool operation could not be completed.",
+        }
+    }
 
 
 @pytest.mark.parametrize(
@@ -169,6 +331,51 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
     assert request.resource_scope == str(expected_id)
     context.db.scalar.assert_awaited_once()
     context.db.scalars.assert_awaited_once()
+
+
+async def test_session_read_exposes_historical_attachment_identity_and_path(tmp_path) -> None:
+    call = ToolCall(id="read", name="session_read", arguments={})
+    context = _context(tmp_path, call)
+    target = context.session
+    message = Message(
+        id=uuid4(),
+        session_id=target.id,
+        role="user",
+        content="Siehe Anhang",
+    )
+    attachment = MessageAttachment(
+        id=uuid4(),
+        message_id=message.id,
+        position=0,
+        filename="bericht.pdf",
+        kind="document",
+        category="user_upload",
+        processing_status="ready",
+        mime_type="application/pdf",
+        size_bytes=123,
+        sha256="a" * 64,
+        storage_path=f"attachments/{uuid4()}/bericht.pdf",
+    )
+    message.attachments = [attachment]
+    records = Mock()
+    records.all.return_value = [message]
+    context.db.scalar.return_value = target
+    context.db.scalars.return_value = records
+
+    result = await tool_registry.execute(call, context)
+
+    payload = json.loads(result.content)
+    assert payload["messages"][0]["attachments"] == [
+        {
+            "id": str(attachment.id),
+            "filename": "bericht.pdf",
+            "kind": "document",
+            "mimeType": "application/pdf",
+            "category": "user_upload",
+            "processingStatus": "ready",
+            "path": attachment.storage_path,
+        }
+    ]
 
 
 async def test_session_read_redacts_private_memory_for_public_model(tmp_path) -> None:
@@ -307,7 +514,11 @@ async def test_memory_write_reports_invalid_identifier_field(tmp_path) -> None:
 
     assert result.metadata == {"errorCode": "tool.invalidArguments"}
     assert json.loads(result.content) == {
-        "error": {"code": "tool.invalidArguments", "field": "memory_id"}
+        "error": {
+            "code": "tool.invalidArguments",
+            "message": "The tool operation could not be completed.",
+            "field": "memory_id",
+        }
     }
 
 
@@ -325,7 +536,7 @@ async def test_read_file_returns_numbered_page_and_continuation(tmp_path) -> Non
     call = ToolCall(
         id="read",
         name="read_file",
-        arguments={"path": "notes.txt", "offset": 2, "limit": 1},
+        arguments={"root": "workspace", "path": "notes.txt", "offset": 2, "limit": 1},
     )
     context = _context_with_workdir(tmp_path, call)
 
@@ -333,7 +544,8 @@ async def test_read_file_returns_numbered_page_and_continuation(tmp_path) -> Non
 
     assert result.content == "2: two\n\n[Weitere Zeilen verfügbar. Mit offset=3 weiterlesen.]"
     assert result.metadata == {
-        "path": "project/notes.txt",
+        "root": "workspace",
+        "path": "notes.txt",
         "offset": 2,
         "limit": 1,
         "linesRead": 1,
@@ -343,51 +555,60 @@ async def test_read_file_returns_numbered_page_and_continuation(tmp_path) -> Non
     }
 
 
-async def test_read_file_authorizes_canonical_symlink_target(tmp_path) -> None:
+async def test_read_file_rejects_workspace_symlinks(tmp_path) -> None:
     project = tmp_path / "project"
     private = tmp_path / "private"
     project.mkdir()
     private.mkdir()
     (private / "notes.txt").write_text("secret", encoding="utf-8")
     (project / "link").symlink_to(private, target_is_directory=True)
-    call = ToolCall(id="read", name="read_file", arguments={"path": "link/notes.txt"})
+    call = ToolCall(
+        id="read",
+        name="read_file",
+        arguments={"root": "workspace", "path": "link/notes.txt"},
+    )
     context = _context_with_workdir(tmp_path, call)
 
     result = await tool_registry.execute(call, context)
 
-    assert result.content == "1: secret"
+    assert result.metadata == {"errorCode": "file.symlinkForbidden"}
     request = context.ask_handler.await_args.args[0]
-    assert request.resource_scope == "private/notes.txt"
-    assert result.metadata["path"] == "private/notes.txt"
+    assert request.resource_display == "workspace:link/notes.txt"
 
 
-async def test_list_directory_authorizes_canonical_symlink_target(tmp_path) -> None:
+async def test_list_directory_rejects_workspace_symlinks(tmp_path) -> None:
     project = tmp_path / "project"
     private = tmp_path / "private"
     project.mkdir()
     private.mkdir()
     (private / "notes.txt").write_text("secret", encoding="utf-8")
     (project / "link").symlink_to(private, target_is_directory=True)
-    call = ToolCall(id="list", name="list_directory", arguments={"path": "link"})
+    call = ToolCall(
+        id="list",
+        name="list_directory",
+        arguments={"root": "workspace", "path": "link"},
+    )
     context = _context_with_workdir(tmp_path, call)
 
     result = await tool_registry.execute(call, context)
 
     request = context.ask_handler.await_args.args[0]
-    assert request.resource_scope == "private"
-    assert json.loads(result.content)[0]["path"] == "private/notes.txt"
+    assert request.resource_display == "workspace:link"
+    assert result.metadata == {"errorCode": "file.symlinkForbidden"}
 
 
 async def test_read_file_does_not_read_after_denial(tmp_path) -> None:
     (tmp_path / "notes.txt").write_text("secret", encoding="utf-8")
-    call = ToolCall(id="read", name="read_file", arguments={"path": "notes.txt"})
+    call = ToolCall(
+        id="read", name="read_file", arguments={"root": "session", "path": "files/notes.txt"}
+    )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
-    context.workspace.read_file = Mock(side_effect=AssertionError("must not read"))
+    context.root_files.read_file = Mock(side_effect=AssertionError("must not read"))
 
     result = await tool_registry.execute(call, context)
 
     assert result.metadata == {"errorCode": "permission.denied"}
-    context.workspace.read_file.assert_not_called()
+    context.root_files.read_file.assert_not_called()
 
 
 def test_webfetch_schema_has_the_expected_contract() -> None:
@@ -528,10 +749,11 @@ async def test_webfetch_returns_stable_integration_errors(tmp_path, monkeypatch)
 
 
 def test_permission_for_is_safe_for_webfetch_and_unknown_tools(tmp_path) -> None:
-    workspace = WorkspaceService(tmp_path)
+    call = ToolCall(id="call", name="read_file", arguments={})
+    root_files = _context(tmp_path, call).root_files
 
     assert permission_for(
-        "webfetch", {"url": "https://example.com"}, workspace, None
+        "webfetch", {"url": "https://example.com"}, root_files
     ).resource_type == "url"
-    assert permission_for("webfetch", {"url": "not a URL"}, workspace, None) is None
-    assert permission_for("unknown", {}, workspace, None) is None
+    assert permission_for("webfetch", {"url": "not a URL"}, root_files) is None
+    assert permission_for("unknown", {}, root_files) is None

@@ -4,7 +4,7 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Tools</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Netzwerkzugriffe des Agents global steuern und private Ziele gezielt freigeben.
+          Netzwerk- und Medienwerkzeuge des Agents global steuern.
         </p>
       </div>
       <q-btn
@@ -103,6 +103,63 @@
         </q-card-section>
         <q-inner-loading :showing="tools.loading" />
       </q-card>
+
+      <div class="media-tool-settings-grid q-mt-md">
+        <q-card
+          v-for="item in mediaTools"
+          :key="item.field"
+          flat
+          class="app-surface media-tool-settings-card"
+        >
+          <q-card-section class="row items-start no-wrap q-gutter-md">
+            <q-avatar color="primary" text-color="white" :icon="item.icon" />
+            <div class="col">
+              <div class="text-subtitle1 text-weight-bold">{{ item.label }}</div>
+              <div class="text-body2 app-muted">{{ item.description }}</div>
+            </div>
+          </q-card-section>
+          <q-separator />
+          <q-card-section class="q-gutter-md">
+            <q-select
+              v-model="form[item.field].policy"
+              outlined
+              emit-value
+              map-options
+              label="Ausführungsrichtlinie"
+              :options="MEDIA_POLICY_OPTIONS"
+              :hint="policyHint(form[item.field].policy)"
+              persistent-hint
+            />
+            <q-input
+              v-model.number="form[item.field].timeoutSeconds"
+              outlined
+              type="number"
+              min="10"
+              max="3600"
+              step="10"
+              label="Zeitlimit"
+              suffix="Sekunden"
+              :rules="[timeoutRule]"
+              lazy-rules
+              hint="Nach dieser Dauer wird die Provider-Anfrage abgebrochen."
+              persistent-hint
+            />
+            <q-banner rounded class="app-surface-tonal">
+              <template #avatar>
+                <q-icon
+                  :name="form[item.field].policy === 'auto' ? 'warning_amber' : item.warningIcon"
+                  :color="form[item.field].policy === 'auto' ? 'warning' : 'primary'"
+                />
+              </template>
+              {{ item.warning }}
+              <span v-if="form[item.field].policy === 'auto'">
+                Im Modus „Automatisch“ kann das Modell dies ohne einzelne Rückfrage auslösen.
+              </span>
+            </q-banner>
+          </q-card-section>
+          <q-inner-loading :showing="tools.loading" />
+        </q-card>
+      </div>
     </q-form>
   </section>
 </template>
@@ -118,10 +175,73 @@ defineOptions({ name: 'ToolSettingsPage' })
 const $q = useQuasar()
 const tools = useToolSettingsStore()
 const formRef = ref(null)
-const form = reactive({ enabled: true, defaultPolicy: 'ask', allowedPrivateOrigins: [] })
+const MEDIA_POLICY_OPTIONS = [
+  { label: 'Deaktiviert', value: 'disabled' },
+  { label: 'Nachfragen', value: 'ask' },
+  { label: 'Automatisch', value: 'auto' }
+]
+const mediaTools = [
+  {
+    field: 'generateImage',
+    label: 'Bilder erzeugen',
+    icon: 'image',
+    warningIcon: 'cloud_upload',
+    description: 'Erzeugt Bilder aus einer textlichen Beschreibung.',
+    warning: 'Prompts werden an den konfigurierten Mediendienst übertragen; die Erzeugung kann länger dauern.'
+  },
+  {
+    field: 'generateSpeech',
+    label: 'Sprache erzeugen',
+    icon: 'record_voice_over',
+    warningIcon: 'cloud_upload',
+    description: 'Erzeugt gesprochene WAV-Audiodateien aus Text.',
+    warning: 'Text wird an den konfigurierten Mediendienst übertragen; lange Texte erhöhen Laufzeit und Datenmenge.'
+  },
+  {
+    field: 'generateAudio',
+    label: 'Audio erzeugen',
+    icon: 'graphic_eq',
+    warningIcon: 'schedule',
+    description: 'Erzeugt Audio oder Musik aus einem Prompt.',
+    warning: 'Die Audioerzeugung kann viel Laufzeit und Rechenleistung beanspruchen und externe Datenübertragung auslösen.'
+  },
+  {
+    field: 'transcribeAudio',
+    label: 'Audio transkribieren',
+    icon: 'mic',
+    warningIcon: 'privacy_tip',
+    description: 'Transkribiert WAV-Anhänge und ermöglicht das Diktat im Chat.',
+    warning: 'Audioaufnahmen können an den konfigurierten Transkriptionsdienst übertragen werden.'
+  }
+]
+const form = reactive({
+  enabled: true,
+  defaultPolicy: 'ask',
+  allowedPrivateOrigins: [],
+  generateImage: { policy: 'disabled', timeoutSeconds: 300 },
+  generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
+  generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
+  transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 }
+})
 
 function assignForm(settings) {
-  Object.assign(form, settings, { allowedPrivateOrigins: [...settings.allowedPrivateOrigins] })
+  Object.assign(form, settings.webFetch, {
+    allowedPrivateOrigins: [...settings.webFetch.allowedPrivateOrigins]
+  })
+  for (const { field } of mediaTools) form[field] = { ...settings[field] }
+}
+
+function policyHint(policy) {
+  return {
+    disabled: 'Das Tool wird dem Modell nicht angeboten.',
+    ask: 'Vor jeder Ausführung ist eine Freigabe erforderlich.',
+    auto: 'Das Modell darf das Tool ohne einzelne Freigabe ausführen.'
+  }[policy]
+}
+
+function timeoutRule(value) {
+  return (Number.isInteger(value) && value >= 10 && value <= 3600)
+    || 'Das Zeitlimit muss zwischen 10 und 3600 Sekunden liegen.'
 }
 
 function originRule(value) {
@@ -135,9 +255,15 @@ async function save() {
     form.allowedPrivateOrigins.map((origin) => normalizePrivateOrigin(origin).value)
   )]
   const saved = await tools.saveSettings({
-    enabled: form.enabled,
-    defaultPolicy: form.defaultPolicy,
-    allowedPrivateOrigins
+    webFetch: {
+      enabled: form.enabled,
+      defaultPolicy: form.defaultPolicy,
+      allowedPrivateOrigins
+    },
+    generateImage: { ...form.generateImage },
+    generateSpeech: { ...form.generateSpeech },
+    generateAudio: { ...form.generateAudio },
+    transcribeAudio: { ...form.transcribeAudio }
   })
   assignForm(saved)
   $q.notify({ type: 'positive', message: 'Tool-Einstellungen gespeichert' })

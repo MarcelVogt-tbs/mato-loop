@@ -8,7 +8,8 @@ Diese Datei beschreibt die verbindlichen Arbeitsregeln für Coding-Agents in Mat
 - Sessions, Nachrichten, Agent-Runs, Freigaben und Permission-Grants sind persistente Kerndaten.
 - ChatGPT Codex und OpenAI-kompatible APIs sind ausschließlich LLM-Transporte.
 - Tool-Ausführung, Dateizugriff, Memory, Websuche und Human-in-the-loop-Freigaben werden von MatoLoop kontrolliert.
-- Neue Sessions starten ohne Arbeitsverzeichnis und erzeugen keinen Ordner.
+- Neue Sessions starten ohne Arbeitsverzeichnis. Mit der ersten persistierten Nachricht entsteht
+  ausschließlich der interne Session-Speicher unter `/data/sessions`; er ist kein Workspace.
 
 ## Repository
 
@@ -21,8 +22,9 @@ Diese Datei beschreibt die verbindlichen Arbeitsregeln für Coding-Agents in Mat
 
 ## Sprache und Stil
 
-- Schreibe Dokumentation, Kommentare und nutzerseitige Texte auf Deutsch.
-- Verwende Englisch für Code, APIs, Typen, Fehlercodes und technische Bezeichner.
+- Schreibe Dokumentation und nutzerseitige Texte auf Deutsch.
+- Verwende Englisch für Code, APIs, Typen, Fehlercodes, technische Bezeichner,
+  Codekommentare und Docstrings.
 - Bevorzuge kleine, vertikale und verifizierbare Änderungen.
 - Verwende Quasar-Komponenten und vorhandene Utilities vor neuem Custom CSS oder neuen Abstraktionen.
 - Unterstütze Desktop, Mobile, Light Mode und Dark Mode.
@@ -65,10 +67,12 @@ Diese Datei beschreibt die verbindlichen Arbeitsregeln für Coding-Agents in Mat
 
 - Fehlerantworten enthalten einen stabilen, sprachneutralen `error.code`.
 - Dynamische Werte werden über `error.params` übertragen; feldbezogene Fehler können `error.field` enthalten.
-- Das Backend liefert keine nutzerseitigen Fehlertexte und keine rohen Pydantic-Details aus.
+- Das Backend ergänzt jeden Fehler um eine kontrollierte englische `error.message` als Fallback für Kanäle ohne eigene Lokalisierung.
+- Englische Fallbacks stammen ausschließlich aus dem zentralen Fehlerkatalog; rohe Pydantic-, Provider- und Exception-Texte werden nie ausgegeben.
 - Das Frontend übersetzt Fehlercodes zentral in `apps/frontend/src/utils/api-errors.js`.
 - Axios-Fehler werden über den zentralen Response-Interceptor als negative Quasar-Toasts angezeigt.
-- SSE- und andere Fehler außerhalb von Axios verwenden denselben Formatter und Toast-Helper.
+- Persistente Agent- und Runtimefehler erscheinen als MatoLoop-Antwort im Chat; SSE dient nur der schnellen Zustellung dieses kanonischen Zustands.
+- Nicht persistierbare SSE-Transportfehler und andere Fehler außerhalb von Axios verwenden denselben Formatter und Toast-Helper.
 - Unbekannte Codes müssen auf eine sichere Meldung anhand des HTTP-Status zurückfallen.
 - Frontend-Code darf Fehlertexte nicht vergleichen oder strukturierte Fehlerobjekte direkt rendern.
 
@@ -78,6 +82,7 @@ Beispiel:
 {
   "error": {
     "code": "validation.tooShort",
+    "message": "The value is too short.",
     "field": "password",
     "params": {
       "minLength": 10

@@ -42,6 +42,26 @@ describe('provider store', () => {
     }])
   })
 
+  it('keeps media models out of chat selectors and filters options by capability', () => {
+    const store = useProviderStore()
+    store.providers = [{ id: 'p1', name: 'Lemonade', enabled: true, adapterType: 'lemonade' }]
+    store.models = [
+      { id: 'legacy', providerId: 'p1', name: 'Legacy Chat', enabled: true },
+      { id: 'empty', providerId: 'p1', name: 'Ohne Fähigkeit', enabled: true, capabilities: [] },
+      { id: 'image', providerId: 'p1', name: 'Bild', enabled: true, capabilities: ['image_generation'] },
+      { id: 'speech', providerId: 'p1', name: 'Sprache', enabled: false, capabilities: ['speech_generation'] }
+    ]
+
+    expect(store.modelOptions.map((option) => option.value)).toEqual(['legacy'])
+    expect(store.selectionOptions(null).map((option) => option.value)).toEqual(['legacy'])
+    expect(store.capabilityOptions('image_generation').map((option) => option.value)).toEqual(['image'])
+    expect(store.capabilityOptions('speech_generation')).toEqual([])
+    expect(store.selectedModelState('image')).toMatchObject({
+      available: false,
+      message: 'Das Modell dieser Session unterstützt keinen Chat.'
+    })
+  })
+
   it('keeps existing models visible while sync is pending and reloads afterward', async () => {
     const store = useProviderStore()
     store.providers = [{ id: 'p1', name: 'Lokal', enabled: true, adapterType: 'openai-compatible' }]
@@ -63,6 +83,84 @@ describe('provider store', () => {
 
     expect(api.post).toHaveBeenCalledWith('/providers/configuration/p1/models/sync')
     expect(store.models.map((item) => item.id)).toEqual(['new'])
+  })
+
+  it('keeps successfully loaded providers when the Codex status fails', async () => {
+    const store = useProviderStore()
+    api.get.mockImplementation((url) => url.endsWith('/codex/status')
+      ? Promise.reject(new Error('Codex status unavailable'))
+      : Promise.resolve({
+          data: {
+            enabled: true,
+            providers: [{ id: 'p1', name: 'Lokal', enabled: true }],
+            models: [{ id: 'm1', providerId: 'p1', name: 'Alpha', enabled: true }],
+            defaultModelId: 'm1'
+          }
+        }))
+
+    await expect(store.fetchAll()).resolves.toBeUndefined()
+
+    expect(store.providers.map((provider) => provider.id)).toEqual(['p1'])
+    expect(store.models.map((model) => model.id)).toEqual(['m1'])
+    expect(store.defaultModelId).toBe('m1')
+    expect(store.lastLoadComplete).toBe(false)
+    expect(store.loading).toBe(false)
+  })
+
+  it('does not let an older fetch overwrite a mutation payload', async () => {
+    const requests = []
+    api.get.mockImplementation((url) => new Promise((resolve) => {
+      requests.push({ url, resolve })
+    }))
+    api.patch.mockResolvedValue({
+      data: {
+        providers: [{ id: 'latest', enabled: true }],
+        models: [{ id: 'latest-model', providerId: 'latest', enabled: true }]
+      }
+    })
+    const store = useProviderStore()
+
+    const loading = store.fetchAll()
+    await store.setProviderEnabled('latest', true)
+    requests.find(({ url }) => url === '/providers').resolve({
+      data: { providers: [{ id: 'stale' }], models: [] }
+    })
+    requests.find(({ url }) => url.endsWith('/codex/status')).resolve({
+      data: { authenticated: false }
+    })
+    await loading
+
+    expect(store.providers.map((provider) => provider.id)).toEqual(['latest'])
+    expect(store.models.map((model) => model.id)).toEqual(['latest-model'])
+    expect(store.loading).toBe(false)
+  })
+
+  it('does not let an older provider response overwrite the latest load', async () => {
+    const requests = []
+    api.get.mockImplementation((url) => new Promise((resolve) => {
+      requests.push({ url, resolve })
+    }))
+    const store = useProviderStore()
+
+    const firstLoad = store.fetchAll()
+    const secondLoad = store.fetchAll()
+    const secondRequests = requests.slice(2)
+    secondRequests.find(({ url }) => url === '/providers').resolve({
+      data: { providers: [{ id: 'latest' }], models: [], defaultModelId: null }
+    })
+    secondRequests.find(({ url }) => url.endsWith('/codex/status')).resolve({
+      data: { authenticated: true }
+    })
+    await secondLoad
+    requests[0].resolve({
+      data: { providers: [{ id: 'stale' }], models: [], defaultModelId: null }
+    })
+    requests[1].resolve({ data: { authenticated: false } })
+    await firstLoad
+
+    expect(store.providers.map((provider) => provider.id)).toEqual(['latest'])
+    expect(store.codex.authenticated).toBe(true)
+    expect(store.loading).toBe(false)
   })
 
   it('saves model configuration and enabled state atomically', async () => {
@@ -115,7 +213,11 @@ describe('provider store', () => {
         defaultModelId: 'agent',
         compactionModelId: 'compact',
         titleGenerationModelId: null,
-        dreamingModelId: 'compact'
+        dreamingModelId: 'compact',
+        imageGenerationModelId: 'image',
+        speechGenerationModelId: null,
+        audioGenerationModelId: 'audio',
+        audioTranscriptionModelId: 'transcription'
       }
     })
 
@@ -123,7 +225,11 @@ describe('provider store', () => {
       defaultModelId: 'agent',
       compactionModelId: 'compact',
       titleGenerationModelId: null,
-      dreamingModelId: 'compact'
+      dreamingModelId: 'compact',
+      imageGenerationModelId: 'image',
+      speechGenerationModelId: null,
+      audioGenerationModelId: 'audio',
+      audioTranscriptionModelId: 'transcription'
     })
 
     expect(api.put).toHaveBeenCalledTimes(1)
@@ -131,12 +237,55 @@ describe('provider store', () => {
       default_model_id: 'agent',
       compaction_model_id: 'compact',
       title_generation_model_id: null,
-      dreaming_model_id: 'compact'
+      dreaming_model_id: 'compact',
+      image_generation_model_id: 'image',
+      speech_generation_model_id: null,
+      audio_generation_model_id: 'audio',
+      audio_transcription_model_id: 'transcription'
     })
     expect(store.defaultModelId).toBe('agent')
     expect(store.compactionModelId).toBe('compact')
     expect(store.titleGenerationModelId).toBeNull()
     expect(store.dreamingModelId).toBe('compact')
+    expect(store.imageGenerationModelId).toBe('image')
+    expect(store.speechGenerationModelId).toBeNull()
+    expect(store.audioGenerationModelId).toBe('audio')
+    expect(store.audioTranscriptionModelId).toBe('transcription')
+  })
+
+  it('creates and updates Lemonade providers through the configured endpoints', async () => {
+    const store = useProviderStore()
+    const payload = {
+      name: 'Lemonade lokal',
+      base_url: 'http://lemonade-host:13305/v1',
+      api_key: null,
+      remove_api_key: false,
+      trust_level: 'private',
+      pseudonymization_enabled: false,
+      memory_policy: 'inherit'
+    }
+    const providerPayload = {
+      enabled: true,
+      providers: [{
+        id: 'lemonade',
+        name: payload.name,
+        adapterType: 'lemonade',
+        config: { baseUrl: payload.base_url }
+      }],
+      models: [],
+      defaultModelId: null
+    }
+    api.post.mockResolvedValue({ data: { ...providerPayload, providerId: 'lemonade' } })
+    api.put.mockResolvedValue({ data: providerPayload })
+    api.get.mockImplementation((url) => Promise.resolve({
+      data: url.endsWith('/codex/status') ? { authenticated: false } : providerPayload
+    }))
+
+    await expect(store.createLemonade(payload)).resolves.toBe('lemonade')
+    await store.updateLemonade('lemonade', payload)
+
+    expect(api.post).toHaveBeenCalledWith('/providers/lemonade', payload)
+    expect(api.put).toHaveBeenCalledWith('/providers/configuration/lemonade', payload)
   })
 
   it('keeps public and private models selectable', () => {

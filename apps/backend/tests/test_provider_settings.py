@@ -41,6 +41,7 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     MemoryPolicy,
     ModelAvailability,
+    ModelCapability,
     ModelConfig,
     ModelOrigin,
     WebFetchSettings,
@@ -286,6 +287,54 @@ async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
     assert result["models"][0]["modelId"] == "openai-codex/gpt-test"
 
 
+async def test_lemonade_sync_updates_discovered_capabilities_authoritatively(
+    monkeypatch,
+) -> None:
+    provider = LlmProviderConfig(name="Lemonade", adapter_type="lemonade")
+    discovered = ModelConfig(
+        provider_id=provider.id,
+        model_id="media",
+        origin=ModelOrigin.DISCOVERED,
+        capabilities={ModelCapability.IMAGE_GENERATION},
+        context_window_tokens=32_000,
+        max_output_tokens=4_000,
+    )
+    manual = ModelConfig(
+        provider_id=provider.id,
+        model_id="manual",
+        capabilities={ModelCapability.CHAT, ModelCapability.IMAGE_GENERATION},
+    )
+    settings = AiSettings(providers=[provider], models=[discovered, manual])
+    _mock_settings(monkeypatch, settings)
+    monkeypatch.setattr(
+        ProviderService,
+        "discover_models",
+        AsyncMock(
+            return_value=[
+                DiscoveredModel(
+                    id="media",
+                    capabilities={ModelCapability.AUDIO_TRANSCRIPTION},
+                    max_context_window=8_192,
+                    supports_tools=True,
+                    supports_parallel_tool_calls=False,
+                ),
+                DiscoveredModel(id="manual", capabilities={ModelCapability.AUDIO_GENERATION}),
+            ]
+        ),
+    )
+
+    await sync_provider_models(provider.id, _db())
+
+    assert discovered.capabilities == {ModelCapability.AUDIO_TRANSCRIPTION}
+    assert discovered.context_window_tokens == 8_192
+    assert discovered.supports_tools is True
+    assert discovered.supports_parallel_tool_calls is False
+    assert manual.capabilities == {
+        ModelCapability.CHAT,
+        ModelCapability.IMAGE_GENERATION,
+    }
+
+
 async def test_codex_sync_ignores_own_oauth_token_rotation(monkeypatch) -> None:
     credential_id = uuid4()
     credential = SimpleNamespace(
@@ -437,6 +486,69 @@ async def test_default_models_are_saved_atomically(monkeypatch) -> None:
     assert result["titleGenerationModelId"] == str(title.id)
 
 
+async def test_capability_defaults_require_matching_models(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Lemonade", adapter_type="lemonade")
+    chat = ModelConfig(provider_id=provider.id, model_id="chat")
+    image = ModelConfig(
+        provider_id=provider.id,
+        model_id="image",
+        capabilities={ModelCapability.IMAGE_GENERATION},
+    )
+    settings = AiSettings(providers=[provider], models=[chat, image])
+    _mock_settings(monkeypatch, settings)
+
+    result = await set_default_models(
+        DefaultModelsRequest(
+            default_model_id=chat.id,
+            compaction_model_id=None,
+            title_generation_model_id=None,
+            image_generation_model_id=image.id,
+        ),
+        _db(),
+    )
+
+    assert settings.image_generation_model_id == image.id
+    assert result["imageGenerationModelId"] == str(image.id)
+
+    with pytest.raises(ApiError) as exc_info:
+        await set_default_models(
+            DefaultModelsRequest(
+                default_model_id=image.id,
+                compaction_model_id=None,
+                title_generation_model_id=None,
+            ),
+            _db(),
+        )
+    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
+    assert exc_info.value.field == "defaultModelId"
+
+
+async def test_media_default_rejects_unsupported_provider_adapter(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="OpenAI", adapter_type="openai-compatible")
+    image = ModelConfig(
+        provider_id=provider.id,
+        model_id="image",
+        capabilities={ModelCapability.IMAGE_GENERATION},
+    )
+    settings = AiSettings(providers=[provider], models=[image])
+    _mock_settings(monkeypatch, settings)
+
+    with pytest.raises(ApiError) as exc_info:
+        await set_default_models(
+            DefaultModelsRequest(
+                default_model_id=None,
+                compaction_model_id=None,
+                title_generation_model_id=None,
+                image_generation_model_id=image.id,
+            ),
+            _db(),
+        )
+
+    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
+    assert exc_info.value.field == "imageGenerationModelId"
+    assert settings.image_generation_model_id is None
+
+
 async def test_default_models_reject_unavailable_model_with_field(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     unavailable = ModelConfig(provider_id=provider.id, model_id="title", enabled=False)
@@ -528,6 +640,23 @@ async def test_model_specific_test_uses_selected_model(monkeypatch) -> None:
 
     assert await run_model_test(second.id, db) == {"status": "ok"}
     assert complete.await_args.kwargs["model"] is second
+
+
+async def test_model_specific_test_rejects_non_chat_model(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Lemonade", adapter_type="lemonade")
+    image = ModelConfig(
+        provider_id=provider.id,
+        model_id="image",
+        capabilities={ModelCapability.IMAGE_GENERATION},
+    )
+    settings = AiSettings(providers=[provider], models=[image])
+    _mock_settings(monkeypatch, settings)
+
+    with pytest.raises(ApiError) as exc_info:
+        await run_model_test(image.id, _db())
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
 
 
 async def test_provider_delete_clears_default_without_selecting_another(monkeypatch) -> None:

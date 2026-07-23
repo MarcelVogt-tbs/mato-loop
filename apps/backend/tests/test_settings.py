@@ -16,6 +16,7 @@ from mato_loop_backend.settings.models import (
     AgentRuntimeSettings,
     AiSettings,
     LlmProviderConfig,
+    ModelCapability,
     ModelConfig,
     ModelWebFetchPolicy,
     ToolSettings,
@@ -48,6 +49,16 @@ def test_ai_settings_collections_are_independent() -> None:
 
     assert len(first.providers) == 1
     assert second.providers == []
+
+
+def test_legacy_model_defaults_to_chat_capability() -> None:
+    provider = LlmProviderConfig(name="Legacy", adapter_type="openai-compatible")
+
+    model = ModelConfig.model_validate(
+        {"provider_id": str(provider.id), "model_id": "legacy"}
+    )
+
+    assert model.capabilities == {ModelCapability.CHAT}
 
 
 def test_user_preferences_default_to_collapsed_thinking() -> None:

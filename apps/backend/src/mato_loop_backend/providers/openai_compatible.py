@@ -25,6 +25,7 @@ from mato_loop_backend.providers.reasoning import (
     TaggedReasoningStream,
     split_tagged_reasoning,
 )
+from mato_loop_backend.settings.models import ModelCapability
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,9 @@ class DiscoveredModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str = Field(min_length=1)
+    capabilities: set[ModelCapability] = Field(
+        default_factory=lambda: {ModelCapability.CHAT}
+    )
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -44,14 +48,32 @@ class DiscoveredModel(BaseModel):
             "root",
             "parent",
             "max_model_len",
+            "max_context_window",
+            "recipe",
             "supports_image_input",
+            "supports_tools",
             "supports_parallel_tool_calls",
         }
         metadata: dict[str, Any] = {}
-        for key, value in self.model_dump(exclude={"id"}).items():
+        for key, value in self.model_dump(exclude={"id", "capabilities"}).items():
             if key not in allowed or not isinstance(value, (str, int, float, bool, type(None))):
                 continue
             metadata[key] = value[:500] if isinstance(value, str) else value
+        labels = self.__pydantic_extra__.get("labels") if self.__pydantic_extra__ else None
+        if isinstance(labels, list):
+            metadata["labels"] = [
+                item[:100] for item in labels[:64] if isinstance(item, str)
+            ]
+        image_defaults = (
+            self.__pydantic_extra__.get("image_defaults") if self.__pydantic_extra__ else None
+        )
+        if isinstance(image_defaults, dict):
+            metadata["image_defaults"] = {
+                key[:100]: value[:500] if isinstance(value, str) else value
+                for key, value in list(image_defaults.items())[:32]
+                if isinstance(key, str)
+                and isinstance(value, (str, int, float, bool, type(None)))
+            }
         return metadata
 
 
@@ -95,7 +117,7 @@ def _media_marker(item: ProviderMedia) -> str:
 
 def _chat_media_message(media: list[ProviderMedia]) -> dict[str, Any]:
     content: list[dict[str, Any]] = [
-        {"type": "text", "text": "[Bildanhang aus Tool-Ergebnis]"}
+        {"type": "text", "text": "[Session-Bild]"}
     ]
     for item in media:
         if item.data_url:
@@ -181,7 +203,7 @@ def _responses_input(
 
     def append_media(values: list[ProviderMedia]) -> None:
         content: list[dict[str, Any]] = [
-            {"type": "input_text", "text": "[Bildanhang aus Tool-Ergebnis]"}
+            {"type": "input_text", "text": "[Session-Bild]"}
         ]
         for item in values:
             if item.data_url:
@@ -438,6 +460,15 @@ def _public_reasoning(
     )
 
 
+def _normalize_finish_reason(value: Any) -> str | None:
+    if value is None:
+        return None
+    reason = str(value)
+    if reason in {"length", "max_tokens", "max_output_tokens"}:
+        return "length"
+    return reason
+
+
 def _chat_result(data: dict[str, Any]) -> ProviderResult:
     choices = data.get("choices") or []
     choice = choices[0] if choices and isinstance(choices[0], dict) else {}
@@ -463,7 +494,7 @@ def _chat_result(data: dict[str, Any]) -> ProviderResult:
         tool_calls=tool_calls,
         provider_data=provider_data,
         usage=usage,
-        finish_reason=choice.get("finish_reason"),
+        finish_reason=_normalize_finish_reason(choice.get("finish_reason")),
         reasoning=_public_reasoning(reasoning_text, kind="content", usage=usage),
     )
 
@@ -575,7 +606,7 @@ async def chat_completions(
                     continue
                 choice = choices[0]
                 if choice.get("finish_reason"):
-                    finish_reason = str(choice["finish_reason"])
+                    finish_reason = _normalize_finish_reason(choice["finish_reason"])
                 delta = choice.get("delta") or {}
                 reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning") or ""
                 if isinstance(reasoning_delta, str) and reasoning_delta:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
+from pathlib import PurePosixPath
 from uuid import UUID
 
 from sqlalchemy import select
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.integrations import canonicalize_url, sanitize_url_for_display
 from mato_loop_backend.models import ChatSession, PermissionGrant
-from mato_loop_backend.workspace import WorkspaceService
+from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 
 class PermissionDecision(StrEnum):
@@ -34,19 +35,37 @@ class PermissionRequest:
 
 def path_permission(
     *,
+    root_files: RootFileService,
+    root: FileRoot | str,
     capability: str,
     relative_path: str,
     action_kind: str,
     action_label: str,
 ) -> PermissionRequest:
+    selected_root = FileRoot(root)
+    normalized_path = root_files.normalize_relative_path(relative_path)
+    root_identity = root_files.root_identity(selected_root)
+    scope = json.dumps(
+        {
+            "identity": root_identity,
+            "path": normalized_path,
+            "root": selected_root.value,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
     return PermissionRequest(
         capability=capability,
-        resource_type="path",
-        resource_scope=relative_path,
+        resource_type="root_path",
+        resource_scope=scope,
         action_kind=action_kind,
         risk_level="high" if capability == "filesystem.delete" else "medium",
         title=f"{action_label} erlauben?",
-        summary=f"Der Agent möchte {relative_path} verwenden.",
+        summary=(
+            f"Der Agent möchte {selected_root.value}:{normalized_path} verwenden."
+        ),
+        resource_display=f"{selected_root.value}:{normalized_path}",
     )
 
 
@@ -88,12 +107,46 @@ def webfetch_permission(url: str) -> PermissionRequest:
     )
 
 
-def _path_is_within(resource: Path, scope: Path) -> bool:
+def media_permission(session_id: UUID, capability: str, tool_name: str) -> PermissionRequest:
+    labels = {
+        "media.generate.image": ("Bild erzeugen?", "ein Bild erzeugen"),
+        "media.generate.speech": ("Sprache erzeugen?", "eine Sprachaufnahme erzeugen"),
+        "media.generate.audio": ("Audio erzeugen?", "eine Audiodatei erzeugen"),
+        "media.transcribe.audio": ("Audio transkribieren?", "einen Audioanhang transkribieren"),
+    }
+    title, action = labels.get(capability, ("Medienaktion erlauben?", "Medien verarbeiten"))
+    return PermissionRequest(
+        capability=capability,
+        resource_type="session",
+        resource_scope=str(session_id),
+        action_kind=tool_name,
+        risk_level="medium",
+        title=title,
+        summary=f"Der Agent möchte in der aktuellen Session {action}.",
+    )
+
+
+def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath] | None:
     try:
-        resource.relative_to(scope)
-        return True
-    except ValueError:
-        return False
+        value = json.loads(resource_scope)
+        root = FileRoot(value["root"])
+        identity = value["identity"]
+        path = value["path"]
+        if not isinstance(identity, str) or not isinstance(path, str):
+            return None
+        parsed = PurePosixPath(path)
+        if path != "." and (
+            parsed.is_absolute()
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+        ):
+            return None
+        return root, identity, parsed
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _path_is_within(resource: PurePosixPath, scope: PurePosixPath) -> bool:
+    return resource == scope or scope == PurePosixPath(".") or scope in resource.parents
 
 
 class PermissionPolicy:
@@ -102,7 +155,7 @@ class PermissionPolicy:
         db: AsyncSession,
         chat_session: ChatSession,
         request: PermissionRequest,
-        workspace: WorkspaceService,
+        root_files: RootFileService,
     ) -> PermissionDecision:
         if request.resource_type == "session" and request.capability == "session.read":
             try:
@@ -111,18 +164,36 @@ class PermissionPolicy:
             except ValueError:
                 return PermissionDecision.DENY
 
-        if request.resource_type == "path":
-            try:
-                resource = workspace.resolve(request.resource_scope)
-            except ValueError:
+        if request.resource_type == "root_path":
+            scope = _root_path_scope(request.resource_scope)
+            if scope is None or root_files.session_id != chat_session.id:
                 return PermissionDecision.DENY
-            if chat_session.working_directory:
-                workdir = workspace.resolve(chat_session.working_directory)
-                if _path_is_within(resource, workdir):
-                    if request.capability == "filesystem.read":
-                        return PermissionDecision.ALLOW
-                    if chat_session.workspace_access == "read-write":
-                        return PermissionDecision.ALLOW
+            root, identity, _path = scope
+            try:
+                current_identity = root_files.root_identity(root)
+            except RootFileError:
+                return PermissionDecision.DENY
+            if identity != current_identity:
+                return PermissionDecision.DENY
+            if root is FileRoot.SESSION and identity != str(chat_session.id):
+                return PermissionDecision.DENY
+            if root is FileRoot.WORKSPACE and (
+                chat_session.working_directory is None
+                or root_files.working_directory != chat_session.working_directory
+            ):
+                return PermissionDecision.DENY
+            if request.capability == "filesystem.read":
+                return PermissionDecision.ALLOW
+            if request.capability in {"filesystem.write", "filesystem.delete"}:
+                return (
+                    PermissionDecision.ALLOW
+                    if chat_session.workspace_access == "read-write"
+                    else PermissionDecision.DENY
+                )
+            return PermissionDecision.DENY
+
+        if request.capability.startswith("filesystem."):
+            return PermissionDecision.DENY
 
         grants = list(
             (
@@ -136,7 +207,7 @@ class PermissionPolicy:
             ).all()
         )
         for grant in grants:
-            if PermissionPolicy.grant_matches(grant, request, workspace):
+            if PermissionPolicy.grant_matches(grant, request, root_files):
                 return PermissionDecision.ALLOW
         return PermissionDecision.ASK
 
@@ -144,18 +215,26 @@ class PermissionPolicy:
     def grant_matches(
         grant: PermissionGrant,
         request: PermissionRequest,
-        workspace: WorkspaceService,
+        root_files: RootFileService,
     ) -> bool:
         if grant.capability != request.capability or grant.resource_type != request.resource_type:
             return False
-        if request.resource_type == "path":
-            try:
-                return _path_is_within(
-                    workspace.resolve(request.resource_scope),
-                    workspace.resolve(grant.resource_scope),
-                )
-            except ValueError:
+        if request.resource_type == "root_path":
+            resource = _root_path_scope(request.resource_scope)
+            granted = _root_path_scope(grant.resource_scope)
+            if resource is None or granted is None:
                 return False
+            resource_root, resource_identity, resource_path = resource
+            grant_root, grant_identity, grant_path = granted
+            try:
+                current_identity = root_files.root_identity(resource_root)
+            except RootFileError:
+                return False
+            return (
+                resource_root is grant_root
+                and resource_identity == grant_identity == current_identity
+                and _path_is_within(resource_path, grant_path)
+            )
         if request.resource_type == "session":
             try:
                 return UUID(request.resource_scope) == UUID(grant.resource_scope)

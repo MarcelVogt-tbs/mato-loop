@@ -8,6 +8,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from mato_loop_backend.error_contract import ErrorDescriptor, describe_error, error_payload
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,10 +23,16 @@ class ApiError(HTTPException):
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
-        super().__init__(status_code=status_code, detail=code, headers=headers)
-        self.code = code
-        self.field = field
-        self.params = params
+        self.error: ErrorDescriptor = describe_error(
+            code,
+            field=field,
+            params=params,
+            fallback_code="http.requestFailed",
+        )
+        super().__init__(status_code=status_code, detail=self.error.code, headers=headers)
+        self.code = self.error.code
+        self.field = self.error.field
+        self.params = self.error.params
 
 
 def _payload(
@@ -33,12 +41,12 @@ def _payload(
     field: str | None = None,
     params: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    error: dict[str, Any] = {"code": code}
-    if field:
-        error["field"] = field
-    if params:
-        error["params"] = params
-    return {"error": error}
+    return error_payload(
+        code,
+        field=field,
+        params=params,
+        fallback_code="http.requestFailed",
+    )
 
 
 def _validation_payload(exc: RequestValidationError) -> dict[str, dict[str, Any]]:
@@ -110,7 +118,7 @@ def register_error_handlers(app: FastAPI) -> None:
     async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
-            content=_payload(exc.code, field=exc.field, params=exc.params),
+            content={"error": exc.error.payload()},
             headers=exc.headers,
         )
 

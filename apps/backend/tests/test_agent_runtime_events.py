@@ -10,13 +10,14 @@ from mato_loop_backend.agent.runtime import (
     RUN_PHASES,
     AgentRuntime,
     _public_reasoning_payload,
+    _public_run_error,
     _publish_run_phase,
     _safe_provider_data,
     _safe_tool_arguments,
 )
 from mato_loop_backend.events import RunEventBroker, run_events
 from mato_loop_backend.models import AgentRun, ChatSession, Message, TitleGenerationStatus
-from mato_loop_backend.providers.base import PublicReasoning, ToolCall
+from mato_loop_backend.providers.base import ProviderError, PublicReasoning, ToolCall
 from mato_loop_backend.settings import AiSettings, SettingsStore, TrustLevel
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
@@ -122,6 +123,40 @@ async def test_start_persists_effective_run_policy_snapshot(
     assert run.trust_level == expected_trust.value
     assert run.pseudonymization_enabled is expected_pseudonymization
     assert session.trust_level == expected_trust.value
+    db.commit.assert_awaited_once()
+    task.add_done_callback.assert_called_once()
+    AgentRuntime._tasks.pop(run.id, None)
+
+
+async def test_start_persists_user_message_and_run_when_model_is_unavailable(monkeypatch) -> None:
+    missing_model_id = uuid4()
+    settings = AiSettings(models=[], default_model_id=missing_model_id)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    task = Mock()
+
+    def create_task(coroutine):
+        coroutine.close()
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", create_task)
+    session = ChatSession(
+        id=uuid4(),
+        user_id=uuid4(),
+        title="Test",
+        model_config_id=missing_model_id,
+        trust_level="private",
+    )
+    db = AsyncMock(spec=AsyncSession)
+
+    run = await AgentRuntime.start(db, session, "Nachricht")
+
+    message, persisted_run = db.add_all.call_args.args[0]
+    assert message.content == "Nachricht"
+    assert message.trust_level == "private"
+    assert persisted_run is run
+    assert run.model_config_id == missing_model_id
+    assert run.model_name is None
+    assert run.status == "queued"
     db.commit.assert_awaited_once()
     task.add_done_callback.assert_called_once()
     AgentRuntime._tasks.pop(run.id, None)
@@ -249,6 +284,64 @@ class _SessionContext:
 
     async def __aexit__(self, *_args) -> None:
         return None
+
+
+def test_unknown_runtime_exception_has_safe_descriptor() -> None:
+    secret = "secret upstream response"
+
+    error = _public_run_error(RuntimeError(secret))
+
+    assert error.payload() == {
+        "code": "agent.failed",
+        "message": "The agent run failed.",
+    }
+    assert secret not in str(error.payload())
+
+
+async def test_run_failure_persists_structured_message_before_terminal_event(monkeypatch) -> None:
+    run = AgentRun(
+        id=uuid4(),
+        session_id=uuid4(),
+        status="queued",
+        model_name="Antwortmodell",
+        trust_level="private",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = run
+    db.scalar.return_value = None
+    db.add.side_effect = lambda message: setattr(message, "id", uuid4())
+    events = []
+
+    async def fail(*_args) -> None:
+        raise ProviderError(
+            "secret provider response",
+            code="provider.rawSecretResponse",
+        )
+
+    async def publish(_run_id, event) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    monkeypatch.setattr(AgentRuntime, "_execute_loop", fail)
+    monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
+    monkeypatch.setattr(run_events, "publish", publish)
+
+    await AgentRuntime._run(run.id)
+
+    message = db.add.call_args.args[0]
+    assert message.error_run_id == run.id
+    assert message.error_code == "provider.requestFailed"
+    assert message.error_params is None
+    assert message.content == ""
+    assert run.status == "failed"
+    assert run.error == "provider.requestFailed"
+    assert [event["type"] for event in events] == [
+        "run.started",
+        "message.completed",
+        "run.failed",
+    ]
+    assert events[1]["message"]["content"] == "The model provider request failed."
+    assert "secret" not in str(events)
 
 
 async def test_user_cancel_persists_visible_response_before_terminal_event(monkeypatch) -> None:
@@ -418,6 +511,48 @@ def test_webfetch_url_query_is_redacted_before_persistence() -> None:
         "url": "https://example.com/page?REDACTED",
         "format": "text",
     }
+
+
+def test_write_file_content_is_fully_redacted_before_persistence() -> None:
+    secret = "vertraulicher Dateiinhalt"
+
+    arguments = _safe_tool_arguments(
+        "write_file",
+        {"root": "session", "path": "files/note.txt", "content": secret},
+    )
+
+    assert arguments["content"] == {"characters": len(secret), "redacted": True}
+    assert secret not in str(arguments)
+
+
+def test_responses_replay_write_file_content_is_fully_redacted() -> None:
+    secret = "nicht persistieren"
+    call = ToolCall(
+        id="write-1",
+        name="write_file",
+        arguments={"root": "session", "path": "files/note.txt", "content": secret},
+    )
+
+    result = _safe_provider_data(
+        {
+            "responses_output_items": [
+                {
+                    "type": "function_call",
+                    "call_id": "write-1",
+                    "name": "write_file",
+                    "arguments": (
+                        '{"root":"session","path":"files/note.txt",'
+                        f'"content":"{secret}"}}'
+                    ),
+                }
+            ]
+        },
+        [call],
+    )
+
+    persisted = result["responses_output_items"][0]["arguments"]
+    assert secret not in persisted
+    assert '"redacted": true' in persisted
 
 
 def test_responses_replay_webfetch_arguments_are_redacted() -> None:

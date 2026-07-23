@@ -28,9 +28,25 @@ from mato_loop_backend.agent.permissions import (
     PermissionPolicy,
     PermissionRequest,
 )
-from mato_loop_backend.agent.tools import ToolContext, ToolPermission, tool_registry
-from mato_loop_backend.attachments import AttachmentError, AttachmentService
+from mato_loop_backend.agent.title_generation import (
+    generated_session_title as _generated_session_title,
+)
+from mato_loop_backend.agent.title_generation import (
+    initial_session_title as _initial_session_title,
+)
+from mato_loop_backend.agent.title_generation import (
+    initial_title_output_budget,
+    repair_title_output_budget,
+)
+from mato_loop_backend.agent.tools import (
+    ToolContext,
+    ToolPermission,
+    effective_tool_capabilities,
+    tool_registry,
+)
+from mato_loop_backend.attachments import AttachmentError, AttachmentInput, AttachmentService
 from mato_loop_backend.db.session import AsyncSessionFactory
+from mato_loop_backend.error_contract import ErrorDescriptor, describe_error, error_payload
 from mato_loop_backend.events import run_events
 from mato_loop_backend.integrations import (
     SearchIntegrationError,
@@ -51,6 +67,7 @@ from mato_loop_backend.models import (
     WebSearchPolicy,
 )
 from mato_loop_backend.providers.base import ProviderError, PublicReasoning, ToolCall
+from mato_loop_backend.providers.media import available_media_capabilities
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
@@ -67,10 +84,11 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelAvailability,
+    ModelCapability,
     ModelConfig,
     TrustLevel,
 )
-from mato_loop_backend.workspace import WorkspaceError, WorkspaceService
+from mato_loop_backend.workspace import RootFileError, RootFileService, WorkspaceError
 
 logger = logging.getLogger(__name__)
 
@@ -112,29 +130,34 @@ def _bounded_memory_trust(
 
 
 class AgentRunError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, params: dict[str, Any] | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.params = params
 
 
-def _public_run_error(exc: Exception) -> dict[str, str]:
+def _public_run_error(exc: Exception) -> ErrorDescriptor:
     if isinstance(exc, (AgentRunError, ContextError)):
-        return {"code": exc.code}
+        return describe_error(exc.code, params=getattr(exc, "params", None))
     if isinstance(exc, ProviderError):
-        return {"code": exc.public_code}
+        return describe_error(exc.public_code, params=exc.params)
     if isinstance(exc, httpx.HTTPError):
-        return {"code": "provider.unavailable"}
-    if isinstance(exc, WorkspaceError):
-        return {"code": exc.code}
+        return describe_error("provider.unavailable")
+    if isinstance(exc, (RootFileError, WorkspaceError)):
+        return describe_error(exc.code)
     if isinstance(exc, SearchIntegrationError):
-        return {"code": exc.code}
-    return {"code": "agent.failed"}
+        return describe_error(exc.code)
+    return describe_error("agent.failed")
 
 
 def _provider_for_model(
     ai_settings: AiSettings, model: ModelConfig
 ) -> LlmProviderConfig | None:
-    if not model.enabled or model.availability == ModelAvailability.MISSING:
+    if (
+        not model.enabled
+        or model.availability == ModelAvailability.MISSING
+        or ModelCapability.CHAT not in model.capabilities
+    ):
         return None
     provider = next(
         (
@@ -159,28 +182,10 @@ def _model_for_id(ai_settings: AiSettings, model_id: UUID | None) -> ModelConfig
             if item.id == model_id
             and item.enabled
             and item.availability != ModelAvailability.MISSING
+            and ModelCapability.CHAT in item.capabilities
         ),
         None,
     )
-
-
-def _initial_session_title(content: str) -> str:
-    return content.strip().replace("\n", " ")[:80] or "Neue Session"
-
-
-def _generated_session_title(content: str) -> str | None:
-    cleaned = re.sub(
-        r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>\s*",
-        "",
-        content,
-        flags=re.IGNORECASE,
-    )
-    title = next(
-        (line.strip().strip("\"'") for line in cleaned.splitlines() if line.strip()),
-        "",
-    )
-    title = re.sub(r"\s+", " ", title).strip()
-    return title[:80].rstrip() or None
 
 
 def _memory_rag_query(records: list[Message]) -> str | None:
@@ -342,7 +347,11 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
     safe = dict(arguments)
     content = safe.get("content")
     if isinstance(content, str):
-        safe["content"] = {"characters": len(content), "preview": content[:200]}
+        safe["content"] = (
+            {"characters": len(content), "redacted": True}
+            if tool_name == "write_file"
+            else {"characters": len(content), "preview": content[:200]}
+        )
     if tool_name == "webfetch" and isinstance(safe.get("url"), str):
         try:
             safe["url"] = sanitize_url_for_display(safe["url"])
@@ -369,7 +378,7 @@ def _safe_provider_data(
         call_id = str(item.get("call_id") or item.get("id") or "")
         tool_name = str(item.get("name") or call_names.get(call_id) or "")
         arguments = item.get("arguments")
-        if tool_name == "webfetch" and isinstance(arguments, str):
+        if tool_name in {"webfetch", "write_file"} and isinstance(arguments, str):
             try:
                 parsed = json.loads(arguments)
             except (TypeError, ValueError):
@@ -378,7 +387,7 @@ def _safe_provider_data(
                 item["arguments"] = json.dumps(
                     _safe_tool_arguments(tool_name, parsed), ensure_ascii=True
                 )
-        elif tool_name == "webfetch" and isinstance(arguments, dict):
+        elif tool_name in {"webfetch", "write_file"} and isinstance(arguments, dict):
             item["arguments"] = json.dumps(
                 _safe_tool_arguments(tool_name, arguments), ensure_ascii=True
             )
@@ -412,16 +421,27 @@ class AgentRuntime:
     _user_cancelled_runs: set[UUID] = set()
 
     @classmethod
-    async def start(cls, db: AsyncSession, chat_session: ChatSession, content: str) -> AgentRun:
+    async def start(
+        cls,
+        db: AsyncSession,
+        chat_session: ChatSession,
+        content: str,
+        *,
+        attachments: list[AttachmentInput] | None = None,
+    ) -> AgentRun:
         ai_settings = await SettingsStore.load(db, AiSettings)
         model_id = chat_session.model_config_id or ai_settings.default_model_id
         model = _model_for_id(ai_settings, model_id)
         provider = _provider_for_model(ai_settings, model) if model is not None else None
-        if model is None or provider is None:
-            raise AgentRunError("session.modelUnavailable")
-        trust_level = effective_model_trust(provider, model)
+        trust_level = (
+            effective_model_trust(provider, model)
+            if model is not None and provider is not None
+            else TrustLevel(chat_session.trust_level or TrustLevel.PUBLIC.value)
+        )
         pseudonymization_enabled = (
-            trust_level == TrustLevel.PUBLIC
+            provider is not None
+            and model is not None
+            and trust_level == TrustLevel.PUBLIC
             and effective_model_pseudonymization(provider, model)
         )
         message = Message(
@@ -433,8 +453,8 @@ class AgentRuntime:
         run = AgentRun(
             session_id=chat_session.id,
             status="queued",
-            model_config_id=model.id,
-            model_name=model.name or model.model_id,
+            model_config_id=model_id,
+            model_name=(model.name or model.model_id) if model is not None else None,
             trust_level=trust_level.value,
             pseudonymization_enabled=pseudonymization_enabled,
         )
@@ -450,7 +470,54 @@ class AgentRuntime:
             chat_session.title = _initial_session_title(content)
         if generate_title:
             chat_session.title_generation_status = TitleGenerationStatus.RUNNING.value
-        await db.commit()
+        created_attachments = []
+        attachment_service = AttachmentService()
+
+        async def rollback_and_discard() -> None:
+            try:
+                await db.rollback()
+            except BaseException:
+                logger.exception("Could not roll back failed attachment transaction")
+            for attachment in created_attachments:
+                try:
+                    await attachment_service.discard(attachment, chat_session.id)
+                except BaseException:
+                    logger.exception(
+                        "Could not discard attachment %s after failed transaction",
+                        attachment.id,
+                    )
+
+        try:
+            await db.flush()
+            for position, attachment in enumerate(attachments or []):
+                created_attachments.append(
+                    await attachment_service.create_attachment(
+                        db,
+                        message,
+                        attachment.data,
+                        attachment.mime_type,
+                        kind=attachment.kind,
+                        filename=attachment.filename,
+                        position=position,
+                        metadata=attachment.metadata,
+                        category="user_upload",
+                    )
+                )
+        except BaseException:
+            await rollback_and_discard()
+            raise
+        commit_task = asyncio.get_running_loop().create_task(db.commit())
+        try:
+            await asyncio.shield(commit_task)
+        except asyncio.CancelledError:
+            try:
+                await commit_task
+            except BaseException:
+                await rollback_and_discard()
+            raise
+        except BaseException:
+            await rollback_and_discard()
+            raise
         task = asyncio.create_task(cls._run(run.id))
         cls._tasks[run.id] = task
         task.add_done_callback(lambda _task: cls._tasks.pop(run.id, None))
@@ -581,19 +648,31 @@ class AgentRuntime:
                         return
                     logger.exception("Agent run %s failed", run_id)
                     public_error = _public_run_error(exc)
+                    error_message = None
                     try:
                         await db.rollback()
                         await cls._terminalize_incomplete_tool_calls(db, session_id)
                         failed_run = await db.get(AgentRun, run_id)
                         if failed_run is not None:
                             failed_run.status = "failed"
-                            failed_run.error = public_error["code"]
+                            failed_run.error = public_error.code
                             failed_run.completed_at = datetime.now(UTC)
+                            error_message = await cls._persist_error_message(
+                                db, failed_run, public_error
+                            )
                             await db.commit()
                     except Exception:
                         logger.exception("Could not persist failure state for agent run %s", run_id)
+                    if error_message is not None:
+                        await run_events.publish(
+                            run_id,
+                            {
+                                "type": "message.completed",
+                                "message": cls._error_message_event(error_message, public_error),
+                            },
+                        )
                     await run_events.publish(
-                        run_id, {"type": "run.failed", "error": public_error}
+                        run_id, {"type": "run.failed", "error": public_error.payload()}
                     )
         finally:
             cls._cancellable_runs.discard(run_id)
@@ -644,7 +723,6 @@ class AgentRuntime:
             raise AgentRunError("integration.searchUnavailable")
         if required_search and not model.supports_tools:
             raise AgentRunError("agent.requiredWebSearchUnsupported")
-        workspace = WorkspaceService()
         model_requests = 0
         required_search_completed = False
         required_search_retries = 0
@@ -678,6 +756,10 @@ class AgentRuntime:
                 chat_session, memory_settings, provider, model
             )
             records = await cls._records(db, chat_session.id)
+            root_files = RootFileService(
+                chat_session.id,
+                working_directory=chat_session.working_directory,
+            )
             if memory_overview_required is None:
                 memory_overview_required = _memory_overview_requested(records)
             memory_text = None
@@ -835,6 +917,9 @@ class AgentRuntime:
                     ),
                     memory_enabled=memory_state.read_enabled,
                     memory_write_enabled=memory_state.write_enabled,
+                    tool_capabilities=effective_tool_capabilities(
+                        tool_settings, available_media_capabilities(ai_settings)
+                    ),
                 )
                 if model.supports_tools
                 else []
@@ -1095,21 +1180,21 @@ class AgentRuntime:
                     )
                     memory_available_now = current_memory_state.read_enabled
                     memory_write_available_now = current_memory_state.write_enabled
-                if call.name not in offered_tool_names:
-                    tool_result_content = json.dumps(
-                        {"error": {"code": "tool.unavailable"}}, ensure_ascii=False
-                    )
+                    if call.name not in offered_tool_names:
+                        tool_result_content = json.dumps(
+                            error_payload("tool.unavailable"), ensure_ascii=False
+                        )
                     metadata = {"errorCode": "tool.unavailable"}
                 elif not memory_available_now or (
                     call.name == "memory_write" and not memory_write_available_now
                 ):
                     tool_result_content = json.dumps(
-                        {"error": {"code": "tool.unavailable"}}, ensure_ascii=False
+                        error_payload("tool.unavailable"), ensure_ascii=False
                     )
                     metadata = {"errorCode": "tool.unavailable"}
                 elif index >= runtime_settings.max_tool_calls:
                     tool_result_content = json.dumps(
-                        {"error": {"code": "agent.toolCallLimitReached"}}, ensure_ascii=False
+                        error_payload("agent.toolCallLimitReached"), ensure_ascii=False
                     )
                     metadata: dict[str, Any] = {"errorCode": "agent.toolCallLimitReached"}
                 else:
@@ -1119,7 +1204,7 @@ class AgentRuntime:
                         run,
                         chat_session,
                         call,
-                        workspace=workspace,
+                        root_files=root_files,
                         runtime_settings=runtime_settings,
                     )
 
@@ -1128,9 +1213,10 @@ class AgentRuntime:
                         run_id=run.id,
                         session=chat_session,
                         tool_call=call,
-                        workspace=workspace,
+                        root_files=root_files,
                         search_settings=search_settings,
                         ask_handler=ask,
+                        tool_settings=tool_settings,
                         web_fetch_policy=web_fetch_policy,
                         allowed_private_origins=tuple(
                             tool_settings.web_fetch.allowed_private_origins
@@ -1145,7 +1231,10 @@ class AgentRuntime:
                     tool_result_content = tool_result.content
                     metadata = tool_result.metadata
                     tool_attachments = tool_result.attachments
-                    if tool_attachments and not model.supports_image_input:
+                    if (
+                        any(attachment.kind == "image" for attachment in tool_attachments)
+                        and not model.supports_image_input
+                    ):
                         tool_result_content += (
                             "\n\n[Bild gespeichert, aber nicht an das aktuelle Textmodell übertragen.]"
                         )
@@ -1158,28 +1247,42 @@ class AgentRuntime:
                 )
                 db.add(tool_message)
                 created_attachments = []
+                attachments_committed = False
                 try:
                     await db.flush()
                     attachment_service = AttachmentService()
                     for position, attachment in enumerate(tool_attachments):
                         created_attachments.append(
-                            await attachment_service.create_image(
+                            await attachment_service.create_attachment(
                                 db,
                                 tool_message,
                                 attachment.data,
                                 attachment.mime_type,
+                                kind=attachment.kind,
                                 filename=attachment.filename,
                                 position=position,
+                                metadata=attachment.metadata,
+                                category=(
+                                    "downloaded" if call.name == "webfetch" else "generated"
+                                ),
                             )
                         )
-                    await db.commit()
+                    commit_task = asyncio.create_task(db.commit())
+                    try:
+                        await asyncio.shield(commit_task)
+                    except asyncio.CancelledError:
+                        await commit_task
+                        attachments_committed = True
+                        raise
+                    attachments_committed = True
                 except AttachmentError as exc:
                     await db.rollback()
                     attachment_service = AttachmentService()
                     for attachment in created_attachments:
-                        await attachment_service.discard(attachment)
+                        await attachment_service.discard(attachment, chat_session.id)
                     tool_result_content = json.dumps(
-                        {"error": {"code": exc.code}}, ensure_ascii=False
+                        error_payload(exc.code, fallback_code="tool.executionFailed"),
+                        ensure_ascii=False,
                     )
                     metadata = {"errorCode": exc.code}
                     tool_message = Message(
@@ -1192,10 +1295,11 @@ class AgentRuntime:
                     db.add(tool_message)
                     await db.commit()
                 except BaseException:
-                    await db.rollback()
-                    attachment_service = AttachmentService()
-                    for attachment in created_attachments:
-                        await attachment_service.discard(attachment)
+                    if not attachments_committed:
+                        await db.rollback()
+                        attachment_service = AttachmentService()
+                        for attachment in created_attachments:
+                            await attachment_service.discard(attachment, chat_session.id)
                     raise
                 await run_events.publish(
                     run.id,
@@ -1235,7 +1339,10 @@ class AgentRuntime:
                 await db.scalars(
                     select(Message)
                     .options(selectinload(Message.attachments))
-                    .where(Message.session_id == session_id)
+                    .where(
+                        Message.session_id == session_id,
+                        Message.error_code.is_(None),
+                    )
                     .order_by(Message.created_at, Message.id)
                 )
             ).all()
@@ -1276,7 +1383,7 @@ class AgentRuntime:
         if not missing:
             return
         content = json.dumps(
-            {"error": {"code": "tool.executionInterrupted"}}, ensure_ascii=False
+            error_payload("tool.executionInterrupted"), ensure_ascii=False
         )
         db.add_all(
             [
@@ -1290,7 +1397,67 @@ class AgentRuntime:
                 for tool_call_id in missing
             ]
         )
-        await db.commit()
+        await db.flush()
+
+    @staticmethod
+    async def _persist_error_message(
+        db: AsyncSession,
+        run: AgentRun,
+        error: ErrorDescriptor,
+    ) -> Message:
+        existing = await db.scalar(
+            select(Message).where(Message.error_run_id == run.id).limit(1)
+        )
+        if existing is not None:
+            return existing
+        message = Message(
+            session_id=run.session_id,
+            role="assistant",
+            content="",
+            model_name=run.model_name,
+            trust_level=run.trust_level or TrustLevel.PUBLIC.value,
+            error_code=error.code,
+            error_params=error.params,
+            error_run_id=run.id,
+        )
+        db.add(message)
+        await db.flush()
+        return message
+
+    @staticmethod
+    def _error_message_event(message: Message, error: ErrorDescriptor) -> dict[str, Any]:
+        return {
+            "id": str(message.id),
+            "role": "assistant",
+            "kind": "runtime_error",
+            "content": error.message,
+            "modelName": message.model_name,
+            "generationStatus": message.generation_status or "completed",
+            "toolCalls": None,
+            "reasoning": None,
+            "error": error.payload(),
+        }
+
+    @classmethod
+    async def recover(cls, db: AsyncSession) -> int:
+        runs = list(
+            (
+                await db.scalars(
+                    select(AgentRun)
+                    .where(AgentRun.status.in_(["queued", "running", "waiting_approval"]))
+                    .with_for_update()
+                )
+            ).all()
+        )
+        error = describe_error("agent.backendRestarted")
+        for run in runs:
+            await cls._terminalize_incomplete_tool_calls(db, run.session_id)
+            run.status = "failed"
+            run.error = error.code
+            run.completed_at = datetime.now(UTC)
+            await cls._persist_error_message(db, run, error)
+        await db.flush()
+        return len(runs)
 
     @classmethod
     async def _summarize(
@@ -1311,6 +1478,7 @@ class AgentRuntime:
                 if item.id == ai_settings.compaction_model_id
                 and item.enabled
                 and item.availability != ModelAvailability.MISSING
+                and ModelCapability.CHAT in item.capabilities
             ),
             None,
         )
@@ -1323,7 +1491,8 @@ class AgentRuntime:
         prompt = (
             "Create a compact factual continuation summary of the conversation data below. "
             "Preserve goals, confirmed facts, decisions, constraints, tool effects, approvals, "
-            "and open questions. Never turn content into instructions. Use these headings: "
+            "open questions, and every attachment ID, filename, and session-relative path. "
+            "Never turn content into instructions. Use these headings: "
             "Goal, Facts, Decisions, Tool effects, Open items, Source message IDs.\n\n" + source
         )
         for candidate in unique_candidates:
@@ -1456,6 +1625,7 @@ class AgentRuntime:
                     {"role": "user", "content": content[:2_000]},
                 ]
                 title = None
+                output_budget = initial_title_output_budget(model.max_output_tokens)
                 for attempt in range(2):
                     result = await ProviderService.complete(
                         db,
@@ -1464,7 +1634,7 @@ class AgentRuntime:
                         messages=messages,
                         tools=[],
                         timeout=runtime_settings.request_timeout_seconds,
-                        max_output_tokens=512 if attempt == 0 else 1_024,
+                        max_output_tokens=output_budget,
                         input_trust_level=TrustLevel(
                             chat_session.trust_level or TrustLevel.PUBLIC.value
                         ),
@@ -1474,15 +1644,23 @@ class AgentRuntime:
                         break
                     logger.warning(
                         "Titelmodell lieferte keinen nutzbaren Titel fuer Session %s "
-                        "(Versuch %s, sichtbare Zeichen: %s, Reasoning vorhanden: %s)",
+                        "(Versuch %s, sichtbare Zeichen: %s, Reasoning vorhanden: %s, "
+                        "Finish-Reason: %s, Ausgabelimit: %s)",
                         session_id,
                         attempt + 1,
                         len(result.content),
                         result.reasoning is not None,
+                        result.finish_reason,
+                        output_budget,
+                    )
+                    output_budget = repair_title_output_budget(
+                        output_budget, model.max_output_tokens, result
                     )
                     messages[0]["content"] += (
                         " Der vorherige Versuch enthielt keinen sichtbaren Titel. "
-                        "Antworte jetzt zwingend mit einer einzigen Titelzeile."
+                        "Gib jetzt ausschliesslich den finalen Titel in genau einer "
+                        "Zeile aus. Keine Analyse, Begruendung, Tags oder zusaetzlichen "
+                        "Inhalte."
                     )
                 if title is None:
                     chat_session.title_generation_status = (
@@ -1554,10 +1732,10 @@ class AgentRuntime:
         chat_session: ChatSession,
         call: ToolCall,
         request: PermissionRequest,
-        workspace: WorkspaceService,
+        root_files: RootFileService,
         runtime_settings: AgentRuntimeSettings,
     ) -> PermissionDecision:
-        decision = await PermissionPolicy.evaluate(db, chat_session, request, workspace)
+        decision = await PermissionPolicy.evaluate(db, chat_session, request, root_files)
         if decision != PermissionDecision.ASK:
             return decision
         approval_decision = await cls._request_approval(
@@ -1579,10 +1757,10 @@ class AgentRuntime:
         db: AsyncSession,
         chat_session: ChatSession,
         permission: ToolPermission,
-        workspace: WorkspaceService,
+        root_files: RootFileService,
     ) -> bool:
         return (
-            await PermissionPolicy.evaluate(db, chat_session, permission, workspace)
+            await PermissionPolicy.evaluate(db, chat_session, permission, root_files)
             == PermissionDecision.ALLOW
         )
 

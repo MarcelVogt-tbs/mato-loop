@@ -1,13 +1,11 @@
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.tools import permission_for
-from mato_loop_backend.models import ChatSession
-from mato_loop_backend.workspace import WorkspaceError, WorkspaceService
+from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.workspace import RootFileService, WorkspaceError, WorkspaceService
 
 
 def test_workspace_manages_directories_and_files(tmp_path: Path) -> None:
@@ -136,25 +134,19 @@ def test_workspace_cannot_delete_home(tmp_path: Path) -> None:
         workspace.delete(".")
 
 
-async def test_write_mode_without_workdir_still_requires_permission(tmp_path: Path) -> None:
-    workspace = WorkspaceService(tmp_path)
+def test_write_mode_without_workdir_has_no_workspace_permission(tmp_path: Path) -> None:
+    session_id = uuid4()
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session_id)
+    root_files = RootFileService(
+        session_id,
+        session_storage=storage,
+        workspace_home=tmp_path,
+    )
     permission = permission_for(
         "write_file",
-        {"path": "notes.txt", "content": "hello"},
-        workspace,
-        None,
+        {"root": "workspace", "path": "notes.txt", "content": "hello"},
+        root_files,
     )
-    chat_session = ChatSession(
-        title="Test",
-        memory_mode="disabled",
-        web_search_policy="available",
-        working_directory=None,
-        workspace_access="read-write",
-    )
-    grants = MagicMock()
-    grants.all.return_value = []
-    db = AsyncMock(spec=AsyncSession)
-    db.scalars.return_value = grants
 
-    assert permission is not None
-    assert await AgentRuntime._is_allowed(db, chat_session, permission, workspace) is False
+    assert permission is None

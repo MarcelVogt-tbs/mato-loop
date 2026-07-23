@@ -13,17 +13,38 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'provider.discoveryUnsupported' } })).toBe(
       'Dieser Provider unterstützt keine automatische Modellerkennung.'
     )
+    expect(apiErrorMessage({ error: { code: 'provider.modelCapabilityUnavailable' } })).toBe(
+      'Das ausgewählte Modell unterstützt die benötigte Fähigkeit nicht.'
+    )
     expect(apiErrorMessage({ error: { code: 'oauth.loginExpired' } })).toBe(
       'Der ChatGPT-Einmalcode ist abgelaufen. Bitte starte die Anmeldung erneut.'
     )
     expect(apiErrorMessage({ error: { code: 'workspace.invalidEncoding' } })).toBe(
       'Die Datei kann nur als UTF-8-Text gelesen werden.'
     )
+    expect(apiErrorMessage({ error: { code: 'file.workspaceNotSelected' } })).toBe(
+      'Für diese Session ist kein Arbeitsverzeichnis ausgewählt.'
+    )
+    expect(apiErrorMessage({ error: { code: 'file.pathAlreadyExists' } })).toBe(
+      'Der exakte Zielpfad existiert bereits. Dateien werden nicht überschrieben.'
+    )
+    expect(apiErrorMessage({ error: { code: 'file.sessionQuotaExceeded' } })).toBe(
+      'Das Speicherlimit für Dateien dieser Session ist erreicht.'
+    )
+    expect(apiErrorMessage({ error: { code: 'file.operationTooLarge' } })).toBe(
+      'Die Quelle ist für eine einzelne Dateioperation zu groß oder enthält zu viele Einträge.'
+    )
+    expect(apiErrorMessage({ error: { code: 'session.storageUnavailable' } })).toBe(
+      'Der interne Dateispeicher dieser Session ist derzeit nicht verfügbar.'
+    )
     expect(apiErrorMessage({ error: { code: 'webfetch.addressBlocked' } })).toBe(
       'Diese Netzwerkadresse ist aus Sicherheitsgründen gesperrt.'
     )
     expect(apiErrorMessage({ error: { code: 'attachment.tooLarge' } })).toBe(
-      'Der Bildanhang ist zu groß.'
+      'Der Dateianhang ist zu groß.'
+    )
+    expect(apiErrorMessage({ error: { code: 'attachment.invalidDocument' } })).toBe(
+      'Das Dokument ist beschädigt, geschützt oder überschreitet die Verarbeitungsgrenzen.'
     )
     expect(apiErrorMessage({ error: { code: 'agent.requiredWebSearchMissing' } })).toBe(
       'Das Modell hat die verpflichtende Websuche auch nach mehreren Versuchen nicht ausgeführt.'
@@ -40,6 +61,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'privacy.pseudonymizationUnavailable' } })).toBe(
       'Die lokale Pseudonymisierung ist derzeit nicht verfügbar.'
     )
+    expect(apiErrorMessage({
+      error: { code: 'provider.timeout', params: { timeoutSeconds: 420, retryable: true } }
+    })).toBe('Der Provider hat nicht innerhalb von 420 Sekunden geantwortet.')
   })
 
   it('formats validation parameters without backend text', () => {
@@ -56,6 +80,13 @@ describe('API error messages', () => {
     }
 
     expect(apiErrorMessage(source)).toBe('Das Passwort muss mindestens 10 Zeichen lang sein.')
+    expect(apiErrorMessage({
+      error: {
+        code: 'validation.tooManyItems',
+        field: 'audio',
+        params: { maxItems: 4 }
+      }
+    })).toBe('Die Audioauswahl darf höchstens 4 Einträge enthalten.')
   })
 
   it('never renders legacy validation payloads', () => {
@@ -77,5 +108,18 @@ describe('API error messages', () => {
       'Aktion fehlgeschlagen'
     )
     expect(apiErrorMessage({ request: {} })).toBe('MatoLoop ist nicht erreichbar.')
+  })
+
+  it('prefers German translations over backend messages', () => {
+    expect(apiErrorMessage({
+      error: {
+        code: 'agent.requiredWebSearchMissing',
+        message: 'The required web search was not performed.',
+        params: {}
+      }
+    })).toBe('Das Modell hat die verpflichtende Websuche auch nach mehreren Versuchen nicht ausgeführt.')
+    expect(apiErrorMessage({
+      error: { code: 'future.unknown', message: 'Secret upstream details' }
+    })).toBe('Die Aktion ist fehlgeschlagen.')
   })
 })

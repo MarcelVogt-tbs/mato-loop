@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,24 +9,24 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from mato_loop_backend import __version__
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import register_error_handlers
+from mato_loop_backend.api.request_body_limit import MediaRequestBodyLimitMiddleware
 from mato_loop_backend.api.router import api_router
-from mato_loop_backend.attachments import AttachmentService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.memory.dreaming import DreamingScheduler, DreamingService
 from mato_loop_backend.memory.embeddings import embedding_client
 from mato_loop_backend.memory.indexing import MemoryIndexScheduler, MemoryIndexService
 from mato_loop_backend.models import (
-    AgentRun,
     ApprovalRequest,
     ChatSession,
     TitleGenerationStatus,
 )
+from mato_loop_backend.session_storage import SessionStorage
 
 runtime_config = get_runtime_config()
 logger = logging.getLogger(__name__)
@@ -46,11 +47,8 @@ async def lifespan(_app: FastAPI):
     runtime_config.secrets_dir.mkdir(parents=True, exist_ok=True)
     try:
         async with AsyncSessionFactory() as db:
-            await db.execute(
-                update(AgentRun)
-                .where(AgentRun.status.in_(["queued", "running", "waiting_approval"]))
-                .values(status="failed", error="agent.backendRestarted")
-            )
+            await AgentRuntime.recover(db)
+            await db.commit()
             await db.execute(
                 update(ApprovalRequest)
                 .where(ApprovalRequest.status == "pending")
@@ -66,10 +64,21 @@ async def lifespan(_app: FastAPI):
             )
             await DreamingService.recover(db)
             await db.commit()
+            session_ids = set((await db.scalars(select(ChatSession.id))).all())
+            reconciliation = await asyncio.to_thread(
+                SessionStorage().reconcile, session_ids, stale_staging_after_seconds=0
+            )
+            if reconciliation.provisioned or reconciliation.restored or reconciliation.trashed:
+                logger.info(
+                    "Session-Storage abgeglichen: %s provisioniert, %s wiederhergestellt, "
+                    "%s verwaist",
+                    len(reconciliation.provisioned),
+                    len(reconciliation.restored),
+                    len(reconciliation.trashed),
+                )
             if runtime_config.embedding_enabled:
                 await MemoryIndexService.recover(db)
                 await MemoryIndexService.reconcile(db)
-            await AttachmentService().reconcile(db)
     except Exception:
         logger.exception("Failed to clean up stale runs and approvals during startup")
     DreamingScheduler.start()
@@ -100,6 +109,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(MediaRequestBodyLimitMiddleware)
 
 app.include_router(api_router, prefix="/api")
 register_error_handlers(app)

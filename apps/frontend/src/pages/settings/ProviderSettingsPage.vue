@@ -4,7 +4,7 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Provider</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          LLM-Verbindungen und ihre verfügbaren Modelle verwalten.
+          KI-Verbindungen und ihre verfügbaren Chat- und Medienmodelle verwalten.
         </p>
       </div>
       <div class="provider-settings-actions">
@@ -31,7 +31,7 @@
         <q-avatar color="grey-7" text-color="white" icon="hub" />
         <div>
           <div class="text-weight-medium">Noch kein Provider konfiguriert</div>
-          <div class="text-body2 app-muted">Füge ChatGPT Codex oder einen OpenAI-kompatiblen Endpunkt hinzu.</div>
+          <div class="text-body2 app-muted">Füge ChatGPT Codex, Lemonade oder einen OpenAI-kompatiblen Endpunkt hinzu.</div>
         </div>
       </div>
     </q-card>
@@ -172,13 +172,22 @@
             <q-list v-else separator class="provider-model-list q-mt-md">
               <q-item v-for="model in filteredModels(provider)" :key="model.id" class="provider-model-item">
                 <q-item-section avatar>
-                  <q-avatar rounded color="primary" text-color="white" icon="smart_toy" size="38px" />
+                  <q-avatar rounded color="primary" text-color="white" :icon="modelIcon(model)" size="38px" />
                 </q-item-section>
                 <q-item-section>
                   <q-item-label class="text-weight-medium">{{ model.name || model.modelId }}</q-item-label>
                   <q-item-label caption class="model-technical-id">{{ model.modelId }}</q-item-label>
                   <div class="row items-center q-gutter-xs q-mt-xs">
                     <q-chip dense outline>{{ model.origin === 'manual' ? 'Manuell' : 'Entdeckt' }}</q-chip>
+                    <q-chip
+                      v-for="capability in normalizeModelCapabilities(model.capabilities)"
+                      :key="capability"
+                      dense
+                      outline
+                      :icon="capabilityIcon(capability)"
+                    >
+                      {{ modelCapabilityLabel(capability) }}
+                    </q-chip>
                     <q-chip v-if="!isModelPresent(model)" dense color="warning" text-color="dark">Nicht verfügbar</q-chip>
                   </div>
                 </q-item-section>
@@ -194,13 +203,19 @@
                   <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${model.name || model.modelId}`">
                     <q-menu class="app-menu-popup app-action-menu">
                       <q-list dense style="min-width: 210px">
-                        <q-item v-close-popup clickable :disable="!canTestModel(model, provider)" @click="testModel(model)">
+                        <q-item
+                          v-if="modelSupportsCapability(model, 'chat')"
+                          v-close-popup
+                          clickable
+                          :disable="!canTestModel(model, provider)"
+                          @click="testModel(model)"
+                        >
                           <q-item-section avatar><q-icon name="network_check" /></q-item-section>
                           <q-item-section>Testen</q-item-section>
                         </q-item>
                         <q-item v-close-popup clickable @click="openModelDialog(provider, model)">
                           <q-item-section avatar><q-icon name="tune" /></q-item-section>
-                          <q-item-section>Laufzeit bearbeiten</q-item-section>
+                          <q-item-section>{{ modelSupportsCapability(model, 'chat') ? 'Laufzeit bearbeiten' : 'Modell bearbeiten' }}</q-item-section>
                         </q-item>
                         <template v-if="model.origin === 'manual'">
                           <q-separator />
@@ -248,7 +263,11 @@ import {
   discoveryState,
   isModelEffective,
   isModelPresent,
-  isProviderEffective
+  isProviderEffective,
+  MODEL_CAPABILITY_OPTIONS,
+  modelCapabilityLabel,
+  modelSupportsCapability,
+  normalizeModelCapabilities
 } from 'src/utils/provider-models'
 import { useProviderStore } from 'stores/providers'
 
@@ -271,7 +290,7 @@ const providerToggleLoading = reactive({})
 const modelToggleLoading = reactive({})
 const modelSearch = reactive({})
 const llmProviders = computed(() => providers.providers.filter((item) => (
-  item.adapterType === 'openai-codex' || item.adapterType === 'openai-compatible'
+  ['openai-codex', 'openai-compatible', 'lemonade'].includes(item.adapterType)
 )))
 
 function openCreateDialog() {
@@ -309,7 +328,9 @@ function activeModelCount(provider) {
 }
 
 function providerIcon(provider) {
-  return provider.adapterType === 'openai-codex' ? 'key' : 'hub'
+  if (provider.adapterType === 'openai-codex') return 'key'
+  if (provider.adapterType === 'lemonade') return 'developer_board'
+  return 'hub'
 }
 
 function providerStatus(provider) {
@@ -323,24 +344,40 @@ function providerStatus(provider) {
 
 function providerDescription(provider) {
   if (provider.adapterType === 'openai-codex') return 'ChatGPT-Abonnement · Codex OAuth'
+  if (provider.adapterType === 'lemonade') {
+    return `${provider.config?.baseUrl || provider.config?.base_url || 'Keine URL'} · Lemonade`
+  }
   const apiType = provider.config?.apiType || provider.config?.api_type
   const protocol = apiType === 'responses' ? 'Responses API' : 'Chat Completions'
   return `${provider.config?.baseUrl || provider.config?.base_url || 'Keine URL'} · ${protocol}`
 }
 
 function canTest(provider) {
-  return activeModelCount(provider) > 0
+  return providerModels(provider).some((model) => (
+    modelSupportsCapability(model, 'chat')
+    && isModelEffective(model, provider, providers.codex, providers.enabled)
+  ))
 }
 
 function canTestModel(model, provider) {
   return providers.enabled
     && isModelPresent(model)
     && isProviderEffective(provider, providers.codex)
+    && modelSupportsCapability(model, 'chat')
 }
 
 function supportsDiscovery(provider) {
-  return provider.adapterType === 'openai-compatible'
+  return provider.adapterType === 'openai-compatible' || provider.adapterType === 'lemonade'
     || (provider.adapterType === 'openai-codex' && providers.codex.authenticated === true)
+}
+
+function capabilityIcon(capability) {
+  return MODEL_CAPABILITY_OPTIONS.find((option) => option.value === capability)?.icon || 'extension'
+}
+
+function modelIcon(model) {
+  const capability = normalizeModelCapabilities(model.capabilities).find((item) => item !== 'chat') || 'chat'
+  return capabilityIcon(capability)
 }
 
 function showProminentManualAction(provider) {

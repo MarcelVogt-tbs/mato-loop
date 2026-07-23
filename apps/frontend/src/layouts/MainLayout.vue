@@ -390,14 +390,14 @@ async function toggleSessionPinned(session) {
 }
 
 async function openNewSession() {
+  if ($q.screen.lt.md) drawerOpen.value = false
   await chat.loadSession(null)
   await router.push({ name: 'chat' })
-  if ($q.screen.lt.md) drawerOpen.value = false
 }
 
 async function openSession(id) {
-  await router.push({ name: 'chat', query: { session: id } })
   if ($q.screen.lt.md) drawerOpen.value = false
+  await router.push({ name: 'chat', query: { session: id } })
 }
 
 function closeDrawerOnMobile() {

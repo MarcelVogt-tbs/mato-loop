@@ -63,7 +63,7 @@
           />
         </div>
 
-        <q-form v-if="providerType === 'openai-compatible'" ref="formRef" class="provider-form-grid">
+        <q-form v-if="isConfiguredProvider" ref="formRef" class="provider-form-grid">
           <q-input
             v-model="form.name"
             outlined
@@ -75,11 +75,12 @@
             v-model="form.base_url"
             outlined
             label="Base URL"
-            placeholder="https://api.example.com/v1"
+            :placeholder="providerType === 'lemonade' ? 'http://lemonade-host:13305/v1' : 'https://api.example.com/v1'"
             lazy-rules
             :rules="[requiredRule, urlRule]"
           />
           <q-select
+            v-if="providerType === 'openai-compatible'"
             v-model="form.api_type"
             outlined
             emit-value
@@ -148,14 +149,14 @@
           @click="close"
         />
         <q-space />
-        <template v-if="providerType === 'openai-compatible'">
+        <template v-if="isConfiguredProvider">
           <q-btn
             unelevated
             no-caps
             color="primary"
             :label="isEditing ? 'Änderungen speichern' : 'Provider hinzufügen'"
             :loading="saving"
-            @click="saveOpenAI"
+            @click="saveConfiguredProvider"
           />
         </template>
         <template v-else-if="providerType === 'openai-codex'">
@@ -234,6 +235,7 @@ const memoryPolicyOptions = [
 ]
 const isEditing = computed(() => Boolean(props.provider))
 const hasCodexProvider = computed(() => providers.providers.some((item) => item.adapterType === 'openai-codex'))
+const isConfiguredProvider = computed(() => ['openai-compatible', 'lemonade'].includes(providerType.value))
 const providerOptions = computed(() => [
   {
     label: 'ChatGPT Codex',
@@ -247,20 +249,30 @@ const providerOptions = computed(() => [
     value: 'openai-compatible',
     icon: 'hub',
     description: 'Chat Completions oder Responses API'
+  },
+  {
+    label: 'Lemonade',
+    value: 'lemonade',
+    icon: 'developer_board',
+    description: 'Lokaler Lemonade-Server für Chat- und Medienmodelle'
   }
 ])
 const dialogTitle = computed(() => isEditing.value ? `${props.provider.name} bearbeiten` : 'Provider hinzufügen')
-const dialogIcon = computed(() => providerType.value === 'openai-codex' ? 'key' : 'hub')
+const dialogIcon = computed(() => ({
+  'openai-codex': 'key',
+  lemonade: 'developer_board'
+})[providerType.value] || 'hub')
 
-function defaultForm() {
+function defaultForm(type = null) {
+  const isLemonade = type === 'lemonade'
   return {
     name: '',
     base_url: '',
     api_type: 'chat_completions',
     api_key: '',
     remove_api_key: false,
-    trust_level: 'public',
-    pseudonymization_enabled: true,
+    trust_level: isLemonade ? 'private' : 'public',
+    pseudonymization_enabled: !isLemonade,
     memory_policy: 'inherit'
   }
 }
@@ -281,7 +293,7 @@ function initialize() {
   clearPolling()
   codexLogin.value = null
   providerType.value = props.provider?.adapterType || null
-  Object.assign(form, defaultForm(), props.provider ? {
+  Object.assign(form, defaultForm(providerType.value), props.provider ? {
     name: props.provider.name,
     base_url: props.provider.config?.baseUrl || props.provider.config?.base_url || '',
     api_type: props.provider.config?.apiType || props.provider.config?.api_type || 'chat_completions',
@@ -291,23 +303,29 @@ function initialize() {
   } : {})
 }
 
-async function saveOpenAI() {
+async function saveConfiguredProvider() {
   if (!await formRef.value?.validate()) return
   saving.value = true
   try {
     const payload = {
       name: form.name.trim(),
       base_url: form.base_url.trim(),
-      api_type: form.api_type,
       api_key: form.api_key.trim() || null,
       remove_api_key: form.remove_api_key,
       trust_level: form.trust_level,
       pseudonymization_enabled: form.pseudonymization_enabled,
       memory_policy: form.memory_policy
     }
+    if (providerType.value === 'openai-compatible') payload.api_type = form.api_type
     let providerId = props.provider?.id
-    if (props.provider) await providers.updateOpenAI(props.provider.id, payload)
-    else providerId = await providers.createOpenAI(payload)
+    if (props.provider) {
+      if (providerType.value === 'lemonade') await providers.updateLemonade(props.provider.id, payload)
+      else await providers.updateOpenAI(props.provider.id, payload)
+    } else if (providerType.value === 'lemonade') {
+      providerId = await providers.createLemonade(payload)
+    } else {
+      providerId = await providers.createOpenAI(payload)
+    }
     $q.notify({ type: 'positive', message: 'Provider gespeichert' })
     close()
     if (!props.provider && providerId) emit('provider-created', providerId)
@@ -431,6 +449,9 @@ function handleHide() {
 
 watch(() => props.modelValue, (open) => {
   if (open) initialize()
+})
+watch(providerType, (type, previousType) => {
+  if (!props.provider && type !== previousType) Object.assign(form, defaultForm(type))
 })
 onUnmounted(clearPolling)
 </script>

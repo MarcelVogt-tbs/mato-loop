@@ -27,7 +27,11 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
             "enabled": True,
             "defaultPolicy": "ask",
             "allowedPrivateOrigins": [],
-        }
+        },
+        "generateImage": {"policy": "disabled", "timeoutSeconds": 300},
+        "generateSpeech": {"policy": "disabled", "timeoutSeconds": 300},
+        "generateAudio": {"policy": "disabled", "timeoutSeconds": 300},
+        "transcribeAudio": {"policy": "disabled", "timeoutSeconds": 300},
     }
 
 
@@ -48,7 +52,11 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
                     "http://127.0.0.1:8080",
                     "https://example.com",
                 ],
-            }
+            },
+            "generateImage": {"policy": "ask", "timeoutSeconds": 600},
+            "generateSpeech": {"policy": "auto", "timeoutSeconds": 120},
+            "generateAudio": {"policy": "disabled", "timeoutSeconds": 900},
+            "transcribeAudio": {"policy": "ask", "timeoutSeconds": 180},
         }
     )
 
@@ -69,6 +77,14 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     assert saved.web_fetch.allowed_private_origins == result["webFetch"][
         "allowedPrivateOrigins"
     ]
+    assert saved.generate_image.policy == "ask"
+    assert saved.generate_image.timeout_seconds == 600
+    assert saved.generate_speech.policy == "auto"
+    assert saved.generate_speech.timeout_seconds == 120
+    assert saved.generate_audio.policy == "disabled"
+    assert saved.generate_audio.timeout_seconds == 900
+    assert saved.transcribe_audio.policy == "ask"
+    assert saved.transcribe_audio.timeout_seconds == 180
     db.commit.assert_awaited_once()
 
 
@@ -91,5 +107,20 @@ def test_tool_settings_reject_non_origin_urls(origin: str) -> None:
                     "defaultPolicy": "ask",
                     "allowedPrivateOrigins": [origin],
                 }
+            }
+        )
+
+
+@pytest.mark.parametrize("timeout", [9, 3_601, 30.5])
+def test_tool_settings_reject_invalid_media_timeout(timeout: float) -> None:
+    with pytest.raises(ValidationError):
+        ToolSettingsRequest.model_validate(
+            {
+                "webFetch": {
+                    "enabled": True,
+                    "defaultPolicy": "ask",
+                    "allowedPrivateOrigins": [],
+                },
+                "generateImage": {"policy": "ask", "timeoutSeconds": timeout},
             }
         )

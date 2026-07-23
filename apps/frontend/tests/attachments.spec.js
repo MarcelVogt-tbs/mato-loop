@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
-import { attachmentMetadata, imageAttachments, safeAttachmentUrl } from '../src/utils/attachments'
+import {
+  attachmentIcon,
+  attachmentMetadata,
+  audioMimeTypeSupported,
+  audioAttachments,
+  formatAttachmentDuration,
+  imageAttachments,
+  safeAttachmentUrl,
+  supportedAttachments
+} from '../src/utils/attachments'
 
 const url = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
 
-describe('tool result attachments', () => {
+describe('persisted attachments', () => {
   it('only permits the internal hierarchical attachment route', () => {
     expect(safeAttachmentUrl(url)).toBe(url)
     expect(safeAttachmentUrl(`https://example.com${url}`)).toBeNull()
@@ -19,5 +28,60 @@ describe('tool result attachments', () => {
     expect(attachments).toHaveLength(1)
     expect(attachments[0].safeUrl).toBe(url)
     expect(attachmentMetadata(attachments[0])).toBe('10 × 20 px · 2 KB · image/png')
+  })
+
+  it('keeps arbitrary audio formats with robust duration and metadata handling', () => {
+    const attachments = audioAttachments([
+      {
+        id: 'audio-one',
+        kind: 'audio',
+        mimeType: 'audio/x-wav; charset=binary',
+        url,
+        durationMs: 65_400,
+        sizeBytes: 4096,
+        metadata: null
+      },
+      { id: 'audio-two', kind: 'audio', mimeType: 'audio/mpeg', url }
+    ])
+
+    expect(attachments).toHaveLength(2)
+    expect(attachments[0]).toMatchObject({ mimeType: 'audio/x-wav', metadata: {}, safeUrl: url })
+    expect(attachmentMetadata(attachments[0])).toBe('1:05 · 4 KB · audio/x-wav')
+    expect(formatAttachmentDuration(3_661_000)).toBe('1:01:01')
+  })
+
+  it('returns every persisted attachment kind and rejects unknown kinds', () => {
+    const attachments = supportedAttachments([
+      { kind: 'image', mimeType: 'image/png', url },
+      { kind: 'audio', mimeType: 'audio/mpeg', url },
+      { kind: 'text', mimeType: 'text/plain', url },
+      { kind: 'document', mimeType: 'application/pdf', url },
+      { kind: 'file', mimeType: 'application/zip', url },
+      { kind: 'archive', mimeType: 'application/zip', url }
+    ])
+
+    expect(attachments).toHaveLength(5)
+    expect(attachments.map((attachment) => attachment.kind))
+      .toEqual(['image', 'audio', 'text', 'document', 'file'])
+    expect(attachmentIcon(attachments[2])).toBe('description')
+    expect(attachmentIcon(attachments[3])).toBe('picture_as_pdf')
+    expect(attachmentIcon(attachments[4])).toBe('folder_zip')
+  })
+
+  it('only enables the audio player when the browser accepts the MIME type', () => {
+    const originalDocument = globalThis.document
+    globalThis.document = {
+      createElement: () => ({
+        canPlayType: (mimeType) => mimeType === 'audio/ogg' ? 'probably' : ''
+      })
+    }
+    try {
+      expect(audioMimeTypeSupported('audio/ogg; codecs=opus')).toBe(true)
+      expect(audioMimeTypeSupported('audio/unknown')).toBe(false)
+      expect(audioMimeTypeSupported('application/ogg')).toBe(false)
+    } finally {
+      if (originalDocument === undefined) delete globalThis.document
+      else globalThis.document = originalDocument
+    }
   })
 })

@@ -38,18 +38,18 @@ Ein Modellargument darf weder die Registry-Auswahl noch `Context.ask`, Capabilit
 
 Eine Permission besteht aus Capability und typisiertem Ressourcen-Matcher. Sicherheitsentscheidungen dürfen nicht auf frei zusammengesetzten Anzeige-Strings, Präfixvergleichen oder Toolnamen beruhen. Ein Matcher besitzt einen eindeutigen Typ und dafür validierte Felder, beispielsweise einen kanonischen Pfad, eine Session-ID oder einen festgelegten Session-Suchbereich.
 
-- Pfad-Matcher vergleichen kanonisierte Pfade komponentenweise und respektieren die Grenze `/data/home`; Stringpräfixe sind unzulässig.
+- Pfad-Matcher enthalten den expliziten Root `session` oder `workspace` und vergleichen relative Pfade komponentenweise innerhalb der hostseitig gebundenen Rootgrenze; Stringpräfixe sind unzulässig.
 - Session-Matcher vergleichen UUIDs und unterscheiden die aktuelle Session von einer explizit benannten anderen Session.
 - Session-Such-Matcher repräsentieren die Suche als eigene Ressource. Eine Suchanfrage ist nicht implizit durch einen Grant zum Lesen einer einzelnen Session erlaubt.
 - URL-Matcher verwenden den SHA-256-Hash der vollständigen kanonischen URL. Anzeigeinformationen werden getrennt und ohne Querywerte persistiert.
 - Persistierte Matcher müssen verlustfrei wieder in denselben typisierten Matcher deserialisiert werden.
 - Approval-Anzeigeinformationen wie Titel, Zusammenfassung und Risikostufe sind Metadaten und nicht Teil der Match-Entscheidung.
 
-Für `read_file` und `list_directory` wird vor der Permission-Prüfung das kanonische Leseziel bestimmt. Liegt es innerhalb des Arbeitsverzeichnisses, ist der Zugriff ohne Rückfrage erlaubt. Außerhalb des Arbeitsverzeichnisses oder ohne gesetztes Arbeitsverzeichnis ist ein passender Session-Grant oder ein Approval erforderlich. Interne Symlinks werden über ihr kanonisches Ziel autorisiert; Ziele außerhalb `/data/home` bleiben unveränderlich gesperrt. Ein Grant für einen Symlink-Alias darf deshalb kein später geändertes Ziel freigeben.
+Für `read_file` und `list_directory` bestimmt der Host die Rootgrenze vor der Permission-Prüfung. `root=session` ist immer an die aktuelle Session gebunden; `root=workspace` ausschließlich an das ausgewählte Arbeitsverzeichnis und ohne Auswahl unverfügbar. Agent-Dateitools folgen keinen Symlinks. Im Session-Root sind `attachments`, `generated`, `downloads` und `derived` lesbar und als Copy-Quelle erlaubt, aber unveränderlich; Mutationen sind nur unter `files` möglich.
 
 Für `webfetch` wird jede initiale URL und jedes Redirectziel vor DNS-Auflösung und HTTP-Zugriff durch die effektive Modellpolicy bewertet. `ask` fordert jede URL an, `auto_public` erlaubt öffentliche Ziele automatisch und fragt für explizit allowlistete private Origins, `auto_allowed` erlaubt beide Zielklassen automatisch. Die Netzwerkklassifikation nach der Permission bleibt eine unveränderliche Hostgrenze. Kein Grant kann eine nicht allowlistete private, Link-Local- oder Metadatenadresse öffnen.
 
-Tool-Attachments sind persistente Kerndaten der zugehörigen Tool-Message. Binärdaten werden atomar außerhalb des Agent-Homes gespeichert, gegen MIME-Typ, Magic Bytes, Decoder und Quota validiert und bei einer fehlgeschlagenen Transaktion bereinigt. API, SSE und kanonische Messageinhalte enthalten keine Base64-Daten. Providerbilder entstehen nur in der flüchtigen Requestprojektion.
+Tool-Attachments sind persistente Kerndaten der zugehörigen Tool-Message. Binärdaten werden atomar in den flachen, hostverwalteten Session-Verzeichnissen `attachments`, `generated`, `downloads` und `derived` gespeichert, gegen MIME-Typ, Magic Bytes, Decoder und Quota validiert und bei einer fehlgeschlagenen Transaktion bereinigt. API, SSE und kanonische Messageinhalte enthalten keine Base64-Daten oder physischen Storage-Pfade. Providerbilder entstehen nur in der flüchtigen Requestprojektion.
 
 Die verbindliche Grundpolicy für Session-Tools lautet:
 
@@ -109,15 +109,16 @@ Die folgenden unabhängigen Testfälle sind bei Einführung der jeweiligen Symbo
 | `MATCH-01` | Ein Pfadgrant für `project/a` | Der Agent fordert `project/ab` an | Der Grant passt nicht. |
 | `MATCH-02` | Ein serialisierter Matcher jedes unterstützten Typs | Er wird deserialisiert | Typ und Match-Semantik bleiben identisch. |
 | `FILE-01` | Eine Read-only-Session mit Arbeitsverzeichnis | Der Agent liest eine Datei innerhalb dieses Verzeichnisses | Der Zugriff erfolgt ohne Approval. |
-| `FILE-02` | Eine Session ohne passenden Grant | Der Agent liest außerhalb des Arbeitsverzeichnisses oder ohne Arbeitsverzeichnis | Es entsteht ein Approval für den kanonischen Zielpfad. |
-| `FILE-03` | Ein Symlink im Arbeitsverzeichnis zeigt auf einen internen Pfad außerhalb des Arbeitsverzeichnisses | Der Agent liest über den Symlink | Permission und Tool-Ausführung verwenden das kanonische Ziel und benötigen ein Approval. |
+| `FILE-02` | Eine Session ohne ausgewählten Workspace | Der Agent verwendet `root=workspace` | Der Call endet mit `file.workspaceNotSelected`; ein Approval kann die fehlende Rootbindung nicht umgehen. |
+| `FILE-03` | Ein Symlink liegt innerhalb eines Datei-Roots | Der Agent liest, kopiert oder verschiebt über den Symlink | Permission und Tool-Ausführung lehnen den Zugriff mit `file.symlinkForbidden` ab. |
 | `FILE-04` | Eine mehrzeilige oder große UTF-8-Datei | `read_file` erhält `offset` und `limit` | Das Ergebnis enthält genau den nummerierten Ausschnitt und einen Hinweis auf eine mögliche Fortsetzung. |
+| `FILE-05` | Eine Datei unter `session:attachments`, `session:generated`, `session:downloads` oder `session:derived` | Der Agent kopiert sie nach `session:files` oder in den Workspace | Copy ist erlaubt; Write, Move und Delete an der Quelle bleiben unveränderlich gesperrt. |
 | `WEBFETCH-01` | Globale Standardpolicy `ask` | Das Modell fordert eine URL an | Vor Approval erfolgen weder DNS-Auflösung noch HTTP-Zugriff. |
 | `WEBFETCH-02` | Policy `auto_public` und ein öffentliches Ziel | Das Modell ruft die URL ab | Das Ziel wird SSRF-sicher geprüft und ohne Approval abgerufen. |
 | `WEBFETCH-03` | Ein Redirect auf eine andere URL | Der Fetch verarbeitet den Redirect | Das Redirectziel durchläuft erneut Policy, DNS-Prüfung und Adress-Pinning. |
 | `WEBFETCH-04` | Ein nicht allowlistetes privates oder ein Metadatenziel | Das Modell fordert den Abruf an | Der Zugriff bleibt unabhängig von Grants und Modell-Override gesperrt. |
 | `WEBFETCH-05` | Eine Antwort über 5 MiB oder ein nicht unterstützter MIME-Typ | Der Body wird gestreamt | Der Abruf endet mit einem stabilen Fehler, bevor der Inhalt persistiert wird. |
-| `ATTACH-01` | Webfetch liefert ein gültiges unterstütztes Bild | Das Tool-Ergebnis wird persistiert | Message und Attachment-Metadaten werden gemeinsam gespeichert; die Datei liegt außerhalb des Agent-Homes. |
+| `ATTACH-01` | Webfetch liefert ein gültiges unterstütztes Bild | Das Tool-Ergebnis wird persistiert | Message und Attachment-Metadaten werden gemeinsam gespeichert; die Datei liegt unter `downloads` der aktuellen Session. |
 | `ATTACH-02` | Das aktive Modell unterstützt Bildeingaben | Der nächste Providerrequest wird gebaut | Das Bild wird flüchtig als Medienpart übertragen, aber weder als Base64 persistiert noch geloggt. |
 | `ATTACH-03` | Das aktive Modell unterstützt keine Bildeingaben | Webfetch liefert ein Bild | Das Bild bleibt im Chat sichtbar und das Modell erhält nur einen Textmarker. |
 | `SESSION-01` | Ein Run in Session A | Das Session-Read-Tool liest A | `Context.ask` erzeugt kein Approval. |

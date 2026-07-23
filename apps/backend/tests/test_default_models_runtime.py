@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent.runtime import AgentRuntime, _generated_session_title
+from mato_loop_backend.agent.title_generation import repair_title_output_budget
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import ChatSession, TitleGenerationStatus
+from mato_loop_backend.providers.base import ProviderResult, PublicReasoning
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import AgentRuntimeSettings, AiSettings, SettingsStore
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
@@ -164,6 +166,18 @@ def test_generated_title_is_normalized_and_bounded() -> None:
     assert _generated_session_title("<think>Nur Reasoning</think>") is None
 
 
+def test_title_repair_budget_uses_provider_signals_and_model_limit() -> None:
+    reasoning_only = ProviderResult(
+        reasoning=PublicReasoning("Analyse"),
+        usage={"output_tokens": 512, "reasoning_tokens": 512},
+        finish_reason="length",
+    )
+
+    assert repair_title_output_budget(512, 16_384, reasoning_only) == 4_096
+    assert repair_title_output_budget(512, 2_048, reasoning_only) == 2_048
+    assert repair_title_output_budget(256, 300, ProviderResult()) == 300
+
+
 async def test_title_generation_repairs_empty_visible_output(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="title")
@@ -184,8 +198,12 @@ async def test_title_generation_repairs_empty_visible_output(monkeypatch) -> Non
 
     complete = AsyncMock(
         side_effect=[
-            SimpleNamespace(content="<think>Nur Reasoning</think>", reasoning=object()),
-            SimpleNamespace(content="Reparierter Titel", reasoning=None),
+            ProviderResult(
+                reasoning=PublicReasoning("Nur Reasoning"),
+                usage={"output_tokens": 512, "reasoning_tokens": 512},
+                finish_reason="length",
+            ),
+            ProviderResult(content="Reparierter Titel", finish_reason="stop"),
         ]
     )
     monkeypatch.setattr(SettingsStore, "load", load)
@@ -200,8 +218,10 @@ async def test_title_generation_repairs_empty_visible_output(monkeypatch) -> Non
     assert complete.await_count == 2
     assert [
         call.kwargs["max_output_tokens"] for call in complete.await_args_list
-    ] == [512, 1_024]
-    assert "vorherige Versuch" in complete.await_args.kwargs["messages"][0]["content"]
+    ] == [512, 4_096]
+    repair_prompt = complete.await_args.kwargs["messages"][0]["content"]
+    assert "vorherige Versuch" in repair_prompt
+    assert "ausschliesslich den finalen Titel" in repair_prompt
     statement = db.scalar.await_args.args[0]
     assert "Reparierter Titel" in statement.compile().params.values()
 

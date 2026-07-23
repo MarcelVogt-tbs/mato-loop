@@ -7,6 +7,7 @@ from mato_loop_backend.providers.base import ProviderError, ProviderMedia, Provi
 from mato_loop_backend.providers.openai_compatible import (
     _chat_body,
     _chat_messages,
+    _normalize_finish_reason,
     _responses_body,
     _responses_finish_reason,
     _responses_input,
@@ -84,7 +85,7 @@ def test_media_follows_complete_parallel_tool_result_block_for_both_protocols() 
 
     assert [item["role"] for item in chat] == ["assistant", "tool", "tool", "user"]
     assert chat[-1]["content"] == [
-        {"type": "text", "text": "[Bildanhang aus Tool-Ergebnis]"},
+        {"type": "text", "text": "[Session-Bild]"},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
@@ -100,6 +101,10 @@ def test_media_follows_complete_parallel_tool_result_block_for_both_protocols() 
     assert responses[-1]["content"][1] == {
         "type": "input_image",
         "image_url": "data:image/png;base64,aW1hZ2U=",
+    }
+    assert responses[-1]["content"][0] == {
+        "type": "input_text",
+        "text": "[Session-Bild]",
     }
 
 
@@ -208,6 +213,13 @@ def test_responses_finish_reason_normalizes_output_limit() -> None:
         )
         == "length"
     )
+
+
+def test_chat_finish_reason_normalizes_output_limit() -> None:
+    assert _normalize_finish_reason("max_tokens") == "length"
+    assert _normalize_finish_reason("max_output_tokens") == "length"
+    assert _normalize_finish_reason("stop") == "stop"
+    assert _normalize_finish_reason(None) is None
 
 
 def test_failed_responses_result_raises_safe_provider_error() -> None:

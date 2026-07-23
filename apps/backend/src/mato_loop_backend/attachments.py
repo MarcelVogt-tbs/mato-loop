@@ -1,49 +1,97 @@
-"""Validierung und persistenter Storage fuer Message-Bildattachments.
-
-Der Service committet keine Transaktion. Schlaegt ein Commit nach erfolgreichem
-``create_image`` fehl, muss der Aufrufer ``discard`` mit dem zurueckgegebenen
-Attachment aufrufen. Ein Prozessabbruch zwischen Dateischreibvorgang und
-Datenbank-Commit kann eine verwaiste Datei hinterlassen; Storage-Keys sind
-zufaellig und werden weder in API-Payloads noch in Logs ausgegeben.
-Das Datenbank-CASCADE entfernt nur Metadaten. Message- oder Session-Loeschungen
-ausserhalb des Session-Routers muessen die Storage-Keys vorab erfassen und nach
-dem Commit ueber ``delete_files`` entfernen.
-"""
+"""Validation and persistent storage for general session attachments."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import os
 import re
+import shutil
 import stat
-import time
+import unicodedata
 import warnings
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import Path
-from uuid import uuid4
+from pathlib import Path, PurePosixPath
+from uuid import UUID, uuid4
 
 from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.config import get_runtime_config
+from mato_loop_backend.attachment_processing import (
+    AttachmentProcessingError,
+    audio_mime_type,
+    claimed_audio_format,
+    claimed_document_format,
+    derived_metadata,
+    document_mime_type,
+    process_attachment,
+    signed_audio_format,
+    signed_document_format,
+    validate_pcm_wav,
+)
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment
+from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
+from mato_loop_backend.workspace import RootFileError, RootFileService
 
-MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
-SESSION_ATTACHMENT_QUOTA_BYTES = 100 * 1024 * 1024
+MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024
+MAX_ATTACHMENT_BYTES = MAX_IMAGE_ATTACHMENT_BYTES
+MAX_FILE_ATTACHMENT_BYTES = 64 * 1024 * 1024
+MAX_AUDIO_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
+MAX_ATTACHMENTS_PER_MESSAGE = 4
+SESSION_ATTACHMENT_QUOTA_BYTES = 500 * 1024 * 1024
 
-logger = logging.getLogger(__name__)
-
-_STORAGE_KEY_PATTERN = re.compile(r"^[0-9a-f]{2}/[0-9a-f]{32}$")
 _FORMAT_MIME_TYPES = {
     "PNG": "image/png",
     "JPEG": "image/jpeg",
     "WEBP": "image/webp",
     "GIF": "image/gif",
 }
+_TEXT_EXTENSIONS = {
+    ".c",
+    ".cc",
+    ".conf",
+    ".cpp",
+    ".css",
+    ".csv",
+    ".go",
+    ".h",
+    ".hpp",
+    ".html",
+    ".ini",
+    ".java",
+    ".js",
+    ".json",
+    ".jsx",
+    ".log",
+    ".md",
+    ".php",
+    ".properties",
+    ".py",
+    ".rb",
+    ".rs",
+    ".sh",
+    ".sql",
+    ".svg",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".vue",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+_CATEGORY_DIRECTORIES = {
+    "user_upload": "attachments",
+    "generated": "generated",
+    "downloaded": "downloads",
+}
+_STORAGE_PATH_PATTERN = re.compile(
+    r"^(attachments|generated|downloads)/"
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/([^/]+)$"
+)
 
 
 class AttachmentError(Exception):
@@ -65,6 +113,27 @@ class ValidatedImage:
     sha256: str
 
 
+@dataclass(frozen=True)
+class ValidatedAudio:
+    mime_type: str
+    duration_ms: int
+    channels: int
+    sample_rate: int
+    sample_width: int
+    frames: int
+    size_bytes: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class AttachmentInput:
+    data: bytes
+    mime_type: str
+    filename: str | None = None
+    kind: str = "file"
+    metadata: dict | None = None
+
+
 def _magic_mime_type(data: bytes) -> str | None:
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -80,21 +149,19 @@ def _magic_mime_type(data: bytes) -> str | None:
 def validate_image(data: bytes, mime_type: str) -> ValidatedImage:
     if not data:
         raise AttachmentError("attachment.empty")
-    if len(data) > MAX_ATTACHMENT_BYTES:
+    if len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
         raise AttachmentError("attachment.tooLarge")
-
-    claimed_mime_type = mime_type.strip().lower()
-    magic_mime_type = _magic_mime_type(data)
-    if magic_mime_type is None or claimed_mime_type not in _FORMAT_MIME_TYPES.values():
+    claimed = mime_type.strip().lower()
+    magic = _magic_mime_type(data)
+    if magic is None or claimed not in _FORMAT_MIME_TYPES.values():
         raise AttachmentError("attachment.unsupportedType")
-    if claimed_mime_type != magic_mime_type:
+    if claimed != magic:
         raise AttachmentError("attachment.mimeMismatch")
-
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(BytesIO(data)) as image:
-                pillow_mime_type = _FORMAT_MIME_TYPES.get(image.format or "")
+                pillow_mime = _FORMAT_MIME_TYPES.get(image.format or "")
                 width, height = image.size
                 image.verify()
             with Image.open(BytesIO(data)) as image:
@@ -107,48 +174,168 @@ def validate_image(data: bytes, mime_type: str) -> ValidatedImage:
         ValueError,
     ) as exc:
         raise AttachmentError("attachment.invalidImage") from exc
-
-    if pillow_mime_type != magic_mime_type or width <= 0 or height <= 0:
+    if pillow_mime != magic or width <= 0 or height <= 0:
         raise AttachmentError("attachment.invalidImage")
-    return ValidatedImage(
-        mime_type=magic_mime_type,
-        width=width,
-        height=height,
-        size_bytes=len(data),
-        sha256=hashlib.sha256(data).hexdigest(),
+    return ValidatedImage(magic, width, height, len(data), hashlib.sha256(data).hexdigest())
+
+
+def validate_audio(data: bytes, mime_type: str) -> ValidatedAudio:
+    if not data:
+        raise AttachmentError("attachment.empty")
+    if len(data) > MAX_AUDIO_ATTACHMENT_BYTES:
+        raise AttachmentError("attachment.tooLarge")
+    if mime_type.strip().lower() not in {"audio/wav", "audio/x-wav", "audio/wave"}:
+        raise AttachmentError("attachment.unsupportedType")
+    try:
+        info = validate_pcm_wav(data)
+    except AttachmentProcessingError as exc:
+        raise AttachmentError(exc.code) from exc
+    return ValidatedAudio(
+        "audio/wav",
+        info.duration_ms,
+        info.channels,
+        info.sample_rate,
+        info.sample_width,
+        info.frames,
+        len(data),
+        hashlib.sha256(data).hexdigest(),
     )
 
 
-def _safe_filename(filename: str | None) -> str | None:
-    if filename is None:
-        return None
-    value = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+def safe_filename(filename: str | None, *, fallback: str = "attachment") -> str:
+    value = unicodedata.normalize("NFKC", filename or "")
+    value = value.replace("\\", "/").rsplit("/", 1)[-1]
     value = "".join(character for character in value if ord(character) >= 32 and ord(character) != 127)
-    return value[:255] or None
+    value = re.sub(r"[<>:\"|?*]", "_", value).strip(" .")
+    if value in {"", ".", ".."}:
+        value = fallback
+    value = value[:255].rstrip(" .")
+    while len(value.encode("utf-8")) > 240:
+        value = value[:-1]
+    return value or fallback
+
+
+def _safe_metadata(metadata: dict | None) -> dict:
+    if not metadata:
+        return {}
+    safe = {}
+    for key, value in list(metadata.items())[:32]:
+        if key not in {
+            "channels",
+            "created",
+            "sampleRate",
+            "sampleWidth",
+        }:
+            continue
+        if isinstance(value, str):
+            safe[key] = value[:500]
+        elif isinstance(value, (bool, int, float)) or value is None:
+            safe[key] = value
+    return safe
+
+
+def classify_attachment(data: bytes, browser_mime_type: str, filename: str | None) -> AttachmentInput:
+    if not data:
+        raise AttachmentError("attachment.empty")
+    if len(data) > MAX_FILE_ATTACHMENT_BYTES:
+        raise AttachmentError("attachment.tooLarge")
+    cleaned_name = safe_filename(filename)
+    image_mime = _magic_mime_type(data)
+    if image_mime is not None and len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
+        raise AttachmentError("attachment.tooLarge")
+    if image_mime is not None:
+        validate_image(data, image_mime)
+        return AttachmentInput(data, image_mime, cleaned_name, "image")
+    claimed = browser_mime_type.split(";", 1)[0].strip().lower()
+    suffix = Path(cleaned_name).suffix.lower()
+    signed_audio = signed_audio_format(data)
+    audio_format = signed_audio or claimed_audio_format(claimed, suffix)
+    if audio_format is not None:
+        return AttachmentInput(
+            data, audio_mime_type(audio_format), cleaned_name, "audio"
+        )
+    signed_document = signed_document_format(data)
+    document_format = signed_document or claimed_document_format(claimed, suffix)
+    if document_format is not None:
+        return AttachmentInput(
+            data, document_mime_type(document_format), cleaned_name, "document"
+        )
+    is_text_candidate = claimed.startswith("text/") or suffix in _TEXT_EXTENSIONS
+    if is_text_candidate:
+        try:
+            data.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise AttachmentError("attachment.invalidText") from exc
+        mime_type = claimed if claimed.startswith("text/") else "text/plain"
+        return AttachmentInput(data, mime_type, cleaned_name, "text")
+    return AttachmentInput(data, "application/octet-stream", cleaned_name, "file")
 
 
 class AttachmentStorage:
-    def __init__(self, root: Path | None = None) -> None:
-        self.root = (root or get_runtime_config().attachments_dir).absolute()
+    def __init__(self, session_storage: SessionStorage | Path | None = None) -> None:
+        self.sessions = (
+            SessionStorage(session_storage)
+            if isinstance(session_storage, Path)
+            else session_storage or SessionStorage()
+        )
 
-    def _prepare_directory(self, directory: Path) -> None:
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if directory.is_symlink() or not directory.is_dir():
-            raise AttachmentStorageError("Ungueltiges Attachment-Storage-Verzeichnis")
-        directory.chmod(0o700)
+    @staticmethod
+    def _relative_path(
+        attachment_id: UUID, filename: str, category: str
+    ) -> str:
+        directory = _CATEGORY_DIRECTORIES.get(category)
+        if directory is None:
+            raise AttachmentStorageError("Ungueltige Attachment-Kategorie")
+        return f"{directory}/{attachment_id}/{filename}"
 
-    def _path(self, storage_key: str) -> Path:
-        if not _STORAGE_KEY_PATTERN.fullmatch(storage_key):
-            raise AttachmentStorageError("Ungueltiger Attachment-Storage-Key")
-        return self.root / storage_key
+    def _path(self, session_id: UUID, storage_path: str, *, require_exists: bool) -> Path:
+        match = _STORAGE_PATH_PATTERN.fullmatch(storage_path)
+        if (
+            match is None
+            or PurePosixPath(storage_path).is_absolute()
+            or match.group(3) != safe_filename(match.group(3))
+        ):
+            raise AttachmentStorageError("Ungueltiger Attachment-Pfad")
+        try:
+            UUID(match.group(2))
+            root = self.sessions.session_path(session_id, require_exists=True)
+        except (SessionStorageError, ValueError) as exc:
+            raise AttachmentStorageError("Ungueltiger Session-Storage") from exc
+        target = root.joinpath(*PurePosixPath(storage_path).parts)
+        if require_exists:
+            try:
+                parent_metadata = target.parent.lstat()
+                metadata = target.lstat()
+            except FileNotFoundError as exc:
+                raise AttachmentStorageError("Attachment-Datei nicht gefunden") from exc
+            if (
+                stat.S_ISLNK(parent_metadata.st_mode)
+                or not stat.S_ISDIR(parent_metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+                or not stat.S_ISREG(metadata.st_mode)
+            ):
+                raise AttachmentStorageError("Ungueltige Attachment-Datei")
+        return target
 
-    def write(self, data: bytes) -> str:
-        storage_id = uuid4().hex
-        storage_key = f"{storage_id[:2]}/{storage_id}"
-        target = self._path(storage_key)
-        self._prepare_directory(self.root)
-        self._prepare_directory(target.parent)
-        temporary = target.parent / f".{storage_id}.{uuid4().hex}.tmp"
+    def write(
+        self,
+        session_id: UUID,
+        attachment_id: UUID,
+        data: bytes,
+        filename: str,
+        category: str,
+    ) -> str:
+        storage_path = self._relative_path(attachment_id, safe_filename(filename), category)
+        target = self._path(session_id, storage_path, require_exists=False)
+        try:
+            target.parent.mkdir(mode=0o700)
+            parent_metadata = target.parent.lstat()
+        except OSError as exc:
+            raise AttachmentStorageError("Attachment-Verzeichnis konnte nicht erstellt werden") from exc
+        if stat.S_ISLNK(parent_metadata.st_mode) or not stat.S_ISDIR(parent_metadata.st_mode):
+            raise AttachmentStorageError("Ungueltiges Attachment-Verzeichnis")
+        target.parent.chmod(0o700)
+        temporary = target.parent / f".{uuid4().hex}.tmp"
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(temporary, flags, 0o600)
         try:
@@ -156,6 +343,8 @@ class AttachmentStorage:
                 file.write(data)
                 file.flush()
                 os.fsync(file.fileno())
+            if target.exists() or target.is_symlink():
+                raise AttachmentStorageError("Attachment-Datei existiert bereits")
             os.replace(temporary, target)
             target.chmod(0o600)
             directory_descriptor = os.open(target.parent, os.O_RDONLY)
@@ -163,73 +352,209 @@ class AttachmentStorage:
                 os.fsync(directory_descriptor)
             finally:
                 os.close(directory_descriptor)
-        except Exception:
+        except BaseException:
             temporary.unlink(missing_ok=True)
             target.unlink(missing_ok=True)
+            try:
+                target.parent.rmdir()
+            except OSError:
+                pass
             raise
-        return storage_key
+        return storage_path
 
-    def path(self, storage_key: str) -> Path:
-        target = self._path(storage_key)
-        if self.root.is_symlink() or not self.root.is_dir():
-            raise AttachmentStorageError("Ungueltiges Attachment-Storage-Verzeichnis")
+    def path(self, session_id: UUID, storage_path: str) -> Path:
+        return self._path(session_id, storage_path, require_exists=True)
+
+    def delete(self, session_id: UUID, storage_path: str) -> None:
         try:
-            target.resolve(strict=True).relative_to(self.root.resolve(strict=True))
-        except (FileNotFoundError, ValueError) as exc:
-            raise AttachmentStorageError("Attachment-Datei nicht gefunden") from exc
-        if target.is_symlink() or not target.is_file() or not stat.S_ISREG(target.stat().st_mode):
-            raise AttachmentStorageError("Ungueltige Attachment-Datei")
-        return target
-
-    def delete(self, storage_key: str) -> None:
-        target = self._path(storage_key)
-        if not target.exists() and not target.is_symlink():
+            target = self.path(session_id, storage_path)
+        except AttachmentStorageError:
             return
-        self.path(storage_key).unlink()
+        target.unlink()
         try:
             target.parent.rmdir()
         except OSError:
             pass
 
-    def keys(self, *, older_than_seconds: float = 0) -> set[str]:
-        if not self.root.exists():
-            return set()
-        if self.root.is_symlink() or not self.root.is_dir():
-            raise AttachmentStorageError("Ungueltiges Attachment-Storage-Verzeichnis")
-        keys: set[str] = set()
-        for directory in self.root.iterdir():
-            if directory.is_symlink() or not directory.is_dir():
-                continue
-            for item in directory.iterdir():
-                key = f"{directory.name}/{item.name}"
-                old_enough = time.time() - item.stat().st_mtime >= older_than_seconds
-                if (
-                    _STORAGE_KEY_PATTERN.fullmatch(key)
-                    and item.is_file()
-                    and not item.is_symlink()
-                    and old_enough
-                ):
-                    keys.add(key)
-        return keys
+    def _derived_root(self, session_id: UUID) -> Path:
+        try:
+            root = self.sessions.session_path(session_id, require_exists=True) / "derived"
+            metadata = root.lstat()
+        except (OSError, SessionStorageError) as exc:
+            raise AttachmentStorageError("Ungueltiger Derived-Storage") from exc
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise AttachmentStorageError("Ungueltiger Derived-Storage")
+        return root
+
+    def write_derived(
+        self, session_id: UUID, attachment_id: UUID, files: dict[str, bytes]
+    ) -> dict[str, str]:
+        if not files:
+            return {}
+        if set(files) - {"content.txt", "audio.wav"}:
+            raise AttachmentStorageError("Ungueltiger Derived-Dateiname")
+        root = self._derived_root(session_id)
+        target = root / str(attachment_id)
+        temporary = root / f".{attachment_id}.{uuid4().hex}.tmp"
+        if target.exists() or target.is_symlink():
+            raise AttachmentStorageError("Derived-Verzeichnis existiert bereits")
+        try:
+            temporary.mkdir(mode=0o700)
+            for name, data in files.items():
+                path = temporary / name
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                descriptor = os.open(path, flags, 0o600)
+                with os.fdopen(descriptor, "wb") as file:
+                    file.write(data)
+                    file.flush()
+                    os.fsync(file.fileno())
+                path.chmod(0o600)
+            os.replace(temporary, target)
+            target.chmod(0o700)
+            directory_descriptor = os.open(root, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        except BaseException:
+            if temporary.exists() and not temporary.is_symlink():
+                shutil.rmtree(temporary)
+            if target.exists() and not target.is_symlink():
+                shutil.rmtree(target)
+            raise
+        return {
+            name: f"derived/{attachment_id}/{name}" for name in files
+        }
+
+    def derived_path(
+        self, session_id: UUID, attachment_id: UUID, derived_path: str
+    ) -> Path:
+        expected_prefix = f"derived/{attachment_id}/"
+        if not derived_path.startswith(expected_prefix):
+            raise AttachmentStorageError("Ungueltiger Derived-Pfad")
+        name = derived_path.removeprefix(expected_prefix)
+        if name not in {"content.txt", "audio.wav"}:
+            raise AttachmentStorageError("Ungueltiger Derived-Pfad")
+        target = self._derived_root(session_id) / str(attachment_id) / name
+        try:
+            parent_metadata = target.parent.lstat()
+            metadata = target.lstat()
+        except OSError as exc:
+            raise AttachmentStorageError("Derived-Datei nicht gefunden") from exc
+        if (
+            stat.S_ISLNK(parent_metadata.st_mode)
+            or not stat.S_ISDIR(parent_metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISREG(metadata.st_mode)
+        ):
+            raise AttachmentStorageError("Ungueltige Derived-Datei")
+        return target
+
+    def delete_derived(self, session_id: UUID, attachment_id: UUID) -> None:
+        try:
+            target = self._derived_root(session_id) / str(attachment_id)
+            metadata = target.lstat()
+        except (AttachmentStorageError, FileNotFoundError):
+            return
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise AttachmentStorageError("Ungueltiges Derived-Verzeichnis")
+        shutil.rmtree(target)
+
+    def derived_usage(self, session_id: UUID) -> int:
+        total = 0
+        root = self._derived_root(session_id)
+        for directory in root.iterdir():
+            metadata = directory.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                raise AttachmentStorageError("Ungueltiger Derived-Storage")
+            for path in directory.iterdir():
+                file_metadata = path.lstat()
+                if stat.S_ISLNK(file_metadata.st_mode) or not stat.S_ISREG(file_metadata.st_mode):
+                    raise AttachmentStorageError("Ungueltiger Derived-Storage")
+                total += file_metadata.st_size
+                if total > SESSION_ATTACHMENT_QUOTA_BYTES:
+                    return total
+        return total
 
 
 class AttachmentService:
     def __init__(self, storage: AttachmentStorage | None = None) -> None:
         self.storage = storage or AttachmentStorage()
 
-    async def create_image(
+    async def create_image(self, db: AsyncSession, message: Message, data: bytes, mime_type: str, **kwargs) -> MessageAttachment:
+        return await self.create_attachment(db, message, data, mime_type, kind="image", **kwargs)
+
+    async def create_audio(self, db: AsyncSession, message: Message, data: bytes, mime_type: str, **kwargs) -> MessageAttachment:
+        return await self.create_attachment(db, message, data, mime_type, kind="audio", **kwargs)
+
+    async def create_attachment(
         self,
         db: AsyncSession,
         message: Message,
         data: bytes,
         mime_type: str,
         *,
+        kind: str,
         filename: str | None = None,
         position: int | None = None,
+        metadata: dict | None = None,
+        category: str = "user_upload",
+        processing_status: str | None = "ready",
     ) -> MessageAttachment:
-        """Validiert und persistiert ein Bild fuer eine bereits geflushte Message."""
+        if not data:
+            raise AttachmentError("attachment.empty")
+        if len(data) > MAX_FILE_ATTACHMENT_BYTES:
+            raise AttachmentError("attachment.tooLarge")
+        attachment_id = uuid4()
+        cleaned_filename = safe_filename(filename, fallback=f"attachment-{attachment_id}")
+        width = height = duration_ms = None
+        safe_metadata = _safe_metadata(metadata)
+        derived_files: dict[str, bytes] = {}
+        if kind == "image":
+            validated_image = validate_image(data, mime_type)
+            mime_type = validated_image.mime_type
+            width, height = validated_image.width, validated_image.height
+        elif kind in {"audio", "text", "document"}:
+            try:
+                processed = process_attachment(
+                    data,
+                    kind=kind,
+                    mime_type=mime_type,
+                    filename=cleaned_filename,
+                )
+            except AttachmentProcessingError as exc:
+                raise AttachmentError(exc.code) from exc
+            if processed is None:
+                raise AttachmentError("attachment.unsupportedType")
+            mime_type = processed.mime_type
+            duration_ms = processed.duration_ms
+            derived_files = processed.derived_files
+            safe_metadata.update(processed.metadata)
+            safe_metadata["format"] = processed.format
+            safe_metadata.update(derived_metadata(derived_files))
+            if kind == "audio":
+                safe_metadata.update(
+                    channels=processed.channels,
+                    sampleRate=processed.sample_rate,
+                    sampleWidth=processed.sample_width,
+                )
+        elif kind == "file":
+            mime_type = "application/octet-stream"
+        else:
+            raise AttachmentError("attachment.unsupportedType")
+        if kind == "audio" and duration_ms is None:
+            raise AttachmentError("attachment.invalidAudio")
+        if kind == "audio":
+            safe_metadata.update(
+                channels=safe_metadata.get("channels"),
+                sampleRate=safe_metadata.get("sampleRate"),
+                sampleWidth=safe_metadata.get("sampleWidth"),
+            )
+        if category not in _CATEGORY_DIRECTORIES:
+            raise AttachmentError("attachment.invalidCategory")
+        if processing_status not in {None, "pending", "ready", "failed"}:
+            raise AttachmentError("attachment.invalidProcessingStatus")
 
-        validated = validate_image(data, mime_type)
         locked_session_id = await db.scalar(
             select(ChatSession.id)
             .join(Message, Message.session_id == ChatSession.id)
@@ -238,15 +563,21 @@ class AttachmentService:
         )
         if locked_session_id is None:
             raise AttachmentError("attachment.messageNotFound")
-
-        used_bytes = await db.scalar(
-            select(func.coalesce(func.sum(MessageAttachment.size_bytes), 0))
-            .join(Message, Message.id == MessageAttachment.message_id)
-            .where(Message.session_id == message.session_id)
-        )
-        if int(used_bytes or 0) + validated.size_bytes > SESSION_ATTACHMENT_QUOTA_BYTES:
+        try:
+            used_bytes = await asyncio.to_thread(
+                RootFileService(
+                    message.session_id,
+                    session_storage=self.storage.sessions,
+                ).session_usage
+            )
+        except (RootFileError, AttachmentStorageError) as exc:
+            raise AttachmentError("attachment.storageInvalid") from exc
+        new_derived_bytes = sum(len(value) for value in derived_files.values())
+        if (
+            int(used_bytes or 0) + len(data) + new_derived_bytes
+            > SESSION_ATTACHMENT_QUOTA_BYTES
+        ):
             raise AttachmentError("attachment.sessionQuotaExceeded")
-
         if position is None:
             maximum_position = await db.scalar(
                 select(func.max(MessageAttachment.position)).where(
@@ -257,48 +588,165 @@ class AttachmentService:
         if isinstance(position, bool) or position < 0:
             raise AttachmentError("attachment.invalidPosition")
 
-        write_task = asyncio.create_task(asyncio.to_thread(self.storage.write, data))
+        def write_files() -> tuple[str, dict[str, str]]:
+            storage_path = self.storage.write(
+                message.session_id,
+                attachment_id,
+                data,
+                cleaned_filename,
+                category,
+            )
+            try:
+                paths = self.storage.write_derived(
+                    message.session_id, attachment_id, derived_files
+                )
+            except BaseException:
+                self.storage.delete(message.session_id, storage_path)
+                raise
+            return storage_path, paths
+
+        write_task = asyncio.create_task(
+            asyncio.to_thread(write_files)
+        )
         try:
-            storage_key = await asyncio.shield(write_task)
+            storage_path, derived_paths = await asyncio.shield(write_task)
         except asyncio.CancelledError:
-            storage_key = await write_task
-            await asyncio.to_thread(self.storage.delete, storage_key)
+            storage_path, _derived_paths = await write_task
+            await asyncio.to_thread(self.storage.delete, message.session_id, storage_path)
+            await asyncio.to_thread(
+                self.storage.delete_derived, message.session_id, attachment_id
+            )
             raise
+        if derived_paths:
+            safe_metadata["derivedPath"] = next(iter(derived_paths.values()))
         attachment = MessageAttachment(
+            id=attachment_id,
             message_id=message.id,
             position=position,
-            kind="image",
-            mime_type=validated.mime_type,
-            size_bytes=validated.size_bytes,
-            sha256=validated.sha256,
-            storage_key=storage_key,
-            filename=_safe_filename(filename),
-            width=validated.width,
-            height=validated.height,
+            kind=kind,
+            category=category,
+            processing_status=processing_status,
+            mime_type=mime_type,
+            size_bytes=len(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+            storage_path=storage_path,
+            filename=cleaned_filename,
+            width=width,
+            height=height,
+            duration_ms=duration_ms,
+            metadata_json=safe_metadata,
         )
         db.add(attachment)
         try:
             await db.flush()
         except BaseException:
-            await asyncio.to_thread(self.storage.delete, storage_key)
+            await asyncio.to_thread(self.storage.delete, message.session_id, storage_path)
+            await asyncio.to_thread(
+                self.storage.delete_derived, message.session_id, attachment_id
+            )
             raise
         return attachment
 
-    async def discard(self, attachment: MessageAttachment) -> None:
-        """Entfernt die Datei nach einem spaeteren Transaktions-Rollback."""
+    async def verified_path(self, attachment: MessageAttachment, session_id: UUID) -> Path:
+        expected_directory = _CATEGORY_DIRECTORIES.get(attachment.category)
+        path_parts = PurePosixPath(attachment.storage_path).parts
+        if (
+            expected_directory is None
+            or len(path_parts) != 3
+            or path_parts[0] != expected_directory
+            or path_parts[1] != str(attachment.id)
+        ):
+            raise AttachmentError("attachment.notFound")
+        try:
+            path = self.storage.path(session_id, attachment.storage_path)
+        except AttachmentStorageError as exc:
+            raise AttachmentError("attachment.notFound") from exc
 
-        await asyncio.to_thread(self.storage.delete, attachment.storage_key)
+        def verify() -> bool:
+            digest = hashlib.sha256()
+            size = 0
+            with path.open("rb") as file:
+                while chunk := file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > attachment.size_bytes:
+                        return False
+                    digest.update(chunk)
+            return size == attachment.size_bytes and digest.hexdigest() == attachment.sha256
 
-    async def delete_files(self, storage_keys: list[str]) -> None:
-        for storage_key in storage_keys:
-            try:
-                await asyncio.to_thread(self.storage.delete, storage_key)
-            except Exception:
-                logger.exception("Attachment-Datei konnte nicht entfernt werden")
+        try:
+            valid = await asyncio.to_thread(verify)
+        except OSError as exc:
+            raise AttachmentError("attachment.notFound") from exc
+        if not valid:
+            raise AttachmentError("attachment.notFound")
+        return path
 
-    async def reconcile(self, db: AsyncSession, *, orphan_grace_seconds: float = 86_400) -> None:
-        known_keys = set((await db.scalars(select(MessageAttachment.storage_key))).all())
-        stored_keys = await asyncio.to_thread(
-            self.storage.keys, older_than_seconds=orphan_grace_seconds
-        )
-        await self.delete_files(sorted(stored_keys - known_keys))
+    async def read_audio(self, attachment: MessageAttachment, session_id: UUID) -> bytes:
+        if (
+            attachment.kind != "audio"
+            or attachment.processing_status != "ready"
+            or attachment.size_bytes > MAX_AUDIO_ATTACHMENT_BYTES
+        ):
+            raise AttachmentError("attachment.notFound")
+        path = await self.verified_path(attachment, session_id)
+        try:
+            data = await asyncio.to_thread(path.read_bytes)
+        except OSError as exc:
+            raise AttachmentError("attachment.notFound") from exc
+        derived_path = (attachment.metadata_json or {}).get("derivedPath")
+        if derived_path is not None:
+            data = await asyncio.to_thread(
+                self._verified_derived_bytes, attachment, session_id, "audio.wav"
+            )
+        try:
+            validated = validate_audio(data, "audio/wav")
+        except AttachmentError as exc:
+            raise AttachmentError("attachment.notFound") from exc
+        if attachment.duration_ms is not None and validated.duration_ms != attachment.duration_ms:
+            raise AttachmentError("attachment.notFound")
+        return data
+
+    def _verified_derived_bytes(
+        self,
+        attachment: MessageAttachment,
+        session_id: UUID,
+        expected_name: str,
+    ) -> bytes:
+        metadata = attachment.metadata_json or {}
+        derived_path = metadata.get("derivedPath")
+        expected_size = metadata.get("derivedSizeBytes")
+        expected_sha256 = metadata.get("derivedSha256")
+        if (
+            not isinstance(derived_path, str)
+            or not isinstance(expected_size, int)
+            or isinstance(expected_size, bool)
+            or expected_size < 0
+            or not isinstance(expected_sha256, str)
+            or metadata.get("derivedName") != expected_name
+        ):
+            raise AttachmentError("attachment.notFound")
+        try:
+            path = self.storage.derived_path(session_id, attachment.id, derived_path)
+            if path.name != expected_name or path.stat().st_size != expected_size:
+                raise AttachmentError("attachment.notFound")
+            data = path.read_bytes()
+        except (OSError, AttachmentStorageError) as exc:
+            raise AttachmentError("attachment.notFound") from exc
+        if len(data) != expected_size or hashlib.sha256(data).hexdigest() != expected_sha256:
+            raise AttachmentError("attachment.notFound")
+        return data
+
+    def read_derived_text(
+        self, attachment: MessageAttachment, session_id: UUID
+    ) -> str:
+        if attachment.kind not in {"text", "document"} or attachment.processing_status != "ready":
+            raise AttachmentError("attachment.notFound")
+        data = self._verified_derived_bytes(attachment, session_id, "content.txt")
+        try:
+            return data.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise AttachmentError("attachment.notFound") from exc
+
+    async def discard(self, attachment: MessageAttachment, session_id: UUID) -> None:
+        await asyncio.to_thread(self.storage.delete, session_id, attachment.storage_path)
+        await asyncio.to_thread(self.storage.delete_derived, session_id, attachment.id)

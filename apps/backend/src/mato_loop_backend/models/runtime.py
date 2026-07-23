@@ -199,6 +199,12 @@ class Message(Base):
             "generation_status IN ('completed', 'interrupted')",
             name="generation_status_valid",
         ),
+        CheckConstraint(
+            "(error_code IS NULL AND error_params IS NULL AND error_run_id IS NULL) OR "
+            "(error_code IS NOT NULL AND role = 'assistant' AND error_run_id IS NOT NULL)",
+            name="message_error_valid",
+        ),
+        UniqueConstraint("error_run_id"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -218,6 +224,11 @@ class Message(Base):
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     provider_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     public_reasoning: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    error_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    error_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
@@ -235,10 +246,22 @@ class MessageAttachment(Base):
     __tablename__ = "message_attachments"
     __table_args__ = (
         CheckConstraint("position >= 0", name="position_nonnegative"),
-        CheckConstraint("kind = 'image'", name="kind_image"),
+        CheckConstraint(
+            "kind IN ('image', 'audio', 'text', 'document', 'file')",
+            name="kind_valid",
+        ),
+        CheckConstraint(
+            "category IN ('user_upload', 'generated', 'downloaded')",
+            name="category_valid",
+        ),
+        CheckConstraint(
+            "processing_status IS NULL OR processing_status IN ('pending', 'ready', 'failed')",
+            name="processing_status_valid",
+        ),
         CheckConstraint("size_bytes > 0", name="size_bytes_positive"),
         CheckConstraint("width IS NULL OR width > 0", name="width_positive"),
         CheckConstraint("height IS NULL OR height > 0", name="height_positive"),
+        CheckConstraint("duration_ms IS NULL OR duration_ms > 0", name="duration_ms_positive"),
         UniqueConstraint("message_id", "position"),
     )
 
@@ -248,13 +271,23 @@ class MessageAttachment(Base):
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default="image")
+    category: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="user_upload", server_default="user_upload"
+    )
+    processing_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # Keep the existing column for schema evolution while storing a relative path
+    # inside the associated session tree.
+    storage_path: Mapped[str] = mapped_column("storage_key", String(500), nullable=False, unique=True)
     filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

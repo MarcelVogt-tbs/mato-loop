@@ -29,7 +29,7 @@
 
     <q-banner v-else-if="loaded && !providers.modelOptions.length" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="warning_amber" color="warning" /></template>
-      Es ist derzeit kein effektiv verfügbares Modell eingerichtet. Aktiviere zuerst einen Provider und mindestens ein Modell.
+      Es ist derzeit kein effektiv verfügbares Chatmodell eingerichtet. Aktiviere zuerst einen Provider und mindestens ein Chatmodell.
     </q-banner>
 
     <q-card flat class="app-surface default-models-card">
@@ -90,7 +90,7 @@
         <div class="default-model-setting__description">
           <div class="text-subtitle1 text-weight-bold">Titelgenerierung</div>
           <div class="text-body2 app-muted">
-            Erstellt nach der ersten Antwort einen kurzen Titel aus der ersten Nutzernachricht.
+            Erstellt parallel zum ersten Agent-Run einen kurzen Titel aus der ersten Nutzernachricht.
           </div>
         </div>
         <div>
@@ -136,6 +136,32 @@
         </div>
       </q-card-section>
 
+      <template v-for="setting in mediaSettings" :key="setting.field">
+        <q-separator />
+
+        <q-card-section class="default-model-setting">
+          <q-avatar rounded :color="setting.color" text-color="white" :icon="setting.icon" />
+          <div class="default-model-setting__description">
+            <div class="text-subtitle1 text-weight-bold">{{ setting.title }}</div>
+            <div class="text-body2 app-muted">{{ setting.description }}</div>
+          </div>
+          <div>
+            <q-select
+              v-model="form[setting.field]"
+              outlined
+              clearable
+              emit-value
+              map-options
+              options-dense
+              :label="setting.label"
+              :display-value="form[setting.field] ? undefined : 'Kein Standardmodell'"
+              :options="providers.capabilityOptions(setting.capability)"
+              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+            />
+          </div>
+        </q-card-section>
+      </template>
+
       <q-inner-loading :showing="providers.loading && !loaded" />
     </q-card>
   </section>
@@ -153,17 +179,60 @@ const providers = useProviderStore()
 const loaded = ref(false)
 const loadFailed = ref(false)
 const saving = ref(false)
+const mediaSettings = [
+  {
+    field: 'imageGenerationModelId',
+    capability: 'image_generation',
+    title: 'Bildgenerierung',
+    description: 'Erzeugt Bilder aus einer textlichen Beschreibung.',
+    label: 'Bildmodell',
+    icon: 'image',
+    color: 'teal'
+  },
+  {
+    field: 'speechGenerationModelId',
+    capability: 'speech_generation',
+    title: 'Sprachausgabe',
+    description: 'Wandelt Text in gesprochene Sprache um.',
+    label: 'Sprachmodell',
+    icon: 'record_voice_over',
+    color: 'deep-orange'
+  },
+  {
+    field: 'audioGenerationModelId',
+    capability: 'audio_generation',
+    title: 'Audio und Musik',
+    description: 'Erzeugt Klänge, Audio oder Musik aus einer Beschreibung.',
+    label: 'Audiomodell',
+    icon: 'music_note',
+    color: 'indigo'
+  },
+  {
+    field: 'audioTranscriptionModelId',
+    capability: 'audio_transcription',
+    title: 'Transkription',
+    description: 'Wandelt Sprache und andere Audioaufnahmen in Text um.',
+    label: 'Transkriptionsmodell',
+    icon: 'graphic_eq',
+    color: 'cyan-8'
+  }
+]
 const form = reactive({
   defaultModelId: null,
   compactionModelId: null,
   titleGenerationModelId: null,
-  dreamingModelId: null
+  dreamingModelId: null,
+  imageGenerationModelId: null,
+  speechGenerationModelId: null,
+  audioGenerationModelId: null,
+  audioTranscriptionModelId: null
 })
 const changed = computed(() => (
   form.defaultModelId !== providers.defaultModelId
   || form.compactionModelId !== providers.compactionModelId
   || form.titleGenerationModelId !== providers.titleGenerationModelId
   || form.dreamingModelId !== providers.dreamingModelId
+  || mediaSettings.some((setting) => form[setting.field] !== providers[setting.field])
 ))
 
 function assignForm() {
@@ -171,6 +240,7 @@ function assignForm() {
   form.compactionModelId = providers.compactionModelId
   form.titleGenerationModelId = providers.titleGenerationModelId
   form.dreamingModelId = providers.dreamingModelId
+  for (const setting of mediaSettings) form[setting.field] = providers[setting.field]
 }
 
 async function load() {
@@ -188,12 +258,7 @@ async function save() {
   if (!loaded.value || !changed.value) return
   saving.value = true
   try {
-    await providers.setDefaultModels({
-      defaultModelId: form.defaultModelId,
-      compactionModelId: form.compactionModelId,
-      titleGenerationModelId: form.titleGenerationModelId,
-      dreamingModelId: form.dreamingModelId
-    })
+    await providers.setDefaultModels({ ...form })
     assignForm()
     $q.notify({ type: 'positive', message: 'Standardmodelle gespeichert' })
   } finally {

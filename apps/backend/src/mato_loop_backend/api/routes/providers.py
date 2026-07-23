@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.models import ChatSession, Credential
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.codex_oauth import (
@@ -28,6 +29,7 @@ from mato_loop_backend.providers.codex_oauth import (
     oauth_manager,
     poll_device_code,
 )
+from mato_loop_backend.providers.media import media_model_available
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.security import require_user, store_credential
 from mato_loop_backend.settings import (
@@ -43,6 +45,7 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     MemoryPolicy,
     ModelAvailability,
+    ModelCapability,
     ModelConfig,
     ModelOrigin,
     TrustLevel,
@@ -66,6 +69,9 @@ class ApiRequest(BaseModel):
 
 
 class ModelRuntimeRequest(ApiRequest):
+    capabilities: set[ModelCapability] = Field(
+        default_factory=lambda: {ModelCapability.CHAT}
+    )
     context_window_tokens: int = Field(default=128_000, ge=1, le=10_000_000)
     max_output_tokens: int = Field(default=16_384, ge=1, le=1_000_000)
     characters_per_token: float = Field(default=4.0, gt=0, le=100)
@@ -96,6 +102,26 @@ class OpenAIProviderRequest(ApiRequest):
     remove_api_key: bool = False
     trust_level: TrustLevel = TrustLevel.PUBLIC
     pseudonymization_enabled: bool = True
+    memory_policy: MemoryPolicy = MemoryPolicy.INHERIT
+
+    @model_validator(mode="after")
+    def validate_base_url(self) -> Self:
+        if self.base_url.username or self.base_url.password:
+            raise ValueError("base_url must not contain credentials")
+        if self.base_url.query or self.base_url.fragment:
+            raise ValueError("base_url must not contain query or fragment")
+        if self.remove_api_key and self.api_key and self.api_key.strip():
+            raise ValueError("api_key and remove_api_key are mutually exclusive")
+        return self
+
+
+class LemonadeProviderRequest(ApiRequest):
+    name: str = Field(min_length=1, max_length=160)
+    base_url: HttpUrl
+    api_key: str | None = None
+    remove_api_key: bool = False
+    trust_level: TrustLevel = TrustLevel.PRIVATE
+    pseudonymization_enabled: bool = False
     memory_policy: MemoryPolicy = MemoryPolicy.INHERIT
 
     @model_validator(mode="after")
@@ -147,6 +173,10 @@ class DefaultModelsRequest(ApiRequest):
     compaction_model_id: UUID | None
     title_generation_model_id: UUID | None
     dreaming_model_id: UUID | None = None
+    image_generation_model_id: UUID | None = None
+    speech_generation_model_id: UUID | None = None
+    audio_generation_model_id: UUID | None = None
+    audio_transcription_model_id: UUID | None = None
 
 
 def _provider(settings: AiSettings, provider_id: UUID) -> LlmProviderConfig:
@@ -179,7 +209,11 @@ def _ensure_unique_model_id(
         raise ApiError(409, "provider.modelIdConflict", field="modelId")
 
 
-def _available_model(settings: AiSettings, model_id: UUID | None) -> ModelConfig | None:
+def _available_model(
+    settings: AiSettings,
+    model_id: UUID | None,
+    capability: ModelCapability | None = None,
+) -> ModelConfig | None:
     model = next((item for item in settings.models if item.id == model_id), None)
     provider = (
         next((item for item in settings.providers if item.id == model.provider_id), None)
@@ -193,20 +227,33 @@ def _available_model(settings: AiSettings, model_id: UUID | None) -> ModelConfig
         or not provider.enabled
         or (provider.adapter_type == "openai-codex" and provider.credential_id is None)
         or model.availability == ModelAvailability.MISSING
+        or (capability is not None and capability not in model.capabilities)
     ):
         return None
     return model
 
 
 def _clear_invalid_defaults(settings: AiSettings) -> None:
-    for field in (
-        "default_model_id",
-        "compaction_model_id",
-        "title_generation_model_id",
-        "dreaming_model_id",
-    ):
+    fields = {
+        "default_model_id": ModelCapability.CHAT,
+        "compaction_model_id": ModelCapability.CHAT,
+        "title_generation_model_id": ModelCapability.CHAT,
+        "dreaming_model_id": ModelCapability.CHAT,
+        "image_generation_model_id": ModelCapability.IMAGE_GENERATION,
+        "speech_generation_model_id": ModelCapability.SPEECH_GENERATION,
+        "audio_generation_model_id": ModelCapability.AUDIO_GENERATION,
+        "audio_transcription_model_id": ModelCapability.AUDIO_TRANSCRIPTION,
+    }
+    for field, capability in fields.items():
         model_id = getattr(settings, field)
-        if model_id is not None and _available_model(settings, model_id) is None:
+        media_capability = capability != ModelCapability.CHAT
+        if model_id is not None and (
+            _available_model(settings, model_id, capability) is None
+            or (
+                media_capability
+                and not media_model_available(settings, capability, model_id)
+            )
+        ):
             setattr(settings, field, None)
 
 
@@ -258,6 +305,26 @@ def _settings_payload(
         "dreamingModelId": (
             str(settings.dreaming_model_id) if settings.dreaming_model_id else None
         ),
+        "imageGenerationModelId": (
+            str(settings.image_generation_model_id)
+            if settings.image_generation_model_id
+            else None
+        ),
+        "speechGenerationModelId": (
+            str(settings.speech_generation_model_id)
+            if settings.speech_generation_model_id
+            else None
+        ),
+        "audioGenerationModelId": (
+            str(settings.audio_generation_model_id)
+            if settings.audio_generation_model_id
+            else None
+        ),
+        "audioTranscriptionModelId": (
+            str(settings.audio_transcription_model_id)
+            if settings.audio_transcription_model_id
+            else None
+        ),
         "providers": [
             {
                 "id": str(provider.id),
@@ -288,6 +355,7 @@ def _settings_payload(
                 "availability": model.availability.value,
                 "lastSeenAt": model.last_seen_at.isoformat() if model.last_seen_at else None,
                 "discoveryMetadata": model.discovery_metadata,
+                "capabilities": sorted(item.value for item in model.capabilities),
                 "contextWindowTokens": model.context_window_tokens,
                 "maxOutputTokens": model.max_output_tokens,
                 "charactersPerToken": model.characters_per_token,
@@ -368,6 +436,51 @@ async def _save_openai_provider(
     return await _settings_response(db, settings)
 
 
+async def _save_lemonade_provider(
+    db: AsyncSession,
+    settings: AiSettings,
+    payload: LemonadeProviderRequest,
+    provider: LlmProviderConfig | None = None,
+) -> dict[str, Any]:
+    credential_id = provider.credential_id if provider else None
+    previous_config = dict(provider.config) if provider else None
+    api_key = payload.api_key.strip() if payload.api_key else ""
+    if payload.remove_api_key and credential_id:
+        existing = await db.get(Credential, credential_id)
+        if existing is not None:
+            await db.delete(existing)
+        credential_id = None
+    elif api_key:
+        existing = await db.get(Credential, credential_id) if credential_id else None
+        credential = await store_credential(
+            db,
+            kind="lemonade-api-key",
+            label=payload.name,
+            payload={"api_key": api_key},
+            credential=existing,
+        )
+        credential_id = credential.id
+    if provider is None:
+        provider = LlmProviderConfig(name=payload.name, adapter_type="lemonade")
+        settings.providers.append(provider)
+    provider.name = payload.name
+    provider.trust_level = payload.trust_level
+    provider.pseudonymization_enabled = payload.pseudonymization_enabled
+    provider.memory_policy = payload.memory_policy
+    provider.credential_id = credential_id
+    provider.config = {"base_url": str(payload.base_url).rstrip("/")}
+    if previous_config is not None and (
+        previous_config != provider.config or bool(api_key) or payload.remove_api_key
+    ):
+        provider.models_last_synced_at = None
+        for model in settings.models:
+            if model.provider_id == provider.id and model.origin == ModelOrigin.DISCOVERED:
+                model.availability = ModelAvailability.MISSING
+        _clear_invalid_defaults(settings)
+    await SettingsStore.save(db, settings)
+    return await _settings_response(db, settings)
+
+
 @router.get("")
 async def list_providers(
     db: Annotated[AsyncSession, Depends(get_db_session)],
@@ -388,17 +501,41 @@ async def save_openai_provider(
     return result
 
 
+@router.post("/lemonade", status_code=status.HTTP_201_CREATED)
+async def save_lemonade_provider(
+    payload: LemonadeProviderRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    result = await _save_lemonade_provider(db, settings, payload)
+    result["providerId"] = str(settings.providers[-1].id)
+    await db.commit()
+    return result
+
+
 @router.put("/configuration/{provider_id}")
 async def update_openai_provider(
     provider_id: UUID,
-    payload: OpenAIProviderRequest,
+    payload: OpenAIProviderRequest | LemonadeProviderRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     settings = await SettingsStore.load(db, AiSettings, for_update=True)
     provider = _provider(settings, provider_id)
-    if provider.adapter_type != "openai-compatible":
+    if provider.adapter_type == "openai-compatible":
+        if not isinstance(payload, OpenAIProviderRequest):
+            payload = OpenAIProviderRequest.model_validate(payload.model_dump(exclude_unset=True))
+        result = await _save_openai_provider(db, settings, payload, provider)
+    elif provider.adapter_type == "lemonade":
+        if not isinstance(payload, LemonadeProviderRequest):
+            try:
+                payload = LemonadeProviderRequest.model_validate(
+                    payload.model_dump(exclude_unset=True)
+                )
+            except ValidationError as exc:
+                raise ApiError(400, "provider.configurationInvalid") from exc
+        result = await _save_lemonade_provider(db, settings, payload, provider)
+    else:
         raise ApiError(404, "provider.notFound")
-    result = await _save_openai_provider(db, settings, payload, provider)
     await db.commit()
     return result
 
@@ -497,7 +634,10 @@ async def sync_provider_models(
         model = existing_by_id.get(external_id)
         if model is None:
             name = discovered_model.metadata.get("name")
-            discovered_context = discovered_model.metadata.get("max_model_len")
+            discovered_context = discovered_model.metadata.get(
+                "max_context_window",
+                discovered_model.metadata.get("max_model_len"),
+            )
             context_window = (
                 discovered_context
                 if isinstance(discovered_context, int)
@@ -506,8 +646,10 @@ async def sync_provider_models(
                 else 128_000
             )
             max_output = min(16_384, max(1, context_window // 4))
+            supports_tools = discovered_model.metadata.get("supports_tools")
             supports_parallel = discovered_model.metadata.get("supports_parallel_tool_calls")
             supports_image = discovered_model.metadata.get("supports_image_input")
+            is_lemonade = provider.adapter_type == "lemonade"
             settings.models.append(
                 ModelConfig(
                     provider_id=provider.id,
@@ -517,11 +659,21 @@ async def sync_provider_models(
                     origin=ModelOrigin.DISCOVERED,
                     last_seen_at=synced_at,
                     discovery_metadata=discovered_model.metadata,
+                    capabilities=discovered_model.capabilities,
                     context_window_tokens=context_window,
                     max_output_tokens=max_output,
                     supports_parallel_tool_calls=(
-                        supports_parallel if isinstance(supports_parallel, bool) else True
+                        supports_parallel
+                        if isinstance(supports_parallel, bool)
+                        else not is_lemonade
                     ),
+                    supports_tools=(
+                        supports_tools
+                        if isinstance(supports_tools, bool)
+                        else not is_lemonade
+                    ),
+                    supports_streaming=ModelCapability.CHAT
+                    in discovered_model.capabilities,
                     supports_image_input=(
                         supports_image if isinstance(supports_image, bool) else False
                     ),
@@ -531,6 +683,39 @@ async def sync_provider_models(
             model.availability = ModelAvailability.AVAILABLE
             model.last_seen_at = synced_at
             model.discovery_metadata = discovered_model.metadata
+            if provider.adapter_type == "lemonade":
+                model.capabilities = discovered_model.capabilities
+                discovered_context = discovered_model.metadata.get("max_context_window")
+                if (
+                    isinstance(discovered_context, int)
+                    and not isinstance(discovered_context, bool)
+                    and discovered_context > 1
+                ):
+                    model.context_window_tokens = discovered_context
+                    model.max_output_tokens = min(
+                        model.max_output_tokens,
+                        max(1, discovered_context // 4),
+                        discovered_context - 1,
+                    )
+                supports_parallel = discovered_model.metadata.get(
+                    "supports_parallel_tool_calls"
+                )
+                supports_tools = discovered_model.metadata.get("supports_tools")
+                supports_image = discovered_model.metadata.get("supports_image_input")
+                model.supports_tools = (
+                    supports_tools if isinstance(supports_tools, bool) else False
+                )
+                model.supports_parallel_tool_calls = (
+                    supports_parallel
+                    if model.supports_tools and isinstance(supports_parallel, bool)
+                    else False
+                )
+                model.supports_image_input = (
+                    supports_image if isinstance(supports_image, bool) else False
+                )
+                model.supports_streaming = (
+                    ModelCapability.CHAT in discovered_model.capabilities
+                )
     for model in settings.models:
         if (
             model.provider_id == provider.id
@@ -585,7 +770,7 @@ async def update_model(
         exclude_id=model.id,
     )
     candidate = model.model_dump()
-    candidate.update(payload.model_dump(exclude={"enabled"}))
+    candidate.update(payload.model_dump(exclude={"enabled"}, exclude_unset=True))
     if payload.enabled is not None:
         if payload.enabled and model.availability == ModelAvailability.MISSING:
             raise ApiError(409, "provider.modelUnavailable")
@@ -646,6 +831,8 @@ async def test_model(
     settings = await SettingsStore.load(db, AiSettings)
     model = _model(settings, model_id)
     provider = _provider(settings, model.provider_id)
+    if ModelCapability.CHAT not in model.capabilities:
+        raise ApiError(409, "provider.modelCapabilityUnavailable")
     if (
         not provider.enabled
         or model.availability == ModelAvailability.MISSING
@@ -676,8 +863,12 @@ async def set_default_model(
 ) -> dict:
     settings = await SettingsStore.load(db, AiSettings, for_update=True)
     model_id = payload.model_id if payload else None
-    if model_id is not None and _available_model(settings, model_id) is None:
-        raise ApiError(409, "provider.modelUnavailable")
+    if model_id is not None:
+        model = _available_model(settings, model_id)
+        if model is None:
+            raise ApiError(409, "provider.modelUnavailable")
+        if ModelCapability.CHAT not in model.capabilities:
+            raise ApiError(409, "provider.modelCapabilityUnavailable")
     settings.default_model_id = model_id
     await SettingsStore.save(db, settings)
     await db.commit()
@@ -691,21 +882,55 @@ async def set_default_models(
 ) -> dict:
     settings = await SettingsStore.load(db, AiSettings, for_update=True)
     fields = {
-        "default_model_id": "defaultModelId",
-        "compaction_model_id": "compactionModelId",
-        "title_generation_model_id": "titleGenerationModelId",
-        "dreaming_model_id": "dreamingModelId",
+        "default_model_id": ("defaultModelId", ModelCapability.CHAT),
+        "compaction_model_id": ("compactionModelId", ModelCapability.CHAT),
+        "title_generation_model_id": ("titleGenerationModelId", ModelCapability.CHAT),
+        "dreaming_model_id": ("dreamingModelId", ModelCapability.CHAT),
+        "image_generation_model_id": (
+            "imageGenerationModelId",
+            ModelCapability.IMAGE_GENERATION,
+        ),
+        "speech_generation_model_id": (
+            "speechGenerationModelId",
+            ModelCapability.SPEECH_GENERATION,
+        ),
+        "audio_generation_model_id": (
+            "audioGenerationModelId",
+            ModelCapability.AUDIO_GENERATION,
+        ),
+        "audio_transcription_model_id": (
+            "audioTranscriptionModelId",
+            ModelCapability.AUDIO_TRANSCRIPTION,
+        ),
     }
-    for field, api_field in fields.items():
+    for field, (api_field, capability) in fields.items():
         model_id = getattr(payload, field)
         if model_id is None:
             continue
         model = _available_model(settings, model_id)
         if model is None:
             raise ApiError(409, "provider.modelUnavailable", field=api_field)
+        if capability not in model.capabilities:
+            raise ApiError(
+                409, "provider.modelCapabilityUnavailable", field=api_field
+            )
+        if capability != ModelCapability.CHAT and not media_model_available(
+            settings, capability, model_id
+        ):
+            raise ApiError(
+                409, "provider.modelCapabilityUnavailable", field=api_field
+            )
         if field == "dreaming_model_id" and not model.supports_tools:
             raise ApiError(409, "memory.dreamingModelToolsUnavailable", field=api_field)
+    additive_fields = {
+        "image_generation_model_id",
+        "speech_generation_model_id",
+        "audio_generation_model_id",
+        "audio_transcription_model_id",
+    }
     for field in fields:
+        if field in additive_fields and field not in payload.model_fields_set:
+            continue
         setattr(settings, field, getattr(payload, field))
     await SettingsStore.save(db, settings)
     await db.commit()
@@ -761,7 +986,10 @@ async def codex_login_status(
         raise ApiError(404, "oauth.loginNotFound")
     if oauth_manager.expired(attempt):
         oauth_manager.finish(login_id)
-        return {"status": "failed", "error": {"code": "oauth.loginExpired"}}
+        return {
+            "status": "failed",
+            "error": describe_error("oauth.loginExpired").payload(),
+        }
     if not should_poll:
         return {"status": "pending"}
     try:
@@ -773,11 +1001,14 @@ async def codex_login_status(
     except CodexOAuthError as exc:
         logger.warning("Codex device-code login failed: %s", exc.code)
         oauth_manager.finish(login_id)
-        return {"status": "failed", "error": {"code": exc.code}}
+        return {"status": "failed", "error": describe_error(exc.code).payload()}
     except Exception:
         logger.exception("Codex device-code login failed unexpectedly")
         oauth_manager.finish(login_id)
-        return {"status": "failed", "error": {"code": "oauth.exchangeFailed"}}
+        return {
+            "status": "failed",
+            "error": describe_error("oauth.exchangeFailed").payload(),
+        }
     try:
         credential = await db.scalar(select(Credential).where(Credential.kind == "codex-oauth"))
         credential = await store_credential(
@@ -801,7 +1032,10 @@ async def codex_login_status(
     except Exception:
         logger.exception("Codex credential persistence failed")
         oauth_manager.finish(login_id)
-        return {"status": "failed", "error": {"code": "oauth.exchangeFailed"}}
+        return {
+            "status": "failed",
+            "error": describe_error("oauth.exchangeFailed").payload(),
+        }
     oauth_manager.finish(login_id)
     return {
         "status": "authenticated",

@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.memory.dreaming import (
     DreamingService,
     dreaming_availability,
@@ -123,7 +124,7 @@ def dream_run_payload(item: MemoryDreamRun) -> dict[str, Any]:
         "sourceToMessageId": str(item.source_to_message_id),
         "sourceMessageCount": item.source_message_count,
         "attempts": item.attempts,
-        "error": {"code": item.error} if item.error else None,
+        "error": describe_error(item.error).payload() if item.error else None,
         "candidates": item.candidate_count,
         "createdMemories": item.created_memory_count,
         "updatedMemories": item.updated_memory_count,

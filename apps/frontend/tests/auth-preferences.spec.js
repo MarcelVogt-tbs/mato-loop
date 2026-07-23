@@ -12,6 +12,7 @@ const { api } = vi.hoisted(() => ({
 vi.mock('src/boot/axios', () => ({ api }))
 
 import { useAuthStore } from '../src/stores/auth'
+import { useChatStore } from '../src/stores/chat'
 
 describe('auth preferences', () => {
   beforeEach(() => {
@@ -39,5 +40,20 @@ describe('auth preferences', () => {
     await expect(auth.setThinkingExpanded(true)).rejects.toThrow('offline')
 
     expect(auth.preferences.thinkingExpanded).toBe(false)
+  })
+
+  it('clears all in-memory attachment drafts on logout', async () => {
+    api.post.mockResolvedValue({ data: {} })
+    const auth = useAuthStore()
+    const chat = useChatStore()
+    auth.authenticated = true
+    auth.username = 'viktor'
+    chat.attachmentDrafts.newSession.push({ id: 'audio', file: { size: 1 } })
+    chat.setAudioDictation({ file: { size: 1 }, status: 'failed' })
+
+    await auth.logout()
+
+    expect(chat.attachmentDrafts).toEqual({ newSession: [], sessionMessages: {} })
+    expect(chat.audioDictations).toEqual({ newSession: null, sessionMessages: {} })
   })
 })

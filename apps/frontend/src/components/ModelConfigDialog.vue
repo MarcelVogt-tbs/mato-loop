@@ -39,7 +39,23 @@
             aria-label="Modell aktiv"
             :disable="model?.availability === 'missing'"
           />
+          <q-select
+            v-model="form.capabilities"
+            class="provider-form-section"
+            outlined
+            multiple
+            use-chips
+            emit-value
+            map-options
+            label="Modellfähigkeiten"
+            :options="MODEL_CAPABILITY_OPTIONS"
+            :readonly="isDiscovered"
+            :hint="capabilityHint"
+            lazy-rules
+            :rules="[capabilityRule]"
+          />
           <ModelRuntimeFields
+            v-if="supportsChat"
             :model-value="form"
             :reasoning-summary-available="reasoningSummaryAvailable"
             :reasoning-summary-forced="provider?.adapterType === 'openai-codex'"
@@ -47,6 +63,9 @@
             :provider-trust-level="provider?.trustLevel"
             :provider-pseudonymization-enabled="provider?.pseudonymizationEnabled"
           />
+          <q-banner v-else rounded class="provider-form-section app-surface-tonal">
+            Die LLM-Laufzeitfelder gelten nur für Chatmodelle. Die ausgewählten Medienfähigkeiten bleiben davon unabhängig.
+          </q-banner>
         </q-form>
       </q-card-section>
 
@@ -72,6 +91,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ModelRuntimeFields from 'components/ModelRuntimeFields.vue'
 import { modelRuntimeForm, modelRuntimePayload } from 'src/utils/model-runtime'
+import { MODEL_CAPABILITY_OPTIONS, modelSupportsCapability } from 'src/utils/provider-models'
 import { resolveWebfetchPolicy } from 'src/utils/webfetch'
 import { useProviderStore } from 'stores/providers'
 import { useToolSettingsStore } from 'stores/tool-settings'
@@ -91,6 +111,15 @@ const formRef = ref(null)
 const saving = ref(false)
 const form = reactive(defaultForm())
 const isDiscovered = computed(() => props.model?.origin === 'discovered')
+const capabilitiesAreAuthoritative = computed(() => (
+  isDiscovered.value && props.provider?.adapterType === 'lemonade'
+))
+const supportsChat = computed(() => modelSupportsCapability({ capabilities: form.capabilities }, 'chat'))
+const capabilityHint = computed(() => {
+  if (capabilitiesAreAuthoritative.value) return 'Lemonade gibt diese Fähigkeiten bei der Modellerkennung verbindlich vor.'
+  if (isDiscovered.value) return 'Die Fähigkeiten wurden bei der Modellerkennung ermittelt.'
+  return 'Bestimmt, für welche Aufgaben das Modell auswählbar ist.'
+})
 const title = computed(() => props.model ? `${props.model.name || props.model.modelId} bearbeiten` : 'Modell hinzufügen')
 const reasoningSummaryAvailable = computed(() => props.provider?.adapterType === 'openai-codex'
   || ['responses'].includes(props.provider?.config?.apiType || props.provider?.config?.api_type))
@@ -122,15 +151,21 @@ function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
 }
 
+function capabilityRule(value) {
+  return Array.isArray(value) && value.length > 0 || 'Wähle mindestens eine Modellfähigkeit aus.'
+}
+
 async function save() {
   if (!await formRef.value?.validate() || !props.provider) return
   saving.value = true
   try {
+    const runtimePayload = modelRuntimePayload(form)
+    if (capabilitiesAreAuthoritative.value) delete runtimePayload.capabilities
     const payload = {
       model_id: form.modelId.trim(),
       name: form.name.trim() || null,
       enabled: form.enabled,
-      ...modelRuntimePayload(form)
+      ...runtimePayload
     }
     if (props.model) await providers.updateModel(props.model.id, payload)
     else await providers.createModel(props.provider.id, payload)

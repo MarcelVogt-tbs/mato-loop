@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
+    PermissionRequest,
+    media_permission,
     path_permission,
     session_permission,
     session_search_permission,
@@ -14,7 +16,8 @@ from mato_loop_backend.agent.permissions import (
 )
 from mato_loop_backend.integrations import canonicalize_url
 from mato_loop_backend.models import ChatSession, PermissionGrant
-from mato_loop_backend.workspace import WorkspaceService
+from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.workspace import RootFileService
 
 
 def _session(**values) -> ChatSession:
@@ -37,72 +40,132 @@ def _db_with_grants(*grants: PermissionGrant) -> AsyncMock:
     return db
 
 
-def _read_path(path: str):
+def _root_files(tmp_path, session: ChatSession) -> RootFileService:
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id)
+    if session.working_directory:
+        (tmp_path / session.working_directory).mkdir(parents=True, exist_ok=True)
+    return RootFileService(
+        session.id,
+        session_storage=storage,
+        workspace_home=tmp_path,
+        working_directory=session.working_directory,
+    )
+
+
+def _path_request(
+    root_files: RootFileService,
+    path: str,
+    *,
+    root: str = "session",
+    capability: str = "filesystem.read",
+):
     return path_permission(
-        capability="filesystem.read",
+        root_files=root_files,
+        root=root,
+        capability=capability,
         relative_path=path,
         action_kind="read_file",
         action_label="Datei lesen",
     )
 
 
-@pytest.mark.parametrize(
-    ("resource_scope", "expected"),
-    [
-        ("project", PermissionDecision.ALLOW),
-        ("project/docs/readme.md", PermissionDecision.ALLOW),
-        ("project-other/readme.md", PermissionDecision.ASK),
-    ],
-)
-async def test_path_grant_matches_exact_scope_and_subtree_only(
-    tmp_path, resource_scope: str, expected: PermissionDecision
-) -> None:
-    session = _session()
-    workspace = WorkspaceService(tmp_path)
+def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -> None:
+    session = _session(working_directory="project")
+    root_files = _root_files(tmp_path, session)
+    granted = _path_request(root_files, "docs", root="workspace")
     grant = PermissionGrant(
         session_id=session.id,
         capability="filesystem.read",
-        resource_type="path",
-        resource_scope="project",
+        resource_type=granted.resource_type,
+        resource_scope=granted.resource_scope,
     )
-    db = _db_with_grants(grant)
 
-    assert await PermissionPolicy.evaluate(
-        db, session, _read_path(resource_scope), workspace
-    ) == expected
+    assert PermissionPolicy.grant_matches(
+        grant, _path_request(root_files, "docs/readme.md", root="workspace"), root_files
+    )
+    assert not PermissionPolicy.grant_matches(
+        grant, _path_request(root_files, "docs-other/readme.md", root="workspace"), root_files
+    )
+    assert not PermissionPolicy.grant_matches(
+        grant, _path_request(root_files, "docs/readme.md", root="session"), root_files
+    )
 
 
 @pytest.mark.parametrize(
-    ("working_directory", "resource_scope", "expected"),
+    ("root", "access", "capability", "expected"),
     [
-        ("project", "project/notes.txt", PermissionDecision.ALLOW),
-        ("project", "project/docs/readme.md", PermissionDecision.ALLOW),
-        ("project", "other/notes.txt", PermissionDecision.ASK),
-        ("project", "project-other/notes.txt", PermissionDecision.ASK),
-        (None, "notes.txt", PermissionDecision.ASK),
+        ("session", "read-only", "filesystem.read", PermissionDecision.ALLOW),
+        ("workspace", "read-only", "filesystem.read", PermissionDecision.ALLOW),
+        ("session", "read-only", "filesystem.write", PermissionDecision.DENY),
+        ("workspace", "read-only", "filesystem.delete", PermissionDecision.DENY),
+        ("session", "read-write", "filesystem.write", PermissionDecision.ALLOW),
+        ("workspace", "read-write", "filesystem.delete", PermissionDecision.ALLOW),
     ],
 )
-async def test_read_access_is_automatic_only_inside_workdir(
-    tmp_path, working_directory: str | None, resource_scope: str, expected: PermissionDecision
+async def test_file_access_is_decided_only_for_current_host_bound_roots(
+    tmp_path, root: str, access: str, capability: str, expected: PermissionDecision
 ) -> None:
-    workspace = WorkspaceService(tmp_path)
-    (tmp_path / "project").mkdir()
-    session = _session(working_directory=working_directory)
+    session = _session(working_directory="project", workspace_access=access)
+    root_files = _root_files(tmp_path, session)
     db = _db_with_grants()
 
     assert await PermissionPolicy.evaluate(
-        db, session, _read_path(resource_scope), workspace
+        db,
+        session,
+        _path_request(root_files, "files/notes.txt", root=root, capability=capability),
+        root_files,
     ) == expected
+    db.scalars.assert_not_awaited()
 
 
-async def test_trailing_parent_segment_is_not_treated_as_inside_workdir(tmp_path) -> None:
-    workspace = WorkspaceService(tmp_path)
-    (tmp_path / "project").mkdir()
+async def test_stale_or_missing_workspace_cannot_be_approved(tmp_path) -> None:
     session = _session(working_directory="project")
+    selected = _root_files(tmp_path, session)
+    request = _path_request(selected, "notes.txt", root="workspace")
+    session.working_directory = None
+    current = RootFileService(
+        session.id,
+        session_storage=selected.session_storage,
+        workspace_home=tmp_path,
+        working_directory=None,
+    )
 
     assert await PermissionPolicy.evaluate(
-        _db_with_grants(), session, _read_path("project/.."), workspace
-    ) == PermissionDecision.ASK
+        _db_with_grants(), session, request, current
+    ) == PermissionDecision.DENY
+
+
+async def test_root_scope_from_another_session_is_denied(tmp_path) -> None:
+    session = _session()
+    current = _root_files(tmp_path, session)
+    other = _session()
+    other_files = _root_files(tmp_path, other)
+
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(),
+        session,
+        _path_request(other_files, "files/notes.txt"),
+        current,
+    ) == PermissionDecision.DENY
+
+
+async def test_legacy_global_path_permission_is_hard_denied(tmp_path) -> None:
+    session = _session(workspace_access="read-write")
+    root_files = _root_files(tmp_path, session)
+    request = PermissionRequest(
+        capability="filesystem.read",
+        resource_type="path",
+        resource_scope="notes.txt",
+        action_kind="read_file",
+        risk_level="medium",
+        title="Datei lesen?",
+        summary="Legacy-Pfad",
+    )
+
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(), session, request, root_files
+    ) == PermissionDecision.DENY
 
 
 async def test_current_session_read_is_allowed_without_querying_grants(tmp_path) -> None:
@@ -113,7 +176,7 @@ async def test_current_session_read_is_allowed_without_querying_grants(tmp_path)
         db,
         session,
         session_permission(session.id),
-        WorkspaceService(tmp_path),
+        _root_files(tmp_path, session),
     )
 
     assert decision == PermissionDecision.ALLOW
@@ -128,7 +191,7 @@ async def test_other_session_read_requires_approval_without_matching_grant(tmp_p
         db,
         session,
         session_permission(uuid4()),
-        WorkspaceService(tmp_path),
+        _root_files(tmp_path, session),
     )
 
     assert decision == PermissionDecision.ASK
@@ -145,13 +208,34 @@ async def test_session_grant_only_allows_its_exact_target(tmp_path) -> None:
         resource_scope=str(granted_target),
     )
     db = _db_with_grants(grant)
-    workspace = WorkspaceService(tmp_path)
+    root_files = _root_files(tmp_path, session)
 
     assert await PermissionPolicy.evaluate(
-        db, session, session_permission(granted_target), workspace
+        db, session, session_permission(granted_target), root_files
     ) == PermissionDecision.ALLOW
     assert await PermissionPolicy.evaluate(
-        db, session, session_permission(uuid4()), workspace
+        db, session, session_permission(uuid4()), root_files
+    ) == PermissionDecision.ASK
+
+
+async def test_media_session_grant_matches_capability_and_current_session(tmp_path) -> None:
+    session = _session()
+    request = media_permission(session.id, "media.generate.audio", "generate_audio")
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=request.capability,
+        resource_type="session",
+        resource_scope=str(session.id),
+    )
+
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant), session, request, _root_files(tmp_path, session)
+    ) == PermissionDecision.ALLOW
+    other_capability = media_permission(
+        session.id, "media.generate.speech", "generate_speech"
+    )
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant), session, other_capability, _root_files(tmp_path, session)
     ) == PermissionDecision.ASK
 
 
@@ -170,16 +254,16 @@ async def test_session_search_and_session_read_grants_remain_separate(tmp_path) 
         resource_type="session_collection",
         resource_scope="all",
     )
-    workspace = WorkspaceService(tmp_path)
+    root_files = _root_files(tmp_path, session)
 
     assert await PermissionPolicy.evaluate(
-        _db_with_grants(read_grant), session, session_search_permission(), workspace
+        _db_with_grants(read_grant), session, session_search_permission(), root_files
     ) == PermissionDecision.ASK
     assert await PermissionPolicy.evaluate(
-        _db_with_grants(search_grant), session, session_permission(target_id), workspace
+        _db_with_grants(search_grant), session, session_permission(target_id), root_files
     ) == PermissionDecision.ASK
     assert await PermissionPolicy.evaluate(
-        _db_with_grants(search_grant), session, session_search_permission(), workspace
+        _db_with_grants(search_grant), session, session_search_permission(), root_files
     ) == PermissionDecision.ALLOW
 
 
@@ -208,14 +292,14 @@ async def test_webfetch_grant_matches_only_the_exact_url_hash(tmp_path) -> None:
         resource_type=granted.resource_type,
         resource_scope=granted.resource_scope,
     )
-    workspace = WorkspaceService(tmp_path)
+    root_files = _root_files(tmp_path, session)
 
     assert await PermissionPolicy.evaluate(
-        _db_with_grants(grant), session, granted, workspace
+        _db_with_grants(grant), session, granted, root_files
     ) == PermissionDecision.ALLOW
     assert await PermissionPolicy.evaluate(
         _db_with_grants(grant),
         session,
         webfetch_permission("https://example.com/page?lang=en"),
-        workspace,
+        root_files,
     ) == PermissionDecision.ASK

@@ -1,4 +1,5 @@
 import base64
+import json
 import re
 from io import BytesIO
 from pathlib import Path
@@ -11,6 +12,7 @@ from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.attachments import AttachmentStorage, validate_image
+from mato_loop_backend.providers import lemonade
 from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import (
     ProviderError,
@@ -18,9 +20,19 @@ from mato_loop_backend.providers.base import (
     PublicReasoning,
     ToolCall,
 )
-from mato_loop_backend.providers.openai_compatible import _responses_body, discover_models
+from mato_loop_backend.providers.openai_compatible import (
+    _chat_body,
+    _responses_body,
+    discover_models,
+)
 from mato_loop_backend.providers.service import ProviderService, _with_retries
-from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig, TrustLevel
+from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.settings.models import (
+    LlmProviderConfig,
+    ModelCapability,
+    ModelConfig,
+    TrustLevel,
+)
 
 
 def _png_bytes() -> bytes:
@@ -29,14 +41,28 @@ def _png_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def _attachment_reference(storage_key: str, data: bytes) -> dict:
+def _attachment_reference(
+    session_id,
+    storage_path: str,
+    data: bytes,
+    *,
+    attachment_id=None,
+    filename: str = "image.png",
+    category: str = "generated",
+    trust_level: TrustLevel = TrustLevel.PUBLIC,
+) -> dict:
     validated = validate_image(data, "image/png")
     return {
+        "id": str(attachment_id or uuid4()),
+        "filename": filename,
         "kind": "image",
+        "category": category,
         "mime_type": validated.mime_type,
         "size_bytes": validated.size_bytes,
         "sha256": validated.sha256,
-        "storage_key": storage_key,
+        "trust_level": trust_level.value,
+        "session_id": str(session_id),
+        "storage_path": storage_path,
     }
 
 
@@ -256,7 +282,13 @@ async def test_complete_does_not_touch_attachment_storage_without_image_capabili
                 "role": "tool",
                 "content": "Screenshot",
                 "tool_call_id": "call-1",
-                "attachments": [_attachment_reference("ab/missing", _png_bytes())],
+                "attachments": [
+                    _attachment_reference(
+                        uuid4(),
+                        "generated/00000000-0000-4000-8000-000000000000/missing.png",
+                        _png_bytes(),
+                    )
+                ],
             }
         ],
         tools=[],
@@ -277,9 +309,12 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
         config={"base_url": "http://local.test/v1"},
     )
     model = ModelConfig(provider_id=provider.id, model_id="vision", supports_image_input=True)
-    storage = AttachmentStorage(tmp_path / "attachments")
+    session_id = uuid4()
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(session_id)
+    storage = AttachmentStorage(sessions)
     data = _png_bytes()
-    storage_key = storage.write(data)
+    storage_path = storage.write(session_id, uuid4(), data, "image.png", "generated")
     captured = {}
 
     async def fake_chat_completions(**kwargs):
@@ -298,7 +333,7 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
                 "role": "tool",
                 "content": "Screenshot",
                 "tool_call_id": "call-1",
-                "attachments": [_attachment_reference(storage_key, data)],
+                "attachments": [_attachment_reference(session_id, storage_path, data)],
             }
         ],
         tools=[],
@@ -309,8 +344,8 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
     assert request.media[0].status == "ready"
     assert request.media[0].data_url is not None
     assert base64.b64decode(request.media[0].data_url.split(",", 1)[1]) == data
-    assert storage_key not in repr(request.messages)
-    assert storage_key not in repr(request.media)
+    assert storage_path not in repr(request.messages)
+    assert storage_path not in repr(request.media)
 
 
 async def test_complete_uses_unavailable_marker_for_missing_attachment_file(
@@ -322,7 +357,10 @@ async def test_complete_uses_unavailable_marker_for_missing_attachment_file(
         config={"base_url": "http://local.test/v1"},
     )
     model = ModelConfig(provider_id=provider.id, model_id="vision", supports_image_input=True)
-    storage = AttachmentStorage(tmp_path / "attachments")
+    session_id = uuid4()
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(session_id)
+    storage = AttachmentStorage(sessions)
     data = _png_bytes()
     captured = {}
 
@@ -342,7 +380,13 @@ async def test_complete_uses_unavailable_marker_for_missing_attachment_file(
                 "role": "tool",
                 "content": "Screenshot",
                 "tool_call_id": "call-1",
-                "attachments": [_attachment_reference("ab/" + "0" * 32, data)],
+                "attachments": [
+                    _attachment_reference(
+                        session_id,
+                        "generated/00000000-0000-4000-8000-000000000000/missing.png",
+                        data,
+                    )
+                ],
             }
         ],
         tools=[],
@@ -352,6 +396,314 @@ async def test_complete_uses_unavailable_marker_for_missing_attachment_file(
     request = captured["request"]
     assert request.media[0].status == "unavailable"
     assert request.media[0].data_url is None
+
+
+async def test_projection_sends_current_user_images_but_not_unreferenced_history(
+    monkeypatch, tmp_path: Path
+) -> None:
+    session_id = uuid4()
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(session_id)
+    storage = AttachmentStorage(sessions)
+    old_data = _png_bytes()
+    current_buffer = BytesIO()
+    Image.new("RGB", (2, 2), (90, 80, 70)).save(current_buffer, format="PNG")
+    current_data = current_buffer.getvalue()
+    old_path = storage.write(session_id, uuid4(), old_data, "old.png", "user_upload")
+    current_path = storage.write(
+        session_id, uuid4(), current_data, "current.png", "user_upload"
+    )
+    monkeypatch.setattr(service_module, "AttachmentStorage", lambda: storage)
+
+    projected, media = await service_module._provider_projection(
+        [
+            {
+                "role": "user",
+                "content": "Alte Nachricht",
+                "attachments": [
+                    _attachment_reference(
+                        session_id, old_path, old_data, filename="old.png"
+                    )
+                ],
+            },
+            {
+                "role": "user",
+                "content": "Aktuelles Bild",
+                "attachments": [
+                    _attachment_reference(
+                        session_id, current_path, current_data, filename="current.png"
+                    )
+                ],
+            },
+        ],
+        supports_image_input=True,
+        input_trust_level=TrustLevel.PUBLIC,
+        target_trust_level=TrustLevel.PUBLIC,
+    )
+
+    assert all("attachments" not in message for message in projected)
+    assert len(media) == 1
+    assert media[0].message_index == 1
+    assert base64.b64decode(media[0].data_url.split(",", 1)[1]) == current_data
+
+
+async def test_session_read_result_reactivates_historical_image(monkeypatch) -> None:
+    attachment_id = uuid4()
+    reference = _attachment_reference(
+        uuid4(),
+        f"attachments/{attachment_id}/scan.png",
+        _png_bytes(),
+        attachment_id=attachment_id,
+        filename="scan.png",
+    )
+    reference["historical"] = True
+    reference["source_order"] = 0
+    monkeypatch.setattr(
+        service_module,
+        "AttachmentStorage",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_read_image_data_url",
+        lambda _storage, attachment: f"data:image/png;base64,{attachment['id']}",
+    )
+
+    _projected, media = await service_module._provider_projection(
+        [
+            {"role": "system", "content": "System", "attachments": [reference]},
+            {"role": "user", "content": "Lies den alten Verlauf"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "read", "name": "session_read", "arguments": {}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "read",
+                "content": json.dumps(
+                    {
+                        "messages": [
+                            {
+                                "attachments": [
+                                    {
+                                        "id": str(attachment_id),
+                                        "filename": "scan.png",
+                                        "path": reference["storage_path"],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ),
+            },
+        ],
+        supports_image_input=True,
+        input_trust_level=TrustLevel.PUBLIC,
+        target_trust_level=TrustLevel.PUBLIC,
+    )
+
+    assert len(media) == 1
+    assert media[0].message_index == 3
+    assert media[0].status == "ready"
+
+
+async def test_historical_image_limit_prefers_newest_references(monkeypatch) -> None:
+    references = []
+    for order in range(5):
+        attachment_id = uuid4()
+        reference = _attachment_reference(
+            uuid4(),
+            f"attachments/{attachment_id}/image-{order}.png",
+            _png_bytes(),
+            attachment_id=attachment_id,
+            filename=f"image-{order}.png",
+        )
+        reference.update({"historical": True, "source_order": order})
+        references.append(reference)
+    monkeypatch.setattr(service_module, "AttachmentStorage", lambda: object())
+    monkeypatch.setattr(
+        service_module,
+        "_read_image_data_url",
+        lambda _storage, attachment: f"data:image/png;base64,{attachment['id']}",
+    )
+
+    _projected, media = await service_module._provider_projection(
+        [
+            {"role": "system", "content": "System", "attachments": references},
+            {
+                "role": "user",
+                "content": " ".join(reference["id"] for reference in references),
+            },
+        ],
+        supports_image_input=True,
+        input_trust_level=TrustLevel.PUBLIC,
+        target_trust_level=TrustLevel.PUBLIC,
+    )
+
+    assert len(media) == 4
+    assert [item.data_url.rsplit(",", 1)[1] for item in media] == [
+        reference["id"] for reference in references[1:]
+    ]
+
+
+async def test_public_target_blocks_private_image_without_reading_storage(monkeypatch) -> None:
+    private_reference = _attachment_reference(
+        uuid4(),
+        f"attachments/{uuid4()}/private.png",
+        _png_bytes(),
+        trust_level=TrustLevel.PRIVATE,
+    )
+    private_reference["historical"] = True
+    private_reference["source_order"] = 0
+
+    def fail_storage():
+        raise AssertionError("Private Bilddaten duerfen nicht gelesen werden")
+
+    monkeypatch.setattr(service_module, "AttachmentStorage", fail_storage)
+
+    _projected, media = await service_module._provider_projection(
+        [
+            {"role": "system", "content": "System", "attachments": [private_reference]},
+            {"role": "user", "content": private_reference["id"]},
+        ],
+        supports_image_input=True,
+        input_trust_level=TrustLevel.PRIVATE,
+        target_trust_level=TrustLevel.PUBLIC,
+    )
+
+    assert len(media) == 1
+    assert media[0].status == "unavailable"
+    assert media[0].data_url is None
+
+
+async def test_private_target_can_read_private_image(monkeypatch, tmp_path: Path) -> None:
+    session_id = uuid4()
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(session_id)
+    storage = AttachmentStorage(sessions)
+    data = _png_bytes()
+    storage_path = storage.write(session_id, uuid4(), data, "private.png", "user_upload")
+    monkeypatch.setattr(service_module, "AttachmentStorage", lambda: storage)
+
+    _projected, media = await service_module._provider_projection(
+        [
+            {
+                "role": "user",
+                "content": "Privates Bild",
+                "attachments": [
+                    _attachment_reference(
+                        session_id,
+                        storage_path,
+                        data,
+                        trust_level=TrustLevel.PRIVATE,
+                    )
+                ],
+            }
+        ],
+        supports_image_input=True,
+        input_trust_level=TrustLevel.PRIVATE,
+        target_trust_level=TrustLevel.PRIVATE,
+    )
+
+    assert media[0].status == "ready"
+    assert base64.b64decode(media[0].data_url.split(",", 1)[1]) == data
+
+
+async def test_internal_storage_path_never_reaches_openai_payload(monkeypatch) -> None:
+    storage_path = f"attachments/{uuid4()}/secret.png"
+    reference = _attachment_reference(uuid4(), storage_path, _png_bytes())
+    monkeypatch.setattr(service_module, "AttachmentStorage", lambda: object())
+    monkeypatch.setattr(
+        service_module,
+        "_read_image_data_url",
+        lambda _storage, _attachment: "data:image/png;base64,aW1hZ2U=",
+    )
+
+    projected, media = await service_module._provider_projection(
+        [{"role": "user", "content": "Bild", "attachments": [reference]}],
+        supports_image_input=True,
+        input_trust_level=TrustLevel.PUBLIC,
+        target_trust_level=TrustLevel.PUBLIC,
+    )
+    request = service_module.ProviderRequest(
+        model="vision", messages=projected, media=media
+    )
+    payload = json.dumps(
+        {"chat": _chat_body(request), "responses": _responses_body(request)}
+    )
+
+    assert storage_path not in payload
+    assert "storage_path" not in payload
+    assert "data:image/png" in payload
+
+
+async def test_media_selection_precedes_pseudonymization(monkeypatch) -> None:
+    provider = LlmProviderConfig(
+        name="Public",
+        adapter_type="openai-compatible",
+        config={"base_url": "http://public.test/v1"},
+    )
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="vision",
+        supports_image_input=True,
+    )
+    attachment_id = uuid4()
+    reference = _attachment_reference(
+        uuid4(),
+        f"attachments/{attachment_id}/anna@example.com.png",
+        _png_bytes(),
+        attachment_id=attachment_id,
+        filename="anna@example.com.png",
+    )
+    reference.update({"historical": True, "source_order": 0})
+    captured = {}
+
+    class ReplacingPseudonymizer:
+        def protect_messages(self, messages):
+            assert all("attachments" not in message for message in messages)
+            return [
+                {**message, "content": str(message.get("content") or "").replace("anna@example.com", "PERSON")}
+                for message in messages
+            ]
+
+        def restore_text(self, text):
+            return text
+
+        def restore_value(self, value):
+            return value
+
+    async def fake_chat_completions(**kwargs):
+        captured.update(kwargs)
+        return ProviderResult(content="OK")
+
+    monkeypatch.setattr(service_module, "RequestPseudonymizer", ReplacingPseudonymizer)
+    monkeypatch.setattr(service_module, "AttachmentStorage", lambda: object())
+    monkeypatch.setattr(
+        service_module,
+        "_read_image_data_url",
+        lambda _storage, _attachment: "data:image/png;base64,aW1hZ2U=",
+    )
+    monkeypatch.setattr(service_module, "chat_completions", fake_chat_completions)
+
+    await ProviderService.complete(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        messages=[
+            {"role": "system", "content": "System", "attachments": [reference]},
+            {"role": "user", "content": "Zeige anna@example.com.png"},
+        ],
+        tools=[],
+        input_trust_level=TrustLevel.PUBLIC,
+        target_trust_level=TrustLevel.PUBLIC,
+        pseudonymization_enabled=True,
+    )
+
+    request = captured["request"]
+    assert request.media[0].status == "ready"
+    assert "anna@example.com" not in request.messages[1]["content"]
 
 
 async def test_transient_errors_use_retry_after(monkeypatch) -> None:
@@ -536,3 +888,135 @@ async def test_provider_discovery_requires_codex_connection() -> None:
         await ProviderService.discover_models(AsyncMock(spec=AsyncSession), provider=provider)
 
     assert exc_info.value.public_code == "provider.notConnected"
+
+
+async def test_lemonade_discovery_maps_capabilities_and_filters_missing(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://lemonade.test/v1/models"
+        assert request.headers["Authorization"] == "Bearer secret"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "chat-vision",
+                        "labels": ["Vision", "tool_calling"],
+                        "recipe": " LlamaCpp ",
+                        "downloaded": True,
+                        "max_context_window": 8192,
+                        "image_defaults": None,
+                    },
+                    {
+                        "id": "image",
+                        "labels": ["IMAGE"],
+                        "recipe": "sd-cpp",
+                        "downloaded": True,
+                        "image_defaults": {"steps": 4, "cfg_scale": 1.0},
+                    },
+                    {
+                        "id": "chat-parallel",
+                        "labels": [],
+                        "recipe": "llamacpp",
+                        "downloaded": True,
+                        "supports_parallel_tool_calls": True,
+                    },
+                    {
+                        "id": "music",
+                        "labels": [],
+                        "recipe": "ACE_STEP",
+                        "downloaded": True,
+                    },
+                    {
+                        "id": "omni",
+                        "labels": ["image", "tts"],
+                        "recipe": "collection.omni",
+                        "downloaded": True,
+                    },
+                    {
+                        "id": "missing",
+                        "labels": ["transcription"],
+                        "recipe": "whispercpp",
+                        "downloaded": False,
+                    },
+                ]
+            },
+        )
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        lemonade.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    models = await lemonade.discover_models(
+        base_url="https://lemonade.test/v1", api_key="secret"
+    )
+
+    assert [item.id for item in models] == [
+        "chat-vision",
+        "image",
+        "chat-parallel",
+        "music",
+        "omni",
+    ]
+    assert models[0].capabilities == {ModelCapability.CHAT}
+    assert models[0].metadata["supports_image_input"] is True
+    assert models[0].metadata["supports_tools"] is True
+    assert models[0].metadata["supports_parallel_tool_calls"] is False
+    assert models[1].capabilities == {ModelCapability.IMAGE_GENERATION}
+    assert models[2].metadata["supports_tools"] is True
+    assert models[2].metadata["supports_parallel_tool_calls"] is True
+    assert models[3].capabilities == {ModelCapability.AUDIO_GENERATION}
+    assert ModelCapability.CHAT not in models[4].capabilities
+    assert "capabilities" not in models[1].metadata
+
+
+async def test_lemonade_complete_explicitly_uses_chat_completions(monkeypatch) -> None:
+    provider = LlmProviderConfig(
+        name="Lemonade",
+        adapter_type="lemonade",
+        pseudonymization_enabled=False,
+        config={"base_url": "http://lemonade.test/v1", "api_type": "responses"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="chat")
+    transport = AsyncMock(return_value=ProviderResult(content="OK"))
+    responses = AsyncMock(side_effect=AssertionError("Responses API darf nicht genutzt werden"))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    monkeypatch.setattr(service_module, "responses_api", responses)
+
+    result = await ProviderService.complete(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        messages=[{"role": "user", "content": "Test"}],
+        tools=[],
+        input_trust_level=TrustLevel.PUBLIC,
+    )
+
+    assert result.content == "OK"
+    transport.assert_awaited_once()
+    responses.assert_not_awaited()
+
+
+async def test_complete_rejects_unknown_adapter_before_transport(monkeypatch) -> None:
+    provider = LlmProviderConfig(
+        name="Unknown", adapter_type="unknown", config={"base_url": "http://unknown.test"}
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="chat")
+    transport = AsyncMock()
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession),
+            provider=provider,
+            model=model,
+            messages=[],
+            tools=[],
+            input_trust_level=TrustLevel.PUBLIC,
+        )
+
+    assert exc_info.value.public_code == "provider.configurationInvalid"
+    transport.assert_not_awaited()

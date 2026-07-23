@@ -6,6 +6,7 @@ import logging
 import math
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
+from uuid import UUID
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,13 +24,14 @@ from mato_loop_backend.privacy import (
     RequestPseudonymizer,
     StreamingPseudonymRestorer,
 )
-from mato_loop_backend.providers import codex_oauth, openai_compatible
+from mato_loop_backend.providers import codex_oauth, lemonade, openai_compatible
 from mato_loop_backend.providers.base import (
     ProviderError,
     ProviderMedia,
     ProviderRequest,
     ProviderResult,
     ReasoningDeltaCallback,
+    select_provider_images,
 )
 from mato_loop_backend.providers.openai_compatible import (
     DiscoveredModel,
@@ -39,6 +41,7 @@ from mato_loop_backend.providers.openai_compatible import (
 from mato_loop_backend.security import read_credential, store_credential
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
+    ModelCapability,
     ModelConfig,
     TrustLevel,
     effective_model_pseudonymization,
@@ -48,10 +51,6 @@ from mato_loop_backend.settings.models import (
 logger = logging.getLogger(__name__)
 
 _IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
-MAX_PROVIDER_IMAGES = 4
-MAX_PROVIDER_IMAGE_BYTES = 20 * 1024 * 1024
-
-
 async def _refresh_codex_credential(
     db: AsyncSession,
     credential: Credential,
@@ -110,7 +109,7 @@ def _temperature_option(config: dict[str, Any]) -> float | None:
 
 
 def _read_image_data_url(storage: AttachmentStorage, attachment: dict[str, Any]) -> str:
-    path = storage.path(attachment["storage_key"])
+    path = storage.path(UUID(attachment["session_id"]), attachment["storage_path"])
     with path.open("rb") as file:
         data = file.read(MAX_ATTACHMENT_BYTES + 1)
     if len(data) > MAX_ATTACHMENT_BYTES or len(data) != attachment["size_bytes"]:
@@ -123,38 +122,46 @@ def _read_image_data_url(storage: AttachmentStorage, attachment: dict[str, Any])
 
 
 async def _provider_projection(
-    messages: list[dict[str, Any]], *, supports_image_input: bool
+    messages: list[dict[str, Any]],
+    *,
+    supports_image_input: bool,
+    input_trust_level: TrustLevel,
+    target_trust_level: TrustLevel,
 ) -> tuple[list[dict[str, Any]], list[ProviderMedia]]:
     projected_messages: list[dict[str, Any]] = []
-    references: list[tuple[int, dict[str, Any]]] = []
-    for index, message in enumerate(messages):
+    for message in messages:
         projected = dict(message)
-        attachments = projected.pop("attachments", None) or []
+        projected.pop("attachments", None)
         projected_messages.append(projected)
-        references.extend(
-            (index, attachment)
-            for attachment in attachments
-            if isinstance(attachment, dict) and attachment.get("kind") == "image"
-        )
 
-    if not supports_image_input or not references:
+    if not supports_image_input:
         return projected_messages, []
 
+    selected = select_provider_images(
+        messages,
+        input_trust_level=input_trust_level.value,
+        target_trust_level=target_trust_level.value,
+    )
     media = [
         ProviderMedia(
-            message_index=index,
-            mime_type=str(attachment.get("mime_type") or "image"),
+            message_index=item.message_index,
+            mime_type=str(item.attachment.get("mime_type") or "image"),
             status="unavailable",
         )
-        for index, attachment in references
+        for item in selected
     ]
+    if not selected:
+        return projected_messages, media
+    if not any(item.allow_raw for item in selected):
+        return projected_messages, media
     storage = AttachmentStorage()
 
     async def materialize(position: int, attachment: dict[str, Any]) -> None:
         mime_type = attachment.get("mime_type")
         size_bytes = attachment.get("size_bytes")
         sha256 = attachment.get("sha256")
-        storage_key = attachment.get("storage_key")
+        session_id = attachment.get("session_id")
+        storage_path = attachment.get("storage_path")
         if (
             mime_type not in _IMAGE_MIME_TYPES
             or not isinstance(size_bytes, int)
@@ -162,30 +169,20 @@ async def _provider_projection(
             or not 0 < size_bytes <= MAX_ATTACHMENT_BYTES
             or not isinstance(sha256, str)
             or len(sha256) != 64
-            or not isinstance(storage_key, str)
+            or not isinstance(session_id, str)
+            or not isinstance(storage_path, str)
         ):
             return
         try:
             data_url = await asyncio.to_thread(_read_image_data_url, storage, attachment)
-        except (AttachmentError, AttachmentStorageError, OSError):
+        except (AttachmentError, AttachmentStorageError, OSError, ValueError):
             return
         media[position].data_url = data_url
         media[position].status = "ready"
 
-    selected: list[tuple[int, dict[str, Any]]] = []
-    selected_bytes = 0
-    for position, (_index, attachment) in enumerate(references):
-        size_bytes = attachment.get("size_bytes")
-        if not isinstance(size_bytes, int) or isinstance(size_bytes, bool):
-            continue
-        if len(selected) >= MAX_PROVIDER_IMAGES:
-            continue
-        if selected_bytes + size_bytes > MAX_PROVIDER_IMAGE_BYTES:
-            continue
-        selected.append((position, attachment))
-        selected_bytes += size_bytes
-    for position, attachment in selected:
-        await materialize(position, attachment)
+    for position, item in enumerate(selected):
+        if item.allow_raw:
+            await materialize(position, item.attachment)
     unavailable_count = sum(item.status != "ready" for item in media)
     if unavailable_count:
         logger.warning("%s Attachment-Datei(en) konnten nicht an den Provider uebertragen werden", unavailable_count)
@@ -243,6 +240,17 @@ class ProviderService:
                 account_id=refreshed.get("account_id"),
                 timeout=timeout,
             )
+        if provider.adapter_type == "lemonade":
+            base_url = str(provider.config.get("base_url") or "").rstrip("/")
+            if not base_url:
+                raise ProviderError(
+                    "Provider base URL is missing", code="provider.configurationInvalid"
+                )
+            return await lemonade.discover_models(
+                base_url=base_url,
+                api_key=payload.get("api_key"),
+                timeout=timeout,
+            )
         if provider.adapter_type != "openai-compatible":
             raise ProviderError(
                 "Provider does not support model discovery",
@@ -281,6 +289,15 @@ class ProviderService:
                 "Model and provider do not belong together",
                 code="provider.configurationInvalid",
             )
+        if ModelCapability.CHAT not in model.capabilities:
+            raise ProviderError(
+                "Model does not support chat",
+                code="provider.modelCapabilityUnavailable",
+            )
+        if provider.adapter_type not in {"openai-compatible", "openai-codex", "lemonade"}:
+            raise ProviderError(
+                "Unsupported provider adapter", code="provider.configurationInvalid"
+            )
         model_trust_level = target_trust_level or effective_model_trust(provider, model)
         use_pseudonymization = (
             model_trust_level == TrustLevel.PUBLIC
@@ -311,18 +328,24 @@ class ProviderService:
             "trustLevel": model_trust_level.value,
             "pseudonymization": "enabled" if use_pseudonymization else "disabled",
         }
-        pseudonymizer = RequestPseudonymizer() if use_pseudonymization else None
-        if pseudonymizer is not None:
-            try:
-                messages = await asyncio.to_thread(
-                    pseudonymizer.protect_messages, messages
-                )
-            except PseudonymizationError as exc:
-                raise ProviderError(str(exc), code=str(exc)) from exc
         provider_messages, media = await _provider_projection(
             messages,
             supports_image_input=model.supports_image_input,
+            input_trust_level=input_trust_level,
+            target_trust_level=model_trust_level,
         )
+        pseudonymizer = RequestPseudonymizer() if use_pseudonymization else None
+        if pseudonymizer is not None:
+            try:
+                provider_messages = await asyncio.to_thread(
+                    pseudonymizer.protect_messages, provider_messages
+                )
+            except PseudonymizationError as exc:
+                code = str(exc)
+                raise ProviderError(
+                    "Local pseudonymization failed",
+                    code=code,
+                ) from exc
         request = ProviderRequest(
             model=(
                 model.model_id.removeprefix("openai-codex/") if is_codex else model.model_id
@@ -443,7 +466,11 @@ class ProviderService:
                 "Provider-Base-URL fehlt", code="provider.configurationInvalid"
             )
         api_key = payload.get("api_key")
-        api_type = str(provider.config.get("api_type") or "chat_completions")
+        api_type = (
+            "chat_completions"
+            if provider.adapter_type == "lemonade"
+            else str(provider.config.get("api_type") or "chat_completions")
+        )
         if api_type == "responses":
             headers = {"Content-Type": "application/json"}
             if api_key:
