@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from mato_loop_backend.api.routes.agent_identity import router as agent_identity_router
 from mato_loop_backend.api.routes.approvals import router as approvals_router
 from mato_loop_backend.api.routes.auth import router as auth_router
 from mato_loop_backend.api.routes.health import router as health_router
@@ -14,6 +15,7 @@ from mato_loop_backend.api.routes.workspace import router as workspace_router
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["health"])
 api_router.include_router(auth_router, tags=["auth"])
+api_router.include_router(agent_identity_router, tags=["agent-identity"])
 api_router.include_router(providers_router, tags=["providers"])
 api_router.include_router(integrations_router, tags=["integrations"])
 api_router.include_router(memories_router, tags=["memories"])

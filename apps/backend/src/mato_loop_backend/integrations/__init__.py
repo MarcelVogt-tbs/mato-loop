@@ -1,9 +1,11 @@
 from mato_loop_backend.integrations.search import (
     SearchIntegrationError,
-    default_search_provider,
+    effective_search_providers,
+    normalize_search_tool_settings,
     search_available,
-    search_unavailable_reason,
+    search_provider_options,
     search_web,
+    search_with_key,
     search_with_provider,
 )
 from mato_loop_backend.integrations.service import (
@@ -26,10 +28,12 @@ __all__ = [
     "WebFetchError",
     "WebFetchResult",
     "canonicalize_url",
-    "default_search_provider",
+    "effective_search_providers",
+    "normalize_search_tool_settings",
     "search_available",
-    "search_unavailable_reason",
+    "search_provider_options",
     "search_web",
+    "search_with_key",
     "search_with_provider",
     "fetch_web",
     "private_origin_is_allowed",

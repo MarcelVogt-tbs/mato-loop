@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import AgentRuntime
@@ -18,12 +20,14 @@ from mato_loop_backend.api.routes.sessions import (
     delete_session,
     download_attachment,
     get_session,
+    list_sessions,
     message_payload,
     send_message,
     session_defaults,
     update_session,
 )
 from mato_loop_backend.attachments import AttachmentService, AttachmentStorage
+from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -32,6 +36,7 @@ from mato_loop_backend.models import (
     TitleGenerationStatus,
     UserAccount,
 )
+from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import AiSettings, MemorySettings, SettingsStore, TrustLevel
 from mato_loop_backend.settings.models import (
@@ -43,6 +48,76 @@ from mato_loop_backend.settings.models import (
 
 def _user() -> UserAccount:
     return UserAccount(id=uuid4(), username="test", password_hash="hash")
+
+
+def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
+    run = AgentRun(
+        id=uuid4(),
+        session_id=session.id,
+        status="queued",
+        model_name=None,
+    )
+    message = Message(
+        id=uuid4(),
+        session_id=session.id,
+        role="user",
+        content="Nachricht",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, message]
+    monkeypatch.setattr(AgentRuntime, "start", AsyncMock(return_value=run))
+
+    async def override_db():
+        yield db
+
+    app = FastAPI()
+    app.include_router(sessions_route.router, prefix="/api")
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[require_user] = lambda: user
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/sessions/{session.id}/messages",
+            json={"content": "Nachricht"},
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "runId": str(run.id),
+        "modelName": None,
+        "message": message_payload(message),
+    }
+
+
+async def test_session_list_uses_latest_visible_message_timestamp() -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Fortgesetzte Session",
+        memory_mode="disabled",
+        created_at=datetime(2026, 7, 1, 8, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 7, 2, 8, 0, tzinfo=UTC),
+    )
+    last_message_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
+    execution_result = MagicMock()
+    execution_result.all.return_value = [(session, last_message_at)]
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = execution_result
+
+    result = await list_sessions(user, db)
+
+    assert result[0]["lastMessageAt"] == last_message_at.isoformat()
+    statement = db.execute.await_args.args[0]
+    sql = str(statement)
+    assert "max(messages.created_at)" in sql
+    assert "messages.role IN" in sql
+    assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC" in sql
+    assert "chat_sessions.updated_at DESC" not in sql
 
 
 async def test_session_is_created_with_first_message_and_run(monkeypatch) -> None:

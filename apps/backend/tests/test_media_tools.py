@@ -19,7 +19,7 @@ from mato_loop_backend.providers.media import MediaService, available_media_capa
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AiSettings,
-    SearchSettings,
+    IntegrationSettings,
     SettingsStore,
     ToolSettings,
 )
@@ -58,7 +58,7 @@ def context(tmp_path, call: ToolCall, decision=PermissionDecision.ALLOW) -> Tool
         root_files=RootFileService(
             session.id, session_storage=storage, workspace_home=tmp_path
         ),
-        search_settings=SearchSettings(),
+        integration_settings=IntegrationSettings(),
         ask_handler=AsyncMock(return_value=decision),
     )
 
@@ -104,12 +104,16 @@ def test_media_schemas_follow_effective_capabilities() -> None:
         settings, available_media_capabilities(ai)
     )
     schemas = tool_registry.schemas(
-        SearchSettings(), "read-only", tool_capabilities=capabilities
+        IntegrationSettings(), "read-only", tool_capabilities=capabilities
     )
     names = {item["name"] for item in schemas}
 
-    assert capabilities == {"media.generate.image"}
+    assert capabilities == {
+        "media.generate.image",
+        "settings.agent_identity.update",
+    }
     assert "generate_image" in names
+    assert "update_agent_identity" in names
     assert "generate_speech" not in names
     assert "generate_audio" not in names
     assert "transcribe_audio" not in names

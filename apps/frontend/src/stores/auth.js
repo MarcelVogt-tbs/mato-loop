@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useChatStore } from 'src/stores/chat'
 
 function clearAttachmentDraftsAfterIdentityChange(previous, next) {
@@ -8,6 +9,7 @@ function clearAttachmentDraftsAfterIdentityChange(previous, next) {
     || previous.username !== next.username
   )) {
     useChatStore().clearAllAttachmentDrafts()
+    useAgentIdentityStore().resetIdentity()
   }
 }
 
@@ -66,6 +68,7 @@ export const useAuthStore = defineStore('auth', {
     async logout() {
       await api.post('/auth/logout')
       useChatStore().clearAllAttachmentDrafts()
+      useAgentIdentityStore().resetIdentity()
       this.authenticated = false
       this.username = null
       this.preferences = { thinkingExpanded: false }

@@ -22,6 +22,11 @@ const routes = [
             component: () => import('pages/settings/DefaultModelSettingsPage.vue')
           },
           {
+            path: 'persona',
+            name: 'settings-persona',
+            component: () => import('pages/settings/AgentIdentitySettingsPage.vue')
+          },
+          {
             path: 'integrations',
             name: 'settings-integrations',
             component: () => import('pages/settings/IntegrationSettingsPage.vue')

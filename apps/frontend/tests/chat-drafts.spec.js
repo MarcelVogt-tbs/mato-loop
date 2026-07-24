@@ -426,6 +426,38 @@ describe('chat drafts', () => {
     expect(watchRun).not.toHaveBeenCalled()
   })
 
+  it('moves a continued session to the top after persisting its new message', async () => {
+    api.post.mockResolvedValue({
+      data: {
+        runId: 'run-1',
+        message: {
+          id: 'message-1',
+          role: 'user',
+          content: 'Neue Nachricht',
+          createdAt: '2026-07-24T15:00:00Z'
+        }
+      }
+    })
+    const chat = useChatStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    chat.sessions = [
+      { id: 'session-2', lastMessageAt: '2026-07-24T14:00:00Z' },
+      { id: 'session-1', lastMessageAt: '2026-07-20T12:00:00Z' }
+    ]
+    chat.current = {
+      id: 'session-1',
+      lastMessageAt: '2026-07-20T12:00:00Z',
+      messages: []
+    }
+    chat.selectedSessionId = 'session-1'
+
+    await chat.sendToCurrent('Neue Nachricht')
+
+    expect(chat.sessions.map((session) => session.id)).toEqual(['session-1', 'session-2'])
+    expect(chat.sessions[0].lastMessageAt).toBe('2026-07-24T15:00:00Z')
+    expect(chat.current.lastMessageAt).toBe('2026-07-24T15:00:00Z')
+  })
+
   it('does not navigate back to a late new-session response', async () => {
     let resolveSend
     api.post.mockReturnValue(new Promise((resolve) => { resolveSend = resolve }))
@@ -676,15 +708,15 @@ describe('chat drafts', () => {
     })
     const chat = useChatStore()
     chat.sessions = [
-      { id: 'session-2', title: 'Andere Session', updatedAt: '2026-07-20T13:00:00Z' },
-      { id: 'session-1', title: 'Alter Titel', updatedAt: '2026-07-19T13:00:00Z' }
+      { id: 'session-2', title: 'Andere Session', lastMessageAt: '2026-07-20T13:00:00Z' },
+      { id: 'session-1', title: 'Alter Titel', lastMessageAt: '2026-07-19T13:00:00Z' }
     ]
     chat.current = { id: 'session-1', title: 'Alter Titel', messages: [] }
 
     await chat.renameSession('session-1', 'Neuer Titel')
 
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', { title: 'Neuer Titel' })
-    expect(chat.sessions.map((session) => session.id)).toEqual(['session-1', 'session-2'])
+    expect(chat.sessions.map((session) => session.id)).toEqual(['session-2', 'session-1'])
     expect(chat.current.title).toBe('Neuer Titel')
   })
 
@@ -698,8 +730,8 @@ describe('chat drafts', () => {
     })
     const chat = useChatStore()
     chat.sessions = [
-      { id: 'session-2', pinned: false, updatedAt: '2026-07-20T14:00:00Z' },
-      { id: 'session-1', pinned: false, updatedAt: '2026-07-20T12:00:00Z' }
+      { id: 'session-2', pinned: false, lastMessageAt: '2026-07-20T14:00:00Z' },
+      { id: 'session-1', pinned: false, lastMessageAt: '2026-07-20T12:00:00Z' }
     ]
     chat.current = { id: 'session-1', pinned: false, messages: [] }
 

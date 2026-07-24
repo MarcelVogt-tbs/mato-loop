@@ -7,6 +7,7 @@ import pytest
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.agent.tools as tools_module
 from mato_loop_backend.agent.permissions import PermissionDecision
 from mato_loop_backend.agent.tools import (
     ToolAttachment,
@@ -18,6 +19,10 @@ from mato_loop_backend.agent.tools import (
     tool_registry,
 )
 from mato_loop_backend.integrations import WebFetchError, WebFetchResult
+from mato_loop_backend.integrations.contracts import (
+    IntegrationContributions,
+    ToolContribution,
+)
 from mato_loop_backend.memory.retrieval import (
     MemoryRetrieval,
     MemoryRetrievalService,
@@ -27,7 +32,16 @@ from mato_loop_backend.memory.retrieval import (
 from mato_loop_backend.models import ChatSession, MemoryRecord, Message, MessageAttachment
 from mato_loop_backend.providers import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.settings import SearchSettings, TrustLevel, WebFetchPolicy
+from mato_loop_backend.settings import (
+    AgentIdentitySettings,
+    AiSettings,
+    IntegrationInstance,
+    IntegrationSettings,
+    SettingsStore,
+    ToolSettings,
+    TrustLevel,
+    WebFetchPolicy,
+)
 from mato_loop_backend.workspace import RootFileService
 
 
@@ -77,7 +91,7 @@ def _context(
             workspace_home=tmp_path,
             working_directory=session.working_directory,
         ),
-        search_settings=SearchSettings(),
+        integration_settings=IntegrationSettings(),
         ask_handler=AsyncMock(return_value=decision),
         web_fetch_policy=web_fetch_policy,
         allowed_private_origins=allowed_private_origins,
@@ -98,8 +112,32 @@ def test_tool_registry_rejects_duplicate_names() -> None:
         ToolRegistry([_definition(), _definition()])
 
 
+def test_effective_toolset_accepts_host_registered_integration_tools(monkeypatch) -> None:
+    contributions = IntegrationContributions(
+        tools=(
+            ToolContribution(
+                name="integration_example",
+                description="Example integration tool.",
+                arguments_model=_RequiredArguments,
+                handler=_successful_handler,
+            ),
+        ),
+        prompt_fragments=("Trusted integration instruction.",),
+    )
+    monkeypatch.setattr(
+        tools_module,
+        "effective_integration_contributions",
+        Mock(return_value=contributions),
+    )
+
+    effective = ToolRegistry([]).effective(IntegrationSettings(), "read-only")
+
+    assert [item["name"] for item in effective.schemas()] == ["integration_example"]
+    assert effective.prompt_fragments == ("Trusted integration instruction.",)
+
+
 def test_webfetch_schema_describes_verified_image_attachments() -> None:
-    schemas = tool_registry.schemas(SearchSettings(), "read-only", webfetch_enabled=True)
+    schemas = tool_registry.schemas(IntegrationSettings(), "read-only", webfetch_enabled=True)
     webfetch = next(item for item in schemas if item["name"] == "webfetch")
 
     assert "Successful images are validated and attached" in webfetch["description"]
@@ -109,7 +147,7 @@ def test_webfetch_schema_describes_verified_image_attachments() -> None:
 def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
     schemas = {
         item["name"]: item
-        for item in tool_registry.schemas(SearchSettings(), "read-write")
+        for item in tool_registry.schemas(IntegrationSettings(), "read-write")
     }
 
     for name in {
@@ -152,7 +190,7 @@ async def test_read_only_mode_offers_only_read_file_tools_and_blocks_stale_mutat
         "move_path",
     }
     offered = {
-        item["name"] for item in tool_registry.schemas(SearchSettings(), "read-only")
+        item["name"] for item in tool_registry.schemas(IntegrationSettings(), "read-only")
     }
     assert offered & file_tools == {"list_directory", "read_file"}
 
@@ -170,6 +208,61 @@ async def test_read_only_mode_offers_only_read_file_tools_and_blocks_stale_mutat
     context.root_files.write_file.assert_not_called()
 
 
+async def test_effective_toolset_rejects_a_call_that_was_not_offered(tmp_path) -> None:
+    effective = tool_registry.effective(IntegrationSettings(), "read-only")
+    call = ToolCall(
+        id="not-offered",
+        name="write_file",
+        arguments={"root": "session", "path": "files/note.txt", "content": "secret"},
+    )
+
+    result = await effective.execute(call, _context(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+
+
+async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
+    tmp_path, monkeypatch
+) -> None:
+    integration = IntegrationInstance(
+        name="Intern",
+        integration_type="search",
+        adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    settings = IntegrationSettings(instances=[integration])
+    effective = tool_registry.effective(settings, "read-only")
+    call = ToolCall(
+        id="stale-search",
+        name="web_search",
+        arguments={"query": "MatoLoop"},
+    )
+    context = _context(tmp_path, call)
+    context.integration_settings = settings
+    current_tools = ToolSettings.model_validate(
+        {"webSearch": {"primaryProvider": f"searxng:{integration.id}"}}
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        if settings_type is IntegrationSettings:
+            return IntegrationSettings()
+        return current_tools
+
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(side_effect=load_settings)
+    )
+    search = AsyncMock(return_value="[]")
+    monkeypatch.setattr(tools_module, "search_web", search)
+
+    result = await effective.execute(call, context)
+
+    assert result.is_error is False
+    assert search.await_args.kwargs == {
+        "provider": "no_key",
+        "fallback_provider": None,
+    }
+
+
 async def test_missing_workspace_returns_structured_error_without_approval(tmp_path) -> None:
     call = ToolCall(
         id="read",
@@ -182,6 +275,103 @@ async def test_missing_workspace_returns_structured_error_without_approval(tmp_p
 
     assert result.metadata == {"errorCode": "file.workspaceNotSelected"}
     context.ask_handler.assert_not_awaited()
+
+
+async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> None:
+    tool_settings = ToolSettings.model_validate(
+        {"updateAgentIdentity": {"policy": "ask"}}
+    )
+    identity = AgentIdentitySettings()
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return {
+            ToolSettings: tool_settings,
+            AiSettings: AiSettings(),
+            AgentIdentitySettings: identity,
+        }[settings_type]
+
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", save)
+    call = ToolCall(
+        id="identity",
+        name="update_agent_identity",
+        arguments={
+            "display_name": "Ada",
+            "instructions": "Antworte direkt.",
+        },
+    )
+    context = _context(tmp_path, call)
+
+    result = await tool_registry.execute(call, context)
+
+    assert json.loads(result.content) == {
+        "displayName": "Ada",
+        "instructionsUpdated": True,
+        "effectiveFrom": "next_run",
+    }
+    assert result.metadata["agentIdentity"]["displayName"] == "Ada"
+    request = context.ask_handler.await_args.args[0]
+    assert request.capability == "settings.agent_identity.update"
+    assert request.resource_type == "agent_identity"
+    assert request.resource_scope == str(context.session.user_id)
+    save.assert_awaited_once()
+
+
+async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) -> None:
+    tool_settings = ToolSettings.model_validate(
+        {"updateAgentIdentity": {"policy": "auto"}}
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return {
+            ToolSettings: tool_settings,
+            AiSettings: AiSettings(),
+            AgentIdentitySettings: AgentIdentitySettings(),
+        }[settings_type]
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    call = ToolCall(
+        id="identity-auto",
+        name="update_agent_identity",
+        arguments={"instructions": "Sei freundlich."},
+    )
+    context = _context(tmp_path, call, decision=PermissionDecision.DENY)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    context.ask_handler.assert_not_awaited()
+
+
+async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
+    monkeypatch, tmp_path
+) -> None:
+    tool_settings = ToolSettings.model_validate(
+        {"updateAgentIdentity": {"policy": "disabled"}}
+    )
+    capabilities = set()
+    assert "update_agent_identity" not in {
+        schema["name"]
+        for schema in tool_registry.schemas(
+            IntegrationSettings(), "read-only", tool_capabilities=capabilities
+        )
+    }
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return {ToolSettings: tool_settings, AiSettings: AiSettings()}[settings_type]
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    call = ToolCall(
+        id="identity-disabled",
+        name="update_agent_identity",
+        arguments={"display_name": "Ada"},
+    )
+    result = await tool_registry.execute(call, _context(tmp_path, call))
+
+    assert result.is_error
+    assert result.metadata == {"errorCode": "tool.unavailable"}
 
 
 async def test_copy_and_move_handlers_check_both_roots_before_effect(tmp_path) -> None:
@@ -615,7 +805,7 @@ def test_webfetch_schema_has_the_expected_contract() -> None:
     schema = next(
         item.schema()
         for item in tool_registry.available(
-            SearchSettings(enabled=False), "read-only", webfetch_enabled=True
+            IntegrationSettings(), "read-only", webfetch_enabled=True
         )
         if item.name == "webfetch"
     )

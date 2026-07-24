@@ -107,7 +107,7 @@
             </q-item>
 
             <div class="drawer-section__body">
-              <q-list class="session-list q-px-sm q-pb-sm">
+              <q-list id="session-list" class="session-list q-px-sm q-pb-sm">
                 <q-item v-if="!chat.sessions.length" dense class="q-px-sm q-py-xs">
                   <q-item-section>
                     <q-item-label class="text-body2">Noch keine Sessions</q-item-label>
@@ -212,6 +212,19 @@
                   </q-item>
                 </template>
               </q-list>
+              <div v-if="hasSessionOverflow" class="q-px-md q-pb-sm">
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  class="full-width"
+                  :color="$q.dark.isActive ? 'grey-5' : 'grey-7'"
+                  :label="sessionsExpanded ? 'Weniger anzeigen' : 'Mehr anzeigen'"
+                  :aria-expanded="sessionsExpanded"
+                  aria-controls="session-list"
+                  @click="sessionsExpanded = !sessionsExpanded"
+                />
+              </div>
             </div>
           </section>
 
@@ -320,6 +333,7 @@ import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import AppLogo from 'components/AppLogo.vue'
 import FileExplorerPanel from 'components/FileExplorerPanel.vue'
+import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
@@ -328,15 +342,23 @@ import { groupSessionsByRecency } from 'src/utils/session-groups'
 
 defineOptions({ name: 'MainLayout' })
 
+const SESSION_PREVIEW_LIMIT = 10
+
 const drawerOpen = ref(true)
 const $q = useQuasar()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const identity = useAgentIdentityStore()
 const chat = useChatStore()
 const workspace = useWorkspaceStore()
 const approvals = useApprovalStore()
-const groupedSessions = computed(() => groupSessionsByRecency(chat.sessions))
+const sessionsExpanded = ref(false)
+const visibleSessions = computed(() => (
+  sessionsExpanded.value ? chat.sessions : chat.sessions.slice(0, SESSION_PREVIEW_LIMIT)
+))
+const hasSessionOverflow = computed(() => chat.sessions.length > SESSION_PREVIEW_LIMIT)
+const groupedSessions = computed(() => groupSessionsByRecency(visibleSessions.value))
 const renameDialogOpen = ref(false)
 const renameSessionId = ref(null)
 const renameTitle = ref('')
@@ -419,6 +441,6 @@ watch(() => workspace.open, (open) => {
 })
 
 onMounted(async () => {
-  await Promise.all([chat.fetchSessions(), approvals.fetchPending()])
+  await Promise.all([chat.fetchSessions(), approvals.fetchPending(), identity.fetchIdentity()])
 })
 </script>

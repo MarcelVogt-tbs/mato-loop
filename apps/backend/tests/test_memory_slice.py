@@ -55,8 +55,8 @@ from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AiSettings,
+    IntegrationSettings,
     MemorySettings,
-    SearchSettings,
     SettingsStore,
     TrustLevel,
 )
@@ -432,7 +432,7 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
         session=session,
         tool_call=call,
         root_files=_root_files(tmp_path, session),
-        search_settings=SearchSettings(),
+        integration_settings=IntegrationSettings(),
         ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW),
         assistant_message_id=uuid4(),
         memory_read_enabled=True,
@@ -449,12 +449,12 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
 
 
 def test_memory_tools_are_gated_independently_from_workspace_write_mode() -> None:
-    without_memory = tool_registry.schemas(SearchSettings(), "read-only")
+    without_memory = tool_registry.schemas(IntegrationSettings(), "read-only")
     with_read_memory = tool_registry.schemas(
-        SearchSettings(), "read-only", memory_enabled=True
+        IntegrationSettings(), "read-only", memory_enabled=True
     )
     with_full_memory = tool_registry.schemas(
-        SearchSettings(), "read-only", memory_enabled=True, memory_write_enabled=True
+        IntegrationSettings(), "read-only", memory_enabled=True, memory_write_enabled=True
     )
 
     assert not {"memory_write", "memory_retrieve"} & {
@@ -499,7 +499,7 @@ async def test_public_model_can_read_private_session_after_approval(
         session=source,
         tool_call=call,
         root_files=_root_files(tmp_path, source),
-        search_settings=SearchSettings(),
+        integration_settings=IntegrationSettings(),
         ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW),
     )
 

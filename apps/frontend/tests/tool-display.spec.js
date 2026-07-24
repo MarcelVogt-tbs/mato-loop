@@ -14,6 +14,7 @@ describe('tool display', () => {
     expect(toolSummary({ name: 'read_file', arguments: { path: 'Projekte/plan.md' } })).toBe('Projekte/plan.md')
     expect(toolIdentity('copy_path')).toEqual({ label: 'Pfad kopieren', icon: 'content_copy' })
     expect(toolIdentity('move_path')).toEqual({ label: 'Pfad verschieben', icon: 'drive_file_move' })
+    expect(toolIdentity('update_agent_identity')).toEqual({ label: 'Persona ändern', icon: 'face' })
     expect(toolSummary({
       name: 'copy_path',
       arguments: {
@@ -23,6 +24,17 @@ describe('tool display', () => {
         destination_path: 'bild.png'
       }
     })).toBe('session:generated/bild.png -> workspace:bild.png')
+  })
+
+  it('summarizes persona changes without rendering the complete instructions', () => {
+    expect(toolSummary({
+      name: 'update_agent_identity',
+      arguments: { display_name: 'Ada', instructions: 'Eine lange Persona' }
+    })).toBe('Agent-Name: Ada')
+    expect(toolSummary({
+      name: 'update_agent_identity',
+      arguments: { instructions: 'Eine lange Persona' }
+    })).toBe('Verhalten und Charakter aktualisieren')
   })
 
   it('identifies webfetch exactly and hides sensitive URL parameters', () => {

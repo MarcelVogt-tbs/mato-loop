@@ -12,6 +12,7 @@ describe('MatoLoop frontend scaffold', () => {
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
       'settings-providers',
       'settings-default-models',
+      'settings-persona',
       'settings-integrations',
       'settings-tools',
       'settings-memory'

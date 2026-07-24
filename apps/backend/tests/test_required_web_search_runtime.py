@@ -13,19 +13,16 @@ from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPo
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
+    AgentIdentitySettings,
     AgentRuntimeSettings,
     AiSettings,
     GeneralSettings,
+    IntegrationSettings,
     MemorySettings,
-    SearchSettings,
     SettingsStore,
     ToolSettings,
 )
-from mato_loop_backend.settings.models import (
-    LlmProviderConfig,
-    ModelConfig,
-    SearchProviderConfig,
-)
+from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 
 async def _runtime_setup(monkeypatch, results: list[ProviderResult]):
@@ -38,14 +35,7 @@ async def _runtime_setup(monkeypatch, results: list[ProviderResult]):
     ai_settings = AiSettings(
         providers=[provider], models=[model], default_model_id=model.id
     )
-    search_provider = SearchProviderConfig(
-        name="Search",
-        adapter_type="searxng",
-        config={"base_url": "https://search.example.test"},
-    )
-    search_settings = SearchSettings(
-        providers=[search_provider], default_provider_id=search_provider.id
-    )
+    integration_settings = IntegrationSettings()
     runtime_settings = AgentRuntimeSettings(max_steps=10, max_model_requests=10)
     session = ChatSession(
         id=uuid4(),
@@ -64,10 +54,11 @@ async def _runtime_setup(monkeypatch, results: list[ProviderResult]):
     async def load_settings(_db, settings_type, **_kwargs):
         return {
             AiSettings: ai_settings,
+            AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
             GeneralSettings: GeneralSettings(default_timezone="Europe/Berlin"),
             MemorySettings: MemorySettings(enabled=False),
-            SearchSettings: search_settings,
+            IntegrationSettings: integration_settings,
             ToolSettings: ToolSettings(),
         }[settings_type]
 
@@ -105,7 +96,7 @@ async def _runtime_setup(monkeypatch, results: list[ProviderResult]):
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
     monkeypatch.setattr(
         tool_registry,
-        "execute",
+        "_execute_definition",
         AsyncMock(
             return_value=ToolResult.json(
                 [

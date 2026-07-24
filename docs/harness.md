@@ -24,6 +24,10 @@ Ein Tool ist eine Host-Fähigkeit mit einem stabilen Namen, einer Beschreibung, 
 
 Die Tool-Registry ist die einzige Namensauflösung für Tool-Calls. Sie muss doppelte Namen beim Aufbau ablehnen, Eingaben vor der Ausführung validieren und nur Tools exportieren, die für Session, Modus und effektive Integrationen verfügbar sind. Unbekannte Tools, ungültige Argumente und Ausführungsfehler werden in stabile Tool-Fehler übersetzt. Exception-Texte oder Secrets gelangen weder in den Modellkontext noch in API-Antworten.
 
+Konfigurierte Integrationen werden über einen statischen Hostkatalog aufgelöst. Ein Adapter kann neue statisch implementierte Tools beitragen oder Werte zu einem vom Basistool deklarierten hostseitigen Konfigurationsfeld ergänzen. Solche Werte werden nicht automatisch Modellargumente. Der Adapter darf keine fremden Handler oder beliebige Remoteschemas laden. Promptfragmente stammen ausschließlich aus dem Adaptercode; Namen, Antworten und sonstige externe Daten werden nicht als Anweisungen übernommen.
+
+Das effektive Toolset wird für genau einen Modellrequest gebunden. Schemaexport, Optionsvalidierung und anschließende Ausführung verwenden dasselbe Binding. Ein Tool-Call außerhalb dieses Sets wird auch dann nicht ausgeführt, wenn eine gleichnamige globale Definition existiert. Vor externen Wirkungen muss der Handler widerrufbare Integrations-, Tool- und Capability-Konfiguration erneut prüfen.
+
 Jede Ausführung erhält einen Host-Context mit mindestens Run-ID, aktueller Session-ID, Registry-unabhängigen Services und `Context.ask`. Tools greifen nicht direkt auf Coordinator-Waiter, Approval-Tabellen oder Providerobjekte zu. `Context.ask` nimmt eine typisierte Permission-Anforderung entgegen und führt zentral dieselbe Reihenfolge aus:
 
 1. Unveränderliche Host-Policy prüfen.

@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import runtime as runtime_module
+from mato_loop_backend.agent.context import _model_tool_calls
 from mato_loop_backend.agent.runtime import (
     RUN_PHASES,
     AgentRuntime,
@@ -577,6 +578,38 @@ def test_responses_replay_webfetch_arguments_are_redacted() -> None:
     )
 
     assert "secret" not in result["responses_output_items"][0]["arguments"]
+
+
+def test_agent_identity_instructions_are_redacted_and_reprojected_as_text() -> None:
+    instructions = "Sei direkt. " * 100
+    call = ToolCall(
+        id="identity-1",
+        name="update_agent_identity",
+        arguments={"instructions": instructions},
+    )
+
+    safe_arguments = _safe_tool_arguments(call.name, call.arguments)
+    replay = _safe_provider_data(
+        {
+            "responses_output_items": [
+                {
+                    "type": "function_call",
+                    "call_id": call.id,
+                    "name": call.name,
+                    "arguments": {"instructions": instructions},
+                }
+            ]
+        },
+        [call],
+    )
+    projected = _model_tool_calls(
+        [{"id": call.id, "name": call.name, "arguments": safe_arguments}]
+    )
+
+    assert instructions not in replay["responses_output_items"][0]["arguments"]
+    assert projected is not None
+    assert isinstance(projected[0]["arguments"]["instructions"], str)
+    assert "were truncated" in projected[0]["arguments"]["instructions"]
 
 
 def test_object_responses_replay_webfetch_arguments_are_redacted() -> None:

@@ -12,6 +12,7 @@ const { api } = vi.hoisted(() => ({
 vi.mock('src/boot/axios', () => ({ api }))
 
 import { useAuthStore } from '../src/stores/auth'
+import { useAgentIdentityStore } from '../src/stores/agent-identity'
 import { useChatStore } from '../src/stores/chat'
 
 describe('auth preferences', () => {
@@ -45,9 +46,12 @@ describe('auth preferences', () => {
   it('clears all in-memory attachment drafts on logout', async () => {
     api.post.mockResolvedValue({ data: {} })
     const auth = useAuthStore()
+    const identity = useAgentIdentityStore()
     const chat = useChatStore()
     auth.authenticated = true
     auth.username = 'viktor'
+    identity.assignIdentity({ displayName: 'Ada', instructions: 'Direkt' })
+    identity.loaded = true
     chat.attachmentDrafts.newSession.push({ id: 'audio', file: { size: 1 } })
     chat.setAudioDictation({ file: { size: 1 }, status: 'failed' })
 
@@ -55,5 +59,7 @@ describe('auth preferences', () => {
 
     expect(chat.attachmentDrafts).toEqual({ newSession: [], sessionMessages: {} })
     expect(chat.audioDictations).toEqual({ newSession: null, sessionMessages: {} })
+    expect(identity.displayName).toBe('MatoLoop')
+    expect(identity.loaded).toBe(false)
   })
 })

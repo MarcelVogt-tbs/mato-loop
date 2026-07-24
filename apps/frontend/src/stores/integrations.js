@@ -3,20 +3,24 @@ import { api } from 'src/boot/axios'
 
 const emptySearch = () => ({
   configured: false,
-  enabled: false,
-  effectiveEnabled: false,
-  defaultIntegrationId: null,
-  unavailableReason: 'integration.notConfigured',
+  enabled: true,
+  effectiveEnabled: true,
+  unavailableReason: null,
   providers: []
 })
 
 export const useIntegrationStore = defineStore('integrations', {
-  state: () => ({ search: emptySearch(), loading: false }),
+  state: () => ({ search: emptySearch(), loading: false, loaded: false, loadFailed: false }),
   actions: {
     async fetchSearch() {
       this.loading = true
+      this.loadFailed = false
       try {
         this.search = (await api.get('/integrations/search')).data
+        this.loaded = true
+      } catch (error) {
+        this.loadFailed = true
+        throw error
       } finally {
         this.loading = false
       }
@@ -31,10 +35,6 @@ export const useIntegrationStore = defineStore('integrations', {
     },
     async removeSearch(id) {
       await api.delete(`/integrations/search/providers/${id}`)
-      await this.fetchSearch()
-    },
-    async setDefaultSearch(id) {
-      await api.put('/integrations/search/default', { integration_id: id })
       await this.fetchSearch()
     },
     async testSearch(id) {

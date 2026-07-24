@@ -6,26 +6,43 @@ const defaultWebFetch = () => ({
   defaultPolicy: 'ask',
   allowedPrivateOrigins: []
 })
+const defaultWebSearch = () => ({
+  primaryProvider: 'no_key',
+  fallbackProvider: null,
+  providerOptions: [
+    {
+      value: 'no_key',
+      name: 'Websuche ohne API-Key',
+      adapterType: 'ddgs',
+      integrationId: null
+    }
+  ]
+})
 
 const defaultMediaPolicy = () => ({ policy: 'disabled', timeoutSeconds: 300 })
+const defaultAgentIdentityPolicy = () => ({ policy: 'ask' })
 
 function settingsPayload(state) {
   return {
+    webSearch: state.webSearch,
     webFetch: state.webFetch,
     generateImage: state.generateImage,
     generateSpeech: state.generateSpeech,
     generateAudio: state.generateAudio,
-    transcribeAudio: state.transcribeAudio
+    transcribeAudio: state.transcribeAudio,
+    updateAgentIdentity: state.updateAgentIdentity
   }
 }
 
 export const useToolSettingsStore = defineStore('tool-settings', {
   state: () => ({
+    webSearch: defaultWebSearch(),
     webFetch: defaultWebFetch(),
     generateImage: defaultMediaPolicy(),
     generateSpeech: defaultMediaPolicy(),
     generateAudio: defaultMediaPolicy(),
     transcribeAudio: defaultMediaPolicy(),
+    updateAgentIdentity: defaultAgentIdentityPolicy(),
     loaded: false,
     loadFailed: false,
     loading: false,
@@ -51,11 +68,23 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       this.saving = true
       try {
         const payload = {
+          webSearch: {
+            primaryProvider: settings.webSearch
+              ? settings.webSearch.primaryProvider
+              : this.webSearch.primaryProvider,
+            fallbackProvider: settings.webSearch
+              ? settings.webSearch.fallbackProvider
+              : this.webSearch.fallbackProvider
+          },
           webFetch: settings.webFetch || this.webFetch,
           generateImage: { ...this.generateImage, ...settings.generateImage },
           generateSpeech: { ...this.generateSpeech, ...settings.generateSpeech },
           generateAudio: { ...this.generateAudio, ...settings.generateAudio },
-          transcribeAudio: { ...this.transcribeAudio, ...settings.transcribeAudio }
+          transcribeAudio: { ...this.transcribeAudio, ...settings.transcribeAudio },
+          updateAgentIdentity: {
+            ...this.updateAgentIdentity,
+            ...settings.updateAgentIdentity
+          }
         }
         const { data } = await api.put('/tools/settings', payload)
         this.assignSettings(data)
@@ -66,9 +95,14 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       }
     },
     assignSettings(data) {
+      this.webSearch = { ...defaultWebSearch(), ...data?.webSearch }
       this.webFetch = { ...defaultWebFetch(), ...data?.webFetch }
       for (const field of ['generateImage', 'generateSpeech', 'generateAudio', 'transcribeAudio']) {
         this[field] = { ...defaultMediaPolicy(), ...data?.[field] }
+      }
+      this.updateAgentIdentity = {
+        ...defaultAgentIdentityPolicy(),
+        ...data?.updateAgentIdentity
       }
     }
   }

@@ -19,7 +19,8 @@ const TOOL_DISPLAY = {
   session_read: { label: 'Session lesen', icon: 'forum' },
   session_search: { label: 'Sessions durchsuchen', icon: 'manage_search' },
   memory_retrieve: { label: 'Memory abrufen', icon: 'psychology' },
-  memory_write: { label: 'Memory speichern', icon: 'save' }
+  memory_write: { label: 'Memory speichern', icon: 'save' },
+  update_agent_identity: { label: 'Persona ändern', icon: 'face' }
 }
 
 function truncate(value, maxLength = 140) {
@@ -48,6 +49,12 @@ export function toolSummary(tool) {
   }
   if (tool?.name === 'transcribe_audio' && typeof argumentsValue.attachment_id === 'string') {
     return `Audioanhang ${truncate(argumentsValue.attachment_id, 36)}`
+  }
+  if (tool?.name === 'update_agent_identity') {
+    if (typeof argumentsValue.display_name === 'string') {
+      return `Agent-Name: ${truncate(argumentsValue.display_name, 80)}`
+    }
+    return 'Verhalten und Charakter aktualisieren'
   }
   if (typeof argumentsValue.path === 'string') return truncate(argumentsValue.path)
   if (typeof argumentsValue.source_path === 'string' && typeof argumentsValue.destination_path === 'string') {

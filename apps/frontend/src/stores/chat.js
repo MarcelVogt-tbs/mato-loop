@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
+import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
 import { notifyError } from 'src/utils/notifications'
 
@@ -75,9 +76,9 @@ function emptyActivity(revision = 0) {
 function sortSessions(sessions) {
   return [...sessions].sort((left, right) => {
     if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1
-    const leftUpdatedAt = Date.parse(left.updatedAt || '') || 0
-    const rightUpdatedAt = Date.parse(right.updatedAt || '') || 0
-    return rightUpdatedAt - leftUpdatedAt
+    const leftLastMessageAt = Date.parse(left.lastMessageAt || left.createdAt || '') || 0
+    const rightLastMessageAt = Date.parse(right.lastMessageAt || right.createdAt || '') || 0
+    return rightLastMessageAt - leftLastMessageAt
   })
 }
 
@@ -327,7 +328,7 @@ export const useChatStore = defineStore('chat', {
       this.persistDrafts()
     },
     async fetchSessions() {
-      this.sessions = (await api.get('/sessions')).data
+      this.sessions = sortSessions((await api.get('/sessions')).data)
       const sessionIds = new Set(this.sessions.map((session) => session.id))
       for (const id of Object.keys(this.drafts.sessionMessages)) {
         if (!sessionIds.has(id)) delete this.drafts.sessionMessages[id]
@@ -595,6 +596,14 @@ export const useChatStore = defineStore('chat', {
         if (data.message) {
           const index = session.messages.findIndex((message) => message.id === localMessage.id)
           if (index >= 0) session.messages[index] = data.message
+          if (data.message.createdAt) {
+            session.lastMessageAt = data.message.createdAt
+            this.sessions = sortSessions(
+              this.sessions.map((item) => item.id === session.id
+                ? { ...item, lastMessageAt: data.message.createdAt }
+                : item)
+            )
+          }
         }
         this.clearAttachmentDraft(session.id)
         delete this.drafts.sessionMessages[session.id]
@@ -682,6 +691,10 @@ export const useChatStore = defineStore('chat', {
           }
         }
       })
+      source.addEventListener('agent.identity.updated', (event) => {
+        if (this.eventSource !== source) return
+        useAgentIdentityStore().assignIdentity(JSON.parse(event.data).identity)
+      })
       source.addEventListener('message.delta', (event) => {
         if (this.eventSource !== source) return
         if (this.activity.phase !== 'streaming') this.setActivity('streaming')
@@ -765,6 +778,7 @@ export const useChatStore = defineStore('chat', {
         this.refreshSession(sessionId)
         this.fetchSessions()
         useApprovalStore().fetchPending()
+        void useAgentIdentityStore().fetchIdentity({ suppressErrorToast: true }).catch(() => {})
         if (titleGenerationActive) void this.refreshGeneratedTitle(sessionId)
       }
       source.addEventListener('run.failed', () => {

@@ -34,7 +34,7 @@
 
         <div v-else-if="!chat.current" class="chat-welcome text-center q-pa-lg">
           <AppLogo :size="72" />
-          <h1 class="text-h4 text-weight-bold q-mb-sm">Willkommen bei MatoLoop</h1>
+          <h1 class="text-h4 text-weight-bold q-mb-sm">Willkommen bei {{ identity.displayName }}</h1>
           <p class="text-body1 app-muted q-mx-auto">
             Was möchtest du tun?
           </p>
@@ -52,7 +52,7 @@
             :class="['chat-message', `chat-message--${message.role}`]"
           >
             <template v-if="message.kind === 'runtime_error' && message.error">
-              <div class="chat-message__label">MatoLoop</div>
+              <div class="chat-message__label">{{ identity.displayName }}</div>
               <q-banner rounded class="chat-runtime-error app-surface-tonal" role="alert">
                 <template #avatar>
                   <q-icon name="error_outline" color="negative" />
@@ -64,7 +64,7 @@
               v-else-if="message.content || message.reasoning || message.generationStatus === 'interrupted'"
             >
               <div class="chat-message__label">
-                <span>{{ message.role === 'user' ? 'Du' : 'MatoLoop' }}</span>
+                <span>{{ message.role === 'user' ? 'Du' : identity.displayName }}</span>
                 <span
                   v-if="message.role === 'assistant' && message.modelName"
                   class="chat-message__model"
@@ -119,7 +119,7 @@
             class="chat-message chat-message--assistant"
           >
             <div class="chat-message__label">
-              <span>MatoLoop</span>
+              <span>{{ identity.displayName }}</span>
               <span v-if="chat.streamModelName" class="chat-message__model">
                 · {{ chat.streamModelName }}
               </span>
@@ -212,6 +212,7 @@ import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ReasoningPanel from 'components/ReasoningPanel.vue'
 import ToolCallItem from 'components/ToolCallItem.vue'
+import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useAuthStore } from 'stores/auth'
@@ -228,6 +229,7 @@ const route = useRoute()
 const router = useRouter()
 const $q = useQuasar()
 const chat = useChatStore()
+const identity = useAgentIdentityStore()
 const auth = useAuthStore()
 const approvals = useApprovalStore()
 const integrations = useIntegrationStore()

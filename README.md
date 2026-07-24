@@ -13,7 +13,7 @@ Der aktuelle Entwicklungsstand umfasst:
 - einheitlichen Modell-/Tool-Loop für alle Provider
 - Datei-Explorer und Arbeitsverzeichnisse unter `/data/home`
 - persistente Permission-Grants und Freigabeentscheidungen
-- externe SearXNG-Anbindung
+- integrierte Websuche ohne API-Key und zusätzliche SearXNG-Provider
 - sprachneutrale API-Fehlercodes und menschenlesbare Frontend-Toasts
 
 ## Stack
@@ -113,7 +113,7 @@ Provider sind ausschließlich Modelltransporte. Sessions, Tool-Calls, Dateien, M
 
 Jeder Provider kann mehrere Modelle besitzen. OpenAI-kompatible Provider und ChatGPT Codex unterstützen die automatische Modellerkennung. Neu erkannte Modelle sind zunächst deaktiviert und werden erst nach expliziter Aktivierung im Chat angeboten. Ein erneuter Abgleich behält interne Modell-IDs und Laufzeitkonfigurationen bei; nicht mehr gemeldete Modelle werden als nicht verfügbar markiert statt gelöscht. Falls ein Provider keine Discovery unterstützt, kann eine Modell-ID über den erweiterten manuellen Fallback hinterlegt werden. Provider, Modelle und die globale LLM-Laufzeit können unabhängig aktiviert werden.
 
-Unter **Einstellungen > Integrationen** können mehrere Suchintegrationen verwaltet werden. Aktuell wird SearXNG unterstützt; eine aktive Instanz wird als Standard ausgewählt. Erst dann stehen die erzwungene und agentengesteuerte Websuche zur Verfügung.
+`web_search` verwendet ohne weitere Konfiguration die eingebaute No-Key-Metasuche. Sie ist keine Integration und fragt über `ddgs` je nach Verfügbarkeit öffentliche Suchdienste ab. Unter **Einstellungen > Integrationen** können zusätzliche SearXNG-Instanzen verwaltet werden; unter **Einstellungen > Tools** werden daraus der Primärprovider und ein optionaler Fallback gewählt. Das Modell übergibt ausschließlich den Suchtext und kann diese Hostauswahl nicht überschreiben. Der Fallback wird nur bei temporären Fehlern des Primärproviders verwendet.
 
 Unter **Einstellungen > Tools** wird `webfetch` unabhängig von SearXNG konfiguriert. Das Tool ruft konkrete HTTP(S)-URLs als Markdown, Text oder HTML ab und unterstützt Bildantworten bis 5 MiB. Standardmäßig fragt jeder Abruf nach einer Freigabe. Alternativ können öffentliche Ziele oder öffentliche und explizit erlaubte private Origins automatisch freigegeben werden. Pro Modell ist ein vollständiger Policy-Override möglich; der globale Schalter und die Origin-Allowlist bleiben Hostgrenzen.
 

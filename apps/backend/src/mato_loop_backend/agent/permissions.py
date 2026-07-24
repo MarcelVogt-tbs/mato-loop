@@ -126,6 +126,27 @@ def media_permission(session_id: UUID, capability: str, tool_name: str) -> Permi
     )
 
 
+def agent_identity_permission(
+    user_id: UUID, *, changes_name: bool, changes_instructions: bool
+) -> PermissionRequest:
+    if changes_name and changes_instructions:
+        summary = "Der Agent möchte seinen Namen und seine Persona-Anweisungen ändern."
+    elif changes_name:
+        summary = "Der Agent möchte seinen Namen ändern."
+    else:
+        summary = "Der Agent möchte seine Persona-Anweisungen ändern."
+    return PermissionRequest(
+        capability="settings.agent_identity.update",
+        resource_type="agent_identity",
+        resource_scope=str(user_id),
+        action_kind="update_agent_identity",
+        risk_level="medium",
+        title="Agent-Persona ändern?",
+        summary=summary,
+        resource_display="Eigene Agent-Persona",
+    )
+
+
 def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath] | None:
     try:
         value = json.loads(resource_scope)
@@ -244,4 +265,9 @@ class PermissionPolicy:
             return request.resource_scope == grant.resource_scope == "all"
         if request.resource_type == "url":
             return request.resource_scope == grant.resource_scope
+        if request.resource_type == "agent_identity":
+            try:
+                return UUID(request.resource_scope) == UUID(grant.resource_scope)
+            except ValueError:
+                return False
         return False

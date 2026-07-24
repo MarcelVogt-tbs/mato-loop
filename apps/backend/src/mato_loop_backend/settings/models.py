@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, ClassVar, Self
+from unicodedata import category as unicode_category
 from uuid import UUID, uuid4
 
 from pydantic import (
@@ -37,6 +38,15 @@ class SettingsScope(StrEnum):
 class SettingsDocument(BaseModel):
     settings_key: ClassVar[str]
     settings_scope: ClassVar[SettingsScope] = SettingsScope.GLOBAL
+
+
+def normalize_agent_display_name(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("display_name must not be blank")
+    if any(unicode_category(character) in {"Cc", "Cf"} for character in cleaned):
+        raise ValueError("display_name must not contain control characters")
+    return cleaned
 
 
 class MemoryPolicy(StrEnum):
@@ -225,9 +235,10 @@ def effective_model_pseudonymization(
     return provider.pseudonymization_enabled
 
 
-class SearchProviderConfig(BaseModel):
+class IntegrationInstance(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str
+    integration_type: str
     adapter_type: str
     enabled: bool = True
     credential_id: UUID | None = None
@@ -282,6 +293,32 @@ class WebFetchSettings(BaseModel):
         return origins
 
 
+class WebSearchToolSettings(BaseModel):
+    primary_provider: str = Field(
+        default="no_key",
+        min_length=1,
+        max_length=100,
+        validation_alias=AliasChoices("primary_provider", "primaryProvider"),
+    )
+    fallback_provider: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        validation_alias=AliasChoices("fallback_provider", "fallbackProvider"),
+    )
+
+    @field_validator("primary_provider", "fallback_provider", mode="before")
+    @classmethod
+    def migrate_duckduckgo_provider(cls, value: Any) -> Any:
+        return "no_key" if value == "duckduckgo" else value
+
+    @model_validator(mode="after")
+    def providers_must_differ(self) -> WebSearchToolSettings:
+        if self.fallback_provider == self.primary_provider:
+            raise ValueError("fallback_provider must differ from primary_provider")
+        return self
+
+
 class MediaToolSettings(BaseModel):
     policy: ToolExecutionPolicy = ToolExecutionPolicy.DISABLED
     timeout_seconds: int = Field(
@@ -292,9 +329,17 @@ class MediaToolSettings(BaseModel):
     )
 
 
+class PolicyToolSettings(BaseModel):
+    policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
+
+
 class ToolSettings(SettingsDocument):
     settings_key = "tools"
 
+    web_search: WebSearchToolSettings = Field(
+        default_factory=WebSearchToolSettings,
+        validation_alias=AliasChoices("web_search", "webSearch"),
+    )
     web_fetch: WebFetchSettings = Field(
         default_factory=WebFetchSettings,
         validation_alias=AliasChoices("web_fetch", "webFetch"),
@@ -314,6 +359,10 @@ class ToolSettings(SettingsDocument):
     transcribe_audio: MediaToolSettings = Field(
         default_factory=MediaToolSettings,
         validation_alias=AliasChoices("transcribe_audio", "transcribeAudio"),
+    )
+    update_agent_identity: PolicyToolSettings = Field(
+        default_factory=PolicyToolSettings,
+        validation_alias=AliasChoices("update_agent_identity", "updateAgentIdentity"),
     )
 
 
@@ -340,12 +389,10 @@ class AiSettings(SettingsDocument):
     audio_transcription_model_id: UUID | None = None
 
 
-class SearchSettings(SettingsDocument):
-    settings_key = "search"
+class IntegrationSettings(SettingsDocument):
+    settings_key = "integrations"
 
-    enabled: bool = True
-    providers: list[SearchProviderConfig] = Field(default_factory=list)
-    default_provider_id: UUID | None = None
+    instances: list[IntegrationInstance] = Field(default_factory=list)
 
 
 class AgentRuntimeSettings(SettingsDocument):
@@ -382,6 +429,24 @@ class MemorySettings(SettingsDocument):
     dreaming_idle_minutes: int = Field(default=15, ge=1, le=10_080)
     dreaming_max_batch_messages: int = Field(default=50, ge=2, le=500)
     dreaming_max_candidates: int = Field(default=10, ge=1, le=100)
+
+
+class AgentIdentitySettings(SettingsDocument):
+    settings_key = "agent-identity"
+    settings_scope = SettingsScope.USER
+
+    display_name: str = Field(default="MatoLoop", min_length=1, max_length=80)
+    instructions: str = Field(default="", max_length=16_000)
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value: str) -> str:
+        return normalize_agent_display_name(value)
+
+    @field_validator("instructions")
+    @classmethod
+    def normalize_instructions(cls, value: str) -> str:
+        return value.strip()
 
 
 class UserPreferences(SettingsDocument):

@@ -17,15 +17,22 @@
       />
     </header>
 
+    <q-banner v-if="integrations.loadFailed" rounded class="app-surface-tonal q-mb-md">
+      Die Integrationen konnten nicht geladen werden.
+      <template #action>
+        <q-btn flat no-caps color="primary" label="Erneut laden" @click="reload" />
+      </template>
+    </q-banner>
+
     <q-card flat class="app-surface integration-list-card">
       <q-list separator>
-        <q-item v-if="!searchProviders.length && !integrations.loading" class="q-py-lg">
+        <q-item v-if="integrations.loaded && !searchProviders.length && !integrations.loading" class="q-py-lg">
           <q-item-section avatar>
             <q-avatar color="grey-7" text-color="white" icon="extension" />
           </q-item-section>
           <q-item-section>
             <q-item-label>Noch keine Integration konfiguriert</q-item-label>
-            <q-item-label caption>Füge eine Websuche mit einem unterstützten Anbieter hinzu.</q-item-label>
+            <q-item-label caption>Füge einen externen Dienst wie SearXNG hinzu.</q-item-label>
           </q-item-section>
         </q-item>
 
@@ -39,7 +46,7 @@
               <q-chip dense :color="integration.enabled ? 'positive' : 'grey-7'" text-color="white">
                 {{ integration.enabled ? 'Aktiv' : 'Deaktiviert' }}
               </q-chip>
-              <q-chip v-if="isDefault(integration)" dense outline color="primary">Standard</q-chip>
+              <q-chip v-if="integration.enabled" dense outline color="primary">Im Tool verfügbar</q-chip>
             </div>
             <q-item-label caption>Websuche · {{ providerLabel(integration.providerType) }}</q-item-label>
             <q-item-label caption>{{ integration.config.baseUrl }}</q-item-label>
@@ -53,15 +60,6 @@
               label="Testen"
               :loading="testingId === integration.id"
               @click="testIntegration(integration.id)"
-            />
-            <q-btn
-              v-if="integration.enabled && !isDefault(integration)"
-              flat
-              dense
-              no-caps
-              icon="star"
-              label="Als Standard"
-              @click="setDefault(integration.id)"
             />
             <q-btn
               flat
@@ -121,10 +119,6 @@ function providerLabel(providerType) {
   return providerType === 'searxng' ? 'SearXNG' : providerType
 }
 
-function isDefault(integration) {
-  return integrations.search.defaultIntegrationId === integration.id
-}
-
 async function testIntegration(id) {
   testingId.value = id
   try {
@@ -135,11 +129,6 @@ async function testIntegration(id) {
   } finally {
     testingId.value = null
   }
-}
-
-async function setDefault(id) {
-  await integrations.setDefaultSearch(id)
-  $q.notify({ type: 'positive', message: 'Standardintegration geändert' })
 }
 
 async function removeIntegration(integration) {
@@ -153,5 +142,13 @@ async function removeIntegration(integration) {
   $q.notify({ type: 'positive', message: 'Integration gelöscht' })
 }
 
-onMounted(() => integrations.fetchSearch())
+async function reload() {
+  try {
+    await integrations.fetchSearch()
+  } catch {
+    // Der zentrale API-Interceptor zeigt den Fehler als Toast an.
+  }
+}
+
+onMounted(reload)
 </script>

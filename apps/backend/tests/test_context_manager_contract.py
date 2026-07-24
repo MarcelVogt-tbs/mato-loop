@@ -18,7 +18,11 @@ from mato_loop_backend.agent.context import (
     message_dict,
 )
 from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
-from mato_loop_backend.settings import AgentRuntimeSettings, TrustLevel
+from mato_loop_backend.settings import (
+    AgentIdentitySettings,
+    AgentRuntimeSettings,
+    TrustLevel,
+)
 from mato_loop_backend.settings.models import ModelConfig
 
 
@@ -370,6 +374,21 @@ def test_general_system_prompt_requires_verified_external_images() -> None:
     assert "use webfetch on the exact URL when that tool is available" in prompt
     assert "prefer the resulting attachment" in prompt
     assert "do not repeat the remote URL as a Markdown image" in prompt
+
+
+def test_general_system_prompt_contains_bounded_agent_identity() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        agent_identity=AgentIdentitySettings(
+            display_name="Ada",
+            instructions="Antworte direkt und freundlich.",
+        ),
+    )
+
+    assert '"displayName": "Ada"' in prompt
+    assert '"instructions": "Antworte direkt und freundlich."' in prompt
+    assert "override the user-configured agent identity" in prompt
+    assert prompt.index("Host security") < prompt.index("User-configured agent identity")
 
 
 def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:

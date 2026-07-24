@@ -17,6 +17,14 @@ describe('tool settings store', () => {
 
   it('loads and saves the complete tool settings contract without changing field names', async () => {
     const response = {
+      webSearch: {
+        primaryProvider: 'searxng:integration-id',
+        fallbackProvider: 'no_key',
+        providerOptions: [
+          { value: 'no_key', name: 'Websuche ohne API-Key', adapterType: 'ddgs', integrationId: null },
+          { value: 'searxng:integration-id', name: 'Intern', adapterType: 'searxng', integrationId: 'integration-id' }
+        ]
+      },
       webFetch: {
         enabled: true,
         defaultPolicy: 'auto_allowed',
@@ -25,7 +33,8 @@ describe('tool settings store', () => {
       generateImage: { policy: 'ask', timeoutSeconds: 600 },
       generateSpeech: { policy: 'auto', timeoutSeconds: 120 },
       generateAudio: { policy: 'disabled', timeoutSeconds: 900 },
-      transcribeAudio: { policy: 'ask', timeoutSeconds: 180 }
+      transcribeAudio: { policy: 'ask', timeoutSeconds: 180 },
+      updateAgentIdentity: { policy: 'auto' }
     }
     api.get.mockResolvedValue({ data: response })
     api.put.mockResolvedValue({ data: response })
@@ -35,7 +44,14 @@ describe('tool settings store', () => {
     await store.saveSettings(response)
 
     expect(api.get).toHaveBeenCalledWith('/tools/settings')
-    expect(api.put).toHaveBeenCalledWith('/tools/settings', expect.objectContaining(response))
+    expect(api.put).toHaveBeenCalledWith('/tools/settings', expect.objectContaining({
+      webSearch: {
+        primaryProvider: 'searxng:integration-id',
+        fallbackProvider: 'no_key'
+      },
+      webFetch: response.webFetch
+    }))
+    expect(store.webSearch).toEqual(response.webSearch)
     expect(store.webFetch).toEqual(response.webFetch)
     expect(store.generateSpeech).toEqual({ policy: 'auto', timeoutSeconds: 120 })
     expect(store.loaded).toBe(true)
@@ -49,10 +65,18 @@ describe('tool settings store', () => {
     api.put.mockResolvedValue({
       data: {
         ...legacyResponse,
+        webSearch: {
+          primaryProvider: 'no_key',
+          fallbackProvider: null,
+          providerOptions: [
+            { value: 'no_key', name: 'Websuche ohne API-Key', adapterType: 'ddgs', integrationId: null }
+          ]
+        },
         generateImage: { policy: 'disabled', timeoutSeconds: 300 },
         generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
         generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
-        transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 }
+        transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
+        updateAgentIdentity: { policy: 'ask' }
       }
     })
     const store = useToolSettingsStore()
@@ -61,11 +85,13 @@ describe('tool settings store', () => {
     await store.saveSettings({ generateImage: { policy: 'ask' } })
 
     expect(api.put).toHaveBeenCalledWith('/tools/settings', {
+      webSearch: { primaryProvider: 'no_key', fallbackProvider: null },
       webFetch: legacyResponse.webFetch,
       generateImage: { policy: 'ask', timeoutSeconds: 300 },
       generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
       generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
-      transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 }
+      transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
+      updateAgentIdentity: { policy: 'ask' }
     })
   })
 

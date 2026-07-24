@@ -10,7 +10,7 @@
           type="textarea"
           rows="1"
           class="chat-composer__input"
-          placeholder="Eine Nachricht an MatoLoop senden"
+          :placeholder="`Eine Nachricht an ${identity.displayName} senden`"
           :disable="interactionDisabled"
           @update:model-value="$emit('update:draft', $event)"
           @keydown.enter.exact.prevent="submit"
@@ -314,6 +314,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'components/ComposerAttachments.vue'
+import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useIntegrationStore } from 'stores/integrations'
 import { useChatStore } from 'stores/chat'
 import { useProviderStore } from 'stores/providers'
@@ -336,6 +337,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['add-attachments', 'remove-attachment', 'send', 'stop', 'update', 'update:draft'])
 const $q = useQuasar()
+const identity = useAgentIdentityStore()
 const integrations = useIntegrationStore()
 const chat = useChatStore()
 const providers = useProviderStore()

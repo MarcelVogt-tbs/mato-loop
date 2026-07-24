@@ -8,6 +8,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
+    agent_identity_permission,
     media_permission,
     path_permission,
     session_permission,
@@ -236,6 +237,34 @@ async def test_media_session_grant_matches_capability_and_current_session(tmp_pa
     )
     assert await PermissionPolicy.evaluate(
         _db_with_grants(grant), session, other_capability, _root_files(tmp_path, session)
+    ) == PermissionDecision.ASK
+
+
+async def test_agent_identity_session_grant_matches_exact_user(tmp_path) -> None:
+    session = _session(user_id=uuid4())
+    request = agent_identity_permission(
+        session.user_id,
+        changes_name=True,
+        changes_instructions=False,
+    )
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=request.capability,
+        resource_type=request.resource_type,
+        resource_scope=str(session.user_id),
+    )
+    root_files = _root_files(tmp_path, session)
+
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant), session, request, root_files
+    ) == PermissionDecision.ALLOW
+    other_user = agent_identity_permission(
+        uuid4(),
+        changes_name=True,
+        changes_instructions=False,
+    )
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant), session, other_user, root_files
     ) == PermissionDecision.ASK
 
 

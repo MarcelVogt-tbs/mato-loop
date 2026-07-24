@@ -28,10 +28,11 @@ from mato_loop_backend.models import AgentRun, ChatSession, MemoryRecord, Messag
 from mato_loop_backend.providers.base import ProviderResult
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
+    AgentIdentitySettings,
     AgentRuntimeSettings,
     AiSettings,
+    IntegrationSettings,
     MemorySettings,
-    SearchSettings,
     SettingsStore,
     ToolSettings,
     TrustLevel,
@@ -80,11 +81,12 @@ async def _runtime_setup(
     async def load_settings(_db, settings_type, **_kwargs):
         return {
             AiSettings: ai_settings,
+            AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
             MemorySettings: MemorySettings(
                 enabled=True, max_context_items=10, max_context_characters=20_000
             ),
-            SearchSettings: SearchSettings(),
+            IntegrationSettings: IntegrationSettings(),
             ToolSettings: ToolSettings(),
         }[settings_type]
 

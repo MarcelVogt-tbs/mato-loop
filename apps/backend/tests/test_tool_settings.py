@@ -4,25 +4,56 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.tool_settings import (
     ToolSettingsRequest,
     get_tool_settings,
     update_tool_settings,
 )
-from mato_loop_backend.settings import SettingsStore, ToolSettings
+from mato_loop_backend.settings import (
+    IntegrationInstance,
+    IntegrationSettings,
+    SettingsStore,
+    ToolSettings,
+)
 
 
 def _db() -> AsyncMock:
     return AsyncMock(spec=AsyncSession)
 
 
+def test_legacy_duckduckgo_provider_is_migrated_to_no_key_search() -> None:
+    settings = ToolSettings.model_validate(
+        {"webSearch": {"primaryProvider": "duckduckgo"}}
+    )
+
+    assert settings.web_search.primary_provider == "no_key"
+
+
 async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
     settings = ToolSettings()
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    integrations = IntegrationSettings()
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else settings
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
 
     result = await get_tool_settings(_db())
 
     assert result == {
+        "webSearch": {
+            "primaryProvider": "no_key",
+            "fallbackProvider": None,
+            "providerOptions": [
+                {
+                    "value": "no_key",
+                    "name": "Websuche ohne API-Key",
+                    "adapterType": "ddgs",
+                    "integrationId": None,
+                }
+            ],
+        },
         "webFetch": {
             "enabled": True,
             "defaultPolicy": "ask",
@@ -32,18 +63,34 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "generateSpeech": {"policy": "disabled", "timeoutSeconds": 300},
         "generateAudio": {"policy": "disabled", "timeoutSeconds": 300},
         "transcribeAudio": {"policy": "disabled", "timeoutSeconds": 300},
+        "updateAgentIdentity": {"policy": "ask"},
     }
 
 
 async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch) -> None:
     save = AsyncMock()
     existing = ToolSettings()
-    load = AsyncMock(return_value=existing)
+    integration = IntegrationInstance(
+        name="Intern",
+        integration_type="search",
+        adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    integrations = IntegrationSettings(instances=[integration])
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else existing
+
+    load = AsyncMock(side_effect=load_settings)
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(SettingsStore, "save", save)
     db = _db()
     payload = ToolSettingsRequest.model_validate(
         {
+            "webSearch": {
+                "primaryProvider": f"searxng:{integration.id}",
+                "fallbackProvider": "no_key",
+            },
             "webFetch": {
                 "enabled": True,
                 "defaultPolicy": "auto_allowed",
@@ -57,6 +104,7 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
             "generateSpeech": {"policy": "auto", "timeoutSeconds": 120},
             "generateAudio": {"policy": "disabled", "timeoutSeconds": 900},
             "transcribeAudio": {"policy": "ask", "timeoutSeconds": 180},
+            "updateAgentIdentity": {"policy": "auto"},
         }
     )
 
@@ -71,12 +119,17 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
         ],
     }
     saved = save.await_args.args[1]
-    load.assert_awaited_once_with(db, ToolSettings, for_update=True)
+    assert load.await_args_list[0].args[1] is IntegrationSettings
+    assert load.await_args_list[0].kwargs == {"for_update": True}
+    assert load.await_args_list[1].args[1] is ToolSettings
+    assert load.await_args_list[1].kwargs == {"for_update": True}
     assert saved is existing
     assert saved.settings_key == "tools"
     assert saved.web_fetch.allowed_private_origins == result["webFetch"][
         "allowedPrivateOrigins"
     ]
+    assert saved.web_search.primary_provider == f"searxng:{integration.id}"
+    assert saved.web_search.fallback_provider == "no_key"
     assert saved.generate_image.policy == "ask"
     assert saved.generate_image.timeout_seconds == 600
     assert saved.generate_speech.policy == "auto"
@@ -85,6 +138,7 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     assert saved.generate_audio.timeout_seconds == 900
     assert saved.transcribe_audio.policy == "ask"
     assert saved.transcribe_audio.timeout_seconds == 180
+    assert saved.update_agent_identity.policy == "auto"
     db.commit.assert_awaited_once()
 
 
@@ -109,6 +163,35 @@ def test_tool_settings_reject_non_origin_urls(origin: str) -> None:
                 }
             }
         )
+
+
+async def test_tool_settings_reject_an_unavailable_search_provider(monkeypatch) -> None:
+    integrations = IntegrationSettings()
+    settings = ToolSettings()
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else settings
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    payload = ToolSettingsRequest.model_validate(
+        {
+            "webSearch": {
+                "primaryProvider": "searxng:00000000-0000-0000-0000-000000000000"
+            },
+            "webFetch": {
+                "enabled": True,
+                "defaultPolicy": "ask",
+                "allowedPrivateOrigins": [],
+            },
+        }
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await update_tool_settings(payload, _db())
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "integration.providerUnavailable"
+    assert exc_info.value.field == "primary_provider"
 
 
 @pytest.mark.parametrize("timeout", [9, 3_601, 30.5])

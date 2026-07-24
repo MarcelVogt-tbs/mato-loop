@@ -5,9 +5,9 @@ import { groupSessionsByRecency } from '../src/utils/session-groups'
 describe('session grouping', () => {
   it('groups sessions by their local calendar date', () => {
     const sessions = [
-      { id: 'today', updatedAt: '2026-07-20T08:00:00' },
-      { id: 'recent', updatedAt: '2026-07-14T18:00:00' },
-      { id: 'older', updatedAt: '2026-07-12T23:59:59' }
+      { id: 'today', lastMessageAt: '2026-07-20T08:00:00' },
+      { id: 'recent', lastMessageAt: '2026-07-14T18:00:00' },
+      { id: 'older', lastMessageAt: '2026-07-12T23:59:59' }
     ]
 
     const groups = groupSessionsByRecency(sessions, new Date('2026-07-20T12:00:00'))
@@ -42,11 +42,21 @@ describe('session grouping', () => {
 
   it('keeps pinned sessions in their own first group', () => {
     const groups = groupSessionsByRecency([
-      { id: 'today', updatedAt: '2026-07-20T08:00:00', pinned: false },
-      { id: 'pinned', updatedAt: '2026-06-01T08:00:00', pinned: true }
+      { id: 'today', lastMessageAt: '2026-07-20T08:00:00', pinned: false },
+      { id: 'pinned', lastMessageAt: '2026-06-01T08:00:00', pinned: true }
     ], new Date('2026-07-20T12:00:00'))
 
     expect(groups.map((group) => group.label)).toEqual(['Angepinnt', 'Heute'])
     expect(groups[0].sessions.map((session) => session.id)).toEqual(['pinned'])
+  })
+
+  it('ignores metadata updates when grouping sessions', () => {
+    const groups = groupSessionsByRecency([{
+      id: 'older-message',
+      lastMessageAt: '2026-07-01T08:00:00',
+      updatedAt: '2026-07-20T08:00:00'
+    }], new Date('2026-07-20T12:00:00'))
+
+    expect(groups[0].label).toBe('Älter')
   })
 })

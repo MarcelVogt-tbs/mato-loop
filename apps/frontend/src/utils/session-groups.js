@@ -20,7 +20,7 @@ export function groupSessionsByRecency(sessions, now = new Date()) {
       continue
     }
 
-    const timestamp = session.updatedAt || session.createdAt
+    const timestamp = session.lastMessageAt || session.createdAt
     const date = timestamp ? new Date(timestamp) : null
 
     if (date && !Number.isNaN(date.getTime()) && date >= today) grouped.today.push(session)

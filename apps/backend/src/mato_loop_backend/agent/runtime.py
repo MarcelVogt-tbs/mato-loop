@@ -70,10 +70,11 @@ from mato_loop_backend.providers.base import ProviderError, PublicReasoning, Too
 from mato_loop_backend.providers.media import available_media_capabilities
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
+    AgentIdentitySettings,
     AgentRuntimeSettings,
     AiSettings,
+    IntegrationSettings,
     MemorySettings,
-    SearchSettings,
     SettingsStore,
     ToolSettings,
     WebFetchPolicy,
@@ -357,6 +358,12 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
             safe["url"] = sanitize_url_for_display(safe["url"])
         except WebFetchError:
             safe["url"] = "[Ungültige URL]"
+    instructions = safe.get("instructions")
+    if isinstance(instructions, str):
+        safe["instructions"] = {
+            "characters": len(instructions),
+            "preview": instructions[:200],
+        }
     return safe
 
 
@@ -378,7 +385,7 @@ def _safe_provider_data(
         call_id = str(item.get("call_id") or item.get("id") or "")
         tool_name = str(item.get("name") or call_names.get(call_id) or "")
         arguments = item.get("arguments")
-        if tool_name in {"webfetch", "write_file"} and isinstance(arguments, str):
+        if tool_name in {"update_agent_identity", "webfetch", "write_file"} and isinstance(arguments, str):
             try:
                 parsed = json.loads(arguments)
             except (TypeError, ValueError):
@@ -387,7 +394,7 @@ def _safe_provider_data(
                 item["arguments"] = json.dumps(
                     _safe_tool_arguments(tool_name, parsed), ensure_ascii=True
                 )
-        elif tool_name in {"webfetch", "write_file"} and isinstance(arguments, dict):
+        elif tool_name in {"update_agent_identity", "webfetch", "write_file"} and isinstance(arguments, dict):
             item["arguments"] = json.dumps(
                 _safe_tool_arguments(tool_name, arguments), ensure_ascii=True
             )
@@ -691,7 +698,10 @@ class AgentRuntime:
             raise AgentRunError("session.notFound")
         ai_settings = await SettingsStore.load(db, AiSettings)
         runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
-        search_settings = await SettingsStore.load(db, SearchSettings)
+        integration_settings = await SettingsStore.load(db, IntegrationSettings)
+        agent_identity = await SettingsStore.load(
+            db, AgentIdentitySettings, user_id=chat_session.user_id
+        )
         if not ai_settings.enabled:
             raise AgentRunError("provider.disabled")
         model_id = run.model_config_id or chat_session.model_config_id or ai_settings.default_model_id
@@ -717,7 +727,7 @@ class AgentRuntime:
         memory_text: str | None = None
         memory_state: memory_policy.EffectiveMemory | None = None
 
-        effective_search = search_available(search_settings)
+        effective_search = search_available(integration_settings)
         required_search = chat_session.web_search_policy == WebSearchPolicy.REQUIRED
         if required_search and not effective_search:
             raise AgentRunError("integration.searchUnavailable")
@@ -746,7 +756,7 @@ class AgentRuntime:
             memory_settings = await SettingsStore.load(
                 db, MemorySettings, user_id=chat_session.user_id
             )
-            search_settings = await SettingsStore.load(db, SearchSettings)
+            integration_settings = await SettingsStore.load(db, IntegrationSettings)
             tool_settings = await SettingsStore.load(db, ToolSettings)
             input_trust_level = TrustLevel(
                 chat_session.trust_level or TrustLevel.PUBLIC.value
@@ -883,8 +893,26 @@ class AgentRuntime:
                             ],
                             ensure_ascii=False,
                         )
+            effective_toolset = (
+                tool_registry.effective(
+                    integration_settings,
+                    chat_session.workspace_access,
+                    webfetch_enabled=web_fetch_policy != WebFetchPolicy.DISABLED,
+                    web_search_enabled=(
+                        chat_session.web_search_policy != WebSearchPolicy.DISABLED
+                    ),
+                    memory_enabled=memory_state.read_enabled,
+                    memory_write_enabled=memory_state.write_enabled,
+                    tool_capabilities=effective_tool_capabilities(
+                        tool_settings, available_media_capabilities(ai_settings)
+                    ),
+                )
+                if model.supports_tools
+                else None
+            )
             system_prompt = general_system_prompt(
                 chat_session,
+                agent_identity=agent_identity,
                 memory_text=memory_text,
                 memory_read_enabled=memory_state.read_enabled,
                 memory_tools_enabled=memory_state.tools_enabled,
@@ -904,26 +932,13 @@ class AgentRuntime:
                 web_search_required=required_search,
                 web_search_completed=required_search_completed,
                 web_search_retry=required_search_retries,
+                tool_instructions=(
+                    effective_toolset.prompt_fragments if effective_toolset else ()
+                ),
             )
             if model_requests >= runtime_settings.max_model_requests:
                 raise AgentRunError("agent.modelRequestLimitReached")
-            schemas = (
-                tool_registry.schemas(
-                    search_settings,
-                    chat_session.workspace_access,
-                    webfetch_enabled=web_fetch_policy != WebFetchPolicy.DISABLED,
-                    web_search_enabled=(
-                        chat_session.web_search_policy != WebSearchPolicy.DISABLED
-                    ),
-                    memory_enabled=memory_state.read_enabled,
-                    memory_write_enabled=memory_state.write_enabled,
-                    tool_capabilities=effective_tool_capabilities(
-                        tool_settings, available_media_capabilities(ai_settings)
-                    ),
-                )
-                if model.supports_tools
-                else []
-            )
+            schemas = effective_toolset.schemas() if effective_toolset else []
             search_pending = required_search and not required_search_completed
             if search_pending and not any(
                 schema["name"] == "web_search" for schema in schemas
@@ -1180,10 +1195,10 @@ class AgentRuntime:
                     )
                     memory_available_now = current_memory_state.read_enabled
                     memory_write_available_now = current_memory_state.write_enabled
-                    if call.name not in offered_tool_names:
-                        tool_result_content = json.dumps(
-                            error_payload("tool.unavailable"), ensure_ascii=False
-                        )
+                if call.name not in offered_tool_names:
+                    tool_result_content = json.dumps(
+                        error_payload("tool.unavailable"), ensure_ascii=False
+                    )
                     metadata = {"errorCode": "tool.unavailable"}
                 elif not memory_available_now or (
                     call.name == "memory_write" and not memory_write_available_now
@@ -1214,7 +1229,7 @@ class AgentRuntime:
                         session=chat_session,
                         tool_call=call,
                         root_files=root_files,
-                        search_settings=search_settings,
+                        integration_settings=integration_settings,
                         ask_handler=ask,
                         tool_settings=tool_settings,
                         web_fetch_policy=web_fetch_policy,
@@ -1227,7 +1242,8 @@ class AgentRuntime:
                         memory_trust_level=current_memory_trust,
                         memory_write_trust_level=model_trust_level,
                     )
-                    tool_result = await tool_registry.execute(call, tool_context)
+                    assert effective_toolset is not None
+                    tool_result = await effective_toolset.execute(call, tool_context)
                     tool_result_content = tool_result.content
                     metadata = tool_result.metadata
                     tool_attachments = tool_result.attachments
@@ -1311,6 +1327,15 @@ class AgentRuntime:
                         "metadata": metadata,
                     },
                 )
+                updated_identity = metadata.get("agentIdentity")
+                if isinstance(updated_identity, dict):
+                    await run_events.publish(
+                        run.id,
+                        {
+                            "type": "agent.identity.updated",
+                            "identity": updated_identity,
+                        },
+                    )
                 if call.name == "web_search":
                     required_search_called = True
                     error_code = metadata.get("errorCode")

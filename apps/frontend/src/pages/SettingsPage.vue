@@ -1,6 +1,6 @@
 <template>
   <q-page class="app-page settings-page column no-wrap">
-    <AppPageHeader title="Einstellungen" subtitle="Provider, Standardmodelle, Integrationen, Tools und Memory zentral verwalten." />
+    <AppPageHeader title="Einstellungen" subtitle="Persona, Provider, Standardmodelle, Integrationen, Tools und Memory zentral verwalten." />
 
     <q-tabs
       no-caps
@@ -13,6 +13,7 @@
     >
       <q-route-tab icon="dns" label="Provider" :to="{ name: 'settings-providers' }" />
       <q-route-tab icon="stars" label="Standardmodelle" :to="{ name: 'settings-default-models' }" />
+      <q-route-tab icon="face" label="Persona" :to="{ name: 'settings-persona' }" />
       <q-route-tab icon="extension" label="Integrationen" :to="{ name: 'settings-integrations' }" />
       <q-route-tab icon="build" label="Tools" :to="{ name: 'settings-tools' }" />
       <q-route-tab icon="psychology" label="Memory" :to="{ name: 'settings-memory' }" />
@@ -21,6 +22,16 @@
     <div class="settings-layout row no-wrap items-stretch col">
       <nav class="settings-category-nav q-py-xs q-pr-md" aria-label="Einstellungskategorien">
         <q-list class="settings-category-list">
+          <q-item
+            clickable
+            v-ripple
+            class="q-mb-xs"
+            :to="{ name: 'settings-persona' }"
+            active-class="app-nav-item--active"
+          >
+            <q-item-section avatar><q-icon name="face" /></q-item-section>
+            <q-item-section>Persona</q-item-section>
+          </q-item>
           <q-item
             clickable
             v-ripple

@@ -29,6 +29,52 @@
       </q-banner>
       <q-card flat class="app-surface tool-settings-card">
         <q-card-section class="row items-start no-wrap q-gutter-md">
+          <q-avatar color="primary" text-color="white" icon="travel_explore" />
+          <div class="col">
+            <div class="text-subtitle1 text-weight-bold">Websuche</div>
+            <div class="text-body2 app-muted">
+              Wählt den Suchanbieter des hostkontrollierten <code>web_search</code>-Tools.
+            </div>
+          </div>
+        </q-card-section>
+
+        <q-separator />
+
+        <q-card-section class="q-gutter-md">
+          <q-select
+            v-model="form.webSearch.primaryProvider"
+            outlined
+            emit-value
+            map-options
+            label="Primärprovider"
+            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+            :options="primaryProviderOptions"
+            @update:model-value="ensureDistinctProviders"
+          />
+          <q-select
+            v-model="form.webSearch.fallbackProvider"
+            outlined
+            emit-value
+            map-options
+            clearable
+            label="Fallback-Provider"
+            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+            :options="fallbackProviderOptions"
+            hint="Wird nur bei temporären Fehlern des Primärproviders verwendet."
+            persistent-hint
+          />
+          <q-banner rounded class="app-surface-tonal">
+            <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
+            Suchbegriffe werden an den gewählten Dienst übertragen. Die integrierte No-Key-Suche
+            verwendet je nach Verfügbarkeit öffentliche Suchdienste; zusätzliche Provider werden
+            unter Integrationen konfiguriert.
+          </q-banner>
+        </q-card-section>
+        <q-inner-loading :showing="tools.loading" />
+      </q-card>
+
+      <q-card flat class="app-surface tool-settings-card q-mt-md">
+        <q-card-section class="row items-start no-wrap q-gutter-md">
           <q-avatar color="primary" text-color="white" icon="language" />
           <div class="col">
             <div class="text-subtitle1 text-weight-bold">Webfetch</div>
@@ -104,6 +150,43 @@
         <q-inner-loading :showing="tools.loading" />
       </q-card>
 
+      <q-card flat class="app-surface tool-settings-card q-mt-md">
+        <q-card-section class="row items-start no-wrap q-gutter-md">
+          <q-avatar color="primary" text-color="white" icon="face" />
+          <div class="col">
+            <div class="text-subtitle1 text-weight-bold">Agent-Persona ändern</div>
+            <div class="text-body2 app-muted">
+              Erlaubt dem Agenten, einen ausdrücklichen Änderungswunsch aus dem Chat in der
+              gemeinsamen Persona zu speichern.
+            </div>
+          </div>
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="q-gutter-md">
+          <q-select
+            v-model="form.updateAgentIdentity.policy"
+            outlined
+            emit-value
+            map-options
+            label="Ausführungsrichtlinie"
+            :options="MEDIA_POLICY_OPTIONS"
+            :hint="policyHint(form.updateAgentIdentity.policy)"
+            persistent-hint
+          />
+          <q-banner rounded class="app-surface-tonal">
+            <template #avatar>
+              <q-icon
+                :name="form.updateAgentIdentity.policy === 'auto' ? 'warning_amber' : 'manage_accounts'"
+                :color="form.updateAgentIdentity.policy === 'auto' ? 'warning' : 'primary'"
+              />
+            </template>
+            Das Tool darf nur ausdrückliche Wünsche des Nutzers übernehmen. Im Modus
+            „Automatisch“ wird die persistente Persona dennoch ohne einzelne Rückfrage geändert.
+          </q-banner>
+        </q-card-section>
+        <q-inner-loading :showing="tools.loading" />
+      </q-card>
+
       <div class="media-tool-settings-grid q-mt-md">
         <q-card
           v-for="item in mediaTools"
@@ -165,7 +248,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { WEBFETCH_DEFAULT_POLICY_OPTIONS, normalizePrivateOrigin } from 'src/utils/webfetch'
@@ -215,20 +298,46 @@ const mediaTools = [
   }
 ]
 const form = reactive({
+  webSearch: {
+    primaryProvider: 'no_key',
+    fallbackProvider: null,
+    providerOptions: []
+  },
   enabled: true,
   defaultPolicy: 'ask',
   allowedPrivateOrigins: [],
   generateImage: { policy: 'disabled', timeoutSeconds: 300 },
   generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
   generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
-  transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 }
+  transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
+  updateAgentIdentity: { policy: 'ask' }
 })
 
 function assignForm(settings) {
+  form.webSearch = {
+    ...settings.webSearch,
+    providerOptions: [...settings.webSearch.providerOptions]
+  }
   Object.assign(form, settings.webFetch, {
     allowedPrivateOrigins: [...settings.webFetch.allowedPrivateOrigins]
   })
   for (const { field } of mediaTools) form[field] = { ...settings[field] }
+  form.updateAgentIdentity = { ...settings.updateAgentIdentity }
+}
+
+const primaryProviderOptions = computed(() => form.webSearch.providerOptions.map((provider) => ({
+  label: provider.integrationId ? `${provider.name} · SearXNG` : provider.name,
+  value: provider.value
+})))
+const fallbackProviderOptions = computed(() => [
+  { label: 'Kein Fallback', value: null },
+  ...primaryProviderOptions.value.filter((provider) => provider.value !== form.webSearch.primaryProvider)
+])
+
+function ensureDistinctProviders() {
+  if (form.webSearch.fallbackProvider === form.webSearch.primaryProvider) {
+    form.webSearch.fallbackProvider = null
+  }
 }
 
 function policyHint(policy) {
@@ -255,6 +364,10 @@ async function save() {
     form.allowedPrivateOrigins.map((origin) => normalizePrivateOrigin(origin).value)
   )]
   const saved = await tools.saveSettings({
+    webSearch: {
+      primaryProvider: form.webSearch.primaryProvider,
+      fallbackProvider: form.webSearch.fallbackProvider
+    },
     webFetch: {
       enabled: form.enabled,
       defaultPolicy: form.defaultPolicy,
@@ -263,7 +376,8 @@ async function save() {
     generateImage: { ...form.generateImage },
     generateSpeech: { ...form.generateSpeech },
     generateAudio: { ...form.generateAudio },
-    transcribeAudio: { ...form.transcribeAudio }
+    transcribeAudio: { ...form.transcribeAudio },
+    updateAgentIdentity: { ...form.updateAgentIdentity }
   })
   assignForm(saved)
   $q.notify({ type: 'positive', message: 'Tool-Einstellungen gespeichert' })

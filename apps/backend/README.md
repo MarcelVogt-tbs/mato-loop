@@ -27,6 +27,8 @@ Der Backend-Container verwendet Reloading und bindet den Quellcode über `/works
 - `src/mato_loop_backend/providers`: Codex- und OpenAI-kompatible Transporte
 - `src/mato_loop_backend/models`: relationale SQLAlchemy-Modelle
 - `src/mato_loop_backend/settings`: typisierte operative Settings
+- `src/mato_loop_backend/integrations/contracts.py`: statische Adapter- und Toolbeitragsverträge
+- `src/mato_loop_backend/integrations/search.py`: No-Key-Metasuche und SearXNG mit kontrolliertem Fallback
 - `src/mato_loop_backend/integrations/webfetch.py`: SSRF-geschützter Abruf konkreter HTTP(S)-URLs
 - `src/mato_loop_backend/attachments.py`: validierter, persistenter Bild-Storage
 - `src/mato_loop_backend/memory`: CRUD, Dreaming, Infinity-Client, Indexer und Hybrid-Retrieval

@@ -11,7 +11,12 @@ from mato_loop_backend.api.routes.auth import (
     user_preferences,
 )
 from mato_loop_backend.models import UserAccount
-from mato_loop_backend.settings import MemorySettings, SettingsScope, SettingsStore
+from mato_loop_backend.settings import (
+    IntegrationSettings,
+    MemorySettings,
+    SettingsScope,
+    SettingsStore,
+)
 from mato_loop_backend.settings.models import (
     AgentRuntimeSettings,
     AiSettings,
@@ -49,6 +54,16 @@ def test_ai_settings_collections_are_independent() -> None:
 
     assert len(first.providers) == 1
     assert second.providers == []
+
+
+def test_integration_settings_use_an_independent_global_instance_list() -> None:
+    first = IntegrationSettings()
+    second = IntegrationSettings()
+
+    assert first.settings_key == "integrations"
+    assert first.settings_scope == SettingsScope.GLOBAL
+    assert first.instances == []
+    assert second.instances == []
 
 
 def test_legacy_model_defaults_to_chat_capability() -> None:

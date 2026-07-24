@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -27,7 +28,6 @@ from mato_loop_backend.attachments import (
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
-from mato_loop_backend.integrations import search_available
 from mato_loop_backend.memory import effective_memory
 from mato_loop_backend.models import (
     AgentRun,
@@ -44,7 +44,6 @@ from mato_loop_backend.session_storage import SessionStorage, SessionStorageErro
 from mato_loop_backend.settings import (
     AiSettings,
     MemorySettings,
-    SearchSettings,
     SettingsStore,
     effective_model_trust,
 )
@@ -57,6 +56,8 @@ from mato_loop_backend.workspace import WorkspaceError, WorkspaceService
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
+_LAST_MESSAGE_AT_UNSET = object()
+_VISIBLE_MESSAGE_ROLES = ("user", "assistant")
 
 
 def _model_available(ai: AiSettings, model_id: UUID | None) -> bool:
@@ -179,6 +180,7 @@ def session_payload(
     effective_memory_mode: MemoryMode | None = None,
     memory_tools_available: bool | None = None,
     memory_unavailable_reason: str | None = None,
+    last_message_at: datetime | None | object = _LAST_MESSAGE_AT_UNSET,
 ) -> dict[str, Any]:
     payload = {
         "id": str(item.id),
@@ -194,6 +196,10 @@ def session_payload(
         "createdAt": item.created_at.isoformat() if item.created_at else None,
         "updatedAt": item.updated_at.isoformat() if item.updated_at else None,
     }
+    if last_message_at is not _LAST_MESSAGE_AT_UNSET:
+        payload["lastMessageAt"] = (
+            last_message_at.isoformat() if isinstance(last_message_at, datetime) else None
+        )
     if effective_memory_mode is not None:
         payload["effectiveMemoryMode"] = effective_memory_mode.value
         payload["memoryToolsAvailable"] = memory_tools_available
@@ -201,13 +207,19 @@ def session_payload(
     return payload
 
 
-async def _session_payload(db: AsyncSession, item: ChatSession) -> dict[str, Any]:
+async def _session_payload(
+    db: AsyncSession,
+    item: ChatSession,
+    *,
+    last_message_at: datetime | None | object = _LAST_MESSAGE_AT_UNSET,
+) -> dict[str, Any]:
     if item.memory_mode == MemoryMode.DISABLED.value:
         return session_payload(
             item,
             effective_memory_mode=MemoryMode.DISABLED,
             memory_tools_available=False,
             memory_unavailable_reason="memory.sessionDisabled",
+            last_message_at=last_message_at,
         )
     ai = await SettingsStore.load(db, AiSettings)
     memory = await SettingsStore.load(db, MemorySettings, user_id=item.user_id)
@@ -219,6 +231,7 @@ async def _session_payload(db: AsyncSession, item: ChatSession) -> dict[str, Any
         effective_memory_mode=state.mode,
         memory_tools_available=state.tools_enabled,
         memory_unavailable_reason=state.unavailable_reason,
+        last_message_at=last_message_at,
     )
 
 
@@ -311,17 +324,37 @@ async def list_sessions(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[dict]:
-    items = list(
-        (
-            await db.scalars(
-                select(ChatSession).where(ChatSession.user_id == user.id).order_by(
-                    ChatSession.is_pinned.desc(),
-                    ChatSession.updated_at.desc(),
-                )
-            )
-        ).all()
+    latest_messages = (
+        select(
+            Message.session_id.label("session_id"),
+            func.max(Message.created_at).label("last_message_at"),
+        )
+        .join(ChatSession, ChatSession.id == Message.session_id)
+        .where(
+            ChatSession.user_id == user.id,
+            Message.role.in_(_VISIBLE_MESSAGE_ROLES),
+        )
+        .group_by(Message.session_id)
+        .subquery()
     )
-    return [await _session_payload(db, item) for item in items]
+    rows = (
+        await db.execute(
+            select(ChatSession, latest_messages.c.last_message_at)
+            .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
+            .where(ChatSession.user_id == user.id)
+            .order_by(
+                ChatSession.is_pinned.desc(),
+                func.coalesce(
+                    latest_messages.c.last_message_at, ChatSession.created_at
+                ).desc(),
+                ChatSession.id.desc(),
+            )
+        )
+    ).all()
+    return [
+        await _session_payload(db, item, last_message_at=last_message_at)
+        for item, last_message_at in rows
+    ]
 
 
 async def _create_session(
@@ -386,7 +419,9 @@ async def _create_session(
     await db.refresh(item)
     user_message = await _latest_user_message(db, item.id)
     return {
-        "session": await _session_payload(db, item),
+        "session": await _session_payload(
+            db, item, last_message_at=user_message.created_at
+        ),
         "message": message_payload(user_message),
         "runId": str(run.id),
         "modelName": run.model_name,
@@ -477,8 +512,16 @@ async def get_session(
         )
         .order_by(AgentRun.created_at.desc())
     )
+    last_message_at = max(
+        (
+            message.created_at
+            for message in messages
+            if message.role in _VISIBLE_MESSAGE_ROLES and message.created_at
+        ),
+        default=None,
+    )
     return {
-        **(await _session_payload(db, item)),
+        **(await _session_payload(db, item, last_message_at=last_message_at)),
         "messages": [message_payload(message) for message in messages],
         "activeRun": (
             {
@@ -549,9 +592,6 @@ async def update_session(
             model_id = item.model_config_id or ai.default_model_id
             if not _model_supports_tools(ai, model_id):
                 raise ApiError(409, "session.modelToolsUnavailable")
-            search = await SettingsStore.load(db, SearchSettings)
-            if not search_available(search):
-                raise ApiError(409, "integration.searchUnavailable")
         item.web_search_policy = payload.web_search_policy.value
     if "working_directory" in fields:
         if payload.working_directory is None:
@@ -688,7 +728,7 @@ async def _send_message(
     user: UserAccount,
     db: AsyncSession,
     attachments: list[AttachmentInput] | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     item = await _owned_session(db, session_id, user.id, for_update=True)
     if item is None:
         raise ApiError(404, "session.notFound")
@@ -722,7 +762,7 @@ async def send_message(
     payload: SendMessageRequest,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return await _send_message(session_id, payload, user, db)
 
 
@@ -733,7 +773,7 @@ async def send_message_with_attachments(
     attachments: Annotated[list[UploadFile], File()],
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict[str, str]:
+) -> dict[str, Any]:
     request = _multipart_payload(payload, SendMessageRequest)
     assert isinstance(request, SendMessageRequest)
     return await _send_message(

@@ -14,13 +14,10 @@ from mato_loop_backend.integrations import (
     IntegrationSettingsError,
     SearchIntegrationError,
     SearchIntegrationService,
-    search_available,
-    search_unavailable_reason,
     search_with_provider,
 )
 from mato_loop_backend.security import require_user
-from mato_loop_backend.settings import SearchSettings, SettingsStore
-from mato_loop_backend.settings.models import SearchProviderConfig
+from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings, SettingsStore
 
 router = APIRouter(prefix="/integrations", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
@@ -34,36 +31,28 @@ class SearchIntegrationRequest(BaseModel):
     enabled: bool = True
 
 
-class DefaultSearchIntegrationRequest(BaseModel):
-    integration_id: UUID
-
-
-def _provider_payload(provider: SearchProviderConfig, *, legacy_disabled: bool = False) -> dict:
+def _provider_payload(provider: IntegrationInstance) -> dict:
     return {
         "id": str(provider.id),
         "name": provider.name,
-        "integrationType": "search",
+        "integrationType": provider.integration_type,
         "providerType": provider.adapter_type,
-        "enabled": provider.enabled and not legacy_disabled,
+        "enabled": provider.enabled,
         "hasCredential": provider.credential_id is not None,
         "config": {"baseUrl": provider.config.get("base_url")},
     }
 
 
-def search_settings_payload(settings: SearchSettings) -> dict:
-    legacy_disabled = bool(settings.providers) and not settings.enabled
+def search_settings_payload(settings: IntegrationSettings) -> dict:
+    providers = [
+        instance for instance in settings.instances if instance.integration_type == "search"
+    ]
     return {
-        "configured": bool(settings.providers),
-        "enabled": settings.enabled,
-        "effectiveEnabled": search_available(settings),
-        "defaultIntegrationId": (
-            str(settings.default_provider_id) if settings.default_provider_id else None
-        ),
-        "unavailableReason": search_unavailable_reason(settings),
-        "providers": [
-            _provider_payload(provider, legacy_disabled=legacy_disabled)
-            for provider in settings.providers
-        ],
+        "configured": bool(providers),
+        "enabled": True,
+        "effectiveEnabled": True,
+        "unavailableReason": None,
+        "providers": [_provider_payload(provider) for provider in providers],
     }
 
 
@@ -71,7 +60,7 @@ def search_settings_payload(settings: SearchSettings) -> dict:
 async def get_search_integrations(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
-    return search_settings_payload(await SettingsStore.load(db, SearchSettings))
+    return search_settings_payload(await SettingsStore.load(db, IntegrationSettings))
 
 
 @router.post("/search/providers", status_code=status.HTTP_201_CREATED)
@@ -122,25 +111,20 @@ async def delete_search_integration(
         raise ApiError(404, exc.code) from exc
 
 
-@router.put("/search/default")
-async def set_default_search_integration(
-    payload: DefaultSearchIntegrationRequest,
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict:
-    try:
-        settings = await SearchIntegrationService.set_default(db, payload.integration_id)
-    except IntegrationSettingsError as exc:
-        raise ApiError(409, exc.code) from exc
-    return search_settings_payload(settings)
-
-
 @router.post("/search/providers/{integration_id}/test")
 async def test_search_integration(
     integration_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str]:
-    settings = await SettingsStore.load(db, SearchSettings)
-    provider = next((item for item in settings.providers if item.id == integration_id), None)
+    settings = await SettingsStore.load(db, IntegrationSettings)
+    provider = next(
+        (
+            item
+            for item in settings.instances
+            if item.id == integration_id and item.integration_type == "search"
+        ),
+        None,
+    )
     if provider is None:
         raise ApiError(404, "integration.notFound")
     try:
