@@ -60,6 +60,25 @@ def _to_camel(value: str) -> str:
     return first + "".join(part.capitalize() for part in rest)
 
 
+def _discovered_context_window(metadata: dict[str, Any]) -> int | None:
+    value = metadata.get("max_context_window", metadata.get("max_model_len"))
+    if isinstance(value, int) and not isinstance(value, bool) and value > 1:
+        return value
+    return None
+
+
+def _apply_discovered_context_window(model: ModelConfig, value: int | None) -> None:
+    model.discovered_context_window_tokens = value
+    if not model.use_discovered_context_window or value is None:
+        return
+    model.context_window_tokens = value
+    model.max_output_tokens = min(
+        model.max_output_tokens,
+        max(1, value // 4),
+        value - 1,
+    )
+
+
 class ApiRequest(BaseModel):
     model_config = ConfigDict(
         alias_generator=_to_camel,
@@ -73,6 +92,7 @@ class ModelRuntimeRequest(ApiRequest):
         default_factory=lambda: {ModelCapability.CHAT}
     )
     context_window_tokens: int = Field(default=128_000, ge=1, le=10_000_000)
+    use_discovered_context_window: bool = False
     max_output_tokens: int = Field(default=16_384, ge=1, le=1_000_000)
     characters_per_token: float = Field(default=4.0, gt=0, le=100)
     supports_tools: bool = True
@@ -357,6 +377,9 @@ def _settings_payload(
                 "discoveryMetadata": model.discovery_metadata,
                 "capabilities": sorted(item.value for item in model.capabilities),
                 "contextWindowTokens": model.context_window_tokens,
+                "discoveredContextWindowTokens": model.discovered_context_window_tokens,
+                "useDiscoveredContextWindow": model.use_discovered_context_window,
+                "contextWindowSource": model.context_window_source,
                 "maxOutputTokens": model.max_output_tokens,
                 "charactersPerToken": model.characters_per_token,
                 "supportsTools": model.supports_tools,
@@ -634,17 +657,8 @@ async def sync_provider_models(
         model = existing_by_id.get(external_id)
         if model is None:
             name = discovered_model.metadata.get("name")
-            discovered_context = discovered_model.metadata.get(
-                "max_context_window",
-                discovered_model.metadata.get("max_model_len"),
-            )
-            context_window = (
-                discovered_context
-                if isinstance(discovered_context, int)
-                and not isinstance(discovered_context, bool)
-                and discovered_context > 1
-                else 128_000
-            )
+            discovered_context = _discovered_context_window(discovered_model.metadata)
+            context_window = discovered_context or 128_000
             max_output = min(16_384, max(1, context_window // 4))
             supports_tools = discovered_model.metadata.get("supports_tools")
             supports_parallel = discovered_model.metadata.get("supports_parallel_tool_calls")
@@ -661,6 +675,8 @@ async def sync_provider_models(
                     discovery_metadata=discovered_model.metadata,
                     capabilities=discovered_model.capabilities,
                     context_window_tokens=context_window,
+                    discovered_context_window_tokens=discovered_context,
+                    use_discovered_context_window=True,
                     max_output_tokens=max_output,
                     supports_parallel_tool_calls=(
                         supports_parallel
@@ -683,20 +699,11 @@ async def sync_provider_models(
             model.availability = ModelAvailability.AVAILABLE
             model.last_seen_at = synced_at
             model.discovery_metadata = discovered_model.metadata
+            _apply_discovered_context_window(
+                model, _discovered_context_window(discovered_model.metadata)
+            )
             if provider.adapter_type == "lemonade":
                 model.capabilities = discovered_model.capabilities
-                discovered_context = discovered_model.metadata.get("max_context_window")
-                if (
-                    isinstance(discovered_context, int)
-                    and not isinstance(discovered_context, bool)
-                    and discovered_context > 1
-                ):
-                    model.context_window_tokens = discovered_context
-                    model.max_output_tokens = min(
-                        model.max_output_tokens,
-                        max(1, discovered_context // 4),
-                        discovered_context - 1,
-                    )
                 supports_parallel = discovered_model.metadata.get(
                     "supports_parallel_tool_calls"
                 )

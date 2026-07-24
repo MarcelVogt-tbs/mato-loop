@@ -11,6 +11,9 @@ describe('model runtime configuration', () => {
     expect(modelRuntimeForm({
       capabilities: ['chat'],
       contextWindowTokens: 64000,
+      discoveredContextWindowTokens: 32000,
+      useDiscoveredContextWindow: false,
+      contextWindowSource: 'override',
       maxOutputTokens: 8000,
       charactersPerToken: 3.5,
       supportsTools: false,
@@ -26,6 +29,9 @@ describe('model runtime configuration', () => {
     })).toEqual({
       capabilities: ['chat'],
       contextWindowTokens: 64000,
+      discoveredContextWindowTokens: 32000,
+      useDiscoveredContextWindow: false,
+      contextWindowSource: 'override',
       maxOutputTokens: 8000,
       charactersPerToken: 3.5,
       supportsTools: false,
@@ -45,6 +51,7 @@ describe('model runtime configuration', () => {
     expect(modelRuntimePayload({
       capabilities: ['chat', 'image_generation'],
       contextWindowTokens: '32000',
+      useDiscoveredContextWindow: true,
       maxOutputTokens: '4096',
       charactersPerToken: '4.2',
       supportsTools: false,
@@ -59,6 +66,7 @@ describe('model runtime configuration', () => {
     })).toEqual({
       capabilities: ['chat', 'image_generation'],
       context_window_tokens: 32000,
+      use_discovered_context_window: true,
       max_output_tokens: 4096,
       characters_per_token: 4.2,
       supports_tools: false,

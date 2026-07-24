@@ -3,7 +3,7 @@ import { api } from 'src/boot/axios'
 
 const defaultWebFetch = () => ({
   enabled: true,
-  defaultPolicy: 'ask',
+  defaultPolicy: 'auto_public',
   allowedPrivateOrigins: []
 })
 const defaultWebSearch = () => ({

@@ -49,7 +49,7 @@
           <q-toggle
             v-model="form.pseudonymization_enabled"
             color="primary"
-            label="Pseudonymisierung für öffentliche Modelle"
+            label="Kennungen und Secrets für öffentliche Modelle schützen"
           />
           <q-select
             v-model="form.memory_policy"

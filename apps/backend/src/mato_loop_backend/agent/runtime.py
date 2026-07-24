@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import re
@@ -51,6 +52,7 @@ from mato_loop_backend.events import run_events
 from mato_loop_backend.integrations import (
     SearchIntegrationError,
     WebFetchError,
+    canonicalize_url,
     sanitize_url_for_display,
     search_available,
 )
@@ -106,6 +108,17 @@ AUTOMATIC_MEMORY_MAX_CHARACTERS = 2_500
 AUTOMATIC_MEMORY_MAX_DISTANCE = 0.21
 MEMORY_OVERVIEW_MAX_ITEMS = 50
 MEMORY_OVERVIEW_MAX_CHARACTERS = 12_000
+GATED_DELTA_CHARACTERS = 4_000
+_HTML_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
+_INLINE_CODE_PATTERN = re.compile(r"(`+).*?\1", re.DOTALL)
+_BARE_HTTP_URL_PATTERN = re.compile(r"https?://[^\s<]+", re.IGNORECASE)
+_FENCE_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+_FENCE_CLOSE_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*(?:\r?\n)?$")
+_TEX_DISPLAY_PATTERN = re.compile(r"\$\$.*?\$\$|\\\[.*?\\\]", re.DOTALL)
+_TEX_PAREN_PATTERN = re.compile(r"\\\(.*?\\\)", re.DOTALL)
+_TEX_ENVIRONMENT_PATTERN = re.compile(
+    r"\\begin\{([^{}]+)\}.*?\\end\{\1\}", re.DOTALL
+)
 
 
 @dataclass(slots=True)
@@ -120,6 +133,165 @@ class _VisibleResponse:
     def reset(self) -> None:
         self.content_parts.clear()
         self.reasoning = None
+
+
+def _add_research_sources(
+    registry: dict[str, str], metadata: dict[str, Any]
+) -> None:
+    sources = metadata.get("sources")
+    if not isinstance(sources, list):
+        return
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_id = source.get("sourceId")
+        url = source.get("url")
+        if source.get("citationEligible") is False:
+            continue
+        if not isinstance(source_id, str) or not isinstance(url, str):
+            continue
+        try:
+            registry[source_id] = canonicalize_url(url)
+        except WebFetchError:
+            continue
+
+
+def _validated_research_citations(
+    content: str, sources: dict[str, str]
+) -> list[str] | None:
+    visible_lines: list[str] = []
+    active_fence: tuple[str, int] | None = None
+    for line in content.splitlines(keepends=True):
+        fence = _FENCE_PATTERN.match(line)
+        if active_fence is not None:
+            closing_fence = _FENCE_CLOSE_PATTERN.match(line)
+            if (
+                closing_fence
+                and closing_fence.group(1)[0] == active_fence[0]
+                and len(closing_fence.group(1)) >= active_fence[1]
+            ):
+                active_fence = None
+            continue
+        if fence:
+            active_fence = (fence.group(1)[0], len(fence.group(1)))
+            continue
+        visible_lines.append(line)
+    visible_content = _HTML_COMMENT_PATTERN.sub("", "".join(visible_lines))
+    visible_content = _INLINE_CODE_PATTERN.sub("", visible_content)
+    visible_content = _TEX_DISPLAY_PATTERN.sub("", visible_content)
+    visible_content = _TEX_PAREN_PATTERN.sub("", visible_content)
+    visible_content = _TEX_ENVIRONMENT_PATTERN.sub("", visible_content)
+    visible_content = _without_inline_dollar_math(visible_content)
+
+    cited_source_ids: list[str] = []
+    without_link_destinations: list[str] = []
+    index = 0
+    while index < len(visible_content):
+        label_start = visible_content.find("[", index)
+        if label_start < 0:
+            without_link_destinations.append(visible_content[index:])
+            break
+        without_link_destinations.append(visible_content[index:label_start])
+        label_end = visible_content.find("](", label_start + 1)
+        if label_end < 0:
+            without_link_destinations.append(visible_content[label_start:])
+            break
+        if label_start > 0 and visible_content[label_start - 1] == "!":
+            without_link_destinations.append(visible_content[label_start:label_end + 2])
+            index = label_end + 2
+            continue
+        depth = 1
+        cursor = label_end + 2
+        escaped = False
+        while cursor < len(visible_content) and depth:
+            character = visible_content[cursor]
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+            cursor += 1
+        if depth:
+            without_link_destinations.append(visible_content[label_start:])
+            break
+        label = visible_content[label_start + 1 : label_end]
+        destination = visible_content[label_end + 2 : cursor - 1]
+        classified_destination = html.unescape(destination.strip())
+        if classified_destination.startswith("<") and classified_destination.endswith(">"):
+            classified_destination = classified_destination[1:-1]
+        classified_destination = classified_destination.replace("\\", "")
+        if classified_destination.lower().startswith(("http://", "https://", "//")):
+            if sources.get(label) != destination:
+                return None
+            if label not in cited_source_ids:
+                cited_source_ids.append(label)
+        without_link_destinations.append(label)
+        index = cursor
+    if _BARE_HTTP_URL_PATTERN.search("".join(without_link_destinations)):
+        return None
+    return cited_source_ids or None
+
+
+def _without_inline_dollar_math(content: str) -> str:
+    parts: list[str] = []
+    index = 0
+    while index < len(content):
+        start = content.find("$", index)
+        if start < 0:
+            parts.append(content[index:])
+            break
+        parts.append(content[index:start])
+        if start + 1 >= len(content) or content[start + 1].isspace():
+            parts.append("$")
+            index = start + 1
+            continue
+        candidate = start + 1
+        matched = False
+        while (candidate := content.find("$", candidate)) >= 0:
+            backslashes = 0
+            cursor = candidate - 1
+            while cursor > start and content[cursor] == "\\":
+                backslashes += 1
+                cursor -= 1
+            if backslashes % 2:
+                candidate += 1
+                continue
+            math_content = content[start + 1 : candidate]
+            after = content[candidate + 1 : candidate + 2]
+            if "\n" in math_content or "`" in math_content:
+                break
+            if math_content and not math_content[-1].isspace() and not after.isdigit():
+                index = candidate + 1
+                matched = True
+                break
+            candidate += 1
+        if not matched:
+            parts.append("$")
+            index = start + 1
+    return "".join(parts)
+
+
+def _hidden_tool_round_provider_data(provider_data: dict[str, Any]) -> dict[str, Any]:
+    safe = dict(provider_data)
+    safe.pop("chat_reasoning_details", None)
+    replay_items = safe.get("responses_output_items")
+    if isinstance(replay_items, list):
+        safe["responses_output_items"] = [
+            item
+            for item in replay_items
+            if isinstance(item, dict)
+            and (
+                item.get("type") == "function_call"
+                or (
+                    item.get("type") == "reasoning"
+                    and isinstance(item.get("encrypted_content"), str)
+                )
+            )
+        ]
+    return safe
 
 
 def _bounded_memory_trust(
@@ -367,6 +539,17 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
     return safe
 
 
+def _tool_call_signature(call: ToolCall) -> str:
+    arguments = json.dumps(
+        call.arguments,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return f"{call.name}:{arguments}"
+
+
 def _safe_provider_data(
     provider_data: dict[str, Any], calls: list[ToolCall]
 ) -> dict[str, Any]:
@@ -406,7 +589,15 @@ def _safe_provider_data(
 async def _publish_run_phase(run_id: UUID, phase: str, **details: Any) -> None:
     if phase not in RUN_PHASES:
         raise ValueError(f"Unknown run phase: {phase}")
-    await run_events.publish(run_id, {"type": "run.phase", "phase": phase, **details})
+    await run_events.publish(
+        run_id,
+        {
+            "type": "run.phase",
+            "phase": phase,
+            "startedAt": datetime.now(UTC).isoformat(),
+            **details,
+        },
+    )
 
 
 def _public_reasoning_payload(reasoning: PublicReasoning | None) -> dict[str, Any] | None:
@@ -736,7 +927,12 @@ class AgentRuntime:
         model_requests = 0
         required_search_completed = False
         required_search_retries = 0
-        rejected_search_draft: str | None = None
+        research_sources: dict[str, str] = {}
+        citation_repair_pending = False
+        citation_repair_used = False
+        tool_calls_used = 0
+        failed_tool_call_signatures: set[str] = set()
+        turn_datetime = run.created_at or datetime.now(UTC)
         automatic_memories: list[MemoryRecord] | None = None
         memory_scope = None
         memory_overview_required: bool | None = None
@@ -746,7 +942,12 @@ class AgentRuntime:
         memory_overview_has_more = False
         memory_overview_runtime_state: dict[str, Any] | None = None
 
-        for _step in range(runtime_settings.max_steps):
+        step = 0
+        while step < runtime_settings.max_steps or citation_repair_pending:
+            repair_round = citation_repair_pending
+            if not repair_round:
+                step += 1
+            context_started_at = time.monotonic()
             await _publish_run_phase(run.id, "preparing_context")
             await db.refresh(chat_session)
             ai_settings = await SettingsStore.load(db, AiSettings)
@@ -910,12 +1111,16 @@ class AgentRuntime:
                 if model.supports_tools
                 else None
             )
+            if repair_round:
+                effective_toolset = None
+            search_pending = required_search and not required_search_completed
+            if search_pending and effective_toolset is not None:
+                effective_toolset = effective_toolset.only("web_search")
             system_prompt = general_system_prompt(
                 chat_session,
                 agent_identity=agent_identity,
                 memory_text=memory_text,
                 memory_read_enabled=memory_state.read_enabled,
-                memory_tools_enabled=memory_state.tools_enabled,
                 memory_read_scope=model_trust_level,
                 memory_scope=(
                     {
@@ -932,6 +1137,18 @@ class AgentRuntime:
                 web_search_required=required_search,
                 web_search_completed=required_search_completed,
                 web_search_retry=required_search_retries,
+                research_repair_sources=(
+                    tuple(
+                        {"sourceId": source_id, "url": url}
+                        for source_id, url in research_sources.items()
+                    )
+                    if repair_round
+                    else ()
+                ),
+                current_datetime=turn_datetime,
+                offered_tool_names=frozenset(
+                    effective_toolset.tools if effective_toolset else ()
+                ),
                 tool_instructions=(
                     effective_toolset.prompt_fragments if effective_toolset else ()
                 ),
@@ -939,7 +1156,6 @@ class AgentRuntime:
             if model_requests >= runtime_settings.max_model_requests:
                 raise AgentRunError("agent.modelRequestLimitReached")
             schemas = effective_toolset.schemas() if effective_toolset else []
-            search_pending = required_search and not required_search_completed
             if search_pending and not any(
                 schema["name"] == "web_search" for schema in schemas
             ):
@@ -976,20 +1192,6 @@ class AgentRuntime:
                 settings=runtime_settings,
                 summarize=summarize,
             )
-            if search_pending and rejected_search_draft is not None:
-                projection.messages.extend(
-                    [
-                        {"role": "assistant", "content": rejected_search_draft[:4_000]},
-                        {
-                            "role": "system",
-                            "content": (
-                                "Runtime validation error: web_search is required before the "
-                                "final answer. The previous draft was rejected. Call web_search "
-                                "now and do not provide another final answer first."
-                            ),
-                        },
-                    ]
-                )
             if projection.compacted:
                 await run_events.publish(
                     run.id,
@@ -999,16 +1201,30 @@ class AgentRuntime:
                     },
                 )
 
-            buffered_deltas: list[str] = []
+            hold_response = required_search
             visible_response.reset()
+            provider_started_at = time.monotonic()
+            provider_timing: dict[str, int | None] = {
+                "firstReasoningMs": None,
+                "firstTextMs": None,
+            }
+
+            def mark_first_signal(
+                key: str,
+                timing: dict[str, int | None] = provider_timing,
+                started_at: float = provider_started_at,
+            ) -> None:
+                if timing[key] is None:
+                    timing[key] = max(
+                        0, round((time.monotonic() - started_at) * 1_000)
+                    )
 
             async def on_delta(
                 text: str,
-                pending: bool = search_pending,
-                buffer: list[str] = buffered_deltas,
+                pending: bool = hold_response,
             ) -> None:
+                mark_first_signal("firstTextMs")
                 if pending:
-                    buffer.append(text)
                     return
                 await run_events.publish(run.id, {"type": "message.delta", "delta": text})
                 visible_response.content_parts.append(text)
@@ -1023,10 +1239,11 @@ class AgentRuntime:
                 text: str,
                 kind: str,
                 state: dict[str, Any] = streamed_reasoning_state,
-                pending: bool = search_pending,
+                pending: bool = hold_response,
             ) -> None:
                 if not text:
                     return
+                mark_first_signal("firstReasoningMs")
                 state["kind"] = kind
                 state["text"] += text
                 if pending:
@@ -1072,6 +1289,9 @@ class AgentRuntime:
                 target_trust_level=model_trust_level,
                 pseudonymization_enabled=run_pseudonymization_enabled,
             )
+            provider_duration_ms = max(
+                0, round((time.monotonic() - provider_started_at) * 1_000)
+            )
             model_requests += 1
             normalized_calls = [
                 ToolCall(
@@ -1081,13 +1301,16 @@ class AgentRuntime:
                 )
                 for call in result.tool_calls
             ]
-            if search_pending and not normalized_calls:
-                rejected_search_draft = result.content
+            if repair_round and normalized_calls:
+                raise AgentRunError("agent.researchSourcesInvalid")
+            if search_pending and (
+                not normalized_calls
+                or any(call.name != "web_search" for call in normalized_calls)
+            ):
                 required_search_retries += 1
                 if required_search_retries > REQUIRED_WEB_SEARCH_RETRIES:
                     raise AgentRunError("agent.requiredWebSearchMissing")
                 continue
-            rejected_search_draft = None
             serialized_calls = [
                 {
                     "id": call.id,
@@ -1096,32 +1319,78 @@ class AgentRuntime:
                 }
                 for call in normalized_calls
             ] or None
+            if not normalized_calls and result.finish_reason in {"length", "max_tokens"}:
+                raise AgentRunError("agent.outputLimitReached")
+            hide_tool_round = required_search and bool(normalized_calls)
             provider_data = _safe_provider_data(result.provider_data, normalized_calls)
+            if hide_tool_round:
+                provider_data = _hidden_tool_round_provider_data(provider_data)
             if result.usage:
                 provider_data["usage"] = result.usage
             if result.finish_reason:
                 provider_data["finish_reason"] = result.finish_reason
+            runtime_state = provider_data.get("_matoloop")
+            if not isinstance(runtime_state, dict):
+                runtime_state = {}
+            first_signals = [
+                value for value in provider_timing.values() if isinstance(value, int)
+            ]
+            provider_data["_matoloop"] = {
+                **runtime_state,
+                "performance": {
+                    "modelRequest": model_requests,
+                    "estimatedInputTokens": projection.estimated_input_tokens,
+                    "inputBudgetTokens": projection.input_budget_tokens,
+                    "contextPreparationMs": max(
+                        0, round((provider_started_at - context_started_at) * 1_000)
+                    ),
+                    "providerDurationMs": provider_duration_ms,
+                    "timeToFirstSignalMs": min(first_signals) if first_signals else None,
+                    **provider_timing,
+                },
+            }
             if memory_overview_runtime_state is not None:
-                runtime_state = provider_data.get("_matoloop")
-                if not isinstance(runtime_state, dict):
-                    runtime_state = {}
                 provider_data["_matoloop"] = {
-                    **runtime_state,
+                    **provider_data["_matoloop"],
                     "memoryOverview": memory_overview_runtime_state,
                 }
-            public_reasoning = _public_reasoning_payload(result.reasoning)
+            public_reasoning = (
+                None if hide_tool_round else _public_reasoning_payload(result.reasoning)
+            )
             streamed_reasoning = streamed_reasoning_state["text"]
-            if public_reasoning is None and streamed_reasoning:
+            if not hide_tool_round and public_reasoning is None and streamed_reasoning:
                 public_reasoning = _public_reasoning_payload(
                     PublicReasoning(
                         text=streamed_reasoning,
                         kind=streamed_reasoning_state["kind"],
                     )
                 )
+            cited_source_ids: list[str] | None = None
+            if not normalized_calls and required_search_completed:
+                cited_source_ids = _validated_research_citations(
+                    result.content, research_sources
+                )
+                if cited_source_ids is None:
+                    if repair_round or not research_sources:
+                        raise AgentRunError("agent.researchSourcesInvalid")
+                    citation_repair_pending = True
+                    citation_repair_used = True
+                    continue
+                citation_repair_pending = False
+                provider_data["_matoloop"] = {
+                    **provider_data["_matoloop"],
+                    "research": {
+                        "policy": WebSearchPolicy.REQUIRED.value,
+                        "sourceCount": len(research_sources),
+                        "citedSourceIds": cited_source_ids,
+                        "validation": "repaired" if citation_repair_used else "passed",
+                        "repairAttempted": citation_repair_used,
+                    },
+                }
             assistant = Message(
                 session_id=chat_session.id,
                 role="assistant",
-                content=result.content,
+                content="" if hide_tool_round else result.content,
                 model_name=run.model_name,
                 trust_level=model_trust_level.value,
                 tool_calls=serialized_calls,
@@ -1133,8 +1402,17 @@ class AgentRuntime:
             if not normalized_calls:
                 cls._cancellable_runs.discard(run.id)
             visible_response.reset()
-            for delta in buffered_deltas:
-                await run_events.publish(run.id, {"type": "message.delta", "delta": delta})
+            if hold_response and not normalized_calls and result.content:
+                for offset in range(0, len(result.content), GATED_DELTA_CHARACTERS):
+                    await run_events.publish(
+                        run.id,
+                        {
+                            "type": "message.delta",
+                            "delta": result.content[
+                                offset : offset + GATED_DELTA_CHARACTERS
+                            ],
+                        },
+                    )
             if public_reasoning:
                 await run_events.publish(
                     run.id,
@@ -1161,13 +1439,13 @@ class AgentRuntime:
             )
             if not normalized_calls:
                 await _publish_run_phase(run.id, "finalizing")
-                if result.finish_reason in {"length", "max_tokens"}:
-                    raise AgentRunError("agent.outputLimitReached")
                 return
 
             required_search_succeeded = False
             required_search_called = False
             required_search_error: str | None = None
+            tool_call_limit_reached = False
+            repeated_tool_call_detected = False
             for index, call in enumerate(normalized_calls):
                 await _publish_run_phase(
                     run.id,
@@ -1183,6 +1461,7 @@ class AgentRuntime:
                 memory_write_available_now = True
                 current_memory_state = memory_state
                 current_memory_trust = model_trust_level
+                call_signature = _tool_call_signature(call)
                 if call.name in {"memory_write", "memory_retrieve"}:
                     current_memory_settings = await SettingsStore.load(
                         db, MemorySettings, user_id=chat_session.user_id
@@ -1195,7 +1474,24 @@ class AgentRuntime:
                     )
                     memory_available_now = current_memory_state.read_enabled
                     memory_write_available_now = current_memory_state.write_enabled
-                if call.name not in offered_tool_names:
+                within_tool_call_budget = (
+                    tool_calls_used < runtime_settings.max_tool_calls
+                )
+                if within_tool_call_budget:
+                    tool_calls_used += 1
+                if not within_tool_call_budget:
+                    tool_call_limit_reached = True
+                    tool_result_content = json.dumps(
+                        error_payload("agent.toolCallLimitReached"), ensure_ascii=False
+                    )
+                    metadata = {"errorCode": "agent.toolCallLimitReached"}
+                elif call_signature in failed_tool_call_signatures:
+                    repeated_tool_call_detected = True
+                    tool_result_content = json.dumps(
+                        error_payload("agent.repeatedToolCall"), ensure_ascii=False
+                    )
+                    metadata = {"errorCode": "agent.repeatedToolCall"}
+                elif call.name not in offered_tool_names:
                     tool_result_content = json.dumps(
                         error_payload("tool.unavailable"), ensure_ascii=False
                     )
@@ -1207,11 +1503,6 @@ class AgentRuntime:
                         error_payload("tool.unavailable"), ensure_ascii=False
                     )
                     metadata = {"errorCode": "tool.unavailable"}
-                elif index >= runtime_settings.max_tool_calls:
-                    tool_result_content = json.dumps(
-                        error_payload("agent.toolCallLimitReached"), ensure_ascii=False
-                    )
-                    metadata: dict[str, Any] = {"errorCode": "agent.toolCallLimitReached"}
                 else:
                     ask = partial(
                         cls._authorize,
@@ -1317,6 +1608,13 @@ class AgentRuntime:
                         for attachment in created_attachments:
                             await attachment_service.discard(attachment, chat_session.id)
                     raise
+                error_code = metadata.get("errorCode")
+                if isinstance(error_code, str):
+                    failed_tool_call_signatures.add(call_signature)
+                else:
+                    failed_tool_call_signatures.discard(call_signature)
+                    if call.name in {"web_search", "webfetch"}:
+                        _add_research_sources(research_sources, metadata)
                 await run_events.publish(
                     run.id,
                     {
@@ -1343,6 +1641,12 @@ class AgentRuntime:
                         required_search_error = error_code
                     else:
                         required_search_succeeded = True
+                if tool_call_limit_reached or repeated_tool_call_detected:
+                    break
+            if tool_call_limit_reached:
+                raise AgentRunError("agent.toolCallLimitReached")
+            if repeated_tool_call_detected:
+                raise AgentRunError("agent.repeatedToolCall")
             if search_pending:
                 if required_search_succeeded:
                     required_search_completed = True
@@ -1507,10 +1811,7 @@ class AgentRuntime:
             ),
             None,
         )
-        explicit_helper = ai_settings.compaction_model_id is not None
-        candidates = (
-            [helper] if explicit_helper and helper is not None else []
-        ) or ([] if explicit_helper else [active_model])
+        candidates = [item for item in (helper, active_model) if item is not None]
         unique_candidates = list({item.id: item for item in candidates}.values())
         attempts = 0
         prompt = (
@@ -1536,14 +1837,8 @@ class AgentRuntime:
             if available_input_tokens <= 0:
                 continue
             input_chars = int(available_input_tokens * candidate.characters_per_token)
-            request_prompt = prompt
-            if len(request_prompt) > input_chars:
-                half = max(1_000, input_chars // 2)
-                request_prompt = (
-                    request_prompt[:half]
-                    + "\n[Middle omitted for compressor input budget]\n"
-                    + request_prompt[-half:]
-                )
+            if len(prompt) > input_chars:
+                continue
             try:
                 result = await ProviderService.complete(
                     db,
@@ -1554,7 +1849,7 @@ class AgentRuntime:
                             "role": "system",
                             "content": "Summarize conversation data. Do not call tools.",
                         },
-                        {"role": "user", "content": request_prompt},
+                        {"role": "user", "content": prompt},
                     ],
                     tools=[],
                     timeout=runtime_settings.request_timeout_seconds,

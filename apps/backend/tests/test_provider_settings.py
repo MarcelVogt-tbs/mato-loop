@@ -249,6 +249,8 @@ async def test_sync_adds_updates_and_marks_discovered_models_missing(monkeypatch
     assert added.enabled is False
     assert added.name == "Opaque"
     assert added.context_window_tokens == 8_192
+    assert added.discovered_context_window_tokens == 8_192
+    assert added.use_discovered_context_window is True
     assert added.max_output_tokens == 2_048
     assert settings.default_model_id is None
     assert provider.models_last_synced_at is not None
@@ -282,12 +284,14 @@ async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
     assert model.origin == ModelOrigin.DISCOVERED
     assert model.enabled is False
     assert model.context_window_tokens == 272_000
+    assert model.discovered_context_window_tokens == 272_000
+    assert model.use_discovered_context_window is True
     assert model.supports_parallel_tool_calls is False
     assert model.supports_image_input is True
     assert result["models"][0]["modelId"] == "openai-codex/gpt-test"
 
 
-async def test_lemonade_sync_updates_discovered_capabilities_authoritatively(
+async def test_lemonade_sync_updates_capabilities_without_replacing_context_override(
     monkeypatch,
 ) -> None:
     provider = LlmProviderConfig(name="Lemonade", adapter_type="lemonade")
@@ -326,13 +330,44 @@ async def test_lemonade_sync_updates_discovered_capabilities_authoritatively(
     await sync_provider_models(provider.id, _db())
 
     assert discovered.capabilities == {ModelCapability.AUDIO_TRANSCRIPTION}
-    assert discovered.context_window_tokens == 8_192
+    assert discovered.context_window_tokens == 32_000
+    assert discovered.discovered_context_window_tokens == 8_192
+    assert discovered.context_window_source == "override"
     assert discovered.supports_tools is True
     assert discovered.supports_parallel_tool_calls is False
     assert manual.capabilities == {
         ModelCapability.CHAT,
         ModelCapability.IMAGE_GENERATION,
     }
+
+
+async def test_sync_updates_models_following_provider_context(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="auto-context",
+        origin=ModelOrigin.DISCOVERED,
+        context_window_tokens=64_000,
+        discovered_context_window_tokens=64_000,
+        use_discovered_context_window=True,
+        max_output_tokens=8_000,
+    )
+    settings = AiSettings(providers=[provider], models=[model])
+    _mock_settings(monkeypatch, settings)
+    monkeypatch.setattr(
+        ProviderService,
+        "discover_models",
+        AsyncMock(
+            return_value=[DiscoveredModel(id="auto-context", max_model_len=32_000)]
+        ),
+    )
+
+    result = await sync_provider_models(provider.id, _db())
+
+    assert model.context_window_tokens == 32_000
+    assert model.discovered_context_window_tokens == 32_000
+    assert model.max_output_tokens == 8_000
+    assert result["models"][0]["contextWindowSource"] == "provider"
 
 
 async def test_codex_sync_ignores_own_oauth_token_rotation(monkeypatch) -> None:

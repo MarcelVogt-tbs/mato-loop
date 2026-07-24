@@ -44,6 +44,9 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert settings.protected_recent_turns == 2
     assert settings.approval_timeout_seconds == 600
     assert settings.max_compaction_requests == 3
+    assert settings.historical_tool_output_tokens == 2_000
+    assert settings.current_turn_tool_output_tokens == 12_000
+    assert ToolSettings().web_fetch.default_policy == WebFetchPolicy.AUTO_PUBLIC
 
 
 def test_ai_settings_collections_are_independent() -> None:
@@ -111,6 +114,36 @@ def test_model_runtime_uses_defaults_and_legacy_config_values() -> None:
     assert legacy_model.context_window_tokens == 32_000
     assert legacy_model.max_output_tokens == 2_048
     assert legacy_model.supports_tools is False
+
+
+def test_discovered_context_window_can_drive_effective_runtime_limit() -> None:
+    model = ModelConfig(
+        provider_id=uuid4(),
+        model_id="detected",
+        context_window_tokens=128_000,
+        discovered_context_window_tokens=32_000,
+        use_discovered_context_window=True,
+        max_output_tokens=16_384,
+    )
+
+    assert model.context_window_tokens == 32_000
+    assert model.max_output_tokens == 8_000
+    assert model.context_window_source == "provider"
+
+
+def test_existing_context_window_remains_a_manual_override() -> None:
+    model = ModelConfig.model_validate(
+        {
+            "provider_id": uuid4(),
+            "model_id": "existing",
+            "contextWindowTokens": 64_000,
+            "discoveredContextWindowTokens": 32_000,
+        }
+    )
+
+    assert model.context_window_tokens == 64_000
+    assert model.use_discovered_context_window is False
+    assert model.context_window_source == "override"
 
 
 def test_model_config_discards_legacy_compression_model() -> None:

@@ -8,10 +8,12 @@ from collections.abc import Iterable
 import httpx
 from ddgs import DDGS
 
+from mato_loop_backend.integrations.evidence import evidence_source_id
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
     search_provider_key,
 )
+from mato_loop_backend.integrations.webfetch import WebFetchError, canonicalize_url
 from mato_loop_backend.settings.models import (
     IntegrationInstance,
     IntegrationSettings,
@@ -127,18 +129,29 @@ def _public_result_url(value: object) -> str | None:
 
 def _compact_results(results: Iterable[object]) -> str:
     compact = []
+    seen_urls: set[str] = set()
     for item in results:
         if not isinstance(item, dict):
             continue
         url = _public_result_url(item.get("url") or item.get("href"))
         if url is None:
             continue
+        try:
+            url = canonicalize_url(url)
+        except WebFetchError:
+            continue
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
         compact.append(
             {
+                "sourceId": evidence_source_id(url),
                 "title": item.get("title"),
                 "url": url,
-                "content": item.get("content") or item.get("body"),
-                "publishedDate": item.get("publishedDate") or item.get("pubdate") or item.get("date"),
+                "snippet": item.get("content") or item.get("body"),
+                "publishedDate": item.get("publishedDate")
+                or item.get("pubdate")
+                or item.get("date"),
             }
         )
         if len(compact) == 8:

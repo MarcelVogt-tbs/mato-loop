@@ -3,18 +3,53 @@ from __future__ import annotations
 import copy
 import secrets
 from functools import lru_cache
+from threading import Lock
 from typing import Any
 
-from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer, RecognizerRegistry
-from presidio_analyzer.nlp_engine import NlpEngineProvider
+from detect_secrets.core.scan import scan_line
+from detect_secrets.plugins.keyword import KeywordDetector
+from detect_secrets.settings import transient_settings
+from presidio_analyzer import EntityRecognizer, RecognizerResult
 from presidio_analyzer.predefined_recognizers import (
     CreditCardRecognizer,
     EmailRecognizer,
     IbanRecognizer,
     IpRecognizer,
     PhoneRecognizer,
-    SpacyRecognizer,
 )
+
+_SECRET_SCAN_LOCK = Lock()
+_SECRET_SCAN_SETTINGS = {
+    "plugins_used": [
+        {"name": name}
+        for name in (
+            "ArtifactoryDetector",
+            "AWSKeyDetector",
+            "AzureStorageKeyDetector",
+            "BasicAuthDetector",
+            "CloudantDetector",
+            "DiscordBotTokenDetector",
+            "GitHubTokenDetector",
+            "GitLabTokenDetector",
+            "IbmCloudIamDetector",
+            "IbmCosHmacDetector",
+            "JwtTokenDetector",
+            "MailchimpDetector",
+            "NpmDetector",
+            "OpenAIDetector",
+            "PrivateKeyDetector",
+            "PypiTokenDetector",
+            "SendGridDetector",
+            "SlackDetector",
+            "SoftlayerDetector",
+            "SquareOAuthDetector",
+            "StripeDetector",
+            "TelegramBotTokenDetector",
+            "TwilioKeyDetector",
+        )
+    ],
+    "filters_used": [],
+}
 
 
 class PseudonymizationError(RuntimeError):
@@ -22,65 +57,97 @@ class PseudonymizationError(RuntimeError):
 
 
 @lru_cache(maxsize=1)
-def _analyzer() -> AnalyzerEngine:
+def _recognizers() -> tuple[EntityRecognizer, ...]:
     try:
-        nlp_engine = NlpEngineProvider(
-            nlp_configuration={
-                "nlp_engine_name": "spacy",
-                "models": [{"lang_code": "de", "model_name": "de_core_news_sm"}],
-                "ner_model_configuration": {"labels_to_ignore": ["MISC", "ORG"]},
-            }
-        ).create_engine()
-        registry = RecognizerRegistry(supported_languages=["de"])
-        for recognizer_type in (
-            CreditCardRecognizer,
-            EmailRecognizer,
-            IbanRecognizer,
-            IpRecognizer,
-            PhoneRecognizer,
-            SpacyRecognizer,
-        ):
-            registry.add_recognizer(recognizer_type(supported_language="de"))
-        analyzer = AnalyzerEngine(
-            nlp_engine=nlp_engine,
-            registry=registry,
-            supported_languages=["de"],
+        return (
+            CreditCardRecognizer(supported_language="de"),
+            EmailRecognizer(supported_language="de"),
+            IbanRecognizer(supported_language="de"),
+            IpRecognizer(supported_language="de"),
+            PhoneRecognizer(supported_language="de", leniency=3),
         )
-        analyzer.registry.add_recognizer(
-            PatternRecognizer(
-                supported_entity="SECRET",
-                supported_language="de",
-                patterns=[
-                    Pattern(
-                        "private-key",
-                        r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z0-9 ]*PRIVATE KEY-----",
-                        0.95,
-                    ),
-                    Pattern("openai-key", r"\bsk-[A-Za-z0-9_-]{20,}\b", 0.9),
-                    Pattern(
-                        "assigned-secret",
-                        r"(?i)\b(?:api[_-]?key|access[_-]?token|secret|password)\b\s*[:=]\s*[\"']?[^\s\"']{8,}",
-                        0.8,
-                    ),
-                ],
-            )
-        )
-        return analyzer
     except Exception as exc:
         raise PseudonymizationError("privacy.pseudonymizationUnavailable") from exc
 
 
+def _expand_private_key_span(text: str, start: int, end: int) -> tuple[int, int]:
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    if line_end < 0:
+        line_end = len(text)
+    header = text[line_start:line_end].strip()
+
+    if header.startswith("-----BEGIN ") and header.endswith("-----"):
+        label = header[len("-----BEGIN ") : -len("-----")]
+        end_marker = f"-----END {label}-----"
+        block_end = text.find(end_marker, line_end)
+        if block_end >= 0:
+            return line_start, block_end + len(end_marker)
+
+    if header.startswith("PuTTY-User-Key-File-"):
+        block_end = text.find("\nPrivate-MAC:", line_end)
+        if block_end >= 0:
+            mac_end = text.find("\n", block_end + 1)
+            return line_start, len(text) if mac_end < 0 else mac_end
+
+    return start, end
+
+
+def _secret_results(text: str) -> list[RecognizerResult]:
+    results: list[RecognizerResult] = []
+    offset = 0
+    keyword_detector = KeywordDetector()
+    with _SECRET_SCAN_LOCK, transient_settings(_SECRET_SCAN_SETTINGS):
+        for line_with_ending in text.splitlines(keepends=True):
+            line = line_with_ending.rstrip("\r\n")
+            potentials = list(scan_line(line))
+            potentials.extend(
+                keyword_detector.analyze_line(
+                    filename="message.yaml",
+                    line=line,
+                )
+            )
+            for potential in potentials:
+                secret = potential.secret_value
+                if not secret:
+                    continue
+                position = 0
+                while (position := line.find(secret, position)) >= 0:
+                    start = offset + position
+                    end = start + len(secret)
+                    if potential.type == "Private Key":
+                        start, end = _expand_private_key_span(text, start, end)
+                    results.append(
+                        RecognizerResult(
+                            entity_type="SECRET",
+                            start=start,
+                            end=end,
+                            score=1.0,
+                        )
+                    )
+                    position += len(secret)
+            offset += len(line_with_ending)
+    return results
+
+
+def _analyze(text: str) -> list[RecognizerResult]:
+    results = _secret_results(text)
+    for recognizer in _recognizers():
+        current = recognizer.analyze(
+            text=text,
+            entities=recognizer.supported_entities,
+            nlp_artifacts=None,
+        )
+        minimum_score = 0.4 if isinstance(recognizer, PhoneRecognizer) else 0.45
+        results.extend(result for result in current if result.score >= minimum_score)
+    return results
+
+
 class RequestPseudonymizer:
-    _entities = [
-        "PERSON",
-        "LOCATION",
-        "EMAIL_ADDRESS",
-        "PHONE_NUMBER",
-        "IBAN_CODE",
-        "CREDIT_CARD",
-        "IP_ADDRESS",
-        "SECRET",
-    ]
+    _marker_instruction = (
+        "Host privacy placeholders are opaque values. Copy every placeholder exactly and "
+        "unchanged in answers and tool arguments; never interpret, abbreviate, or reformat it."
+    )
 
     def __init__(self) -> None:
         self._nonce = secrets.token_hex(4).upper()
@@ -90,6 +157,10 @@ class RequestPseudonymizer:
     @property
     def max_marker_length(self) -> int:
         return max((len(marker) for marker in self._originals), default=0)
+
+    @property
+    def marker_prefix(self) -> str:
+        return f"[[MLP_{self._nonce}_"
 
     def protect_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         try:
@@ -105,6 +176,22 @@ class RequestPseudonymizer:
                             call["arguments"] = self.protect_value(call["arguments"])
                 # Opaque continuation data cannot be inspected or safely pseudonymized.
                 message.pop("provider_data", None)
+            if self._originals:
+                system_message = next(
+                    (
+                        message
+                        for message in protected
+                        if message.get("role") == "system"
+                        and isinstance(message.get("content"), str)
+                    ),
+                    None,
+                )
+                if system_message is None:
+                    protected.insert(
+                        0, {"role": "system", "content": self._marker_instruction}
+                    )
+                else:
+                    system_message["content"] += f"\n\n{self._marker_instruction}"
             return protected
         except PseudonymizationError:
             raise
@@ -133,12 +220,7 @@ class RequestPseudonymizer:
         if not text:
             return text
         try:
-            results = _analyzer().analyze(
-                text=text,
-                language="de",
-                entities=self._entities,
-                score_threshold=0.45,
-            )
+            results = _analyze(text)
         except PseudonymizationError:
             raise
         except Exception as exc:
@@ -159,7 +241,7 @@ class RequestPseudonymizer:
             key = (result.entity_type, original.casefold())
             marker = self._markers.get(key)
             if marker is None:
-                marker = f"[[MLP_{self._nonce}_{len(self._markers) + 1:04d}]]"
+                marker = f"{self.marker_prefix}{len(self._markers) + 1:04d}]]"
                 self._markers[key] = marker
                 self._originals[marker] = original
             protected = protected[: result.start] + marker + protected[result.end :]
@@ -169,14 +251,15 @@ class RequestPseudonymizer:
         restored = text
         for marker, original in self._originals.items():
             restored = restored.replace(marker, original)
+        if self.marker_prefix in restored:
+            raise PseudonymizationError("privacy.pseudonymizationFailed")
         return restored
 
 
 class StreamingPseudonymRestorer:
-    _prefix = "[[MLP_"
-
     def __init__(self, pseudonymizer: RequestPseudonymizer) -> None:
         self._pseudonymizer = pseudonymizer
+        self._prefix = pseudonymizer.marker_prefix
         self._buffer = ""
 
     def feed(self, text: str) -> str:
@@ -203,9 +286,7 @@ class StreamingPseudonymRestorer:
                     self._pseudonymizer.max_marker_length
                     and len(self._buffer) > self._pseudonymizer.max_marker_length
                 ):
-                    restored.append(self._buffer[0])
-                    self._buffer = self._buffer[1:]
-                    continue
+                    raise PseudonymizationError("privacy.pseudonymizationFailed")
                 break
             marker_end += 2
             restored.append(

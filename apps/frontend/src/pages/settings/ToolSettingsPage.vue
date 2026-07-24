@@ -304,7 +304,7 @@ const form = reactive({
     providerOptions: []
   },
   enabled: true,
-  defaultPolicy: 'ask',
+  defaultPolicy: 'auto_public',
   allowedPrivateOrigins: [],
   generateImage: { policy: 'disabled', timeoutSeconds: 300 },
   generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },

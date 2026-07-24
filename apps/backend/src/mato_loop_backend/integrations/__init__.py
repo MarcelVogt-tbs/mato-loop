@@ -1,3 +1,4 @@
+from mato_loop_backend.integrations.evidence import evidence_source_id
 from mato_loop_backend.integrations.search import (
     SearchIntegrationError,
     effective_search_providers,
@@ -28,6 +29,7 @@ __all__ = [
     "WebFetchError",
     "WebFetchResult",
     "canonicalize_url",
+    "evidence_source_id",
     "effective_search_providers",
     "normalize_search_tool_settings",
     "search_available",

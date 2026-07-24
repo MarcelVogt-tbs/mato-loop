@@ -14,9 +14,24 @@
         step="1"
         label="Kontextfenster (Tokens)"
         hint="Maximale Anzahl von Eingabe- und Ausgabe-Tokens."
+        :disable="form.useDiscoveredContextWindow && form.discoveredContextWindowTokens != null"
         lazy-rules
         :rules="[positiveIntegerRule, contextRule]"
-      />
+      >
+        <template v-if="form.discoveredContextWindowTokens != null" #after>
+          <q-btn
+            flat
+            dense
+            no-caps
+            color="primary"
+            :label="form.useDiscoveredContextWindow ? 'Manuell festlegen' : 'Providerwert verwenden'"
+            @click="toggleProviderContextWindow"
+          />
+        </template>
+      </q-input>
+      <div class="text-caption app-muted model-runtime-context-source">
+        {{ contextWindowHint }}
+      </div>
       <q-input
         v-model.number="form.maxOutputTokens"
         outlined
@@ -54,9 +69,9 @@
         outlined
         emit-value
         map-options
-        label="Pseudonymisierung"
+        label="Schutz von Kennungen und Secrets"
         :options="pseudonymizationOptions"
-        :hint="`Effektiv: ${effectivePseudonymizationEnabled ? 'Aktiv' : 'Inaktiv'}`"
+        :hint="`Effektiv: ${effectivePseudonymizationEnabled ? 'Aktiv' : 'Inaktiv'}. Personen und Orte werden nicht erkannt.`"
         @update:model-value="form.pseudonymizationEnabled = $event === 'inherit' ? null : $event"
       />
       <q-select
@@ -168,6 +183,15 @@ const effectivePseudonymizationEnabled = computed(() => (
   effectiveTrustLevel.value === 'public'
   && (form.value.pseudonymizationEnabled ?? props.providerPseudonymizationEnabled)
 ))
+const contextWindowHint = computed(() => {
+  if (form.value.discoveredContextWindowTokens == null) {
+    return 'Der Provider meldet kein Kontextfenster; der konfigurierte Wert wird verwendet.'
+  }
+  if (form.value.useDiscoveredContextWindow) {
+    return `Automatisch vom Provider erkannt: ${form.value.discoveredContextWindowTokens.toLocaleString('de-DE')} Tokens.`
+  }
+  return `Manueller Override; Providerwert: ${form.value.discoveredContextWindowTokens.toLocaleString('de-DE')} Tokens.`
+})
 
 const effectivePolicyColor = computed(() => ({
   disabled: 'grey-7',
@@ -191,4 +215,23 @@ function contextRule(value) {
 function outputRule(value) {
   return Number(value) < Number(form.value.contextWindowTokens) || 'Die maximale Ausgabe muss kleiner als das Kontextfenster sein.'
 }
+
+function toggleProviderContextWindow() {
+  if (form.value.useDiscoveredContextWindow) {
+    form.value.useDiscoveredContextWindow = false
+    return
+  }
+  form.value.useDiscoveredContextWindow = true
+  form.value.contextWindowTokens = form.value.discoveredContextWindowTokens
+  if (Number(form.value.maxOutputTokens) >= Number(form.value.contextWindowTokens)) {
+    form.value.maxOutputTokens = Math.max(1, Math.floor(form.value.contextWindowTokens / 4))
+  }
+}
 </script>
+
+<style scoped>
+.model-runtime-context-source {
+  align-self: start;
+  margin-top: -12px;
+}
+</style>

@@ -6,7 +6,12 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.context import ContextManager, ContextProjection
-from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime, _VisibleResponse
+from mato_loop_backend.agent.runtime import (
+    AgentRunError,
+    AgentRuntime,
+    _validated_research_citations,
+    _VisibleResponse,
+)
 from mato_loop_backend.agent.tools import ToolResult, tool_registry
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
@@ -24,8 +29,52 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
+SOURCE_ID = "src-test"
+SOURCE_URL = "https://example.test/source"
+SOURCE_CITATION = f"[{SOURCE_ID}]({SOURCE_URL})"
 
-async def _runtime_setup(monkeypatch, results: list[ProviderResult]):
+
+def test_research_citation_validation_handles_urls_with_parentheses() -> None:
+    source_url = "https://example.test/wiki/Product_(series)"
+
+    assert _validated_research_citations(
+        f"Belegt [src-parentheses]({source_url})",
+        {"src-parentheses": source_url},
+    ) == ["src-parentheses"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        f"<!-- {SOURCE_CITATION} -->",
+        f"```text\n{SOURCE_CITATION}\n```",
+        f"`{SOURCE_CITATION}`",
+        f"!{SOURCE_CITATION}",
+        f"````text\n```\n{SOURCE_CITATION}\n````",
+        rf"$\text{{{SOURCE_CITATION}}}$",
+        rf"$$\text{{{SOURCE_CITATION}}}$$",
+        rf"\(\text{{{SOURCE_CITATION}}}\)",
+        rf"\[\text{{{SOURCE_CITATION}}}\]",
+        rf"\begin{{align}}{SOURCE_CITATION}\end{{align}}",
+        f"{SOURCE_CITATION} [other](HTTPS://other.example/source)",
+        f"{SOURCE_CITATION} [other](<HTTPS://other.example/source>)",
+        f"{SOURCE_CITATION} [other](//other.example/source)",
+    ],
+)
+def test_research_citation_validation_rejects_hidden_or_foreign_links(
+    content: str,
+) -> None:
+    assert _validated_research_citations(content, {SOURCE_ID: SOURCE_URL}) is None
+
+
+async def _runtime_setup(
+    monkeypatch,
+    results: list[ProviderResult],
+    *,
+    max_tool_calls: int = 20,
+    max_model_requests: int = 10,
+    search_policy: WebSearchPolicy = WebSearchPolicy.REQUIRED,
+):
     provider = LlmProviderConfig(
         name="Local",
         adapter_type="openai-compatible",
@@ -36,14 +85,18 @@ async def _runtime_setup(monkeypatch, results: list[ProviderResult]):
         providers=[provider], models=[model], default_model_id=model.id
     )
     integration_settings = IntegrationSettings()
-    runtime_settings = AgentRuntimeSettings(max_steps=10, max_model_requests=10)
+    runtime_settings = AgentRuntimeSettings(
+        max_steps=10,
+        max_model_requests=max_model_requests,
+        max_tool_calls=max_tool_calls,
+    )
     session = ChatSession(
         id=uuid4(),
         user_id=uuid4(),
         title="Test",
         model_config_id=model.id,
         memory_mode="disabled",
-        web_search_policy=WebSearchPolicy.REQUIRED.value,
+        web_search_policy=search_policy.value,
         workspace_access="read-only",
     )
     run = AgentRun(id=uuid4(), session_id=session.id, status="running")
@@ -101,11 +154,19 @@ async def _runtime_setup(monkeypatch, results: list[ProviderResult]):
             return_value=ToolResult.json(
                 [
                     {
+                        "sourceId": SOURCE_ID,
                         "title": "Quelle",
-                        "url": "https://example.test/source",
-                        "content": "Aktuelle Information",
+                        "url": SOURCE_URL,
+                        "snippet": "Aktuelle Information",
                     }
-                ]
+                ],
+                metadata={
+                    "resultCount": 1,
+                    "evidenceUrls": [SOURCE_URL],
+                    "sources": [
+                        {"sourceId": SOURCE_ID, "url": SOURCE_URL, "kind": "search"}
+                    ],
+                },
             )
         ),
     )
@@ -113,7 +174,27 @@ async def _runtime_setup(monkeypatch, results: list[ProviderResult]):
     return db, run, requests, projections, events
 
 
-async def test_required_search_retries_hidden_text_and_keeps_normal_tools(monkeypatch) -> None:
+async def test_available_search_keeps_best_effort_streaming(monkeypatch) -> None:
+    answer = "Antwort ohne verpflichtende Recherche"
+    db, run, requests, _, events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content=answer, finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 1
+    assert any(event.get("delta") == answer for event in events)
+    assistant = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
+    )
+    assert "research" not in assistant.provider_data["_matoloop"]
+
+
+async def test_required_search_retries_hidden_text_in_search_only_phase(monkeypatch) -> None:
     db, run, requests, projections, events = await _runtime_setup(
         monkeypatch,
         [
@@ -127,9 +208,28 @@ async def test_required_search_retries_hidden_text_and_keeps_normal_tools(monkey
                         arguments={"query": "Aktuelle Frage"},
                     )
                 ],
+                provider_data={
+                    "responses_output_items": [
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "Versteckter Entwurf"}
+                            ],
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "search-1",
+                            "name": "web_search",
+                            "arguments": '{"query":"Aktuelle Frage"}',
+                        },
+                    ],
+                    "chat_reasoning_details": [{"text": "Verstecktes Reasoning"}],
+                },
                 finish_reason="tool_calls",
             ),
-            ProviderResult(content="Belegte Antwort", finish_reason="stop"),
+            ProviderResult(
+                content=f"Belegte Antwort {SOURCE_CITATION}", finish_reason="stop"
+            ),
         ],
     )
 
@@ -140,42 +240,416 @@ async def test_required_search_retries_hidden_text_and_keeps_normal_tools(monkey
         "required",
         "auto",
     ]
-    assert {tool["name"] for tool in requests[0]["tools"]} >= {
+    assert [tool["name"] for tool in requests[0]["tools"]] == ["web_search"]
+    assert [tool["name"] for tool in requests[1]["tools"]] == ["web_search"]
+    assert {tool["name"] for tool in requests[2]["tools"]} >= {
         "read_file",
         "web_search",
     }
-    assert "previous final draft was rejected" in projections[1]["system_prompt"]
+    assert "previous attempt did not complete" in projections[1]["system_prompt"]
     assert all(
         "Current local date and time:" in projection["system_prompt"]
         for projection in projections
     )
+    time_lines = [
+        next(
+            part
+            for part in projection["system_prompt"].split("\n\n")
+            if part.startswith("Current local date and time:")
+        )
+        for projection in projections
+    ]
+    assert len(set(time_lines)) == 1
+    assert "read_file" not in projections[0]["system_prompt"]
+    assert "memory_write" not in projections[0]["system_prompt"]
+    assert "update_agent_identity" not in projections[0]["system_prompt"]
+    assert "File tools use explicit session and workspace roots" in projections[2][
+        "system_prompt"
+    ]
     assert "satisfies only the tool-use requirement" in projections[2]["system_prompt"]
     assert "including every named recommendation" in projections[2]["system_prompt"]
     assert "search again or omit it" in projections[2]["system_prompt"]
-    assert requests[1]["messages"][-2:] == [
-        {"role": "assistant", "content": "Veraltete Antwort"},
-        {
-            "role": "system",
-            "content": (
-                "Runtime validation error: web_search is required before the final answer. "
-                "The previous draft was rejected. Call web_search now and do not provide "
-                "another final answer first."
-            ),
-        },
-    ]
+    assert requests[1]["messages"][-1] == {
+        "role": "user",
+        "content": "Aktuelle Frage",
+    }
     persisted_contents = [
         call.args[0].content
         for call in db.add.call_args_list
         if isinstance(call.args[0], Message)
     ]
     assert "Veraltete Antwort" not in persisted_contents
-    assert "Ich recherchiere." in persisted_contents
-    assert "Belegte Antwort" in persisted_contents
+    assert "Ich recherchiere." not in persisted_contents
+    assert f"Belegte Antwort {SOURCE_CITATION}" in persisted_contents
+    assistant_messages = [
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
+    ]
+    assert [
+        message.provider_data["_matoloop"]["performance"]["modelRequest"]
+        for message in assistant_messages
+    ] == [2, 3]
+    for message in assistant_messages:
+        performance = message.provider_data["_matoloop"]["performance"]
+        assert performance["estimatedInputTokens"] == 100
+        assert performance["inputBudgetTokens"] == 1_000
+        assert performance["contextPreparationMs"] >= 0
+        assert performance["providerDurationMs"] >= 0
+        assert performance["timeToFirstSignalMs"] is not None
+    search_message = next(message for message in assistant_messages if message.tool_calls)
+    assert "Versteckter Entwurf" not in str(search_message.provider_data)
+    assert "Verstecktes Reasoning" not in str(search_message.provider_data)
+    assert search_message.provider_data["responses_output_items"][0]["type"] == (
+        "function_call"
+    )
+    assert all(
+        "startedAt" in event for event in events if event["type"] == "run.phase"
+    )
     assert all(
         event.get("delta") != "Veraltete Antwort"
         for event in events
         if event["type"] == "message.delta"
     )
+
+
+async def test_required_search_rejects_non_search_tool_calls(monkeypatch) -> None:
+    db, run, requests, _, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                content="Ich lese stattdessen eine Datei.",
+                tool_calls=[
+                    ToolCall(
+                        id="wrong-1",
+                        name="read_file",
+                        arguments={"root": "session", "path": "files/info.txt"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                content="Suche",
+                tool_calls=[
+                    ToolCall(
+                        id="search-1",
+                        name="web_search",
+                        arguments={"query": "Aktuelle Frage"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                content=f"Belegte Antwort {SOURCE_CITATION}", finish_reason="stop"
+            ),
+        ],
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [tool["name"] for tool in requests[0]["tools"]] == ["web_search"]
+    persisted_contents = [
+        call.args[0].content
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+    ]
+    assert "Ich lese stattdessen eine Datei." not in persisted_contents
+    assert all(
+        event.get("delta") != "Ich lese stattdessen eine Datei."
+        for event in events
+        if event["type"] == "message.delta"
+    )
+
+
+async def test_required_search_hides_text_and_retries_after_tool_failure(monkeypatch) -> None:
+    db, run, requests, _, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                content="Unbelegte Antwort trotz Fehler",
+                tool_calls=[
+                    ToolCall(
+                        id="search-failed",
+                        name="web_search",
+                        arguments={"query": "Fehlerhafte Suche"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                content="Zweiter Versuch",
+                tool_calls=[
+                    ToolCall(
+                        id="search-ok",
+                        name="web_search",
+                        arguments={"query": "Aktuelle Frage"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                content=f"Belegte Antwort {SOURCE_CITATION}", finish_reason="stop"
+            ),
+        ],
+    )
+    tool_registry._execute_definition.side_effect = [
+        ToolResult.error("integration.unavailable"),
+        ToolResult.json(
+            [{"sourceId": SOURCE_ID, "url": SOURCE_URL}],
+            metadata={
+                "resultCount": 1,
+                "evidenceUrls": [SOURCE_URL],
+                "sources": [
+                    {"sourceId": SOURCE_ID, "url": SOURCE_URL, "kind": "search"}
+                ],
+            },
+        ),
+    ]
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["tool_choice"] for request in requests] == [
+        "required",
+        "required",
+        "auto",
+    ]
+    persisted_contents = [
+        call.args[0].content
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+    ]
+    assert "Unbelegte Antwort trotz Fehler" not in persisted_contents
+    assert "Zweiter Versuch" not in persisted_contents
+    assert all(
+        event.get("delta") not in {"Unbelegte Antwort trotz Fehler", "Zweiter Versuch"}
+        for event in events
+        if event["type"] == "message.delta"
+    )
+
+
+async def test_required_search_repairs_missing_citations_once(monkeypatch) -> None:
+    invalid = "Unbelegte finale Antwort"
+    repaired = f"Belegte Ersatzantwort {SOURCE_CITATION}"
+    db, run, requests, projections, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="search-1",
+                        name="web_search",
+                        arguments={"query": "Aktuelle Frage"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content=invalid, finish_reason="stop"),
+            ProviderResult(content=repaired, finish_reason="stop"),
+        ],
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 3
+    assert requests[2]["tools"] == []
+    assert "one complete replacement answer" in projections[2]["system_prompt"]
+    assert SOURCE_ID in projections[2]["system_prompt"]
+    persisted = [
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+    ]
+    assert invalid not in [message.content for message in persisted]
+    final = next(message for message in persisted if message.content == repaired)
+    assert final.provider_data["_matoloop"]["research"] == {
+        "policy": "required",
+        "sourceCount": 1,
+        "citedSourceIds": [SOURCE_ID],
+        "validation": "repaired",
+        "repairAttempted": True,
+    }
+    deltas = [event["delta"] for event in events if event["type"] == "message.delta"]
+    assert invalid not in deltas
+    assert repaired in deltas
+
+
+async def test_required_search_rejects_an_invalid_repair_without_leaking_drafts(
+    monkeypatch,
+) -> None:
+    db, run, requests, _, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="search-1",
+                        name="web_search",
+                        arguments={"query": "Aktuelle Frage"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                content="Falsche Quelle [src-other](https://other.example/source)",
+                finish_reason="stop",
+            ),
+            ProviderResult(content="Immer noch ohne Quelle", finish_reason="stop"),
+        ],
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.researchSourcesInvalid"
+    assert len(requests) == 3
+    persisted_contents = [
+        call.args[0].content
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+    ]
+    assert "Falsche Quelle" not in "\n".join(persisted_contents)
+    assert "Immer noch ohne Quelle" not in persisted_contents
+    assert all(event["type"] != "message.delta" for event in events)
+
+
+async def test_required_search_repair_respects_the_model_request_limit(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="search-1",
+                        name="web_search",
+                        arguments={"query": "Aktuelle Frage"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Antwort ohne Quellen", finish_reason="stop"),
+        ],
+        max_model_requests=2,
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.modelRequestLimitReached"
+    assert len(requests) == 2
+
+
+async def test_empty_required_search_result_cannot_support_a_final_answer(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                content="Suche ohne Treffer",
+                tool_calls=[
+                    ToolCall(
+                        id="search-empty",
+                        name="web_search",
+                        arguments={"query": "Sehr seltenes Thema"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Keine belastbaren Quellen gefunden.", finish_reason="stop"),
+        ],
+    )
+    tool_registry._execute_definition.return_value = ToolResult(
+        "[]", {"resultCount": 0, "evidenceUrls": []}
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.researchSourcesInvalid"
+    assert [request["tool_choice"] for request in requests] == ["required", "auto"]
+
+
+async def test_tool_call_limit_applies_across_model_steps(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="search-1",
+                        name="web_search",
+                        arguments={"query": "Aktuelle Frage"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="read-1",
+                        name="read_file",
+                        arguments={"root": "session", "path": "files/info.txt"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+        ],
+        max_tool_calls=1,
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.toolCallLimitReached"
+    assert len(requests) == 2
+    assert tool_registry._execute_definition.await_count == 1
+
+
+async def test_repeated_failed_tool_call_stops_run(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="search-1",
+                        name="web_search",
+                        arguments={"query": "Aktuelle Frage"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="read-1",
+                        name="read_file",
+                        arguments={"root": "session", "path": "files/missing.txt"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="read-2",
+                        name="read_file",
+                        arguments={"path": "files/missing.txt", "root": "session"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+        ],
+    )
+    tool_registry._execute_definition.side_effect = [
+        ToolResult.json([{"url": "https://example.test/source"}]),
+        ToolResult.error("file.fileNotFound"),
+    ]
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.repeatedToolCall"
+    assert len(requests) == 3
+    assert tool_registry._execute_definition.await_count == 2
 
 
 async def test_required_search_stops_after_two_semantic_retries(monkeypatch) -> None:

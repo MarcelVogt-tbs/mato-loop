@@ -3,6 +3,9 @@ import { normalizeModelCapabilities } from 'src/utils/provider-models'
 export const DEFAULT_MODEL_RUNTIME = Object.freeze({
   capabilities: Object.freeze(['chat']),
   contextWindowTokens: 128000,
+  discoveredContextWindowTokens: null,
+  useDiscoveredContextWindow: false,
+  contextWindowSource: 'override',
   maxOutputTokens: 16384,
   charactersPerToken: 4,
   supportsTools: true,
@@ -28,6 +31,17 @@ export function modelRuntimeForm(model) {
   return {
     capabilities: normalizeModelCapabilities(model?.capabilities),
     contextWindowTokens: modelValue(model, 'contextWindowTokens', 'context_window_tokens'),
+    discoveredContextWindowTokens: modelValue(
+      model,
+      'discoveredContextWindowTokens',
+      'discovered_context_window_tokens'
+    ),
+    useDiscoveredContextWindow: modelValue(
+      model,
+      'useDiscoveredContextWindow',
+      'use_discovered_context_window'
+    ),
+    contextWindowSource: modelValue(model, 'contextWindowSource', 'context_window_source'),
     maxOutputTokens: modelValue(model, 'maxOutputTokens', 'max_output_tokens'),
     charactersPerToken: modelValue(model, 'charactersPerToken', 'characters_per_token'),
     supportsTools: modelValue(model, 'supportsTools', 'supports_tools'),
@@ -47,6 +61,7 @@ export function modelRuntimePayload(form) {
   return {
     capabilities: normalizeModelCapabilities(form.capabilities),
     context_window_tokens: Number(form.contextWindowTokens),
+    use_discovered_context_window: Boolean(form.useDiscoveredContextWindow),
     max_output_tokens: Number(form.maxOutputTokens),
     characters_per_token: Number(form.charactersPerToken),
     supports_tools: Boolean(form.supportsTools),

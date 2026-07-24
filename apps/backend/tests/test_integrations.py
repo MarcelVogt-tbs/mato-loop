@@ -78,7 +78,12 @@ async def test_no_key_provider_uses_ddgs_auto_search_and_normalizes_results(
                 "title": "MatoLoop",
                 "href": "https://example.com/result",
                 "body": "Beschreibung",
-            }
+            },
+            {
+                "title": "Duplikat",
+                "href": "https://example.com/result",
+                "body": "Andere Beschreibung",
+            },
         ]
     )
     client = Mock(text=text)
@@ -91,9 +96,10 @@ async def test_no_key_provider_uses_ddgs_auto_search_and_normalizes_results(
     text.assert_called_once_with(query="MatoLoop", max_results=8)
     assert json.loads(result) == [
         {
+            "sourceId": "src-87009d3e3bbb",
             "title": "MatoLoop",
             "url": "https://example.com/result",
-            "content": "Beschreibung",
+            "snippet": "Beschreibung",
             "publishedDate": None,
         }
     ]

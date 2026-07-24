@@ -52,7 +52,7 @@ async def test_compaction_uses_global_model_before_session_model(monkeypatch) ->
     assert complete.await_args.kwargs["tools"] == []
 
 
-async def test_compaction_does_not_replace_explicit_specialist_after_failure(
+async def test_compaction_falls_back_to_active_model_after_specialist_failure(
     monkeypatch,
 ) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
@@ -77,9 +77,12 @@ async def test_compaction_does_not_replace_explicit_specialist_after_failure(
         runtime_settings=AgentRuntimeSettings(),
     )
 
-    assert result.model_config_id is None
-    assert result.is_fallback is True
-    assert [call.kwargs["model"] for call in complete.await_args_list] == [compaction]
+    assert result.model_config_id == active.id
+    assert result.is_fallback is False
+    assert [call.kwargs["model"] for call in complete.await_args_list] == [
+        compaction,
+        active,
+    ]
 
 
 async def test_title_generation_falls_back_to_session_model(monkeypatch) -> None:

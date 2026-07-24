@@ -18,6 +18,8 @@ from pydantic import (
 
 _MODEL_RUNTIME_KEYS = {
     "context_window_tokens": "contextWindowTokens",
+    "discovered_context_window_tokens": "discoveredContextWindowTokens",
+    "use_discovered_context_window": "useDiscoveredContextWindow",
     "max_output_tokens": "maxOutputTokens",
     "characters_per_token": "charactersPerToken",
     "supports_tools": "supportsTools",
@@ -155,6 +157,20 @@ class ModelConfig(BaseModel):
         le=10_000_000,
         validation_alias=AliasChoices("context_window_tokens", "contextWindowTokens"),
     )
+    discovered_context_window_tokens: int | None = Field(
+        default=None,
+        ge=2,
+        le=10_000_000,
+        validation_alias=AliasChoices(
+            "discovered_context_window_tokens", "discoveredContextWindowTokens"
+        ),
+    )
+    use_discovered_context_window: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "use_discovered_context_window", "useDiscoveredContextWindow"
+        ),
+    )
     max_output_tokens: int = Field(
         default=16_384,
         ge=1,
@@ -212,11 +228,31 @@ class ModelConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_runtime_limits(self) -> Self:
+        if (
+            self.use_discovered_context_window
+            and self.discovered_context_window_tokens is not None
+        ):
+            self.context_window_tokens = self.discovered_context_window_tokens
+            self.max_output_tokens = min(
+                self.max_output_tokens,
+                max(1, self.context_window_tokens // 4),
+                self.context_window_tokens - 1,
+            )
         if self.max_output_tokens >= self.context_window_tokens:
             raise ValueError("max_output_tokens must be less than context_window_tokens")
         if not self.supports_tools:
             self.supports_parallel_tool_calls = False
         return self
+
+    @property
+    def context_window_source(self) -> str:
+        if self.use_discovered_context_window:
+            return (
+                "provider"
+                if self.discovered_context_window_tokens is not None
+                else "fallback"
+            )
+        return "override"
 
 
 def effective_model_trust(
@@ -272,7 +308,7 @@ def canonicalize_http_origin(value: str) -> str:
 class WebFetchSettings(BaseModel):
     enabled: bool = True
     default_policy: WebFetchPolicy = Field(
-        default=WebFetchPolicy.ASK,
+        default=WebFetchPolicy.AUTO_PUBLIC,
         validation_alias=AliasChoices("default_policy", "defaultPolicy"),
     )
     allowed_private_origins: list[str] = Field(
@@ -408,6 +444,8 @@ class AgentRuntimeSettings(SettingsDocument):
     protected_recent_turns: int = Field(default=2, ge=1, le=100)
     approval_timeout_seconds: int = Field(default=600, ge=10, le=86_400)
     max_compaction_requests: int = Field(default=3, ge=1, le=20)
+    historical_tool_output_tokens: int = Field(default=2_000, ge=0, le=100_000)
+    current_turn_tool_output_tokens: int = Field(default=12_000, ge=0, le=200_000)
 
     @model_validator(mode="after")
     def validate_compaction_ratios(self) -> Self:

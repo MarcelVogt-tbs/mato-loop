@@ -51,6 +51,12 @@ from mato_loop_backend.settings.models import (
 logger = logging.getLogger(__name__)
 
 _IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
+
+def _pseudonymization_provider_error(exc: PseudonymizationError) -> ProviderError:
+    return ProviderError("Local pseudonymization failed", code=str(exc))
+
+
 async def _refresh_codex_credential(
     db: AsyncSession,
     credential: Credential,
@@ -341,11 +347,7 @@ class ProviderService:
                     pseudonymizer.protect_messages, provider_messages
                 )
             except PseudonymizationError as exc:
-                code = str(exc)
-                raise ProviderError(
-                    "Local pseudonymization failed",
-                    code=code,
-                ) from exc
+                raise _pseudonymization_provider_error(exc) from exc
         request = ProviderRequest(
             model=(
                 model.model_id.removeprefix("openai-codex/") if is_codex else model.model_id
@@ -380,7 +382,10 @@ class ProviderService:
             nonlocal stream_started
             stream_started = True
             if on_delta:
-                restored = delta_restorer.feed(text) if delta_restorer else text
+                try:
+                    restored = delta_restorer.feed(text) if delta_restorer else text
+                except PseudonymizationError as exc:
+                    raise _pseudonymization_provider_error(exc) from exc
                 if restored:
                     await on_delta(restored)
 
@@ -392,7 +397,10 @@ class ProviderService:
                 if pseudonymizer is not None and restorer is None:
                     restorer = StreamingPseudonymRestorer(pseudonymizer)
                     reasoning_restorers[kind] = restorer
-                restored = restorer.feed(text) if restorer else text
+                try:
+                    restored = restorer.feed(text) if restorer else text
+                except PseudonymizationError as exc:
+                    raise _pseudonymization_provider_error(exc) from exc
                 if restored:
                     await on_reasoning(restored, kind)
 
@@ -400,28 +408,31 @@ class ProviderService:
         reasoning_callback = tracked_reasoning if on_reasoning else None
 
         async def finalize(result: ProviderResult) -> ProviderResult:
-            if delta_restorer is not None and on_delta is not None:
-                if remaining := delta_restorer.flush():
-                    await on_delta(remaining)
-            if on_reasoning is not None:
-                for kind, restorer in reasoning_restorers.items():
-                    if remaining := restorer.flush():
-                        await on_reasoning(remaining, kind)
-            if pseudonymizer is not None:
-                result.content = pseudonymizer.restore_text(result.content)
-                for call in result.tool_calls:
-                    call.arguments = pseudonymizer.restore_value(call.arguments)
-                if result.reasoning is not None:
-                    result.reasoning.text = pseudonymizer.restore_text(
-                        result.reasoning.text
-                    )
-                for key in (
-                    "responses_output_items",
-                    "reasoning_encrypted_content",
-                    "chat_reasoning_details",
-                ):
-                    result.provider_data.pop(key, None)
-                return result
+            try:
+                if delta_restorer is not None and on_delta is not None:
+                    if remaining := delta_restorer.flush():
+                        await on_delta(remaining)
+                if on_reasoning is not None:
+                    for kind, restorer in reasoning_restorers.items():
+                        if remaining := restorer.flush():
+                            await on_reasoning(remaining, kind)
+                if pseudonymizer is not None:
+                    result.content = pseudonymizer.restore_text(result.content)
+                    for call in result.tool_calls:
+                        call.arguments = pseudonymizer.restore_value(call.arguments)
+                    if result.reasoning is not None:
+                        result.reasoning.text = pseudonymizer.restore_text(
+                            result.reasoning.text
+                        )
+                    for key in (
+                        "responses_output_items",
+                        "reasoning_encrypted_content",
+                        "chat_reasoning_details",
+                    ):
+                        result.provider_data.pop(key, None)
+                    return result
+            except PseudonymizationError as exc:
+                raise _pseudonymization_provider_error(exc) from exc
             if (
                 result.provider_data.get("responses_output_items")
                 or result.provider_data.get("reasoning_encrypted_content")

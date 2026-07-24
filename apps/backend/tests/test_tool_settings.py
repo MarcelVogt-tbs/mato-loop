@@ -56,7 +56,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         },
         "webFetch": {
             "enabled": True,
-            "defaultPolicy": "ask",
+            "defaultPolicy": "auto_public",
             "allowedPrivateOrigins": [],
         },
         "generateImage": {"policy": "disabled", "timeoutSeconds": 300},

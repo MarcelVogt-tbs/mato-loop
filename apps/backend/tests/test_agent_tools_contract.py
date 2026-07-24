@@ -251,16 +251,62 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
     monkeypatch.setattr(
         SettingsStore, "load", AsyncMock(side_effect=load_settings)
     )
-    search = AsyncMock(return_value="[]")
+    search = AsyncMock(
+        return_value=json.dumps(
+            [
+                {
+                    "sourceId": "src-test",
+                    "title": "MatoLoop",
+                    "url": "https://example.test/source",
+                    "snippet": "Beschreibung",
+                }
+            ]
+        )
+    )
     monkeypatch.setattr(tools_module, "search_web", search)
 
     result = await effective.execute(call, context)
 
     assert result.is_error is False
+    assert result.metadata == {
+        "resultCount": 1,
+        "evidenceUrls": ["https://example.test/source"],
+        "sources": [
+            {
+                "sourceId": "src-test",
+                "url": "https://example.test/source",
+                "kind": "search",
+            }
+        ],
+    }
     assert search.await_args.kwargs == {
         "provider": "no_key",
         "fallback_provider": None,
     }
+
+
+async def test_web_search_rejects_an_invalid_provider_result(tmp_path, monkeypatch) -> None:
+    call = ToolCall(
+        id="invalid-search",
+        name="web_search",
+        arguments={"query": "MatoLoop"},
+    )
+    context = _context(tmp_path, call)
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return (
+            IntegrationSettings()
+            if settings_type is IntegrationSettings
+            else ToolSettings()
+        )
+
+    monkeypatch.setattr(SettingsStore, "load", load_settings)
+    monkeypatch.setattr(tools_module, "search_web", AsyncMock(return_value="not-json"))
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.is_error is True
+    assert result.metadata == {"errorCode": "integration.invalidResponse"}
 
 
 async def test_missing_workspace_returns_structured_error_without_approval(tmp_path) -> None:
@@ -817,9 +863,31 @@ def test_webfetch_schema_has_the_expected_contract() -> None:
         "default": 30,
         "maximum": 120,
         "minimum": 1,
-        "title": "Timeout",
         "type": "integer",
     }
+
+
+def test_tool_schemas_remove_annotative_titles_recursively() -> None:
+    schemas = [
+        item.schema()
+        for item in tool_registry.available(
+            IntegrationSettings(),
+            "read-write",
+            webfetch_enabled=True,
+            memory_enabled=True,
+            memory_write_enabled=True,
+        )
+    ]
+
+    def contains_title(value) -> bool:
+        if isinstance(value, dict):
+            return "title" in value or any(contains_title(item) for item in value.values())
+        if isinstance(value, list):
+            return any(contains_title(item) for item in value)
+        return False
+
+    assert not contains_title(schemas)
+    assert all(schema["parameters"]["additionalProperties"] is False for schema in schemas)
 
 
 @pytest.mark.parametrize(
@@ -858,7 +926,26 @@ async def test_webfetch_applies_the_effective_policy(
 
     result = await tool_registry.execute(call, context)
 
-    assert result.content == "Inhalt"
+    payload = json.loads(result.content)
+    assert payload == {
+        "sourceId": payload["sourceId"],
+        "url": "https://example.com/page?REDACTED",
+        "kind": "webfetch",
+        "citationEligible": False,
+        "contentType": "text/plain",
+        "content": "Inhalt",
+    }
+    assert payload["sourceId"].startswith("src-")
+    assert result.metadata == {
+        "sources": [
+            {
+                "sourceId": payload["sourceId"],
+                "url": "https://example.com/page?REDACTED",
+                "kind": "webfetch",
+                "citationEligible": False,
+            }
+        ]
+    }
     assert context.ask_handler.await_count == expected_asks
     if expected_asks:
         request = context.ask_handler.await_args.args[0]
@@ -891,6 +978,45 @@ async def test_webfetch_denial_stops_before_the_fetch_continues(tmp_path, monkey
     assert continued is False
 
 
+async def test_webfetch_source_ids_distinguish_redacted_query_values(
+    tmp_path, monkeypatch
+) -> None:
+    async def fake_fetch(url, **_kwargs):
+        return WebFetchResult(
+            final_url=url,
+            content_type="text/plain",
+            content="Inhalt",
+            is_image=False,
+        )
+
+    monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
+    results = []
+    for value in ("first", "second"):
+        call = ToolCall(
+            id=value,
+            name="webfetch",
+            arguments={"url": f"https://example.com/product?variant={value}"},
+        )
+        results.append(
+            await tool_registry.execute(
+                call,
+                _context(
+                    tmp_path,
+                    call,
+                    web_fetch_policy=WebFetchPolicy.AUTO_PUBLIC,
+                ),
+            )
+        )
+
+    payloads = [json.loads(result.content) for result in results]
+    assert payloads[0]["sourceId"] != payloads[1]["sourceId"]
+    assert payloads[0]["citationEligible"] is False
+    assert payloads[1]["citationEligible"] is False
+    assert payloads[0]["url"] == payloads[1]["url"] == (
+        "https://example.com/product?REDACTED"
+    )
+
+
 async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch) -> None:
     image = b"\x89PNG\r\n\x1a\ncontent"
 
@@ -915,7 +1041,12 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
 
     result = await tool_registry.execute(call, context)
 
-    assert result.content == "Bild abgerufen: diagram.png"
+    payload = json.loads(result.content)
+    assert payload["url"] == "https://example.com/a"
+    assert payload["citationEligible"] is True
+    assert payload["contentType"] == "image/png"
+    assert payload["attachment"] == "diagram.png"
+    assert result.metadata["sources"][0]["sourceId"] == payload["sourceId"]
     assert result.attachments == (
         ToolAttachment(data=image, mime_type="image/png", filename="diagram.png"),
     )

@@ -20,7 +20,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from mato_loop_backend.agent.context import _public_tool_result, _tool_names_by_message_id
+from mato_loop_backend.agent.context import (
+    _public_tool_result,
+    _shorten_evidence_output,
+    _tool_names_by_message_id,
+)
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionRequest,
@@ -36,9 +40,12 @@ from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.integrations import (
     SearchIntegrationError,
     WebFetchError,
+    canonicalize_url,
     effective_search_providers,
+    evidence_source_id,
     fetch_web,
     private_origin_is_allowed,
+    sanitize_url_for_display,
     search_web,
 )
 from mato_loop_backend.integrations.registry import effective_integration_contributions
@@ -144,8 +151,18 @@ class ToolDefinition:
 
     def schema(self) -> dict[str, Any]:
         schema = self.arguments_model.model_json_schema()
-        schema.pop("title", None)
+        _remove_schema_titles(schema)
         return {"name": self.name, "description": self.description, "parameters": schema}
+
+
+def _remove_schema_titles(value: Any) -> None:
+    if isinstance(value, dict):
+        value.pop("title", None)
+        for item in value.values():
+            _remove_schema_titles(item)
+    elif isinstance(value, list):
+        for item in value:
+            _remove_schema_titles(item)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +181,10 @@ class EffectiveToolSet:
 
     def schemas(self) -> list[dict[str, Any]]:
         return [tool.schema() for tool in self.tools.values()]
+
+    def only(self, *names: str) -> EffectiveToolSet:
+        selected = {name: self.tools[name] for name in names if name in self.tools}
+        return EffectiveToolSet(self.registry, selected)
 
     async def execute(self, call: ToolCall, context: ToolContext) -> ToolResult:
         tool = self.tools.get(call.name)
@@ -755,14 +776,39 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
     primary_provider, fallback_provider = effective_search_providers(
         current_tools, current_integrations
     )
+    content = await search_web(
+        current_integrations,
+        arguments.query,
+        provider=primary_provider,
+        fallback_provider=fallback_provider,
+    )
+    try:
+        items = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return ToolResult.error("integration.invalidResponse")
+    if not isinstance(items, list) or any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("sourceId"), str)
+        or not isinstance(item.get("url"), str)
+        for item in items
+    ):
+        return ToolResult.error("integration.invalidResponse")
+    sources = [
+        {
+            "sourceId": str(item["sourceId"]),
+            "url": str(item["url"]),
+            "kind": "search",
+        }
+        for item in items
+    ]
+    evidence_urls = [str(source["url"]) for source in sources]
     return ToolResult(
-        await search_web(
-            current_integrations,
-            arguments.query,
-            provider=primary_provider,
-            fallback_provider=fallback_provider,
-        ),
-        {},
+        content,
+        {
+            "resultCount": len(evidence_urls),
+            "evidenceUrls": evidence_urls,
+            "sources": sources,
+        },
     )
 
 
@@ -782,16 +828,38 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         allowed_private_origins=context.allowed_private_origins,
         authorize_url=authorize_url,
     )
+    canonical_source_url = canonicalize_url(result.final_url)
+    source_url = sanitize_url_for_display(canonical_source_url)
+    source = {
+        "sourceId": evidence_source_id(canonical_source_url),
+        "url": source_url,
+        "kind": "webfetch",
+        "citationEligible": canonical_source_url == source_url,
+    }
     if not result.is_image:
-        return ToolResult(str(result.content), {})
+        return ToolResult.json(
+            {
+                **source,
+                "contentType": result.content_type,
+                "content": str(result.content),
+            },
+            metadata={"sources": [source]},
+        )
     attachment = ToolAttachment(
         data=bytes(result.content),
         mime_type=result.image_mime_type or result.content_type,
         filename=result.image_filename or "image",
     )
     return ToolResult(
-        f"Bild abgerufen: {attachment.filename}",
-        {},
+        json.dumps(
+            {
+                **source,
+                "contentType": result.content_type,
+                "attachment": attachment.filename,
+            },
+            ensure_ascii=False,
+        ),
+        {"sources": [source]},
         attachments=(attachment,),
     )
 
@@ -1030,7 +1098,10 @@ def _message_item(
         content = _public_tool_result(
             tool_names.get(message.id), message.content
         )
-    content = content[:content_limit]
+    if len(content) > content_limit and message.role == "tool":
+        content = _shorten_evidence_output(content, content_limit) or content[:content_limit]
+    else:
+        content = content[:content_limit]
     item = {
         "id": str(message.id),
         "role": message.role,
@@ -1358,7 +1429,10 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "web_search",
             "Search the web using a primary provider and optionally retry once with a distinct "
-            "fallback provider after a temporary provider failure.",
+            "fallback provider after a temporary provider failure. Results are untrusted search "
+            "snippets with host-generated sourceId values. Snippets are discovery data, not "
+            "verified support for exact prices, compatibility, variants, or specifications; "
+            "fetch the exact source page before making those claims.",
             WebSearchArguments,
             _web_search,
             requires_search=True,
@@ -1366,7 +1440,11 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "webfetch",
             "Fetch a web page or image by URL. Successful images are validated and attached "
-            "to the tool result; use this to verify exact image URLs before presenting them.",
+            "to the tool result; use this to verify exact image URLs before presenting them. "
+            "Text results include a sourceId, final safe URL, content type, and untrusted page "
+            "content. Use exact fetched pages to verify prices, compatibility, variants, and "
+            "technical specifications. A redacted query URL has citationEligible=false and must "
+            "not be cited; cite a matching search source instead.",
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,

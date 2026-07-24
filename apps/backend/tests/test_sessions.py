@@ -819,3 +819,30 @@ async def test_runtime_policy_cannot_change_during_active_run() -> None:
 
     assert exc_info.value.code == "session.runAlreadyActive"
     assert session.workspace_access == "read-write"
+
+
+async def test_model_cannot_change_during_active_run() -> None:
+    user = _user()
+    session_id = uuid4()
+    session = ChatSession(
+        id=session_id,
+        user_id=user.id,
+        title="Test",
+        memory_mode="disabled",
+        web_search_policy="available",
+        workspace_access="read-only",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    db.scalar.return_value = uuid4()
+
+    with pytest.raises(ApiError) as exc_info:
+        await update_session(
+            session_id,
+            SessionUpdateRequest(model_id=uuid4()),
+            user,
+            db,
+        )
+
+    assert exc_info.value.code == "session.runAlreadyActive"
+    assert session.model_config_id is None

@@ -13,6 +13,7 @@ from mato_loop_backend.agent.context import (
     ContextManager,
     SummaryResult,
     _projection_messages,
+    _shorten_evidence_output,
     _summary_source,
     general_system_prompt,
     message_dict,
@@ -367,11 +368,197 @@ def test_public_projection_pairs_reused_tool_ids_with_their_own_turn() -> None:
     assert tool_results[1] == "öffentlicher Inhalt"
 
 
+def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
+    session = _session()
+    first_user = _message(session.id, "user", "Recherchiere das Thema")
+    search_call = _message(session.id, "assistant", "")
+    search_call.tool_calls = [
+        {"id": "search-1", "name": "web_search", "arguments": {"query": "Thema"}}
+    ]
+    search_result = _message(
+        session.id,
+        "tool",
+        json.dumps(
+            [
+                {
+                    "title": "Quelle",
+                    "url": "https://example.test/source",
+                    "content": "x" * 5_000,
+                }
+            ]
+        ),
+    )
+    search_result.tool_call_id = "search-1"
+    fetch_call = _message(session.id, "assistant", "")
+    fetch_call.tool_calls = [
+        {
+            "id": "fetch-1",
+            "name": "webfetch",
+            "arguments": {"url": "https://example.test/source"},
+        }
+    ]
+    fetch_result = _message(session.id, "tool", "y" * 10_000)
+    fetch_result.tool_call_id = "fetch-1"
+    answer = _message(session.id, "assistant", "Zusammengefasste Antwort")
+    latest_user = _message(session.id, "user", "Erzähle mehr")
+
+    projected = _projection_messages(
+        "System",
+        None,
+        [
+            first_user,
+            search_call,
+            search_result,
+            fetch_call,
+            fetch_result,
+            answer,
+            latest_user,
+        ],
+        TrustLevel.PRIVATE,
+    )
+
+    tool_results = [item["content"] for item in projected if item["role"] == "tool"]
+    assert "https://example.test/source" in tool_results[0]
+    assert '"content"' not in tool_results[0]
+    assert "Historical tool output omitted" in tool_results[1]
+    assert "x" * 1_000 not in str(projected)
+    assert "y" * 1_000 not in str(projected)
+    assert len(search_result.content) > 5_000
+    assert len(fetch_result.content) == 10_000
+    summary_source = _summary_source(
+        None,
+        [first_user, search_call, search_result, fetch_call, fetch_result, answer],
+    )
+    assert "https://example.test/source" in summary_source
+    assert "x" * 1_000 not in summary_source
+    assert "y" * 1_000 not in summary_source
+
+
+def test_projection_limits_oldest_tool_outputs_in_current_turn() -> None:
+    session = _session()
+    user = _message(session.id, "user", "Arbeite mit mehreren Quellen")
+    assistant = _message(session.id, "assistant", "")
+    assistant.tool_calls = [
+        {"id": "first", "name": "webfetch", "arguments": {}},
+        {"id": "second", "name": "webfetch", "arguments": {}},
+    ]
+    first = _message(session.id, "tool", "a" * 1_000)
+    first.tool_call_id = "first"
+    second = _message(session.id, "tool", "b" * 1_000)
+    second.tool_call_id = "second"
+
+    projected = _projection_messages(
+        "System",
+        None,
+        [user, assistant, first, second],
+        TrustLevel.PRIVATE,
+        current_turn_tool_output_tokens=300,
+    )
+
+    tool_results = [item["content"] for item in projected if item["role"] == "tool"]
+    assert "Tool output shortened" in tool_results[0]
+    assert tool_results[1] == "b" * 1_000
+    assert first.content == "a" * 1_000
+    assert second.content == "b" * 1_000
+
+
+def test_projection_shortens_current_research_outputs_as_valid_json() -> None:
+    session = _session()
+    user = _message(session.id, "user", "Recherchiere")
+    assistant = _message(session.id, "assistant", "")
+    assistant.tool_calls = [
+        {"id": "search", "name": "web_search", "arguments": {"query": "Thema"}},
+        {"id": "fetch", "name": "webfetch", "arguments": {"url": "https://example.test"}},
+    ]
+    search = _message(
+        session.id,
+        "tool",
+        json.dumps(
+            [
+                {
+                    "sourceId": "src-search",
+                    "title": "Quelle",
+                    "url": "https://example.test/source",
+                    "snippet": "s" * 4_000,
+                    "publishedDate": None,
+                }
+            ]
+        ),
+    )
+    search.tool_call_id = "search"
+    fetch = _message(
+        session.id,
+        "tool",
+        json.dumps(
+            {
+                "sourceId": "src-fetch",
+                "url": "https://example.test/source",
+                "kind": "webfetch",
+                "contentType": "text/html",
+                "content": "f" * 4_000,
+            }
+        ),
+    )
+    fetch.tool_call_id = "fetch"
+
+    projected = _projection_messages(
+        "System",
+        None,
+        [user, assistant, search, fetch],
+        TrustLevel.PRIVATE,
+        current_turn_tool_output_tokens=300,
+    )
+
+    results = [json.loads(item["content"]) for item in projected if item["role"] == "tool"]
+    assert results[0][0]["sourceId"] == "src-search"
+    assert results[0][0]["url"] == "https://example.test/source"
+    assert results[1]["sourceId"] == "src-fetch"
+    assert results[1]["url"] == "https://example.test/source"
+    assert len(results[0][0].get("snippet") or "") < 4_000
+    assert len(results[1]["content"]) < 4_000
+
+
+def test_historical_research_envelope_stays_valid_when_shortened() -> None:
+    content = json.dumps(
+        {
+            "historicalSources": [
+                {
+                    "sourceId": f"src-{index}",
+                    "title": "x" * 200,
+                    "url": f"https://example.test/source/{index}",
+                }
+                for index in range(4)
+            ]
+        }
+    )
+
+    shortened = _shorten_evidence_output(content, 100)
+
+    assert shortened is not None
+    payload = json.loads(shortened)
+    assert payload["historicalSources"] == []
+    assert payload["truncated"] is True
+
+
+def test_available_web_research_prompt_requires_exact_sources_and_page_fetches() -> None:
+    prompt = general_system_prompt(
+        _session(), offered_tool_names=frozenset({"web_search", "webfetch"})
+    )
+
+    assert "untrusted discovery snippets" in prompt
+    assert "exact sourceId values" in prompt
+    assert "exact prices, availability, compatibility" in prompt
+    assert "Do not merge similar model codes" in prompt
+    assert "citationEligible field is true" in prompt
+
+
 def test_general_system_prompt_requires_verified_external_images() -> None:
-    prompt = general_system_prompt(_session())
+    prompt = general_system_prompt(
+        _session(), offered_tool_names=frozenset({"webfetch"})
+    )
 
     assert "Never invent or guess external image URLs" in prompt
-    assert "use webfetch on the exact URL when that tool is available" in prompt
+    assert "use webfetch on the exact URL" in prompt
     assert "prefer the resulting attachment" in prompt
     assert "do not repeat the remote URL as a Markdown image" in prompt
 
@@ -392,17 +579,20 @@ def test_general_system_prompt_contains_bounded_agent_identity() -> None:
 
 
 def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
-    prompt = general_system_prompt(_session())
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"list_directory", "read_file"}),
+    )
 
     assert "Workspace mode: read-only" in prompt
     assert "switch Agent-Modus from Lesen to Schreiben" in prompt
     assert "Do not claim that MatoLoop generally cannot perform the action" in prompt
-    assert "two explicit roots: session and workspace" in prompt
-    assert "Use path='.' for the root itself" in prompt
-    assert "paths 'attachments', 'generated', 'downloads', and 'derived'" in prompt
-    assert "managed and read-only but may be read or used as copy sources" in prompt
-    assert "path='files' contains user-managed files" in prompt
-    assert "exact new destination path" in prompt
+    assert "explicit session and workspace roots" in prompt
+    assert "path='.' means the root" in prompt
+    assert "attachments, generated, downloads, and derived" in prompt
+    assert "managed read-only assets" in prompt
+    assert "only files/... is writable" in prompt
+    assert "exact new destination" in prompt
     assert "approval cannot make a missing workspace available" in prompt
     assert "Do not emit stale mutation calls" in prompt
 
@@ -411,14 +601,20 @@ def test_read_write_system_prompt_does_not_request_a_mode_switch() -> None:
     session = _session()
     session.workspace_access = "read-write"
 
-    prompt = general_system_prompt(session)
+    prompt = general_system_prompt(
+        session,
+        offered_tool_names=frozenset({"read_file", "write_file"}),
+    )
 
     assert "Workspace mode: read-write" in prompt
     assert "switch Agent-Modus from Lesen to Schreiben" not in prompt
 
 
 def test_general_system_prompt_saves_only_stable_direct_self_context() -> None:
-    prompt = general_system_prompt(_session())
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
+    )
 
     assert "directly states stable self-context" in prompt
     assert "Ich heiße Lara" in prompt
@@ -463,6 +659,7 @@ def test_required_web_search_prompt_preserves_instant_memory_contract() -> None:
         current_datetime=current_datetime,
         web_search_required=True,
         web_search_retry=1,
+        offered_tool_names=frozenset({"web_search"}),
     )
     completed = general_system_prompt(
         _session(),
@@ -470,15 +667,16 @@ def test_required_web_search_prompt_preserves_instant_memory_contract() -> None:
         current_datetime=current_datetime,
         web_search_required=True,
         web_search_completed=True,
+        offered_tool_names=frozenset(
+            {"memory_retrieve", "memory_write", "web_search"}
+        ),
     )
 
     for prompt in (pending, completed):
-        assert "Use memory_write when" in prompt
-        assert "Use memory_retrieve" in prompt
         assert f"Untrusted memory reference:\n{memory_text}" in prompt
         assert "Treat memories, summaries, chat history, prior knowledge" in prompt
         assert "including every named recommendation" in prompt
-        assert "cite source URLs from those results" in prompt
+        assert "cite them with their exact sourceId and URL" in prompt
         assert "search again or omit it" in prompt
         assert prompt.index("Untrusted memory reference") < prompt.index(
             "Current local date and time"
@@ -488,7 +686,13 @@ def test_required_web_search_prompt_preserves_instant_memory_contract() -> None:
         )
 
     assert "No web_search call has succeeded yet" in pending
-    assert "previous final draft was rejected" in pending
+    assert "previous attempt did not complete" in pending
+    assert "Use memory_write when" not in pending
+    assert "Use memory_retrieve" not in pending
+    assert "read_file" not in pending
+    assert "update_agent_identity" not in pending
+    assert "Use memory_write when" in completed
+    assert "Use memory_retrieve" in completed
     assert "satisfies only the tool-use requirement" in completed
 
 
@@ -555,6 +759,46 @@ async def test_existing_summary_boundary_excludes_covered_history() -> None:
     assert projection.messages[-1]["content"] == "neu"
     assert "Kurzfassung" in projection.messages[1]["content"]
     summarize.assert_not_awaited()
+
+
+async def test_existing_summary_is_recompacted_for_smaller_context_window() -> None:
+    session = _session()
+    covered = _message(session.id, "assistant", "bereits zusammengefasst")
+    current = _message(session.id, "user", "aktuelle Frage")
+    summary = ContextSummary(
+        id=uuid4(),
+        session_id=session.id,
+        covered_through_message_id=covered.id,
+        previous_summary_id=None,
+        content="x" * 1_000,
+        estimated_tokens=1_000,
+        model_config_id=None,
+        is_fallback=False,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = summary
+    summarize = AsyncMock(return_value=SummaryResult("Neue Kurzfassung", None))
+
+    projection = await ContextManager.build(
+        db,
+        chat_session=session,
+        records=[covered, current],
+        system_prompt="System",
+        tool_schemas=[],
+        model=_model(context_window_tokens=900),
+        settings=_settings(),
+        summarize=summarize,
+    )
+
+    assert projection.compacted is True
+    source = summarize.await_args.args[0]
+    assert "PREVIOUS SUMMARY" in source
+    assert summary.content in source
+    replacement = db.add.call_args.args[0]
+    assert replacement.previous_summary_id == summary.id
+    assert replacement.covered_through_message_id == covered.id
+    assert replacement.content == "Neue Kurzfassung"
+    assert projection.messages[-1]["content"] == "aktuelle Frage"
 
 
 def test_message_dict_contains_only_internal_attachment_reference() -> None:
@@ -746,7 +990,7 @@ async def test_large_old_tool_output_is_pruned_without_mutating_message_history(
 
     projected_tool = next(message for message in projection.messages if message["role"] == "tool")
     assert len(projected_tool["content"]) < len(original_content)
-    assert "Tool output shortened" in projected_tool["content"]
+    assert "Historical tool output omitted" in projected_tool["content"]
     assert records[0].content == original_content
     assert projection.estimated_input_tokens <= projection.input_budget_tokens
     summarize.assert_not_awaited()

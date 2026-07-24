@@ -130,9 +130,11 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
 
     async def fake_chat_completions(**kwargs):
         request = kwargs["request"]
-        protected = request.messages[0]["content"]
+        protected = request.messages[-1]["content"]
         assert "anna@example.com" not in protected
-        assert "provider_data" not in request.messages[0]
+        assert "provider_data" not in request.messages[-1]
+        assert request.messages[0]["role"] == "system"
+        assert "Host privacy placeholders" in request.messages[0]["content"]
         markers = re.findall(r"\[\[MLP_[A-F0-9]+_\d{4}\]\]", protected)
         assert markers
         pseudonym = markers[-1]
@@ -185,6 +187,45 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
     assert result.reasoning is not None
     assert result.reasoning.text == "Gedanke zu anna@example.com"
     assert result.provider_data == {}
+
+
+async def test_public_complete_rejects_unknown_pseudonym_marker(monkeypatch) -> None:
+    provider = LlmProviderConfig(
+        name="Public",
+        adapter_type="openai-compatible",
+        config={"base_url": "http://public.test/v1"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="public-model")
+
+    async def fake_chat_completions(**kwargs):
+        protected = kwargs["request"].messages[-1]["content"]
+        marker = re.search(r"\[\[MLP_[A-F0-9]+_\d{4}\]\]", protected)
+        assert marker is not None
+        unknown_marker = marker.group().replace("0001", "9999")
+        return ProviderResult(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="call-1",
+                    name="send_mail",
+                    arguments={"address": unknown_marker},
+                )
+            ],
+        )
+
+    monkeypatch.setattr(service_module, "chat_completions", fake_chat_completions)
+
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession),
+            provider=provider,
+            model=model,
+            messages=[{"role": "user", "content": "Schreibe an anna@example.com"}],
+            tools=[],
+            input_trust_level=TrustLevel.PRIVATE,
+        )
+
+    assert exc_info.value.code == "privacy.pseudonymizationFailed"
 
 
 async def _append_async(items: list, value) -> None:

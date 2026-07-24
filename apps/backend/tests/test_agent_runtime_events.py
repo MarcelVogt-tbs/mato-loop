@@ -41,6 +41,9 @@ async def test_run_phase_event_has_stable_language_neutral_payload(monkeypatch) 
         total=2,
     )
 
+    started_at = published[0][1].pop("startedAt")
+    assert isinstance(started_at, str)
+    assert started_at.endswith("+00:00")
     assert published == [
         (
             run_id,

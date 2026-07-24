@@ -15,6 +15,12 @@ describe('tool settings store', () => {
     vi.clearAllMocks()
   })
 
+  it('defaults public webfetch targets to automatic execution', () => {
+    const store = useToolSettingsStore()
+
+    expect(store.webFetch.defaultPolicy).toBe('auto_public')
+  })
+
   it('loads and saves the complete tool settings contract without changing field names', async () => {
     const response = {
       webSearch: {

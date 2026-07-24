@@ -554,6 +554,7 @@ async def update_session(
     )
     policy_fields = {
         "memory_mode",
+        "model_id",
         "web_search_policy",
         "working_directory",
         "workspace_access",
