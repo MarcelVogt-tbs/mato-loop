@@ -191,6 +191,8 @@ async def test_available_search_keeps_best_effort_streaming(monkeypatch) -> None
         for call in db.add.call_args_list
         if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
     )
+    completed = next(event for event in events if event.get("type") == "message.completed")
+    assert completed["message"]["createdAt"] == assistant.created_at.isoformat()
     assert "research" not in assistant.provider_data["_matoloop"]
 
 

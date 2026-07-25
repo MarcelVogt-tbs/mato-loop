@@ -616,15 +616,40 @@ def test_general_system_prompt_saves_only_stable_direct_self_context() -> None:
         offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
     )
 
-    assert "directly states stable self-context" in prompt
+    assert "implicit request to persist it" in prompt
+    assert "even when the user does not say 'remember' or 'merk dir'" in prompt
+    assert "call memory_write in the same turn" in prompt
     assert "Ich heiße Lara" in prompt
+    assert "Ich komme aus München" in prompt
     assert "Ich bin mit Daniel verheiratet" in prompt
     assert "independently changeable facts in separate memories" in prompt
-    assert "incidental or transient details" in prompt
+    assert "Ich bin gerade in München" in prompt
     assert "hypotheticals, quotations, or facts about third parties" in prompt
-    assert "retrieve it again and copy its exact ID and revision" in prompt
+    assert "injected memory reference" in prompt
+    assert "copy its exact ID and revision into an update" in prompt
+    assert "purpose=write" in prompt
+    assert "do not add inferred geography" in prompt
+    assert "do not ask for conversational confirmation" in prompt
     assert "Viktor" not in prompt
     assert "Regina" not in prompt
+
+
+def test_general_system_prompt_enforces_pending_memory_write_outcome() -> None:
+    pending = general_system_prompt(
+        _session(),
+        memory_write_pending=True,
+        offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
+    )
+    denied = general_system_prompt(
+        _session(),
+        memory_write_outcome="denied",
+        offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
+    )
+
+    assert "Required memory mutation" in pending
+    assert "Do not produce a final answer" in pending
+    assert "permission was denied and nothing was stored" in denied
+    assert "Do not claim or imply" in denied
 
 
 @pytest.mark.parametrize(

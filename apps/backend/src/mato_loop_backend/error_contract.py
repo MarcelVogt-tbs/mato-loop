@@ -14,6 +14,7 @@ _MESSAGES = {
     "agent.requiredWebSearchFailed": "The required web search failed.",
     "agent.requiredWebSearchMissing": "The model did not perform the required web search.",
     "agent.requiredWebSearchUnsupported": "The selected model cannot perform the required web search.",
+    "agent.requiredMemoryWriteMissing": "The model did not complete the required memory write.",
     "agent.researchSourcesInvalid": "The researched answer could not be supported by valid current sources.",
     "agent.repeatedToolCall": "The model repeated a failed tool call without changing its arguments.",
     "agent.toolCallLimitReached": "The agent reached the maximum number of tool calls.",

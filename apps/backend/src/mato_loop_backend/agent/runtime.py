@@ -103,6 +103,8 @@ RUN_PHASES = {
     "finalizing",
 }
 REQUIRED_WEB_SEARCH_RETRIES = 2
+REQUIRED_MEMORY_WRITE_RETRIES = 3
+MEMORY_WRITE_OUTCOME_PRIORITY = {"denied": 0, "duplicate": 1, "stored": 2}
 AUTOMATIC_MEMORY_MAX_ITEMS = 3
 AUTOMATIC_MEMORY_MAX_CHARACTERS = 2_500
 AUTOMATIC_MEMORY_MAX_DISTANCE = 0.21
@@ -817,6 +819,7 @@ class AgentRuntime:
                                 generation_status="interrupted",
                                 trust_level=cancelled_run.trust_level,
                                 public_reasoning=reasoning,
+                                created_at=datetime.now(UTC),
                             )
                             db.add(interrupted_message)
                         await db.commit()
@@ -829,6 +832,7 @@ class AgentRuntime:
                                     "id": str(interrupted_message.id),
                                     "role": "assistant",
                                     "content": interrupted_message.content,
+                                    "createdAt": interrupted_message.created_at.isoformat(),
                                     "modelName": interrupted_message.model_name,
                                     "generationStatus": "interrupted",
                                     "toolCalls": None,
@@ -927,6 +931,9 @@ class AgentRuntime:
         model_requests = 0
         required_search_completed = False
         required_search_retries = 0
+        memory_write_pending = False
+        memory_write_retries = 0
+        memory_write_outcome: str | None = None
         research_sources: dict[str, str] = {}
         citation_repair_pending = False
         citation_repair_used = False
@@ -1116,6 +1123,10 @@ class AgentRuntime:
             search_pending = required_search and not required_search_completed
             if search_pending and effective_toolset is not None:
                 effective_toolset = effective_toolset.only("web_search")
+            elif memory_write_pending and effective_toolset is not None:
+                effective_toolset = effective_toolset.only(
+                    "memory_retrieve", "memory_write"
+                )
             system_prompt = general_system_prompt(
                 chat_session,
                 agent_identity=agent_identity,
@@ -1137,6 +1148,8 @@ class AgentRuntime:
                 web_search_required=required_search,
                 web_search_completed=required_search_completed,
                 web_search_retry=required_search_retries,
+                memory_write_pending=memory_write_pending,
+                memory_write_outcome=memory_write_outcome,
                 research_repair_sources=(
                     tuple(
                         {"sourceId": source_id, "url": url}
@@ -1160,6 +1173,10 @@ class AgentRuntime:
                 schema["name"] == "web_search" for schema in schemas
             ):
                 raise AgentRunError("agent.requiredWebSearchUnsupported")
+            if memory_write_pending and not any(
+                schema["name"] == "memory_write" for schema in schemas
+            ):
+                raise AgentRunError("agent.requiredMemoryWriteMissing")
             offered_tool_names = {schema["name"] for schema in schemas}
 
             async def summarize(
@@ -1201,7 +1218,7 @@ class AgentRuntime:
                     },
                 )
 
-            hold_response = required_search
+            hold_response = required_search or memory_write_pending
             visible_response.reset()
             provider_started_at = time.monotonic()
             provider_timing: dict[str, int | None] = {
@@ -1280,7 +1297,7 @@ class AgentRuntime:
                 messages=projection.messages,
                 tools=schemas,
                 tool_choice=(
-                    "required" if search_pending else "auto"
+                    "required" if search_pending or memory_write_pending else "auto"
                 ),
                 on_delta=on_delta,
                 on_reasoning=on_reasoning,
@@ -1311,6 +1328,17 @@ class AgentRuntime:
                 if required_search_retries > REQUIRED_WEB_SEARCH_RETRIES:
                     raise AgentRunError("agent.requiredWebSearchMissing")
                 continue
+            if memory_write_pending and (
+                not normalized_calls
+                or any(
+                    call.name not in {"memory_retrieve", "memory_write"}
+                    for call in normalized_calls
+                )
+            ):
+                memory_write_retries += 1
+                if memory_write_retries > REQUIRED_MEMORY_WRITE_RETRIES:
+                    raise AgentRunError("agent.requiredMemoryWriteMissing")
+                continue
             serialized_calls = [
                 {
                     "id": call.id,
@@ -1321,7 +1349,17 @@ class AgentRuntime:
             ] or None
             if not normalized_calls and result.finish_reason in {"length", "max_tokens"}:
                 raise AgentRunError("agent.outputLimitReached")
-            hide_tool_round = required_search and bool(normalized_calls)
+            starts_memory_workflow = any(
+                call.name == "memory_write"
+                or (
+                    call.name == "memory_retrieve"
+                    and call.arguments.get("purpose") == "write"
+                )
+                for call in normalized_calls
+            )
+            hide_tool_round = (
+                required_search and bool(normalized_calls)
+            ) or memory_write_pending or starts_memory_workflow
             provider_data = _safe_provider_data(result.provider_data, normalized_calls)
             if hide_tool_round:
                 provider_data = _hidden_tool_round_provider_data(provider_data)
@@ -1396,6 +1434,7 @@ class AgentRuntime:
                 tool_calls=serialized_calls,
                 provider_data=provider_data,
                 public_reasoning=public_reasoning,
+                created_at=datetime.now(UTC),
             )
             db.add(assistant)
             await db.commit()
@@ -1429,6 +1468,7 @@ class AgentRuntime:
                         "id": str(assistant.id),
                         "role": "assistant",
                         "content": assistant.content[:1000],
+                        "createdAt": assistant.created_at.isoformat(),
                         "modelName": assistant.model_name,
                         "truncated": len(assistant.content) > 1000,
                         "generationStatus": assistant.generation_status,
@@ -1444,6 +1484,10 @@ class AgentRuntime:
             required_search_succeeded = False
             required_search_called = False
             required_search_error: str | None = None
+            memory_workflow_started = False
+            memory_workflow_resolved = False
+            memory_write_attempted = False
+            resolved_memory_outcome: str | None = None
             tool_call_limit_reached = False
             repeated_tool_call_detected = False
             for index, call in enumerate(normalized_calls):
@@ -1609,6 +1653,33 @@ class AgentRuntime:
                             await attachment_service.discard(attachment, chat_session.id)
                     raise
                 error_code = metadata.get("errorCode")
+                if (
+                    call.name == "memory_retrieve"
+                    and metadata.get("memoryWritePending") is True
+                    and not isinstance(error_code, str)
+                ):
+                    memory_workflow_started = True
+                if call.name == "memory_write":
+                    memory_workflow_started = True
+                    memory_write_attempted = True
+                    outcome: str | None = None
+                    if error_code == "permission.denied":
+                        memory_workflow_resolved = True
+                        outcome = "denied"
+                    elif not isinstance(error_code, str):
+                        memory_workflow_resolved = True
+                        reported_outcome = metadata.get("memoryWriteOutcome")
+                        outcome = (
+                            reported_outcome
+                            if reported_outcome in {"stored", "duplicate"}
+                            else "stored"
+                        )
+                    if outcome is not None and (
+                        resolved_memory_outcome is None
+                        or MEMORY_WRITE_OUTCOME_PRIORITY[outcome]
+                        > MEMORY_WRITE_OUTCOME_PRIORITY[resolved_memory_outcome]
+                    ):
+                        resolved_memory_outcome = outcome
                 if isinstance(error_code, str):
                     failed_tool_call_signatures.add(call_signature)
                 else:
@@ -1647,6 +1718,18 @@ class AgentRuntime:
                 raise AgentRunError("agent.toolCallLimitReached")
             if repeated_tool_call_detected:
                 raise AgentRunError("agent.repeatedToolCall")
+            if memory_workflow_resolved:
+                memory_write_pending = False
+                memory_write_retries = 0
+                memory_write_outcome = resolved_memory_outcome
+            elif memory_write_pending or memory_workflow_started:
+                consume_retry = memory_write_pending or memory_write_attempted
+                memory_write_pending = True
+                memory_write_outcome = None
+                if consume_retry:
+                    memory_write_retries += 1
+                if memory_write_retries > REQUIRED_MEMORY_WRITE_RETRIES:
+                    raise AgentRunError("agent.requiredMemoryWriteMissing")
             if search_pending:
                 if required_search_succeeded:
                     required_search_completed = True
@@ -1748,6 +1831,7 @@ class AgentRuntime:
             error_code=error.code,
             error_params=error.params,
             error_run_id=run.id,
+            created_at=datetime.now(UTC),
         )
         db.add(message)
         await db.flush()
@@ -1760,6 +1844,7 @@ class AgentRuntime:
             "role": "assistant",
             "kind": "runtime_error",
             "content": error.message,
+            "createdAt": message.created_at.isoformat(),
             "modelName": message.model_name,
             "generationStatus": message.generation_status or "completed",
             "toolCalls": None,

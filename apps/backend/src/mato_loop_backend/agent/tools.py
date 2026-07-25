@@ -30,6 +30,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionRequest,
     agent_identity_permission,
     media_permission,
+    memory_write_permission,
     path_permission,
     session_permission,
     session_search_permission,
@@ -488,14 +489,19 @@ class MemoryWriteArguments(ToolArguments):
             raise ValueError("memory_id is required for updates")
         if self.action == "update" and self.expected_revision is None:
             raise ValueError("expected_revision is required for updates")
-        if self.action == "create" and (
-            self.memory_id is not None or self.expected_revision is not None
-        ):
-            raise ValueError("memory_id and expected_revision are only valid for updates")
+        if self.action == "create":
+            self.memory_id = None
+            self.expected_revision = None
         return self
 
 
 class MemoryRetrieveArguments(ToolArguments):
+    purpose: Literal["context", "write"] = Field(
+        default="context",
+        description=(
+            "Use write when this lookup prepares a memory_write; otherwise use context."
+        ),
+    )
     mode: Literal["search", "browse"] = Field(
         description="Use search for a concrete topic and browse for a complete overview."
     )
@@ -1261,6 +1267,10 @@ async def _memory_write(
 ) -> ToolResult:
     if context.assistant_message_id is None:
         return ToolResult.error("memory.provenanceUnavailable")
+    if not await _allow(
+        context, memory_write_permission(context.session.id, arguments.action)
+    ):
+        return ToolResult.error("permission.denied")
     if arguments.action == "update":
         assert arguments.memory_id is not None
         assert arguments.expected_revision is not None
@@ -1281,10 +1291,12 @@ async def _memory_write(
             return ToolResult.error("memory.changed")
         if result.duplicate:
             return ToolResult.json(
-                {"stored": False, "updated": False, "duplicate": True}
+                {"stored": False, "updated": False, "duplicate": True},
+                metadata={"memoryWriteOutcome": "duplicate"},
             )
         return ToolResult.json(
-            {"id": str(result.item.id), "stored": True, "updated": True}
+            {"id": str(result.item.id), "stored": True, "updated": True},
+            metadata={"memoryWriteOutcome": "stored"},
         )
     result = await MemoryService.create_tool(
         context.db,
@@ -1299,10 +1311,12 @@ async def _memory_write(
     )
     if result.duplicate:
         return ToolResult.json(
-            {"stored": False, "updated": False, "duplicate": True}
+            {"stored": False, "updated": False, "duplicate": True},
+            metadata={"memoryWriteOutcome": "duplicate"},
         )
     return ToolResult.json(
-        {"id": str(result.item.id), "stored": True, "updated": False}
+        {"id": str(result.item.id), "stored": True, "updated": False},
+        metadata={"memoryWriteOutcome": "stored"},
     )
 
 
@@ -1331,6 +1345,7 @@ async def _memory_retrieve(
     )
     return ToolResult.json(
         {
+            "purpose": arguments.purpose,
             "mode": result.mode.value,
             "strategy": result.strategy.value,
             "scope": {
@@ -1354,7 +1369,11 @@ async def _memory_retrieve(
             "nextCursor": next_cursor,
             "contentIsUntrusted": True,
         },
-        metadata={"hasMore": result.has_more, "nextCursor": next_cursor},
+        metadata={
+            "hasMore": result.has_more,
+            "nextCursor": next_cursor,
+            "memoryWritePending": arguments.purpose == "write",
+        },
     )
 
 
@@ -1491,10 +1510,13 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "memory_write",
-            "Create or update durable memory when explicitly requested or when the user directly "
-            "states stable self-context useful in future conversations. Do not store transient, "
-            "hypothetical, quoted, or third-party details. Retrieve an existing memory ID before "
-            "updating it.",
+            "Create or update durable memory when explicitly requested or when an unquoted "
+            "first-person statement implicitly supplies stable self-context useful in future "
+            "conversations. Do not merely acknowledge such context: persist it in the same turn. "
+            "Do not store transient, hypothetical, quoted, or third-party details. Store only the "
+            "user-supported fact; never enrich it with inferred geography or other world knowledge. "
+            "For create, omit memory_id and expected_revision. Use an injected memory ID and revision "
+            "or retrieve an existing memory before updating it.",
             MemoryWriteArguments,
             _memory_write,
             requires_memory=True,
@@ -1503,6 +1525,7 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "memory_retrieve",
             "Search persistent durable memories semantically or browse all visible memories. "
+            "Set purpose=write when the lookup prepares a memory_write and purpose=context otherwise. "
             "Use browse for questions about what MatoLoop remembers. To continue while hasMore "
             "is true, copy both fields from nextCursor into the next browse call. session_search "
             "searches chat transcripts, not memories. "

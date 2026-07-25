@@ -179,7 +179,39 @@ class MemoryService:
                 evidence_message_ids=[evidence_message_id],
             )
         except MemoryDuplicateError:
-            return MemoryMutation(item, duplicate=True)
+            _, content_hash = normalize_content(content)
+            duplicate = await MemoryService._duplicate_by_hash(
+                db, content_hash, exclude_id=item.id, for_update=True
+            )
+            if duplicate is None:
+                raise
+            source_evidence = list(
+                (
+                    await db.scalars(
+                        select(MemorySourceMessage.message_id).where(
+                            MemorySourceMessage.memory_id == item.id
+                        )
+                    )
+                ).all()
+            )
+            if item.source_message_id is not None:
+                source_evidence.append(item.source_message_id)
+            source_evidence.append(evidence_message_id)
+            merged_trust = (
+                TrustLevel.PRIVATE
+                if TrustLevel.PRIVATE.value
+                in {item.trust_level, duplicate.trust_level, target_trust.value}
+                else TrustLevel.PUBLIC
+            )
+            await MemoryService._merge_automatic_metadata(
+                db,
+                duplicate,
+                trust_level=merged_trust,
+                evidence_message_ids=source_evidence,
+            )
+            await db.delete(item)
+            await db.flush()
+            return MemoryMutation(duplicate, updated=True)
         return MemoryMutation(item, updated=True)
 
     @staticmethod

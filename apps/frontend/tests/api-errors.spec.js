@@ -49,6 +49,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'agent.requiredWebSearchMissing' } })).toBe(
       'Das Modell hat die verpflichtende Websuche auch nach mehreren Versuchen nicht ausgeführt.'
     )
+    expect(apiErrorMessage({ error: { code: 'agent.requiredMemoryWriteMissing' } })).toBe(
+      'Das Modell hat den begonnenen Memory-Schreibvorgang auch nach mehreren Versuchen nicht abgeschlossen.'
+    )
     expect(apiErrorMessage({ error: { code: 'agent.researchSourcesInvalid' } })).toBe(
       'Die recherchierte Antwort konnte nicht ausreichend mit aktuellen Quellen belegt werden.'
     )

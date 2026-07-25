@@ -345,6 +345,7 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
         "run.failed",
     ]
     assert events[1]["message"]["content"] == "The model provider request failed."
+    assert events[1]["message"]["createdAt"] == message.created_at.isoformat()
     assert "secret" not in str(events)
 
 
@@ -397,6 +398,7 @@ async def test_user_cancel_persists_visible_response_before_terminal_event(monke
         "run.cancelled",
     ]
     assert events[1]["message"]["content"] == "Teilantwort"
+    assert events[1]["message"]["createdAt"] == interrupted.created_at.isoformat()
     assert events[1]["message"]["modelName"] == "Antwortmodell"
     assert run.status == "cancelled"
 

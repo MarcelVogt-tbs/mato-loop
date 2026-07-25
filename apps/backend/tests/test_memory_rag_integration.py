@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import func, select
 
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.memory.embeddings import (
@@ -15,11 +16,17 @@ from mato_loop_backend.memory.retrieval import (
     MemoryRetrievalStrategy,
     MemoryRetrieveMode,
 )
-from mato_loop_backend.memory.service import normalize_content
+from mato_loop_backend.memory.service import MemoryService, normalize_content
 from mato_loop_backend.models import (
+    ChatSession,
+    MemoryCategory,
     MemoryEmbedding,
     MemoryEmbeddingStatus,
     MemoryRecord,
+    MemoryRetrievalLevel,
+    MemorySourceMessage,
+    Message,
+    UserAccount,
 )
 from mato_loop_backend.settings import TrustLevel
 
@@ -220,4 +227,114 @@ async def test_browse_lists_instant_and_retrieve_memories() -> None:
         assert set(created).issubset(first_ids | continued_ids)
         assert result.total is not None
         assert continued.total == result.total
+        await db.rollback()
+
+
+async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() -> None:
+    stale_content = f"Alter Herkunftsort {uuid4().hex}"
+    canonical_content = f"Neuer Herkunftsort {uuid4().hex}"
+    _, stale_hash = normalize_content(stale_content)
+    _, canonical_hash = normalize_content(canonical_content)
+
+    async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"merge-{uuid4().hex}", password_hash="test")
+        db.add(user)
+        await db.flush()
+        session = ChatSession(user_id=user.id, trust_level=TrustLevel.PRIVATE.value)
+        db.add(session)
+        await db.flush()
+        source_message = Message(
+            session_id=session.id,
+            role="user",
+            content=stale_content,
+            trust_level=TrustLevel.PRIVATE.value,
+        )
+        correction_message = Message(
+            session_id=session.id,
+            role="user",
+            content=canonical_content,
+            trust_level=TrustLevel.PRIVATE.value,
+        )
+        db.add_all([source_message, correction_message])
+        await db.flush()
+        stale = MemoryRecord(
+            source_session_id=session.id,
+            source_message_id=source_message.id,
+            source_type="dreaming",
+            retrieval_level="retrieve",
+            trust_level="private",
+            category="fact",
+            revision=1,
+            content=stale_content,
+            normalized_content_hash=stale_hash,
+        )
+        canonical = MemoryRecord(
+            source_session_id=session.id,
+            source_message_id=correction_message.id,
+            source_type="tool_call",
+            retrieval_level="retrieve",
+            trust_level="public",
+            category="context",
+            revision=2,
+            content=canonical_content,
+            normalized_content_hash=canonical_hash,
+        )
+        db.add_all([stale, canonical])
+        await db.flush()
+        db.add(
+            MemorySourceMessage(memory_id=stale.id, message_id=source_message.id)
+        )
+        db.add(
+            MemoryEmbedding(
+                memory_id=stale.id,
+                profile_fingerprint=ACTIVE_EMBEDDING_PROFILE.fingerprint,
+                content_hash=stale_hash,
+                status=MemoryEmbeddingStatus.READY.value,
+                vector=[0.0] * ACTIVE_EMBEDDING_PROFILE.dimensions,
+            )
+        )
+        await db.flush()
+
+        result = await MemoryService.update_tool(
+            db,
+            memory_id=stale.id,
+            expected_revision=1,
+            content=canonical_content,
+            category=MemoryCategory.FACT,
+            retrieval_level=MemoryRetrievalLevel.RETRIEVE,
+            readable_by=TrustLevel.PRIVATE,
+            write_trust_level=TrustLevel.PRIVATE,
+            evidence_message_id=correction_message.id,
+        )
+
+        assert result.item is canonical
+        assert result.updated is True
+        assert canonical.revision == 3
+        assert canonical.trust_level == TrustLevel.PRIVATE.value
+        remaining_ids = set(
+            (
+                await db.scalars(
+                    select(MemoryRecord.id).where(
+                        MemoryRecord.id.in_([stale.id, canonical.id])
+                    )
+                )
+            ).all()
+        )
+        assert remaining_ids == {canonical.id}
+        evidence_ids = set(
+            (
+                await db.scalars(
+                    select(MemorySourceMessage.message_id).where(
+                        MemorySourceMessage.memory_id == canonical.id
+                    )
+                )
+            ).all()
+        )
+        assert evidence_ids == {source_message.id, correction_message.id}
+        stale_embedding_count = await db.scalar(
+            select(func.count())
+            .select_from(MemoryEmbedding)
+            .where(MemoryEmbedding.memory_id == stale.id)
+        )
+        assert stale_embedding_count == 0
         await db.rollback()

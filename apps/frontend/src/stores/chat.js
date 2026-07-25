@@ -583,7 +583,12 @@ export const useChatStore = defineStore('chat', {
       this.streamReasoning = null
       this.streamModelName = null
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
-      const localMessage = { id: `local-${Date.now()}`, role: 'user', content }
+      const localMessage = {
+        id: `local-${Date.now()}`,
+        role: 'user',
+        content,
+        createdAt: new Date().toISOString()
+      }
       session.messages.push(localMessage)
       try {
         const payload = { content }

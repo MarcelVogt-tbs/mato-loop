@@ -65,12 +65,6 @@
             >
               <div class="chat-message__label">
                 <span>{{ message.role === 'user' ? 'Du' : identity.displayName }}</span>
-                <span
-                  v-if="message.role === 'assistant' && message.modelName"
-                  class="chat-message__model"
-                >
-                  · {{ message.modelName }}
-                </span>
               </div>
               <ReasoningPanel
                 v-if="message.reasoning"
@@ -113,6 +107,30 @@
               <q-icon name="cancel" size="14px" aria-hidden="true" />
               <span>Anfrage abgebrochen</span>
             </div>
+            <div
+              v-if="message.createdAt || (message.role === 'assistant' && message.modelName)"
+              class="chat-message__meta"
+            >
+              <span
+                v-if="message.role === 'assistant' && message.modelName"
+                class="chat-message__meta-model"
+                :title="message.modelName"
+              >
+                {{ message.modelName }}
+              </span>
+              <span
+                v-if="message.createdAt && message.role === 'assistant' && message.modelName"
+                aria-hidden="true"
+              >·</span>
+              <time
+                v-if="message.createdAt"
+                :datetime="message.createdAt"
+                :title="formatAbsoluteDateTime(message.createdAt)"
+                :aria-label="`Gesendet am ${formatAbsoluteDateTime(message.createdAt)}`"
+              >
+                {{ formatRelativeDateTime(message.createdAt, messageTimestampNow) }}
+              </time>
+            </div>
           </div>
           <div
             v-if="chat.streamContent || chat.streamReasoning"
@@ -120,9 +138,6 @@
           >
             <div class="chat-message__label">
               <span>{{ identity.displayName }}</span>
-              <span v-if="chat.streamModelName" class="chat-message__model">
-                · {{ chat.streamModelName }}
-              </span>
             </div>
             <ReasoningPanel
               v-if="chat.streamReasoning"
@@ -141,6 +156,11 @@
               streaming
               @trust-image-origin="trustImageOrigin"
             />
+            <div v-if="chat.streamModelName" class="chat-message__meta">
+              <span class="chat-message__meta-model" :title="chat.streamModelName">
+                {{ chat.streamModelName }}
+              </span>
+            </div>
           </div>
           <ApprovalCard
             v-for="approval in transcript.unmatchedApprovals"
@@ -222,6 +242,7 @@ import { useToolSettingsStore } from 'stores/tool-settings'
 import { chatBottomDistance, scrollChatToBottom } from 'src/utils/chat-scroll'
 import { buildChatTranscript } from 'src/utils/chat-transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 
 defineOptions({ name: 'ChatPage' })
 
@@ -241,6 +262,7 @@ const composer = ref(null)
 const trustedImageOriginsBySession = ref(new Map())
 const followingBottom = ref(true)
 const visualViewportHeight = ref(null)
+const messageTimestampNow = ref(Date.now())
 const bottomThreshold = 64
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
@@ -250,6 +272,7 @@ let scrollFrame = null
 let scrollTarget = null
 let userScrollActive = false
 let userScrollTimer = null
+let messageTimestampTimer = null
 let touchActive = false
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
 const transcript = computed(() => buildChatTranscript(
@@ -440,6 +463,9 @@ watch(
 onMounted(() => {
   observeChatSize()
   updateVisualViewport()
+  messageTimestampTimer = window.setInterval(() => {
+    messageTimestampNow.value = Date.now()
+  }, 60_000)
   window.visualViewport?.addEventListener('resize', updateVisualViewport)
   window.visualViewport?.addEventListener('scroll', updateVisualViewport)
   window.addEventListener('resize', updateVisualViewport)
@@ -455,6 +481,7 @@ onBeforeUnmount(() => {
   window.visualViewport?.removeEventListener('resize', updateVisualViewport)
   window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
   window.removeEventListener('resize', updateVisualViewport)
+  window.clearInterval(messageTimestampTimer)
   clearTimeout(userScrollTimer)
   cancelFollowScroll()
 })

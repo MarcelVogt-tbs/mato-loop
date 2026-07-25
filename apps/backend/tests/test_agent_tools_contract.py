@@ -686,6 +686,7 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
 
     assert result.is_error is False
     assert payload["strategy"] == "browse"
+    assert payload["purpose"] == "context"
     assert payload["scope"] == {
         "readableBy": "public",
         "includesPrivate": False,
@@ -699,6 +700,7 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
     }
     retrieve.assert_awaited_once()
     assert retrieve.await_args.kwargs["retrieval_level"] is None
+    assert result.metadata["memoryWritePending"] is False
 
 
 @pytest.mark.parametrize(
@@ -726,6 +728,11 @@ def test_memory_retrieve_schema_requires_explicit_mode() -> None:
     schema = tool_registry._definitions["memory_retrieve"].schema()
 
     assert "mode" in schema["parameters"]["required"]
+    assert schema["parameters"]["properties"]["purpose"]["enum"] == [
+        "context",
+        "write",
+    ]
+    assert "purpose=write" in schema["description"]
     assert "browse all visible memories" in schema["description"]
     assert "session_search" in schema["description"]
 
@@ -761,8 +768,41 @@ async def test_memory_write_reports_invalid_identifier_field(tmp_path) -> None:
 def test_memory_write_schema_describes_stable_self_context() -> None:
     schema = tool_registry._definitions["memory_write"].schema()
 
-    assert "directly states stable self-context" in schema["description"]
+    assert "implicitly supplies stable self-context" in schema["description"]
+    assert "persist it in the same turn" in schema["description"]
     assert "transient, hypothetical, quoted, or third-party" in schema["description"]
+    assert "never enrich it with inferred geography" in schema["description"]
+
+
+async def test_memory_write_requires_session_permission_before_mutation(
+    monkeypatch, tmp_path
+) -> None:
+    create_memory = AsyncMock()
+    monkeypatch.setattr(tools_module.MemoryService, "create_tool", create_memory)
+    call = ToolCall(
+        id="memory",
+        name="memory_write",
+        arguments={
+            "action": "create",
+            "content": "Der Nutzer heißt Max.",
+            "category": "identity",
+            "retrieval_level": "instant",
+        },
+    )
+    context = _context(tmp_path, call, decision=PermissionDecision.DENY)
+    context.assistant_message_id = uuid4()
+    context.memory_read_enabled = True
+    context.memory_write_enabled = True
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "permission.denied"}
+    request = context.ask_handler.await_args.args[0]
+    assert request.capability == "memory.write"
+    assert request.resource_type == "session"
+    assert request.resource_scope == str(context.session.id)
+    assert request.action_kind == "memory_write"
+    create_memory.assert_not_awaited()
 
 
 async def test_read_file_returns_numbered_page_and_continuation(tmp_path) -> None:

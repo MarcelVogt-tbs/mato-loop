@@ -15,7 +15,7 @@ from mato_loop_backend.agent.runtime import (
     _bounded_memory_overview,
     _memory_overview_requested,
 )
-from mato_loop_backend.agent.tools import ToolResult, tool_registry
+from mato_loop_backend.agent.tools import EffectiveToolSet, ToolResult
 from mato_loop_backend.events import run_events
 from mato_loop_backend.memory.retrieval import (
     MemoryRetrieval,
@@ -25,7 +25,7 @@ from mato_loop_backend.memory.retrieval import (
 )
 from mato_loop_backend.memory.service import MemoryScope, MemoryService
 from mato_loop_backend.models import AgentRun, ChatSession, MemoryRecord, Message
-from mato_loop_backend.providers.base import ProviderResult
+from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
@@ -146,7 +146,7 @@ async def _runtime_setup(
         AsyncMock(return_value=MemoryScope(total=15, instant=2, retrieve=13)),
     )
     monkeypatch.setattr(MemoryRetrievalService, "retrieve", retrieve)
-    monkeypatch.setattr(tool_registry, "execute", execute_tool)
+    monkeypatch.setattr(EffectiveToolSet, "execute", execute_tool)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
     return db, run, requests, projections, retrieve, execute_tool
 
@@ -186,6 +186,118 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
     assert relevant.content in projections[0]["system_prompt"]
     assert "15 total, 2 instant, 13 on-demand" in projections[0]["system_prompt"]
     assert requests[0]["tool_choice"] == "auto"
+
+
+async def test_memory_write_workflow_discards_drafts_until_write_resolves(
+    monkeypatch,
+) -> None:
+    session_id = uuid4()
+    user = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="user",
+        content="Ich komme aus Ascholding.",
+    )
+    results = [
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    id="lookup",
+                    name="memory_retrieve",
+                    arguments={
+                        "purpose": "write",
+                        "mode": "search",
+                        "query": "Herkunft Ascholding",
+                    },
+                )
+            ]
+        ),
+        ProviderResult(content="Ascholding ist gespeichert.", finish_reason="stop"),
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    id="invalid-write",
+                    name="memory_write",
+                    arguments={
+                        "action": "update",
+                        "memory_id": str(uuid4()),
+                        "content": "Der Nutzer kommt aus Ascholding.",
+                        "category": "identity",
+                    },
+                )
+            ]
+        ),
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    id="valid-write",
+                    name="memory_write",
+                    arguments={
+                        "action": "create",
+                        "content": "Der Nutzer kommt aus Ascholding.",
+                        "category": "identity",
+                    },
+                ),
+                ToolCall(
+                    id="duplicate-write",
+                    name="memory_write",
+                    arguments={
+                        "action": "create",
+                        "content": "Der Nutzer kommt aus Ascholding.",
+                        "category": "identity",
+                    },
+                ),
+            ]
+        ),
+        ProviderResult(content="Ich habe deine Herkunft gespeichert.", finish_reason="stop"),
+    ]
+    db, run, requests, projections, _retrieve, execute_tool = await _runtime_setup(
+        monkeypatch,
+        results,
+        records=[user],
+    )
+    execute_tool.side_effect = [
+        ToolResult.json(
+            {"purpose": "write", "items": []},
+            metadata={"memoryWritePending": True},
+        ),
+        ToolResult.error("tool.invalidArguments", field="expected_revision"),
+        ToolResult.json(
+            {"stored": True, "updated": False},
+            metadata={"memoryWriteOutcome": "stored"},
+        ),
+        ToolResult.json(
+            {"stored": False, "updated": False, "duplicate": True},
+            metadata={"memoryWriteOutcome": "duplicate"},
+        ),
+    ]
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["tool_choice"] for request in requests] == [
+        "auto",
+        "required",
+        "required",
+        "required",
+        "auto",
+    ]
+    assert all(
+        {tool["name"] for tool in request["tools"]}
+        == {"memory_retrieve", "memory_write"}
+        for request in requests[1:4]
+    )
+    assert "Required memory mutation" in projections[1]["system_prompt"]
+    assert "Host-confirmed memory outcome" in projections[-1]["system_prompt"]
+    assert "memory_write succeeded" in projections[-1]["system_prompt"]
+    assert "already stored" not in projections[-1]["system_prompt"]
+    persisted_assistant_texts = [
+        call.args[0].content
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
+    ]
+    assert "Ascholding ist gespeichert." not in persisted_assistant_texts
+    assert persisted_assistant_texts[-1] == "Ich habe deine Herkunft gespeichert."
+    assert execute_tool.await_count == 4
 
 
 def test_memory_overview_stops_before_exceeding_its_character_budget() -> None:

@@ -426,6 +426,23 @@ describe('chat drafts', () => {
     expect(watchRun).not.toHaveBeenCalled()
   })
 
+  it('timestamps an optimistic user message immediately', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-25T14:32:00Z'))
+    let resolveSend
+    api.post.mockReturnValue(new Promise((resolve) => { resolveSend = resolve }))
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+
+    const sending = chat.sendToCurrent('Neue Nachricht')
+
+    expect(chat.current.messages[0].createdAt).toBe('2026-07-25T14:32:00.000Z')
+    resolveSend({ data: { runId: 'run-1' } })
+    await sending
+  })
+
   it('moves a continued session to the top after persisting its new message', async () => {
     api.post.mockResolvedValue({
       data: {
@@ -616,6 +633,7 @@ describe('chat drafts', () => {
         id: 'message-1',
         role: 'assistant',
         content: 'Abgeschnitten',
+        createdAt: '2026-07-25T14:32:00Z',
         modelName: 'Antwortmodell',
         toolCalls: []
       }
@@ -625,6 +643,7 @@ describe('chat drafts', () => {
     expect(chat.current.messages[0]).toMatchObject({
       id: 'message-1',
       content: 'Vollständige Antwort',
+      createdAt: '2026-07-25T14:32:00Z',
       modelName: 'Antwortmodell'
     })
     expect(chat.streamModelName).toBe('Antwortmodell')

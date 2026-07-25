@@ -1,6 +1,5 @@
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -27,12 +26,9 @@ from mato_loop_backend.memory.dreaming import (
     _extract_candidates,
     _memory_read_trust,
     _reconcile_candidates,
+    _reconciliation_tool,
+    _record_candidates_tool,
     dreaming_availability,
-)
-from mato_loop_backend.memory.retrieval import (
-    MemoryRetrievalService,
-    MemoryRetrievalStrategy,
-    MemoryRetrieveMode,
 )
 from mato_loop_backend.memory.service import (
     MemoryDuplicateError,
@@ -332,6 +328,17 @@ def test_memory_write_arguments_require_explicit_update_target() -> None:
 
     assert valid.category == MemoryCategory.FACT
     assert valid.retrieval_level == MemoryRetrievalLevel.INSTANT
+    create = MemoryWriteArguments.model_validate(
+        {
+            "action": "create",
+            "memory_id": str(uuid4()),
+            "expected_revision": 7,
+            "content": "Der Nutzer kommt aus Ascholding.",
+            "category": "identity",
+        }
+    )
+    assert create.memory_id is None
+    assert create.expected_revision is None
     with pytest.raises(ValidationError):
         MemoryWriteArguments.model_validate(
             {"action": "update", "content": "Fakt", "category": "fact"}
@@ -400,6 +407,71 @@ async def test_tool_update_rejects_stale_memory_snapshot(monkeypatch) -> None:
 
     assert result.conflict is True
     update_memory.assert_not_awaited()
+
+
+async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
+    monkeypatch,
+) -> None:
+    source_message_id = uuid4()
+    linked_evidence_id = uuid4()
+    current_evidence_id = uuid4()
+    stale = MemoryRecord(
+        id=uuid4(),
+        source_message_id=source_message_id,
+        source_type="dreaming",
+        retrieval_level="retrieve",
+        trust_level="private",
+        category="fact",
+        content="Der Benutzer kommt aus Aschodling.",
+        revision=1,
+    )
+    canonical = MemoryRecord(
+        id=uuid4(),
+        source_type="tool_call",
+        retrieval_level="retrieve",
+        trust_level="public",
+        category="context",
+        content="Der Benutzer kommt aus Wolfratshausen.",
+        revision=2,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [stale, canonical]
+    linked = Mock()
+    linked.all.return_value = [linked_evidence_id]
+    db.scalars.return_value = linked
+    update_memory = AsyncMock(side_effect=MemoryDuplicateError)
+    monkeypatch.setattr(MemoryService, "update", update_memory)
+
+    result = await MemoryService.update_tool(
+        db,
+        memory_id=stale.id,
+        expected_revision=1,
+        content=canonical.content,
+        category=MemoryCategory.FACT,
+        retrieval_level=MemoryRetrievalLevel.RETRIEVE,
+        readable_by=TrustLevel.PRIVATE,
+        write_trust_level=TrustLevel.PRIVATE,
+        evidence_message_id=current_evidence_id,
+    )
+
+    assert result.item is canonical
+    assert result.updated is True
+    assert result.duplicate is False
+    assert canonical.trust_level == TrustLevel.PRIVATE.value
+    assert canonical.revision == 3
+    evidence_insert = db.execute.await_args.args[0]
+    evidence_params = evidence_insert.compile().params
+    assert {
+        evidence_params["message_id_m0"],
+        evidence_params["message_id_m1"],
+        evidence_params["message_id_m2"],
+    } == {linked_evidence_id, source_message_id, current_evidence_id}
+    assert {
+        evidence_params["memory_id_m0"],
+        evidence_params["memory_id_m1"],
+        evidence_params["memory_id_m2"],
+    } == {canonical.id}
+    db.delete.assert_awaited_once_with(stale)
 
 
 async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_path) -> None:
@@ -743,6 +815,25 @@ def test_dreaming_candidate_schema_uses_small_model_friendly_fields() -> None:
     ).candidates[0].content == "Der Nutzer ist verheiratet."
 
 
+def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
+    candidate_schema = _record_candidates_tool()["parameters"]
+    candidate = candidate_schema["properties"]["candidates"]["items"]
+    reconciliation_schema = _reconciliation_tool()["parameters"]
+
+    assert "$defs" not in candidate_schema
+    assert "$ref" not in json.dumps(candidate_schema)
+    assert candidate_schema["required"] == ["candidates"]
+    assert set(candidate["required"]) == {
+        "memory",
+        "category",
+        "retrievalLevel",
+        "evidence",
+    }
+    assert "$defs" not in reconciliation_schema
+    assert "$ref" not in json.dumps(reconciliation_schema)
+    assert reconciliation_schema["required"] == ["decisions"]
+
+
 async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) -> None:
     evidence_id = uuid4()
     provider = LlmProviderConfig(
@@ -789,12 +880,11 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
     )
     monkeypatch.setattr(ProviderService, "complete", complete)
 
-    output, references = await _extract_candidates(
+    output = await _extract_candidates(
         AsyncMock(spec=AsyncSession),
         provider=provider,
         model=model,
         input_trust=TrustLevel.PRIVATE,
-        memory_read_trust=TrustLevel.PRIVATE,
         system_prompt=DREAMING_SYSTEM_PROMPT,
         source=f"MESSAGE {evidence_id} [USER]\nmeine Frau und unser Kind",
         instant_memories=[],
@@ -803,15 +893,17 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
     )
 
     assert output.candidates[0].content == "Der Nutzer ist verheiratet und hat ein Kind."
-    assert references == []
     assert complete.await_count == 2
     retry_messages = complete.await_args_list[1].kwargs["messages"]
     assert retry_messages[-1]["role"] == "tool"
     assert "memory, category, retrievalLevel, and evidence" in retry_messages[-1]["content"]
 
 
-async def test_dreaming_uses_instant_context_and_memory_retrieve(monkeypatch) -> None:
-    evidence_id = uuid4()
+async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
+    monkeypatch,
+) -> None:
+    first_evidence_id = uuid4()
+    second_evidence_id = uuid4()
     provider = LlmProviderConfig(
         name="Lokal", adapter_type="openai-compatible", trust_level="private"
     )
@@ -825,75 +917,69 @@ async def test_dreaming_uses_instant_context_and_memory_retrieve(monkeypatch) ->
         revision=1,
         content="Der Nutzer hat eine Familie.",
     )
-    retrieved = MemoryRecord(
-        id=uuid4(),
-        source_type="dreaming",
-        retrieval_level="retrieve",
-        trust_level="private",
-        category="context",
-        revision=2,
-        content="Ascholding ist vermutlich ein relevanter Ort für den Nutzer.",
-    )
     complete = AsyncMock(
-        side_effect=[
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="lookup",
-                        name="memory_retrieve",
-                        arguments={"query": "Familie Kind", "limit": 5},
-                    )
-                ]
-            ),
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="record",
-                        name="record_memory_candidates",
-                        arguments={"candidates": []},
-                    )
-                ]
-            ),
-        ]
-    )
-    retrieve_memories = AsyncMock(
-        return_value=SimpleNamespace(
-            items=[retrieved],
-            mode=MemoryRetrieveMode.SEARCH,
-            strategy=MemoryRetrievalStrategy.HYBRID,
+        return_value=ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    id="record-1",
+                    name="record_memory_candidates",
+                    arguments={
+                        "candidates": [
+                            {
+                                "memory": "Der Nutzer hat eine Familie.",
+                                "category": "identity",
+                                "retrievalLevel": "instant",
+                                "evidence": [str(first_evidence_id)],
+                            }
+                        ]
+                    },
+                ),
+                ToolCall(
+                    id="record-2",
+                    name="record_memory_candidates",
+                    arguments={
+                        "candidates": [
+                            {
+                                "memory": " der nutzer hat eine familie. ",
+                                "category": "identity",
+                                "retrievalLevel": "instant",
+                                "evidence": [str(second_evidence_id)],
+                            }
+                        ]
+                    },
+                ),
+            ]
         )
     )
     monkeypatch.setattr(ProviderService, "complete", complete)
-    monkeypatch.setattr(MemoryRetrievalService, "retrieve", retrieve_memories)
     db = AsyncMock(spec=AsyncSession)
 
-    output, references = await _extract_candidates(
+    output = await _extract_candidates(
         db,
         provider=provider,
         model=model,
         input_trust=TrustLevel.PRIVATE,
-        memory_read_trust=TrustLevel.PRIVATE,
         system_prompt=DREAMING_SYSTEM_PROMPT,
-        source=f"MESSAGE {evidence_id} [USER]\nErzähl mir etwas.",
+        source=(
+            f"MESSAGE {first_evidence_id} [USER]\nMeine Familie ist wichtig.\n\n"
+            f"MESSAGE {second_evidence_id} [ASSISTANT]\nVerstanden."
+        ),
         instant_memories=[instant],
         max_candidates=10,
-        evidence_ids={evidence_id},
+        evidence_ids={first_evidence_id, second_evidence_id},
     )
 
-    assert output.candidates == []
-    assert {item.id for item in references} == {instant.id, retrieved.id}
-    first_messages = complete.await_args_list[0].kwargs["messages"]
-    assert instant.content in first_messages[1]["content"]
-    second_messages = complete.await_args_list[1].kwargs["messages"]
-    assert retrieved.content in second_messages[-1]["content"]
-    retrieve_memories.assert_awaited_once_with(
-        db,
-        mode=MemoryRetrieveMode.SEARCH,
-        query="Familie Kind",
-        retrieval_level=MemoryRetrievalLevel.RETRIEVE,
-        readable_by=TrustLevel.PRIVATE,
-        limit=5,
-    )
+    assert len(output.candidates) == 1
+    assert output.candidates[0].content == "Der Nutzer hat eine Familie."
+    assert output.candidates[0].evidence_message_ids == [
+        first_evidence_id,
+        second_evidence_id,
+    ]
+    request = complete.await_args.kwargs
+    assert instant.content in request["messages"][1]["content"]
+    assert [tool["name"] for tool in request["tools"]] == [
+        "record_memory_candidates"
+    ]
 
 
 async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> None:
@@ -950,13 +1036,60 @@ async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> No
     assert "CUSTOM CATEGORY GUIDANCE" in complete.await_args_list[0].kwargs["messages"][0]["content"]
 
 
+async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> None:
+    memory_id = uuid4()
+    provider = LlmProviderConfig(
+        name="Lokal", adapter_type="openai-compatible", trust_level="private"
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    complete = AsyncMock(
+        return_value=ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    id="decision-1",
+                    name="reconcile_memory_candidates",
+                    arguments={
+                        "decisions": [
+                            {
+                                "index": 0,
+                                "action": "unchanged",
+                                "memoryId": str(memory_id),
+                            }
+                        ]
+                    },
+                ),
+                ToolCall(
+                    id="decision-2",
+                    name="reconcile_memory_candidates",
+                    arguments={"decisions": [{"index": 1, "action": "create"}]},
+                ),
+            ]
+        )
+    )
+    monkeypatch.setattr(ProviderService, "complete", complete)
+
+    result = await _reconcile_candidates(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        input_trust=TrustLevel.PRIVATE,
+        source="{}",
+        candidate_count=2,
+        supplied_ids={memory_id},
+    )
+
+    assert [decision.candidate_index for decision in result.decisions] == [0, 1]
+    assert [decision.action for decision in result.decisions] == ["unchanged", "create"]
+    complete.assert_awaited_once()
+
+
 def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
     assert "cross-session knowledge" in DREAMING_SYSTEM_PROMPT
     assert "Reason one or two steps beyond literal wording" in DREAMING_SYSTEM_PROMPT
     assert "weather query for a place" in DREAMING_SYSTEM_PROMPT
     assert "Write each memory" in DREAMING_SYSTEM_PROMPT
-    assert "memory_retrieve" in DREAMING_SYSTEM_PROMPT
-    assert "record_memory_candidates exactly once" in DREAMING_SYSTEM_PROMPT
+    assert "memory_retrieve" not in DREAMING_SYSTEM_PROMPT
+    assert "record_memory_candidates" in DREAMING_SYSTEM_PROMPT
     assert "evidence message IDs from the supplied batch" in DREAMING_SYSTEM_PROMPT
     assert "retrieval level" in DREAMING_SYSTEM_PROMPT
     assert "web_search" not in DREAMING_SYSTEM_PROMPT
@@ -964,6 +1097,18 @@ def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
 
 def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
     memory_id = uuid4()
+    create = DreamReconciliation.model_validate(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "create",
+                    "memory": "Vom Modell wiederholter Kandidat",
+                    "retrievalLevel": "retrieve",
+                }
+            ]
+        }
+    ).decisions[0]
     result = DreamReconciliation.model_validate(
         {
             "decisions": [
@@ -979,6 +1124,8 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
         }
     )
 
+    assert create.content is None
+    assert create.retrieval_level is None
     assert result.decisions[0].memory_id == memory_id
     assert result.decisions[0].retrieval_level == MemoryRetrievalLevel.INSTANT
     assert "Reference only supplied memory IDs" in RECONCILIATION_SYSTEM_PROMPT

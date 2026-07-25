@@ -93,6 +93,24 @@ def session_search_permission() -> PermissionRequest:
     )
 
 
+def memory_write_permission(session_id: UUID, action: str) -> PermissionRequest:
+    updating = action == "update"
+    return PermissionRequest(
+        capability="memory.write",
+        resource_type="session",
+        resource_scope=str(session_id),
+        action_kind="memory_write",
+        risk_level="medium",
+        title="Memory aktualisieren?" if updating else "Memory speichern?",
+        summary=(
+            "Der Agent möchte ein bestehendes Memory aktualisieren."
+            if updating
+            else "Der Agent möchte ein neues Memory speichern."
+        ),
+        resource_display="Memory der aktuellen Session",
+    )
+
+
 def webfetch_permission(url: str) -> PermissionRequest:
     canonical_url = canonicalize_url(url)
     return PermissionRequest(

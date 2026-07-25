@@ -10,6 +10,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionRequest,
     agent_identity_permission,
     media_permission,
+    memory_write_permission,
     path_permission,
     session_permission,
     session_search_permission,
@@ -238,6 +239,31 @@ async def test_media_session_grant_matches_capability_and_current_session(tmp_pa
     assert await PermissionPolicy.evaluate(
         _db_with_grants(grant), session, other_capability, _root_files(tmp_path, session)
     ) == PermissionDecision.ASK
+
+
+async def test_memory_write_uses_current_session_grant(tmp_path) -> None:
+    session = _session()
+    request = memory_write_permission(session.id, "create")
+    root_files = _root_files(tmp_path, session)
+
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(), session, request, root_files
+    ) == PermissionDecision.ASK
+
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=request.capability,
+        resource_type=request.resource_type,
+        resource_scope=request.resource_scope,
+    )
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant),
+        session,
+        memory_write_permission(session.id, "update"),
+        root_files,
+    ) == PermissionDecision.ALLOW
+    assert request.capability == "memory.write"
+    assert request.action_kind == "memory_write"
 
 
 async def test_agent_identity_session_grant_matches_exact_user(tmp_path) -> None:
