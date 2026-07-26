@@ -311,7 +311,10 @@ def general_system_prompt(
         )
     if "memory_retrieve" in offered_tool_names:
         parts.append(
-            "Use memory_retrieve when relevant durable context is not already present. Use mode=search "
+            "The active memory is already present, but long-term memory is only partially prefetched. "
+            "Use memory_retrieve when relevant durable context is not already present. Search long-term "
+            "memory before saying that you do not know or remember something about the user or prior "
+            "context. Use mode=search "
             "for concrete, paraphrased, or cross-language questions. Use mode=browse only for a "
             "deliberate overview; do not use it as an automatic fallback. session_search searches chat "
             "transcripts, not persistent memories. An empty result means only that nothing matched in "
@@ -385,7 +388,7 @@ def general_system_prompt(
             "Persistent memory status: read access is enabled for the "
             f"{(memory_read_scope or TrustLevel.PUBLIC).value} scope. "
             f"Visible entries: {memory_scope['total']} total, "
-            f"{memory_scope['instant']} instant, {memory_scope['retrieve']} on-demand. "
+            f"{memory_scope['instant']} active, {memory_scope['retrieve']} long-term. "
             f"This request includes {injected_memory_count} budgeted memory references. "
             + (
                 "memory_retrieve is available for additional search and complete pagination."

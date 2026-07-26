@@ -70,6 +70,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'memory.duplicate' } })).toBe(
       'Diese Erinnerung ist bereits vorhanden.'
     )
+    expect(apiErrorMessage({ error: { code: 'memory.tierBudgetExceeded' } })).toBe(
+      'Das Zeichenbudget des aktiven Gedächtnisses ist ausgeschöpft. Gib eine fixierte Erinnerung frei oder verschiebe sie ins Langzeitgedächtnis (RAG).'
+    )
     expect(apiErrorMessage({ error: { code: 'privacy.pseudonymizationUnavailable' } })).toBe(
       'Die lokale Pseudonymisierung ist derzeit nicht verfügbar.'
     )

@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.memory.embeddings import (
@@ -122,6 +123,7 @@ class MemoryRetrievalService:
                 next_cursor_id=(cursor_item.id if cursor_item is not None else None),
             )
 
+        retrieval_level = MemoryRetrievalLevel.RETRIEVE
         cleaned_query = (query or "").strip()
         if cursor_updated_at is not None:
             raise ValueError("search mode does not accept a cursor")
@@ -138,6 +140,7 @@ class MemoryRetrievalService:
             (
                 await db.scalars(
                     select(MemoryRecord)
+                    .options(selectinload(MemoryRecord.source_session))
                     .where(MemoryRecord.search_vector.op("@@")(tsquery), *filters)
                     .order_by(
                         func.ts_rank_cd(MemoryRecord.search_vector, tsquery).desc(),
@@ -170,6 +173,7 @@ class MemoryRetrievalService:
                         (
                             await db.scalars(
                                 select(MemoryRecord)
+                                .options(selectinload(MemoryRecord.source_session))
                                 .join(
                                     MemoryEmbedding,
                                     MemoryEmbedding.memory_id == MemoryRecord.id,

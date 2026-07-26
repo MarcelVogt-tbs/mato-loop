@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.context import ContextManager, ContextProjection
 from mato_loop_backend.agent.runtime import (
-    AUTOMATIC_MEMORY_MAX_CHARACTERS,
     AUTOMATIC_MEMORY_MAX_DISTANCE,
     AUTOMATIC_MEMORY_MAX_ITEMS,
     MEMORY_OVERVIEW_MAX_CHARACTERS,
@@ -140,6 +139,8 @@ async def _runtime_setup(
     monkeypatch.setattr(ContextManager, "build", build_context)
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
     monkeypatch.setattr(MemoryService, "instant_context", AsyncMock(return_value=[]))
+    monkeypatch.setattr(MemoryService, "enforce_capacity", AsyncMock())
+    monkeypatch.setattr(MemoryService, "record_exposures", AsyncMock())
     monkeypatch.setattr(
         MemoryService,
         "scope",
@@ -176,15 +177,15 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
     retrieve.assert_awaited_once()
     kwargs = retrieve.await_args.kwargs
     assert kwargs["query"] == "Wie alt ist mein Sohn?"
-    assert kwargs["retrieval_level"] is None
+    assert kwargs["retrieval_level"].value == "retrieve"
     assert kwargs["limit"] == AUTOMATIC_MEMORY_MAX_ITEMS
     assert kwargs["max_semantic_distance"] == AUTOMATIC_MEMORY_MAX_DISTANCE
     instant_kwargs = MemoryService.instant_context.await_args.kwargs
-    assert instant_kwargs["max_items"] == AUTOMATIC_MEMORY_MAX_ITEMS
-    assert instant_kwargs["max_characters"] == AUTOMATIC_MEMORY_MAX_CHARACTERS
+    assert "max_items" not in instant_kwargs
+    assert instant_kwargs["max_characters"] == 20_000
     assert '"source": "relevant"' in projections[0]["system_prompt"]
     assert relevant.content in projections[0]["system_prompt"]
-    assert "15 total, 2 instant, 13 on-demand" in projections[0]["system_prompt"]
+    assert "15 total, 2 active, 13 long-term" in projections[0]["system_prompt"]
     assert requests[0]["tool_choice"] == "auto"
 
 

@@ -41,7 +41,6 @@ from mato_loop_backend.models import (
     MemoryCategory,
     MemoryDreamRun,
     MemoryRecord,
-    MemoryRetrievalLevel,
     MemorySourceMessage,
     UserAccount,
 )
@@ -237,11 +236,10 @@ async def test_instant_context_uses_only_whole_items_within_budget() -> None:
     selected = await MemoryService.instant_context(
         db,
         input_trust_level=TrustLevel.PUBLIC,
-        max_items=3,
         max_characters=7,
     )
 
-    assert [item.content for item in selected] == ["abc", "de"]
+    assert [item.content for item in selected] == ["abc", "de", "f"]
     assert "memories.trust_level" in str(db.scalars.await_args.args[0])
 
 
@@ -265,16 +263,20 @@ async def test_private_dreaming_candidate_upgrades_public_duplicate() -> None:
         db,
         content="Dauerhafter Fakt",
         category=MemoryCategory.FACT,
-        retrieval_level=MemoryRetrievalLevel.INSTANT,
         trust_level=TrustLevel.PRIVATE,
         session_id=uuid4(),
         run_id=uuid4(),
         evidence_message_ids=[evidence_id],
+        max_context_characters=20_000,
     )
 
     assert created.duplicate is True
     assert existing.trust_level == "private"
-    evidence_insert = db.execute.await_args.args[0]
+    evidence_insert = next(
+        call.args[0]
+        for call in db.execute.await_args_list
+        if "memory_source_messages" in str(call.args[0])
+    )
     assert evidence_insert.compile().params["memory_id_m0"] == existing.id
     assert evidence_insert.compile().params["message_id_m0"] == evidence_id
 
@@ -297,7 +299,7 @@ async def test_manual_memory_rejects_normalized_duplicate() -> None:
             content="  EIN\nFAKT ",
             category=MemoryCategory.FACT,
             trust_level=TrustLevel.PUBLIC,
-            retrieval_level=MemoryRetrievalLevel.RETRIEVE,
+            max_context_characters=20_000,
         )
 
     db.add.assert_not_called()
@@ -322,12 +324,11 @@ def test_memory_write_arguments_require_explicit_update_target() -> None:
             "expected_revision": 3,
             "content": "Aktualisierter Fakt",
             "category": "fact",
-            "retrieval_level": "instant",
         }
     )
 
     assert valid.category == MemoryCategory.FACT
-    assert valid.retrieval_level == MemoryRetrievalLevel.INSTANT
+    assert "retrieval_level" not in type(valid).model_fields
     create = MemoryWriteArguments.model_validate(
         {
             "action": "create",
@@ -367,10 +368,13 @@ async def test_private_tool_update_upgrades_trust_and_adds_evidence(monkeypatch)
         expected_revision=3,
         content="Neuer Fakt",
         category=MemoryCategory.FACT,
-        retrieval_level=MemoryRetrievalLevel.INSTANT,
         readable_by=TrustLevel.PUBLIC,
         write_trust_level=TrustLevel.PRIVATE,
+        session_id=uuid4(),
         evidence_message_id=evidence_id,
+        run_id=uuid4(),
+        tool_call_id="memory",
+        max_context_characters=20_000,
     )
 
     assert result.updated is True
@@ -399,10 +403,13 @@ async def test_tool_update_rejects_stale_memory_snapshot(monkeypatch) -> None:
         expected_revision=3,
         content="Veraltetes Update",
         category=MemoryCategory.FACT,
-        retrieval_level=MemoryRetrievalLevel.RETRIEVE,
         readable_by=TrustLevel.PUBLIC,
         write_trust_level=TrustLevel.PUBLIC,
+        session_id=uuid4(),
         evidence_message_id=uuid4(),
+        run_id=uuid4(),
+        tool_call_id="memory",
+        max_context_characters=20_000,
     )
 
     assert result.conflict is True
@@ -441,6 +448,9 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     db.scalars.return_value = linked
     update_memory = AsyncMock(side_effect=MemoryDuplicateError)
     monkeypatch.setattr(MemoryService, "update", update_memory)
+    monkeypatch.setattr(MemoryService, "enforce_capacity", AsyncMock())
+    change_level = AsyncMock()
+    monkeypatch.setattr(MemoryService, "_change_retrieval_level", change_level)
 
     result = await MemoryService.update_tool(
         db,
@@ -448,10 +458,13 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
         expected_revision=1,
         content=canonical.content,
         category=MemoryCategory.FACT,
-        retrieval_level=MemoryRetrievalLevel.RETRIEVE,
         readable_by=TrustLevel.PRIVATE,
         write_trust_level=TrustLevel.PRIVATE,
+        session_id=uuid4(),
         evidence_message_id=current_evidence_id,
+        run_id=uuid4(),
+        tool_call_id="memory",
+        max_context_characters=20_000,
     )
 
     assert result.item is canonical
@@ -459,7 +472,14 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     assert result.duplicate is False
     assert canonical.trust_level == TrustLevel.PRIVATE.value
     assert canonical.revision == 3
-    evidence_insert = db.execute.await_args.args[0]
+    assert canonical.source_type == "tool_call"
+    assert canonical.source_message_id == current_evidence_id
+    change_level.assert_awaited_once()
+    evidence_insert = next(
+        call.args[0]
+        for call in db.execute.await_args_list
+        if "memory_source_messages" in str(call.args[0])
+    )
     evidence_params = evidence_insert.compile().params
     assert {
         evidence_params["message_id_m0"],
@@ -494,7 +514,6 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
             "action": "create",
             "content": "Kurze Antworten",
             "category": "preference",
-            "retrieval_level": "retrieve",
         },
     )
     session = ChatSession(id=uuid4(), title="Test", workspace_access="read-only")
@@ -509,6 +528,9 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
         assistant_message_id=uuid4(),
         memory_read_enabled=True,
         memory_write_enabled=True,
+    )
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=MemorySettings())
     )
 
     result = await tool_registry.execute(call, context)
@@ -670,6 +692,7 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(SettingsStore, "save", save)
+    monkeypatch.setattr(MemoryService, "enforce_capacity", AsyncMock())
     db = AsyncMock(spec=AsyncSession)
     payload = MemorySettingsRequest(
         enabled=True,
@@ -765,7 +788,6 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
                 {
                     "content": "Dauerhafter Fakt",
                     "category": "fact",
-                    "retrievalLevel": "retrieve",
                     "evidenceMessageIds": [str(message_id)],
                 }
             ]
@@ -774,7 +796,6 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
 
     assert output.candidates[0].evidence_message_ids == [message_id]
     assert output.candidates[0].category == MemoryCategory.FACT
-    assert output.candidates[0].retrieval_level == MemoryRetrievalLevel.RETRIEVE
 
     with pytest.raises(ValueError):
         DreamCandidates.model_validate(
@@ -783,7 +804,6 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
                     {
                         "content": "   ",
                         "category": "fact",
-                        "retrievalLevel": "retrieve",
                         "evidenceMessageIds": [str(message_id)],
                     }
                 ]
@@ -798,7 +818,6 @@ def test_dreaming_candidate_schema_uses_small_model_friendly_fields() -> None:
     assert set(candidate["required"]) == {
         "memory",
         "category",
-        "retrievalLevel",
         "evidence",
     }
     assert DreamCandidates.model_validate(
@@ -807,7 +826,6 @@ def test_dreaming_candidate_schema_uses_small_model_friendly_fields() -> None:
                 {
                     "memory": "Der Nutzer ist verheiratet.",
                     "category": "identity",
-                    "retrievalLevel": "instant",
                     "evidence": [str(uuid4())],
                 }
             ]
@@ -826,7 +844,6 @@ def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
     assert set(candidate["required"]) == {
         "memory",
         "category",
-        "retrievalLevel",
         "evidence",
     }
     assert "$defs" not in reconciliation_schema
@@ -868,7 +885,6 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
                                 {
                                     "memory": "Der Nutzer ist verheiratet und hat ein Kind.",
                                     "category": "identity",
-                                    "retrievalLevel": "instant",
                                     "evidence": [str(evidence_id)],
                                 }
                             ]
@@ -896,7 +912,7 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
     assert complete.await_count == 2
     retry_messages = complete.await_args_list[1].kwargs["messages"]
     assert retry_messages[-1]["role"] == "tool"
-    assert "memory, category, retrievalLevel, and evidence" in retry_messages[-1]["content"]
+    assert "memory, category, and evidence" in retry_messages[-1]["content"]
 
 
 async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
@@ -928,7 +944,6 @@ async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
                             {
                                 "memory": "Der Nutzer hat eine Familie.",
                                 "category": "identity",
-                                "retrievalLevel": "instant",
                                 "evidence": [str(first_evidence_id)],
                             }
                         ]
@@ -942,7 +957,6 @@ async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
                             {
                                 "memory": " der nutzer hat eine familie. ",
                                 "category": "identity",
-                                "retrievalLevel": "instant",
                                 "evidence": [str(second_evidence_id)],
                             }
                         ]
@@ -1091,7 +1105,7 @@ def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
     assert "memory_retrieve" not in DREAMING_SYSTEM_PROMPT
     assert "record_memory_candidates" in DREAMING_SYSTEM_PROMPT
     assert "evidence message IDs from the supplied batch" in DREAMING_SYSTEM_PROMPT
-    assert "retrieval level" in DREAMING_SYSTEM_PROMPT
+    assert "retrieval level" not in DREAMING_SYSTEM_PROMPT
     assert "web_search" not in DREAMING_SYSTEM_PROMPT
 
 
@@ -1104,7 +1118,6 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
                     "index": 0,
                     "action": "create",
                     "memory": "Vom Modell wiederholter Kandidat",
-                    "retrievalLevel": "retrieve",
                 }
             ]
         }
@@ -1118,16 +1131,13 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
                     "memoryId": str(memory_id),
                     "content": "Aktuelle Präferenz",
                     "category": "preference",
-                    "retrievalLevel": "instant",
                 }
             ]
         }
     )
 
     assert create.content is None
-    assert create.retrieval_level is None
     assert result.decisions[0].memory_id == memory_id
-    assert result.decisions[0].retrieval_level == MemoryRetrievalLevel.INSTANT
     assert "Reference only supplied memory IDs" in RECONCILIATION_SYSTEM_PROMPT
     with pytest.raises(ValidationError):
         DreamReconciliation.model_validate(

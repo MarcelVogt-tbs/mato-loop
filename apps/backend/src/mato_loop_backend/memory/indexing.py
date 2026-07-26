@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from time import monotonic
 from uuid import UUID
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,7 @@ from mato_loop_backend.models import (
     MemoryEmbedding,
     MemoryEmbeddingStatus,
     MemoryRecord,
+    MemoryRetrievalLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,11 @@ RETRY_DELAYS = (5, 30, 120, 600, 3600)
 class MemoryIndexService:
     @staticmethod
     async def enqueue(db: AsyncSession, memory: MemoryRecord) -> None:
+        if memory.retrieval_level != MemoryRetrievalLevel.RETRIEVE.value:
+            await db.execute(
+                delete(MemoryEmbedding).where(MemoryEmbedding.memory_id == memory.id)
+            )
+            return
         statement = postgresql_insert(MemoryEmbedding).values(
             memory_id=memory.id,
             profile_fingerprint=ACTIVE_EMBEDDING_PROFILE.fingerprint,
@@ -62,9 +68,27 @@ class MemoryIndexService:
     @staticmethod
     async def reconcile(db: AsyncSession) -> int:
         memories = list(
-            (await db.execute(select(MemoryRecord.id, MemoryRecord.normalized_content_hash))).all()
+            (
+                await db.execute(
+                    select(MemoryRecord.id, MemoryRecord.normalized_content_hash).where(
+                        MemoryRecord.retrieval_level
+                        == MemoryRetrievalLevel.RETRIEVE.value
+                    )
+                )
+            ).all()
         )
-        changed = 0
+        removed = await db.execute(
+            delete(MemoryEmbedding).where(
+                ~select(MemoryRecord.id)
+                .where(
+                    MemoryRecord.id == MemoryEmbedding.memory_id,
+                    MemoryRecord.retrieval_level
+                    == MemoryRetrievalLevel.RETRIEVE.value,
+                )
+                .exists()
+            )
+        )
+        changed = int(removed.rowcount or 0)
         for memory_id, content_hash in memories:
             row = await db.get(MemoryEmbedding, memory_id)
             if (
@@ -73,7 +97,13 @@ class MemoryIndexService:
                 and row.content_hash == content_hash
             ):
                 continue
-            memory = MemoryRecord(id=memory_id, normalized_content_hash=content_hash)
+            memory = await db.get(MemoryRecord, memory_id)
+            if (
+                memory is None
+                or memory.retrieval_level != MemoryRetrievalLevel.RETRIEVE.value
+                or memory.normalized_content_hash != content_hash
+            ):
+                continue
             await MemoryIndexService.enqueue(db, memory)
             changed += 1
         await db.commit()
@@ -114,6 +144,10 @@ class MemoryIndexService:
                     select(MemoryEmbedding)
                     .where(
                         MemoryEmbedding.status == MemoryEmbeddingStatus.QUEUED.value,
+                        MemoryEmbedding.memory.has(
+                            MemoryRecord.retrieval_level
+                            == MemoryRetrievalLevel.RETRIEVE.value
+                        ),
                         or_(
                             MemoryEmbedding.next_attempt_at.is_(None),
                             MemoryEmbedding.next_attempt_at <= now,
@@ -156,6 +190,7 @@ class MemoryIndexService:
             memory = memories.get(snapshot[0])
             if (
                 memory is not None
+                and memory.retrieval_level == MemoryRetrievalLevel.RETRIEVE.value
                 and memory.normalized_content_hash == snapshot[1]
                 and snapshot[2] == ACTIVE_EMBEDDING_PROFILE.fingerprint
             ):
@@ -184,6 +219,7 @@ class MemoryIndexService:
                 row.content_hash != content_hash
                 or row.profile_fingerprint != profile
                 or memory.normalized_content_hash != content_hash
+                or memory.retrieval_level != MemoryRetrievalLevel.RETRIEVE.value
             ):
                 await MemoryIndexService.enqueue(db, memory)
                 continue

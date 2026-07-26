@@ -462,6 +462,9 @@ class MemorySettings(SettingsDocument):
     enabled: bool = True
     max_context_items: int = Field(default=10, ge=0, le=100)
     max_context_characters: int = Field(default=20_000, ge=0, le=200_000)
+    short_term_grace_days: int = Field(default=30, ge=1, le=3_650)
+    usage_window_days: int = Field(default=30, ge=1, le=3_650)
+    required_usage_count: int = Field(default=3, ge=1, le=10_000)
     automatic_dreaming_enabled: bool = False
     dreaming_instructions: str = Field(default="", max_length=8_000)
     dreaming_interval_minutes: int = Field(default=60, ge=1, le=10_080)

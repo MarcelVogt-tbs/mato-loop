@@ -83,6 +83,12 @@ class MemoryEmbeddingStatus(StrEnum):
     FAILED = "failed"
 
 
+class MemoryExposureStatus(StrEnum):
+    PENDING = "pending"
+    USED = "used"
+    UNUSED = "unused"
+
+
 class MemoryDreamTrigger(StrEnum):
     SCHEDULED = "scheduled"
     MANUAL = "manual"
@@ -446,7 +452,19 @@ class MemoryRecord(Base):
         String(20), nullable=False, default=MemorySourceType.MANUAL.value
     )
     retrieval_level: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=MemoryRetrievalLevel.RETRIEVE.value
+        String(20), nullable=False, default=MemoryRetrievalLevel.INSTANT.value
+    )
+    tier_locked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    tier_locked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    retrieval_level_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     trust_level: Mapped[str] = mapped_column(
         String(20), nullable=False, default=TrustLevel.PUBLIC.value
@@ -475,6 +493,43 @@ class MemoryRecord(Base):
     embedding: Mapped[MemoryEmbedding | None] = relationship(
         back_populates="memory", cascade="all, delete-orphan", passive_deletes=True
     )
+    exposures: Mapped[list[MemoryExposure]] = relationship(
+        back_populates="memory", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class MemoryExposure(Base):
+    __tablename__ = "memory_exposures"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'used', 'unused')", name="status_valid"
+        ),
+        UniqueConstraint("memory_id", "agent_run_id"),
+        Index("ix_memory_exposures_status_exposed", "status", "exposed_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    memory_id: Mapped[UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    memory_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    assistant_message_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=MemoryExposureStatus.PENDING.value
+    )
+    exposed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    evaluated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    memory: Mapped[MemoryRecord] = relationship(back_populates="exposures")
 
 
 class MemoryEmbedding(Base):

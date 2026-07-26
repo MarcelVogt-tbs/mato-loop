@@ -111,7 +111,7 @@ async def test_transient_index_failure_is_requeued_with_backoff() -> None:
     db.commit.assert_awaited_once()
 
 
-async def test_memory_creation_enqueues_embedding_in_same_service_transaction(
+async def test_instant_memory_creation_removes_embedding_in_same_service_transaction(
     monkeypatch,
 ) -> None:
     db = AsyncMock(spec=AsyncSession)
@@ -123,11 +123,11 @@ async def test_memory_creation_enqueues_embedding_in_same_service_transaction(
         content="Ein neuer Fakt",
         category=MemoryCategory.FACT,
         source_type=MemorySourceType.MANUAL,
-        retrieval_level=MemoryRetrievalLevel.RETRIEVE,
         trust_level=TrustLevel.PRIVATE,
     )
 
     enqueue.assert_awaited_once_with(db, memory)
+    assert memory.retrieval_level == MemoryRetrievalLevel.INSTANT.value
     assert memory.seen_at is not None
     db.commit.assert_not_awaited()
 
@@ -146,7 +146,6 @@ async def test_automatic_memory_creation_starts_unseen(
         content="Automatisch erkannter Fakt",
         category=MemoryCategory.FACT,
         source_type=source_type,
-        retrieval_level=MemoryRetrievalLevel.RETRIEVE,
         trust_level=TrustLevel.PRIVATE,
     )
 

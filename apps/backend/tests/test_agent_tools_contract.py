@@ -786,7 +786,6 @@ async def test_memory_write_requires_session_permission_before_mutation(
             "action": "create",
             "content": "Der Nutzer heißt Max.",
             "category": "identity",
-            "retrieval_level": "instant",
         },
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)

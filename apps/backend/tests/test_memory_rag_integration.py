@@ -18,12 +18,12 @@ from mato_loop_backend.memory.retrieval import (
 )
 from mato_loop_backend.memory.service import MemoryService, normalize_content
 from mato_loop_backend.models import (
+    AgentRun,
     ChatSession,
     MemoryCategory,
     MemoryEmbedding,
     MemoryEmbeddingStatus,
     MemoryRecord,
-    MemoryRetrievalLevel,
     MemorySourceMessage,
     Message,
     UserAccount,
@@ -257,6 +257,13 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
         )
         db.add_all([source_message, correction_message])
         await db.flush()
+        agent_run = AgentRun(
+            session_id=session.id,
+            status="completed",
+            trust_level=TrustLevel.PRIVATE.value,
+        )
+        db.add(agent_run)
+        await db.flush()
         stale = MemoryRecord(
             source_session_id=session.id,
             source_message_id=source_message.id,
@@ -301,10 +308,13 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
             expected_revision=1,
             content=canonical_content,
             category=MemoryCategory.FACT,
-            retrieval_level=MemoryRetrievalLevel.RETRIEVE,
             readable_by=TrustLevel.PRIVATE,
             write_trust_level=TrustLevel.PRIVATE,
+            session_id=session.id,
             evidence_message_id=correction_message.id,
+            run_id=agent_run.id,
+            tool_call_id="correction",
+            max_context_characters=20_000,
         )
 
         assert result.item is canonical

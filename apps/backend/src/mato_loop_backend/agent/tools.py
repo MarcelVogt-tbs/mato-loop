@@ -65,6 +65,7 @@ from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AiSettings,
     IntegrationSettings,
+    MemorySettings,
     ModelCapability,
     SettingsStore,
     ToolExecutionPolicy,
@@ -473,7 +474,6 @@ class MemoryWriteArguments(ToolArguments):
     expected_revision: int | None = Field(default=None, ge=1)
     content: str = Field(min_length=1, max_length=20_000)
     category: MemoryCategory
-    retrieval_level: MemoryRetrievalLevel = MemoryRetrievalLevel.RETRIEVE
 
     @field_validator("content")
     @classmethod
@@ -1271,6 +1271,10 @@ async def _memory_write(
         context, memory_write_permission(context.session.id, arguments.action)
     ):
         return ToolResult.error("permission.denied")
+    await MemoryService.lock_capacity(context.db)
+    settings = await SettingsStore.load(
+        context.db, MemorySettings, user_id=context.session.user_id
+    )
     if arguments.action == "update":
         assert arguments.memory_id is not None
         assert arguments.expected_revision is not None
@@ -1280,10 +1284,13 @@ async def _memory_write(
             expected_revision=arguments.expected_revision,
             content=arguments.content,
             category=arguments.category,
-            retrieval_level=arguments.retrieval_level,
             readable_by=context.memory_trust_level,
             write_trust_level=context.memory_write_trust_level,
+            session_id=context.session.id,
             evidence_message_id=context.assistant_message_id,
+            run_id=context.run_id,
+            tool_call_id=context.tool_call.id,
+            max_context_characters=settings.max_context_characters,
         )
         if result.item is None:
             return ToolResult.error("memory.notFound")
@@ -1302,12 +1309,12 @@ async def _memory_write(
         context.db,
         content=arguments.content,
         category=arguments.category,
-        retrieval_level=arguments.retrieval_level,
         trust_level=context.memory_write_trust_level,
         session_id=context.session.id,
         message_id=context.assistant_message_id,
         run_id=context.run_id,
         tool_call_id=context.tool_call.id,
+        max_context_characters=settings.max_context_characters,
     )
     if result.duplicate:
         return ToolResult.json(
@@ -1328,7 +1335,11 @@ async def _memory_retrieve(
         mode=MemoryRetrieveMode(arguments.mode),
         query=arguments.query,
         category=arguments.category,
-        retrieval_level=None,
+        retrieval_level=(
+            None
+            if arguments.mode == MemoryRetrieveMode.BROWSE.value
+            else MemoryRetrievalLevel.RETRIEVE
+        ),
         readable_by=context.memory_trust_level,
         cursor_updated_at=arguments.cursor_updated_at,
         cursor_id=arguments.cursor_id,
@@ -1343,6 +1354,13 @@ async def _memory_retrieve(
         and result.next_cursor_id is not None
         else None
     )
+    if context.memory_write_enabled:
+        await MemoryService.record_exposures(
+            context.db,
+            result.items,
+            run_id=context.run_id,
+            assistant_message_id=context.assistant_message_id,
+        )
     return ToolResult.json(
         {
             "purpose": arguments.purpose,
@@ -1351,7 +1369,9 @@ async def _memory_retrieve(
             "scope": {
                 "readableBy": result.readable_by.value,
                 "includesPrivate": result.readable_by == TrustLevel.PRIVATE,
-                "retrievalLevel": "all",
+                "retrievalLevel": (
+                    "all" if result.mode == MemoryRetrieveMode.BROWSE else "retrieve"
+                ),
             },
             "items": [
                 {
@@ -1361,6 +1381,11 @@ async def _memory_retrieve(
                     "category": item.category,
                     "retrievalLevel": item.retrieval_level,
                     "trustLevel": item.trust_level,
+                    "sourceSession": (
+                        {"id": str(item.source_session.id)}
+                        if item.source_session
+                        else None
+                    ),
                 }
                 for item in result.items
             ],

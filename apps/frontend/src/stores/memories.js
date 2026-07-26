@@ -39,11 +39,11 @@ export const useMemoryStore = defineStore('memories', {
         if (requestId === this.listRequestId) this.loading = false
       }
     },
-    async createMemory({ content, category, trustLevel, retrievalLevel }) {
-      return (await api.post('/memories', { content, category, trustLevel, retrievalLevel })).data
+    async createMemory({ content, category, trustLevel }) {
+      return (await api.post('/memories', { content, category, trustLevel })).data
     },
-    async updateMemory(id, { content, category, trustLevel, retrievalLevel }) {
-      const { data } = await api.patch(`/memories/${id}`, { content, category, trustLevel, retrievalLevel })
+    async updateMemory(id, { content, category, trustLevel, tierPolicy }) {
+      const { data } = await api.patch(`/memories/${id}`, { content, category, trustLevel, tierPolicy })
       const index = this.items.findIndex((item) => item.id === id)
       if (index >= 0) this.items[index] = data
       return data
@@ -75,7 +75,9 @@ export const useMemoryStore = defineStore('memories', {
     async saveSettings(settings) {
       this.settingsLoading = true
       try {
-        this.settings = (await api.patch('/memories/settings', settings)).data
+        const payload = { ...settings }
+        delete payload.maxContextItems
+        this.settings = (await api.patch('/memories/settings', payload)).data
         return this.settings
       } finally {
         this.settingsLoading = false

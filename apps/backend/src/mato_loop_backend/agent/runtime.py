@@ -64,6 +64,7 @@ from mato_loop_backend.models import (
     ApprovalRequest,
     ChatSession,
     MemoryRecord,
+    MemoryRetrievalLevel,
     Message,
     TitleGenerationStatus,
     WebSearchPolicy,
@@ -547,22 +548,22 @@ def _bounded_memory_references(
     instant: list[MemoryRecord],
     relevant: list[MemoryRecord],
     *,
-    max_items: int,
-    max_characters: int,
+    relevant_max_items: int,
+    relevant_max_characters: int,
 ) -> list[tuple[str, MemoryRecord]]:
-    selected: list[tuple[str, MemoryRecord]] = []
-    selected_ids = set()
+    selected = [("instant", item) for item in instant]
+    selected_ids = {item.id for item in instant}
     used_characters = 0
-    for source, items in (("instant", reversed(instant)), ("relevant", relevant)):
-        for item in items:
-            if item.id in selected_ids or len(selected) >= max_items:
-                continue
-            separator = 2 if selected else 0
-            if used_characters + separator + len(item.content) > max_characters:
-                continue
-            selected.append((source, item))
-            selected_ids.add(item.id)
-            used_characters += separator + len(item.content)
+    relevant_count = 0
+    for item in relevant:
+        if item.id in selected_ids or relevant_count >= relevant_max_items:
+            continue
+        if used_characters + len(item.content) > relevant_max_characters:
+            continue
+        selected.append(("relevant", item))
+        selected_ids.add(item.id)
+        used_characters += len(item.content)
+        relevant_count += 1
     return selected
 
 
@@ -592,6 +593,11 @@ def _bounded_memory_overview(
                 "category": item.category,
                 "retrievalLevel": item.retrieval_level,
                 "content": content,
+                "sourceSession": (
+                    {"id": str(item.source_session.id)}
+                    if item.source_session
+                    else None
+                ),
             }
         )
         used_characters += separator + len(content)
@@ -1115,6 +1121,8 @@ class AgentRuntime:
             if not ai_settings.enabled:
                 raise AgentRunError("provider.disabled")
             runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
+            if not memory_capacity_checked:
+                await MemoryService.lock_capacity(db)
             memory_settings = await SettingsStore.load(
                 db, MemorySettings, user_id=chat_session.user_id
             )
@@ -1136,6 +1144,14 @@ class AgentRuntime:
                 memory_overview_required = _memory_overview_requested(records)
             memory_text = None
             injected_memory_count = 0
+            exposed_memories: list[MemoryRecord] = []
+            if not memory_capacity_checked:
+                if memory_state.read_enabled:
+                    await MemoryService.enforce_capacity(
+                        db, memory_settings.max_context_characters
+                    )
+                await db.commit()
+                memory_capacity_checked = True
             if memory_state.read_enabled:
                 if memory_scope is None:
                     memory_scope = await MemoryService.scope(
@@ -1203,19 +1219,12 @@ class AgentRuntime:
                         memory_overview_prefetched = True
                     memory_text = memory_overview_text
                     injected_memory_count = memory_overview_count
+                    exposed_memories = overview_items[:memory_overview_count]
                 else:
-                    normal_max_items = min(
-                        AUTOMATIC_MEMORY_MAX_ITEMS, memory_settings.max_context_items
-                    )
-                    normal_max_characters = min(
-                        AUTOMATIC_MEMORY_MAX_CHARACTERS,
-                        memory_settings.max_context_characters,
-                    )
                     instant_memories = await MemoryService.instant_context(
                         db,
                         input_trust_level=model_trust_level,
-                        max_items=normal_max_items,
-                        max_characters=normal_max_characters,
+                        max_characters=memory_settings.max_context_characters,
                     )
                     if automatic_memories is None:
                         rag_query = _memory_rag_query(records)
@@ -1225,9 +1234,9 @@ class AgentRuntime:
                                     db,
                                     mode=MemoryRetrieveMode.SEARCH,
                                     query=rag_query,
-                                    retrieval_level=None,
+                                    retrieval_level=MemoryRetrievalLevel.RETRIEVE,
                                     readable_by=model_trust_level,
-                                    limit=normal_max_items,
+                                    limit=AUTOMATIC_MEMORY_MAX_ITEMS,
                                     max_semantic_distance=AUTOMATIC_MEMORY_MAX_DISTANCE,
                                 )
                             ).items
@@ -1236,10 +1245,11 @@ class AgentRuntime:
                     memory_references = _bounded_memory_references(
                         instant_memories,
                         automatic_memories,
-                        max_items=normal_max_items,
-                        max_characters=normal_max_characters,
+                        relevant_max_items=AUTOMATIC_MEMORY_MAX_ITEMS,
+                        relevant_max_characters=AUTOMATIC_MEMORY_MAX_CHARACTERS,
                     )
                     injected_memory_count = len(memory_references)
+                    exposed_memories = [item for _source, item in memory_references]
                     if memory_references:
                         memory_text = json.dumps(
                             [
@@ -1250,6 +1260,11 @@ class AgentRuntime:
                                     "category": item.category,
                                     "retrievalLevel": item.retrieval_level,
                                     "content": item.content,
+                                    "sourceSession": (
+                                        {"id": str(item.source_session.id)}
+                                        if item.source_session
+                                        else None
+                                    ),
                                 }
                                 for source, item in memory_references
                             ],
@@ -1653,6 +1668,18 @@ class AgentRuntime:
                 created_at=datetime.now(UTC),
             )
             db.add(assistant)
+            await db.flush()
+            if memory_state.write_enabled:
+                await MemoryService.record_exposures(
+                    db,
+                    exposed_memories,
+                    run_id=run.id,
+                    assistant_message_id=assistant.id,
+                )
+            if not normalized_calls and memory_state.write_enabled:
+                await MemoryService.link_pending_exposures(
+                    db, run_id=run.id, assistant_message_id=assistant.id
+                )
             await db.commit()
             if not normalized_calls:
                 cls._cancellable_runs.discard(run.id)
