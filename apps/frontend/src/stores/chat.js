@@ -3,6 +3,7 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
+import { safeAttachmentUrl } from 'src/utils/attachments'
 import { notifyError } from 'src/utils/notifications'
 
 const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
@@ -33,6 +34,16 @@ function attachmentPreviewUrl(file) {
   }
 }
 
+export async function downloadMessageAttachmentFiles(message) {
+  return Promise.all((message?.attachments || []).map(async (attachment) => {
+    const url = safeAttachmentUrl(attachment.url)
+    if (!url) throw new Error('Ungültige interne Attachment-Adresse')
+    const { data } = await api.get(url, { responseType: 'blob', suppressErrorToast: true })
+    const type = attachment.mimeType || data?.type || 'application/octet-stream'
+    return new File([data], attachment.filename || 'datei', { type })
+  }))
+}
+
 export function buildAttachmentFormData(payload, attachments) {
   const formData = new FormData()
   formData.append('payload', JSON.stringify(payload))
@@ -53,6 +64,20 @@ function defaultSessionOptions() {
     webSearchPolicy: 'available',
     workingDirectory: null,
     workspaceAccess: 'read-only'
+  }
+}
+
+function optionsFromSession(session) {
+  return {
+    modelId: session.modelId,
+    memoryMode: session.memoryMode,
+    effectiveMemoryMode: session.effectiveMemoryMode,
+    memoryToolsAvailable: session.memoryToolsAvailable,
+    memoryUnavailableReason: session.memoryUnavailableReason,
+    trustLevel: session.trustLevel,
+    webSearchPolicy: session.webSearchPolicy,
+    workingDirectory: session.workingDirectory,
+    workspaceAccess: session.workspaceAccess
   }
 }
 
@@ -80,6 +105,45 @@ function sortSessions(sessions) {
     const rightLastMessageAt = Date.parse(right.lastMessageAt || right.createdAt || '') || 0
     return rightLastMessageAt - leftLastMessageAt
   })
+}
+
+function lastVisibleMessageAt(messages) {
+  return [...messages]
+    .reverse()
+    .find((message) => ['user', 'assistant'].includes(message.role))
+    ?.createdAt || null
+}
+
+function sessionBeforeUserMessage(session, messageId) {
+  const index = session.messages?.findIndex((message) => message.id === messageId) ?? -1
+  if (index < 0) return session
+  const messages = session.messages.slice(0, index)
+  return { ...session, messages, activeRun: null, lastMessageAt: lastVisibleMessageAt(messages) }
+}
+
+function sessionBeforeFailedResponse(session, messageId, activeRun) {
+  const errorIndex = session.messages?.findIndex((message) => message.id === messageId) ?? -1
+  if (errorIndex < 0) return { ...session, activeRun }
+  let userIndex = errorIndex - 1
+  while (userIndex >= 0 && session.messages[userIndex].role !== 'user') userIndex -= 1
+  const messages = userIndex >= 0 ? session.messages.slice(0, userIndex + 1) : session.messages
+  return { ...session, messages, activeRun, lastMessageAt: lastVisibleMessageAt(messages) }
+}
+
+async function sessionStateAfterMutation(sessionId, messageId) {
+  try {
+    const { data } = await api.get(`/sessions/${sessionId}`, { suppressErrorToast: true })
+    return {
+      deleted: false,
+      messageRemoved: !data.messages?.some((message) => message.id === messageId),
+      session: data
+    }
+  } catch (error) {
+    if (error?.response?.status === 404) {
+      return { deleted: true, messageRemoved: true, session: null }
+    }
+    throw error
+  }
 }
 
 function loadDrafts() {
@@ -139,6 +203,7 @@ export const useChatStore = defineStore('chat', {
     reconnectAttempts: 0,
     activity: emptyActivity(),
     sessionLoadVersion: 0,
+    historyActionPending: false,
     sessionRequestController: null,
     loadError: null,
     sessionDefaults: defaultSessionOptions(),
@@ -305,6 +370,51 @@ export const useChatStore = defineStore('chat', {
       this.attachmentDrafts = { newSession: [], sessionMessages: {} }
       this.audioDictations = { newSession: null, sessionMessages: {} }
     },
+    attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
+      if (files.length > MAX_ATTACHMENT_DRAFTS) {
+        return 'Du kannst höchstens vier Dateien pro Nachricht anhängen.'
+      }
+      for (const file of files) {
+        if (!Number.isFinite(file?.size) || file.size <= 0) {
+          return 'Die wiederhergestellte Datei ist leer.'
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          return 'Eine Datei darf höchstens 64 MiB groß sein.'
+        }
+      }
+      const replaced = [
+        ...(sessionId
+          ? this.attachmentDrafts.sessionMessages[sessionId] || []
+          : this.attachmentDrafts.newSession),
+        ...(sourceSessionId && sourceSessionId !== sessionId
+          ? this.attachmentDrafts.sessionMessages[sourceSessionId] || []
+          : [])
+      ]
+      const currentBytes = [
+        ...this.attachmentDrafts.newSession,
+        ...Object.values(this.attachmentDrafts.sessionMessages).flat()
+      ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
+      const replacedBytes = replaced.reduce(
+        (total, attachment) => total + (Number(attachment.file?.size) || 0),
+        0
+      )
+      const incomingBytes = files.reduce((total, file) => total + file.size, 0)
+      return currentBytes - replacedBytes + incomingBytes > MAX_ATTACHMENT_DRAFT_BYTES
+        ? 'Dateianhänge dürfen über alle Sessions zusammen höchstens 256 MiB belegen.'
+        : null
+    },
+    replaceAttachmentFiles(files, sessionId) {
+      this.clearAttachmentDraft(sessionId)
+      const target = files.map((file, index) => ({
+        id: globalThis.crypto?.randomUUID?.() || `attachment-${Date.now()}-${index}`,
+        file: markRaw(file),
+        kind: attachmentKind(file),
+        mimeType: normalizedMimeType(file),
+        objectUrl: attachmentPreviewUrl(file)
+      }))
+      if (sessionId) this.attachmentDrafts.sessionMessages[sessionId] = target
+      else this.attachmentDrafts.newSession = target
+    },
     getAudioDictation(sessionId = null) {
       return sessionId
         ? this.audioDictations.sessionMessages[sessionId] || null
@@ -422,6 +532,11 @@ export const useChatStore = defineStore('chat', {
         if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
           this.current = session
           this.loadError = null
+          if (session.activeRun && this.runId !== session.activeRun.id) {
+            this.watchRun(id, session.activeRun.id, session.activeRun)
+          } else if (!session.activeRun && !this.running) {
+            this.clearActivity()
+          }
         }
       } catch (error) {
         if (!controller.signal.aborted) throw error
@@ -501,8 +616,197 @@ export const useChatStore = defineStore('chat', {
       this.persistDrafts()
       if (this.current?.id === id) this.current = null
     },
+    clearRunTracking() {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+      this.reconnectAttempts = 0
+      this.eventSource?.close()
+      this.eventSource = null
+      this.runSessionId = null
+      this.runId = null
+      this.running = false
+      this.stopping = false
+      this.cancelRequested = false
+      this.streamContent = ''
+      this.streamReasoning = null
+      this.streamModelName = null
+      this.clearActivity()
+    },
+    updateSessionSummary(session) {
+      const summary = { ...session }
+      delete summary.messages
+      delete summary.activeRun
+      const existing = this.sessions.some((item) => item.id === session.id)
+      this.sessions = sortSessions(existing
+        ? this.sessions.map((item) => item.id === session.id ? { ...item, ...summary } : item)
+        : [...this.sessions, summary])
+    },
+    applySessionResult(session) {
+      this.current = session
+      this.updateSessionSummary(session)
+    },
+    async undoUserMessage(message) {
+      const session = this.current
+      if (!session || message?.role !== 'user' || this.historyActionPending) return null
+      this.historyActionPending = true
+      try {
+        let files
+        try {
+          files = await downloadMessageAttachmentFiles(message)
+        } catch (error) {
+          notifyError(error, 'Die Anhänge konnten nicht wiederhergestellt werden.')
+          throw error
+        }
+        const deletesSession = session.messages?.[0]?.id === message.id
+        const replacementError = this.attachmentReplacementError(
+          files,
+          deletesSession ? null : session.id,
+          session.id
+        )
+        if (replacementError) {
+          notifyError({}, replacementError)
+          throw new Error(replacementError)
+        }
+        const options = optionsFromSession(session)
+        let data
+        let recoveredSession = null
+        let mutationKnownUnchanged = false
+        try {
+          data = (await api.post(`/sessions/${session.id}/messages/${message.id}/undo`, null, {
+            suppressErrorToast: true
+          })).data
+        } catch (error) {
+          const ambiguous = !error?.response || error.response.status >= 500
+          if (ambiguous) {
+            try {
+              const recovered = await sessionStateAfterMutation(session.id, message.id)
+              if (recovered.messageRemoved) {
+                recoveredSession = recovered.session
+                data = {
+                  sessionDeleted: recovered.deleted,
+                  draft: { content: message.content }
+                }
+              } else {
+                mutationKnownUnchanged = true
+              }
+            } catch {
+              // Keep the downloaded files recoverable when the server state cannot be determined.
+            }
+          }
+          if (!data && ambiguous && !mutationKnownUnchanged) {
+            if (deletesSession) {
+              this.drafts.newSession = { message: message.content, options }
+              this.replaceAttachmentFiles(files, null)
+            } else {
+              this.drafts.sessionMessages[session.id] = message.content
+              this.replaceAttachmentFiles(files, session.id)
+            }
+            this.persistDrafts()
+          }
+          if (!data) {
+            notifyError(error)
+            throw error
+          }
+        }
+        const stillSelected = this.selectedSessionId === session.id && this.current?.id === session.id
+        const updatedSession = recoveredSession || sessionBeforeUserMessage(
+          stillSelected ? this.current : session,
+          message.id
+        )
+        if (stillSelected) {
+          this.sessionRequestController?.abort()
+          this.sessionLoadVersion += 1
+          this.clearRunTracking()
+        }
+        delete this.drafts.sessionMessages[session.id]
+        this.clearAttachmentDraft(session.id)
+        this.setAudioDictation(null, session.id)
+        if (data.sessionDeleted) {
+          this.sessions = this.sessions.filter((item) => item.id !== session.id)
+          if (stillSelected) {
+            this.current = null
+            this.selectedSessionId = null
+          }
+          this.drafts.newSession = { message: data.draft.content, options }
+          this.replaceAttachmentFiles(files, null)
+        } else {
+          if (stillSelected) this.applySessionResult(updatedSession)
+          else this.updateSessionSummary(updatedSession)
+          this.drafts.sessionMessages[session.id] = data.draft.content
+          this.replaceAttachmentFiles(files, session.id)
+          if (stillSelected && !recoveredSession) {
+            void this.refreshSession(session.id).catch(() => {})
+          }
+        }
+        this.persistDrafts()
+        void useApprovalStore().fetchPending()
+        return data
+      } finally {
+        this.historyActionPending = false
+      }
+    },
+    async retryFailedMessage(message) {
+      const session = this.current
+      if (!session || message?.kind !== 'runtime_error' || this.historyActionPending) return null
+      this.historyActionPending = true
+      try {
+        let data
+        let recoveredSession = null
+        try {
+          data = (await api.post(`/sessions/${session.id}/messages/${message.id}/retry`, null, {
+            suppressErrorToast: true
+          })).data
+        } catch (error) {
+          const ambiguous = !error?.response || error.response.status >= 500
+          if (ambiguous) {
+            try {
+              const recovered = await sessionStateAfterMutation(session.id, message.id)
+              if (recovered.messageRemoved && recovered.session) {
+                recoveredSession = recovered.session
+                data = {
+                  runId: recovered.session.activeRun?.id || null,
+                  modelName: recovered.session.activeRun?.modelName || null,
+                  createdAt: recovered.session.activeRun?.createdAt || null
+                }
+              }
+            } catch {
+              // The original request error remains canonical when recovery is unavailable.
+            }
+          }
+          if (!data) {
+            notifyError(error)
+            throw error
+          }
+        }
+        const activeRun = data.runId ? {
+          id: data.runId,
+          status: 'queued',
+          modelName: data.modelName,
+          createdAt: data.createdAt
+        } : null
+        const stillSelected = this.selectedSessionId === session.id && this.current?.id === session.id
+        const updatedSession = recoveredSession || sessionBeforeFailedResponse(
+          stillSelected ? this.current : session,
+          message.id,
+          activeRun
+        )
+        if (stillSelected) {
+          this.sessionRequestController?.abort()
+          this.sessionLoadVersion += 1
+          this.clearRunTracking()
+          this.applySessionResult(updatedSession)
+          if (activeRun) this.watchRun(session.id, data.runId, activeRun)
+        } else {
+          this.updateSessionSummary(updatedSession)
+        }
+        void useApprovalStore().fetchPending()
+        return data
+      } finally {
+        this.historyActionPending = false
+      }
+    },
     async send(content) {
-      if (this.running) return null
+      if (this.running || this.historyActionPending) return null
       const attachments = [...this.activeAttachmentDraft]
       return this.current
         ? this.sendToCurrent(content, attachments)

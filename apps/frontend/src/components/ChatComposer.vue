@@ -330,6 +330,7 @@ defineOptions({ name: 'ChatComposer' })
 const props = defineProps({
   session: { type: Object, default: null },
   draft: { type: String, default: '' },
+  disabled: Boolean,
   running: Boolean,
   stopping: Boolean,
   pendingCount: { type: Number, default: 0 },
@@ -376,7 +377,7 @@ const agentModes = [
   }
 ]
 const effectiveModelId = computed(() => props.session?.modelId || providers.defaultModelId)
-const modelSelectionOptions = computed(() => providers.selectionOptions(effectiveModelId.value))
+const modelSelectionOptions = computed(() => providers.selectionOptions(effectiveModelId.value, true))
 const selectedModelConfig = computed(() => providers.models.find((model) => (
   model.id === effectiveModelId.value
 )))
@@ -411,9 +412,6 @@ const memoryMessage = computed(() => {
   if (props.session?.memoryUnavailableReason) {
     return apiErrorMessage({ error: { code: props.session.memoryUnavailableReason } })
   }
-  if (!props.session?.memoryToolsAvailable && effectiveMemoryMode.value !== 'disabled') {
-    return 'Automatischer Memory-Kontext ist aktiv; das ausgewählte Modell unterstützt keine Memory-Tools.'
-  }
   return {
     full: 'Memory lesen und schreiben; Dreaming ist für diese Session erlaubt.',
     read_only: 'Memory nur lesen; Schreiben und Dreaming sind deaktiviert.',
@@ -421,7 +419,9 @@ const memoryMessage = computed(() => {
   }[effectiveMemoryMode.value]
 })
 const memoryModeIcon = computed(() => ({ full: 'memory', read_only: 'visibility', disabled: 'memory_alt' })[props.session?.memoryMode] || 'memory')
-const interactionDisabled = computed(() => !props.session || props.running || props.pendingCount > 0)
+const interactionDisabled = computed(() => (
+  !props.session || props.disabled || props.running || props.pendingCount > 0
+))
 const requiredSearchUnavailable = computed(() => (
   props.session?.webSearchPolicy === 'required'
   && (!searchAvailable.value || !modelSupportsTools.value)
@@ -431,6 +431,7 @@ const sendDisabled = computed(() => (
   || starting.value
   || recording.value
   || transcribing.value
+  || !modelSupportsTools.value
   || !props.draft.trim()
 ))
 const agentModeIcon = computed(() => props.session?.workspaceAccess === 'read-write' ? 'edit' : 'visibility')
@@ -481,6 +482,9 @@ const webSearchMessage = computed(() => (
 ))
 const sessionSettingsWarning = computed(() => {
   const warnings = []
+  if (!modelSupportsTools.value) {
+    warnings.push('Wähle ein Agentmodell mit Tool-Unterstützung.')
+  }
   if (
     props.session?.memoryMode !== 'disabled'
     && props.session?.memoryUnavailableReason !== 'session.modelUnavailable'
@@ -653,6 +657,7 @@ onBeforeUnmount(() => {
 
 defineExpose({
   focus: () => input.value?.focus(),
-  cancelAudioActivity
+  cancelAudioActivity,
+  hasAudioActivity: () => starting.value || recording.value || transcribing.value
 })
 </script>

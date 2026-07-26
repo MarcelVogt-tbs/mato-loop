@@ -487,7 +487,9 @@ async def test_manual_model_crud_toggles_and_default(monkeypatch) -> None:
     assert updated.context_window_tokens == 64_000
     assert updated.supports_parallel_tool_calls is False
 
-    await set_default_model(DefaultModelRequest(model_id=updated.id), db)
+    with pytest.raises(ApiError) as exc_info:
+        await set_default_model(DefaultModelRequest(model_id=updated.id), db)
+    assert exc_info.value.code == "session.modelToolsUnavailable"
     await set_provider_enabled(provider.id, EnabledRequest(enabled=False), db)
     assert settings.default_model_id is None
 

@@ -704,6 +704,12 @@ class AgentRuntime:
     _user_cancelled_runs: set[UUID] = set()
 
     @classmethod
+    def _schedule_run(cls, run: AgentRun) -> None:
+        task = asyncio.create_task(cls._run(run.id))
+        cls._tasks[run.id] = task
+        task.add_done_callback(lambda _task: cls._tasks.pop(run.id, None))
+
+    @classmethod
     async def start(
         cls,
         db: AsyncSession,
@@ -715,7 +721,13 @@ class AgentRuntime:
         ai_settings = await SettingsStore.load(db, AiSettings)
         model_id = chat_session.model_config_id or ai_settings.default_model_id
         model = _model_for_id(ai_settings, model_id)
+        if model is None:
+            raise AgentRunError("session.modelUnavailable")
         provider = _provider_for_model(ai_settings, model) if model is not None else None
+        if provider is None:
+            raise AgentRunError("session.modelUnavailable")
+        if model is not None and not model.supports_tools:
+            raise AgentRunError("session.modelToolsUnavailable")
         trust_level = (
             effective_model_trust(provider, model)
             if model is not None and provider is not None
@@ -801,15 +813,60 @@ class AgentRuntime:
         except BaseException:
             await rollback_and_discard()
             raise
-        task = asyncio.create_task(cls._run(run.id))
-        cls._tasks[run.id] = task
-        task.add_done_callback(lambda _task: cls._tasks.pop(run.id, None))
+        cls._schedule_run(run)
         if generate_title:
             title_task = asyncio.create_task(
                 cls._generate_title(run.id, chat_session.id, content, chat_session.title)
             )
             cls._title_tasks.add(title_task)
             title_task.add_done_callback(cls._title_tasks.discard)
+        return run
+
+    @classmethod
+    async def retry(
+        cls,
+        db: AsyncSession,
+        chat_session: ChatSession,
+        failed_run: AgentRun,
+    ) -> AgentRun:
+        if failed_run.session_id != chat_session.id or failed_run.status != "failed":
+            raise AgentRunError("session.retryUnavailable")
+        ai_settings = await SettingsStore.load(db, AiSettings)
+        model = _model_for_id(ai_settings, failed_run.model_config_id)
+        provider = _provider_for_model(ai_settings, model) if model is not None else None
+        if model is None or provider is None:
+            raise AgentRunError("session.modelUnavailable")
+        if not model.supports_tools:
+            raise AgentRunError("session.modelToolsUnavailable")
+        run = AgentRun(
+            session_id=chat_session.id,
+            status="queued",
+            model_config_id=failed_run.model_config_id,
+            model_name=failed_run.model_name or model.name or model.model_id,
+            trust_level=failed_run.trust_level,
+            pseudonymization_enabled=failed_run.pseudonymization_enabled,
+        )
+        db.add(run)
+        commit_task: asyncio.Task[None] | None = None
+        try:
+            await db.flush()
+            commit_task = asyncio.create_task(db.commit())
+            await asyncio.shield(commit_task)
+        except asyncio.CancelledError:
+            if commit_task is None:
+                await db.rollback()
+                raise
+            try:
+                await commit_task
+            except BaseException:
+                await db.rollback()
+                raise
+            cls._schedule_run(run)
+            return run
+        except BaseException:
+            await db.rollback()
+            raise
+        cls._schedule_run(run)
         return run
 
     @classmethod
@@ -986,6 +1043,8 @@ class AgentRuntime:
         model = _model_for_id(ai_settings, model_id)
         if model is None:
             raise AgentRunError("session.modelUnavailable")
+        if not model.supports_tools:
+            raise AgentRunError("session.modelToolsUnavailable")
         provider = _provider_for_model(ai_settings, model)
         if provider is None:
             raise AgentRunError("provider.notFound")

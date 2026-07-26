@@ -130,6 +130,37 @@
               >
                 {{ formatRelativeDateTime(message.createdAt, messageTimestampNow) }}
               </time>
+              <q-btn
+                v-if="message.role === 'user' && !String(message.id).startsWith('local-')"
+                flat
+                round
+                dense
+                size="sm"
+                icon="undo"
+                class="chat-message__meta-action chat-message__meta-action--undo"
+                :loading="messageActionId === message.id"
+                :disable="messageActionId !== null && messageActionId !== message.id"
+                aria-label="Nachricht rückgängig machen"
+                @click.stop="undoMessage(message)"
+              >
+                <q-tooltip>Nachricht rückgängig machen</q-tooltip>
+              </q-btn>
+              <q-btn
+                v-if="canRetryMessage(message)"
+                flat
+                round
+                dense
+                size="sm"
+                icon="refresh"
+                color="negative"
+                class="chat-message__meta-action chat-message__meta-action--retry"
+                :loading="messageActionId === message.id"
+                :disable="messageActionId !== null && messageActionId !== message.id"
+                aria-label="Fehlgeschlagene Antwort erneut versuchen"
+                @click.stop="retryMessage(message)"
+              >
+                <q-tooltip>Erneut versuchen</q-tooltip>
+              </q-btn>
             </div>
           </div>
           <div
@@ -205,6 +236,7 @@
         ref="composer"
         :session="chat.activeContext"
         :draft="chat.activeDraft"
+        :disabled="chat.historyActionPending"
         :running="chat.running"
         :stopping="chat.stopping"
         :pending-count="sessionApprovals.length"
@@ -239,6 +271,7 @@ import { useAuthStore } from 'stores/auth'
 import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
 import { useToolSettingsStore } from 'stores/tool-settings'
+import { useConfirm } from 'src/composables/confirm'
 import { chatBottomDistance, scrollChatToBottom } from 'src/utils/chat-scroll'
 import { buildChatTranscript } from 'src/utils/chat-transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
@@ -249,6 +282,7 @@ defineOptions({ name: 'ChatPage' })
 const route = useRoute()
 const router = useRouter()
 const $q = useQuasar()
+const { confirm } = useConfirm()
 const chat = useChatStore()
 const identity = useAgentIdentityStore()
 const auth = useAuthStore()
@@ -262,6 +296,7 @@ const composer = ref(null)
 const trustedImageOriginsBySession = ref(new Map())
 const followingBottom = ref(true)
 const messageTimestampNow = ref(Date.now())
+const messageActionId = ref(null)
 const bottomThreshold = 64
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
@@ -294,6 +329,70 @@ function trustImageOrigin(origin) {
   trustedImageOriginsBySession.value = next
 }
 
+function canRetryMessage(message) {
+  const messages = transcript.value.messages
+  return message.kind === 'runtime_error'
+    && messages[messages.length - 1]?.id === message.id
+    && !chat.running
+}
+
+async function undoMessage(message) {
+  if (composer.value?.hasAudioActivity?.()) {
+    $q.notify({
+      type: 'info',
+      message: 'Beende oder brich zuerst die laufende Aufnahme beziehungsweise Transkription ab.'
+    })
+    return
+  }
+  const sessionId = chat.current?.id
+  const runningHint = chat.running ? ' Die laufende Anfrage wird dabei abgebrochen.' : ''
+  const firstMessage = chat.current?.messages?.[0]?.id === message.id
+  const hasNewSessionDraft = Boolean(
+    chat.drafts.newSession.message.trim() || chat.attachmentDrafts.newSession.length
+  )
+  const newSessionHint = firstMessage && hasNewSessionDraft
+    ? ' Der vorhandene Entwurf für eine neue Session wird ebenfalls ersetzt.'
+    : ''
+  const accepted = await confirm(
+    `Diese Nachricht und alle späteren Chatnachrichten werden entfernt.${runningHint} `
+      + `Der aktuelle Entwurf, seine Anhänge und ein vorhandenes Diktat werden ersetzt.${newSessionHint} `
+      + 'Bereits ausgeführte Tool-, Datei-, Berechtigungs- und Memory-Aktionen bleiben bestehen.',
+    'Nachricht rückgängig machen?',
+    { okLabel: 'Rückgängig machen' }
+  )
+  if (!accepted) return
+  messageActionId.value = message.id
+  try {
+    const result = await chat.undoUserMessage(message)
+    if (result?.sessionDeleted && routeSessionId.value === sessionId) {
+      await router.replace({ name: 'chat' })
+    }
+    await nextTick()
+    composer.value?.focus()
+  } finally {
+    messageActionId.value = null
+  }
+}
+
+async function retryMessage(message) {
+  const accepted = await confirm(
+    'Die fehlerhafte Antwort wird entfernt und mit dem ursprünglichen Modell erneut erzeugt. '
+      + 'Bereits ausgeführte Tool-, Datei-, Berechtigungs- und Memory-Aktionen können erneut ausgeführt werden.',
+    'Antwort erneut versuchen?',
+    { okLabel: 'Erneut versuchen', okColor: 'primary' }
+  )
+  if (!accepted) return
+  messageActionId.value = message.id
+  followingBottom.value = true
+  try {
+    await chat.retryFailedMessage(message)
+    await nextTick()
+    scheduleFollowScroll()
+  } finally {
+    messageActionId.value = null
+  }
+}
+
 async function loadRouteSession() {
   const sessionId = routeSessionId.value
   const request = chat.loadSession(sessionId).catch(() => null)
@@ -319,7 +418,7 @@ async function loadBackgroundData() {
     && defaultsResult.status === 'fulfilled'
   ) {
     chat.reconcileNewSession(
-      providers.selectionOptions(null)
+      providers.selectionOptions(null, true)
         .filter((option) => !option.disable)
         .map((option) => option.value),
       integrations.search.effectiveEnabled

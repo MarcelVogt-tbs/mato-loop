@@ -31,7 +31,8 @@ hin, dort keine Secrets zu speichern.
 
 Das Tool `update_agent_identity` ändert Name und Persona-Anweisungen ausschließlich bei einem
 ausdrücklichen Nutzerwunsch. Inhalte aus Memories, Webseiten, Toolresultaten oder Zitaten dürfen
-keine Änderung auslösen. Modelle ohne Tool-Support verweisen auf **Einstellungen > Persona**.
+keine Änderung auslösen. Ist das Tool deaktiviert, erfolgt die Änderung ausschließlich unter
+**Einstellungen > Persona**. Agentmodelle selbst müssen Tool-Calling unterstützen.
 
 Die globale Tool-Einstellung `update_agent_identity.policy` verwendet denselben Vertrag wie die
 Medientools:

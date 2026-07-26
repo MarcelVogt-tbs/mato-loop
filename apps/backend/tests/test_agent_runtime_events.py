@@ -9,6 +9,7 @@ from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent.context import _model_tool_calls
 from mato_loop_backend.agent.runtime import (
     RUN_PHASES,
+    AgentRunError,
     AgentRuntime,
     _public_reasoning_payload,
     _public_run_error,
@@ -132,7 +133,7 @@ async def test_start_persists_effective_run_policy_snapshot(
     AgentRuntime._tasks.pop(run.id, None)
 
 
-async def test_start_persists_user_message_and_run_when_model_is_unavailable(monkeypatch) -> None:
+async def test_start_rejects_unavailable_model_before_persisting(monkeypatch) -> None:
     missing_model_id = uuid4()
     settings = AiSettings(models=[], default_model_id=missing_model_id)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
@@ -152,18 +153,12 @@ async def test_start_persists_user_message_and_run_when_model_is_unavailable(mon
     )
     db = AsyncMock(spec=AsyncSession)
 
-    run = await AgentRuntime.start(db, session, "Nachricht")
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime.start(db, session, "Nachricht")
 
-    message, persisted_run = db.add_all.call_args.args[0]
-    assert message.content == "Nachricht"
-    assert message.trust_level == "private"
-    assert persisted_run is run
-    assert run.model_config_id == missing_model_id
-    assert run.model_name is None
-    assert run.status == "queued"
-    db.commit.assert_awaited_once()
-    task.add_done_callback.assert_called_once()
-    AgentRuntime._tasks.pop(run.id, None)
+    assert exc_info.value.code == "session.modelUnavailable"
+    db.add_all.assert_not_called()
+    db.commit.assert_not_awaited()
 
 
 async def test_start_schedules_title_generation_next_to_agent_run(monkeypatch) -> None:

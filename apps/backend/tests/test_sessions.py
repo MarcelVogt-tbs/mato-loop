@@ -70,6 +70,18 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [session, None, message]
     monkeypatch.setattr(AgentRuntime, "start", AsyncMock(return_value=run))
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="agent")
+    session.model_config_id = model.id
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(
+            return_value=AiSettings(
+                providers=[provider], models=[model], default_model_id=model.id
+            )
+        ),
+    )
 
     async def override_db():
         yield db
@@ -575,7 +587,7 @@ async def test_attachment_download_rejects_incomplete_hierarchy() -> None:
     assert exc_info.value.code == "attachment.notFound"
 
 
-async def test_session_accepts_message_before_model_availability_failure(monkeypatch) -> None:
+async def test_session_rejects_unavailable_model_before_creation(monkeypatch) -> None:
     user = _user()
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(
@@ -610,12 +622,11 @@ async def test_session_accepts_message_before_model_availability_failure(monkeyp
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = persisted_message
 
-    result = await create_session(SessionCreateRequest(content="Test"), user, db)
+    with pytest.raises(ApiError) as exc_info:
+        await create_session(SessionCreateRequest(content="Test"), user, db)
 
-    session = db.add.call_args.args[0]
-    start.assert_awaited_once_with(db, session, "Test")
-    assert result["runId"] == str(run.id)
-    assert result["message"]["content"] == "Test"
+    assert exc_info.value.code == "session.modelUnavailable"
+    start.assert_not_awaited()
 
 
 async def test_required_search_unavailability_does_not_reject_user_message(monkeypatch) -> None:
@@ -634,7 +645,14 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
     db.scalar.side_effect = [session, None, user_message]
     start = AsyncMock(return_value=run)
     monkeypatch.setattr(AgentRuntime, "start", start)
-    load = AsyncMock()
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="agent")
+    session.model_config_id = model.id
+    load = AsyncMock(
+        return_value=AiSettings(
+            providers=[provider], models=[model], default_model_id=model.id
+        )
+    )
     monkeypatch.setattr(SettingsStore, "load", load)
 
     result = await send_message(
@@ -642,7 +660,7 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
     )
 
     start.assert_awaited_once_with(db, session, "Aktuelle Frage")
-    load.assert_not_awaited()
+    load.assert_awaited_once()
     assert result["runId"] == str(run.id)
 
 

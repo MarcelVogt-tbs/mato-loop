@@ -747,6 +747,37 @@ body {
   flex: none;
 }
 
+.chat-message__meta-action {
+  flex: none;
+  min-width: 24px;
+  min-height: 24px;
+  margin: -5px -4px -5px 2px;
+  color: var(--app-muted);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .chat-message__meta-action--undo {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+  }
+
+  .chat-message:hover .chat-message__meta-action--undo,
+  .chat-message:focus-within .chat-message__meta-action--undo {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .chat-message__meta-action {
+    min-width: 40px;
+    min-height: 40px;
+    margin-top: -12px;
+    margin-bottom: -12px;
+  }
+}
+
 .chat-message--user .chat-message__meta {
   justify-content: flex-end;
 }

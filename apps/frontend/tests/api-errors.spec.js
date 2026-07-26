@@ -37,6 +37,12 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'session.storageUnavailable' } })).toBe(
       'Der interne Dateispeicher dieser Session ist derzeit nicht verfügbar.'
     )
+    expect(apiErrorMessage({ error: { code: 'session.messageNotFound' } })).toBe(
+      'Die Chatnachricht wurde nicht gefunden.'
+    )
+    expect(apiErrorMessage({ error: { code: 'session.retryUnavailable' } })).toBe(
+      'Diese fehlgeschlagene Antwort kann nicht mehr erneut versucht werden.'
+    )
     expect(apiErrorMessage({ error: { code: 'webfetch.addressBlocked' } })).toBe(
       'Diese Netzwerkadresse ist aus Sicherheitsgründen gesperrt.'
     )

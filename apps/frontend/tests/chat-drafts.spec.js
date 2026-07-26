@@ -11,6 +11,7 @@ const { api } = vi.hoisted(() => ({
 }))
 
 vi.mock('src/boot/axios', () => ({ api }))
+vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
 import { MAX_ATTACHMENT_DRAFT_BYTES, useChatStore } from '../src/stores/chat'
 
@@ -942,5 +943,184 @@ describe('chat drafts', () => {
     expect(api.post).toHaveBeenNthCalledWith(2, '/sessions/session-1/runs/run-1/cancel')
     expect(chat.running).toBe(true)
     expect(chat.stopping).toBe(true)
+  })
+
+  it('undoes a user message and restores its text as the session draft', async () => {
+    const canonicalSession = {
+      id: 'session-1',
+      title: 'Test',
+      messages: [{ id: 'user-1', role: 'user', content: 'Bleibt' }],
+      activeRun: null
+    }
+    api.get.mockImplementation((url) => Promise.resolve({
+      data: url === '/sessions/session-1' ? canonicalSession : []
+    }))
+    api.post.mockResolvedValue({
+      data: {
+        sessionDeleted: false,
+        session: canonicalSession,
+        draft: { content: 'Noch einmal bearbeiten' }
+      }
+    })
+    const chat = useChatStore()
+    chat.sessions = [{ id: 'session-1', title: 'Test' }]
+    chat.current = {
+      id: 'session-1',
+      title: 'Test',
+      messages: [
+        { id: 'user-1', role: 'user', content: 'Bleibt' },
+        { id: 'user-2', role: 'user', content: 'Noch einmal bearbeiten', attachments: [] }
+      ]
+    }
+    chat.selectedSessionId = 'session-1'
+    chat.setDraft('Wird ersetzt')
+
+    await chat.undoUserMessage(chat.current.messages[1])
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/sessions/session-1/messages/user-2/undo',
+      null,
+      { suppressErrorToast: true }
+    )
+    expect(chat.current.messages).toEqual([{ id: 'user-1', role: 'user', content: 'Bleibt' }])
+    expect(chat.activeDraft).toBe('Noch einmal bearbeiten')
+  })
+
+  it('restores persisted attachments before undoing the message', async () => {
+    const sessionId = '11111111-1111-4111-8111-111111111111'
+    const messageId = '22222222-2222-4222-8222-222222222222'
+    const attachmentId = '33333333-3333-4333-8333-333333333333'
+    const url = `/api/sessions/${sessionId}/messages/${messageId}/attachments/${attachmentId}`
+    global.URL = { createObjectURL: vi.fn(() => 'blob:restored'), revokeObjectURL: vi.fn() }
+    api.get.mockImplementation((requestUrl) => Promise.resolve({
+      data: requestUrl === url
+        ? new Blob(['inhalt'], { type: 'text/plain' })
+        : requestUrl === `/sessions/${sessionId}`
+          ? { id: sessionId, messages: [], activeRun: null }
+          : []
+    }))
+    api.post.mockResolvedValue({
+      data: {
+        sessionDeleted: false,
+        session: { id: sessionId, messages: [], activeRun: null },
+        draft: { content: 'Mit Datei' }
+      }
+    })
+    const chat = useChatStore()
+    const message = {
+      id: messageId,
+      role: 'user',
+      content: 'Mit Datei',
+      attachments: [{ id: attachmentId, url, filename: 'notiz.txt', mimeType: 'text/plain' }]
+    }
+    chat.current = { id: sessionId, messages: [message] }
+    chat.selectedSessionId = sessionId
+
+    await chat.undoUserMessage(message)
+
+    expect(chat.activeAttachmentDraft).toHaveLength(1)
+    expect(chat.activeAttachmentDraft[0].file.name).toBe('notiz.txt')
+    expect(chat.activeAttachmentDraft[0].file.type).toBe('text/plain')
+  })
+
+  it('keeps history and draft when undo fails', async () => {
+    const error = new Error('request failed')
+    error.response = { status: 409 }
+    api.post.mockRejectedValue(error)
+    const chat = useChatStore()
+    const message = { id: 'user-1', role: 'user', content: 'Bleibt', attachments: [] }
+    chat.current = { id: 'session-1', messages: [message] }
+    chat.selectedSessionId = 'session-1'
+    chat.setDraft('Vorhandener Entwurf')
+
+    await expect(chat.undoUserMessage(message)).rejects.toThrow('request failed')
+
+    expect(chat.current.messages).toEqual([message])
+    expect(chat.activeDraft).toBe('Vorhandener Entwurf')
+  })
+
+  it('keeps an undone message as a draft after navigating away', async () => {
+    let resolveUndo
+    api.post.mockReturnValue(new Promise((resolve) => { resolveUndo = resolve }))
+    api.get.mockResolvedValue({ data: [] })
+    const chat = useChatStore()
+    const message = { id: 'user-2', role: 'user', content: 'Später bearbeiten', attachments: [] }
+    chat.sessions = [{ id: 'session-1' }, { id: 'session-2' }]
+    chat.current = {
+      id: 'session-1',
+      messages: [{ id: 'user-1', role: 'user', content: 'Bleibt' }, message]
+    }
+    chat.selectedSessionId = 'session-1'
+
+    const undoing = chat.undoUserMessage(message)
+    chat.current = { id: 'session-2', messages: [] }
+    chat.selectedSessionId = 'session-2'
+    resolveUndo({ data: { sessionDeleted: false, draft: { content: 'Später bearbeiten' } } })
+    await undoing
+
+    expect(chat.current.id).toBe('session-2')
+    expect(chat.drafts.sessionMessages['session-1']).toBe('Später bearbeiten')
+  })
+
+  it('recovers an undo whose response was lost after the server commit', async () => {
+    api.post.mockRejectedValue(new Error('connection lost'))
+    api.get.mockResolvedValue({
+      data: {
+        id: 'session-1',
+        messages: [{ id: 'user-1', role: 'user', content: 'Bleibt' }],
+        activeRun: null
+      }
+    })
+    const chat = useChatStore()
+    const message = { id: 'user-2', role: 'user', content: 'Wiederherstellen', attachments: [] }
+    chat.current = {
+      id: 'session-1',
+      messages: [{ id: 'user-1', role: 'user', content: 'Bleibt' }, message]
+    }
+    chat.selectedSessionId = 'session-1'
+
+    const result = await chat.undoUserMessage(message)
+
+    expect(result.sessionDeleted).toBe(false)
+    expect(chat.current.messages).toEqual([{ id: 'user-1', role: 'user', content: 'Bleibt' }])
+    expect(chat.activeDraft).toBe('Wiederherstellen')
+  })
+
+  it('retries the latest runtime error without replacing the user draft', async () => {
+    global.EventSource = EventSourceMock
+    api.get.mockResolvedValue({ data: [] })
+    api.post.mockResolvedValue({
+      data: {
+        runId: 'run-2',
+        modelName: 'Originalmodell',
+        session: {
+          id: 'session-1',
+          messages: [{ id: 'user-1', role: 'user', content: 'Ursprünglicher Auftrag' }],
+          activeRun: { id: 'run-2', status: 'queued', createdAt: '2026-07-25T14:32:00Z' }
+        }
+      }
+    })
+    const chat = useChatStore()
+    const error = { id: 'error-1', role: 'assistant', kind: 'runtime_error' }
+    chat.current = {
+      id: 'session-1',
+      messages: [{ id: 'user-1', role: 'user', content: 'Ursprünglicher Auftrag' }, error]
+    }
+    chat.selectedSessionId = 'session-1'
+    chat.setDraft('Nicht verändern')
+
+    await chat.retryFailedMessage(error)
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/sessions/session-1/messages/error-1/retry',
+      null,
+      { suppressErrorToast: true }
+    )
+    expect(chat.current.messages).toEqual([
+      { id: 'user-1', role: 'user', content: 'Ursprünglicher Auftrag' }
+    ])
+    expect(chat.activeDraft).toBe('Nicht verändern')
+    expect(chat.runId).toBe('run-2')
+    expect(chat.running).toBe(true)
   })
 })

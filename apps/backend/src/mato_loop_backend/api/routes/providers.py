@@ -269,6 +269,7 @@ def _clear_invalid_defaults(settings: AiSettings) -> None:
         media_capability = capability != ModelCapability.CHAT
         if model_id is not None and (
             _available_model(settings, model_id, capability) is None
+            or (field == "default_model_id" and not _model(settings, model_id).supports_tools)
             or (
                 media_capability
                 and not media_model_available(settings, capability, model_id)
@@ -373,6 +374,21 @@ def _settings_payload(
                 "enabled": model.enabled,
                 "origin": model.origin.value,
                 "availability": model.availability.value,
+                "agentAvailable": bool(
+                    _available_model(settings, model.id, ModelCapability.CHAT)
+                    and model.supports_tools
+                ),
+                "agentUnavailableReason": (
+                    None
+                    if _available_model(settings, model.id, ModelCapability.CHAT)
+                    and model.supports_tools
+                    else (
+                        "session.modelToolsUnavailable"
+                        if ModelCapability.CHAT in model.capabilities
+                        and not model.supports_tools
+                        else "session.modelUnavailable"
+                    )
+                ),
                 "lastSeenAt": model.last_seen_at.isoformat() if model.last_seen_at else None,
                 "discoveryMetadata": model.discovery_metadata,
                 "capabilities": sorted(item.value for item in model.capabilities),
@@ -876,6 +892,8 @@ async def set_default_model(
             raise ApiError(409, "provider.modelUnavailable")
         if ModelCapability.CHAT not in model.capabilities:
             raise ApiError(409, "provider.modelCapabilityUnavailable")
+        if not model.supports_tools:
+            raise ApiError(409, "session.modelToolsUnavailable")
     settings.default_model_id = model_id
     await SettingsStore.save(db, settings)
     await db.commit()
@@ -921,6 +939,8 @@ async def set_default_models(
             raise ApiError(
                 409, "provider.modelCapabilityUnavailable", field=api_field
             )
+        if field == "default_model_id" and not model.supports_tools:
+            raise ApiError(409, "session.modelToolsUnavailable", field=api_field)
         if capability != ModelCapability.CHAT and not media_model_available(
             settings, capability, model_id
         ):

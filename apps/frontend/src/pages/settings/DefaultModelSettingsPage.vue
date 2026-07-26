@@ -51,7 +51,8 @@
             options-dense
             label="Agentmodell"
             :display-value="form.defaultModelId ? undefined : 'Kein Standardmodell'"
-            :options="providers.selectionOptions(form.defaultModelId)"
+            :options="providers.selectionOptions(form.defaultModelId, true)"
+            hint="Agent-Läufe benötigen ein Modell mit Tool-Unterstützung."
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           />
         </div>

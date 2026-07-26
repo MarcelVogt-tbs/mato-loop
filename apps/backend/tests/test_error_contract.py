@@ -39,3 +39,11 @@ def test_unknown_error_code_and_provider_code_fall_back_without_raw_text() -> No
     }
     assert provider.public_code == "provider.requestFailed"
     assert "raw" not in str(unknown.payload())
+
+
+def test_chat_history_errors_have_controlled_fallbacks() -> None:
+    assert describe_error("session.messageNotFound").message == "The chat message was not found."
+    assert (
+        describe_error("session.retryUnavailable").message
+        == "The failed response can no longer be retried."
+    )

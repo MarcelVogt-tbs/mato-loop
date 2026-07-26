@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.agent import AgentRuntime
+from mato_loop_backend.agent.runtime import AgentRunError
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.attachments import (
     MAX_ATTACHMENTS_PER_MESSAGE,
@@ -25,6 +26,7 @@ from mato_loop_backend.attachments import (
     classify_attachment,
     safe_filename,
 )
+from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
@@ -295,6 +297,49 @@ def message_payload(item: Message) -> dict[str, Any]:
     }
 
 
+async def _session_detail_payload(db: AsyncSession, item: ChatSession) -> dict[str, Any]:
+    messages = list(
+        (
+            await db.scalars(
+                select(Message)
+                .where(Message.session_id == item.id)
+                .options(selectinload(Message.attachments))
+                .order_by(Message.created_at, Message.id)
+            )
+        ).all()
+    )
+    active_run = await db.scalar(
+        select(AgentRun)
+        .where(
+            AgentRun.session_id == item.id,
+            AgentRun.status.in_(["queued", "running", "waiting_approval"]),
+        )
+        .order_by(AgentRun.created_at.desc())
+    )
+    last_message_at = max(
+        (
+            message.created_at
+            for message in messages
+            if message.role in _VISIBLE_MESSAGE_ROLES and message.created_at
+        ),
+        default=None,
+    )
+    return {
+        **(await _session_payload(db, item, last_message_at=last_message_at)),
+        "messages": [message_payload(message) for message in messages],
+        "activeRun": (
+            {
+                "id": str(active_run.id),
+                "status": active_run.status,
+                "modelName": active_run.model_name,
+                "createdAt": active_run.created_at.isoformat() if active_run.created_at else None,
+            }
+            if active_run
+            else None
+        ),
+    }
+
+
 async def _latest_user_message(db: AsyncSession, session_id: UUID) -> Message:
     message = await db.scalar(
         select(Message)
@@ -368,6 +413,10 @@ async def _create_session(
         raise ApiError(422, "validation.required", field="content")
     ai = await SettingsStore.load(db, AiSettings)
     model_id = payload.model_id or ai.default_model_id
+    if not _model_available(ai, model_id):
+        raise ApiError(409, "session.modelUnavailable", field="modelId")
+    if not _model_supports_tools(ai, model_id):
+        raise ApiError(409, "session.modelToolsUnavailable", field="modelId")
     working_directory = None
     if payload.working_directory is not None:
         try:
@@ -470,6 +519,16 @@ async def session_defaults(
     )
     return {
         "modelId": str(selected_model_id) if selected_model_id else None,
+        "modelAvailable": bool(model and model.supports_tools),
+        "modelUnavailableReason": (
+            None
+            if model and model.supports_tools
+            else (
+                "session.modelToolsUnavailable"
+                if model is not None
+                else "session.modelUnavailable"
+            )
+        ),
         "memoryMode": memory_mode.value,
         "effectiveMemoryMode": state.mode.value,
         "memoryToolsAvailable": state.tools_enabled,
@@ -494,46 +553,7 @@ async def get_session(
     item = await _owned_session(db, session_id, user.id)
     if item is None:
         raise ApiError(404, "session.notFound")
-    messages = list(
-        (
-            await db.scalars(
-                select(Message)
-                .where(Message.session_id == session_id)
-                .options(selectinload(Message.attachments))
-                .order_by(Message.created_at, Message.id)
-            )
-        ).all()
-    )
-    active_run = await db.scalar(
-        select(AgentRun)
-        .where(
-            AgentRun.session_id == session_id,
-            AgentRun.status.in_(["queued", "running", "waiting_approval"]),
-        )
-        .order_by(AgentRun.created_at.desc())
-    )
-    last_message_at = max(
-        (
-            message.created_at
-            for message in messages
-            if message.role in _VISIBLE_MESSAGE_ROLES and message.created_at
-        ),
-        default=None,
-    )
-    return {
-        **(await _session_payload(db, item, last_message_at=last_message_at)),
-        "messages": [message_payload(message) for message in messages],
-        "activeRun": (
-            {
-                "id": str(active_run.id),
-                "status": active_run.status,
-                "modelName": active_run.model_name,
-                "createdAt": active_run.created_at.isoformat() if active_run.created_at else None,
-            }
-            if active_run
-            else None
-        ),
-    }
+    return await _session_detail_payload(db, item)
 
 
 @router.patch("/{session_id}")
@@ -547,11 +567,6 @@ async def update_session(
     if item is None:
         raise ApiError(404, "session.notFound")
     fields = payload.model_fields_set
-    requested_search_policy = (
-        payload.web_search_policy.value
-        if "web_search_policy" in fields and payload.web_search_policy is not None
-        else item.web_search_policy
-    )
     policy_fields = {
         "memory_mode",
         "model_id",
@@ -579,10 +594,9 @@ async def update_session(
             if not _model_available(ai, payload.model_id):
                 raise ApiError(400, "session.modelUnavailable")
         effective_model_id = payload.model_id or ai.default_model_id
-        if (
-            requested_search_policy == WebSearchPolicy.REQUIRED
-            and not _model_supports_tools(ai, effective_model_id)
-        ):
+        if not _model_available(ai, effective_model_id):
+            raise ApiError(409, "session.modelUnavailable")
+        if not _model_supports_tools(ai, effective_model_id):
             raise ApiError(409, "session.modelToolsUnavailable")
         item.model_config_id = payload.model_id
     if "memory_mode" in fields and payload.memory_mode is not None:
@@ -680,6 +694,56 @@ async def delete_session(
     await purge_tree()
 
 
+@router.post("/{session_id}/messages/{message_id}/undo")
+async def undo_user_message(
+    session_id: UUID,
+    message_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, Any]:
+    try:
+        result = await ChatHistoryService.undo_user_message(
+            db,
+            session_id=session_id,
+            user_id=user.id,
+            message_id=message_id,
+        )
+    except ChatHistoryError as exc:
+        raise ApiError(exc.status_code, exc.code) from exc
+    return {
+        "sessionDeleted": result.session_deleted,
+        "draft": {"content": result.content},
+    }
+
+
+@router.post(
+    "/{session_id}/messages/{message_id}/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_failed_message(
+    session_id: UUID,
+    message_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, Any]:
+    try:
+        result = await ChatHistoryService.retry_failed_message(
+            db,
+            session_id=session_id,
+            user_id=user.id,
+            message_id=message_id,
+        )
+    except ChatHistoryError as exc:
+        raise ApiError(exc.status_code, exc.code) from exc
+    except AgentRunError as exc:
+        raise ApiError(409, exc.code, params=exc.params) from exc
+    return {
+        "runId": str(result.run.id),
+        "modelName": result.run.model_name,
+        "createdAt": result.run.created_at.isoformat() if result.run.created_at else None,
+    }
+
+
 @router.get(
     "/{session_id}/messages/{message_id}/attachments/{attachment_id}",
     response_class=FileResponse,
@@ -744,6 +808,12 @@ async def _send_message(
     )
     if active:
         raise ApiError(409, "session.runAlreadyActive")
+    ai = await SettingsStore.load(db, AiSettings)
+    model_id = item.model_config_id or ai.default_model_id
+    if not _model_available(ai, model_id):
+        raise ApiError(409, "session.modelUnavailable")
+    if not _model_supports_tools(ai, model_id):
+        raise ApiError(409, "session.modelToolsUnavailable")
     run = (
         await AgentRuntime.start(db, item, content, attachments=attachments)
         if attachments
