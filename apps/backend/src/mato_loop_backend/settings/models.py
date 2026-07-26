@@ -437,6 +437,7 @@ class AgentRuntimeSettings(SettingsDocument):
     max_steps: int = Field(default=20, ge=1, le=100)
     max_model_requests: int = Field(default=30, ge=1, le=200)
     max_tool_calls: int = Field(default=20, ge=1, le=100)
+    max_research_tool_calls: int = Field(default=8, ge=1, le=100)
     request_timeout_seconds: int = Field(default=300, ge=10, le=3600)
     compaction_trigger_ratio: float = Field(default=0.8, ge=0.5, le=0.95)
     compaction_target_ratio: float = Field(default=0.6, ge=0.1, le=0.9)

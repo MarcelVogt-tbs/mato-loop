@@ -16,6 +16,7 @@ _MESSAGES = {
     "agent.requiredWebSearchUnsupported": "The selected model cannot perform the required web search.",
     "agent.requiredMemoryWriteMissing": "The model did not complete the required memory write.",
     "agent.researchSourcesInvalid": "The researched answer could not be supported by valid current sources.",
+    "agent.researchBudgetReached": "The current-turn research budget has been reached.",
     "agent.repeatedToolCall": "The model repeated a failed tool call without changing its arguments.",
     "agent.toolCallLimitReached": "The agent reached the maximum number of tool calls.",
     "attachment.tooLarge": "The attachment is too large.",
