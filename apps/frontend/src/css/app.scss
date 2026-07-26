@@ -144,6 +144,10 @@ body {
   backdrop-filter: blur(14px);
 }
 
+.app-shell--chat .app-header {
+  transform: translateY(var(--app-visual-viewport-offset-top, 0px));
+}
+
 .app-toolbar {
   min-height: var(--app-header-height);
 }
@@ -1945,11 +1949,6 @@ body.body--dark .chat-composer__card {
   .provider-dialog .q-card__actions .q-space,
   .integration-dialog .q-card__actions .q-space {
     display: none;
-  }
-
-  .chat-page__content {
-    justify-content: flex-start;
-    padding-top: 64px;
   }
 
   .chat-composer {

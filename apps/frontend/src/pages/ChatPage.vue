@@ -261,7 +261,6 @@ const scrollContent = ref(null)
 const composer = ref(null)
 const trustedImageOriginsBySession = ref(new Map())
 const followingBottom = ref(true)
-const visualViewportHeight = ref(null)
 const messageTimestampNow = ref(Date.now())
 const bottomThreshold = 64
 const routeSessionId = computed(() => (
@@ -436,17 +435,11 @@ function observeChatSize() {
   if (scrollTarget) resizeObserver.observe(scrollTarget)
 }
 
-function updateVisualViewport() {
-  const height = window.visualViewport?.height || window.innerHeight
-  if (Number.isFinite(height) && height > 0) visualViewportHeight.value = height
-  scheduleFollowScroll()
-}
-
 function chatPageStyle(offset, height) {
-  const viewportHeight = visualViewportHeight.value || height
   return {
     minHeight: '0px',
-    height: `${Math.max(0, viewportHeight - offset)}px`
+    height: `calc(var(--app-visual-viewport-height, ${height}px) - ${offset}px)`,
+    transform: 'translateY(var(--app-visual-viewport-offset-top, 0px))'
   }
 }
 
@@ -462,13 +455,9 @@ watch(
 )
 onMounted(() => {
   observeChatSize()
-  updateVisualViewport()
   messageTimestampTimer = window.setInterval(() => {
     messageTimestampNow.value = Date.now()
   }, 60_000)
-  window.visualViewport?.addEventListener('resize', updateVisualViewport)
-  window.visualViewport?.addEventListener('scroll', updateVisualViewport)
-  window.addEventListener('resize', updateVisualViewport)
   void loadBackgroundData()
 })
 onBeforeUnmount(() => {
@@ -478,9 +467,6 @@ onBeforeUnmount(() => {
   scrollTarget?.removeEventListener('touchend', handleTouchEnd)
   scrollTarget?.removeEventListener('touchcancel', handleTouchEnd)
   scrollTarget?.removeEventListener('wheel', handleWheel)
-  window.visualViewport?.removeEventListener('resize', updateVisualViewport)
-  window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
-  window.removeEventListener('resize', updateVisualViewport)
   window.clearInterval(messageTimestampTimer)
   clearTimeout(userScrollTimer)
   cancelFollowScroll()

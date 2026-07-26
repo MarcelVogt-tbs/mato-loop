@@ -1,5 +1,10 @@
 <template>
-  <q-layout view="hHh Lpr fFf" class="app-shell">
+  <q-layout
+    view="hHh Lpr fFf"
+    class="app-shell"
+    :class="{ 'app-shell--chat': route.name === 'chat' }"
+    :style="visualViewportStyle"
+  >
     <q-header class="app-header text-dark">
       <q-toolbar class="app-toolbar">
         <div class="app-toolbar__drawer-controls row no-wrap items-center">
@@ -328,7 +333,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import AppLogo from 'components/AppLogo.vue'
@@ -364,6 +369,15 @@ const renameSessionId = ref(null)
 const renameTitle = ref('')
 const renaming = ref(false)
 const pinningSessionId = ref(null)
+const visualViewportHeight = ref(null)
+const visualViewportOffsetTop = ref(0)
+const visualViewportStyle = computed(() => {
+  if (route.name !== 'chat' || visualViewportHeight.value === null) return null
+  return {
+    '--app-visual-viewport-height': `${visualViewportHeight.value}px`,
+    '--app-visual-viewport-offset-top': `${visualViewportOffsetTop.value}px`
+  }
+})
 const userInitials = computed(() => {
   const localPart = (auth.username || '').trim().split('@')[0]
   const parts = localPart.split(/[\s._-]+/).filter(Boolean)
@@ -375,6 +389,14 @@ const userInitials = computed(() => {
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
+}
+
+function updateVisualViewport() {
+  const viewport = window.visualViewport
+  const height = viewport?.height || window.innerHeight
+  const offsetTop = viewport?.offsetTop || 0
+  if (Number.isFinite(height) && height > 0) visualViewportHeight.value = height
+  visualViewportOffsetTop.value = Number.isFinite(offsetTop) ? Math.max(0, offsetTop) : 0
 }
 
 function openRenameDialog(session) {
@@ -426,6 +448,11 @@ function closeDrawerOnMobile() {
   if ($q.screen.lt.md) drawerOpen.value = false
 }
 
+function refreshSessionsWhenVisible() {
+  if (document.visibilityState !== 'visible') return
+  void chat.fetchSessions().catch(() => {})
+}
+
 async function removeSession(id) {
   await chat.deleteSession(id)
   if (route.query.session === id) await router.push({ name: 'chat' })
@@ -441,6 +468,18 @@ watch(() => workspace.open, (open) => {
 })
 
 onMounted(async () => {
+  updateVisualViewport()
+  window.visualViewport?.addEventListener('resize', updateVisualViewport)
+  window.visualViewport?.addEventListener('scroll', updateVisualViewport)
+  window.addEventListener('resize', updateVisualViewport)
+  document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
   await Promise.all([chat.fetchSessions(), approvals.fetchPending(), identity.fetchIdentity()])
+})
+
+onBeforeUnmount(() => {
+  window.visualViewport?.removeEventListener('resize', updateVisualViewport)
+  window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
+  window.removeEventListener('resize', updateVisualViewport)
+  document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)
 })
 </script>
