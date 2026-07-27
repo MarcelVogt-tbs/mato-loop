@@ -34,10 +34,9 @@ WEEKDAY_NAMES = (
     "Saturday",
     "Sunday",
 )
-_OMITTED_TOOL_OUTPUT = (
-    "[Historical tool output omitted from the active context. "
-    "Use session_read to retrieve the original message if needed.]"
-)
+_OMITTED_TOOL_OUTPUT = "[Historical tool output omitted from the active context.]"
+_PRIVATE_TOOL_OUTPUT = "[Historical private tool output unavailable to the current model.]"
+_HOST_TOOL_RESULT_REFERENCE = "_matoloopToolResultReference"
 _SHORTENED_TOOL_OUTPUT = (
     "\n[Tool output shortened in the active context. "
     "Use session_read to retrieve the original message if needed.]"
@@ -74,6 +73,44 @@ def estimate_tokens(value: Any, characters_per_token: float) -> int:
     else:
         text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     return max(1, math.ceil(len(text) / characters_per_token))
+
+
+def _tool_result_reference(message_id: UUID, content: str) -> dict[str, Any]:
+    return {
+        "tool": "session_tool_result_read",
+        "arguments": {"message_id": str(message_id), "offset": 0},
+        "totalCharacters": len(content),
+    }
+
+
+def _omitted_tool_result(message_id: UUID, content: str) -> str:
+    return json.dumps(
+        {
+            "toolResultOmitted": True,
+            "toolResultReference": _tool_result_reference(message_id, content),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _sanitize_tool_result_reference_fields(content: str) -> str:
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return content
+    if not isinstance(payload, dict):
+        return content
+    changed = False
+    for key in ("toolResultOmitted", "toolResultReference"):
+        if key in payload:
+            payload.pop(key)
+            changed = True
+    return (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if changed
+        else content
+    )
 
 
 def _model_tool_calls(
@@ -324,6 +361,14 @@ def general_system_prompt(
             "Use session_read when details were compacted out of the active context. Its attachment "
             "metadata contains IDs, filenames, and session-relative paths for historical assets."
         )
+    if "session_tool_result_read" in offered_tool_names:
+        parts.append(
+            "When a relevant historical tool result contains a host-generated toolResultReference, "
+            "call session_tool_result_read with its exact arguments before answering. Do not rerun "
+            "the original tool merely to recover persisted output, and do not claim the referenced "
+            "content is unavailable before reading it. Continue with nextOffset while further content "
+            "is needed."
+        )
     if file_tools_available:
         parts.append(
             "File tools use explicit session and workspace roots. Pass root separately and use a "
@@ -531,6 +576,7 @@ def _projection_messages(
     )
     projected_attachment_ids: set[str] = set()
     historical_tool_indices: list[int] = []
+    historical_omitted_markers: dict[int, str] = {}
     current_tool_indices: list[int] = []
     for record_index, item in enumerate(records):
         projected = message_dict(
@@ -542,14 +588,32 @@ def _projection_messages(
             projected_attachment_ids.add(str(attachment.get("id") or ""))
         if target_trust_level == TrustLevel.PUBLIC and item.role == "tool":
             tool_name = tool_names.get(item.id)
-            projected["content"] = _public_tool_result(tool_name, item.content)
+            projected["content"] = _public_tool_result(
+                tool_name, str(projected.get("content") or "")
+            )
         if item.role == "tool":
             tool_name = tool_names.get(item.id)
+            projected["content"] = _sanitize_tool_result_reference_fields(
+                str(projected.get("content") or "")
+            )
             if record_index < latest_user_index:
-                projected["content"] = _historical_tool_result(
-                    tool_name, str(projected.get("content") or "")
+                original_content = str(projected.get("content") or "")
+                private_for_target = (
+                    target_trust_level == TrustLevel.PUBLIC
+                    and (item.trust_level or TrustLevel.PUBLIC.value)
+                    == TrustLevel.PRIVATE.value
+                )
+                projected["content"] = (
+                    _PRIVATE_TOOL_OUTPUT
+                    if private_for_target
+                    else _historical_tool_result(tool_name, original_content, item.id)
                 )
                 historical_tool_indices.append(len(messages))
+                if not private_for_target:
+                    projected[_HOST_TOOL_RESULT_REFERENCE] = True
+                    historical_omitted_markers[len(messages)] = _omitted_tool_result(
+                        item.id, original_content
+                    )
             else:
                 current_tool_indices.append(len(messages))
         messages.append(projected)
@@ -559,6 +623,8 @@ def _projection_messages(
         historical_tool_output_tokens,
         characters_per_token,
         omitted_marker=_OMITTED_TOOL_OUTPUT,
+        omitted_markers=historical_omitted_markers,
+        preserve_tool_result_references=True,
     )
     _limit_tool_output_tokens(
         messages,
@@ -583,7 +649,14 @@ def _projection_messages(
     return messages
 
 
-def _historical_tool_result(tool_name: str | None, content: str) -> str:
+def _historical_tool_result(
+    tool_name: str | None,
+    content: str,
+    message_id: UUID,
+    *,
+    include_reference: bool = True,
+) -> str:
+    content = _sanitize_tool_result_reference_fields(content)
     try:
         payload = json.loads(content)
     except (TypeError, json.JSONDecodeError):
@@ -601,14 +674,30 @@ def _historical_tool_result(tool_name: str | None, content: str) -> str:
             if isinstance(item, dict) and isinstance(item.get("url"), str)
         ]
         return json.dumps(
-            {"historicalSources": sources},
+            {
+                "historicalSources": sources,
+                **(
+                    {"toolResultReference": _tool_result_reference(message_id, content)}
+                    if include_reference
+                    else {}
+                ),
+            },
             ensure_ascii=False,
             separators=(",", ":"),
         )
-    return _OMITTED_TOOL_OUTPUT
+    return (
+        _omitted_tool_result(message_id, content)
+        if include_reference
+        else _OMITTED_TOOL_OUTPUT
+    )
 
 
-def _shorten_evidence_output(content: str, max_characters: int) -> str | None:
+def _shorten_evidence_output(
+    content: str,
+    max_characters: int,
+    *,
+    preserve_tool_result_reference: bool = False,
+) -> str | None:
     try:
         payload = json.loads(content)
     except (TypeError, json.JSONDecodeError):
@@ -616,6 +705,18 @@ def _shorten_evidence_output(content: str, max_characters: int) -> str | None:
 
     def serialized(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    if (
+        isinstance(payload, dict)
+        and "toolResultReference" in payload
+        and not preserve_tool_result_reference
+    ):
+        payload.pop("toolResultReference", None)
+        sanitized = serialized(payload)
+        if len(sanitized) <= max_characters:
+            return sanitized
+        omitted = serialized({"toolOutputShortened": True})
+        return omitted if len(omitted) <= max_characters else None
 
     if isinstance(payload, list) and all(
         isinstance(item, dict)
@@ -656,7 +757,28 @@ def _shorten_evidence_output(content: str, max_characters: int) -> str | None:
             sources.pop()
         payload["truncated"] = True
         result = serialized(payload)
-        return result if len(result) <= max_characters else None
+        if len(result) <= max_characters:
+            return result
+        reference = payload.get("toolResultReference")
+        if preserve_tool_result_reference and isinstance(reference, dict):
+            omitted = serialized(
+                {"toolResultOmitted": True, "toolResultReference": reference}
+            )
+            return omitted if len(omitted) <= max_characters else None
+        return None
+
+    if (
+        preserve_tool_result_reference
+        and isinstance(payload, dict)
+        and isinstance(payload.get("toolResultReference"), dict)
+    ):
+        omitted = serialized(
+            {
+                "toolResultOmitted": True,
+                "toolResultReference": payload["toolResultReference"],
+            }
+        )
+        return omitted if len(omitted) <= max_characters else None
 
     if (
         isinstance(payload, dict)
@@ -694,6 +816,8 @@ def _limit_tool_output_tokens(
     characters_per_token: float,
     *,
     omitted_marker: str,
+    omitted_markers: dict[int, str] | None = None,
+    preserve_tool_result_references: bool = False,
 ) -> None:
     total = sum(
         estimate_tokens(str(messages[index].get("content") or ""), characters_per_token)
@@ -706,13 +830,21 @@ def _limit_tool_output_tokens(
         before = estimate_tokens(content, characters_per_token)
         excess_chars = math.ceil((total - token_budget) * characters_per_token)
         keep_chars = len(content) - excess_chars - len(_SHORTENED_TOOL_OUTPUT)
-        replacement = _shorten_evidence_output(content, max(200, keep_chars))
+        replacement = _shorten_evidence_output(
+            content,
+            max(200, keep_chars),
+            preserve_tool_result_reference=preserve_tool_result_references,
+        )
         if replacement is None:
-            replacement = (
-                content[:keep_chars] + _SHORTENED_TOOL_OUTPUT
-                if keep_chars >= 200
-                else omitted_marker
-            )
+            exact_marker = (omitted_markers or {}).get(index)
+            if exact_marker is not None:
+                replacement = exact_marker
+            else:
+                replacement = (
+                    content[:keep_chars] + _SHORTENED_TOOL_OUTPUT
+                    if keep_chars >= 200
+                    else omitted_marker
+                )
         if replacement == content:
             continue
         messages[index]["content"] = replacement
@@ -816,9 +948,18 @@ def _inferred_tool_name(content: str) -> str | None:
     if not isinstance(payload, dict):
         return None
     items = payload.get("items")
-    if isinstance(items, list) and any(
-        isinstance(item, dict) and item.get("trustLevel") in {"public", "private"}
-        for item in items
+    scope = payload.get("scope")
+    memory_envelope = (
+        payload.get("mode") in {"search", "browse"}
+        and isinstance(scope, dict)
+        and scope.get("readableBy") in {"public", "private"}
+    )
+    if isinstance(items, list) and (
+        memory_envelope
+        or any(
+            isinstance(item, dict) and item.get("trustLevel") in {"public", "private"}
+            for item in items
+        )
     ):
         return "memory_retrieve"
     if isinstance(payload.get("messages"), list):
@@ -866,7 +1007,12 @@ def _protected_start(records: list[Message], turns: int) -> int:
     return 0
 
 
-def _summary_source(summary: ContextSummary | None, records: list[Message]) -> str:
+def _summary_source(
+    summary: ContextSummary | None,
+    records: list[Message],
+    *,
+    target_trust_level: TrustLevel = TrustLevel.PRIVATE,
+) -> str:
     parts = []
     if summary is not None:
         parts.append("PREVIOUS SUMMARY\n" + summary.content)
@@ -875,13 +1021,28 @@ def _summary_source(summary: ContextSummary | None, records: list[Message]) -> s
         if (
             item.role == "tool"
             and item.tool_call_id
-            and tool_names.get(item.id) in {"memory_retrieve", "session_read"}
+            and tool_names.get(item.id)
+            in {"memory_retrieve", "session_read", "session_tool_result_read"}
         ):
             continue
         role = item.role.upper()
         content = item.content
         if item.role == "tool":
-            content = _historical_tool_result(tool_names.get(item.id), content)
+            private_for_target = (
+                target_trust_level == TrustLevel.PUBLIC
+                and (item.trust_level or TrustLevel.PUBLIC.value)
+                == TrustLevel.PRIVATE.value
+            )
+            content = (
+                _PRIVATE_TOOL_OUTPUT
+                if private_for_target
+                else _historical_tool_result(
+                    tool_names.get(item.id),
+                    content,
+                    item.id,
+                    include_reference=False,
+                )
+            )
         if item.role == "assistant" and item.generation_status == "interrupted":
             content = f"{content}\n[Response interrupted by the user]".strip()
         if item.tool_calls:
@@ -901,9 +1062,21 @@ def _summary_source(summary: ContextSummary | None, records: list[Message]) -> s
 
 def _message_text_tokens(messages: list[dict[str, Any]], characters_per_token: float) -> int:
     return estimate_tokens(
-        [{key: value for key, value in message.items() if key != "attachments"} for message in messages],
+        [
+            {
+                key: value
+                for key, value in message.items()
+                if key not in {"attachments", _HOST_TOOL_RESULT_REFERENCE}
+            }
+            for message in messages
+        ],
         characters_per_token,
     )
+
+
+def _strip_projection_metadata(messages: list[dict[str, Any]]) -> None:
+    for message in messages:
+        message.pop(_HOST_TOOL_RESULT_REFERENCE, None)
 
 
 def _image_input_tokens(
@@ -947,8 +1120,14 @@ def _prune_tool_outputs_to_budget(
             if len(content) <= 200:
                 continue
             overflow_chars = math.ceil((estimated - input_budget) * characters_per_token)
-            keep_chars = max(100, len(content) - overflow_chars - 120)
-            shortened = _shorten_evidence_output(content, keep_chars)
+            keep_chars = max(200, len(content) - overflow_chars - 120)
+            shortened = _shorten_evidence_output(
+                content,
+                keep_chars,
+                preserve_tool_result_reference=bool(
+                    message.get(_HOST_TOOL_RESULT_REFERENCE)
+                ),
+            )
             if shortened is None:
                 shortened = (
                     content[:keep_chars]
@@ -1043,6 +1222,7 @@ class ContextManager:
             - settings.safety_reserve_tokens,
         )
         if estimated <= max(1, trigger_tokens):
+            _strip_projection_metadata(messages)
             return ContextProjection(messages, estimated, input_budget)
 
         protected_start = _protected_start(active_records, settings.protected_recent_turns)
@@ -1053,7 +1233,12 @@ class ContextManager:
         if prefix or latest is not None:
             target_tokens = max(256, int(input_budget * settings.compaction_target_ratio))
             summary_limit = max(256, min(2_048, target_tokens // 3))
-            result = await summarize(_summary_source(latest, prefix), summary_limit)
+            result = await summarize(
+                _summary_source(
+                    latest, prefix, target_trust_level=target_trust_level
+                ),
+                summary_limit,
+            )
             content = result.content.strip()
             if not content:
                 raise ContextError("agent.compactionFailed")
@@ -1089,4 +1274,5 @@ class ContextManager:
         if pending_summary is not None:
             db.add(pending_summary)
             await db.commit()
+        _strip_projection_metadata(messages)
         return ContextProjection(messages, estimated, input_budget, compacted=compacted)

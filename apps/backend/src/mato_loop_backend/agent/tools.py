@@ -22,8 +22,10 @@ from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.agent.context import (
     _public_tool_result,
+    _sanitize_tool_result_reference_fields,
     _shorten_evidence_output,
     _tool_names_by_message_id,
+    _tool_result_reference,
 )
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
@@ -79,6 +81,7 @@ from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 logger = logging.getLogger(__name__)
 AskHandler = Callable[[PermissionRequest], Awaitable[PermissionDecision]]
+SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
 
 
 @dataclass(slots=True)
@@ -471,6 +474,11 @@ class SessionReadArguments(ToolArguments):
     session_id: UUID | None = None
     after_message_id: UUID | None = None
     limit: int = Field(default=30, ge=1, le=50)
+
+
+class SessionToolResultReadArguments(ToolArguments):
+    message_id: UUID
+    offset: int = Field(default=0, ge=0)
 
 
 class SessionSearchArguments(ToolArguments):
@@ -1113,17 +1121,22 @@ def _message_item(
     remaining: int,
     tool_names: dict[UUID, str],
     target_trust_level: TrustLevel,
+    *,
+    reference_tool_results: bool,
 ) -> tuple[dict[str, Any], int]:
-    content_limit = min(12_000, max(0, remaining))
+    content_limit = min(SESSION_TOOL_RESULT_CHUNK_CHARACTERS, max(0, remaining))
     content = message.content
     if target_trust_level == TrustLevel.PUBLIC and message.role == "tool":
         content = _public_tool_result(
             tool_names.get(message.id), message.content
         )
-    if len(content) > content_limit and message.role == "tool":
-        content = _shorten_evidence_output(content, content_limit) or content[:content_limit]
+    if message.role == "tool":
+        content = _sanitize_tool_result_reference_fields(content)
+    full_content = content
+    if len(full_content) > content_limit and message.role == "tool":
+        content = _shorten_evidence_output(full_content, content_limit) or full_content[:content_limit]
     else:
-        content = content[:content_limit]
+        content = full_content[:content_limit]
     item = {
         "id": str(message.id),
         "role": message.role,
@@ -1131,8 +1144,10 @@ def _message_item(
         "generationStatus": message.generation_status,
         "createdAt": message.created_at.isoformat() if message.created_at else None,
     }
-    if len(message.content) > content_limit:
+    if len(full_content) > content_limit:
         item["truncated"] = True
+        if message.role == "tool" and reference_tool_results:
+            item["toolResultReference"] = _tool_result_reference(message.id, full_content)
     if message.tool_call_id:
         item["toolCallId"] = message.tool_call_id
         if tool_name := tool_names.get(message.id):
@@ -1155,6 +1170,40 @@ def _message_item(
             for attachment in message.attachments
         ]
     return item, remaining - len(content)
+
+
+async def _session_tool_result_read(
+    arguments: SessionToolResultReadArguments, context: ToolContext
+) -> ToolResult:
+    filters = [
+        Message.id == arguments.message_id,
+        Message.session_id == context.session.id,
+        Message.role == "tool",
+        Message.error_code.is_(None),
+    ]
+    if context.memory_trust_level == TrustLevel.PUBLIC:
+        filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
+    message = await context.db.scalar(select(Message).where(*filters))
+    if message is None:
+        return ToolResult.error("session.messageNotFound")
+
+    content = message.content
+    if context.memory_trust_level == TrustLevel.PUBLIC:
+        content = _public_tool_result(None, content)
+    content = _sanitize_tool_result_reference_fields(content)
+    end = min(len(content), arguments.offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
+    has_more = end < len(content)
+    return ToolResult.json(
+        {
+            "messageId": str(message.id),
+            "offset": arguments.offset,
+            "content": content[arguments.offset:end],
+            "totalCharacters": len(content),
+            "hasMore": has_more,
+            "nextOffset": end if has_more else None,
+            "contentIsUntrusted": True,
+        }
+    )
 
 
 async def _session_read(arguments: SessionReadArguments, context: ToolContext) -> ToolResult:
@@ -1200,7 +1249,11 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
     messages: list[dict[str, Any]] = []
     for message in page:
         item, remaining = _message_item(
-            message, remaining, tool_names, context.memory_trust_level
+            message,
+            remaining,
+            tool_names,
+            context.memory_trust_level,
+            reference_tool_results=target_id == context.session.id,
         )
         messages.append(item)
         if remaining <= 0:
@@ -1538,6 +1591,14 @@ tool_registry = ToolRegistry(
             _session_read,
         ),
         ToolDefinition(
+            "session_tool_result_read",
+            "Read a bounded chunk of an original persisted tool result from the current session by "
+            "message ID. Continue with nextOffset when more content is needed. This reads historical "
+            "output and does not execute the original tool again.",
+            SessionToolResultReadArguments,
+            _session_tool_result_read,
+        ),
+        ToolDefinition(
             "session_search",
             "Search chat sessions and return IDs for later reading.",
             SessionSearchArguments,
@@ -1615,6 +1676,7 @@ def permission_for(
     if tool_name in {
         "web_search",
         "session_read",
+        "session_tool_result_read",
         "session_search",
         "memory_write",
         "memory_retrieve",

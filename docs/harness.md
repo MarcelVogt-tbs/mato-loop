@@ -24,6 +24,8 @@ Ein Tool ist eine Host-Fähigkeit mit einem stabilen Namen, einer Beschreibung, 
 
 Research-Tools liefern strukturierte Ergebnisse mit sicheren URLs. `web_search` kennzeichnet seinen Inhalt als Snippets; `webfetch` bewahrt sichere finale URL, Content-Type und Seiteninhalt in einem strukturierten Envelope. Flüchtige Kontextkürzung darf bei diesen Ergebnissen nur Snippet beziehungsweise Seiteninhalt verkürzen und niemals ein halbes JSON-Objekt oder eine halbe URL erzeugen. Links im finalen Antworttext werden ausschließlich vom Modell als Best Effort erzeugt und vom Host weder ergänzt noch als Beleg bewertet; das Frontend darf die daraus abgeleiteten öffentlichen Metadaten zusätzlich als Quellenpanel anzeigen.
 
+`session_tool_result_read` liest ein bereits persistiertes Tool-Ergebnis der aktuellen Session anhand seiner Message-ID und führt das ursprüngliche Tool nicht erneut aus. Der Host liefert den Inhalt ab einem nullbasierten Zeichenoffset in festen Ausschnitten von höchstens 12.000 Zeichen und weist mit `hasMore` und `nextOffset` auf eine Fortsetzung hin. Historische Auslassungsmarker und durch `session_read` in der aktuellen Session gekürzte Tool-Messages enthalten eine hostgenerierte `toolResultReference` mit den exakten Argumenten für diesen Abruf. Gekürzte Tool-Messages einer fremden, freigegebenen Session weisen keine nicht einlösbare Current-Session-Referenz aus.
+
 Die Tool-Registry ist die einzige Namensauflösung für Tool-Calls. Sie muss doppelte Namen beim Aufbau ablehnen, Eingaben vor der Ausführung validieren und nur Tools exportieren, die für Session, Modus und effektive Integrationen verfügbar sind. Unbekannte Tools, ungültige Argumente und Ausführungsfehler werden in stabile Tool-Fehler übersetzt. Exception-Texte oder Secrets gelangen weder in den Modellkontext noch in API-Antworten.
 
 Konfigurierte Integrationen werden über einen statischen Hostkatalog aufgelöst. Ein Adapter kann neue statisch implementierte Tools beitragen oder Werte zu einem vom Basistool deklarierten hostseitigen Konfigurationsfeld ergänzen. Solche Werte werden nicht automatisch Modellargumente. Der Adapter darf keine fremden Handler oder beliebige Remoteschemas laden. Promptfragmente stammen ausschließlich aus dem Adaptercode; Namen, Antworten und sonstige externe Daten werden nicht als Anweisungen übernommen.
@@ -63,15 +65,18 @@ Die verbindliche Grundpolicy für Session-Tools lautet:
 | --- | --- | --- |
 | Session-Historie lesen | aktuelle Session des Runs | `allow` |
 | Session-Historie lesen | andere Session | `ask` |
+| Persistiertes Tool-Ergebnis lesen | aktuelle Session des Runs | `allow` |
 | Sessions beziehungsweise Session-Inhalte durchsuchen | Session-Suchressource | `ask` |
 
-`current-session read allow` ist eine enge Host-Regel und kein persistierter Wildcard-Grant. `other session read ask` und `session search ask` gelten auch dann, wenn das Modell eine bekannte Session-ID oder einen vermeintlich harmlosen Suchtext liefert. Ein geeigneter Session-Grant kann eine spätere identische Anforderung erlauben; er erweitert nicht automatisch seinen Matcher-Typ oder Geltungsbereich.
+`current-session read allow` ist eine enge Host-Regel und kein persistierter Wildcard-Grant. `session_tool_result_read` akzeptiert ausschließlich Tool-Messages derselben Session und kann keine andere Session adressieren. `other session read ask` und `session search ask` gelten auch dann, wenn das Modell eine bekannte Session-ID oder einen vermeintlich harmlosen Suchtext liefert. Ein geeigneter Session-Grant kann eine spätere identische Anforderung erlauben; er erweitert nicht automatisch seinen Matcher-Typ oder Geltungsbereich.
 
 ## Historie und Request-Kontext
 
 Die kanonische Historie ist die persistente, normalisierte Folge der Session-Nachrichten einschließlich Assistant-Tool-Calls und zugehöriger Tool-Ergebnisse. Sie bleibt vollständig und in stabiler Reihenfolge abrufbar. Provider-Nutzdaten dürfen ergänzend persistiert werden, ersetzen aber nicht die normalisierte Historie.
 
 Der Request-Kontext ist dagegen eine flüchtige Projektion für genau einen Modellaufruf. Er kann Systemanweisungen, freigegebene Memories, eine Compaction-Zusammenfassung und einen budgetierten Ausschnitt der kanonischen Historie enthalten. Kürzen, Umordnen oder providerspezifisches Konvertieren des Request-Kontexts verändert oder löscht niemals kanonische Nachrichten.
+
+Wenn der Context-Manager ein historisches Tool-Ergebnis auslässt, ersetzt er es durch eine strukturierte Referenz auf dessen kanonische Message-ID. Das Modell liest benötigte Details mit `session_tool_result_read`, statt das ursprüngliche Tool erneut auszuführen. Ergebnisse dieses Wiederabrufs werden nicht in Compaction-Zusammenfassungen vervielfältigt.
 
 Tool-Call und Tool-Ergebnis bilden beim Schneiden des Kontexts eine unteilbare Gruppe. Kein Request darf mit einem verwaisten Tool-Ergebnis oder einem Tool-Call ohne Ergebnis beginnen, sofern der Call nicht gerade der aktive, noch auszuführende Call ist. Der zuletzt eingegangene Benutzerauftrag muss im Request-Kontext erhalten bleiben.
 

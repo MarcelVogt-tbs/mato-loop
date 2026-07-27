@@ -15,6 +15,8 @@ describe('tool display', () => {
     expect(toolIdentity('copy_path')).toEqual({ label: 'Pfad kopieren', icon: 'content_copy' })
     expect(toolIdentity('move_path')).toEqual({ label: 'Pfad verschieben', icon: 'drive_file_move' })
     expect(toolIdentity('update_agent_identity')).toEqual({ label: 'Persona ändern', icon: 'face' })
+    expect(toolIdentity('session_tool_result_read'))
+      .toEqual({ label: 'Tool-Ergebnis lesen', icon: 'history' })
     expect(toolSummary({
       name: 'copy_path',
       arguments: {
@@ -24,6 +26,10 @@ describe('tool display', () => {
         destination_path: 'bild.png'
       }
     })).toBe('session:generated/bild.png -> workspace:bild.png')
+    expect(toolSummary({
+      name: 'session_tool_result_read',
+      arguments: { message_id: '550e8400-e29b-41d4-a716-446655440000', offset: 12000 }
+    })).toBe('Nachricht 550e8400-e29b-41d4-a716-446655440000, ab Zeichen 12000')
   })
 
   it('summarizes persona changes without rendering the complete instructions', () => {

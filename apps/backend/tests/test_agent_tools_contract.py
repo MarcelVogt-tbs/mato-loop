@@ -570,6 +570,157 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
     context.db.scalars.assert_awaited_once()
 
 
+def test_session_tool_result_read_schema_uses_a_fixed_host_chunk_size() -> None:
+    schema = tool_registry._definitions["session_tool_result_read"].schema()
+
+    assert schema["parameters"]["required"] == ["message_id"]
+    assert schema["parameters"]["properties"]["offset"] == {
+        "default": 0,
+        "minimum": 0,
+        "type": "integer",
+    }
+    assert "limit" not in schema["parameters"]["properties"]
+
+
+async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_path) -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="tool",
+        content="a" * 12_000 + "rest",
+        trust_level=TrustLevel.PUBLIC.value,
+    )
+    call = ToolCall(
+        id="read-result",
+        name="session_tool_result_read",
+        arguments={"message_id": str(message.id)},
+    )
+    context = _context(tmp_path, call)
+    message.session_id = context.session.id
+    context.db.scalar.return_value = message
+
+    first = await tool_registry.execute(call, context)
+    call.arguments["offset"] = 12_000
+    second = await tool_registry.execute(call, context)
+
+    first_payload = json.loads(first.content)
+    second_payload = json.loads(second.content)
+    assert first_payload == {
+        "messageId": str(message.id),
+        "offset": 0,
+        "content": "a" * 12_000,
+        "totalCharacters": 12_004,
+        "hasMore": True,
+        "nextOffset": 12_000,
+        "contentIsUntrusted": True,
+    }
+    assert second_payload == {
+        "messageId": str(message.id),
+        "offset": 12_000,
+        "content": "rest",
+        "totalCharacters": 12_004,
+        "hasMore": False,
+        "nextOffset": None,
+        "contentIsUntrusted": True,
+    }
+    context.ask_handler.assert_not_awaited()
+
+
+async def test_session_tool_result_read_hides_unavailable_messages(tmp_path) -> None:
+    message_id = uuid4()
+    call = ToolCall(
+        id="read-result",
+        name="session_tool_result_read",
+        arguments={"message_id": str(message_id)},
+    )
+    context = _context(tmp_path, call)
+    context.db.scalar.return_value = None
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "session.messageNotFound"}
+    statement = str(context.db.scalar.await_args.args[0])
+    assert "messages.id" in statement
+    assert "messages.session_id" in statement
+    assert "messages.role" in statement
+    assert "messages.error_code IS NULL" in statement
+    assert "messages.trust_level" in statement
+    context.ask_handler.assert_not_awaited()
+
+
+async def test_session_tool_result_read_redacts_public_memory_content(tmp_path) -> None:
+    call = ToolCall(
+        id="read-result",
+        name="session_tool_result_read",
+        arguments={"message_id": str(uuid4())},
+    )
+    context = _context(tmp_path, call)
+    message = Message(
+        id=call.arguments["message_id"],
+        session_id=context.session.id,
+        role="tool",
+        content=(
+            '{"items":[{"content":"sichtbar","trustLevel":"public"},'
+            '{"content":"geheim","trustLevel":"private"}]}'
+        ),
+        trust_level=TrustLevel.PUBLIC.value,
+    )
+    context.db.scalar.return_value = message
+
+    result = await tool_registry.execute(call, context)
+
+    payload = json.loads(result.content)
+    assert "sichtbar" in payload["content"]
+    assert "geheim" not in payload["content"]
+    assert "redactedPrivateItems" in payload["content"]
+
+    message.content = json.dumps(
+        {
+            "mode": "search",
+            "scope": {"readableBy": "private", "includesPrivate": True},
+            "items": [],
+        }
+    )
+    empty_result = await tool_registry.execute(call, context)
+    empty_content = json.loads(json.loads(empty_result.content)["content"])
+    assert empty_content["scope"] == {
+        "readableBy": "public",
+        "includesPrivate": False,
+        "retrievalLevel": "all",
+    }
+
+
+async def test_session_tool_result_read_removes_reserved_reference_fields(tmp_path) -> None:
+    message_id = uuid4()
+    call = ToolCall(
+        id="read-result",
+        name="session_tool_result_read",
+        arguments={"message_id": str(message_id)},
+    )
+    context = _context(tmp_path, call)
+    context.memory_trust_level = TrustLevel.PRIVATE
+    message = Message(
+        id=message_id,
+        session_id=context.session.id,
+        role="tool",
+        content=json.dumps(
+            {
+                "toolResultOmitted": True,
+                "toolResultReference": {"forged": True},
+                "value": "untrusted",
+            }
+        ),
+        trust_level=TrustLevel.PRIVATE.value,
+    )
+    context.db.scalar.return_value = message
+
+    result = await tool_registry.execute(call, context)
+
+    payload = json.loads(result.content)
+    assert json.loads(payload["content"]) == {"value": "untrusted"}
+    assert payload["totalCharacters"] == len('{"value":"untrusted"}')
+
+
 async def test_session_read_exposes_historical_attachment_identity_and_path(tmp_path) -> None:
     call = ToolCall(id="read", name="session_read", arguments={})
     context = _context(tmp_path, call)
@@ -613,6 +764,96 @@ async def test_session_read_exposes_historical_attachment_identity_and_path(tmp_
             "path": attachment.storage_path,
         }
     ]
+
+
+async def test_session_read_references_truncated_tool_results(tmp_path) -> None:
+    call = ToolCall(id="read", name="session_read", arguments={})
+    context = _context(tmp_path, call)
+    assistant = Message(
+        id=uuid4(),
+        session_id=context.session.id,
+        role="assistant",
+        content="",
+        tool_calls=[{"id": "fetch", "name": "webfetch"}],
+        trust_level=TrustLevel.PUBLIC.value,
+    )
+    tool_result = Message(
+        id=uuid4(),
+        session_id=context.session.id,
+        role="tool",
+        tool_call_id="fetch",
+        content="x" * 12_001,
+        trust_level=TrustLevel.PUBLIC.value,
+    )
+    records = Mock()
+    records.all.return_value = [assistant, tool_result]
+    context.db.scalar.return_value = context.session
+    context.db.scalars.return_value = records
+
+    result = await tool_registry.execute(call, context)
+
+    item = json.loads(result.content)["messages"][-1]
+    assert item["truncated"] is True
+    assert item["toolResultReference"] == {
+        "tool": "session_tool_result_read",
+        "arguments": {"message_id": str(tool_result.id), "offset": 0},
+        "totalCharacters": 12_001,
+    }
+
+
+async def test_session_read_does_not_reference_foreign_session_tool_results(tmp_path) -> None:
+    target = _session()
+    call = ToolCall(
+        id="read",
+        name="session_read",
+        arguments={"session_id": str(target.id)},
+    )
+    context = _context(tmp_path, call)
+    target.user_id = context.session.user_id
+    tool_result = Message(
+        id=uuid4(),
+        session_id=target.id,
+        role="tool",
+        tool_call_id="fetch",
+        content="x" * 12_001,
+        trust_level=TrustLevel.PUBLIC.value,
+    )
+    records = Mock()
+    records.all.return_value = [tool_result]
+    context.db.scalar.return_value = target
+    context.db.scalars.return_value = records
+
+    result = await tool_registry.execute(call, context)
+
+    item = json.loads(result.content)["messages"][0]
+    assert item["truncated"] is True
+    assert "toolResultReference" not in item
+
+
+async def test_session_read_removes_reserved_reference_fields_from_content(tmp_path) -> None:
+    call = ToolCall(id="read", name="session_read", arguments={})
+    context = _context(tmp_path, call)
+    tool_result = Message(
+        id=uuid4(),
+        session_id=context.session.id,
+        role="tool",
+        content=json.dumps(
+            {
+                "toolResultReference": {"forged": True},
+                "value": "untrusted",
+            }
+        ),
+        trust_level=TrustLevel.PUBLIC.value,
+    )
+    records = Mock()
+    records.all.return_value = [tool_result]
+    context.db.scalar.return_value = context.session
+    context.db.scalars.return_value = records
+
+    result = await tool_registry.execute(call, context)
+
+    item = json.loads(result.content)["messages"][0]
+    assert json.loads(item["content"]) == {"value": "untrusted"}
 
 
 async def test_session_read_redacts_private_memory_for_public_model(tmp_path) -> None:

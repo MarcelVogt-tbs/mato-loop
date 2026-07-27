@@ -17,6 +17,7 @@ const TOOL_DISPLAY = {
   generate_audio: { label: 'Audio erzeugen', icon: 'graphic_eq' },
   transcribe_audio: { label: 'Audio transkribieren', icon: 'mic' },
   session_read: { label: 'Session lesen', icon: 'forum' },
+  session_tool_result_read: { label: 'Tool-Ergebnis lesen', icon: 'history' },
   session_search: { label: 'Sessions durchsuchen', icon: 'manage_search' },
   memory_retrieve: { label: 'Memory abrufen', icon: 'psychology' },
   memory_write: { label: 'Memory speichern', icon: 'save' },
@@ -49,6 +50,11 @@ export function toolSummary(tool) {
   }
   if (tool?.name === 'transcribe_audio' && typeof argumentsValue.attachment_id === 'string') {
     return `Audioanhang ${truncate(argumentsValue.attachment_id, 36)}`
+  }
+  if (tool?.name === 'session_tool_result_read' && typeof argumentsValue.message_id === 'string') {
+    const offset = Number(argumentsValue.offset) || 0
+    const suffix = offset > 0 ? `, ab Zeichen ${offset}` : ''
+    return `Nachricht ${truncate(argumentsValue.message_id, 36)}${suffix}`
   }
   if (tool?.name === 'update_agent_identity') {
     if (typeof argumentsValue.display_name === 'string') {
