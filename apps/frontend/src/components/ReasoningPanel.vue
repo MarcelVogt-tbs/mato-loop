@@ -38,15 +38,12 @@
         <pre class="reasoning-panel__content">{{ reasoning.text }}</pre>
       </div>
     </q-expansion-item>
-    <span v-if="running" class="q-sr-only" role="status" aria-live="polite" aria-atomic="true">
-      {{ title }}
-    </span>
   </div>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { agentActivityLabel, formatActivityDuration } from 'src/utils/agent-activity'
+import { formatActivityDuration } from 'src/utils/agent-activity'
 import { formatReasoningDuration, reasoningTitle } from 'src/utils/reasoning-display'
 
 defineOptions({ name: 'ReasoningPanel' })
@@ -60,13 +57,11 @@ const props = defineProps({
 defineEmits(['update:expanded'])
 
 const now = ref(Date.now())
+const liveStartedAt = ref(props.running ? props.activity?.startedAt : null)
 let timer = null
-const activityText = computed(() => props.activity?.phase === 'waiting_model'
-  ? 'Modell denkt nach'
-  : props.activity ? agentActivityLabel(props.activity) : '')
-const title = computed(() => reasoningTitle(props.reasoning, props.running, activityText.value))
-const duration = computed(() => props.running && props.activity?.startedAt
-  ? formatActivityDuration(props.activity.startedAt, now.value)
+const title = computed(() => reasoningTitle(props.reasoning, props.running, 'Denkprozess'))
+const duration = computed(() => props.running && liveStartedAt.value
+  ? formatActivityDuration(liveStartedAt.value, now.value)
   : formatReasoningDuration(props.reasoning.observedDurationMs))
 
 onMounted(() => {

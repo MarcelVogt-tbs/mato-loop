@@ -1,9 +1,9 @@
 import { toolIdentity } from 'src/utils/tool-display'
 
 const LABELS = {
-  submitting: 'LLM verarbeitet die Anfrage',
-  queued: 'LLM verarbeitet die Anfrage',
-  preparing_context: 'LLM verarbeitet die Anfrage',
+  submitting: 'Anfrage wird übergeben',
+  queued: 'Ausführung wartet auf den Start',
+  preparing_context: 'Kontext und Tools werden vorbereitet',
   compacting_context: 'Gesprächskontext wird verdichtet',
   streaming: 'Antwort wird erstellt',
   preparing_tools: 'Tool-Aufrufe werden vorbereitet',
@@ -12,16 +12,75 @@ const LABELS = {
   reconnecting: 'Verbindung wird wiederhergestellt'
 }
 
+function toolProgress(activity) {
+  const index = activity?.index
+  const total = activity?.total
+  if (!Number.isInteger(index) || !Number.isInteger(total) || index < 0 || total < 1 || index >= total) {
+    return ''
+  }
+  return ` (${index + 1} von ${total})`
+}
+
 export function agentActivityLabel(activity) {
   if (activity?.phase === 'waiting_model') {
     return activity.modelRequest > 1
-      ? 'Modell verarbeitet die Tool-Ergebnisse'
-      : 'LLM verarbeitet die Anfrage'
+      ? 'Modell wertet Tool-Ergebnisse aus'
+      : 'Modell analysiert die Anfrage'
   }
   if (activity?.phase === 'processing_tool') {
-    return `Tool wird ausgeführt: ${toolIdentity(activity.tool).label}`
+    return `Tool wird ausgeführt: ${toolIdentity(activity.tool).label}${toolProgress(activity)}`
   }
   return LABELS[activity?.phase] || 'Agent arbeitet'
+}
+
+export function agentActivityDisplayKey(activity) {
+  if (activity?.phase === 'waiting_model') {
+    return `waiting_model:${activity.modelRequest > 1 ? 'tool_results' : 'request'}`
+  }
+  if (activity?.phase === 'processing_tool') {
+    return `processing_tool:${activity.tool || 'unknown'}:${activity.index ?? ''}:${activity.total ?? ''}`
+  }
+  return activity?.phase || 'idle'
+}
+
+export function agentRunPresentation({
+  running = false,
+  activity = null,
+  streamReasoning = null,
+  streamContent = '',
+  transcript = null
+} = {}) {
+  if (!running) return { showActivity: false, announcement: '' }
+
+  const toolItems = (transcript?.messages || []).flatMap((message) => message.toolCalls || [])
+  const approval = toolItems.find((item) => item.approval)?.approval
+    || transcript?.unmatchedApprovals?.[0]
+  if (approval) {
+    return {
+      showActivity: false,
+      announcement: approval.title
+        ? `Freigabe erforderlich: ${approval.title}`
+        : 'Freigabe erforderlich'
+    }
+  }
+
+  if (toolItems.some((item) => item.active)) {
+    return { showActivity: false, announcement: agentActivityLabel(activity) }
+  }
+  if (activity?.phase === 'preparing_tools'
+    && toolItems.some((item) => item.current && !item.result)) {
+    return { showActivity: false, announcement: 'Tool-Aufrufe werden vorbereitet' }
+  }
+  if (streamContent) {
+    return { showActivity: false, announcement: 'Antwort wird erstellt' }
+  }
+  if (streamReasoning) {
+    return { showActivity: false, announcement: 'Denkprozess' }
+  }
+  if (activity?.phase === 'finalizing') {
+    return { showActivity: false, announcement: 'Antwort wird abgeschlossen' }
+  }
+  return { showActivity: true, announcement: agentActivityLabel(activity) }
 }
 
 export function formatActivityDuration(startedAt, now = Date.now()) {

@@ -6,7 +6,7 @@ describe('reasoning display', () => {
   it('distinguishes provider summaries from public reasoning content', () => {
     expect(reasoningTitle({ kind: 'summary' })).toBe('Begründungszusammenfassung anzeigen')
     expect(reasoningTitle({ kind: 'content' })).toBe('Denkprozess anzeigen')
-    expect(reasoningTitle({}, true, 'Modell denkt nach')).toBe('Modell denkt nach')
+    expect(reasoningTitle({}, true, 'Denkprozess')).toBe('Denkprozess')
   })
 
   it('formats observed durations without inventing missing values', () => {

@@ -73,6 +73,34 @@ describe('chat drafts', () => {
     expect(chat.activeDraft).toBe('Neue Session Entwurf')
   })
 
+  it('keeps activity time stable until the visible work changes', () => {
+    const chat = useChatStore()
+    const modelStartedAt = '2026-07-27T12:00:00.000Z'
+    const repeatedEventAt = '2026-07-27T12:00:05.000Z'
+    const firstToolStartedAt = '2026-07-27T12:00:10.000Z'
+    const secondToolStartedAt = '2026-07-27T12:00:12.000Z'
+
+    chat.setActivity('waiting_model', { modelRequest: 2, startedAt: modelStartedAt })
+    chat.setActivity('waiting_model', { modelRequest: 3, startedAt: repeatedEventAt })
+    expect(chat.activity.startedAt).toBe(modelStartedAt)
+
+    chat.setActivity('processing_tool', {
+      tool: 'read_file', toolCallId: 'call-1', index: 0, total: 2, startedAt: firstToolStartedAt
+    })
+    expect(chat.activity).toMatchObject({
+      startedAt: firstToolStartedAt,
+      tool: 'read_file',
+      toolCallId: 'call-1',
+      index: 0,
+      total: 2
+    })
+
+    chat.setActivity('processing_tool', {
+      tool: 'read_file', index: 1, total: 2, startedAt: secondToolStartedAt
+    })
+    expect(chat.activity.startedAt).toBe(secondToolStartedAt)
+  })
+
   it('restores drafts from local storage without a schema version', () => {
     const first = useChatStore()
     first.setDraft('Bleibt lokal erhalten')
@@ -611,9 +639,13 @@ describe('chat drafts', () => {
     expect(chat.sessions[0].titleGenerationStatus).toBe('completed')
 
     source.emit('approval.created', {
-      approval: { id: 'approval-1', details: { tool: 'write_file' } }
+      approval: { id: 'approval-1', details: { tool: 'write_file', toolCallId: 'call-1' } }
     })
-    expect(chat.activity).toMatchObject({ phase: 'waiting_approval', tool: 'write_file' })
+    expect(chat.activity).toMatchObject({
+      phase: 'waiting_approval',
+      tool: 'write_file',
+      toolCallId: 'call-1'
+    })
   })
 
   it('promotes streamed content before refreshing the persisted message', async () => {

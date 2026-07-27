@@ -1,4 +1,8 @@
-export function buildChatTranscript(messages = [], approvals = [], running = false) {
+export function buildChatTranscript(
+  messages = [],
+  approvals = [],
+  { running = false, toolExecutionActive = running, activeToolCallId = null } = {}
+) {
   const results = new Map()
   for (const message of messages) {
     if (message.role === 'tool' && message.toolCallId) results.set(message.toolCallId, message)
@@ -28,17 +32,16 @@ export function buildChatTranscript(messages = [], approvals = [], running = fal
         const result = results.get(tool.id) || null
         const currentRound = running && index > lastUserIndex
         if (approval) matchedApprovalIds.add(approval.id)
-        const active = currentRound
-          && !result
-          && !approval
-          && !activeAssigned
-          && !executionBlocked
+        const active = currentRound && toolExecutionActive && !result && !approval && (activeToolCallId
+          ? tool.id === activeToolCallId
+          : !activeAssigned && !executionBlocked)
         if (active) activeAssigned = true
-        if (currentRound && !result) executionBlocked = true
+        if (currentRound && toolExecutionActive && !result && !activeToolCallId) executionBlocked = true
         return {
           tool,
           result,
           approval,
+          current: currentRound,
           active
         }
       })

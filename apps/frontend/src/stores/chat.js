@@ -3,6 +3,7 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
+import { agentActivityDisplayKey } from 'src/utils/agent-activity'
 import { safeAttachmentUrl } from 'src/utils/attachments'
 import { notifyError } from 'src/utils/notifications'
 
@@ -93,7 +94,10 @@ function emptyActivity(revision = 0) {
     phase: 'idle',
     startedAt: null,
     tool: null,
+    toolCallId: null,
     modelRequest: null,
+    index: null,
+    total: null,
     revision
   }
 }
@@ -228,12 +232,21 @@ export const useChatStore = defineStore('chat', {
   },
   actions: {
     setActivity(phase, details = {}) {
-      const startedAt = details.startedAt || this.activity.startedAt || new Date().toISOString()
-      this.activity = {
+      const nextActivity = {
         phase,
-        startedAt,
         tool: details.tool || null,
+        toolCallId: details.toolCallId || null,
         modelRequest: details.modelRequest || null,
+        index: Number.isInteger(details.index) ? details.index : null,
+        total: Number.isInteger(details.total) ? details.total : null
+      }
+      const sameDisplay = agentActivityDisplayKey(this.activity) === agentActivityDisplayKey(nextActivity)
+      const startedAt = sameDisplay
+        ? this.activity.startedAt || details.startedAt || new Date().toISOString()
+        : details.startedAt || new Date().toISOString()
+      this.activity = {
+        ...nextActivity,
+        startedAt,
         revision: this.activity.revision + 1
       }
     },
@@ -1050,17 +1063,26 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('approval.created', (event) => {
         if (this.eventSource !== source) return
         const approval = JSON.parse(event.data).approval
-        this.setActivity('waiting_approval', { tool: approval.details?.tool })
+        this.setActivity('waiting_approval', {
+          tool: approval.details?.tool,
+          toolCallId: approval.details?.toolCallId
+        })
         useApprovalStore().add(approval)
       })
       source.addEventListener('approval.resolved', () => {
         if (this.eventSource !== source) return
-        this.setActivity('processing_tool', { tool: this.activity.tool })
+        this.setActivity('processing_tool', {
+          tool: this.activity.tool,
+          toolCallId: this.activity.toolCallId
+        })
         useApprovalStore().fetchPending()
       })
       source.addEventListener('approval.expired', () => {
         if (this.eventSource !== source) return
-        this.setActivity('processing_tool', { tool: this.activity.tool })
+        this.setActivity('processing_tool', {
+          tool: this.activity.tool,
+          toolCallId: this.activity.toolCallId
+        })
         useApprovalStore().fetchPending()
       })
       const finish = () => {

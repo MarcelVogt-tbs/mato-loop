@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest'
 
-import { agentActivityLabel, formatActivityDuration } from '../src/utils/agent-activity'
+import {
+  agentActivityDisplayKey,
+  agentActivityLabel,
+  agentRunPresentation,
+  formatActivityDuration
+} from '../src/utils/agent-activity'
 
 describe('agent activity', () => {
   it('uses safe German labels for runtime phases', () => {
-    expect(agentActivityLabel({ phase: 'preparing_context' })).toBe('LLM verarbeitet die Anfrage')
+    expect(agentActivityLabel({ phase: 'preparing_context' }))
+      .toBe('Kontext und Tools werden vorbereitet')
     expect(agentActivityLabel({ phase: 'waiting_model', modelRequest: 1 }))
-      .toBe('LLM verarbeitet die Anfrage')
+      .toBe('Modell analysiert die Anfrage')
     expect(agentActivityLabel({ phase: 'waiting_model', modelRequest: 2 }))
-      .toBe('Modell verarbeitet die Tool-Ergebnisse')
+      .toBe('Modell wertet Tool-Ergebnisse aus')
     expect(agentActivityLabel({ phase: 'streaming' })).toBe('Antwort wird erstellt')
   })
 
@@ -17,6 +23,55 @@ describe('agent activity', () => {
       .toBe('Tool wird ausgeführt: Datei lesen')
     expect(agentActivityLabel({ phase: 'processing_tool', tool: 'unknown_tool' }))
       .toBe('Tool wird ausgeführt: Tool ausführen')
+    expect(agentActivityLabel({
+      phase: 'processing_tool', tool: 'read_file', index: 1, total: 3
+    })).toBe('Tool wird ausgeführt: Datei lesen (2 von 3)')
+  })
+
+  it('identifies changes to the visible activity independently from event timestamps', () => {
+    expect(agentActivityDisplayKey({ phase: 'waiting_model', modelRequest: 2 }))
+      .toBe(agentActivityDisplayKey({ phase: 'waiting_model', modelRequest: 3 }))
+    expect(agentActivityDisplayKey({ phase: 'processing_tool', tool: 'read_file', index: 0, total: 2 }))
+      .not.toBe(agentActivityDisplayKey({ phase: 'processing_tool', tool: 'read_file', index: 1, total: 2 }))
+  })
+
+  it('shows the global activity only when no concrete run artifact owns the status', () => {
+    const activity = { phase: 'waiting_model', modelRequest: 1 }
+    expect(agentRunPresentation({ running: true, activity })).toEqual({
+      showActivity: true,
+      announcement: 'Modell analysiert die Anfrage'
+    })
+    expect(agentRunPresentation({ running: true, activity, streamReasoning: { text: 'Plan' } }))
+      .toEqual({ showActivity: false, announcement: 'Denkprozess' })
+    expect(agentRunPresentation({ running: true, activity, streamContent: 'Antwort' }))
+      .toEqual({ showActivity: false, announcement: 'Antwort wird erstellt' })
+    expect(agentRunPresentation({
+      running: true,
+      activity: { phase: 'processing_tool', tool: 'read_file' },
+      transcript: { messages: [{ toolCalls: [{ active: true }] }], unmatchedApprovals: [] }
+    })).toEqual({ showActivity: false, announcement: 'Tool wird ausgeführt: Datei lesen' })
+    expect(agentRunPresentation({
+      running: true,
+      activity: { phase: 'preparing_tools' },
+      transcript: {
+        messages: [{ toolCalls: [{ current: true, result: null }] }],
+        unmatchedApprovals: []
+      }
+    })).toEqual({ showActivity: false, announcement: 'Tool-Aufrufe werden vorbereitet' })
+    expect(agentRunPresentation({
+      running: true,
+      activity,
+      transcript: {
+        messages: [{ toolCalls: [{ approval: { title: 'Datei schreiben?' } }] }],
+        unmatchedApprovals: []
+      }
+    })).toEqual({ showActivity: false, announcement: 'Freigabe erforderlich: Datei schreiben?' })
+    expect(agentRunPresentation({ running: true, activity: { phase: 'finalizing' } }))
+      .toEqual({ showActivity: false, announcement: 'Antwort wird abgeschlossen' })
+    expect(agentRunPresentation({ running: false, activity })).toEqual({
+      showActivity: false,
+      announcement: ''
+    })
   })
 
   it('formats the total duration in whole seconds', () => {

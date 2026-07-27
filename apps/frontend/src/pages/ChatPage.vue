@@ -39,7 +39,7 @@
             Was möchtest du tun?
           </p>
           <AgentActivity
-            v-if="chat.running"
+            v-if="runPresentation.showActivity"
             :activity="chat.activity"
             class="chat-welcome__activity text-left q-mx-auto"
           />
@@ -199,7 +199,7 @@
             :approval="approval"
             class="q-mt-md"
           />
-          <AgentActivity v-if="chat.running && !chat.streamReasoning" :activity="chat.activity" />
+          <AgentActivity v-if="runPresentation.showActivity" :activity="chat.activity" />
         </div>
       </div>
     </q-scroll-area>
@@ -249,6 +249,9 @@
         @update:draft="chat.setDraft"
       />
     </div>
+    <span class="q-sr-only" role="status" aria-live="polite" aria-atomic="true">
+      {{ announcedRunStatus }}
+    </span>
   </q-page>
 </template>
 
@@ -272,6 +275,7 @@ import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { useConfirm } from 'src/composables/confirm'
+import { agentRunPresentation } from 'src/utils/agent-activity'
 import { chatBottomDistance, scrollChatToBottom } from 'src/utils/chat-scroll'
 import { buildChatTranscript } from 'src/utils/chat-transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
@@ -297,6 +301,7 @@ const trustedImageOriginsBySession = ref(new Map())
 const followingBottom = ref(true)
 const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
+const announcedRunStatus = ref('')
 const bottomThreshold = 64
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
@@ -307,13 +312,25 @@ let scrollTarget = null
 let userScrollActive = false
 let userScrollTimer = null
 let messageTimestampTimer = null
+let runAnnouncementTimer = null
 let touchActive = false
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
 const transcript = computed(() => buildChatTranscript(
   chat.current?.messages,
   sessionApprovals.value,
-  chat.running
+  {
+    running: chat.running,
+    toolExecutionActive: chat.activity.phase === 'processing_tool',
+    activeToolCallId: chat.activity.toolCallId
+  }
 ))
+const runPresentation = computed(() => agentRunPresentation({
+  running: chat.running,
+  activity: chat.activity,
+  streamReasoning: chat.streamReasoning,
+  streamContent: chat.streamContent,
+  transcript: transcript.value
+}))
 const trustedImageOrigins = computed(() => (
   trustedImageOriginsBySession.value.get(chat.current?.id) || []
 ))
@@ -544,6 +561,20 @@ function chatPageStyle(offset, height) {
 
 watch(routeSessionId, () => void loadRouteSession(), { immediate: true })
 watch(
+  () => runPresentation.value.announcement,
+  (value) => {
+    clearTimeout(runAnnouncementTimer)
+    if (!value) {
+      announcedRunStatus.value = ''
+      return
+    }
+    runAnnouncementTimer = window.setTimeout(() => {
+      announcedRunStatus.value = value
+    }, 250)
+  },
+  { immediate: true }
+)
+watch(
   () => chat.current?.id,
   async (sessionId, previousSessionId) => {
     if (!sessionId || sessionId === previousSessionId) return
@@ -567,6 +598,7 @@ onBeforeUnmount(() => {
   scrollTarget?.removeEventListener('touchcancel', handleTouchEnd)
   scrollTarget?.removeEventListener('wheel', handleWheel)
   window.clearInterval(messageTimestampTimer)
+  clearTimeout(runAnnouncementTimer)
   clearTimeout(userScrollTimer)
   cancelFollowScroll()
 })
