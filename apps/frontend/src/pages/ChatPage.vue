@@ -254,7 +254,7 @@
         @update:draft="chat.setDraft"
       />
     </div>
-    <span class="q-sr-only" role="status" aria-live="polite" aria-atomic="true">
+    <span class="app-sr-only" role="status" aria-live="polite" aria-atomic="true">
       {{ announcedRunStatus }}
     </span>
   </q-page>

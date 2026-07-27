@@ -60,7 +60,7 @@ def document_bytes(document_format: str) -> bytes:
         slide.shapes.title.text = "Sicherer PPTX-Inhalt"
         presentation.save(buffer)
     else:
-        raise AssertionError("Unbekanntes Testformat")
+        raise AssertionError("Unknown test format")
     return buffer.getvalue()
 
 

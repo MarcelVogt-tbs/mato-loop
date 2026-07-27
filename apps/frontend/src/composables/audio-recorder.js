@@ -105,7 +105,7 @@ export function createAudioRecorder({
       try {
         node?.disconnect()
       } catch {
-        // Bereits getrennte Web-Audio-Knoten benötigen keine weitere Behandlung.
+        // Already disconnected Web Audio nodes need no further handling.
       }
     }
     resources.stream?.getTracks().forEach((track) => track.stop())

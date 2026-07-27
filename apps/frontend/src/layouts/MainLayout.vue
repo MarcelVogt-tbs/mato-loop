@@ -414,7 +414,7 @@ async function renameSession() {
     await chat.renameSession(renameSessionId.value, title)
     renameDialogOpen.value = false
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler; der Dialog bleibt zur Korrektur offen.
+    // The central API interceptor displays the error; the dialog remains open for correction.
   } finally {
     renaming.value = false
   }
@@ -427,7 +427,7 @@ async function toggleSessionPinned(session) {
   try {
     await chat.setSessionPinned(session.id, !session.pinned)
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler; der bestehende Zustand bleibt erhalten.
+    // The central API interceptor displays the error; existing state remains unchanged.
   } finally {
     pinningSessionId.value = null
   }

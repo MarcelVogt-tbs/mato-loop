@@ -1,80 +1,80 @@
 # MatoLoop Frontend
 
-Das MatoLoop-Frontend ist eine Vue-3-SPA mit Quasar, Pinia und Vue Router. Im Devstack läuft es als eigener HMR-Prozess und leitet `/api` an das Backend weiter.
+The MatoLoop frontend is a Vue 3 SPA using Quasar, Pinia, and Vue Router. In the development stack it runs as a separate HMR process and proxies `/api` to the backend.
 
-## Entwicklung
+## Development
 
-Das Frontend wird normalerweise vom Repository-Root als Teil des Devstacks gestartet:
+The frontend normally starts from the repository root as part of the development stack:
 
 ```bash
 ./scripts/dev.sh up --build -d
 ./scripts/dev.sh logs frontend
 ```
 
-Die WebUI ist anschließend unter `http://localhost:10020` erreichbar. Installierte Pakete liegen im Named Volume `frontend_node_modules`; ein zusätzlicher Cache-Pfad ist als `frontend_yarn_cache` eingebunden.
+The Web UI is then available at `http://localhost:10020`. Installed packages live in the `frontend_node_modules` named volume; `frontend_yarn_cache` provides an additional cache mount.
 
-## Struktur
+## Structure
 
-- `src/pages`: routbare Seiten
-- `src/layouts`: gemeinsame Navigation und Seitenrahmen
-- `src/components`: wiederverwendbare UI-Bausteine
-- `src/stores`: Pinia-Stores für Server- und Laufzeitzustand
-- `src/boot`: Quasar-Boot-Dateien, Axios und globale Directives
-- `src/composables`: wiederverwendbare Composition-API-Logik
-- `src/directives`: globale Vue-Directives
-- `src/utils`: zustandslose Hilfsfunktionen wie Fehlerübersetzung
-- `src/css`: globale Styles und Theme-Anpassungen
-- `tests`: Vitest-Tests
+- `src/pages`: routable pages
+- `src/layouts`: shared navigation and page frames
+- `src/components`: reusable UI components
+- `src/stores`: Pinia stores for server and runtime state
+- `src/boot`: Quasar boot files, Axios, and global directives
+- `src/composables`: reusable Composition API logic
+- `src/directives`: global Vue directives
+- `src/utils`: stateless helpers such as error localization
+- `src/css`: global styles and theme adjustments
+- `tests`: Vitest tests
 
-## API-Fehler und Toasts
+## API Errors and Toasts
 
-Das Backend liefert sprachneutrale Fehlercodes. `src/utils/api-errors.js` übersetzt diese Codes in deutsche Meldungen und formatiert optionale `field`- und `params`-Werte.
+The backend returns language-neutral error codes. `src/utils/api-errors.js` translates them into German messages and formats optional `field` and `params` values.
 
-Der Axios-Response-Interceptor in `src/boot/axios.js` zeigt API-Fehler zentral als negative Quasar-Toasts an. Komponenten dürfen denselben Fehler nicht zusätzlich benachrichtigen.
+The Axios response interceptor in `src/boot/axios.js` displays API errors centrally as negative Quasar toasts. Components must not display a duplicate notification for the same error.
 
-Fehler außerhalb von Axios, beispielsweise `run.failed` über SSE oder ein fehlgeschlagener OAuth-Status, verwenden `notifyError` aus `src/utils/notifications.js`.
+Failures outside Axios, such as `run.failed` over SSE or a failed OAuth status, use `notifyError` from `src/utils/notifications.js`.
 
-Regeln:
+Rules:
 
-- Niemals `response.data`, `detail`, Arrays oder Fehlerobjekte direkt rendern.
-- Niemals Backendtexte vergleichen, um Programmabläufe zu steuern.
-- Neue Backendcodes in `api-errors.js` mit einer sicheren Meldung ergänzen.
-- Dynamische Werte ausschließlich aus `params` einsetzen.
-- Für unbekannte Codes einen generischen Fallback anhand des HTTP-Status verwenden.
-- Optimistische UI-Einträge nach fehlgeschlagenen Requests zurücknehmen.
+- Never render `response.data`, `detail`, arrays, or error objects directly.
+- Never compare backend text to control program flow.
+- Add new backend codes to `api-errors.js` with a safe message.
+- Insert dynamic values only from `params`.
+- Use a generic fallback based on HTTP status for unknown codes.
+- Roll back optimistic UI entries after failed requests.
 
-Die Code-zu-Text-Abbildung kann später durch eine i18n-Bibliothek ersetzt werden. Backendcodes und Parameter bleiben dabei unverändert.
+The code-to-text mapping can later be replaced by an i18n library. Backend codes and parameters remain unchanged.
 
-## Bestätigungen und Dialoge
+## Confirmations and Dialogs
 
-Einfache destruktive Aktionen verwenden `useConfirm` aus `src/composables/confirm.js` oder die Directive `v-confirm`. Dazu gehören insbesondere das Löschen von Sessions, Dateien oder Ordnern.
+Simple destructive actions use `useConfirm` from `src/composables/confirm.js` or the `v-confirm` directive. This includes deleting sessions, files, and directories.
 
-Quasar-Dialoge werden verwendet, wenn zusätzlich Eingaben oder mehrere fachliche Entscheidungen notwendig sind. Human-in-the-loop-Freigaben verwenden den persistierten Approval-Zustand und dürfen beim Schließen nicht automatisch abgelehnt werden.
+Quasar dialogs are used when additional input or multiple domain decisions are required. Human-in-the-loop approvals use persistent approval state and must not be denied automatically when the dialog closes.
 
-## UI-Regeln
+## UI Rules
 
-- Quasar-Komponenten und Utilities haben Vorrang vor neuem Custom CSS.
-- Seiten, Dialoge und Drawer müssen auf Desktop und Mobile bedienbar sein.
-- Light Mode und Dark Mode müssen beide unterstützt werden.
-- Nutzerseitige Texte werden auf Deutsch geschrieben.
-- Stores verwalten Serverzustand; Komponenten koordinieren Darstellung und Benutzeraktionen.
-- Angezeigt wird der effektive Runtime-Zustand, nicht nur ein gespeicherter Wunschwert.
-- Webfetch-Policy und Modell-Override werden getrennt angezeigt; die globale Netzwerk-Allowlist bleibt eine Hostgrenze.
-- Attachment-URLs müssen authentifizierte interne MatoLoop-Pfade sein. Fremde URLs und `v-html` sind für Tool-Ergebnisse unzulässig.
-- Assistant-Antworten werden ausschließlich über die zentrale Markdown-Komponente gerendert. Sie deaktiviert Raw HTML, sanitisiert das erzeugte HTML und ist die einzige zulässige `v-html`-Ausnahme.
-- Die Markdown-Komponente rendert KaTeX-unterstütztes LaTeX mit `$...$`, `$$...$$`, `\\(...\\)` und `\\[...\\]`. Vertrauensabhängige KaTeX-Befehle sind deaktiviert; notwendige Styles bleiben ausschließlich innerhalb erzeugter KaTeX-Teilbäume erhalten.
-- Externe Markdown-Bilder bleiben bis zu einer expliziten, sitzungsbezogenen Origin-Freigabe inaktiv. Danach muss jede konkrete URL einen Browser-Load und die Bilddecodierung bestehen; Fehler und Timeouts bleiben als Platzhalter mit Retry sichtbar. Interne Bilder werden nur über validierte MatoLoop-Attachment-Pfade automatisch geladen.
+- Prefer Quasar components and utilities over new custom CSS.
+- Pages, dialogs, and drawers must be usable on desktop and mobile.
+- Support both light and dark mode.
+- Write visible user-facing text in German.
+- Stores manage server state; components coordinate presentation and user interaction.
+- Display effective runtime state, not only stored desired values.
+- Display the webfetch policy separately from model overrides; the global network allowlist remains a host boundary.
+- Attachment URLs must be authenticated internal MatoLoop paths. External URLs and `v-html` are forbidden for tool results.
+- Render assistant responses only through the central Markdown component. It disables raw HTML, sanitizes generated HTML, and is the only permitted `v-html` exception.
+- The Markdown component renders KaTeX-supported LaTeX with `$...$`, `$$...$$`, `\(...\)`, and `\[...\]`. Trust-dependent KaTeX commands are disabled; required styles remain confined to generated KaTeX subtrees.
+- External Markdown images remain inactive until an explicit session-scoped origin approval. Each concrete URL must then pass browser loading and image decoding; failures and timeouts remain visible as retryable placeholders. Internal images load automatically only through validated MatoLoop attachment paths.
 
-## Checks und Tests
+## Checks and Tests
 
-Vom Repository-Root:
+From the repository root:
 
 ```bash
 ./scripts/dev.sh check frontend
 ./scripts/dev.sh test frontend
 ```
 
-Direkt aus `apps/frontend`, wenn die Yarn-Abhängigkeiten bereits installiert sind:
+Directly from `apps/frontend`, when Yarn dependencies are already installed:
 
 ```bash
 yarn lint
@@ -82,4 +82,4 @@ yarn test
 yarn build
 ```
 
-Neue Fehlercodes benötigen Tests für die übersetzte Meldung und den sicheren Fallback. UI-Änderungen werden mindestens auf Desktop und Mobile sowie in Light Mode und Dark Mode geprüft.
+New error codes require tests for the translated message and safe fallback. Verify UI changes on desktop and mobile in both light and dark mode.

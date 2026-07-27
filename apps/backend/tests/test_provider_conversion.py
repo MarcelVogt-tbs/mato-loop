@@ -85,7 +85,7 @@ def test_media_follows_complete_parallel_tool_result_block_for_both_protocols() 
 
     assert [item["role"] for item in chat] == ["assistant", "tool", "tool", "user"]
     assert chat[-1]["content"] == [
-        {"type": "text", "text": "[Session-Bild]"},
+        {"type": "text", "text": "[Session image]"},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
@@ -104,7 +104,7 @@ def test_media_follows_complete_parallel_tool_result_block_for_both_protocols() 
     }
     assert responses[-1]["content"][0] == {
         "type": "input_text",
-        "text": "[Session-Bild]",
+        "text": "[Session image]",
     }
 
 

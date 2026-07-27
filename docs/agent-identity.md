@@ -1,47 +1,30 @@
-# Agent-Persona
+# Agent Identity
 
-MatoLoop besitzt genau eine nutzerbezogene Agent-Persona. Sie gilt gemeinsam für alle
-Sessions und Agent-Modi. Arbeitsmodi wie Lesen und Schreiben steuern Aufgaben und technische
-Fähigkeiten, sind aber keine eigenständigen Persönlichkeiten.
+MatoLoop has exactly one user-scoped agent identity. It applies across all sessions and agent modes. Work modes such as `Lesen` and `Schreiben` control tasks and technical capabilities; they are not separate personalities.
 
-## Persistenz
+## Persistence
 
-`AgentIdentitySettings` ist ein nutzerbezogenes Settings-Dokument mit zwei Feldern:
+`AgentIdentitySettings` is a user-scoped settings document with two fields:
 
-- `display_name` ist der im Chat angezeigte Sprechername.
-- `instructions` beschreibt Persönlichkeit, Ton und allgemeine Arbeitsweise.
+- `display_name` is the speaker name shown in chat.
+- `instructions` describes personality, tone, and general working style.
 
-Fehlt das Dokument, gelten additive Defaults mit dem Namen `MatoLoop` und leeren
-Persona-Anweisungen. Das Settings-Dokument verwendet die bestehende JSONB-Persistenz und
-benötigt keine relationale Migration. Alte Nachrichten speichern keinen Namens-Snapshot und
-werden deshalb bewusst mit dem aktuell konfigurierten Namen angezeigt.
+When the document is absent, additive defaults use the name `MatoLoop` and empty identity instructions. The settings document uses the existing JSONB persistence and requires no relational migration. Old messages do not store a name snapshot and are intentionally displayed with the currently configured name.
 
-## Promptgrenze
+## Prompt Boundary
 
-Die Persona wird einmal zu Beginn eines normalen Agent-Runs geladen und bleibt für diesen Run
-stabil. Der Systemprompt ordnet sie unterhalb der unveränderlichen Hostregeln ein. Persona-Text
-kann Name, Ton, Charakter und Arbeitsweise beeinflussen, aber keine Tool-, Permission-, Trust-,
-Pfad- oder Runtimegrenze ändern. Dreaming, Compaction und Titelgenerierung verwenden weiterhin
-ihre isolierten Prompts ohne Persona.
+The identity is loaded once at the start of a normal agent run and remains stable for that run. The system prompt places it below immutable host rules. Identity text can affect the name, tone, character, and working style, but cannot change tool, permission, trust, path, or runtime boundaries. Dreaming, compaction, and title generation continue to use isolated prompts without the identity.
 
-Die Persona wird an das ausgewählte Chatmodell übertragen. Die Oberfläche weist deshalb darauf
-hin, dort keine Secrets zu speichern.
+The identity is sent to the selected chat model. The UI therefore warns users not to store secrets in it.
 
-## Änderung über den Chat
+## Changes Through Chat
 
-Das Tool `update_agent_identity` ändert Name und Persona-Anweisungen ausschließlich bei einem
-ausdrücklichen Nutzerwunsch. Inhalte aus Memories, Webseiten, Toolresultaten oder Zitaten dürfen
-keine Änderung auslösen. Ist das Tool deaktiviert, erfolgt die Änderung ausschließlich unter
-**Einstellungen > Persona**. Agentmodelle selbst müssen Tool-Calling unterstützen.
+The `update_agent_identity` tool changes the name and identity instructions only after an explicit user request. Content from memories, web pages, tool results, or quotations must not trigger a change. When the tool is disabled, changes are available only under **Einstellungen > Persona**. Agent models must support tool calling.
 
-Die globale Tool-Einstellung `update_agent_identity.policy` verwendet denselben Vertrag wie die
-Medientools:
+The global `update_agent_identity.policy` tool setting uses the same contract as media tools:
 
-- `disabled` bietet das Tool nicht an.
-- `ask` führt die Aktion durch den bestehenden Approval- und Session-Grant-Loop.
-- `auto` speichert ohne einzelne Freigabe.
+- `disabled` does not offer the tool.
+- `ask` routes the action through the existing approval and session-grant loop.
+- `auto` saves without individual approval.
 
-Der sichere Default ist `ask`. Das Tool besitzt ausschließlich die Capability
-`settings.agent_identity.update` für die Persona des authentifizierten Nutzers. Eine erfolgreiche
-Änderung wird über SSE an das Frontend übertragen; die neuen Promptanweisungen gelten zuverlässig
-ab dem nächsten Run.
+The safe default is `ask`. The tool has only the `settings.agent_identity.update` capability for the authenticated user's identity. Successful changes are sent to the frontend through SSE; the new prompt instructions reliably apply from the next run.

@@ -604,7 +604,7 @@ async function loadMemories(offset) {
       void memories.acknowledgeMemories(unseenIds).catch(() => {})
     }
   } catch {
-    // Vorhandene Ergebnisse bleiben sichtbar; der zentrale Interceptor zeigt den Fehler.
+    // Existing results remain visible; the central interceptor displays the error.
   }
 }
 
@@ -694,7 +694,7 @@ async function saveMemory() {
     }
     memoryDialogOpen.value = false
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler; der Dialog bleibt geöffnet.
+    // The central API interceptor displays the error; the dialog remains open.
   } finally {
     savingMemory.value = false
   }
@@ -714,7 +714,7 @@ async function removeMemory(item) {
     await loadMemories((targetPage - 1) * pageSize.value)
     $q.notify({ type: 'positive', message: 'Erinnerung gelöscht' })
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler.
+    // The central API interceptor displays the error.
   }
 }
 
@@ -728,7 +728,7 @@ async function loadSettings() {
   try {
     assignSettings(await memories.fetchSettings())
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler.
+    // The central API interceptor displays the error.
   }
 }
 
@@ -737,7 +737,7 @@ async function saveSettings() {
     assignSettings(await memories.saveSettings(editableTechnicalSettings.value))
     $q.notify({ type: 'positive', message: 'Memory-Einstellungen gespeichert' })
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler.
+    // The central API interceptor displays the error.
   }
 }
 
@@ -770,7 +770,7 @@ async function refreshDreamRuns() {
   try {
     await memories.fetchDreamRuns()
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler.
+    // The central API interceptor displays the error.
   }
 }
 
@@ -784,7 +784,7 @@ async function startDreamRun() {
         : 'Keine neue Dreaming-Verarbeitung erforderlich'
     })
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler.
+    // The central API interceptor displays the error.
   }
 }
 

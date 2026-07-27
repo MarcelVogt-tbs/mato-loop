@@ -1,45 +1,45 @@
 # MatoLoop
 
-MatoLoop ist eine selbst gehostete, providerneutrale AI-Chat- und Agent-Harness mit persistenten Sessions, internen Tools, Human-in-the-loop-Freigaben, optionalem Memory und erzwingbarer Websuche.
+MatoLoop is a self-hosted, provider-neutral AI chat and agent harness with persistent sessions, internal tools, human-in-the-loop approvals, optional memory, and enforceable web search.
 
-## Aktueller Stand
+## Current State
 
-Der aktuelle Entwicklungsstand umfasst:
+The current implementation includes:
 
-- Single-User-Setup und Cookie-basierte Anmeldung
-- ChatGPT Codex über Device-Code-OAuth
-- OpenAI-kompatible Chat-Completions- und Responses-Endpunkte
-- persistente Sessions, Nachrichten und Agent-Runs
-- einheitlichen Modell-/Tool-Loop für alle Provider
-- Datei-Explorer und Arbeitsverzeichnisse unter `/data/home`
-- persistente Permission-Grants und Freigabeentscheidungen
-- integrierte Websuche ohne API-Key und zusätzliche SearXNG-Provider
-- sprachneutrale API-Fehlercodes und menschenlesbare Frontend-Toasts
+- single-user setup and cookie-based authentication
+- ChatGPT Codex through device-code OAuth
+- OpenAI-compatible Chat Completions and Responses endpoints
+- persistent sessions, messages, and agent runs
+- one shared model and tool loop for all providers
+- file explorer and working directories under `/data/home`
+- persistent permission grants and approval decisions
+- built-in web search without an API key and additional SearXNG providers
+- language-neutral API error codes and human-readable frontend toasts
 
 ## Stack
 
-- FastAPI und Pydantic v2
-- SQLAlchemy 2.x async, PostgreSQL und Alembic
-- pgvector und lokales Infinity für hybrides Memory-Retrieval
-- Vue 3, Quasar, Pinia und Vue Router
-- `uv` und Yarn 4
+- FastAPI and Pydantic v2
+- asynchronous SQLAlchemy 2.x, PostgreSQL, and Alembic
+- pgvector and local Infinity for hybrid memory retrieval
+- Vue 3, Quasar, Pinia, and Vue Router
+- `uv` and Yarn 4
 - Docker Compose
 
-## Entwicklung
+## Development
 
-Der Entwicklungsstack ist der Standard für alle lokalen Arbeiten:
+The development stack is the standard environment for all local work:
 
 ```bash
 ./scripts/dev.sh up --build -d
 ```
 
-Danach sind erreichbar:
+The following endpoints are then available:
 
-- WebUI: `http://localhost:10020`
+- Web UI: `http://localhost:10020`
 - Backend: `http://localhost:6020/api`
 - OpenAPI: `http://localhost:6020/api/docs`
 
-Nützliche Kommandos:
+Useful commands:
 
 ```bash
 ./scripts/dev.sh status
@@ -49,7 +49,7 @@ Nützliche Kommandos:
 ./scripts/dev.sh down
 ```
 
-Checks und Tests:
+Checks and tests:
 
 ```bash
 ./scripts/dev.sh check
@@ -57,90 +57,90 @@ Checks und Tests:
 ./scripts/dev.sh test rag
 ```
 
-Einzelne Bereiche können als `backend` oder `frontend` angegeben werden:
+Individual targets can be selected with `backend` or `frontend`:
 
 ```bash
 ./scripts/dev.sh check backend
 ./scripts/dev.sh test frontend
 ```
 
-`test rag` startet PostgreSQL und Infinity, wartet auf deren Healthchecks und prüft echtes deutsch-englisches Hybrid-Retrieval, Trust-Filterung und den FTS-Fallback. Der normale Testlauf verwendet weiterhin keine Infrastrukturabhängigkeiten.
+`test rag` starts PostgreSQL and Infinity, waits for their health checks, and verifies real German-English hybrid retrieval, trust filtering, and the FTS fallback. The normal test run remains infrastructure-independent.
 
-Migrationen:
+Migrations:
 
 ```bash
 ./scripts/dev.sh db current
 ./scripts/dev.sh db upgrade head
 ```
 
-Lokale Konfigurationsabweichungen können in `.env.dev.override` hinterlegt werden. Als Vorlage dient `.env.dev.override.example`.
+Local configuration overrides belong in `.env.dev.override`; use `.env.dev.override.example` as a template.
 
-## Entwicklungsdaten
+## Development Data
 
-Der Devstack verwendet Named Volumes:
+The development stack uses named volumes:
 
-- `app_data`: Agent-Home, Credential-Schlüssel und weitere MatoLoop-Laufzeitdaten
-- `db_data`: PostgreSQL-Daten
-- `embedding_cache`: reproduzierbarer Infinity-Modellcache
-- `backend_uv_data`: Python-Umgebung und `uv`-Cache
-- `frontend_node_modules`: installierte Frontend-Abhängigkeiten
-- `frontend_yarn_cache`: zusätzlicher Frontend-Cache-Mount unter `/opt/mato-loop/yarn-cache`
+- `app_data`: agent home, credential key, and other MatoLoop runtime data
+- `db_data`: PostgreSQL data
+- `embedding_cache`: reproducible Infinity model cache
+- `backend_uv_data`: Python environment and `uv` cache
+- `frontend_node_modules`: installed frontend dependencies
+- `frontend_yarn_cache`: additional frontend cache mounted at `/opt/mato-loop/yarn-cache`
 
-Docker versieht die Volumenamen standardmäßig mit dem Compose-Projektnamen, beispielsweise `mato-loop_app_data`. Der Repository-Bind-Mount nach `/workspace` dient nur HMR und Live-Code-Änderungen.
+Docker prefixes volume names with the Compose project name by default, for example `mato-loop_app_data`. The repository bind mount at `/workspace` exists only for HMR and live code changes.
 
-Infinity lädt beim ersten Start die gepinnte Revision von `intfloat/multilingual-e5-small`. Dieser Cold Start kann einige Minuten dauern; Backend und lexikalische Memory-Suche bleiben dabei verfügbar. Der Cache muss nicht gesichert werden. `./scripts/dev.sh doctor` prüft pgvector, die Vektordimension, den Indexierungsstatus und Infinitys Health-Endpunkt.
+On first startup, Infinity downloads the pinned `intfloat/multilingual-e5-small` revision. This cold start can take several minutes; the backend and lexical memory search remain available. The cache does not require backup. `./scripts/dev.sh doctor` checks pgvector, vector dimensions, indexing state, and the Infinity health endpoint.
 
-Der folgende Befehl löscht Container und alle Named Volumes des Devstacks einschließlich Datenbank, Benutzer, Secrets und Agent-Dateien:
+The following command deletes containers and all development volumes, including the database, users, secrets, and agent files:
 
 ```bash
 ./scripts/dev.sh reset-storage
 ```
 
-## Produktionsvorbereitung
+## Production Preparation
 
-`docker-compose.yaml` und `apps/backend/Dockerfile` bereiten einen kombinierten MatoLoop-Container, PostgreSQL mit pgvector und einen internen Infinity-CPU-Service vor. Der vorbereitete Infinity-Container ist für `linux/amd64` vorgesehen. Dieser Stack ist nicht der Entwicklungsstack und wird bei normalen Entwicklungsarbeiten nicht gestartet.
+`docker-compose.yaml` and `apps/backend/Dockerfile` prepare a combined MatoLoop container, PostgreSQL with pgvector, and an internal Infinity CPU service. The prepared Infinity container targets `linux/amd64`. This is not the development stack and is not started during normal development work.
 
-Die Produktionsvorbereitung verwendet die Bind-Mounts `./data:/data` und `./db:/var/lib/postgresql/data`. Vor einem produktiven Einsatz müssen insbesondere TLS, sichere Cookies, Zugangsdaten, Backup und Wiederherstellung für die konkrete Umgebung festgelegt und geprüft werden.
+The prepared production setup uses `./data:/data` and `./db:/var/lib/postgresql/data` bind mounts. Before production use, define and verify TLS, secure cookies, credentials, backups, and restoration for the target environment.
 
-## Provider
+## Providers
 
-Unter **Einstellungen** stehen zwei LLM-Pfade zur Verfügung:
+Two LLM paths are available under **Einstellungen**:
 
-- **ChatGPT Codex**: Device-Code-OAuth mit einem geeigneten ChatGPT-Konto. MatoLoop zeigt einen einmaligen Code an, der auf der geöffneten ChatGPT-Anmeldeseite bestätigt wird; ein lokaler Callback-Port ist nicht erforderlich. Verfügbare Codex-Modelle werden anschließend automatisch synchronisiert.
-- **OpenAI-kompatibel**: Base URL, optionaler API-Key und `Chat Completions` oder `Responses API`. MatoLoop liest verfügbare Modelle über den kompatiblen `/models`-Endpunkt aus.
+- **ChatGPT Codex**: device-code OAuth with an appropriate ChatGPT account. MatoLoop displays a one-time code for confirmation on the opened ChatGPT sign-in page; no local callback port is required. Available Codex models are synchronized afterward.
+- **OpenAI-kompatibel**: base URL, optional API key, and either `Chat Completions` or `Responses API`. MatoLoop reads available models from the compatible `/models` endpoint.
 
-Provider sind ausschließlich Modelltransporte. Sessions, Tool-Calls, Dateien, Memory, Websuche und Freigaben laufen immer durch die MatoLoop-Harness.
+Providers are model transports only. Sessions, tool calls, files, memory, web search, and approvals always pass through the MatoLoop harness.
 
-Jeder Provider kann mehrere Modelle besitzen. OpenAI-kompatible Provider und ChatGPT Codex unterstützen die automatische Modellerkennung. Neu erkannte Modelle sind zunächst deaktiviert und werden erst nach expliziter Aktivierung im Chat angeboten. Ein erneuter Abgleich behält interne Modell-IDs und Laufzeitkonfigurationen bei; nicht mehr gemeldete Modelle werden als nicht verfügbar markiert statt gelöscht. Falls ein Provider keine Discovery unterstützt, kann eine Modell-ID über den erweiterten manuellen Fallback hinterlegt werden. Provider, Modelle und die globale LLM-Laufzeit können unabhängig aktiviert werden.
+Each provider can contain multiple models. OpenAI-compatible providers and ChatGPT Codex support automatic model discovery. Newly discovered models start disabled and appear in chat only after explicit activation. Repeated synchronization preserves internal model IDs and runtime settings; missing models are marked unavailable instead of deleted. If a provider does not support discovery, an advanced manual fallback can store a model ID. Providers, models, and the global LLM runtime can be enabled independently.
 
-`web_search` verwendet ohne weitere Konfiguration die eingebaute No-Key-Metasuche. Sie ist keine Integration und fragt über `ddgs` je nach Verfügbarkeit öffentliche Suchdienste ab. Unter **Einstellungen > Integrationen** können zusätzliche SearXNG-Instanzen verwaltet werden; unter **Einstellungen > Tools** werden daraus der Primärprovider und ein optionaler Fallback gewählt. Das Modell übergibt ausschließlich den Suchtext und kann diese Hostauswahl nicht überschreiben. Der Fallback wird nur bei temporären Fehlern des Primärproviders verwendet.
+Without additional configuration, `web_search` uses the built-in no-key metasearch. It is not an integration and uses `ddgs` to query available public search services. Additional SearXNG instances can be managed under **Einstellungen > Integrationen**; the primary provider and optional fallback are selected under **Einstellungen > Tools**. The model supplies only the query and cannot override this host selection. Fallback is used only for transient primary-provider failures.
 
-Unter **Einstellungen > Tools** wird `webfetch` unabhängig von SearXNG konfiguriert. Das Tool ruft konkrete HTTP(S)-URLs als Markdown, Text oder HTML ab und unterstützt Bildantworten bis 5 MiB. Standardmäßig fragt jeder Abruf nach einer Freigabe. Alternativ können öffentliche Ziele oder öffentliche und explizit erlaubte private Origins automatisch freigegeben werden. Pro Modell ist ein vollständiger Policy-Override möglich; der globale Schalter und die Origin-Allowlist bleiben Hostgrenzen.
+`webfetch` is configured independently of SearXNG under **Einstellungen > Tools**. It fetches concrete HTTP(S) URLs as Markdown, text, or HTML and supports image responses up to 5 MiB. By default, each fetch asks for approval. Policies can instead allow public targets, or public targets plus explicitly allowed private origins, automatically. Models can override the complete policy, but the global switch and origin allowlist remain host boundaries.
 
-Webfetch folgt Redirects nur nach erneuter Prüfung, pinnt validierte DNS-Ziele und blockiert Link-Local-, Metadaten- und andere gefährliche Adressen. Heruntergeladene Dateien werden im geschützten Session-Speicher unter `/data/sessions/<session-id>/downloads` gespeichert. Bildfähige Modelle erhalten aktuelle oder ausdrücklich referenzierte Bilder flüchtig im Providerrequest; Textmodelle erhalten ausschließlich sichere Metadaten und verfügbare Textableitungen.
+Webfetch follows redirects only after renewed validation, pins validated DNS targets, and blocks link-local, metadata, and other dangerous addresses. Downloads are stored under `/data/sessions/<session-id>/downloads`. Image-capable models receive current or explicitly referenced images transiently in the provider request; text-only models receive only safe metadata and available text derivatives.
 
-## Arbeitsverzeichnisse
+## Working Directories
 
-Neue Sessions starten ohne Arbeitsverzeichnis. Mit der ersten Nachricht entsteht ein eigener interner Session-Speicher unter `/data/sessions/<session-id>` mit den fünf flachen Verzeichnissen `files`, `attachments`, `generated`, `downloads` und `derived`. Nur `files` ist bearbeitbar; die übrigen Bereiche werden vom Host verwaltet. Dieser Speicher ersetzt keinen Workspace. Der rechte Datei-Explorer verwaltet weiterhin das Agent-Home unter `/data/home` und kann einen Ordner als optionalen Workspace auswählen.
+New sessions start without a working directory. The first message creates internal session storage under `/data/sessions/<session-id>` with the five flat directories `files`, `attachments`, `generated`, `downloads`, and `derived`. Only `files` is mutable; the other directories are host-managed. This storage is not a workspace. The file explorer continues to manage the agent home under `/data/home` and can select an optional workspace directory.
 
-Eine neue Session wird erst mit ihrer ersten Nachricht serverseitig angelegt und erscheint erst dann in der Seitenleiste. Nicht abgesendete Texte bleiben getrennt pro Session ausschließlich im lokalen Browserspeicher.
+A new session is created server-side only with its first message and appears in the sidebar afterward. Unsent text remains separately per session in browser-local storage.
 
-- `read-only`: Nur `list_directory` und `read_file` werden für Session-Speicher und optionalen Workspace angeboten.
-- `read-write`: Zusätzlich stehen Schreiben, Erstellen, Löschen, Kopieren und Verschieben zur Verfügung. Im Session-Speicher ist ausschließlich `files` veränderbar; `attachments`, `generated`, `downloads` und `derived` bleiben schreibgeschützt und können nur gelesen oder als Copy-Quelle verwendet werden.
-- Dateitools verwenden ein explizites `root`-Feld mit `session` oder `workspace`. Ohne Arbeitsverzeichnis ist ausschließlich `root=workspace` nicht verfügbar.
-- `Einmal erlauben`: gilt nur für die aktuelle Aktion.
-- `Für Session erlauben`: erzeugt einen separaten, widerrufbaren Permission-Grant.
-- `Später`: lässt die Anfrage ausstehend und den Agent-Run pausiert.
+- `read-only`: only `list_directory` and `read_file` are offered for session storage and an optional workspace.
+- `read-write`: write, create, delete, copy, and move are also available. Only `files` is mutable in session storage; `attachments`, `generated`, `downloads`, and `derived` remain read-only and may only be read or used as copy sources.
+- File tools use an explicit `root` field with `session` or `workspace`. Without a selected working directory, only `root=workspace` is unavailable.
+- `Einmal erlauben`: applies only to the current action.
+- `Für Session erlauben`: creates a separate revocable permission grant.
+- `Später`: leaves the request pending and the agent run paused.
 
-## Konfiguration und Secrets
+## Configuration and Secrets
 
-Infrastrukturwerte wie Datenbankverbindung, Ports und Datenverzeichnis kommen aus Environment-Variablen mit dem Präfix `MATO_LOOP_`. Operative Einstellungen werden über typisierte Settings-Dokumente und die WebUI verwaltet.
+Infrastructure values such as the database connection, ports, and data directory come from environment variables prefixed with `MATO_LOOP_`. Typed settings documents and the Web UI manage operational settings.
 
-API-Keys und OAuth-Tokens liegen verschlüsselt in PostgreSQL. Der lokale Fernet-Schlüssel liegt unter `/data/secrets/credential.key` und muss gemeinsam mit der Datenbank gesichert werden.
+API keys and OAuth tokens are encrypted in PostgreSQL. The local Fernet key is stored at `/data/secrets/credential.key` and must be backed up together with the database.
 
-## Dokumentation
+## Documentation
 
-- [Arbeitsregeln für Coding-Agents](AGENTS.md)
-- [Architektur](docs/architecture.md)
+- [Coding agent rules](AGENTS.md)
+- [Architecture](docs/architecture.md)
 - [Backend](apps/backend/README.md)
 - [Frontend](apps/frontend/README.md)

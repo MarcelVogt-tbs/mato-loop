@@ -46,7 +46,6 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert settings.approval_timeout_seconds == 600
     assert settings.max_compaction_requests == 3
     assert settings.historical_tool_output_tokens == 2_000
-    assert settings.current_turn_tool_output_tokens == 12_000
     assert ToolSettings().web_fetch.default_policy == WebFetchPolicy.AUTO_PUBLIC
 
 

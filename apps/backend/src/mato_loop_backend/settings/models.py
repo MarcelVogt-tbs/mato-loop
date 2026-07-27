@@ -446,7 +446,6 @@ class AgentRuntimeSettings(SettingsDocument):
     approval_timeout_seconds: int = Field(default=600, ge=10, le=86_400)
     max_compaction_requests: int = Field(default=3, ge=1, le=20)
     historical_tool_output_tokens: int = Field(default=2_000, ge=0, le=100_000)
-    current_turn_tool_output_tokens: int = Field(default=12_000, ge=0, le=200_000)
 
     @model_validator(mode="after")
     def validate_compaction_ratios(self) -> Self:

@@ -127,7 +127,7 @@ async def test_disabled_media_tool_is_rejected_before_provider(
     mock_settings_load(
         monkeypatch, ToolSettings(), media_settings(ModelCapability.IMAGE_GENERATION)
     )
-    generate = AsyncMock(side_effect=AssertionError("Provider darf nicht aufgerufen werden"))
+    generate = AsyncMock(side_effect=AssertionError("Provider must not be called"))
     monkeypatch.setattr(MediaService, "generate_image", generate)
 
     result = await tool_registry.execute(call, tool_context)
@@ -149,7 +149,7 @@ async def test_ask_denial_stops_before_media_service(tmp_path, monkeypatch) -> N
     mock_settings_load(
         monkeypatch, settings, media_settings(ModelCapability.IMAGE_GENERATION)
     )
-    generate = AsyncMock(side_effect=AssertionError("Provider darf nicht aufgerufen werden"))
+    generate = AsyncMock(side_effect=AssertionError("Provider must not be called"))
     monkeypatch.setattr(MediaService, "generate_image", generate)
 
     result = await tool_registry.execute(call, tool_context)
@@ -179,7 +179,7 @@ async def test_policy_revocation_during_approval_stops_media_service(
         return ask_settings if tool_loads == 1 else ToolSettings()
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
-    generate = AsyncMock(side_effect=AssertionError("Provider darf nicht aufgerufen werden"))
+    generate = AsyncMock(side_effect=AssertionError("Provider must not be called"))
     monkeypatch.setattr(MediaService, "generate_image", generate)
 
     result = await tool_registry.execute(call, tool_context)
@@ -258,7 +258,7 @@ async def test_transcription_cannot_load_attachment_from_other_session(
     mock_settings_load(
         monkeypatch, settings, media_settings(ModelCapability.AUDIO_TRANSCRIPTION)
     )
-    transcribe = AsyncMock(side_effect=AssertionError("Provider darf nicht aufgerufen werden"))
+    transcribe = AsyncMock(side_effect=AssertionError("Provider must not be called"))
     monkeypatch.setattr(MediaService, "transcribe_audio", transcribe)
 
     result = await tool_registry.execute(call, tool_context)

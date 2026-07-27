@@ -15,6 +15,7 @@ from urllib.parse import unquote
 import aiohttp
 from aiohttp.abc import AbstractResolver
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 from markdownify import markdownify
 from yarl import URL
 
@@ -64,9 +65,10 @@ _CHARSET_PATTERN = re.compile(br"charset\s*=\s*['\"]?\s*([a-zA-Z0-9._:+-]+)", re
 
 
 class WebFetchError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, params: dict[str, object] | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.params = params
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +77,8 @@ class WebFetchResult:
     content_type: str
     content: str | bytes
     is_image: bool
+    status_code: int
+    output_format: str
     title: str | None = None
     image_mime_type: str | None = None
     image_filename: str | None = None
@@ -129,8 +133,8 @@ class _PinnedResolver(AbstractResolver):
         return None
 
 
-def _error(code: str) -> WebFetchError:
-    return WebFetchError(f"webfetch.{code}")
+def _error(code: str, **params: object) -> WebFetchError:
+    return WebFetchError(f"webfetch.{code}", params=params or None)
 
 
 def _canonical_host(host: str) -> str:
@@ -322,11 +326,6 @@ async def _request_once(target: _Target, timeout: float) -> _Response:
             trust_env=False,
         ) as session:
             async with session.get(target.url, allow_redirects=False) as response:
-                if (
-                    response.content_length is not None
-                    and response.content_length > MAX_RESPONSE_BYTES
-                ):
-                    raise _error("responseTooLarge")
                 if response.status in _REDIRECT_STATUSES:
                     return _Response(
                         status=response.status,
@@ -336,6 +335,20 @@ async def _request_once(target: _Target, timeout: float) -> _Response:
                         content_disposition=None,
                         body=b"",
                     )
+                if not 200 <= response.status < 300:
+                    return _Response(
+                        status=response.status,
+                        location=None,
+                        content_type="",
+                        charset=None,
+                        content_disposition=None,
+                        body=b"",
+                    )
+                if (
+                    response.content_length is not None
+                    and response.content_length > MAX_RESPONSE_BYTES
+                ):
+                    raise _error("responseTooLarge")
                 body = await _read_limited(response)
                 content_type = response.headers.get("Content-Type", "").split(";", 1)[0]
                 return _Response(
@@ -387,6 +400,39 @@ def _sanitize_html(value: str) -> BeautifulSoup:
     return soup
 
 
+def _absolutize_urls(soup: BeautifulSoup, base_url: URL) -> None:
+    for tag in soup.find_all(True):
+        for attribute in _URL_ATTRIBUTES.intersection(tag.attrs):
+            raw_value = tag.attrs[attribute]
+            if isinstance(raw_value, list):
+                continue
+            value = html.unescape(str(raw_value)).strip()
+            if not value or value.startswith("#"):
+                continue
+            try:
+                parsed = URL(value)
+                if not parsed.scheme:
+                    tag.attrs[attribute] = str(base_url.join(parsed))
+            except (TypeError, ValueError):
+                continue
+
+
+def _content_root(soup: BeautifulSoup) -> Tag | BeautifulSoup:
+    root = (
+        soup.find("main")
+        or soup.find(attrs={"role": "main"})
+        or soup.find("article")
+        or soup.body
+        or soup
+    )
+    if root is soup.body or root is soup:
+        for tag in list(root.find_all(["nav", "footer"])):
+            tag.decompose()
+        for tag in list(root.find_all(attrs={"role": "navigation"})):
+            tag.decompose()
+    return root
+
+
 def _normalize_lines(value: str) -> str:
     lines = [line.rstrip() for line in value.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     result: list[str] = []
@@ -401,17 +447,25 @@ def _normalize_lines(value: str) -> str:
     return "\n".join(result).strip()
 
 
-def _convert_text(body: bytes, content_type: str, format: str, charset: str | None) -> str:
+def _convert_text(
+    body: bytes,
+    content_type: str,
+    format: str,
+    charset: str | None,
+    base_url: URL,
+) -> str:
     is_html = content_type in {"application/xhtml+xml", "text/html"}
     value = _decode_text(body, charset, html_content=is_html)
     if is_html:
         soup = _sanitize_html(value)
+        _absolutize_urls(soup, base_url)
         if format == "html":
             return str(soup)
+        root = _content_root(soup)
         if format == "text":
-            plain_text = soup.get_text(" ", strip=True)
+            plain_text = root.get_text(" ", strip=True)
             return re.sub(r"\s+([,.;:!?])", r"\1", plain_text)
-        return _normalize_lines(markdownify(str(soup), heading_style="ATX"))
+        return _normalize_lines(markdownify(str(root), heading_style="ATX"))
     if format == "html":
         return f"<pre>{html.escape(value)}</pre>"
     if content_type == "text/markdown":
@@ -476,6 +530,8 @@ def _build_result(target: _Target, response: _Response, format: str) -> WebFetch
             content_type=response.content_type,
             content=response.body,
             is_image=True,
+            status_code=response.status,
+            output_format="image",
             image_mime_type=response.content_type,
             image_filename=_image_filename(
                 target.url, response.content_disposition, response.content_type
@@ -486,8 +542,16 @@ def _build_result(target: _Target, response: _Response, format: str) -> WebFetch
     return WebFetchResult(
         final_url=str(target.url),
         content_type=response.content_type,
-        content=_convert_text(response.body, response.content_type, format, response.charset),
+        content=_convert_text(
+            response.body,
+            response.content_type,
+            format,
+            response.charset,
+            target.url,
+        ),
         is_image=False,
+        status_code=response.status,
+        output_format=format,
         title=_html_title(response.body, response.content_type, response.charset),
     )
 
@@ -528,8 +592,13 @@ async def fetch_web(
                     raise _error("redirectInvalid") from exc
                 continue
             if not 200 <= response.status < 300:
-                raise _error("requestFailed")
-            return _build_result(target, response, format)
+                raise _error("requestFailed", statusCode=response.status)
+            try:
+                return _build_result(target, response, format)
+            except WebFetchError as exc:
+                if exc.params is None:
+                    exc.params = {"statusCode": response.status}
+                raise
     except WebFetchError:
         raise
     except TimeoutError as exc:

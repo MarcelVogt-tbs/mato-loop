@@ -111,13 +111,13 @@ def _media_by_message(media: list[ProviderMedia]) -> dict[int, list[ProviderMedi
 
 def _media_marker(item: ProviderMedia) -> str:
     if item.status == "unsupported":
-        return "[Bildanhang nicht an dieses Modell uebertragen]"
-    return "[Bildanhang nicht verfuegbar]"
+        return "[Image attachment not sent to this model]"
+    return "[Image attachment unavailable]"
 
 
 def _chat_media_message(media: list[ProviderMedia]) -> dict[str, Any]:
     content: list[dict[str, Any]] = [
-        {"type": "text", "text": "[Session-Bild]"}
+        {"type": "text", "text": "[Session image]"}
     ]
     for item in media:
         if item.data_url:
@@ -203,7 +203,7 @@ def _responses_input(
 
     def append_media(values: list[ProviderMedia]) -> None:
         content: list[dict[str, Any]] = [
-            {"type": "input_text", "text": "[Session-Bild]"}
+            {"type": "input_text", "text": "[Session image]"}
         ]
         for item in values:
             if item.data_url:

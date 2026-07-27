@@ -387,7 +387,7 @@ async function load() {
   try {
     assignForm(await tools.fetchSettings())
   } catch {
-    // Der zentrale Axios-Interceptor zeigt die Fehlermeldung an.
+    // The central Axios interceptor displays the error message.
   }
 }
 

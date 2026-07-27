@@ -305,7 +305,7 @@ async def test_complete_does_not_touch_attachment_storage_without_image_capabili
     captured = {}
 
     def fail_storage():
-        raise AssertionError("AttachmentStorage darf nicht geoeffnet werden")
+        raise AssertionError("AttachmentStorage must not be opened")
 
     async def fake_chat_completions(**kwargs):
         captured.update(kwargs)
@@ -599,7 +599,7 @@ async def test_public_target_blocks_private_image_without_reading_storage(monkey
     private_reference["source_order"] = 0
 
     def fail_storage():
-        raise AssertionError("Private Bilddaten duerfen nicht gelesen werden")
+        raise AssertionError("Private image data must not be read")
 
     monkeypatch.setattr(service_module, "AttachmentStorage", fail_storage)
 
@@ -1023,7 +1023,7 @@ async def test_lemonade_complete_explicitly_uses_chat_completions(monkeypatch) -
     )
     model = ModelConfig(provider_id=provider.id, model_id="chat")
     transport = AsyncMock(return_value=ProviderResult(content="OK"))
-    responses = AsyncMock(side_effect=AssertionError("Responses API darf nicht genutzt werden"))
+    responses = AsyncMock(side_effect=AssertionError("Responses API must not be used"))
     monkeypatch.setattr(service_module, "chat_completions", transport)
     monkeypatch.setattr(service_module, "responses_api", responses)
 

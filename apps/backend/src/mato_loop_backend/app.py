@@ -70,8 +70,7 @@ async def lifespan(_app: FastAPI):
             )
             if reconciliation.provisioned or reconciliation.restored or reconciliation.trashed:
                 logger.info(
-                    "Session-Storage abgeglichen: %s provisioniert, %s wiederhergestellt, "
-                    "%s verwaist",
+                    "Session storage reconciled: %s provisioned, %s restored, %s orphaned",
                     len(reconciliation.provisioned),
                     len(reconciliation.restored),
                     len(reconciliation.trashed),

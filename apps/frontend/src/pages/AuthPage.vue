@@ -62,7 +62,7 @@ async function submit() {
     else await auth.login(credentials)
     await router.replace(route.query.redirect || '/')
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler als Toast an.
+    // The central API interceptor displays the error as a toast.
   } finally {
     loading.value = false
   }

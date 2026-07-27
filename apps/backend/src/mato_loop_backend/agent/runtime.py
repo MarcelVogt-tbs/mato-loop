@@ -595,7 +595,7 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
         try:
             safe["url"] = sanitize_url_for_display(safe["url"])
         except WebFetchError:
-            safe["url"] = "[Ungültige URL]"
+            safe["url"] = "[Invalid URL]"
     instructions = safe.get("instructions")
     if isinstance(instructions, str):
         safe["instructions"] = {
@@ -1767,7 +1767,7 @@ class AgentRuntime:
                         and not model.supports_image_input
                     ):
                         tool_result_content += (
-                            "\n\n[Bild gespeichert, aber nicht an das aktuelle Textmodell übertragen.]"
+                            "\n\n[Image saved but not sent to the current text-only model.]"
                         )
                 tool_message = Message(
                     session_id=chat_session.id,
@@ -2190,7 +2190,7 @@ class AgentRuntime:
                 )
                 if model is None:
                     logger.warning(
-                        "Titelgenerierung fuer Session %s ohne verfuegbares Modell beendet",
+                        "Title generation for session %s stopped without an available model",
                         session_id,
                     )
                     chat_session.title_generation_status = (
@@ -2201,7 +2201,7 @@ class AgentRuntime:
                 provider = _provider_for_model(ai_settings, model)
                 if provider is None:
                     logger.warning(
-                        "Titelgenerierung fuer Session %s ohne verfuegbaren Provider beendet",
+                        "Title generation for session %s stopped without an available provider",
                         session_id,
                     )
                     chat_session.title_generation_status = (
@@ -2213,10 +2213,9 @@ class AgentRuntime:
                     {
                         "role": "system",
                         "content": (
-                            "Erzeuge einen kurzen Titel fuer diese Unterhaltung. "
-                            "Antworte in der Sprache der Nutzernachricht mit genau einer "
-                            "Zeile und hoechstens 80 Zeichen. Gib nur den Titel aus, ohne "
-                            "Anfuehrungszeichen, Erklaerung oder Begruendung."
+                            "Create a short title for this conversation. Reply in the language "
+                            "of the user message with exactly one line and at most 80 characters. "
+                            "Return only the title without quotation marks, explanation, or reasoning."
                         ),
                     },
                     {"role": "user", "content": content[:2_000]},
@@ -2240,9 +2239,9 @@ class AgentRuntime:
                     if title is not None:
                         break
                     logger.warning(
-                        "Titelmodell lieferte keinen nutzbaren Titel fuer Session %s "
-                        "(Versuch %s, sichtbare Zeichen: %s, Reasoning vorhanden: %s, "
-                        "Finish-Reason: %s, Ausgabelimit: %s)",
+                        "Title model returned no usable title for session %s "
+                        "(attempt %s, visible characters: %s, reasoning present: %s, "
+                        "finish reason: %s, output limit: %s)",
                         session_id,
                         attempt + 1,
                         len(result.content),
@@ -2254,10 +2253,9 @@ class AgentRuntime:
                         output_budget, model.max_output_tokens, result
                     )
                     messages[0]["content"] += (
-                        " Der vorherige Versuch enthielt keinen sichtbaren Titel. "
-                        "Gib jetzt ausschliesslich den finalen Titel in genau einer "
-                        "Zeile aus. Keine Analyse, Begruendung, Tags oder zusaetzlichen "
-                        "Inhalte."
+                        " The previous attempt contained no visible title. Return only the final "
+                        "title in exactly one line. Do not include analysis, reasoning, tags, or "
+                        "additional content."
                     )
                 if title is None:
                     chat_session.title_generation_status = (
@@ -2294,7 +2292,7 @@ class AgentRuntime:
                 raise
             except Exception:
                 logger.warning(
-                    "Titelgenerierung fuer Session %s fehlgeschlagen",
+                    "Title generation failed for session %s",
                     session_id,
                     exc_info=True,
                 )
@@ -2316,7 +2314,7 @@ class AgentRuntime:
             await db.commit()
         except Exception:
             logger.warning(
-                "Titelstatus fuer Session %s konnte nicht gespeichert werden",
+                "Title status for session %s could not be saved",
                 session_id,
                 exc_info=True,
             )

@@ -79,6 +79,29 @@ export function formatToolArguments(argumentsValue) {
   return formatTechnicalDetails(argumentsValue)
 }
 
+function localizePlainToolResult(content, toolName) {
+  const mediaResults = {
+    generate_image: ['Image generated.', 'Bild erzeugt.'],
+    generate_speech: ['Speech generated.', 'Sprachaufnahme erzeugt.'],
+    generate_audio: ['Audio generated.', 'Audio erzeugt.']
+  }
+  const mediaResult = mediaResults[toolName]
+  let text = mediaResult && content.startsWith(mediaResult[0])
+    ? `${mediaResult[1]}${content.slice(mediaResult[0].length)}`
+    : content
+  if (toolName === 'read_file') {
+    text = text
+      .replace(/\n\n\[Lines ([\d, ]+) were truncated after 2000 characters\.\](?=\n|$)/,
+        '\n\n[Zeilen $1 wurden nach 2000 Zeichen gekürzt.]')
+      .replace(/\n\[More lines are available\. Continue with offset=(\d+)\.\]$/,
+        '\n[Weitere Zeilen verfügbar. Mit offset=$1 weiterlesen.]')
+  }
+  const imageMarker = '\n\n[Image saved but not sent to the current text-only model.]'
+  return ['generate_image', 'webfetch'].includes(toolName) && text.endsWith(imageMarker)
+    ? `${text.slice(0, -imageMarker.length)}\n\n[Bild gespeichert, aber nicht an das aktuelle Textmodell übertragen.]`
+    : text
+}
+
 export function parseToolResult(content, toolName = null) {
   if (typeof content !== 'string') return { text: '', error: null }
   try {
@@ -107,7 +130,8 @@ export function parseToolResult(content, toolName = null) {
       errorMessage: error ? apiErrorMessage(error, 'Die Tool-Aktion ist fehlgeschlagen.') : null
     }
   } catch {
-    const text = content.length > 5000 ? `${content.slice(0, 5000)}\n... [Ergebnis gekürzt]` : content
+    const localized = localizePlainToolResult(content, toolName)
+    const text = localized.length > 5000 ? `${localized.slice(0, 5000)}\n... [Ergebnis gekürzt]` : localized
     return { text, error: null, errorMessage: null }
   }
 }

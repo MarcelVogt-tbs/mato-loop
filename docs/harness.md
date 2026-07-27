@@ -1,154 +1,159 @@
-# Schlanker Agent-Harness
+# Lean Agent Harness
 
-Dieses Dokument legt die Zielarchitektur für den schlanken, OpenCode-nahen Agent-Harness fest. Es ergänzt `docs/architecture.md`; bei der Implementierung gelten die hier beschriebenen Laufzeit-, Tool-, Permission- und Kontextgrenzen als verbindlich.
+This document defines the target architecture for the lean OpenCode-inspired agent harness. It complements [architecture.md](architecture.md); its runtime, tool, permission, and context boundaries are mandatory.
 
-## Laufzeit und Coordinator
+## Runtime and Coordinator
 
-MatoLoop betreibt Runs und Freigaben über genau einen prozesslokalen Run-/Approval-Coordinator. Der Backend-Prozess läuft deshalb mit genau einem Worker. Der Coordinator besitzt die aktiven Run-Tasks und die Waiter für offene Freigaben. Er ist weder ein verteilter Scheduler noch eine Queue und verwendet keine prozessübergreifenden Locks.
+MatoLoop manages runs and approvals through exactly one process-local run and approval coordinator. The backend therefore uses one worker. The coordinator owns active run tasks and waiters for open approvals. It is neither a distributed scheduler nor a queue and uses no cross-process locks.
 
-- Ein Run wird nur von dem Coordinator fortgesetzt, der ihn gestartet hat.
-- Eine Freigabeentscheidung darf nur einen noch lebenden Waiter dieses Coordinators auflösen.
-- Mehrere Backend-Worker, parallele Coordinator-Instanzen oder die Übernahme eines Runs durch einen anderen Prozess werden nicht unterstützt.
-- Persistente Run-Zustände dienen API, UI und Audit. Sie sind kein Checkpoint des Python-Stacks und keine ausführbare Queue.
-- Geordneter Shutdown und Prozessabbruch dürfen keine zweite Tool-Ausführung auslösen.
+- A run continues only in the coordinator that started it.
+- An approval decision can resolve only a live waiter in that coordinator.
+- Multiple backend workers, parallel coordinator instances, and transfer of a run to another process are unsupported.
+- Persistent run state serves API, UI, and audit. It is not a Python stack checkpoint or executable queue.
+- Graceful shutdown and process termination must not execute a tool twice.
 
-Approvals und Session-Grants sind persistent. Daraus folgt ausdrücklich keine Restart-Resume-Garantie: Nach einem Backend-Neustart werden zuvor aktive oder wartende Runs terminal als unterbrochen beziehungsweise fehlgeschlagen markiert und ihre offenen Approvals verfallen. Eine Entscheidung für ein persistiertes Approval ohne lebenden Waiter liefert `approval.runInactive`; sie setzt den alten Run nicht fort und erzeugt keinen Grant. Der Benutzer startet bei Bedarf einen neuen Run. Bereits vor dem Neustart vollständig persistierte Session-Grants bleiben gültig.
+Approvals and session grants are persistent, but restart resume is explicitly not guaranteed. After backend restart, previously active or waiting runs end terminally as interrupted or failed and their open approvals expire. Deciding a persisted approval without a live waiter returns `approval.runInactive`; it does not resume the old run or create a grant. The user starts a new run when needed. Fully persisted session grants created before restart remain valid.
 
-Diese Einschränkung ist eine bewusste Grenze der ersten Harness-Version. Restart-Resume würde persistente Tool-Checkpoints, idempotente Ausführung, Leases und eine Wiederanlaufstrategie erfordern und darf nicht durch das bloße erneute Laden eines `AgentRun` simuliert werden.
+This is a deliberate first-version boundary. Restart resume would require persistent tool checkpoints, idempotent execution, leases, and a recovery strategy; it must not be simulated by reloading an `AgentRun`.
 
-Ein Benutzerabbruch ist eine explizite Run-Operation und wird nicht aus einem SSE-Disconnect abgeleitet. Der Cancel-Endpunkt fordert die Cancellation des prozesslokalen Tasks an und wartet auf dessen persistierten Terminalzustand. Wiederholte Cancel-Aufrufe dürfen den bereits laufenden Cleanup nicht erneut canceln. Bereits abgeschlossene Runs werden idempotent zurückgegeben. Der bereits erfolgreich als Text oder öffentliches Reasoning gestreamte Stand wird als unterbrochene Assistant-Nachricht persistiert; ohne sichtbaren Stand entsteht ein leerer Abbruchmarker. Während der initialen Pflichtsuche ausgeblendete Text- und Reasoning-Ausgaben bleiben ausgeschlossen. Bereits ausgeführte Tool-Wirkungen werden nicht rückgängig gemacht. Offene Approvals verfallen und unvollständige Tool-Calls erhalten ein terminales Fehlerergebnis, bevor `message.interrupted` und anschließend `run.cancelled` veröffentlicht werden. Ein geordneter Backend-Shutdown gilt nicht als expliziter Benutzerabbruch und erzeugt keinen solchen Nachrichtenmarker.
+User cancellation is an explicit run operation and is never inferred from SSE disconnect. The cancel endpoint requests cancellation of the process-local task and waits for its persisted terminal state. Repeated calls do not cancel cleanup again. Completed runs return idempotently. Successfully streamed text and public reasoning become an interrupted assistant message; without visible output, an empty interruption marker is stored. Hidden output from the initial required-search phase remains excluded. Completed tool effects are not reversed. Open approvals expire and incomplete tool calls receive terminal errors before `message.interrupted` and then `run.cancelled` are published. Graceful backend shutdown is not an explicit user cancellation and creates no such message marker.
 
-## Tool-Vertrag
+## Tool Contract
 
-Ein Tool ist eine Host-Fähigkeit mit einem stabilen Namen, einer Beschreibung, einem typisierten Eingabeschema und einer asynchronen Ausführung. Provider erhalten ausschließlich die von der Registry exportierten Schemas und melden normalisierte Tool-Calls zurück. Sie führen keine Tools aus.
+A tool is a host capability with a stable name, description, typed input schema, and asynchronous execution. Providers receive only registry-exported schemas and return normalized tool calls. They never execute tools.
 
-Research-Tools liefern strukturierte Ergebnisse mit sicheren URLs. `web_search` kennzeichnet seinen Inhalt als Snippets; `webfetch` bewahrt sichere finale URL, Content-Type und Seiteninhalt in einem strukturierten Envelope. Flüchtige Kontextkürzung darf bei diesen Ergebnissen nur Snippet beziehungsweise Seiteninhalt verkürzen und niemals ein halbes JSON-Objekt oder eine halbe URL erzeugen. Links im finalen Antworttext werden ausschließlich vom Modell als Best Effort erzeugt und vom Host weder ergänzt noch als Beleg bewertet; das Frontend darf die daraus abgeleiteten öffentlichen Metadaten zusätzlich als Quellenpanel anzeigen.
+Research tools return structured results with safe URLs. `web_search` labels content as snippets; `webfetch` preserves safe final URL, content type, output format, final HTTP status, and page content in a structured envelope. Transient context shortening may reduce only snippet or page content and must never create partial JSON or URLs. Final-answer links are model-generated best effort; the host neither adds them nor treats them as proof. The frontend may show derived public metadata in a sources panel.
 
-`session_tool_result_read` liest ein bereits persistiertes Tool-Ergebnis der aktuellen Session anhand seiner Message-ID und führt das ursprüngliche Tool nicht erneut aus. Der Host liefert den Inhalt ab einem nullbasierten Zeichenoffset in festen Ausschnitten von höchstens 12.000 Zeichen und weist mit `hasMore` und `nextOffset` auf eine Fortsetzung hin. Historische Auslassungsmarker und durch `session_read` in der aktuellen Session gekürzte Tool-Messages enthalten eine hostgenerierte `toolResultReference` mit den exakten Argumenten für diesen Abruf. Gekürzte Tool-Messages einer fremden, freigegebenen Session weisen keine nicht einlösbare Current-Session-Referenz aus.
+`session_tool_result_read` reads a persisted current-session tool result by message ID without executing the original tool again. The host returns fixed chunks of at most 12,000 characters from a zero-based offset and reports continuation through `hasMore` and `nextOffset`. Historical omission markers and shortened current-session tool messages returned by `session_read` contain a host-generated `toolResultReference` with exact retrieval arguments. Shortened tool messages from another approved session contain no unusable current-session reference.
 
-Die Tool-Registry ist die einzige Namensauflösung für Tool-Calls. Sie muss doppelte Namen beim Aufbau ablehnen, Eingaben vor der Ausführung validieren und nur Tools exportieren, die für Session, Modus und effektive Integrationen verfügbar sind. Unbekannte Tools, ungültige Argumente und Ausführungsfehler werden in stabile Tool-Fehler übersetzt. Exception-Texte oder Secrets gelangen weder in den Modellkontext noch in API-Antworten.
+The tool registry is the only name resolver for tool calls. It rejects duplicate names during construction, validates input before execution, and exports only tools available for the session, mode, and effective integrations. Unknown tools, invalid arguments, and execution failures become stable tool errors. Exception text and secrets never enter model context or API responses.
 
-Konfigurierte Integrationen werden über einen statischen Hostkatalog aufgelöst. Ein Adapter kann neue statisch implementierte Tools beitragen oder Werte zu einem vom Basistool deklarierten hostseitigen Konfigurationsfeld ergänzen. Solche Werte werden nicht automatisch Modellargumente. Der Adapter darf keine fremden Handler oder beliebige Remoteschemas laden. Promptfragmente stammen ausschließlich aus dem Adaptercode; Namen, Antworten und sonstige externe Daten werden nicht als Anweisungen übernommen.
+Configured integrations resolve through a static host catalog. An adapter can contribute statically implemented tools or values to a configuration field declared extensible by a base tool. Such values do not automatically become model arguments. Adapters cannot load foreign handlers or arbitrary remote schemas. Prompt fragments come only from adapter code; names, responses, and other external data are never treated as instructions.
 
-Das effektive Toolset wird für genau einen Modellrequest gebunden. Schemaexport, Optionsvalidierung und anschließende Ausführung verwenden dasselbe Binding. Ein Tool-Call außerhalb dieses Sets wird auch dann nicht ausgeführt, wenn eine gleichnamige globale Definition existiert. Vor externen Wirkungen muss der Handler widerrufbare Integrations-, Tool- und Capability-Konfiguration erneut prüfen.
+The effective tool set is bound for exactly one model request. Schema export, option validation, and subsequent execution use the same binding. Calls outside this set are rejected even when a global tool definition with that name exists. Before external effects, handlers reload revocable integration, tool, and capability configuration.
 
-Jede Ausführung erhält einen Host-Context mit mindestens Run-ID, aktueller Session-ID, Registry-unabhängigen Services und `Context.ask`. Tools greifen nicht direkt auf Coordinator-Waiter, Approval-Tabellen oder Providerobjekte zu. `Context.ask` nimmt eine typisierte Permission-Anforderung entgegen und führt zentral dieselbe Reihenfolge aus:
+Every execution receives host context containing at least run ID, current session ID, registry-independent services, and `Context.ask`. Tools do not access coordinator waiters, approval tables, or provider objects directly. `Context.ask` accepts a typed permission request and centrally performs this sequence:
 
-1. Unveränderliche Host-Policy prüfen.
-2. Einen passenden persistenten Session-Grant prüfen.
-3. Falls weiterhin nötig, ein persistentes Approval erzeugen und auf den prozesslokalen Coordinator warten.
-4. `allow_once`, `allow_session` oder `deny` als typisiertes Ergebnis liefern.
-5. Nur bei `allow_session` und einem lebenden Run den Grant in der Approval-Transaktion persistieren und anschließend den Waiter fortsetzen.
+1. Check immutable host policy.
+2. Check a matching persistent session grant.
+3. If still needed, create a persistent approval and wait on the process-local coordinator.
+4. Return typed `allow_once`, `allow_session`, or `deny`.
+5. Only for `allow_session` and a live run, persist the grant in the approval transaction and then resume the waiter.
 
-Ein Modellargument darf weder die Registry-Auswahl noch `Context.ask`, Capability-Grenzen oder Ressourcen-Matcher umgehen. Das Tool führt die angefragte Wirkung erst nach einem erlaubenden Ergebnis aus.
+Model arguments cannot bypass registry selection, `Context.ask`, capability boundaries, or resource matchers. The tool performs effects only after an allowing result.
 
-## Typisierte Ressourcen-Matcher
+## Typed Resource Matchers
 
-Eine Permission besteht aus Capability und typisiertem Ressourcen-Matcher. Sicherheitsentscheidungen dürfen nicht auf frei zusammengesetzten Anzeige-Strings, Präfixvergleichen oder Toolnamen beruhen. Ein Matcher besitzt einen eindeutigen Typ und dafür validierte Felder, beispielsweise einen kanonischen Pfad, eine Session-ID oder einen festgelegten Session-Suchbereich.
+A permission consists of a capability and typed resource matcher. Security decisions never depend on free-form display strings, prefix comparisons, or tool names. Matchers have unique types and validated fields such as canonical path, session ID, or defined session-search scope.
 
-- Pfad-Matcher enthalten den expliziten Root `session` oder `workspace` und vergleichen relative Pfade komponentenweise innerhalb der hostseitig gebundenen Rootgrenze; Stringpräfixe sind unzulässig.
-- Session-Matcher vergleichen UUIDs und unterscheiden die aktuelle Session von einer explizit benannten anderen Session.
-- Session-Such-Matcher repräsentieren die Suche als eigene Ressource. Eine Suchanfrage ist nicht implizit durch einen Grant zum Lesen einer einzelnen Session erlaubt.
-- URL-Matcher verwenden den SHA-256-Hash der vollständigen kanonischen URL. Anzeigeinformationen werden getrennt und ohne Querywerte persistiert.
-- Persistierte Matcher müssen verlustfrei wieder in denselben typisierten Matcher deserialisiert werden.
-- Approval-Anzeigeinformationen wie Titel, Zusammenfassung und Risikostufe sind Metadaten und nicht Teil der Match-Entscheidung.
+- Path matchers contain explicit `session` or `workspace` root and compare relative paths component by component inside the host-bound root; string-prefix matching is forbidden.
+- Session matchers compare UUIDs and distinguish the current session from an explicitly named other session.
+- Session-search matchers represent search as its own resource. A grant to read one session does not allow search.
+- URL matchers use the SHA-256 hash of the complete canonical URL. Display metadata is persisted separately without query values.
+- Persisted matchers deserialize losslessly to the same typed matcher.
+- Approval display title, summary, and risk are metadata, not matching inputs.
 
-Für `read_file` und `list_directory` bestimmt der Host die Rootgrenze vor der Permission-Prüfung. `root=session` ist immer an die aktuelle Session gebunden; `root=workspace` ausschließlich an das ausgewählte Arbeitsverzeichnis und ohne Auswahl unverfügbar. Agent-Dateitools folgen keinen Symlinks. Im Session-Root sind `attachments`, `generated`, `downloads` und `derived` lesbar und als Copy-Quelle erlaubt, aber unveränderlich; Mutationen sind nur unter `files` möglich.
+For `read_file` and `list_directory`, the host resolves the root before permission checks. `root=session` is always bound to the current session; `root=workspace` is bound only to the selected working directory and is unavailable otherwise. Agent file tools never follow symlinks. In the session root, `attachments`, `generated`, `downloads`, and `derived` are readable and may be copy sources, but are immutable; only `files` permits mutations.
 
-Für `webfetch` wird jede initiale URL und jedes Redirectziel vor DNS-Auflösung und HTTP-Zugriff durch die effektive Modellpolicy bewertet. `ask` fordert jede URL an, `auto_public` erlaubt öffentliche Ziele automatisch und fragt für explizit allowlistete private Origins, `auto_allowed` erlaubt beide Zielklassen automatisch. Die Netzwerkklassifikation nach der Permission bleibt eine unveränderliche Hostgrenze. Kein Grant kann eine nicht allowlistete private, Link-Local- oder Metadatenadresse öffnen.
+For `webfetch`, effective model policy evaluates every initial URL and redirect before DNS or HTTP. `ask` requests approval for every URL, `auto_public` automatically allows public targets and asks for allowlisted private origins, and `auto_allowed` automatically allows both classes. Network classification after permission remains immutable host policy. No grant can open a private origin not on the allowlist, link-local address, or metadata address.
 
-Tool-Attachments sind persistente Kerndaten der zugehörigen Tool-Message. Binärdaten werden atomar in den flachen, hostverwalteten Session-Verzeichnissen `attachments`, `generated`, `downloads` und `derived` gespeichert, gegen MIME-Typ, Magic Bytes, Decoder und Quota validiert und bei einer fehlgeschlagenen Transaktion bereinigt. API, SSE und kanonische Messageinhalte enthalten keine Base64-Daten oder physischen Storage-Pfade. Providerbilder entstehen nur in der flüchtigen Requestprojektion.
+Tool attachments are persistent core data of their tool message. Binary data is stored atomically in flat host-managed session directories, validated against MIME type, magic bytes, decoder, and quota, and removed after transaction failure. API, SSE, and canonical message content contain no Base64 data or physical storage paths. Provider images exist only in transient request projections.
 
-Die verbindliche Grundpolicy für Session-Tools lautet:
+The binding baseline for session tools is:
 
-| Aktion | Ressource | Ergebnis ohne Grant |
+| Action | Resource | Result without grant |
 | --- | --- | --- |
-| Session-Historie lesen | aktuelle Session des Runs | `allow` |
-| Session-Historie lesen | andere Session | `ask` |
-| Persistiertes Tool-Ergebnis lesen | aktuelle Session des Runs | `allow` |
-| Sessions beziehungsweise Session-Inhalte durchsuchen | Session-Suchressource | `ask` |
+| Read session history | current run session | `allow` |
+| Read session history | another session | `ask` |
+| Read persisted tool result | current run session | `allow` |
+| Search sessions or session content | session-search resource | `ask` |
 
-`current-session read allow` ist eine enge Host-Regel und kein persistierter Wildcard-Grant. `session_tool_result_read` akzeptiert ausschließlich Tool-Messages derselben Session und kann keine andere Session adressieren. `other session read ask` und `session search ask` gelten auch dann, wenn das Modell eine bekannte Session-ID oder einen vermeintlich harmlosen Suchtext liefert. Ein geeigneter Session-Grant kann eine spätere identische Anforderung erlauben; er erweitert nicht automatisch seinen Matcher-Typ oder Geltungsbereich.
+`current-session read allow` is a narrow host rule, not a persistent wildcard grant. `session_tool_result_read` accepts only tool messages from the same session. `other session read ask` and `session search ask` apply even when the model supplies a known session ID or harmless-looking query. A suitable session grant can allow a later identical request but never expands matcher type or scope.
 
-## Historie und Request-Kontext
+## History and Request Context
 
-Die kanonische Historie ist die persistente, normalisierte Folge der Session-Nachrichten einschließlich Assistant-Tool-Calls und zugehöriger Tool-Ergebnisse. Sie bleibt vollständig und in stabiler Reihenfolge abrufbar. Provider-Nutzdaten dürfen ergänzend persistiert werden, ersetzen aber nicht die normalisierte Historie.
+Canonical history is the persistent normalized sequence of session messages, including assistant tool calls and results. It remains complete and available in stable order. Provider payloads may be persisted additionally but never replace normalized history.
 
-Der Request-Kontext ist dagegen eine flüchtige Projektion für genau einen Modellaufruf. Er kann Systemanweisungen, freigegebene Memories, eine Compaction-Zusammenfassung und einen budgetierten Ausschnitt der kanonischen Historie enthalten. Kürzen, Umordnen oder providerspezifisches Konvertieren des Request-Kontexts verändert oder löscht niemals kanonische Nachrichten.
+Request context is a transient projection for one model request. It can contain system instructions, released memories, a compaction summary, and a budgeted slice of canonical history. Shortening, reordering, and provider conversion never modify or delete canonical messages.
 
-Wenn der Context-Manager ein historisches Tool-Ergebnis auslässt, ersetzt er es durch eine strukturierte Referenz auf dessen kanonische Message-ID. Das Modell liest benötigte Details mit `session_tool_result_read`, statt das ursprüngliche Tool erneut auszuführen. Ergebnisse dieses Wiederabrufs werden nicht in Compaction-Zusammenfassungen vervielfältigt.
+When context omits a historical tool result, it inserts a structured reference to the canonical message ID. The model reads required details through `session_tool_result_read` instead of rerunning the tool. Results of that read are not duplicated in compaction summaries.
 
-Tool-Call und Tool-Ergebnis bilden beim Schneiden des Kontexts eine unteilbare Gruppe. Kein Request darf mit einem verwaisten Tool-Ergebnis oder einem Tool-Call ohne Ergebnis beginnen, sofern der Call nicht gerade der aktive, noch auszuführende Call ist. Der zuletzt eingegangene Benutzerauftrag muss im Request-Kontext erhalten bleiben.
+Tool call and result are indivisible when slicing context. A request cannot begin with an orphaned tool result or call without result unless it is the active call awaiting execution. The latest user request remains in context.
 
 ## Compaction
 
-Compaction erzeugt eine persistente, gekennzeichnete Zusammenfassung eines abgeschlossenen Präfixes der kanonischen Historie. Die Zusammenfassung enthält eine eindeutige Abdeckungsgrenze, damit der Request-Builder genau die Zusammenfassung und nur die Nachrichten nach dieser Grenze auswählt. Sie ersetzt, editiert oder löscht die abgedeckten Nachrichten nicht.
+Compaction creates a persistent marked summary of a completed canonical-history prefix. The summary has an unambiguous coverage boundary so the request builder selects exactly that summary and messages after it. It never replaces, edits, or deletes covered messages.
 
-Eine Zusammenfassung muss Ziele, relevante Fakten, getroffene Entscheidungen, offene Punkte, Tool-Wirkungen und Freigabeergebnisse bewahren. Unbestätigte Modellbehauptungen dürfen nicht als ausgeführte Tool-Wirkung dargestellt werden. Ein fehlgeschlagener Compaction-Versuch lässt die bisherige Historie und die zuletzt gültige Zusammenfassung unverändert.
+A summary preserves goals, relevant facts, decisions, open items, tool effects, and approval outcomes. Unconfirmed model claims must not appear as executed effects. Failed compaction leaves existing history and the latest valid summary unchanged.
 
-Compaction wird anhand des geschätzten Eingabebudgets ausgelöst, nicht anhand einer festen Nachrichtenzahl. Bereits kompaktierte Präfixe dürfen bei wiederholter Compaction nicht unkontrolliert erneut in den Kontext aufgenommen werden. Die Implementierung muss deterministisch festlegen, welche gültige Zusammenfassung bei mehreren Generationen aktiv ist.
+Compaction triggers from estimated input budget, not message count. Repeated compaction must not reinsert already compacted prefixes without bounds. The implementation deterministically chooses the active summary among generations.
 
-## Modell-Kontexteinstellungen
+## Model Context Settings
 
-Jede Modellkonfiguration besitzt explizite Grenzen für Kontextfenster und maximale Ausgabe. Die Werte sind typisierte positive Tokenzahlen mit sicheren Defaults. Ein Modell- oder Providerargument darf diese Host-Grenzen nicht erhöhen.
+Every model configuration has explicit context-window and maximum-output limits as positive token counts with safe defaults. Model and provider arguments cannot increase these host limits.
 
-Für einen Modellaufruf gilt:
+For one model request:
 
 ```text
 input_budget = context_window_tokens - max_output_tokens - safety_reserve_tokens
 ```
 
-Systemanweisungen, Toolschemas, Memories, Zusammenfassungen und Historie zählen gemeinsam gegen `input_budget`. Der Request-Builder schätzt das Budget vor dem Provideraufruf, hält die Ausgabereserve frei und compactiert beziehungsweise kürzt nur die flüchtige Projektion. Reicht selbst der minimale Kontext nicht, endet der Run mit einem stabilen Kontextfehler statt mit einem übergroßen Providerrequest.
+System instructions, tool schemas, memories, summaries, and history all count against `input_budget`. Before provider access, the request builder estimates usage, keeps output reserve free, and compacts or shortens only the transient projection. If minimum context still does not fit, the run ends with a stable context error instead of sending an oversized request.
 
-Provider-Metadaten können sinnvolle Defaults liefern. Explizite, validierte Modellsettings sind jedoch maßgeblich. Änderungen gelten für neue Modellrequests; sie schreiben weder alte Runs noch die kanonische Historie um.
+Provider metadata can supply useful defaults, but explicit validated model settings are authoritative. Changes apply to new model requests and never rewrite old runs or canonical history.
 
-## Abnahmetests
+## Acceptance Tests
 
-Die folgenden unabhängigen Testfälle sind bei Einführung der jeweiligen Symbole zu automatisieren. Bis dahin sind sie absichtlich keine importierenden oder übersprungenen Tests, damit die Testsuite keine noch nicht vorhandene API vorgibt.
+The following independent cases are automated when their symbols are introduced. Until then they intentionally are not importing or skipped tests, so the suite does not prescribe an API that does not yet exist.
 
 | ID | Given | When | Then |
 | --- | --- | --- | --- |
-| `COORD-01` | Ein Coordinator mit einem lebenden Approval-Waiter | Die passende Entscheidung wird übergeben | Genau dieser Waiter wird einmal aufgelöst und der Run läuft weiter. |
-| `COORD-02` | Ein persistiertes pending Approval ohne prozesslokalen Waiter | Eine Entscheidung wird übergeben | Die API liefert `approval.runInactive`, das Approval verfällt und es entsteht kein Grant. |
-| `COORD-03` | Persistente Runs in `queued`, `running` und `waiting_approval` sowie ein bereits abgeschlossener Run | Der Backend-Prozess startet | Nur die aktiven Zustände werden terminal beendet; pending Approvals verfallen, abgeschlossene Runs und bestehende Grants bleiben unverändert. |
-| `COORD-04` | Zwei gleichzeitige Entscheidungen für dasselbe Approval | Beide erreichen den Coordinator | Höchstens eine Entscheidung gewinnt; Tool und Grant werden höchstens einmal ausgeführt beziehungsweise angelegt. |
-| `COORD-05` | Ein aktiver Run mit offenem Providerrequest oder Approval | Der Benutzer fordert den Abbruch einmal oder wiederholt an | Der Task wird einmal gecancelt, Cleanup und Terminalisierung laufen zu Ende und der Run veröffentlicht genau den persistierten Zustand `cancelled`. |
-| `TOOL-01` | Zwei Tooldefinitionen mit demselben Namen | Die Registry wird aufgebaut | Der Aufbau schlägt deterministisch fehl. |
-| `TOOL-02` | Ein registriertes Tool und schemawidrige Argumente | Die Registry führt den Call aus | Das Tool wird nicht betreten und ein stabiler Validierungsfehler entsteht. |
-| `TOOL-03` | Ein Tool mit einer nicht vorab erlaubten Permission | Das Tool ruft `Context.ask` auf | Die Wirkung tritt erst nach `allow_once` oder `allow_session` ein; bei `deny` nie. |
-| `TOOL-04` | Ein Modellargument versucht Capability oder Matcher zu überschreiben | Der Call wird validiert | Die Host-Permission bleibt unverändert. |
-| `MATCH-01` | Ein Pfadgrant für `project/a` | Der Agent fordert `project/ab` an | Der Grant passt nicht. |
-| `MATCH-02` | Ein serialisierter Matcher jedes unterstützten Typs | Er wird deserialisiert | Typ und Match-Semantik bleiben identisch. |
-| `FILE-01` | Eine Read-only-Session mit Arbeitsverzeichnis | Der Agent liest eine Datei innerhalb dieses Verzeichnisses | Der Zugriff erfolgt ohne Approval. |
-| `FILE-02` | Eine Session ohne ausgewählten Workspace | Der Agent verwendet `root=workspace` | Der Call endet mit `file.workspaceNotSelected`; ein Approval kann die fehlende Rootbindung nicht umgehen. |
-| `FILE-03` | Ein Symlink liegt innerhalb eines Datei-Roots | Der Agent liest, kopiert oder verschiebt über den Symlink | Permission und Tool-Ausführung lehnen den Zugriff mit `file.symlinkForbidden` ab. |
-| `FILE-04` | Eine mehrzeilige oder große UTF-8-Datei | `read_file` erhält `offset` und `limit` | Das Ergebnis enthält genau den nummerierten Ausschnitt und einen Hinweis auf eine mögliche Fortsetzung. |
-| `FILE-05` | Eine Datei unter `session:attachments`, `session:generated`, `session:downloads` oder `session:derived` | Der Agent kopiert sie nach `session:files` oder in den Workspace | Copy ist erlaubt; Write, Move und Delete an der Quelle bleiben unveränderlich gesperrt. |
-| `WEBFETCH-01` | Globale Standardpolicy `ask` | Das Modell fordert eine URL an | Vor Approval erfolgen weder DNS-Auflösung noch HTTP-Zugriff. |
-| `WEBFETCH-02` | Policy `auto_public` und ein öffentliches Ziel | Das Modell ruft die URL ab | Das Ziel wird SSRF-sicher geprüft und ohne Approval abgerufen. |
-| `WEBFETCH-03` | Ein Redirect auf eine andere URL | Der Fetch verarbeitet den Redirect | Das Redirectziel durchläuft erneut Policy, DNS-Prüfung und Adress-Pinning. |
-| `WEBFETCH-04` | Ein nicht allowlistetes privates oder ein Metadatenziel | Das Modell fordert den Abruf an | Der Zugriff bleibt unabhängig von Grants und Modell-Override gesperrt. |
-| `WEBFETCH-05` | Eine Antwort über 5 MiB oder ein nicht unterstützter MIME-Typ | Der Body wird gestreamt | Der Abruf endet mit einem stabilen Fehler, bevor der Inhalt persistiert wird. |
-| `RESEARCH-01` | Suchmodus `disabled` | Ein normaler Modellrequest wird gebaut | `web_search` und seine Promptanweisungen fehlen; das unabhängige `webfetch` folgt weiterhin seiner eigenen Policy. |
-| `RESEARCH-02` | Suchmodus `available` und angebotene Webtools | Das Modell recherchiert oder antwortet direkt | Der normale research-fähige Agent-Loop verwendet automatische Toolwahl, reguläres Streaming und die normale Finalisierung ohne hostseitige Finalblockade. |
-| `RESEARCH-03` | Suchmodus `required` ohne erfolgreichen `web_search` im aktuellen Turn | Der initiale Modellrequest wird gebaut | Ausschließlich `web_search` wird mit `tool_choice=required` angeboten; Text- und Reasoning-Ausgaben werden weder persistiert noch gestreamt. |
-| `RESEARCH-04` | Die initial erzwungene Suche ist technisch erfolgreich und liefert keine Treffer | Der Host verarbeitet das Toolergebnis | Die Vorbedingung ist erfüllt; ein Suchergebnis muss weder Treffer noch Links enthalten. |
-| `RESEARCH-05` | Die Vorbedingung von `required` ist erfüllt | Der nächste Modellrequest wird gebaut | Toolset, automatische Toolwahl, Prompts, Budgets, Streaming und Finalisierung entsprechen exakt `available`. |
-| `RESEARCH-06` | Suchmodus `available` oder erfülltes `required` | `web_search` und `webfetch` werden mehrfach aufgerufen | `max_research_tool_calls` begrenzt die gemeinsame Summe beider Tools in beiden Modi. |
-| `RESEARCH-07` | Ein exakt gleicher Research-Call war im Run bereits erfolgreich | Das Modell wiederholt den Call | Es erfolgt kein weiterer Netzwerkrequest; der Loop liefert ein kompaktes `alreadyCompleted`-Ergebnis und der folgende normale Modellrequest finalisiert ohne Research-Tools. |
-| `RESEARCH-08` | Research wurde im aktuellen Turn verwendet und die finale Antwort enthält einige Research-URLs als sichtbare Markdown-Links | Die Antwort wird finalisiert | Der Host verändert den Antworttext nicht und persistiert als zusätzliche Research-Metadaten nur Policy, Research-Nutzung und die sichtbar verlinkten aktuellen Research-URLs; die Metadaten behaupten weder Nutzung noch inhaltliche Stützung durch einen Link. |
-| `RESEARCH-09` | Ein finaler Markdown-Link stimmt kanonisch mit einer öffentlich freigegebenen aktuellen Research-URL überein | Das Frontend rendert die Antwort | Nur dieser allowlistete Link erscheint als Inline-Quellenchip unmittelbar an seiner Position im Modelltext; andere Links behalten die normale Darstellung. |
-| `ATTACH-01` | Webfetch liefert ein gültiges unterstütztes Bild | Das Tool-Ergebnis wird persistiert | Message und Attachment-Metadaten werden gemeinsam gespeichert; die Datei liegt unter `downloads` der aktuellen Session. |
-| `ATTACH-02` | Das aktive Modell unterstützt Bildeingaben | Der nächste Providerrequest wird gebaut | Das Bild wird flüchtig als Medienpart übertragen, aber weder als Base64 persistiert noch geloggt. |
-| `ATTACH-03` | Das aktive Modell unterstützt keine Bildeingaben | Webfetch liefert ein Bild | Das Bild bleibt im Chat sichtbar und das Modell erhält nur einen Textmarker. |
-| `SESSION-01` | Ein Run in Session A | Das Session-Read-Tool liest A | `Context.ask` erzeugt kein Approval. |
-| `SESSION-02` | Ein Run in Session A ohne passenden Grant | Das Session-Read-Tool liest B | Es entsteht ein Approval mit einem exakten Session-Matcher für B. |
-| `SESSION-03` | Ein Run mit einem Read-Grant für Session B | Das Session-Search-Tool sucht über Sessions | Der Read-Grant passt nicht und es entsteht ein Search-Approval. |
-| `HISTORY-01` | Eine kanonische Historie mit Tool-Call und Tool-Ergebnis | Ein kleiner Request-Kontext wird gebaut | Die Datenbankhistorie bleibt unverändert und im Request gibt es keine verwaiste Tool-Nachricht. |
-| `HISTORY-02` | Eine gültige Zusammenfassung bis Grenze N | Der nächste Request wird gebaut | Genau die Zusammenfassung plus Nachrichten nach N werden verwendet. |
-| `COMPACT-01` | Eine Historie über dem Eingabebudget | Compaction gelingt | Eine Summary mit Abdeckungsgrenze wird persistiert; kanonische Nachrichten bleiben erhalten. |
-| `COMPACT-02` | Eine Historie über dem Eingabebudget | Compaction scheitert | Historie und vorherige Summary bleiben unverändert; der Run endet sicher. |
-| `CONTEXT-01` | Kontextfenster, Ausgabelimit und Sicherheitsreserve | Ein Request wird gebaut | System, Tools, Memories, Summary und Historie überschreiten zusammen nicht das Eingabebudget. |
-| `CONTEXT-02` | Ein zu kleines Fenster für den Minimalkontext | Ein Request wird gebaut | Kein Provider wird aufgerufen und ein stabiler Kontextfehler wird geliefert. |
+| `COORD-01` | Coordinator with a live approval waiter | Matching decision arrives | Exactly that waiter resolves once and the run continues. |
+| `COORD-02` | Persisted pending approval without process-local waiter | Decision arrives | API returns `approval.runInactive`, approval expires, and no grant is created. |
+| `COORD-03` | Persisted `queued`, `running`, and `waiting_approval` runs plus a completed run | Backend starts | Only active states terminate; pending approvals expire and completed runs and grants remain. |
+| `COORD-04` | Two concurrent decisions for one approval | Both reach coordinator | At most one wins; tool effect and grant happen at most once. |
+| `COORD-05` | Active run with provider request or approval open | User cancels once or repeatedly | Task is cancelled once, cleanup finishes, and exactly persisted `cancelled` state is published. |
+| `TOOL-01` | Two tool definitions with same name | Registry builds | Build fails deterministically. |
+| `TOOL-02` | Registered tool with invalid arguments | Registry executes call | Handler is not entered and a stable validation error results. |
+| `TOOL-03` | Tool request not preallowed | Tool calls `Context.ask` | Effect occurs only after `allow_once` or `allow_session`, never after `deny`. |
+| `TOOL-04` | Model argument tries to override capability or matcher | Call validates | Host permission remains unchanged. |
+| `MATCH-01` | Path grant for `project/a` | Agent requests `project/ab` | Grant does not match. |
+| `MATCH-02` | Serialized matcher of each type | It is deserialized | Type and semantics are preserved. |
+| `FILE-01` | Read-only session with working directory | Agent reads within it | Access occurs without approval. |
+| `FILE-02` | Session without workspace | Agent uses `root=workspace` | Call returns `file.workspaceNotSelected`; approval cannot create binding. |
+| `FILE-03` | Symlink inside file root | Agent reads, copies, or moves through it | Permission and execution reject `file.symlinkForbidden`. |
+| `FILE-04` | Multiline or large UTF-8 file | `read_file` receives `offset` and `limit` | Result contains exact numbered slice and continuation hint. |
+| `FILE-05` | File under a host-managed session asset directory | Agent copies it to `session:files` or workspace | Copy is allowed; write, move, and delete at source remain blocked. |
+| `WEBFETCH-01` | Global `ask` policy | Model requests URL | No DNS or HTTP occurs before approval. |
+| `WEBFETCH-02` | `auto_public` and public target | Model fetches URL | Target is SSRF-validated and fetched without approval. |
+| `WEBFETCH-03` | Redirect to another URL | Fetch handles redirect | Target repeats policy, DNS validation, and address pinning. |
+| `WEBFETCH-04` | Private target not on allowlist or metadata target | Model requests fetch | Access remains blocked regardless of grants or model override. |
+| `WEBFETCH-05` | Response over 5 MiB or unsupported MIME type | Body streams | Fetch ends with stable error before persistence. |
+| `WEBFETCH-06` | HTML with semantic main content, navigation, and relative links | Tool creates Markdown or text | Relevant root is converted, links resolve against final URL, and result reports status, input type, and output format. |
+| `WEBFETCH-07` | Target returns non-success HTTP status | Fetch ends | Model gets `webfetch.requestFailed` and safe `statusCode`, never external error text or body. |
+| `RESEARCH-01` | Search mode `disabled` | Normal request builds | `web_search` and instructions are absent; independent `webfetch` still follows policy. |
+| `RESEARCH-02` | Search mode `available` and web tools offered | Model researches or answers directly | Normal loop uses automatic tool choice, streaming, and finalization without host final block. |
+| `RESEARCH-03` | Search mode `required` without successful current-turn search | Initial request builds | Only `web_search` is offered with `tool_choice=required`; text and reasoning are hidden. |
+| `RESEARCH-04` | Forced initial search succeeds with no results | Host handles result | Gate is satisfied; result need not contain hits or links. |
+| `RESEARCH-05` | `required` gate satisfied | Next request builds | Tool set, automatic choice, prompts, budgets, streaming, and finalization match `available`. |
+| `RESEARCH-06` | `available` or completed `required` | Search and fetch are called repeatedly | `max_research_tool_calls` limits their combined count. |
+| `RESEARCH-07` | Identical research call already succeeded | Model repeats it | No network request; compact `alreadyCompleted` result returns and next request finalizes without research tools. |
+| `RESEARCH-08` | Current turn used research and final answer visibly links some research URLs | Answer finalizes | Host preserves text and stores only policy, use flag, and visibly linked current URLs without claiming support. |
+| `RESEARCH-09` | Final Markdown link canonically matches approved current research URL | Frontend renders | Only allowlisted link becomes an inline source chip; other links render normally. |
+| `RESEARCH-10` | SearXNG returns oversized response or markup snippets | Host reads and normalizes | Response stops at 256 KiB; accepted snippets are bounded local plain text. |
+| `RESEARCH-11` | Model searches current, latest, or today information | Prompt uses frozen local timestamp | Query omits a year or derives it from timestamp; explicit historical and exact-name years remain. |
+| `ATTACH-01` | Webfetch returns valid supported image | Tool result persists | Message and attachment metadata persist together under session `downloads`. |
+| `ATTACH-02` | Active model supports image input | Next request builds | Image is transferred transiently, never persisted or logged as Base64. |
+| `ATTACH-03` | Active model lacks image input | Webfetch returns image | Image remains visible and model receives only a text marker. |
+| `SESSION-01` | Run in session A | Session-read tool reads A | `Context.ask` creates no approval. |
+| `SESSION-02` | Run in A without matching grant | Session-read reads B | Exact session matcher approval is created. |
+| `SESSION-03` | Run with read grant for B | Session-search searches sessions | Read grant does not match and search approval is created. |
+| `HISTORY-01` | Canonical history with tool call and result | Small request context builds | Database history is unchanged and request has no orphaned tool message. |
+| `HISTORY-02` | Valid summary through boundary N | Next request builds | Exactly summary plus messages after N are used. |
+| `COMPACT-01` | History exceeds input budget | Compaction succeeds | Boundary summary persists and canonical messages remain. |
+| `COMPACT-02` | History exceeds input budget | Compaction fails | History and previous summary remain and run ends safely. |
+| `CONTEXT-01` | Context window, output limit, and safety reserve | Request builds | System, tools, memories, summary, and history fit input budget. |
+| `CONTEXT-02` | Window too small for minimum context | Request builds | No provider call and stable context error. |
+| `CONTEXT-03` | Same current tool output projected for different model windows | Requests build | Tool budget scales to model-dependent compaction threshold; canonical tool message is unchanged. |
 
-Die bereits vorhandene Restart-Grenze wird unabhängig in `apps/backend/tests/test_harness_restart_contract.py` geprüft. Registry, Session-Tools, Matcher, Compaction und Modell-Kontextsettings erhalten erst ausführbare Tests, sobald ihre öffentlichen Verträge implementiert sind.
+The restart boundary is tested independently in `apps/backend/tests/test_harness_restart_contract.py`. Registry, session tools, matchers, compaction, and model context settings receive executable tests when their public contracts exist.

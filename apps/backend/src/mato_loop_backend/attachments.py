@@ -285,7 +285,7 @@ class AttachmentStorage:
     ) -> str:
         directory = _CATEGORY_DIRECTORIES.get(category)
         if directory is None:
-            raise AttachmentStorageError("Ungueltige Attachment-Kategorie")
+            raise AttachmentStorageError("Invalid attachment category")
         return f"{directory}/{attachment_id}/{filename}"
 
     def _path(self, session_id: UUID, storage_path: str, *, require_exists: bool) -> Path:
@@ -295,26 +295,26 @@ class AttachmentStorage:
             or PurePosixPath(storage_path).is_absolute()
             or match.group(3) != safe_filename(match.group(3))
         ):
-            raise AttachmentStorageError("Ungueltiger Attachment-Pfad")
+            raise AttachmentStorageError("Invalid attachment path")
         try:
             UUID(match.group(2))
             root = self.sessions.session_path(session_id, require_exists=True)
         except (SessionStorageError, ValueError) as exc:
-            raise AttachmentStorageError("Ungueltiger Session-Storage") from exc
+            raise AttachmentStorageError("Invalid session storage") from exc
         target = root.joinpath(*PurePosixPath(storage_path).parts)
         if require_exists:
             try:
                 parent_metadata = target.parent.lstat()
                 metadata = target.lstat()
             except FileNotFoundError as exc:
-                raise AttachmentStorageError("Attachment-Datei nicht gefunden") from exc
+                raise AttachmentStorageError("Attachment file not found") from exc
             if (
                 stat.S_ISLNK(parent_metadata.st_mode)
                 or not stat.S_ISDIR(parent_metadata.st_mode)
                 or stat.S_ISLNK(metadata.st_mode)
                 or not stat.S_ISREG(metadata.st_mode)
             ):
-                raise AttachmentStorageError("Ungueltige Attachment-Datei")
+                raise AttachmentStorageError("Invalid attachment file")
         return target
 
     def write(
@@ -331,9 +331,9 @@ class AttachmentStorage:
             target.parent.mkdir(mode=0o700)
             parent_metadata = target.parent.lstat()
         except OSError as exc:
-            raise AttachmentStorageError("Attachment-Verzeichnis konnte nicht erstellt werden") from exc
+            raise AttachmentStorageError("Attachment directory could not be created") from exc
         if stat.S_ISLNK(parent_metadata.st_mode) or not stat.S_ISDIR(parent_metadata.st_mode):
-            raise AttachmentStorageError("Ungueltiges Attachment-Verzeichnis")
+            raise AttachmentStorageError("Invalid attachment directory")
         target.parent.chmod(0o700)
         temporary = target.parent / f".{uuid4().hex}.tmp"
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -344,7 +344,7 @@ class AttachmentStorage:
                 file.flush()
                 os.fsync(file.fileno())
             if target.exists() or target.is_symlink():
-                raise AttachmentStorageError("Attachment-Datei existiert bereits")
+                raise AttachmentStorageError("Attachment file already exists")
             os.replace(temporary, target)
             target.chmod(0o600)
             directory_descriptor = os.open(target.parent, os.O_RDONLY)
@@ -381,9 +381,9 @@ class AttachmentStorage:
             root = self.sessions.session_path(session_id, require_exists=True) / "derived"
             metadata = root.lstat()
         except (OSError, SessionStorageError) as exc:
-            raise AttachmentStorageError("Ungueltiger Derived-Storage") from exc
+            raise AttachmentStorageError("Invalid derived storage") from exc
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise AttachmentStorageError("Ungueltiger Derived-Storage")
+            raise AttachmentStorageError("Invalid derived storage")
         return root
 
     def write_derived(
@@ -392,12 +392,12 @@ class AttachmentStorage:
         if not files:
             return {}
         if set(files) - {"content.txt", "audio.wav"}:
-            raise AttachmentStorageError("Ungueltiger Derived-Dateiname")
+            raise AttachmentStorageError("Invalid derived filename")
         root = self._derived_root(session_id)
         target = root / str(attachment_id)
         temporary = root / f".{attachment_id}.{uuid4().hex}.tmp"
         if target.exists() or target.is_symlink():
-            raise AttachmentStorageError("Derived-Verzeichnis existiert bereits")
+            raise AttachmentStorageError("Derived directory already exists")
         try:
             temporary.mkdir(mode=0o700)
             for name, data in files.items():
@@ -431,23 +431,23 @@ class AttachmentStorage:
     ) -> Path:
         expected_prefix = f"derived/{attachment_id}/"
         if not derived_path.startswith(expected_prefix):
-            raise AttachmentStorageError("Ungueltiger Derived-Pfad")
+            raise AttachmentStorageError("Invalid derived path")
         name = derived_path.removeprefix(expected_prefix)
         if name not in {"content.txt", "audio.wav"}:
-            raise AttachmentStorageError("Ungueltiger Derived-Pfad")
+            raise AttachmentStorageError("Invalid derived path")
         target = self._derived_root(session_id) / str(attachment_id) / name
         try:
             parent_metadata = target.parent.lstat()
             metadata = target.lstat()
         except OSError as exc:
-            raise AttachmentStorageError("Derived-Datei nicht gefunden") from exc
+            raise AttachmentStorageError("Derived file not found") from exc
         if (
             stat.S_ISLNK(parent_metadata.st_mode)
             or not stat.S_ISDIR(parent_metadata.st_mode)
             or stat.S_ISLNK(metadata.st_mode)
             or not stat.S_ISREG(metadata.st_mode)
         ):
-            raise AttachmentStorageError("Ungueltige Derived-Datei")
+            raise AttachmentStorageError("Invalid derived file")
         return target
 
     def delete_derived(self, session_id: UUID, attachment_id: UUID) -> None:
@@ -457,7 +457,7 @@ class AttachmentStorage:
         except (AttachmentStorageError, FileNotFoundError):
             return
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise AttachmentStorageError("Ungueltiges Derived-Verzeichnis")
+            raise AttachmentStorageError("Invalid derived directory")
         shutil.rmtree(target)
 
     def derived_usage(self, session_id: UUID) -> int:
@@ -466,11 +466,11 @@ class AttachmentStorage:
         for directory in root.iterdir():
             metadata = directory.lstat()
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-                raise AttachmentStorageError("Ungueltiger Derived-Storage")
+                raise AttachmentStorageError("Invalid derived storage")
             for path in directory.iterdir():
                 file_metadata = path.lstat()
                 if stat.S_ISLNK(file_metadata.st_mode) or not stat.S_ISREG(file_metadata.st_mode):
-                    raise AttachmentStorageError("Ungueltiger Derived-Storage")
+                    raise AttachmentStorageError("Invalid derived storage")
                 total += file_metadata.st_size
                 if total > SESSION_ATTACHMENT_QUOTA_BYTES:
                     return total

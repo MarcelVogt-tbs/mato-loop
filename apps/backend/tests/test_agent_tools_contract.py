@@ -235,7 +235,7 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
     call = ToolCall(
         id="stale-search",
         name="web_search",
-        arguments={"query": "MatoLoop"},
+        arguments={"query": "OpenWrt TL-MR6400 support status 2024 2025"},
     )
     context = _context(tmp_path, call)
     context.integration_settings = settings
@@ -284,6 +284,7 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
         "provider": "no_key",
         "fallback_provider": None,
     }
+    assert search.await_args.args[1] == "OpenWrt TL-MR6400 support status 2024 2025"
 
 
 async def test_web_search_rejects_an_invalid_provider_result(tmp_path, monkeypatch) -> None:
@@ -1059,7 +1060,7 @@ async def test_read_file_returns_numbered_page_and_continuation(tmp_path) -> Non
 
     result = await tool_registry.execute(call, context)
 
-    assert result.content == "2: two\n\n[Weitere Zeilen verfügbar. Mit offset=3 weiterlesen.]"
+    assert result.content == "2: two\n\n[More lines are available. Continue with offset=3.]"
     assert result.metadata == {
         "root": "workspace",
         "path": "notes.txt",
@@ -1190,6 +1191,8 @@ async def test_webfetch_applies_the_effective_policy(
             content_type="text/plain",
             content="Inhalt",
             is_image=False,
+            status_code=200,
+            output_format="markdown",
             title="  Example   page  ",
         )
 
@@ -1215,7 +1218,9 @@ async def test_webfetch_applies_the_effective_policy(
         "kind": "webfetch",
         "citationEligible": False,
         "title": "Example page",
+        "statusCode": 200,
         "contentType": "text/plain",
+        "outputFormat": "markdown",
         "content": "Inhalt",
     }
     assert payload["sourceId"].startswith("src-")
@@ -1245,7 +1250,7 @@ async def test_webfetch_denial_stops_before_the_fetch_continues(tmp_path, monkey
         nonlocal continued
         await kwargs["authorize_url"](url)
         continued = True
-        raise AssertionError("Der Request darf nach Deny nicht fortgesetzt werden")
+        raise AssertionError("The request must not continue after denial")
 
     monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
     call = ToolCall(id="fetch", name="webfetch", arguments={"url": "https://example.com"})
@@ -1271,6 +1276,8 @@ async def test_webfetch_source_ids_distinguish_redacted_query_values(
             content_type="text/plain",
             content="Inhalt",
             is_image=False,
+            status_code=200,
+            output_format="markdown",
         )
 
     monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
@@ -1311,6 +1318,8 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
             content_type="image/png",
             content=image,
             is_image=True,
+            status_code=200,
+            output_format="image",
             image_mime_type="image/png",
             image_filename="diagram.png",
         )
@@ -1328,7 +1337,9 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
     payload = json.loads(result.content)
     assert payload["url"] == "https://example.com/a"
     assert payload["citationEligible"] is True
+    assert payload["statusCode"] == 200
     assert payload["contentType"] == "image/png"
+    assert payload["outputFormat"] == "image"
     assert payload["attachment"] == "diagram.png"
     assert result.metadata["sources"][0]["sourceId"] == payload["sourceId"]
     assert result.attachments == (
@@ -1338,7 +1349,7 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
 
 async def test_webfetch_returns_stable_integration_errors(tmp_path, monkeypatch) -> None:
     async def failing_fetch(*args, **kwargs):
-        raise WebFetchError("webfetch.timeout")
+        raise WebFetchError("webfetch.requestFailed", params={"statusCode": 404})
 
     monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", failing_fetch)
     call = ToolCall(id="fetch", name="webfetch", arguments={"url": "https://example.com"})
@@ -1350,7 +1361,8 @@ async def test_webfetch_returns_stable_integration_errors(tmp_path, monkeypatch)
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata == {"errorCode": "webfetch.timeout"}
+    assert result.metadata == {"errorCode": "webfetch.requestFailed"}
+    assert json.loads(result.content)["error"]["params"] == {"statusCode": 404}
 
 
 def test_permission_for_is_safe_for_webfetch_and_unknown_tools(tmp_path) -> None:

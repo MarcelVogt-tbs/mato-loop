@@ -1,44 +1,44 @@
 # MatoLoop Backend
 
-Das MatoLoop-Backend basiert auf FastAPI, Pydantic v2, asynchronem SQLAlchemy, PostgreSQL und Alembic. Es stellt REST- und SSE-Schnittstellen bereit und enthält die providerneutrale Agent-Runtime.
+The MatoLoop backend uses FastAPI, Pydantic v2, asynchronous SQLAlchemy, PostgreSQL, and Alembic. It provides REST and SSE interfaces and contains the provider-neutral agent runtime.
 
-## Entwicklung
+## Development
 
-Das Backend wird normalerweise als Teil des Docker-Devstacks vom Repository-Root gestartet:
+The backend normally runs as part of the Docker development stack from the repository root:
 
 ```bash
 ./scripts/dev.sh up --build -d
 ./scripts/dev.sh logs backend
 ```
 
-Danach sind erreichbar:
+The following endpoints are then available:
 
 - API: `http://localhost:6020/api`
 - OpenAPI: `http://localhost:6020/api/docs`
 - Liveness: `http://localhost:6020/api/health/live`
 - Readiness: `http://localhost:6020/api/health`
 
-Der Backend-Container verwendet Reloading und bindet den Quellcode über `/workspace` ein. Python-Umgebung und `uv`-Cache liegen im Named Volume `backend_uv_data`.
+The backend container uses reload mode and mounts the source tree through `/workspace`. The Python environment and `uv` cache live in the `backend_uv_data` named volume.
 
-## Struktur
+## Structure
 
-- `src/mato_loop_backend/api`: Router, Dependencies und zentraler Fehlervertrag
-- `src/mato_loop_backend/agent`: Modell-/Tool-Loop, Permissions und Freigaben
-- `src/mato_loop_backend/providers`: Codex- und OpenAI-kompatible Transporte
-- `src/mato_loop_backend/models`: relationale SQLAlchemy-Modelle
-- `src/mato_loop_backend/settings`: typisierte operative Settings
-- `src/mato_loop_backend/integrations/contracts.py`: statische Adapter- und Toolbeitragsverträge
-- `src/mato_loop_backend/integrations/search.py`: No-Key-Metasuche und SearXNG mit kontrolliertem Fallback
-- `src/mato_loop_backend/integrations/webfetch.py`: SSRF-geschützter Abruf konkreter HTTP(S)-URLs
-- `src/mato_loop_backend/attachments.py`: validierter, persistenter Bild-Storage
-- `src/mato_loop_backend/memory`: CRUD, Dreaming, Infinity-Client, Indexer und Hybrid-Retrieval
-- `src/mato_loop_backend/workspace.py`: kanonisierte Pfade und Agent-Home-Grenze
-- `alembic`: Migrationen und Alembic-Laufzeit
-- `tests`: Backend-Unit- und Vertragstests
+- `src/mato_loop_backend/api`: routers, dependencies, and the central error contract
+- `src/mato_loop_backend/agent`: model and tool loop, permissions, and approvals
+- `src/mato_loop_backend/providers`: Codex and OpenAI-compatible transports
+- `src/mato_loop_backend/models`: relational SQLAlchemy models
+- `src/mato_loop_backend/settings`: typed operational settings
+- `src/mato_loop_backend/integrations/contracts.py`: static adapter and tool contribution contracts
+- `src/mato_loop_backend/integrations/search.py`: no-key metasearch and SearXNG with controlled fallback
+- `src/mato_loop_backend/integrations/webfetch.py`: SSRF-protected fetching of concrete HTTP(S) URLs
+- `src/mato_loop_backend/attachments.py`: validated persistent image storage
+- `src/mato_loop_backend/memory`: CRUD, dreaming, Infinity client, indexer, and hybrid retrieval
+- `src/mato_loop_backend/workspace.py`: canonical paths and agent-home boundary
+- `alembic`: migrations and Alembic runtime
+- `tests`: backend unit and contract tests
 
-## Datenbank und Migrationen
+## Database and Migrations
 
-Der Devstack führt beim Backendstart automatisch `alembic upgrade head` aus. Migrationen können gezielt geprüft oder ausgeführt werden:
+The development stack runs `alembic upgrade head` automatically when the backend starts. Migrations can also be inspected or run directly:
 
 ```bash
 ./scripts/dev.sh db current
@@ -47,21 +47,21 @@ Der Devstack führt beim Backendstart automatisch `alembic upgrade head` aus. Mi
 ./scripts/dev.sh db check
 ```
 
-Jede Änderung am relationalen Schema benötigt eine neue Alembic-Migration. Migrationen werden ausschließlich aus den aktuellen SQLAlchemy-Metadaten erzeugt:
+Every relational schema change requires an Alembic migration generated only from the current SQLAlchemy metadata:
 
 ```bash
-./scripts/dev.sh db revision --autogenerate -m "kurze beschreibung"
+./scripts/dev.sh db revision --autogenerate -m "short description"
 ```
 
-Der generierte Diff muss vollständig geprüft werden. Renames, Datenmigrationen, Extensions und andere von Alembic nicht sicher erkannte Operationen werden anschließend in der generierten Revision manuell angepasst; vollständig handgeschriebene Revisionsdateien sind nicht zulässig. Danach müssen mindestens `upgrade head` und `check` erfolgreich laufen. Operative Settings bleiben typisierte Pydantic-Dokumente und erhalten für additive Felder Defaults.
+Review the generated diff completely. Adjust generated revisions manually for renames, data migrations, extensions, and other operations Alembic cannot detect safely; fully handwritten revision files are not allowed. At minimum, `upgrade head` and `check` must then succeed. Operational settings remain typed Pydantic documents and additive fields require defaults.
 
-Die Init-Migration aktiviert pgvector und legt `memory_embeddings` als Vektorspeicher und persistente Queue an. Bestehende Memories werden nach dem Backendstart asynchron indexiert; die Migration selbst ruft Infinity nicht auf. Das aktive Profil verwendet `intfloat/multilingual-e5-small`, 384 Dimensionen sowie die E5-Präfixe `query: ` und `passage: `. Inhalts-Hash und Profil-Fingerprint verhindern die Nutzung veralteter Vektoren.
+The initial migration enables pgvector and creates `memory_embeddings` as vector storage and a persistent queue. Existing memories are indexed asynchronously after backend startup; the migration never calls Infinity. The active profile uses `intfloat/multilingual-e5-small`, 384 dimensions, and the E5 prefixes `query: ` and `passage: `. Content hashes and profile fingerprints prevent stale vectors from being used.
 
-Infinity ist keine harte Readiness-Abhängigkeit. `/api/health` meldet den Dienst bei einem Ausfall als `degraded`, während FTS, CRUD und Agent-Runs verfügbar bleiben. `./scripts/dev.sh doctor` zeigt Extension-Version, Spaltentyp, Queuezustände und Infinity-Health.
+Infinity is not a hard readiness dependency. `/api/health` reports `degraded` when it is unavailable, while FTS, CRUD, and agent runs remain available. `./scripts/dev.sh doctor` displays the extension version, column type, queue states, and Infinity health.
 
-## Fehlervertrag
+## Error Contract
 
-Erwartete API-Fehler werden als `ApiError` aus `src/mato_loop_backend/api/errors.py` ausgelöst. Antworten enthalten einen stabilen Code und bei Bedarf ein Feld sowie Parameter:
+Expected API errors are raised as `ApiError` from `src/mato_loop_backend/api/errors.py`. Responses contain a stable code and, when needed, a field and parameters:
 
 ```json
 {
@@ -83,30 +83,30 @@ Erwartete API-Fehler werden als `ApiError` aus `src/mato_loop_backend/api/errors
 }
 ```
 
-Regeln:
+Rules:
 
-- Keine deutschen oder englischen Benutzertexte im API-Vertrag ausliefern.
-- Keine rohen Pydantic-Details, Exception-Texte oder Providerantworten zurückgeben.
-- Technische Ursachen serverseitig protokollieren.
-- Providerfehler auf sichere Codes wie `provider.authenticationFailed` oder `provider.unavailable` abbilden.
-- Agent- und SSE-Fehler mit demselben Codevertrag veröffentlichen.
-- Für unbekannte interne Fehler `internal.unexpected` verwenden.
+- Do not expose German or English user-facing text as part of the API contract.
+- Do not return raw Pydantic details, exception text, or provider responses.
+- Log technical causes server-side.
+- Map provider failures to safe codes such as `provider.authenticationFailed` or `provider.unavailable`.
+- Publish agent and SSE errors through the same code contract.
+- Use `internal.unexpected` for unknown internal failures.
 
-## Provider und Agent-Runtime
+## Providers and Agent Runtime
 
-Provideradapter transportieren ausschließlich Modellnachrichten, Toolschemas, Textdeltas und Tool-Calls. Die Agent-Runtime führt Tools aus, prüft Permissions und persistiert Runs sowie Freigaben.
+Provider adapters transport only model messages, tool schemas, text deltas, and tool calls. The agent runtime executes tools, checks permissions, and persists runs and approvals.
 
-Providerabhängige Datentypen dürfen nicht in den Agent-Kern gelangen. Technische Providerfehler werden nicht als Tool-Output, Run-Fehler oder API-Antwort weitergegeben.
+Provider-specific data types must not enter the agent core. Technical provider errors are never exposed as tool output, run errors, or API responses.
 
-Ein Provider kann mehrere Modellkonfigurationen besitzen. OpenAI-kompatible Discovery verwendet serverseitig den `/models`-Endpunkt. ChatGPT Codex verwendet nach der Device-Code-Anmeldung den privaten Codex-Modellkatalog. Beide Pfade normalisieren Antworten auf Modell-ID und eine begrenzte Metadatenmenge. Sync-Vorgänge erhalten interne UUIDs und Nutzereinstellungen, markieren verschwundene Discovery-Modelle als nicht verfügbar und verändern manuelle Modelle nicht. Neu entdeckte Modelle werden nicht automatisch aktiviert.
+A provider can contain multiple model configurations. OpenAI-compatible discovery uses the server-side `/models` endpoint. ChatGPT Codex uses the private Codex model catalog after device-code authentication. Both paths normalize responses to a model ID and a bounded set of metadata. Synchronization preserves internal UUIDs and user settings, marks missing discovered models unavailable, and leaves manual models unchanged. Newly discovered models are not enabled automatically.
 
-Agent-Dateizugriffe laufen über `RootFileService` mit den expliziten Roots `session` und `workspace`. Der aktuelle Session-Speicher liegt unter `/data/sessions/<session-id>`, der optionale Workspace unter dem ausgewählten Pfad in `/data/home`. Absolute Pfade, Parent-Segmente und Symlink-Ausbrüche sind verboten. Der Session-Root enthält flach `files`, `attachments`, `generated`, `downloads` und `derived`. Nur `files` ist veränderbar; die vier hostverwalteten Asset-Verzeichnisse sind lesbar und als Copy-Quelle nutzbar.
+Agent file access uses `RootFileService` with the explicit roots `session` and `workspace`. Current session storage is under `/data/sessions/<session-id>`; the optional workspace is under the selected path in `/data/home`. Absolute paths, parent segments, and symlink escapes are forbidden. The session root contains the flat directories `files`, `attachments`, `generated`, `downloads`, and `derived`. Only `files` is mutable; the four host-managed asset directories are readable and can be copy sources.
 
-Webfetch-Zugriffe laufen über einen eigenen gepinnten Resolver und eine vom Modell nicht überschreibbare Netzwerkpolicy. Persistente Downloads liegen unter `downloads`, Nutzeruploads unter `attachments` und generierte Inhalte unter `generated`. Bilder werden über eine authentifizierte Session-URL ausgeliefert und nur für explizit bildfähige Modelle flüchtig in Providerrequests eingebettet. Text-, Dokument- und Audioableitungen liegen unter `derived`.
+Webfetch uses a dedicated pinned resolver and a network policy the model cannot override. Persistent downloads are stored under `downloads`, user uploads under `attachments`, and generated content under `generated`. Images are served through authenticated session URLs and embedded transiently only for explicitly image-capable models. Text, document, and audio derivatives are stored under `derived`.
 
-## Checks und Tests
+## Checks and Tests
 
-Vom Repository-Root:
+From the repository root:
 
 ```bash
 ./scripts/dev.sh check backend
@@ -114,7 +114,7 @@ Vom Repository-Root:
 ./scripts/dev.sh test rag
 ```
 
-Direkt aus `apps/backend` können dieselben Werkzeuge lokal ausgeführt werden, wenn die `uv`-Umgebung bereits vorhanden ist:
+The same tools can run directly from `apps/backend` when the `uv` environment already exists:
 
 ```bash
 uv sync --frozen
@@ -122,4 +122,4 @@ uv run ruff check .
 uv run pytest
 ```
 
-`test rag` verwendet den laufenden Devstack und prüft Infinity sowie pgvector mit echten multilingualen Vektoren. Der normale Backendtest überspringt diese beiden Integrationstests. Neue Fehlercodes benötigen mindestens einen Vertragstest für die Backendantwort. Änderungen an Pfadgrenzen, Credentials, Permissions oder Providerkonvertierung benötigen gezielte Unit-Tests.
+`test rag` uses the running development stack and verifies Infinity and pgvector with real multilingual vectors. The normal backend test skips these integration tests. New error codes require at least one contract test for the backend response. Changes to path boundaries, credentials, permissions, or provider conversion require targeted unit tests.

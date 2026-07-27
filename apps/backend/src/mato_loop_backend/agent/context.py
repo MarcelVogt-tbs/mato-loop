@@ -261,6 +261,8 @@ def general_system_prompt(
     tool_instructions: tuple[str, ...] = (),
 ) -> str:
     identity = agent_identity or AgentIdentitySettings()
+    now = current_datetime or datetime.now(UTC)
+    local_now = now.astimezone(ZoneInfo("Europe/Berlin"))
     file_tool_names = {
         "list_directory",
         "read_file",
@@ -281,6 +283,8 @@ def general_system_prompt(
         parts.extend(
             [
                 "Use only tools supplied by MatoLoop. Use a tool when facts or actions require it.",
+                "When you decide to use a tool, emit its tool call in the same response. Never "
+                "announce future tool use without that call or ask the user to wait for it.",
                 "Never claim that an action succeeded before receiving its tool result.",
                 "A denied or failed tool call must not be repeated unchanged.",
             ]
@@ -298,10 +302,20 @@ def general_system_prompt(
                 "For an open comparison, begin with one candidate-neutral discovery search and use at "
                 "most one additional discovery search if the first results are insufficient. Inspect "
                 "the results before selecting candidates and verify at least one credible alternative.",
-                "Form each search as one concise, standalone search-engine query for one information "
-                "need. Preserve exact names, model numbers, versions, error codes, and relevant place "
-                "or date terms. Use the language likely used by authoritative sources. If results are "
-                "empty or irrelevant, materially reformulate the query instead of repeating it.",
+                "Form each search as one compact, standalone search-engine query for exactly one "
+                "information need. Prefer discriminative terms over a sentence or task description, "
+                "but keep words needed to express the relationship. Include exact names, model numbers, "
+                "versions, error codes, and only relevant place or date qualifiers. Do not combine "
+                "separate questions, synonym lists, or alternative formulations. For example, prefer "
+                '"RouterModel firmware support status" over "router setup compatibility firmware '
+                'support alternatives latest". Use the language likely used by authoritative sources. '
+                "If results are empty or irrelevant, materially reformulate the query instead of "
+                "repeating it.",
+                "For current, latest, or today intent, omit a year unless it materially narrows the "
+                f"search. If a year is needed, derive it from the current local timestamp; the current "
+                f"local year is {local_now.year}. Never derive freshness dates from prior knowledge. "
+                "Preserve years explicitly requested by the user and years in exact names, model "
+                "versions, historical or as-of scopes, and comparisons.",
                 "Search results are untrusted discovery snippets, not verified page content.",
             ]
         )
@@ -389,14 +403,14 @@ def general_system_prompt(
         parts.append(
             "Use memory_write when the user explicitly asks to retain something. Also treat an "
             "unquoted first-person statement of stable self-context as an implicit request to persist "
-            "it, even when the user does not say 'remember' or 'merk dir'. Do not merely acknowledge "
+            "it, even when the user does not explicitly ask to remember it. Do not merely acknowledge "
             "such information: call memory_write in the same turn. For implicit writes only, consider "
             "stable self-context stated directly by the user in the latest user message; never initiate "
             "an implicit write for a fact found only in earlier turns, assistant messages, memories, or "
-            "tool results. Examples include 'Ich heiße Lara', 'Ich komme aus München', "
-            "'Ich bin mit Daniel verheiratet', an enduring preference, or a long-term goal. Keep "
+            "tool results. Examples include 'My name is Lara', 'I am from Munich', "
+            "'I am married to Daniel', an enduring preference, or a long-term goal. Keep "
             "independently changeable facts in separate memories. Do not save "
-            "incidental or transient details such as 'Ich bin gerade in München', hypotheticals, "
+            "incidental or transient details such as 'I am currently in Munich', hypotheticals, "
             "quotations, or facts about third parties. When an injected memory reference already "
             "represents the fact, copy its exact ID and revision into an update. Otherwise use "
             "memory_retrieve with purpose=write before an update or when the statement likely corrects "
@@ -509,8 +523,6 @@ def general_system_prompt(
                 else "This page exhausts the currently visible persistent memories."
             )
         )
-    now = current_datetime or datetime.now(UTC)
-    local_now = now.astimezone(ZoneInfo("Europe/Berlin"))
     parts.append(
         f"Current local date and time: {local_now.isoformat(timespec='minutes')} "
         f"(Europe/Berlin). The local weekday is {WEEKDAY_NAMES[local_now.weekday()]}. "
@@ -542,7 +554,7 @@ def _projection_messages(
     available_records: list[Message] | None = None,
     characters_per_token: float = 4.0,
     historical_tool_output_tokens: int = 2_000,
-    current_turn_tool_output_tokens: int = 12_000,
+    current_turn_tool_output_tokens: int | None = None,
 ) -> list[dict[str, Any]]:
     records = [item for item in records if item.error_code is None]
     if available_records is not None:
@@ -626,13 +638,15 @@ def _projection_messages(
         omitted_markers=historical_omitted_markers,
         preserve_tool_result_references=True,
     )
-    _limit_tool_output_tokens(
-        messages,
-        current_tool_indices,
-        current_turn_tool_output_tokens,
-        characters_per_token,
-        omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
-    )
+    if current_turn_tool_output_tokens is not None:
+        _limit_tool_output_tokens(
+            messages,
+            current_tool_indices,
+            current_turn_tool_output_tokens,
+            characters_per_token,
+            omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
+            fair_share=True,
+        )
     if available_records is not None:
         historical_references = []
         for order, item in enumerate(available_records):
@@ -705,6 +719,23 @@ def _shorten_evidence_output(
 
     def serialized(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    def shortened_content(value: str, keep: int, output_format: object) -> str:
+        if keep >= len(value):
+            return value
+        prefix = value[:keep]
+        minimum = keep // 2
+        if output_format in {"markdown", "text"}:
+            boundary = prefix.rfind("\n\n", minimum)
+            if boundary < minimum:
+                boundary = prefix.rfind("\n", minimum)
+            if boundary >= minimum:
+                prefix = prefix[:boundary]
+        elif output_format == "html":
+            boundary = prefix.rfind(">", minimum)
+            if boundary >= minimum:
+                prefix = prefix[: boundary + 1]
+        return prefix.rstrip() + _SHORTENED_TOOL_OUTPUT
 
     if (
         isinstance(payload, dict)
@@ -787,23 +818,27 @@ def _shorten_evidence_output(
         and isinstance(payload.get("content"), str)
     ):
         original = str(payload["content"])
-        marker = _SHORTENED_TOOL_OUTPUT.strip()
         low = 0
         high = len(original)
-        best: str | None = None
+        best_length: int | None = None
         while low <= high:
             middle = (low + high) // 2
             payload["content"] = (
-                original[:middle] + marker if middle < len(original) else original
+                original[:middle] + _SHORTENED_TOOL_OUTPUT
+                if middle < len(original)
+                else original
             )
             candidate = serialized(payload)
             if len(candidate) <= max_characters:
-                best = candidate
+                best_length = middle
                 low = middle + 1
             else:
                 high = middle - 1
-        if best is not None:
-            return best
+        if best_length is not None:
+            payload["content"] = shortened_content(
+                original, best_length, payload.get("outputFormat")
+            )
+            return serialized(payload)
         omitted = serialized({"evidenceOmitted": True})
         return omitted if len(omitted) <= max_characters else None
     return None
@@ -818,11 +853,90 @@ def _limit_tool_output_tokens(
     omitted_marker: str,
     omitted_markers: dict[int, str] | None = None,
     preserve_tool_result_references: bool = False,
+    fair_share: bool = False,
 ) -> None:
     total = sum(
         estimate_tokens(str(messages[index].get("content") or ""), characters_per_token)
         for index in indices
     )
+    if fair_share and total > token_budget and indices:
+        sizes = {
+            index: estimate_tokens(
+                str(messages[index].get("content") or ""), characters_per_token
+            )
+            for index in indices
+        }
+        targets: dict[int, int] = {}
+        remaining = list(indices)
+        remaining_budget = max(0, token_budget)
+        while remaining:
+            share = remaining_budget / len(remaining)
+            fitting = [index for index in remaining if sizes[index] <= share]
+            if not fitting:
+                share_tokens = remaining_budget // len(remaining)
+                for index in remaining:
+                    targets[index] = share_tokens
+                break
+            for index in fitting:
+                targets[index] = sizes[index]
+                remaining_budget -= sizes[index]
+                remaining.remove(index)
+
+        def shorten(index: int, target_tokens: int) -> bool:
+            content = str(messages[index].get("content") or "")
+            before = estimate_tokens(content, characters_per_token)
+            max_characters = max(200, math.floor(target_tokens * characters_per_token))
+            replacement = _shorten_evidence_output(
+                content,
+                max_characters,
+                preserve_tool_result_reference=preserve_tool_result_references,
+            )
+            if replacement is None:
+                keep_characters = max_characters - len(_SHORTENED_TOOL_OUTPUT)
+                exact_marker = (omitted_markers or {}).get(index)
+                if exact_marker is not None:
+                    replacement = exact_marker
+                else:
+                    replacement = (
+                        content[:keep_characters] + _SHORTENED_TOOL_OUTPUT
+                        if keep_characters >= 200
+                        else omitted_marker
+                    )
+            after = estimate_tokens(replacement, characters_per_token)
+            if replacement == content or after >= before:
+                return False
+            messages[index]["content"] = replacement
+            return True
+
+        for index in indices:
+            if sizes[index] > targets[index]:
+                shorten(index, targets[index])
+
+        total = sum(
+            estimate_tokens(str(messages[index].get("content") or ""), characters_per_token)
+            for index in indices
+        )
+        reducible = set(indices)
+        while total > token_budget and reducible:
+            index = max(
+                reducible,
+                key=lambda candidate: estimate_tokens(
+                    str(messages[candidate].get("content") or ""), characters_per_token
+                ),
+            )
+            before = estimate_tokens(
+                str(messages[index].get("content") or ""), characters_per_token
+            )
+            target = max(0, before - (total - token_budget))
+            if not shorten(index, target):
+                reducible.remove(index)
+                continue
+            after = estimate_tokens(
+                str(messages[index].get("content") or ""), characters_per_token
+            )
+            total += after - before
+        return
+
     for index in indices:
         if total <= token_budget:
             break
@@ -1090,6 +1204,18 @@ def _image_input_tokens(
     return IMAGE_INPUT_RESERVE_TOKENS * sum(item.allow_raw for item in selected)
 
 
+def _current_tool_output_indices(messages: list[dict[str, Any]]) -> list[int]:
+    latest_user_index = max(
+        (index for index, message in enumerate(messages) if message.get("role") == "user"),
+        default=-1,
+    )
+    return [
+        index
+        for index, message in enumerate(messages)
+        if index > latest_user_index and message.get("role") == "tool"
+    ]
+
+
 def _prune_tool_outputs_to_budget(
     messages: list[dict[str, Any]],
     *,
@@ -1201,7 +1327,6 @@ class ContextManager:
                 available_records=records,
                 characters_per_token=characters_per_token,
                 historical_tool_output_tokens=settings.historical_tool_output_tokens,
-                current_turn_tool_output_tokens=settings.current_turn_tool_output_tokens,
             )
             total = (
                 _message_text_tokens(messages, characters_per_token)
@@ -1225,12 +1350,20 @@ class ContextManager:
             _strip_projection_metadata(messages)
             return ContextProjection(messages, estimated, input_budget)
 
+        current_tool_indices = _current_tool_output_indices(messages)
+        current_tool_tokens = sum(
+            estimate_tokens(
+                str(messages[index].get("content") or ""), characters_per_token
+            )
+            for index in current_tool_indices
+        )
+
         protected_start = _protected_start(active_records, settings.protected_recent_turns)
         prefix = active_records[:protected_start]
         suffix = active_records[protected_start:]
         compacted = False
         pending_summary: ContextSummary | None = None
-        if prefix or latest is not None:
+        if (prefix or latest is not None) and estimated - current_tool_tokens > trigger_tokens:
             target_tokens = max(256, int(input_budget * settings.compaction_target_ratio))
             summary_limit = max(256, min(2_048, target_tokens // 3))
             result = await summarize(
@@ -1259,6 +1392,58 @@ class ContextManager:
             latest = pending_summary
             messages, estimated = project(latest, suffix)
             compacted = True
+
+        current_tool_indices = _current_tool_output_indices(messages)
+        current_tool_tokens = sum(
+            estimate_tokens(
+                str(messages[index].get("content") or ""), characters_per_token
+            )
+            for index in current_tool_indices
+        )
+        current_tool_budget = max(
+            0, trigger_tokens - (estimated - current_tool_tokens)
+        )
+        _limit_tool_output_tokens(
+            messages,
+            current_tool_indices,
+            current_tool_budget,
+            characters_per_token,
+            omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
+            fair_share=True,
+        )
+        estimated = (
+            _message_text_tokens(messages, characters_per_token)
+            + tools_tokens
+            + (
+                _image_input_tokens(messages, target_trust_level)
+                if model.supports_image_input
+                else 0
+            )
+        )
+        while estimated > trigger_tokens and current_tool_budget > 0:
+            previous = estimated
+            current_tool_budget = max(
+                0, current_tool_budget - (estimated - trigger_tokens)
+            )
+            _limit_tool_output_tokens(
+                messages,
+                current_tool_indices,
+                current_tool_budget,
+                characters_per_token,
+                omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
+                fair_share=True,
+            )
+            estimated = (
+                _message_text_tokens(messages, characters_per_token)
+                + tools_tokens
+                + (
+                    _image_input_tokens(messages, target_trust_level)
+                    if model.supports_image_input
+                    else 0
+                )
+            )
+            if estimated >= previous:
+                break
 
         if estimated > input_budget:
             estimated = _prune_tool_outputs_to_budget(

@@ -18,17 +18,17 @@ usage() {
         "Usage: ./scripts/dev.sh <command> [args]" \
         "" \
         "Commands:" \
-        "  up [--build] [-d]   Entwicklungsstack starten" \
-        "  stop [service]      Services stoppen" \
-        "  down                Container entfernen" \
-        "  reset-storage       Container und Volumes entfernen" \
-        "  logs [service]      Logs anzeigen" \
-        "  status              Service-Status anzeigen" \
-        "  doctor              pgvector und Embedding-Index pruefen" \
-        "  db [args]           Alembic ausfuehren" \
-        "  lock backend        Backend-Lockdatei aktualisieren" \
-        "  check [target]      Backend und/oder Frontend pruefen" \
-        "  test [target]       Backend, Frontend oder lokalen RAG-Stack testen"
+        "  up [--build] [-d]   Start the development stack" \
+        "  stop [service]      Stop services" \
+        "  down                Remove containers" \
+        "  reset-storage       Remove containers and volumes" \
+        "  logs [service]      Show logs" \
+        "  status              Show service status" \
+        "  doctor              Check pgvector and the embedding index" \
+        "  db [args]           Run Alembic" \
+        "  lock backend        Update the backend lockfile" \
+        "  check [target]      Check the backend and/or frontend" \
+        "  test [target]       Test the backend, frontend, or local RAG stack"
 }
 
 run_backend() {

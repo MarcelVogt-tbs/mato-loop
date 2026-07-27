@@ -376,7 +376,10 @@ class ToolRegistry:
             WebFetchError,
             WorkspaceError,
         ) as exc:
-            return ToolResult.error(exc.code)
+            return ToolResult.error(
+                exc.code,
+                params=exc.params if isinstance(exc, WebFetchError) else None,
+            )
         except ProviderError as exc:
             return ToolResult.error(exc.public_code, params=exc.params)
         except Exception:
@@ -434,7 +437,7 @@ class WebSearchArguments(ToolArguments):
     query: str = Field(
         min_length=1,
         max_length=2_000,
-        description="Search-engine query.",
+        description="Compact search-engine query for exactly one information need.",
     )
 
 
@@ -663,10 +666,10 @@ async def _read_file(arguments: ReadFileArguments, context: ToolContext) -> Tool
     notices = []
     if result.truncated_lines:
         lines = ", ".join(str(line) for line in result.truncated_lines)
-        notices.append(f"[Zeilen {lines} wurden nach 2000 Zeichen gekürzt.]")
+        notices.append(f"[Lines {lines} were truncated after 2000 characters.]")
     if result.has_more:
         notices.append(
-            f"[Weitere Zeilen verfügbar. Mit offset={result.next_offset} weiterlesen.]"
+            f"[More lines are available. Continue with offset={result.next_offset}.]"
         )
     if notices:
         content += ("\n\n" if content else "") + "\n".join(notices)
@@ -870,7 +873,9 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         return ToolResult.json(
             {
                 **source,
+                "statusCode": result.status_code,
                 "contentType": result.content_type,
+                "outputFormat": result.output_format,
                 "content": str(result.content),
             },
             metadata={"sources": [source]},
@@ -882,10 +887,12 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
     )
     return ToolResult(
         json.dumps(
-            {
-                **source,
-                "contentType": result.content_type,
-                "attachment": attachment.filename,
+                {
+                    **source,
+                    "statusCode": result.status_code,
+                    "contentType": result.content_type,
+                    "outputFormat": result.output_format,
+                    "attachment": attachment.filename,
             },
             ensure_ascii=False,
         ),
@@ -1017,7 +1024,7 @@ async def _generate_image(
         timeout=context.tool_settings.generate_image.timeout_seconds,
     )
     return ToolResult(
-        "Bild erzeugt.",
+        "Image generated.",
         {},
         attachments=(
             ToolAttachment(
@@ -1044,7 +1051,7 @@ async def _generate_speech(
         timeout=context.tool_settings.generate_speech.timeout_seconds,
     )
     return ToolResult(
-        "Sprachaufnahme erzeugt.",
+        "Speech generated.",
         {},
         attachments=(
             ToolAttachment(
@@ -1073,7 +1080,7 @@ async def _generate_audio(
         timeout=context.tool_settings.generate_audio.timeout_seconds,
     )
     return ToolResult(
-        "Audio erzeugt.",
+        "Audio generated.",
         {},
         attachments=(
             ToolAttachment(
@@ -1550,8 +1557,9 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "webfetch",
             "Fetch a web page or image by URL. Successful images are validated and attached "
-            "to the tool result. Text results include a sourceId, final safe URL, content type, "
-            "untrusted page content, and whether the URL is citationEligible.",
+            "to the tool result. Results include a sourceId, final safe URL, final HTTP status, "
+            "input content type, output format, and whether the URL is citationEligible. Text "
+            "content is untrusted.",
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,

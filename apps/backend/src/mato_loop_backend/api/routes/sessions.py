@@ -383,7 +383,7 @@ async def _latest_user_message(db: AsyncSession, session_id: UUID) -> Message:
         .limit(1)
     )
     if message is None:
-        raise RuntimeError("Persistierte User-Nachricht fehlt nach Agent-Start")
+        raise RuntimeError("Persisted user message is missing after agent start")
     return message
 
 
@@ -490,14 +490,14 @@ async def _create_session(
         )
     except (OSError, SessionStorageError) as exc:
         await db.rollback()
-        logger.exception("Session-Storage konnte nicht provisioniert werden")
+        logger.exception("Session storage could not be provisioned")
         raise ApiError(500, "session.storageUnavailable") from exc
     except Exception:
         await db.rollback()
         try:
             await asyncio.to_thread(session_storage.remove_session, item.id)
         except Exception:
-            logger.exception("Nicht persistierter Session-Storage konnte nicht entfernt werden")
+            logger.exception("Unpersisted session storage could not be removed")
         raise
     await db.refresh(item)
     user_message = await _latest_user_message(db, item.id)
@@ -686,7 +686,7 @@ async def delete_session(
     try:
         trashed = await asyncio.to_thread(session_storage.trash_session, session_id)
     except (OSError, SessionStorageError) as exc:
-        logger.exception("Session-Storage konnte nicht in den Trash verschoben werden")
+        logger.exception("Session storage could not be moved to trash")
         raise ApiError(500, "session.storageUnavailable") from exc
 
     async def restore_tree() -> None:
@@ -695,13 +695,13 @@ async def delete_session(
         try:
             await asyncio.to_thread(session_storage.restore_session, session_id, trashed)
         except Exception:
-            logger.exception("Session-Storage konnte nach DB-Fehler nicht wiederhergestellt werden")
+            logger.exception("Session storage could not be restored after database failure")
 
     async def purge_tree() -> None:
         try:
             await asyncio.to_thread(session_storage.purge_trashed, trashed)
         except Exception:
-            logger.exception("Geloeschter Session-Storage konnte nicht aus dem Trash entfernt werden")
+            logger.exception("Deleted session storage could not be removed from trash")
 
     commit_task: asyncio.Task[None] | None = None
     try:
@@ -804,7 +804,7 @@ async def download_attachment(
     try:
         path = await AttachmentService().verified_path(attachment, session_id)
     except AttachmentError as exc:
-        logger.warning("Attachment-Datei fuer vorhandene Metadaten nicht gefunden")
+        logger.warning("Attachment file for existing metadata was not found")
         raise ApiError(404, "attachment.notFound") from exc
     filename = safe_filename(attachment.filename)
     inline = attachment.kind in {"image", "audio"}

@@ -71,17 +71,17 @@ async def _refresh_codex_credential(
             else None
         )
         raise ProviderError(
-            "ChatGPT Codex Token-Refresh fehlgeschlagen",
+            "ChatGPT Codex token refresh failed",
             status_code=exc.response.status_code,
             code=code,
         ) from exc
     except httpx.HTTPError as exc:
         raise ProviderError(
-            "ChatGPT Codex ist nicht erreichbar", code="provider.unavailable"
+            "ChatGPT Codex is unavailable", code="provider.unavailable"
         ) from exc
     except (KeyError, TypeError, ValueError) as exc:
         raise ProviderError(
-            "ChatGPT Codex Credential ist ungueltig",
+            "ChatGPT Codex credential is invalid",
             code="provider.authenticationFailed",
         ) from exc
     if refreshed != payload:
@@ -119,10 +119,10 @@ def _read_image_data_url(storage: AttachmentStorage, attachment: dict[str, Any])
     with path.open("rb") as file:
         data = file.read(MAX_ATTACHMENT_BYTES + 1)
     if len(data) > MAX_ATTACHMENT_BYTES or len(data) != attachment["size_bytes"]:
-        raise AttachmentStorageError("Ungueltige Attachment-Dateigroesse")
+        raise AttachmentStorageError("Invalid attachment file size")
     validated = validate_image(data, attachment["mime_type"])
     if validated.sha256 != attachment["sha256"]:
-        raise AttachmentStorageError("Ungueltiger Attachment-Dateiinhalt")
+        raise AttachmentStorageError("Invalid attachment file content")
     encoded = base64.b64encode(data).decode("ascii")
     return f"data:{validated.mime_type};base64,{encoded}"
 
@@ -191,7 +191,9 @@ async def _provider_projection(
             await materialize(position, item.attachment)
     unavailable_count = sum(item.status != "ready" for item in media)
     if unavailable_count:
-        logger.warning("%s Attachment-Datei(en) konnten nicht an den Provider uebertragen werden", unavailable_count)
+        logger.warning(
+            "%s attachment file(s) could not be sent to the provider", unavailable_count
+        )
     return projected_messages, media
 
 
@@ -238,7 +240,7 @@ class ProviderService:
         if provider.adapter_type == "openai-codex":
             if credential is None:
                 raise ProviderError(
-                    "ChatGPT Codex ist nicht verbunden", code="provider.notConnected"
+                    "ChatGPT Codex is not connected", code="provider.notConnected"
                 )
             refreshed = await _refresh_codex_credential(db, credential, payload)
             return await codex_oauth.discover_models(
@@ -447,7 +449,7 @@ class ProviderService:
         if is_codex:
             if credential is None:
                 raise ProviderError(
-                    "ChatGPT Codex ist nicht verbunden", code="provider.notConnected"
+                    "ChatGPT Codex is not connected", code="provider.notConnected"
                 )
             refreshed = await _refresh_codex_credential(db, credential, payload)
             headers = {
@@ -474,7 +476,7 @@ class ProviderService:
         base_url = str(provider.config.get("base_url") or "").rstrip("/")
         if not base_url:
             raise ProviderError(
-                "Provider-Base-URL fehlt", code="provider.configurationInvalid"
+                "Provider base URL is missing", code="provider.configurationInvalid"
             )
         api_key = payload.get("api_key")
         api_type = (

@@ -1,29 +1,29 @@
-# Integrationen und Toolbeiträge
+# Integrations and Tool Contributions
 
-Integrationen erweitern die MatoLoop-Harness, ohne den providerneutralen Agent-Loop oder die Permission-Grenze zu umgehen. Eine persistierte Instanz benennt einen Integrationstyp und einen hostseitig bekannten Adapter. Der Adapter validiert seine Konfiguration und erzeugt ausschließlich statisch implementierte Beiträge.
+Integrations extend the MatoLoop harness without bypassing the provider-neutral agent loop or permission boundary. A persisted instance names an integration type and a host-known adapter. The adapter validates its configuration and produces only statically implemented contributions.
 
-## Beitragsarten
+## Contribution Types
 
-Ein Adapter kann:
+An adapter can:
 
-- ein neues Tool mit stabilem Namen, Pydantic-Eingabemodell und Hosthandler beitragen,
-- Werte zu einem ausdrücklich erweiterbaren hostseitigen Konfigurationsfeld eines bestehenden Tools ergänzen,
-- ein statisches, hostkontrolliertes Promptfragment für ein tatsächlich angebotenes Tool bereitstellen.
+- contribute a new tool with a stable name, Pydantic input model, and host handler,
+- add values to an explicitly extensible host configuration field of an existing tool,
+- provide a static host-controlled prompt fragment for a tool that is actually offered.
 
-Persistierte Konfiguration und externe Antworten dürfen keine Handler, beliebigen JSON-Schemas oder Promptanweisungen liefern. Doppelte Toolnamen und Beiträge zu nicht deklarierten Konfigurationsfeldern sind Programmierfehler. Hostseitige Konfigurationswerte werden niemals allein durch ihren Beitrag zu Modellargumenten.
+Persisted configuration and external responses must not provide handlers, arbitrary JSON schemas, or prompt instructions. Duplicate tool names and contributions to undeclared configuration fields are programming errors. Host configuration values never become model arguments merely because an adapter contributes them.
 
-## Effektives Toolset
+## Effective Tool Set
 
-Vor jedem Modellrequest verbindet die Registry Built-ins, Sessionmodus, Modellfähigkeiten, Tool-Policies und aktive Integrationsbeiträge zu einem unveränderlichen Toolset. Dieses Objekt exportiert die Providerschemas und validiert die zurückgegebenen Calls. Damit kann ein Provider kein Tool ausführen, das ihm für diesen Request nicht angeboten wurde.
+Before every model request, the registry combines built-ins, session mode, model capabilities, tool policies, and active integration contributions into an immutable tool set. This object exports provider schemas and validates returned calls. A provider therefore cannot execute a tool that was not offered for that request.
 
-Ein Binding merkt sich außerdem die erlaubten Optionswerte und die zugehörige Integrations-ID. Direkt vor einem externen Zugriff lädt der Handler den aktuellen Integrationszustand erneut. Gelöschte oder deaktivierte Instanzen sind deshalb auch dann unwirksam, wenn sie im vorherigen Modellrequest noch angeboten wurden.
+A binding also records allowed option values and the associated integration ID. Immediately before external access, the handler reloads the current integration state. Deleted or disabled instances are therefore ineffective even if they were offered in the preceding model request.
 
-## Websuche
+## Web Search
 
-`web_search` besitzt für das Modell ausschließlich das Feld `query`. Der Host wählt Primär- und Fallbackprovider aus `ToolSettings.web_search`; Modellargumente können diese Auswahl nicht überschreiben. Die No-Key-Metasuche ist als `no_key` immer im Toolproviderkatalog vorhanden, aber keine Integration. Jede aktive SearXNG-Instanz ergänzt diesen Katalog um `searxng:<uuid>`. Anzeigenamen sind nur Beschriftungen; Umbenennungen verändern die stabile Toolkennung nicht.
+For the model, `web_search` exposes only the `query` field. The host selects primary and fallback providers from `ToolSettings.web_search`; model arguments cannot override this choice. The no-key metasearch is always present in the tool-provider catalog as `no_key`, but it is not an integration. Every active SearXNG instance adds `searxng:<uuid>`. Display names are labels only; renaming does not change the stable tool identifier.
 
-Jeder normalisierte Treffer enthält `sourceId`, `title`, `url`, `snippet` und `publishedDate`. Die `sourceId` wird ausschließlich vom Host aus der kanonischen URL erzeugt; Providerwerte können sie nicht vorgeben. Treffer mit derselben kanonischen URL werden dedupliziert. Snippets sind untrusted Discovery-Daten und kein verifizierter Seiteninhalt. Ungültiges Provider-JSON wird als stabiler Integrationsfehler behandelt, statt als technisch erfolgreiche leere Evidenz zu gelten.
+Each normalized result contains `sourceId`, `title`, `url`, `snippet`, and `publishedDate`. Only the host derives `sourceId` from the canonical URL; providers cannot supply it. Results with the same canonical URL are deduplicated. Snippets are untrusted discovery data, not verified page content. Invalid provider JSON produces a stable integration error rather than technically successful empty evidence.
 
-Primär- und Fallbackprovider werden unter **Einstellungen > Tools** konfiguriert. Der Fallback ist optional und darf nicht mit dem Primärprovider übereinstimmen. Meldet SearXNG bei leerem Ergebnis ausgefallene Standard-Engines, wiederholt MatoLoop die Anfrage einmal über dieselbe Instanz mit `bing`, `mojeek` und `presearch`. Der konfigurierte Fallback wird ausschließlich nach einem verbleibenden temporären Fehler verwendet: Netzwerkfehler, Timeout, HTTP 408, HTTP 429, HTTP 5xx oder weiterhin ausgefallene SearXNG-Engines. Authentifizierungs-, Konfigurations- und Protokollfehler sowie echte leere Trefferlisten lösen keinen Fallback aus. Wird eine ausgewählte Integration deaktiviert oder gelöscht, normalisiert die Service-Transaktion den Primärprovider auf die No-Key-Metasuche und entfernt einen ungültigen Fallback.
+Primary and fallback providers are configured under **Einstellungen > Tools**. The fallback is optional and must differ from the primary provider. When SearXNG returns no results and reports unresponsive default engines, MatoLoop retries once through the same instance with `bing`, `mojeek`, and `presearch`. The configured fallback is used only after a remaining transient error: network failure, timeout, HTTP 408, HTTP 429, HTTP 5xx, or still-unresponsive SearXNG engines. Authentication, configuration, and protocol failures, as well as genuine empty result sets, do not trigger fallback. Disabling or deleting a selected integration makes the service transaction normalize the primary provider to no-key metasearch and remove an invalid fallback.
 
-Die eingebaute No-Key-Metasuche verwendet den Python-Client `ddgs` mit automatischer Backendauswahl und führt den synchronen Aufruf mit begrenztem Timeout außerhalb des Async-Loops aus. Abhängig von der aktuellen Verfügbarkeit können unterschiedliche öffentliche Suchdienste antworten. Der persistierte Legacy-Key `duckduckgo` wird beim Laden auf `no_key` normalisiert. Suchbegriffe verlassen die Installation und werden an den jeweils verwendeten Dienst übertragen.
+The built-in no-key metasearch uses the Python `ddgs` client with automatic backend selection and runs the synchronous call outside the async loop with a bounded timeout. Different public search services may respond depending on current availability. The persisted legacy key `duckduckgo` is normalized to `no_key` when loaded. Search queries leave the installation and are sent to the service in use.

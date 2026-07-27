@@ -101,7 +101,7 @@ async function load() {
   try {
     assignForm(await identity.fetchIdentity())
   } catch {
-    // Der zentrale Axios-Interceptor zeigt die Fehlermeldung an.
+    // The central Axios interceptor displays the error message.
   }
 }
 
@@ -114,7 +114,7 @@ async function save() {
     }))
     $q.notify({ type: 'positive', message: 'Persona gespeichert' })
   } catch {
-    // Der zentrale Axios-Interceptor zeigt die Fehlermeldung an.
+    // The central Axios interceptor displays the error message.
   }
 }
 

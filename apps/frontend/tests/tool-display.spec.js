@@ -68,6 +68,21 @@ describe('tool display', () => {
     })).toBe('Audioanhang 550e8400-e29b-41d4-a716-446655440000')
   })
 
+  it('localizes plain host-controlled tool results', () => {
+    expect(parseToolResult(
+      'Image generated.\n\n[Image saved but not sent to the current text-only model.]',
+      'generate_image'
+    ).text).toBe('Bild erzeugt.\n\n[Bild gespeichert, aber nicht an das aktuelle Textmodell übertragen.]')
+    expect(parseToolResult(
+      '2: two\n\n[More lines are available. Continue with offset=3.]',
+      'read_file'
+    ).text).toContain('[Weitere Zeilen verfügbar. Mit offset=3 weiterlesen.]')
+    expect(parseToolResult(
+      '1: [More lines are available. Continue with offset=3.]',
+      'read_file'
+    ).text).toBe('1: [More lines are available. Continue with offset=3.]')
+  })
+
   it('renders memory retrieval with its visible scope and contents', () => {
     expect(toolIdentity('memory_retrieve')).toEqual({ label: 'Memory abrufen', icon: 'psychology' })
     expect(toolSummary({

@@ -125,7 +125,7 @@ async function testIntegration(id) {
     await integrations.testSearch(id)
     $q.notify({ type: 'positive', message: 'Verbindung erfolgreich' })
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler als Toast an.
+    // The central API interceptor displays the error as a toast.
   } finally {
     testingId.value = null
   }
@@ -146,7 +146,7 @@ async function reload() {
   try {
     await integrations.fetchSearch()
   } catch {
-    // Der zentrale API-Interceptor zeigt den Fehler als Toast an.
+    // The central API interceptor displays the error as a toast.
   }
 }
 

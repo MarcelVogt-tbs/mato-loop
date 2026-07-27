@@ -149,7 +149,7 @@ def test_attachment_excerpt_is_never_injected_into_tool_content() -> None:
 
     class FailingService:
         def read_derived_text(self, _attachment, _session_id):
-            raise AssertionError("Tool-Inhalte dürfen keine Attachment-Projektion laden")
+            raise AssertionError("Tool content must not load attachment projection")
 
     projected = message_dict(
         message,
@@ -476,7 +476,7 @@ def test_public_projection_does_not_reference_private_historical_tool_results() 
     assert "toolResultReference" not in summary_source
 
 
-def test_projection_limits_oldest_tool_outputs_in_current_turn() -> None:
+def test_projection_distributes_current_tool_output_budget_fairly() -> None:
     session = _session()
     user = _message(session.id, "user", "Arbeite mit mehreren Quellen")
     assistant = _message(session.id, "assistant", "")
@@ -499,9 +499,52 @@ def test_projection_limits_oldest_tool_outputs_in_current_turn() -> None:
 
     tool_results = [item["content"] for item in projected if item["role"] == "tool"]
     assert "Tool output shortened" in tool_results[0]
-    assert tool_results[1] == "b" * 1_000
+    assert "Tool output shortened" in tool_results[1]
+    assert tool_results[0].startswith("a")
+    assert tool_results[1].startswith("b")
+    assert abs(len(tool_results[0]) - len(tool_results[1])) <= 4
     assert first.content == "a" * 1_000
     assert second.content == "b" * 1_000
+
+
+def test_current_tool_output_budget_keeps_small_results_and_ignores_order() -> None:
+    session = _session()
+    user = _message(session.id, "user", "Arbeite mit mehreren Quellen")
+    assistant = _message(session.id, "assistant", "")
+    assistant.tool_calls = [
+        {"id": "small", "name": "example", "arguments": {}},
+        {"id": "first", "name": "webfetch", "arguments": {}},
+        {"id": "second", "name": "webfetch", "arguments": {}},
+    ]
+    small = _message(session.id, "tool", "s" * 100)
+    small.tool_call_id = "small"
+    first = _message(session.id, "tool", "a" * 3_000)
+    first.tool_call_id = "first"
+    second = _message(session.id, "tool", "b" * 2_000)
+    second.tool_call_id = "second"
+
+    def projected_lengths(results: list[Message]) -> dict[str, int]:
+        projected = _projection_messages(
+            "System",
+            None,
+            [user, assistant, *results],
+            TrustLevel.PRIVATE,
+            current_turn_tool_output_tokens=300,
+        )
+        return {
+            str(item["tool_call_id"]): len(str(item["content"]))
+            for item in projected
+            if item["role"] == "tool"
+        }
+
+    forward = projected_lengths([small, first, second])
+    reversed_order = projected_lengths([second, first, small])
+
+    assert forward == reversed_order
+    assert forward["small"] == 100
+    assert abs(forward["first"] - forward["second"]) <= 4
+    assert first.content == "a" * 3_000
+    assert second.content == "b" * 2_000
 
 
 def test_projection_shortens_current_research_outputs_as_valid_json() -> None:
@@ -537,6 +580,7 @@ def test_projection_shortens_current_research_outputs_as_valid_json() -> None:
                 "url": "https://example.test/source",
                 "kind": "webfetch",
                 "contentType": "text/html",
+                "outputFormat": "markdown",
                 "content": "f" * 4_000,
             }
         ),
@@ -556,6 +600,8 @@ def test_projection_shortens_current_research_outputs_as_valid_json() -> None:
     assert results[0][0]["url"] == "https://example.test/source"
     assert results[1]["sourceId"] == "src-fetch"
     assert results[1]["url"] == "https://example.test/source"
+    assert results[0][0].get("snippet")
+    assert results[1]["content"]
     assert len(results[0][0].get("snippet") or "") < 4_000
     assert len(results[1]["content"]) < 4_000
 
@@ -698,6 +744,7 @@ def test_summary_source_excludes_retrieved_tool_result_chunks() -> None:
 def test_available_web_research_prompt_balances_freshness_and_search_cost() -> None:
     prompt = general_system_prompt(
         _session(),
+        current_datetime=datetime(2026, 7, 27, 8, 31, tzinfo=UTC),
         offered_tool_names=frozenset({"web_search", "webfetch"}),
         research_tool_calls_used=2,
         research_tool_call_limit=8,
@@ -713,8 +760,20 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "at most one additional discovery search" in prompt
     assert "verify at least one credible alternative" in prompt
     assert "untrusted discovery snippets" in prompt
-    assert "one concise, standalone search-engine query" in prompt
+    assert "one compact, standalone search-engine query" in prompt
+    assert "exactly one information need" in prompt
+    assert "Prefer discriminative terms over a sentence or task description" in prompt
+    assert "keep words needed to express the relationship" in prompt
+    assert "Do not combine separate questions, synonym lists, or alternative formulations" in prompt
+    assert 'prefer "RouterModel firmware support status"' in prompt
     assert "materially reformulate the query" in prompt
+    assert "emit its tool call in the same response" in prompt
+    assert "Never announce future tool use without that call" in prompt
+    assert "current local year is 2026" in prompt
+    assert "omit a year unless it materially narrows the search" in prompt
+    assert "Never derive freshness dates from prior knowledge" in prompt
+    assert "years explicitly requested by the user" in prompt
+    assert "exact names, model versions" in prompt
     assert "Once a relevant URL is known, fetch that page" in prompt
     assert "prioritize official or otherwise primary authoritative sources" in prompt
     assert "requested jurisdiction and effective date or version" in prompt
@@ -794,17 +853,17 @@ def test_general_system_prompt_saves_only_stable_direct_self_context() -> None:
     )
 
     assert "implicit request to persist it" in prompt
-    assert "even when the user does not say 'remember' or 'merk dir'" in prompt
+    assert "even when the user does not explicitly ask to remember it" in prompt
     assert "call memory_write in the same turn" in prompt
     assert "For implicit writes only" in prompt
     assert "latest user message" in prompt
     assert "fact found only in earlier turns" in prompt
     assert "assistant messages, memories, or tool results" in prompt
-    assert "Ich heiße Lara" in prompt
-    assert "Ich komme aus München" in prompt
-    assert "Ich bin mit Daniel verheiratet" in prompt
+    assert "My name is Lara" in prompt
+    assert "I am from Munich" in prompt
+    assert "I am married to Daniel" in prompt
     assert "independently changeable facts in separate memories" in prompt
-    assert "Ich bin gerade in München" in prompt
+    assert "I am currently in Munich" in prompt
     assert "hypotheticals, quotations, or facts about third parties" in prompt
     assert "injected memory reference" in prompt
     assert "copy its exact ID and revision into an update" in prompt
@@ -885,6 +944,8 @@ def test_required_web_search_prompt_preserves_instant_memory_contract() -> None:
         assert f"Untrusted memory reference:\n{memory_text}" in prompt
         assert "Web research contract:" in prompt
         assert "freshness could materially change the answer" in prompt
+        assert "current local year is 2026" in prompt
+        assert "Never derive freshness dates from prior knowledge" in prompt
         assert "prioritize official or otherwise primary authoritative sources" in prompt
         assert "do not apply current rules to a past period" in prompt
         assert "exact URLs returned by successful current-turn research tools" in prompt
@@ -930,6 +991,98 @@ def _settings(**values) -> AgentRuntimeSettings:
         "protected_recent_turns": 1,
     }
     return AgentRuntimeSettings(**(defaults | values))
+
+
+async def test_current_tool_output_budget_scales_with_model_context() -> None:
+    session = _session()
+    user = _message(session.id, "user", "Analysiere die Seite")
+    assistant = _message(session.id, "assistant", "")
+    assistant.tool_calls = [
+        {"id": "fetch", "name": "webfetch", "arguments": {"url": "https://example.test"}}
+    ]
+    tool_result = _message(
+        session.id,
+        "tool",
+        json.dumps(
+            {
+                "sourceId": "src-fetch",
+                "url": "https://example.test",
+                "kind": "webfetch",
+                "statusCode": 200,
+                "contentType": "text/html",
+                "outputFormat": "markdown",
+                "content": "Absatz\n\n" + "x" * 6_000,
+            }
+        ),
+    )
+    tool_result.tool_call_id = "fetch"
+    records = [user, assistant, tool_result]
+
+    async def build(context_window_tokens: int):
+        db = AsyncMock(spec=AsyncSession)
+        db.scalar.return_value = None
+        return await ContextManager.build(
+            db,
+            chat_session=session,
+            records=records,
+            system_prompt="System",
+            tool_schemas=[],
+            model=_model(context_window_tokens=context_window_tokens),
+            settings=_settings(),
+            summarize=AsyncMock(),
+        )
+
+    small = await build(1_500)
+    large = await build(5_000)
+    small_content = json.loads(small.messages[-1]["content"])["content"]
+    large_content = json.loads(large.messages[-1]["content"])["content"]
+
+    assert len(large_content) > len(small_content)
+    assert small.estimated_input_tokens <= int(1_500 * 0.8) - 100
+    assert large.estimated_input_tokens <= int(5_000 * 0.8) - 100
+    assert len(json.loads(tool_result.content)["content"]) == 6_008
+
+
+async def test_large_current_tool_output_does_not_compact_older_history() -> None:
+    session = _session()
+    old_user = _message(session.id, "user", "Alte Frage")
+    old_assistant = _message(session.id, "assistant", "Alte Antwort")
+    current_user = _message(session.id, "user", "Aktuelle Frage")
+    assistant = _message(session.id, "assistant", "")
+    assistant.tool_calls = [
+        {"id": "fetch", "name": "webfetch", "arguments": {"url": "https://example.test"}}
+    ]
+    tool_result = _message(
+        session.id,
+        "tool",
+        json.dumps(
+            {
+                "sourceId": "src-fetch",
+                "url": "https://example.test",
+                "outputFormat": "markdown",
+                "content": "x" * 6_000,
+            }
+        ),
+    )
+    tool_result.tool_call_id = "fetch"
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock()
+
+    projection = await ContextManager.build(
+        db,
+        chat_session=session,
+        records=[old_user, old_assistant, current_user, assistant, tool_result],
+        system_prompt="System",
+        tool_schemas=[],
+        model=_model(context_window_tokens=5_000),
+        settings=_settings(),
+        summarize=summarize,
+    )
+
+    summarize.assert_not_awaited()
+    assert projection.compacted is False
+    assert projection.estimated_input_tokens <= 3_900
 
 
 async def test_existing_summary_boundary_excludes_covered_history() -> None:

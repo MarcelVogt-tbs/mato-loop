@@ -866,7 +866,7 @@ async def test_model(
             db,
             provider=provider,
             model=model,
-            messages=[{"role": "user", "content": "Antworte nur mit OK."}],
+            messages=[{"role": "user", "content": "Reply with OK only."}],
             tools=[],
             input_trust_level=TrustLevel.PUBLIC,
         )

@@ -32,7 +32,7 @@ from mato_loop_backend.settings import TrustLevel
 
 pytestmark = pytest.mark.skipif(
     os.getenv("MATO_LOOP_RAG_INTEGRATION") != "1",
-    reason="benötigt den lokalen pgvector- und Infinity-Stack",
+    reason="requires the local pgvector and Infinity stack",
 )
 
 

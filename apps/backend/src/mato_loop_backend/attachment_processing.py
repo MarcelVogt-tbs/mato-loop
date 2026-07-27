@@ -371,7 +371,7 @@ def _extract_pdf(data: bytes) -> tuple[str, dict[str, int]]:
         parts: list[str] = []
         count = 0
         for number, page in enumerate(reader.pages, 1):
-            count = _append_text(parts, f"--- Seite {number} ---", count)
+            count = _append_text(parts, f"--- Page {number} ---", count)
             count = _append_text(parts, page.extract_text() or "", count)
     except AttachmentProcessingError:
         raise
@@ -410,7 +410,7 @@ def _extract_xlsx(data: bytes) -> tuple[str, dict[str, int]]:
         count = 0
         cells = 0
         for sheet in workbook.worksheets:
-            count = _append_text(parts, f"--- Tabelle: {sheet.title} ---", count)
+            count = _append_text(parts, f"--- Sheet: {sheet.title} ---", count)
             for row in sheet.iter_rows(values_only=True):
                 cells += len(row)
                 if cells > MAX_WORKBOOK_CELLS:
@@ -436,7 +436,7 @@ def _extract_pptx(data: bytes) -> tuple[str, dict[str, int]]:
         parts: list[str] = []
         count = 0
         for number, slide in enumerate(presentation.slides, 1):
-            count = _append_text(parts, f"--- Folie {number} ---", count)
+            count = _append_text(parts, f"--- Slide {number} ---", count)
             for shape in slide.shapes:
                 if hasattr(shape, "text"):
                     count = _append_text(parts, shape.text, count)
@@ -514,7 +514,7 @@ def derived_metadata(files: dict[str, bytes]) -> dict[str, Any]:
     if not files:
         return {}
     if len(files) != 1:
-        raise ValueError("Pro Attachment wird genau eine Ableitung erwartet")
+        raise ValueError("Exactly one derivative is required per attachment")
     name, data = next(iter(files.items()))
     return {
         "derivedName": name,

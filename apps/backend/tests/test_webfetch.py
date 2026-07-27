@@ -103,7 +103,7 @@ def test_canonicalizes_urls_and_redacts_query_values_for_display() -> None:
 
 async def test_authorization_runs_after_normalization_and_before_dns(monkeypatch) -> None:
     authorize = AsyncMock(side_effect=WebFetchError("permission.denied"))
-    resolve = AsyncMock(side_effect=AssertionError("DNS darf nicht ausgeführt werden"))
+    resolve = AsyncMock(side_effect=AssertionError("DNS must not be resolved"))
     monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
 
     assert await _error_code(
@@ -208,7 +208,10 @@ async def test_redirects_are_resolved_and_each_origin_is_validated() -> None:
         authorized_urls.append(url)
 
     async def destination(target: str, headers: dict[str, str]) -> bytes:
-        return _response(b"destination", headers={"Content-Type": "text/plain"})
+        return _response(
+            b'<main><a href="/next">destination</a></main>',
+            headers={"Content-Type": "text/html"},
+        )
 
     async with _server(destination) as destination_port:
         async def source(target: str, headers: dict[str, str]) -> bytes:
@@ -229,7 +232,8 @@ async def test_redirects_are_resolved_and_each_origin_is_validated() -> None:
             )
 
     assert result.final_url == f"http://127.0.0.1:{destination_port}/target"
-    assert result.content == "destination"
+    assert result.status_code == 200
+    assert result.content == f"[destination](http://127.0.0.1:{destination_port}/next)"
     assert authorized_urls == [
         f"http://127.0.0.1:{source_port}/start",
         f"http://127.0.0.1:{destination_port}/target",
@@ -275,7 +279,9 @@ async def test_html_conversion_removes_active_content() -> None:
     document = b"""<!doctype html><html><head><meta charset=utf-8>
         <title> MatoLoop\nDocs </title><style>.x{}</style>
         <script>secret()</script><link href=/track></head><body onload=evil()>
-        <h1>Titel</h1><p>Hallo <a href="javascript:evil()">Welt</a>.</p></body></html>"""
+        <nav>Navigation</nav><main><h1>Titel</h1><p>Hallo
+        <a href="/docs">Dokumentation</a> und
+        <a href="javascript:evil()">Welt</a>.</p></main><footer>Footer</footer></body></html>"""
 
     async def responder(target: str, headers: dict[str, str]) -> bytes:
         return _response(document, headers={"Content-Type": "text/html; charset=utf-8"})
@@ -288,11 +294,16 @@ async def test_html_conversion_removes_active_content() -> None:
         html_result = await fetch_web(url, format="html", allowed_private_origins=allowed)
 
     assert "# Titel" in markdown_result.content
+    assert f"({_origin(port)}/docs)" in markdown_result.content
+    assert "Navigation" not in markdown_result.content
+    assert "Footer" not in markdown_result.content
     assert "secret" not in markdown_result.content
     assert markdown_result.title == "MatoLoop Docs"
+    assert markdown_result.status_code == 200
+    assert markdown_result.output_format == "markdown"
     assert text_result.title == "MatoLoop Docs"
     assert html_result.title == "MatoLoop Docs"
-    assert text_result.content == "MatoLoop\nDocs Titel Hallo Welt."
+    assert text_result.content == "Titel Hallo Dokumentation und Welt."
     assert "<script" not in html_result.content
     assert "<style" not in html_result.content
     assert "onload" not in html_result.content
@@ -437,9 +448,34 @@ async def test_timeout_and_http_errors_have_stable_codes() -> None:
         assert await _error_code(
             fetch_web(f"{_origin(port)}/slow", timeout=1, allowed_private_origins=allowed)
         ) == "webfetch.timeout"
-        assert await _error_code(
-            fetch_web(f"{_origin(port)}/missing", allowed_private_origins=allowed)
-        ) == "webfetch.requestFailed"
+        with pytest.raises(WebFetchError) as exc_info:
+            await fetch_web(f"{_origin(port)}/missing", allowed_private_origins=allowed)
+
+    assert exc_info.value.code == "webfetch.requestFailed"
+    assert exc_info.value.params == {"statusCode": 404}
+
+
+async def test_http_error_status_is_returned_without_reading_large_body() -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(
+            b"x",
+            status=404,
+            headers={
+                "Content-Type": "text/plain",
+                "Content-Length": str(webfetch.MAX_RESPONSE_BYTES + 1),
+            },
+            content_length=False,
+        )
+
+    async with _server(responder) as port:
+        with pytest.raises(WebFetchError) as exc_info:
+            await fetch_web(
+                f"{_origin(port)}/missing",
+                allowed_private_origins=(_origin(port),),
+            )
+
+    assert exc_info.value.code == "webfetch.requestFailed"
+    assert exc_info.value.params == {"statusCode": 404}
 
 
 async def test_dns_failures_have_a_stable_code(monkeypatch) -> None:

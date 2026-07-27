@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 from collections.abc import Iterable
 
 import httpx
+from bs4 import BeautifulSoup
 from ddgs import DDGS
 
 from mato_loop_backend.integrations.evidence import evidence_source_id
@@ -26,6 +28,9 @@ from mato_loop_backend.settings.models import (
 
 logger = logging.getLogger(__name__)
 _SEARXNG_RECOVERY_ENGINES = "bing,mojeek,presearch"
+MAX_SEARCH_RESPONSE_BYTES = 256 * 1024
+MAX_SEARCH_SNIPPET_CHARACTERS = 2_000
+SEARCH_DEADLINE_SECONDS = 35
 
 
 class SearchIntegrationError(RuntimeError):
@@ -131,6 +136,25 @@ def _public_result_url(value: object) -> str | None:
     return str(url)
 
 
+def _normalize_snippet(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = (
+        BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
+        if "<" in value
+        else value
+    )
+    normalized = " ".join(html.unescape(text).split())
+    return normalized[:MAX_SEARCH_SNIPPET_CHARACTERS] or None
+
+
+def _normalize_published_date(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.split())
+    return normalized[:100] or None
+
+
 def _compact_results(results: Iterable[object]) -> str:
     compact = []
     seen_urls: set[str] = set()
@@ -152,10 +176,10 @@ def _compact_results(results: Iterable[object]) -> str:
                 "sourceId": evidence_source_id(url),
                 "title": normalize_source_title(item.get("title")),
                 "url": url,
-                "snippet": item.get("content") or item.get("body"),
-                "publishedDate": item.get("publishedDate")
-                or item.get("pubdate")
-                or item.get("date"),
+                "snippet": _normalize_snippet(item.get("content") or item.get("body")),
+                "publishedDate": _normalize_published_date(
+                    item.get("publishedDate") or item.get("pubdate") or item.get("date")
+                ),
             }
         )
         if len(compact) == 8:
@@ -186,39 +210,64 @@ async def search_with_provider(provider: IntegrationInstance, query: str) -> str
     if not base_url:
         raise SearchIntegrationError("integration.configurationInvalid")
 
-    def parse_response(response: httpx.Response) -> tuple[list[object], list[object]]:
-        if response.status_code >= 400:
-            code, transient = _http_error_code(response.status_code)
-            raise SearchIntegrationError(code, transient=transient)
+    async def request(
+        client: httpx.AsyncClient, params: dict[str, str]
+    ) -> tuple[list[object], list[object]]:
+        async with client.stream(
+            "GET",
+            f"{base_url}/search",
+            params=params,
+            headers={"Accept-Encoding": "identity"},
+        ) as response:
+            if response.status_code >= 400:
+                code, transient = _http_error_code(response.status_code)
+                raise SearchIntegrationError(code, transient=transient)
+            if response.headers.get("Content-Encoding", "identity").lower() not in {
+                "",
+                "identity",
+            }:
+                raise SearchIntegrationError("integration.invalidResponse")
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > MAX_SEARCH_RESPONSE_BYTES:
+                        raise SearchIntegrationError("integration.invalidResponse")
+                except ValueError:
+                    pass
+            body = bytearray()
+            async for chunk in response.aiter_raw():
+                if len(body) + len(chunk) > MAX_SEARCH_RESPONSE_BYTES:
+                    raise SearchIntegrationError("integration.invalidResponse")
+                body.extend(chunk)
         try:
-            payload = response.json()
-            results = payload.get("results") if isinstance(payload, dict) else None
-            if not isinstance(results, list):
-                raise TypeError
-            unresponsive = payload.get("unresponsive_engines", [])
-            if not isinstance(unresponsive, list):
-                unresponsive = []
-            return results, list(unresponsive)
+            payload = json.loads(body)
         except (TypeError, ValueError) as exc:
             raise SearchIntegrationError("integration.requestFailed") from exc
+        results = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(results, list):
+            raise SearchIntegrationError("integration.requestFailed")
+        unresponsive = payload.get("unresponsive_engines", [])
+        if not isinstance(unresponsive, list):
+            unresponsive = []
+        return results, list(unresponsive)
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                f"{base_url}/search", params={"q": query, "format": "json"}
+            results, unresponsive_engines = await request(
+                client, {"q": query, "format": "json"}
             )
-            results, unresponsive_engines = parse_response(response)
             if not results and unresponsive_engines:
-                recovery_response = await client.get(
-                    f"{base_url}/search",
-                    params={
+                results, recovery_unresponsive = await request(
+                    client,
+                    {
                         "q": query,
                         "format": "json",
                         "engines": _SEARXNG_RECOVERY_ENGINES,
                     },
                 )
-                results, recovery_unresponsive = parse_response(recovery_response)
                 unresponsive_engines.extend(recovery_unresponsive)
+    except SearchIntegrationError:
+        raise
     except httpx.HTTPError as exc:
         raise SearchIntegrationError("integration.unavailable", transient=True) from exc
     if not results and unresponsive_engines:
@@ -247,8 +296,12 @@ async def search_web(
     if fallback_provider == provider:
         raise SearchIntegrationError("tool.invalidArguments")
     try:
-        return await search_with_key(settings, provider, query)
-    except SearchIntegrationError as exc:
-        if fallback_provider is None or not exc.transient:
-            raise
-    return await search_with_key(settings, fallback_provider, query)
+        async with asyncio.timeout(SEARCH_DEADLINE_SECONDS):
+            try:
+                return await search_with_key(settings, provider, query)
+            except SearchIntegrationError as exc:
+                if fallback_provider is None or not exc.transient:
+                    raise
+            return await search_with_key(settings, fallback_provider, query)
+    except TimeoutError as exc:
+        raise SearchIntegrationError("integration.unavailable", transient=True) from exc

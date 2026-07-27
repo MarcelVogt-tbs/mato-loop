@@ -38,7 +38,7 @@ function attachmentPreviewUrl(file) {
 export async function downloadMessageAttachmentFiles(message) {
   return Promise.all((message?.attachments || []).map(async (attachment) => {
     const url = safeAttachmentUrl(attachment.url)
-    if (!url) throw new Error('Ungültige interne Attachment-Adresse')
+    if (!url) throw new Error('Invalid internal attachment URL')
     const { data } = await api.get(url, { responseType: 'blob', suppressErrorToast: true })
     const type = attachment.mimeType || data?.type || 'application/octet-stream'
     return new File([data], attachment.filename || 'datei', { type })
@@ -258,7 +258,7 @@ export const useChatStore = defineStore('chat', {
       try {
         window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(this.drafts))
       } catch {
-        // Der Chat bleibt auch dann bedienbar, wenn lokaler Speicher blockiert oder voll ist.
+        // Chat remains usable when local storage is blocked or full.
       }
     },
     async fetchDefaults() {

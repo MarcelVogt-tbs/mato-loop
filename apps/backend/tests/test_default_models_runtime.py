@@ -223,8 +223,8 @@ async def test_title_generation_repairs_empty_visible_output(monkeypatch) -> Non
         call.kwargs["max_output_tokens"] for call in complete.await_args_list
     ] == [512, 4_096]
     repair_prompt = complete.await_args.kwargs["messages"][0]["content"]
-    assert "vorherige Versuch" in repair_prompt
-    assert "ausschliesslich den finalen Titel" in repair_prompt
+    assert "previous attempt" in repair_prompt
+    assert "only the final title" in repair_prompt
     statement = db.scalar.await_args.args[0]
     assert "Reparierter Titel" in statement.compile().params.values()
 
