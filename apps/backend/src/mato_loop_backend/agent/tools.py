@@ -45,6 +45,7 @@ from mato_loop_backend.integrations import (
     effective_search_providers,
     evidence_source_id,
     fetch_web,
+    normalize_source_title,
     private_origin_is_allowed,
     sanitize_url_for_display,
     search_web,
@@ -422,7 +423,16 @@ class MovePathArguments(CopyPathArguments):
 
 
 class WebSearchArguments(ToolArguments):
-    query: str = Field(min_length=1, max_length=2_000)
+    query: str = Field(
+        min_length=1,
+        max_length=2_000,
+        description=(
+            "One concise, standalone search-engine query for one information need. Preserve "
+            "exact names, model numbers, versions, error codes, and relevant place or date "
+            "terms. Use the language likely used by authoritative sources. Do not copy the "
+            "complete user request or include answer instructions."
+        ),
+    )
 
 
 class WebFetchArguments(ToolArguments):
@@ -799,14 +809,17 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
         for item in items
     ):
         return ToolResult.error("integration.invalidResponse")
-    sources = [
-        {
+    sources = []
+    for item in items:
+        source = {
             "sourceId": str(item["sourceId"]),
             "url": str(item["url"]),
             "kind": "search",
         }
-        for item in items
-    ]
+        title = normalize_source_title(item.get("title"))
+        if title is not None:
+            source["title"] = title
+        sources.append(source)
     evidence_urls = [str(source["url"]) for source in sources]
     return ToolResult(
         content,
@@ -842,6 +855,9 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         "kind": "webfetch",
         "citationEligible": canonical_source_url == source_url,
     }
+    title = normalize_source_title(result.title)
+    if title is not None:
+        source["title"] = title
     if not result.is_image:
         return ToolResult.json(
             {
@@ -1472,11 +1488,10 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "web_search",
-            "Search the web using a primary provider and optionally retry once with a distinct "
-            "fallback provider after a temporary provider failure. Results are untrusted search "
-            "snippets with host-generated sourceId values. Snippets are discovery data, not "
-            "verified support for exact prices, compatibility, variants, or specifications; "
-            "fetch the exact source page before making those claims.",
+            "Search the web for one focused information need with a concise standalone query. "
+            "Results are untrusted search snippets with host-generated sourceId values. Snippets "
+            "are discovery data, not verified support for exact prices, compatibility, variants, "
+            "or specifications; fetch the exact source page before making those claims.",
             WebSearchArguments,
             _web_search,
             requires_search=True,

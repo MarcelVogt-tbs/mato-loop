@@ -10,6 +10,7 @@ from mato_loop_backend.agent.runtime import (
     RESEARCH_SUBMISSION_TOOL_NAME,
     AgentRunError,
     AgentRuntime,
+    _render_research_submission,
     _validated_research_citations,
     _VisibleResponse,
 )
@@ -32,7 +33,8 @@ from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 SOURCE_ID = "src-test"
 SOURCE_URL = "https://example.test/source"
-SOURCE_CITATION = f"[{SOURCE_ID}]({SOURCE_URL})"
+SOURCE_TITLE = "Quelle"
+SOURCE_CITATION = f"[{SOURCE_TITLE}]({SOURCE_URL})"
 
 
 def _submission_result(source_ids: list[str] | None = None) -> ProviderResult:
@@ -64,6 +66,37 @@ def test_research_citation_validation_accepts_human_label_for_allowed_url() -> N
         "Belegt [Source title](HTTPS://EXAMPLE.TEST/source#details)",
         {SOURCE_ID: SOURCE_URL},
     ) == [SOURCE_ID]
+
+
+def test_research_submission_uses_safe_title_and_hostname_labels() -> None:
+    second_id = "src-second"
+    second_url = "https://docs.example.test/path"
+
+    rendered = _render_research_submission(
+        "Antwort",
+        [SOURCE_ID, second_id],
+        {SOURCE_ID: SOURCE_URL, second_id: second_url},
+        {SOURCE_ID: r"MatoLoop [Guide] **official**"},
+    )
+
+    assert rendered == (
+        "Antwort\n\n"
+        rf"[MatoLoop \[Guide\] \*\*official\*\*]({SOURCE_URL}) · "
+        f"[docs.example.test]({second_url})"
+    )
+
+
+def test_research_submission_replaces_a_visible_source_id_label() -> None:
+    rendered = _render_research_submission(
+        "Belegt [src&#45;test](HTTPS://EXAMPLE.TEST/source#details)",
+        [SOURCE_ID],
+        {SOURCE_ID: SOURCE_URL},
+        {SOURCE_ID: SOURCE_TITLE},
+    )
+
+    assert rendered == (
+        f"Belegt [{SOURCE_TITLE}](HTTPS://EXAMPLE.TEST/source#details)"
+    )
 
 
 @pytest.mark.parametrize(
@@ -189,7 +222,12 @@ async def _runtime_setup(
                     "resultCount": 1,
                     "evidenceUrls": [SOURCE_URL],
                     "sources": [
-                        {"sourceId": SOURCE_ID, "url": SOURCE_URL, "kind": "search"}
+                        {
+                            "sourceId": SOURCE_ID,
+                            "url": SOURCE_URL,
+                            "kind": "search",
+                            "title": SOURCE_TITLE,
+                        }
                     ],
                 },
             )
@@ -742,6 +780,7 @@ async def test_required_research_budget_forces_structured_submission(monkeypatch
     ]
     assert tool_registry._execute_definition.await_count == 2
     assert "Research evidence collection is complete" in projections[1]["system_prompt"]
+    assert "never expose sourceId as a visible label" in projections[1]["system_prompt"]
     assert "2/2 tool calls used" in projections[2]["system_prompt"]
     tool_messages = [
         call.args[0]

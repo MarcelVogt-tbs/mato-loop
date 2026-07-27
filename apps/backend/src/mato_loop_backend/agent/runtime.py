@@ -53,6 +53,7 @@ from mato_loop_backend.integrations import (
     SearchIntegrationError,
     WebFetchError,
     canonicalize_url,
+    normalize_source_title,
     sanitize_url_for_display,
     search_available,
 )
@@ -142,7 +143,9 @@ class _VisibleResponse:
 
 
 def _add_research_sources(
-    registry: dict[str, str], metadata: dict[str, Any]
+    registry: dict[str, str],
+    metadata: dict[str, Any],
+    titles: dict[str, str] | None = None,
 ) -> None:
     sources = metadata.get("sources")
     if not isinstance(sources, list):
@@ -160,6 +163,9 @@ def _add_research_sources(
             registry[source_id] = canonicalize_url(url)
         except WebFetchError:
             continue
+        title = normalize_source_title(source.get("title"))
+        if titles is not None and title is not None:
+            titles[source_id] = title
 
 
 def _validated_research_citations(
@@ -305,20 +311,95 @@ def _validated_research_submission(
 
 
 def _render_research_submission(
-    answer: str, source_ids: list[str], sources: dict[str, str]
+    answer: str,
+    source_ids: list[str],
+    sources: dict[str, str],
+    titles: dict[str, str] | None = None,
 ) -> str:
     inline_source_ids = _validated_research_citations(
         answer, sources, require_citation=False
     ) or []
+    rendered_answer = _replace_research_source_id_labels(
+        answer, inline_source_ids, sources, titles
+    )
     rendered_source_ids = [
         source_id for source_id in source_ids if source_id not in inline_source_ids
     ]
     if not rendered_source_ids:
-        return answer.rstrip()
+        return rendered_answer.rstrip()
     source_links = " · ".join(
-        f"[{source_id}]({sources[source_id]})" for source_id in rendered_source_ids
+        f"[{_research_source_label(source_id, sources[source_id], titles)}]"
+        f"({sources[source_id]})"
+        for source_id in rendered_source_ids
     )
-    return f"{answer.rstrip()}\n\n{source_links}"
+    return f"{rendered_answer.rstrip()}\n\n{source_links}"
+
+
+def _research_source_label(
+    source_id: str, url: str, titles: dict[str, str] | None
+) -> str:
+    title = titles.get(source_id) if titles is not None else None
+    if title is None:
+        try:
+            title = httpx.URL(url).host
+        except (TypeError, ValueError):
+            title = None
+    label = title or source_id
+    return re.sub(r"([\\`*_~$\[\]<>])", r"\\\1", label)
+
+
+def _replace_research_source_id_labels(
+    content: str,
+    source_ids: list[str],
+    sources: dict[str, str],
+    titles: dict[str, str] | None,
+) -> str:
+    source_id_set = set(source_ids)
+    index = 0
+    while (start := content.find("[", index)) >= 0:
+        label_end = content.find("](", start + 1)
+        if label_end < 0:
+            break
+        if start > 0 and content[start - 1] == "!":
+            index = label_end + 2
+            continue
+        raw_label = content[start + 1 : label_end]
+        source_id = html.unescape(raw_label).replace("\\", "")
+        if source_id not in source_id_set:
+            index = label_end + 2
+            continue
+        destination_start = label_end + 2
+        cursor = destination_start
+        depth = 1
+        escaped = False
+        while cursor < len(content) and depth:
+            character = content[cursor]
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+            cursor += 1
+        if depth:
+            break
+        destination = html.unescape(content[destination_start : cursor - 1].strip())
+        if destination.startswith("<") and destination.endswith(">"):
+            destination = destination[1:-1]
+        destination = destination.replace("\\", "")
+        try:
+            matching_source = canonicalize_url(destination) == sources[source_id]
+        except WebFetchError:
+            matching_source = False
+        if not matching_source:
+            index = cursor
+            continue
+        label = _research_source_label(source_id, sources[source_id], titles)
+        content = content[: start + 1] + label + content[label_end:]
+        index = start + len(label) + 3
+    return content
 
 
 def _without_inline_dollar_math(content: str) -> str:
@@ -1083,6 +1164,7 @@ class AgentRuntime:
         memory_write_retries = 0
         memory_write_outcome: str | None = None
         research_sources: dict[str, str] = {}
+        research_source_titles: dict[str, str] = {}
         research_draft_pending = False
         research_draft_retries = 0
         research_submission_pending = False
@@ -1321,7 +1403,15 @@ class AgentRuntime:
                 memory_write_outcome=memory_write_outcome,
                 research_submission_sources=(
                     tuple(
-                        {"sourceId": source_id, "url": url}
+                        {
+                            "sourceId": source_id,
+                            "url": url,
+                            **(
+                                {"title": research_source_titles[source_id]}
+                                if source_id in research_source_titles
+                                else {}
+                            ),
+                        }
                         for source_id, url in research_sources.items()
                     )
                     if submission_round
@@ -1522,6 +1612,7 @@ class AgentRuntime:
                     research_submission_draft,
                     submitted_source_ids,
                     research_sources,
+                    research_source_titles,
                 )
                 result.tool_calls = []
                 normalized_calls = []
@@ -1967,7 +2058,9 @@ class AgentRuntime:
                 else:
                     failed_tool_call_signatures.discard(call_signature)
                     if call.name in {"web_search", "webfetch"}:
-                        _add_research_sources(research_sources, metadata)
+                        _add_research_sources(
+                            research_sources, metadata, research_source_titles
+                        )
                         successful_research_calls[call_signature] = dict(metadata)
                 await run_events.publish(
                     run.id,

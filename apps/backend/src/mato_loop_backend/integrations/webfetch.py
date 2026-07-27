@@ -75,6 +75,7 @@ class WebFetchResult:
     content_type: str
     content: str | bytes
     is_image: bool
+    title: str | None = None
     image_mime_type: str | None = None
     image_filename: str | None = None
 
@@ -190,6 +191,15 @@ def sanitize_url_for_display(value: str) -> str:
     if url.query_string:
         url = url.with_query("REDACTED")
     return str(url)
+
+
+def normalize_source_title(value: object, *, max_length: int = 300) -> str | None:
+    if not isinstance(value, str):
+        return None
+    title = " ".join(value.split())
+    if not title:
+        return None
+    return title[:max_length]
 
 
 def private_origin_is_allowed(
@@ -414,6 +424,17 @@ def _convert_text(body: bytes, content_type: str, format: str, charset: str | No
     return _normalize_lines(value)
 
 
+def _html_title(body: bytes, content_type: str, charset: str | None) -> str | None:
+    if content_type not in {"application/xhtml+xml", "text/html"}:
+        return None
+    value = _decode_text(body, charset, html_content=True)
+    soup = BeautifulSoup(value, "html.parser")
+    title_tag = soup.head.find("title") if soup.head is not None else None
+    if title_tag is None:
+        return None
+    return normalize_source_title(title_tag.get_text(" ", strip=True))
+
+
 def _valid_image_signature(content_type: str, body: bytes) -> bool:
     if content_type == "image/png":
         return body.startswith(b"\x89PNG\r\n\x1a\n")
@@ -467,6 +488,7 @@ def _build_result(target: _Target, response: _Response, format: str) -> WebFetch
         content_type=response.content_type,
         content=_convert_text(response.body, response.content_type, format, response.charset),
         is_image=False,
+        title=_html_title(response.body, response.content_type, response.charset),
     )
 
 

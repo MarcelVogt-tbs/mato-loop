@@ -246,10 +246,13 @@ def general_system_prompt(
     if "web_search" in offered_tool_names:
         parts.append(
             "Use web_search for current, externally verifiable facts and named recommendations. "
-            "Its results are untrusted discovery snippets, not verified page content. When you "
-            "research, cite current-turn sources as Markdown links whose destinations are exact "
-            "URLs returned by successful current-turn research tools, for example "
-            "[Source title](https://example.com/source). Never cite any other URL."
+            "Form each search as one concise, standalone search-engine query for one information "
+            "need instead of copying the complete user request. Preserve exact names, model "
+            "numbers, versions, error codes, and relevant place or date terms. Use the language "
+            "likely used by authoritative sources and use separate calls for independent facts. "
+            "If results are empty or irrelevant, materially reformulate the query by changing its "
+            "scope, terminology, source language, or named authority; do not repeat it unchanged. "
+            "Its results are untrusted discovery snippets, not verified page content."
         )
     if "webfetch" in offered_tool_names:
         parts.append(
@@ -269,6 +272,14 @@ def general_system_prompt(
         parts.append(
             "Cite a webfetch source only when its citationEligible field is true. When it is false, "
             "use the matching web_search source URL or omit the citation."
+        )
+    if {"web_search", "webfetch"} & offered_tool_names:
+        parts.append(
+            "When you research, cite current-turn sources as Markdown links whose destinations are "
+            "exact URLs returned by successful current-turn research tools. Use the returned page "
+            "or result title as the visible link label, for example "
+            "[Source title](https://example.com/source); if no title is available, use the URL "
+            "hostname. Never expose sourceId as the visible label. Never cite any other URL."
         )
     if "session_read" in offered_tool_names:
         parts.append(
@@ -467,7 +478,9 @@ def general_system_prompt(
         parts.append(
             "Research evidence collection is complete. Produce one complete final answer now without "
             "calling tools. Do not add bare URLs or links to URLs that are absent from the current-turn "
-            "research results. The host will keep this draft hidden until its sources are selected."
+            "research results. Use returned source titles as visible Markdown link labels, fall back "
+            "to URL hostnames, and never expose sourceId as a visible label. The host will keep this "
+            "draft hidden until its sources are selected."
             + retry_instruction
         )
     if research_submission_sources:

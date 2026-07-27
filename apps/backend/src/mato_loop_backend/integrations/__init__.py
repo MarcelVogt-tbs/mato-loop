@@ -18,6 +18,7 @@ from mato_loop_backend.integrations.webfetch import (
     WebFetchResult,
     canonicalize_url,
     fetch_web,
+    normalize_source_title,
     private_origin_is_allowed,
     sanitize_url_for_display,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "search_with_key",
     "search_with_provider",
     "fetch_web",
+    "normalize_source_title",
     "private_origin_is_allowed",
     "sanitize_url_for_display",
 ]

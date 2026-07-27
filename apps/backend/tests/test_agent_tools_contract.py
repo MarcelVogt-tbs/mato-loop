@@ -276,6 +276,7 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
                 "sourceId": "src-test",
                 "url": "https://example.test/source",
                 "kind": "search",
+                "title": "MatoLoop",
             }
         ],
     }
@@ -948,6 +949,7 @@ async def test_webfetch_applies_the_effective_policy(
             content_type="text/plain",
             content="Inhalt",
             is_image=False,
+            title="  Example   page  ",
         )
 
     monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
@@ -971,6 +973,7 @@ async def test_webfetch_applies_the_effective_policy(
         "url": "https://example.com/page?REDACTED",
         "kind": "webfetch",
         "citationEligible": False,
+        "title": "Example page",
         "contentType": "text/plain",
         "content": "Inhalt",
     }
@@ -982,6 +985,7 @@ async def test_webfetch_applies_the_effective_policy(
                 "url": "https://example.com/page?REDACTED",
                 "kind": "webfetch",
                 "citationEligible": False,
+                "title": "Example page",
             }
         ]
     }

@@ -13,7 +13,11 @@ from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
     search_provider_key,
 )
-from mato_loop_backend.integrations.webfetch import WebFetchError, canonicalize_url
+from mato_loop_backend.integrations.webfetch import (
+    WebFetchError,
+    canonicalize_url,
+    normalize_source_title,
+)
 from mato_loop_backend.settings.models import (
     IntegrationInstance,
     IntegrationSettings,
@@ -146,7 +150,7 @@ def _compact_results(results: Iterable[object]) -> str:
         compact.append(
             {
                 "sourceId": evidence_source_id(url),
-                "title": item.get("title"),
+                "title": normalize_source_title(item.get("title")),
                 "url": url,
                 "snippet": item.get("content") or item.get("body"),
                 "publishedDate": item.get("publishedDate")

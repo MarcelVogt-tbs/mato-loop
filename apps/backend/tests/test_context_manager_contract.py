@@ -546,7 +546,14 @@ def test_available_web_research_prompt_requires_allowed_sources_and_page_fetches
     )
 
     assert "untrusted discovery snippets" in prompt
+    assert "one concise, standalone search-engine query" in prompt
+    assert "use separate calls for independent facts" in prompt
+    assert "materially reformulate the query" in prompt
+    assert "do not repeat it unchanged" in prompt
     assert "destinations are exact URLs" in prompt
+    assert "returned page or result title" in prompt
+    assert "if no title is available, use the URL hostname" in prompt
+    assert "Never expose sourceId as the visible label" in prompt
     assert "Never cite any other URL" in prompt
     assert "exact prices, availability, compatibility" in prompt
     assert "Do not merge similar model codes" in prompt
@@ -577,6 +584,7 @@ def test_general_system_prompt_requires_verified_external_images() -> None:
     assert "use webfetch on the exact URL" in prompt
     assert "prefer the resulting attachment" in prompt
     assert "do not repeat the remote URL as a Markdown image" in prompt
+    assert "returned page or result title" in prompt
 
 
 def test_general_system_prompt_contains_bounded_agent_identity() -> None:

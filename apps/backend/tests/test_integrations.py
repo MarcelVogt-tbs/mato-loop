@@ -55,6 +55,8 @@ def test_no_key_provider_makes_search_available_without_configuration() -> None:
     search_schema = next(item for item in schemas if item["name"] == "web_search")
     properties = search_schema["parameters"]["properties"]
     assert set(properties) == {"query"}
+    assert "standalone search-engine query" in properties["query"]["description"]
+    assert "Do not copy the complete user request" in properties["query"]["description"]
 
 
 def test_active_integrations_extend_the_host_search_provider_catalog() -> None:

@@ -272,7 +272,8 @@ async def test_redirect_limit_and_invalid_redirect() -> None:
 
 
 async def test_html_conversion_removes_active_content() -> None:
-    document = b"""<!doctype html><html><head><meta charset=utf-8><style>.x{}</style>
+    document = b"""<!doctype html><html><head><meta charset=utf-8>
+        <title> MatoLoop\nDocs </title><style>.x{}</style>
         <script>secret()</script><link href=/track></head><body onload=evil()>
         <h1>Titel</h1><p>Hallo <a href="javascript:evil()">Welt</a>.</p></body></html>"""
 
@@ -288,7 +289,10 @@ async def test_html_conversion_removes_active_content() -> None:
 
     assert "# Titel" in markdown_result.content
     assert "secret" not in markdown_result.content
-    assert text_result.content == "Titel Hallo Welt."
+    assert markdown_result.title == "MatoLoop Docs"
+    assert text_result.title == "MatoLoop Docs"
+    assert html_result.title == "MatoLoop Docs"
+    assert text_result.content == "MatoLoop\nDocs Titel Hallo Welt."
     assert "<script" not in html_result.content
     assert "<style" not in html_result.content
     assert "onload" not in html_result.content
@@ -305,6 +309,20 @@ async def test_plain_text_is_escaped_for_html() -> None:
         )
 
     assert result.content == "<pre>&lt;script&gt;alert(1)&lt;/script&gt;</pre>"
+
+
+async def test_html_title_ignores_title_elements_outside_the_head() -> None:
+    document = b"<html><body><svg><title>Diagram title</title></svg><p>Text</p></body></html>"
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(document, headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(
+            f"{_origin(port)}/page", allowed_private_origins=(_origin(port),)
+        )
+
+    assert result.title is None
 
 
 async def test_active_markup_is_removed_or_escaped_from_markdown() -> None:
