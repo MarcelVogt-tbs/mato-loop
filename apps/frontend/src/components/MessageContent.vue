@@ -24,6 +24,10 @@ const props = defineProps({
     default: ''
   },
   streaming: Boolean,
+  researchSources: {
+    type: Array,
+    default: () => []
+  },
   trustedImageOrigins: {
     type: Array,
     default: () => []
@@ -40,6 +44,7 @@ function renderContent() {
   renderFrame = null
   rendered.value = renderMarkdown(props.content, {
     imageStates: imageStates.value,
+    researchSources: props.researchSources,
     streaming: props.streaming,
     trustedImageOrigins: props.trustedImageOrigins
   })
@@ -123,7 +128,7 @@ function handleImageError(event) {
 }
 
 watch(
-  () => [props.content, props.streaming, props.trustedImageOrigins],
+  () => [props.content, props.researchSources, props.streaming, props.trustedImageOrigins],
   scheduleRender,
   { immediate: true }
 )

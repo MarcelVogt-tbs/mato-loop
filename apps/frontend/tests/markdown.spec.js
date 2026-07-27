@@ -210,6 +210,27 @@ describe('assistant markdown rendering', () => {
     const { root } = renderedDom('```js\nconst streaming = true')
     expect(root.querySelector('pre code')?.textContent).toContain('const streaming = true')
   })
+
+  it('renders only allowlisted research URLs as inline source links', () => {
+    const { root } = renderedDom(
+      'Aussage [Primärquelle](https://example.com/report#section) und [normaler Link](https://other.example).',
+      {
+        researchSources: [
+          { title: 'Offizieller Bericht', url: 'https://example.com/report' }
+        ]
+      }
+    )
+
+    const source = root.querySelector('a[href="https://example.com/report#section"]')
+    const regular = root.querySelector('a[href="https://other.example/"]')
+    expect(source?.classList.contains('chat-markdown__source-link')).toBe(true)
+    expect(source?.getAttribute('title')).toBe('Offizieller Bericht')
+    expect(source?.getAttribute('target')).toBe('_blank')
+    expect(regular?.classList.contains('chat-markdown__source-link')).toBe(false)
+
+    const nextRender = renderedDom('[Primärquelle](https://example.com/report)').root
+    expect(nextRender.querySelector('.chat-markdown__source-link')).toBeNull()
+  })
 })
 
 function fakeImage(decode = () => Promise.resolve()) {

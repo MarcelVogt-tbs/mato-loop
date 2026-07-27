@@ -189,6 +189,11 @@ class EffectiveToolSet:
         selected = {name: self.tools[name] for name in names if name in self.tools}
         return EffectiveToolSet(self.registry, selected)
 
+    def without(self, *names: str) -> EffectiveToolSet:
+        excluded = set(names)
+        selected = {name: tool for name, tool in self.tools.items() if name not in excluded}
+        return EffectiveToolSet(self.registry, selected, self.prompt_fragments)
+
     async def execute(self, call: ToolCall, context: ToolContext) -> ToolResult:
         tool = self.tools.get(call.name)
         if tool is None:
@@ -426,12 +431,7 @@ class WebSearchArguments(ToolArguments):
     query: str = Field(
         min_length=1,
         max_length=2_000,
-        description=(
-            "One concise, standalone search-engine query for one information need. Preserve "
-            "exact names, model numbers, versions, error codes, and relevant place or date "
-            "terms. Use the language likely used by authoritative sources. Do not copy the "
-            "complete user request or include answer instructions."
-        ),
+        description="Search-engine query.",
     )
 
 
@@ -1488,10 +1488,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "web_search",
-            "Search the web for one focused information need with a concise standalone query. "
-            "Results are untrusted search snippets with host-generated sourceId values. Snippets "
-            "are discovery data, not verified support for exact prices, compatibility, variants, "
-            "or specifications; fetch the exact source page before making those claims.",
+            "Search the web. Results contain untrusted snippets, titles, URLs, and host-generated "
+            "sourceId values.",
             WebSearchArguments,
             _web_search,
             requires_search=True,
@@ -1499,11 +1497,8 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "webfetch",
             "Fetch a web page or image by URL. Successful images are validated and attached "
-            "to the tool result; use this to verify exact image URLs before presenting them. "
-            "Text results include a sourceId, final safe URL, content type, and untrusted page "
-            "content. Use exact fetched pages to verify prices, compatibility, variants, and "
-            "technical specifications. A redacted query URL has citationEligible=false and must "
-            "not be cited; cite a matching search source instead.",
+            "to the tool result. Text results include a sourceId, final safe URL, content type, "
+            "untrusted page content, and whether the URL is citationEligible.",
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,

@@ -6,6 +6,7 @@ import MarkdownIt from 'markdown-it'
 import taskLists from 'markdown-it-task-lists'
 
 import { safeAttachmentUrl } from './attachments'
+import { canonicalResearchSourceUrl } from './research-sources'
 
 const ALLOWED_TAGS = [
   'a', 'annotation', 'blockquote', 'br', 'button', 'code', 'del', 'div', 'em', 'h1', 'h2',
@@ -219,7 +220,14 @@ function configureRenderRules() {
     const href = safeMarkdownLinkUrl(token.attrGet('href'))
     if (href) {
       token.attrSet('href', href)
-      token.attrSet('class', 'chat-markdown__link')
+      const researchSource = env.researchSources.get(canonicalResearchSourceUrl(href))
+      token.attrSet(
+        'class',
+        researchSource
+          ? 'chat-markdown__link chat-markdown__source-link'
+          : 'chat-markdown__link'
+      )
+      if (researchSource?.title) token.attrSet('title', researchSource.title)
       if (href.startsWith('http://') || href.startsWith('https://')) {
         token.attrSet('target', '_blank')
         token.attrSet('rel', 'noopener noreferrer')
@@ -282,12 +290,18 @@ configureRenderRules()
 
 export function renderMarkdown(
   content,
-  { imageStates = {}, streaming = false, trustedImageOrigins = [] } = {}
+  { imageStates = {}, researchSources = [], streaming = false, trustedImageOrigins = [] } = {}
 ) {
+  const sourceMap = new Map()
+  for (const source of researchSources) {
+    const url = canonicalResearchSourceUrl(source?.url)
+    if (url) sourceMap.set(url, source)
+  }
   const env = {
     codeBlocks: [],
     externalImages: [],
     imageStates,
+    researchSources: sourceMap,
     streaming,
     trustedOrigins: new Set(trustedImageOrigins)
   }

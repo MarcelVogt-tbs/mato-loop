@@ -105,10 +105,7 @@ RUN_PHASES = {
     "finalizing",
 }
 REQUIRED_WEB_SEARCH_RETRIES = 2
-REQUIRED_RESEARCH_DRAFT_RETRIES = 1
-REQUIRED_RESEARCH_SUBMISSION_RETRIES = 1
 REQUIRED_MEMORY_WRITE_RETRIES = 3
-RESEARCH_SUBMISSION_TOOL_NAME = "submit_researched_answer"
 MEMORY_WRITE_OUTCOME_PRIORITY = {"denied": 0, "duplicate": 1, "stored": 2}
 AUTOMATIC_MEMORY_MAX_ITEMS = 3
 AUTOMATIC_MEMORY_MAX_CHARACTERS = 2_500
@@ -116,7 +113,7 @@ AUTOMATIC_MEMORY_MAX_DISTANCE = 0.21
 MEMORY_OVERVIEW_MAX_ITEMS = 50
 MEMORY_OVERVIEW_MAX_CHARACTERS = 12_000
 GATED_DELTA_CHARACTERS = 4_000
-_HTML_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
+_HTML_COMMENT_PATTERN = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
 _INLINE_CODE_PATTERN = re.compile(r"(`+).*?\1", re.DOTALL)
 _BARE_HTTP_URL_PATTERN = re.compile(r"https?://[^\s<]+", re.IGNORECASE)
 _FENCE_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
@@ -168,9 +165,7 @@ def _add_research_sources(
             titles[source_id] = title
 
 
-def _validated_research_citations(
-    content: str, sources: dict[str, str], *, require_citation: bool = True
-) -> list[str] | None:
+def _linked_research_source_ids(content: str, sources: dict[str, str]) -> list[str]:
     source_ids_by_url: dict[str, str] = {}
     for source_id, url in sources.items():
         try:
@@ -214,10 +209,13 @@ def _validated_research_citations(
         if label_end < 0:
             without_link_destinations.append(visible_content[label_start:])
             break
-        if label_start > 0 and visible_content[label_start - 1] == "!":
-            without_link_destinations.append(visible_content[label_start:label_end + 2])
-            index = label_end + 2
-            continue
+        preceding_backslashes = 0
+        preceding_index = label_start - 1
+        while preceding_index >= 0 and visible_content[preceding_index] == "\\":
+            preceding_backslashes += 1
+            preceding_index -= 1
+        escaped_link = preceding_backslashes % 2 == 1
+        image_link = label_start > 0 and visible_content[label_start - 1] == "!"
         depth = 1
         cursor = label_end + 2
         escaped = False
@@ -235,171 +233,67 @@ def _validated_research_citations(
         if depth:
             without_link_destinations.append(visible_content[label_start:])
             break
-        label = visible_content[label_start + 1 : label_end]
         destination = visible_content[label_end + 2 : cursor - 1]
         classified_destination = html.unescape(destination.strip())
-        if classified_destination.startswith("<") and classified_destination.endswith(">"):
-            classified_destination = classified_destination[1:-1]
+        if classified_destination.startswith("<"):
+            destination_end = classified_destination.find(">", 1)
+            classified_destination = (
+                classified_destination[1:destination_end]
+                if destination_end >= 0
+                else classified_destination
+            )
+        else:
+            destination_parts = classified_destination.split(maxsplit=1)
+            classified_destination = destination_parts[0] if destination_parts else ""
         classified_destination = classified_destination.replace("\\", "")
-        if classified_destination.lower().startswith(("http://", "https://", "//")):
+        if (
+            not escaped_link
+            and not image_link
+            and classified_destination.lower().startswith(("http://", "https://", "//"))
+        ):
             try:
                 canonical_destination = canonicalize_url(classified_destination)
             except WebFetchError:
-                return None
+                canonical_destination = ""
             source_id = source_ids_by_url.get(canonical_destination)
-            if source_id is None:
-                return None
-            if source_id not in cited_source_ids:
+            if source_id is not None and source_id not in cited_source_ids:
                 cited_source_ids.append(source_id)
-        without_link_destinations.append(label)
+        without_link_destinations.append("")
         index = cursor
-    if _BARE_HTTP_URL_PATTERN.search("".join(without_link_destinations)):
-        return None
-    return cited_source_ids or (None if require_citation else [])
-
-
-def _research_submission_schema(sources: dict[str, str]) -> dict[str, Any]:
-    return {
-        "name": RESEARCH_SUBMISSION_TOOL_NAME,
-        "description": (
-            "Select the current-turn source IDs that support the complete answer draft."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sourceIds": {
-                    "type": "array",
-                    "minItems": 1,
-                    "uniqueItems": True,
-                    "items": {
-                        "type": "string",
-                        "enum": list(sources),
-                    },
-                    "description": "Current-turn source IDs selected from the supplied allowlist.",
-                },
-            },
-            "required": ["sourceIds"],
-            "additionalProperties": False,
-        },
-    }
-
-
-def _validated_research_submission(
-    calls: list[ToolCall], sources: dict[str, str], draft: str
-) -> list[str] | None:
-    if len(calls) != 1 or calls[0].name != RESEARCH_SUBMISSION_TOOL_NAME:
-        return None
-    arguments = calls[0].arguments
-    raw_source_ids = arguments.get("sourceIds")
-    if not isinstance(raw_source_ids, list) or not raw_source_ids:
-        return None
-    source_ids: list[str] = []
-    for source_id in raw_source_ids:
-        if (
-            not isinstance(source_id, str)
-            or source_id not in sources
-            or source_id in source_ids
-        ):
-            return None
-        source_ids.append(source_id)
-    inline_source_ids = _validated_research_citations(
-        draft, sources, require_citation=False
-    )
-    if inline_source_ids is None or not set(inline_source_ids).issubset(source_ids):
-        return None
-    return source_ids
-
-
-def _render_research_submission(
-    answer: str,
-    source_ids: list[str],
-    sources: dict[str, str],
-    titles: dict[str, str] | None = None,
-) -> str:
-    inline_source_ids = _validated_research_citations(
-        answer, sources, require_citation=False
-    ) or []
-    rendered_answer = _replace_research_source_id_labels(
-        answer, inline_source_ids, sources, titles
-    )
-    rendered_source_ids = [
-        source_id for source_id in source_ids if source_id not in inline_source_ids
-    ]
-    if not rendered_source_ids:
-        return rendered_answer.rstrip()
-    source_links = " · ".join(
-        f"[{_research_source_label(source_id, sources[source_id], titles)}]"
-        f"({sources[source_id]})"
-        for source_id in rendered_source_ids
-    )
-    return f"{rendered_answer.rstrip()}\n\n{source_links}"
-
-
-def _research_source_label(
-    source_id: str, url: str, titles: dict[str, str] | None
-) -> str:
-    title = titles.get(source_id) if titles is not None else None
-    if title is None:
+    for match in _BARE_HTTP_URL_PATTERN.finditer("".join(without_link_destinations)):
+        candidate = match.group(0).rstrip(".,;:!?)]}>")
         try:
-            title = httpx.URL(url).host
-        except (TypeError, ValueError):
-            title = None
-    label = title or source_id
-    return re.sub(r"([\\`*_~$\[\]<>])", r"\\\1", label)
-
-
-def _replace_research_source_id_labels(
-    content: str,
-    source_ids: list[str],
-    sources: dict[str, str],
-    titles: dict[str, str] | None,
-) -> str:
-    source_id_set = set(source_ids)
-    index = 0
-    while (start := content.find("[", index)) >= 0:
-        label_end = content.find("](", start + 1)
-        if label_end < 0:
-            break
-        if start > 0 and content[start - 1] == "!":
-            index = label_end + 2
-            continue
-        raw_label = content[start + 1 : label_end]
-        source_id = html.unescape(raw_label).replace("\\", "")
-        if source_id not in source_id_set:
-            index = label_end + 2
-            continue
-        destination_start = label_end + 2
-        cursor = destination_start
-        depth = 1
-        escaped = False
-        while cursor < len(content) and depth:
-            character = content[cursor]
-            if escaped:
-                escaped = False
-            elif character == "\\":
-                escaped = True
-            elif character == "(":
-                depth += 1
-            elif character == ")":
-                depth -= 1
-            cursor += 1
-        if depth:
-            break
-        destination = html.unescape(content[destination_start : cursor - 1].strip())
-        if destination.startswith("<") and destination.endswith(">"):
-            destination = destination[1:-1]
-        destination = destination.replace("\\", "")
-        try:
-            matching_source = canonicalize_url(destination) == sources[source_id]
+            source_id = source_ids_by_url.get(canonicalize_url(candidate))
         except WebFetchError:
-            matching_source = False
-        if not matching_source:
-            index = cursor
             continue
-        label = _research_source_label(source_id, sources[source_id], titles)
-        content = content[: start + 1] + label + content[label_end:]
-        index = start + len(label) + 3
-    return content
+        if source_id is not None and source_id not in cited_source_ids:
+            cited_source_ids.append(source_id)
+    return cited_source_ids
+
+
+def _research_snapshot(
+    *,
+    policy: str,
+    used: bool,
+    content: str,
+    sources: dict[str, str],
+    titles: dict[str, str],
+) -> dict[str, Any]:
+    linked_sources = []
+    for source_id in _linked_research_source_ids(content, sources):
+        url = sources[source_id]
+        title = titles.get(source_id)
+        if title is None:
+            try:
+                title = httpx.URL(url).host
+            except (TypeError, ValueError):
+                title = None
+        linked_sources.append({"title": title or url, "url": url})
+    return {
+        "policy": policy,
+        "used": used,
+        "linkedSources": linked_sources,
+    }
 
 
 def _without_inline_dollar_math(content: str) -> str:
@@ -1165,12 +1059,8 @@ class AgentRuntime:
         memory_write_outcome: str | None = None
         research_sources: dict[str, str] = {}
         research_source_titles: dict[str, str] = {}
-        research_draft_pending = False
-        research_draft_retries = 0
-        research_submission_pending = False
-        research_submission_retries = 0
-        research_submission_draft: str | None = None
-        research_submission_reasoning: dict[str, Any] | None = None
+        research_used = False
+        research_budget_exhausted = False
         research_tool_calls_used = 0
         successful_research_calls: dict[str, dict[str, Any]] = {}
         tool_calls_used = 0
@@ -1187,15 +1077,8 @@ class AgentRuntime:
         memory_capacity_checked = False
 
         step = 0
-        while (
-            step < runtime_settings.max_steps
-            or research_draft_pending
-            or research_submission_pending
-        ):
-            draft_round = research_draft_pending
-            submission_round = research_submission_pending
-            if not draft_round and not submission_round:
-                step += 1
+        while step < runtime_settings.max_steps:
+            step += 1
             context_started_at = time.monotonic()
             await _publish_run_phase(run.id, "preparing_context")
             await db.refresh(chat_session)
@@ -1369,8 +1252,6 @@ class AgentRuntime:
                 if model.supports_tools
                 else None
             )
-            if draft_round or submission_round:
-                effective_toolset = None
             search_pending = required_search and not required_search_completed
             if search_pending and effective_toolset is not None:
                 effective_toolset = effective_toolset.only("web_search")
@@ -1378,6 +1259,8 @@ class AgentRuntime:
                 effective_toolset = effective_toolset.only(
                     "memory_retrieve", "memory_write"
                 )
+            elif research_budget_exhausted and effective_toolset is not None:
+                effective_toolset = effective_toolset.without("web_search", "webfetch")
             system_prompt = general_system_prompt(
                 chat_session,
                 agent_identity=agent_identity,
@@ -1401,30 +1284,13 @@ class AgentRuntime:
                 web_search_retry=required_search_retries,
                 memory_write_pending=memory_write_pending,
                 memory_write_outcome=memory_write_outcome,
-                research_submission_sources=(
-                    tuple(
-                        {
-                            "sourceId": source_id,
-                            "url": url,
-                            **(
-                                {"title": research_source_titles[source_id]}
-                                if source_id in research_source_titles
-                                else {}
-                            ),
-                        }
-                        for source_id, url in research_sources.items()
-                    )
-                    if submission_round
-                    else ()
-                ),
-                research_submission_draft=(
-                    research_submission_draft if submission_round else None
-                ),
-                research_submission_retry=research_submission_retries,
-                research_draft_required=draft_round,
-                research_draft_retry=research_draft_retries,
                 research_tool_calls_used=research_tool_calls_used,
-                research_tool_call_limit=runtime_settings.max_research_tool_calls,
+                research_tool_call_limit=(
+                    runtime_settings.max_research_tool_calls
+                    if chat_session.web_search_policy != WebSearchPolicy.DISABLED
+                    else None
+                ),
+                research_tools_exhausted=research_budget_exhausted,
                 current_datetime=turn_datetime,
                 offered_tool_names=frozenset(
                     effective_toolset.tools if effective_toolset else ()
@@ -1435,11 +1301,7 @@ class AgentRuntime:
             )
             if model_requests >= runtime_settings.max_model_requests:
                 raise AgentRunError("agent.modelRequestLimitReached")
-            schemas = (
-                [_research_submission_schema(research_sources)]
-                if submission_round
-                else (effective_toolset.schemas() if effective_toolset else [])
-            )
+            schemas = effective_toolset.schemas() if effective_toolset else []
             if search_pending and not any(
                 schema["name"] == "web_search" for schema in schemas
             ):
@@ -1489,7 +1351,7 @@ class AgentRuntime:
                     },
                 )
 
-            hold_response = required_search or memory_write_pending
+            hold_response = search_pending or memory_write_pending
             visible_response.reset()
             provider_started_at = time.monotonic()
             provider_timing: dict[str, int | None] = {
@@ -1569,7 +1431,7 @@ class AgentRuntime:
                 tools=schemas,
                 tool_choice=(
                     "required"
-                    if search_pending or memory_write_pending or submission_round
+                    if search_pending or memory_write_pending
                     else "auto"
                 ),
                 on_delta=on_delta,
@@ -1591,36 +1453,6 @@ class AgentRuntime:
                 )
                 for call in result.tool_calls
             ]
-            submitted_source_ids: list[str] | None = None
-            if submission_round:
-                submission = _validated_research_submission(
-                    normalized_calls,
-                    research_sources,
-                    research_submission_draft or "",
-                )
-                if submission is None:
-                    research_submission_retries += 1
-                    if (
-                        research_submission_retries
-                        > REQUIRED_RESEARCH_SUBMISSION_RETRIES
-                    ):
-                        raise AgentRunError("agent.researchSourcesInvalid")
-                    continue
-                submitted_source_ids = submission
-                assert research_submission_draft is not None
-                result.content = _render_research_submission(
-                    research_submission_draft,
-                    submitted_source_ids,
-                    research_sources,
-                    research_source_titles,
-                )
-                result.tool_calls = []
-                normalized_calls = []
-            elif draft_round and normalized_calls:
-                research_draft_retries += 1
-                if research_draft_retries > REQUIRED_RESEARCH_DRAFT_RETRIES:
-                    raise AgentRunError("agent.researchSourcesInvalid")
-                continue
             if search_pending and (
                 not normalized_calls
                 or any(call.name != "web_search" for call in normalized_calls)
@@ -1659,13 +1491,9 @@ class AgentRuntime:
                 for call in normalized_calls
             )
             hide_tool_round = (
-                required_search and bool(normalized_calls)
+                search_pending and bool(normalized_calls)
             ) or memory_write_pending or starts_memory_workflow
-            provider_data = (
-                {}
-                if submission_round
-                else _safe_provider_data(result.provider_data, normalized_calls)
-            )
+            provider_data = _safe_provider_data(result.provider_data, normalized_calls)
             if hide_tool_round:
                 provider_data = _hidden_tool_round_provider_data(provider_data)
             if result.usage:
@@ -1708,44 +1536,18 @@ class AgentRuntime:
                         kind=streamed_reasoning_state["kind"],
                     )
                 )
-            if submission_round:
-                public_reasoning = research_submission_reasoning
-            cited_source_ids: list[str] | None = None
-            if not normalized_calls and required_search_completed:
-                if submitted_source_ids is None:
-                    if not research_sources:
-                        raise AgentRunError("agent.researchSourcesInvalid")
-                    if (
-                        not result.content.strip()
-                        or _validated_research_citations(
-                            result.content,
-                            research_sources,
-                            require_citation=False,
-                        )
-                        is None
-                    ):
-                        research_draft_retries += 1
-                        if research_draft_retries > REQUIRED_RESEARCH_DRAFT_RETRIES:
-                            raise AgentRunError("agent.researchSourcesInvalid")
-                        research_draft_pending = True
-                        continue
-                    research_submission_draft = result.content
-                    research_submission_reasoning = public_reasoning
-                    research_draft_pending = False
-                    research_submission_pending = True
-                    continue
-                cited_source_ids = submitted_source_ids
-                research_submission_pending = False
-                research_submission_draft = None
+            public_research = None
+            if not normalized_calls:
+                public_research = _research_snapshot(
+                    policy=chat_session.web_search_policy,
+                    used=research_used,
+                    content=result.content,
+                    sources=research_sources,
+                    titles=research_source_titles,
+                )
                 provider_data["_matoloop"] = {
                     **provider_data["_matoloop"],
-                    "research": {
-                        "policy": WebSearchPolicy.REQUIRED.value,
-                        "sourceCount": len(research_sources),
-                        "citedSourceIds": cited_source_ids,
-                        "validation": "structured",
-                        "submissionAttempts": research_submission_retries + 1,
-                    },
+                    "research": public_research,
                 }
             assistant = Message(
                 session_id=chat_session.id,
@@ -1808,6 +1610,7 @@ class AgentRuntime:
                         "generationStatus": assistant.generation_status,
                         "toolCalls": serialized_calls,
                         "reasoning": public_reasoning,
+                        "research": public_research,
                     },
                 },
             )
@@ -1841,10 +1644,13 @@ class AgentRuntime:
                 current_memory_state = memory_state
                 current_memory_trust = model_trust_level
                 call_signature = _tool_call_signature(call)
-                is_research_call = required_search and call.name in {
-                    "web_search",
-                    "webfetch",
-                }
+                is_research_call = (
+                    chat_session.web_search_policy != WebSearchPolicy.DISABLED
+                    and call.name in {"web_search", "webfetch"}
+                )
+                repeated_successful_research_call = (
+                    is_research_call and call_signature in successful_research_calls
+                )
                 if call.name in {"memory_write", "memory_retrieve"}:
                     current_memory_settings = await SettingsStore.load(
                         db, MemorySettings, user_id=chat_session.user_id
@@ -1871,6 +1677,7 @@ class AgentRuntime:
                     within_tool_call_budget
                     and is_research_call
                     and within_research_budget
+                    and not repeated_successful_research_call
                 ):
                     research_tool_calls_used += 1
                 if not within_tool_call_budget:
@@ -1879,13 +1686,7 @@ class AgentRuntime:
                         error_payload("agent.toolCallLimitReached"), ensure_ascii=False
                     )
                     metadata = {"errorCode": "agent.toolCallLimitReached"}
-                elif not within_research_budget:
-                    research_budget_reached = True
-                    tool_result_content = json.dumps(
-                        error_payload("agent.researchBudgetReached"), ensure_ascii=False
-                    )
-                    metadata = {"errorCode": "agent.researchBudgetReached"}
-                elif is_research_call and call_signature in successful_research_calls:
+                elif repeated_successful_research_call:
                     research_budget_reached = True
                     previous_metadata = successful_research_calls[call_signature]
                     tool_result_content = json.dumps(
@@ -1902,6 +1703,12 @@ class AgentRuntime:
                         "alreadyCompleted": True,
                         "sources": previous_metadata.get("sources", []),
                     }
+                elif not within_research_budget:
+                    research_budget_reached = True
+                    tool_result_content = json.dumps(
+                        error_payload("agent.researchBudgetReached"), ensure_ascii=False
+                    )
+                    metadata = {"errorCode": "agent.researchBudgetReached"}
                 elif call_signature in failed_tool_call_signatures:
                     repeated_tool_call_detected = True
                     tool_result_content = json.dumps(
@@ -2058,6 +1865,7 @@ class AgentRuntime:
                 else:
                     failed_tool_call_signatures.discard(call_signature)
                     if call.name in {"web_search", "webfetch"}:
+                        research_used = True
                         _add_research_sources(
                             research_sources, metadata, research_source_titles
                         )
@@ -2119,16 +1927,13 @@ class AgentRuntime:
                             raise AgentRunError(required_search_error)
                         raise AgentRunError("agent.requiredWebSearchFailed")
             if (
-                required_search_completed
-                and research_sources
-                and (
-                    research_budget_reached
-                    or research_tool_calls_used
-                    >= runtime_settings.max_research_tool_calls
-                )
+                research_budget_reached
+                or research_tool_calls_used
+                >= runtime_settings.max_research_tool_calls
             ):
-                research_draft_pending = True
-                research_submission_draft = None
+                research_budget_exhausted = True
+                if search_pending and not required_search_completed:
+                    raise AgentRunError("agent.requiredWebSearchFailed")
         raise AgentRunError("agent.stepLimitReached")
 
     @staticmethod

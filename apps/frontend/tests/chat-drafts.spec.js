@@ -668,6 +668,11 @@ describe('chat drafts', () => {
         content: 'Abgeschnitten',
         createdAt: '2026-07-25T14:32:00Z',
         modelName: 'Antwortmodell',
+        research: {
+          policy: 'available',
+          used: true,
+          linkedSources: [{ title: 'Quelle', url: 'https://example.test/source' }]
+        },
         toolCalls: []
       }
     })
@@ -677,7 +682,10 @@ describe('chat drafts', () => {
       id: 'message-1',
       content: 'Vollständige Antwort',
       createdAt: '2026-07-25T14:32:00Z',
-      modelName: 'Antwortmodell'
+      modelName: 'Antwortmodell',
+      research: {
+        linkedSources: [{ title: 'Quelle', url: 'https://example.test/source' }]
+      }
     })
     expect(chat.streamModelName).toBe('Antwortmodell')
     resolveRefresh({

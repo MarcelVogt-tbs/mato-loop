@@ -394,6 +394,41 @@ def test_message_payload_exposes_only_public_reasoning() -> None:
     assert payload["attachments"] == []
 
 
+def test_message_payload_exposes_only_validated_research_snapshot() -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="assistant",
+        content="Antwort",
+        provider_data={
+            "secret": "private-state",
+            "_matoloop": {
+                "research": {
+                    "policy": "available",
+                    "used": True,
+                    "linkedSources": [
+                        {"title": "Quelle", "url": "HTTPS://EXAMPLE.TEST/source#part"},
+                        {"title": "Unsicher", "url": "javascript:alert(1)"},
+                    ],
+                    "internal": "not-public",
+                }
+            },
+        },
+    )
+
+    payload = message_payload(message)
+
+    assert payload["research"] == {
+        "policy": "available",
+        "used": True,
+        "linkedSources": [
+            {"title": "Quelle", "url": "https://example.test/source"}
+        ],
+    }
+    assert "private-state" not in str(payload)
+    assert "not-public" not in str(payload)
+
+
 def test_message_payload_recreates_safe_english_runtime_error() -> None:
     secret = "secret upstream response"
     message = Message(

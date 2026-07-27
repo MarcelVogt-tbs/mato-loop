@@ -30,6 +30,7 @@ from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
+from mato_loop_backend.integrations import WebFetchError, canonicalize_url
 from mato_loop_backend.memory import effective_memory
 from mato_loop_backend.models import (
     AgentRun,
@@ -60,6 +61,38 @@ router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
 _LAST_MESSAGE_AT_UNSET = object()
 _VISIBLE_MESSAGE_ROLES = ("user", "assistant")
+
+
+def _public_research_payload(item: Message) -> dict[str, Any] | None:
+    provider_data = item.provider_data if isinstance(item.provider_data, dict) else {}
+    runtime_data = provider_data.get("_matoloop")
+    if not isinstance(runtime_data, dict):
+        return None
+    research = runtime_data.get("research")
+    if not isinstance(research, dict):
+        return None
+    policy = research.get("policy")
+    used = research.get("used")
+    if policy not in {item.value for item in WebSearchPolicy} or not isinstance(used, bool):
+        return None
+    linked_sources = []
+    raw_sources = research.get("linkedSources")
+    if isinstance(raw_sources, list):
+        for source in raw_sources[:100]:
+            if not isinstance(source, dict):
+                continue
+            title = source.get("title")
+            url = source.get("url")
+            if not isinstance(title, str) or not title.strip() or not isinstance(url, str):
+                continue
+            try:
+                safe_url = canonicalize_url(url)
+            except WebFetchError:
+                continue
+            linked_sources.append(
+                {"title": title.strip()[:500], "url": safe_url}
+            )
+    return {"policy": policy, "used": used, "linkedSources": linked_sources}
 
 
 def _model_available(ai: AiSettings, model_id: UUID | None) -> bool:
@@ -272,6 +305,7 @@ def message_payload(item: Message) -> dict[str, Any]:
         "toolCallId": item.tool_call_id,
         "toolCalls": item.tool_calls,
         "reasoning": item.public_reasoning,
+        "research": _public_research_payload(item),
         "error": error.payload() if error else None,
         "attachments": [
             {

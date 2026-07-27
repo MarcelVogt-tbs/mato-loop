@@ -7,23 +7,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.context import ContextManager, ContextProjection
 from mato_loop_backend.agent.runtime import (
-    RESEARCH_SUBMISSION_TOOL_NAME,
     AgentRunError,
     AgentRuntime,
-    _render_research_submission,
-    _validated_research_citations,
+    _linked_research_source_ids,
     _VisibleResponse,
 )
 from mato_loop_backend.agent.tools import ToolResult, tool_registry
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
-from mato_loop_backend.providers.base import ProviderResult, PublicReasoning, ToolCall
+from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentRuntimeSettings,
     AiSettings,
-    GeneralSettings,
     IntegrationSettings,
     MemorySettings,
     SettingsStore,
@@ -37,90 +34,23 @@ SOURCE_TITLE = "Quelle"
 SOURCE_CITATION = f"[{SOURCE_TITLE}]({SOURCE_URL})"
 
 
-def _submission_result(source_ids: list[str] | None = None) -> ProviderResult:
-    return ProviderResult(
-        tool_calls=[
-            ToolCall(
-                id="submit-1",
-                name=RESEARCH_SUBMISSION_TOOL_NAME,
-                arguments={
-                    "sourceIds": source_ids or [SOURCE_ID],
-                },
-            )
-        ],
-        finish_reason="tool_calls",
+def _search_call(call_id: str, query: str) -> ToolCall:
+    return ToolCall(id=call_id, name="web_search", arguments={"query": query})
+
+
+def _search_result(*, empty: bool = False) -> ToolResult:
+    if empty:
+        return ToolResult.json([], metadata={"resultCount": 0, "sources": []})
+    source = {
+        "sourceId": SOURCE_ID,
+        "title": SOURCE_TITLE,
+        "url": SOURCE_URL,
+        "kind": "search",
+    }
+    return ToolResult.json(
+        [{**source, "snippet": "Aktuelle Information"}],
+        metadata={"resultCount": 1, "sources": [source]},
     )
-
-
-def test_research_citation_validation_handles_urls_with_parentheses() -> None:
-    source_url = "https://example.test/wiki/Product_(series)"
-
-    assert _validated_research_citations(
-        f"Belegt [src-parentheses]({source_url})",
-        {"src-parentheses": source_url},
-    ) == ["src-parentheses"]
-
-
-def test_research_citation_validation_accepts_human_label_for_allowed_url() -> None:
-    assert _validated_research_citations(
-        "Belegt [Source title](HTTPS://EXAMPLE.TEST/source#details)",
-        {SOURCE_ID: SOURCE_URL},
-    ) == [SOURCE_ID]
-
-
-def test_research_submission_uses_safe_title_and_hostname_labels() -> None:
-    second_id = "src-second"
-    second_url = "https://docs.example.test/path"
-
-    rendered = _render_research_submission(
-        "Antwort",
-        [SOURCE_ID, second_id],
-        {SOURCE_ID: SOURCE_URL, second_id: second_url},
-        {SOURCE_ID: r"MatoLoop [Guide] **official**"},
-    )
-
-    assert rendered == (
-        "Antwort\n\n"
-        rf"[MatoLoop \[Guide\] \*\*official\*\*]({SOURCE_URL}) · "
-        f"[docs.example.test]({second_url})"
-    )
-
-
-def test_research_submission_replaces_a_visible_source_id_label() -> None:
-    rendered = _render_research_submission(
-        "Belegt [src&#45;test](HTTPS://EXAMPLE.TEST/source#details)",
-        [SOURCE_ID],
-        {SOURCE_ID: SOURCE_URL},
-        {SOURCE_ID: SOURCE_TITLE},
-    )
-
-    assert rendered == (
-        f"Belegt [{SOURCE_TITLE}](HTTPS://EXAMPLE.TEST/source#details)"
-    )
-
-
-@pytest.mark.parametrize(
-    "content",
-    [
-        f"<!-- {SOURCE_CITATION} -->",
-        f"```text\n{SOURCE_CITATION}\n```",
-        f"`{SOURCE_CITATION}`",
-        f"!{SOURCE_CITATION}",
-        f"````text\n```\n{SOURCE_CITATION}\n````",
-        rf"$\text{{{SOURCE_CITATION}}}$",
-        rf"$$\text{{{SOURCE_CITATION}}}$$",
-        rf"\(\text{{{SOURCE_CITATION}}}\)",
-        rf"\[\text{{{SOURCE_CITATION}}}\]",
-        rf"\begin{{align}}{SOURCE_CITATION}\end{{align}}",
-        f"{SOURCE_CITATION} [other](HTTPS://other.example/source)",
-        f"{SOURCE_CITATION} [other](<HTTPS://other.example/source>)",
-        f"{SOURCE_CITATION} [other](//other.example/source)",
-    ],
-)
-def test_research_citation_validation_rejects_hidden_or_foreign_links(
-    content: str,
-) -> None:
-    assert _validated_research_citations(content, {SOURCE_ID: SOURCE_URL}) is None
 
 
 async def _runtime_setup(
@@ -141,7 +71,6 @@ async def _runtime_setup(
     ai_settings = AiSettings(
         providers=[provider], models=[model], default_model_id=model.id
     )
-    integration_settings = IntegrationSettings()
     runtime_settings = AgentRuntimeSettings(
         max_steps=10,
         max_model_requests=max_model_requests,
@@ -167,9 +96,8 @@ async def _runtime_setup(
             AiSettings: ai_settings,
             AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
-            GeneralSettings: GeneralSettings(default_timezone="Europe/Berlin"),
             MemorySettings: MemorySettings(enabled=False),
-            IntegrationSettings: integration_settings,
+            IntegrationSettings: IntegrationSettings(),
             ToolSettings: ToolSettings(),
         }[settings_type]
 
@@ -206,39 +134,71 @@ async def _runtime_setup(
     monkeypatch.setattr(ContextManager, "build", build_context)
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
     monkeypatch.setattr(
-        tool_registry,
-        "_execute_definition",
-        AsyncMock(
-            return_value=ToolResult.json(
-                [
-                    {
-                        "sourceId": SOURCE_ID,
-                        "title": "Quelle",
-                        "url": SOURCE_URL,
-                        "snippet": "Aktuelle Information",
-                    }
-                ],
-                metadata={
-                    "resultCount": 1,
-                    "evidenceUrls": [SOURCE_URL],
-                    "sources": [
-                        {
-                            "sourceId": SOURCE_ID,
-                            "url": SOURCE_URL,
-                            "kind": "search",
-                            "title": SOURCE_TITLE,
-                        }
-                    ],
-                },
-            )
-        ),
+        tool_registry, "_execute_definition", AsyncMock(return_value=_search_result())
     )
     monkeypatch.setattr(run_events, "publish", publish)
     return db, run, requests, projections, events
 
 
-async def test_available_search_keeps_best_effort_streaming(monkeypatch) -> None:
-    answer = "Antwort ohne verpflichtende Recherche"
+def _assistant_messages(db) -> list[Message]:
+    return [
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
+    ]
+
+
+def test_linked_research_sources_ignore_hidden_and_foreign_links() -> None:
+    parenthesized_url = "https://example.test/wiki/Product_(series)"
+    content = (
+        f"[Beleg]({parenthesized_url})\n"
+        "[Andere Quelle](https://other.example/source)\n"
+        f"`[Versteckt]({SOURCE_URL})`"
+    )
+
+    assert _linked_research_source_ids(
+        content,
+        {"parenthesized": parenthesized_url, SOURCE_ID: SOURCE_URL},
+    ) == ["parenthesized"]
+
+
+def test_linked_research_sources_support_autolinks_but_not_images() -> None:
+    image_url = "https://example.test/image"
+    escaped_url = "https://example.test/escaped"
+    hidden_url = "https://example.test/hidden"
+    content = (
+        f"<{SOURCE_URL}>\n"
+        f"![Bild]({image_url})\n"
+        f"\\[Kein Link]({escaped_url})\n"
+        f"<!-- [Versteckt]({hidden_url})"
+    )
+
+    assert _linked_research_source_ids(
+        content,
+        {
+            SOURCE_ID: SOURCE_URL,
+            "image": image_url,
+            "escaped": escaped_url,
+            "hidden": hidden_url,
+        },
+    ) == [SOURCE_ID]
+
+
+def test_linked_research_sources_match_rendered_destinations_not_link_labels() -> None:
+    other_url = "https://other.example/source"
+    content = (
+        f"[{SOURCE_URL}]({other_url}) "
+        f"[Quelle mit Titel]({SOURCE_URL} \"Offiziell\")"
+    )
+
+    assert _linked_research_source_ids(
+        content,
+        {SOURCE_ID: SOURCE_URL, "other": other_url},
+    ) == ["other", SOURCE_ID]
+
+
+async def test_available_can_answer_without_research(monkeypatch) -> None:
+    answer = "Antwort aus stabilem Wissen"
     db, run, requests, _, events = await _runtime_setup(
         monkeypatch,
         [ProviderResult(content=answer, finish_reason="stop")],
@@ -248,44 +208,145 @@ async def test_available_search_keeps_best_effort_streaming(monkeypatch) -> None
     await AgentRuntime._execute_loop(db, run)
 
     assert len(requests) == 1
+    assert requests[0]["tool_choice"] == "auto"
     assert any(event.get("delta") == answer for event in events)
-    assistant = next(
-        call.args[0]
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
+    final = _assistant_messages(db)[0]
+    assert final.provider_data["_matoloop"]["research"] == {
+        "policy": "available",
+        "used": False,
+        "linkedSources": [],
+    }
+
+
+async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypatch) -> None:
+    answer = f"Belegte Antwort {SOURCE_CITATION}"
+    db, run, requests, projections, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                content="Ich recherchiere.",
+                tool_calls=[_search_call("search-1", "Aktuelle Frage")],
+                provider_data={"chat_reasoning_details": [{"text": "Intern"}]},
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content=answer, finish_reason="stop"),
+        ],
     )
-    completed = next(event for event in events if event.get("type") == "message.completed")
-    assert completed["message"]["createdAt"] == assistant.created_at.isoformat()
-    assert "research" not in assistant.provider_data["_matoloop"]
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["tool_choice"] for request in requests] == ["required", "auto"]
+    assert [tool["name"] for tool in requests[0]["tools"]] == ["web_search"]
+    assert {tool["name"] for tool in requests[1]["tools"]} >= {
+        "read_file",
+        "web_search",
+    }
+    assert "Mandatory web research is active" in projections[0]["system_prompt"]
+    assert "Mandatory web research is active" not in projections[1]["system_prompt"]
+    assert "Web research contract:" in projections[0]["system_prompt"]
+    assert "Web research contract:" in projections[1]["system_prompt"]
+    persisted_contents = [message.content for message in _assistant_messages(db)]
+    assert "Ich recherchiere." not in persisted_contents
+    assert answer in persisted_contents
+    assert all(event.get("delta") != "Ich recherchiere." for event in events)
+    assert any(event.get("delta") == answer for event in events)
+    final = next(message for message in _assistant_messages(db) if not message.tool_calls)
+    assert final.provider_data["_matoloop"]["research"] == {
+        "policy": "required",
+        "used": True,
+        "linkedSources": [{"title": SOURCE_TITLE, "url": SOURCE_URL}],
+    }
+    completed = next(
+        event
+        for event in events
+        if event["type"] == "message.completed" and not event["message"]["toolCalls"]
+    )
+    assert completed["message"]["research"] == final.provider_data["_matoloop"][
+        "research"
+    ]
 
 
-async def test_available_search_does_not_consume_required_research_budget(
-    monkeypatch,
-) -> None:
+async def test_empty_required_search_satisfies_the_gate(monkeypatch) -> None:
+    db, run, requests, _, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[_search_call("search-empty", "Sehr seltenes Thema")],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                content="Keine aktuellen Treffer gefunden.", finish_reason="stop"
+            ),
+        ],
+    )
+    tool_registry._execute_definition.return_value = _search_result(empty=True)
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["tool_choice"] for request in requests] == ["required", "auto"]
+    assert any(
+        event.get("delta") == "Keine aktuellen Treffer gefunden." for event in events
+    )
+    final = next(message for message in _assistant_messages(db) if not message.tool_calls)
+    assert final.provider_data["_matoloop"]["research"] == {
+        "policy": "required",
+        "used": True,
+        "linkedSources": [],
+    }
+
+
+async def test_required_search_retries_hidden_after_tool_failure(monkeypatch) -> None:
+    db, run, requests, projections, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                content="Unbelegte Antwort",
+                tool_calls=[_search_call("search-failed", "Fehlerhafte Suche")],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                content="Zweiter Versuch",
+                tool_calls=[_search_call("search-ok", "Neu formulierte Suche")],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Normale Antwort", finish_reason="stop"),
+        ],
+    )
+    tool_registry._execute_definition.side_effect = [
+        ToolResult.error("integration.unavailable"),
+        _search_result(),
+    ]
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["tool_choice"] for request in requests] == [
+        "required",
+        "required",
+        "auto",
+    ]
+    assert "previous attempt did not complete" in projections[1]["system_prompt"]
+    persisted_contents = [message.content for message in _assistant_messages(db)]
+    assert "Unbelegte Antwort" not in persisted_contents
+    assert "Zweiter Versuch" not in persisted_contents
+    assert all(
+        event.get("delta") not in {"Unbelegte Antwort", "Zweiter Versuch"}
+        for event in events
+    )
+
+
+async def test_available_uses_the_shared_research_budget(monkeypatch) -> None:
     db, run, requests, _, _ = await _runtime_setup(
         monkeypatch,
         [
             ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="search-1",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
+                tool_calls=[_search_call("search-1", "Aktuelle Frage")],
                 finish_reason="tool_calls",
             ),
             ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="search-2",
-                        name="web_search",
-                        arguments={"query": "Weitere aktuelle Frage"},
-                    )
-                ],
+                tool_calls=[_search_call("search-2", "Weitere Frage")],
                 finish_reason="tool_calls",
             ),
-            ProviderResult(content="Best-Effort-Antwort", finish_reason="stop"),
+            ProviderResult(content="Budgetierte Antwort", finish_reason="stop"),
         ],
         max_research_tool_calls=1,
         search_policy=WebSearchPolicy.AVAILABLE,
@@ -293,495 +354,9 @@ async def test_available_search_does_not_consume_required_research_budget(
 
     await AgentRuntime._execute_loop(db, run)
 
-    assert len(requests) == 3
-    assert tool_registry._execute_definition.await_count == 2
-
-
-async def test_required_search_retries_hidden_text_in_search_only_phase(monkeypatch) -> None:
-    db, run, requests, projections, events = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(content="Veraltete Antwort", finish_reason="stop"),
-            ProviderResult(
-                content="Ich recherchiere.",
-                tool_calls=[
-                    ToolCall(
-                        id="search-1",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
-                provider_data={
-                    "responses_output_items": [
-                        {
-                            "role": "assistant",
-                            "content": [
-                                {"type": "output_text", "text": "Versteckter Entwurf"}
-                            ],
-                        },
-                        {
-                            "type": "function_call",
-                            "call_id": "search-1",
-                            "name": "web_search",
-                            "arguments": '{"query":"Aktuelle Frage"}',
-                        },
-                    ],
-                    "chat_reasoning_details": [{"text": "Verstecktes Reasoning"}],
-                },
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                content=f"Belegte Antwort {SOURCE_CITATION}", finish_reason="stop"
-            ),
-            _submission_result(),
-        ],
-    )
-
-    await AgentRuntime._execute_loop(db, run)
-
-    assert [request["tool_choice"] for request in requests] == [
-        "required",
-        "required",
-        "auto",
-        "required",
-    ]
-    assert [tool["name"] for tool in requests[0]["tools"]] == ["web_search"]
-    assert [tool["name"] for tool in requests[1]["tools"]] == ["web_search"]
-    assert {tool["name"] for tool in requests[2]["tools"]} >= {
-        "read_file",
-        "web_search",
-    }
-    assert [tool["name"] for tool in requests[3]["tools"]] == [
-        RESEARCH_SUBMISSION_TOOL_NAME
-    ]
-    assert "previous attempt did not complete" in projections[1]["system_prompt"]
-    assert all(
-        "Current local date and time:" in projection["system_prompt"]
-        for projection in projections
-    )
-    time_lines = [
-        next(
-            part
-            for part in projection["system_prompt"].split("\n\n")
-            if part.startswith("Current local date and time:")
-        )
-        for projection in projections
-    ]
-    assert len(set(time_lines)) == 1
-    assert "read_file" not in projections[0]["system_prompt"]
-    assert "memory_write" not in projections[0]["system_prompt"]
-    assert "update_agent_identity" not in projections[0]["system_prompt"]
-    assert "File tools use explicit session and workspace roots" in projections[2][
-        "system_prompt"
-    ]
-    assert "satisfies only the tool-use requirement" in projections[2]["system_prompt"]
-    assert "including every named recommendation" in projections[2]["system_prompt"]
-    assert "search again or omit it" in projections[2]["system_prompt"]
-    assert requests[1]["messages"][-1] == {
-        "role": "user",
-        "content": "Aktuelle Frage",
-    }
-    persisted_contents = [
-        call.args[0].content
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Message)
-    ]
-    assert "Veraltete Antwort" not in persisted_contents
-    assert "Ich recherchiere." not in persisted_contents
-    assert f"Belegte Antwort {SOURCE_CITATION}" in persisted_contents
-    assistant_messages = [
-        call.args[0]
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
-    ]
-    assert [
-        message.provider_data["_matoloop"]["performance"]["modelRequest"]
-        for message in assistant_messages
-    ] == [2, 4]
-    for index, message in enumerate(assistant_messages):
-        performance = message.provider_data["_matoloop"]["performance"]
-        assert performance["estimatedInputTokens"] == 100
-        assert performance["inputBudgetTokens"] == 1_000
-        assert performance["contextPreparationMs"] >= 0
-        assert performance["providerDurationMs"] >= 0
-        assert (performance["timeToFirstSignalMs"] is not None) is (index == 0)
-    search_message = next(message for message in assistant_messages if message.tool_calls)
-    assert "Versteckter Entwurf" not in str(search_message.provider_data)
-    assert "Verstecktes Reasoning" not in str(search_message.provider_data)
-    assert search_message.provider_data["responses_output_items"][0]["type"] == (
-        "function_call"
-    )
-    assert all(
-        "startedAt" in event for event in events if event["type"] == "run.phase"
-    )
-    assert all(
-        event.get("delta") != "Veraltete Antwort"
-        for event in events
-        if event["type"] == "message.delta"
-    )
-
-
-async def test_required_search_rejects_non_search_tool_calls(monkeypatch) -> None:
-    db, run, requests, _, events = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                content="Ich lese stattdessen eine Datei.",
-                tool_calls=[
-                    ToolCall(
-                        id="wrong-1",
-                        name="read_file",
-                        arguments={"root": "session", "path": "files/info.txt"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                content="Suche",
-                tool_calls=[
-                    ToolCall(
-                        id="search-1",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                content=f"Belegte Antwort {SOURCE_CITATION}", finish_reason="stop"
-            ),
-            _submission_result(),
-        ],
-    )
-
-    await AgentRuntime._execute_loop(db, run)
-
-    assert [tool["name"] for tool in requests[0]["tools"]] == ["web_search"]
-    persisted_contents = [
-        call.args[0].content
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Message)
-    ]
-    assert "Ich lese stattdessen eine Datei." not in persisted_contents
-    assert all(
-        event.get("delta") != "Ich lese stattdessen eine Datei."
-        for event in events
-        if event["type"] == "message.delta"
-    )
-
-
-async def test_required_search_hides_text_and_retries_after_tool_failure(monkeypatch) -> None:
-    db, run, requests, _, events = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                content="Unbelegte Antwort trotz Fehler",
-                tool_calls=[
-                    ToolCall(
-                        id="search-failed",
-                        name="web_search",
-                        arguments={"query": "Fehlerhafte Suche"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                content="Zweiter Versuch",
-                tool_calls=[
-                    ToolCall(
-                        id="search-ok",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                content=f"Belegte Antwort {SOURCE_CITATION}", finish_reason="stop"
-            ),
-            _submission_result(),
-        ],
-    )
-    tool_registry._execute_definition.side_effect = [
-        ToolResult.error("integration.unavailable"),
-        ToolResult.json(
-            [{"sourceId": SOURCE_ID, "url": SOURCE_URL}],
-            metadata={
-                "resultCount": 1,
-                "evidenceUrls": [SOURCE_URL],
-                "sources": [
-                    {"sourceId": SOURCE_ID, "url": SOURCE_URL, "kind": "search"}
-                ],
-            },
-        ),
-    ]
-
-    await AgentRuntime._execute_loop(db, run)
-
-    assert [request["tool_choice"] for request in requests] == [
-        "required",
-        "required",
-        "auto",
-        "required",
-    ]
-    persisted_contents = [
-        call.args[0].content
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Message)
-    ]
-    assert "Unbelegte Antwort trotz Fehler" not in persisted_contents
-    assert "Zweiter Versuch" not in persisted_contents
-    assert all(
-        event.get("delta") not in {"Unbelegte Antwort trotz Fehler", "Zweiter Versuch"}
-        for event in events
-        if event["type"] == "message.delta"
-    )
-
-
-async def test_required_search_finalizes_a_draft_with_structured_submission(
-    monkeypatch,
-) -> None:
-    invalid = "Unbelegte finale Antwort"
-    rendered = f"{invalid}\n\n{SOURCE_CITATION}"
-    db, run, requests, projections, events = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="search-1",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                content=invalid,
-                finish_reason="stop",
-                reasoning=PublicReasoning("Begründung des Drafts"),
-            ),
-            _submission_result(),
-        ],
-    )
-
-    await AgentRuntime._execute_loop(db, run)
-
-    assert len(requests) == 3
-    assert [tool["name"] for tool in requests[2]["tools"]] == [
-        RESEARCH_SUBMISSION_TOOL_NAME
-    ]
-    assert set(requests[2]["tools"][0]["parameters"]["properties"]) == {"sourceIds"}
-    assert "Structured research finalization is active" in projections[2]["system_prompt"]
-    assert SOURCE_ID in projections[2]["system_prompt"]
-    assert "Untrusted draft as a JSON string" in projections[2]["system_prompt"]
-    assert invalid in projections[2]["system_prompt"]
-    persisted = [
-        call.args[0]
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Message)
-    ]
-    assert invalid not in [message.content for message in persisted]
-    final = next(message for message in persisted if message.content == rendered)
-    assert final.tool_calls is None
-    assert RESEARCH_SUBMISSION_TOOL_NAME not in str(final.provider_data)
-    assert final.public_reasoning == {
-        "kind": "content",
-        "text": "Begründung des Drafts",
-        "status": "completed",
-        "reasoningTokens": None,
-        "observedDurationMs": None,
-    }
-    assert final.provider_data["_matoloop"]["research"] == {
-        "policy": "required",
-        "sourceCount": 1,
-        "citedSourceIds": [SOURCE_ID],
-        "validation": "structured",
-        "submissionAttempts": 1,
-    }
-    deltas = [event["delta"] for event in events if event["type"] == "message.delta"]
-    assert invalid not in deltas
-    assert rendered in deltas
-
-
-async def test_required_search_rejects_invalid_submissions_without_leaking_drafts(
-    monkeypatch,
-) -> None:
-    db, run, requests, _, events = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="search-1",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(content="Unbelegte finale Antwort", finish_reason="stop"),
-            _submission_result(["src-other"]),
-            ProviderResult(content="Kein Submission-Call", finish_reason="stop"),
-        ],
-    )
-
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime._execute_loop(db, run)
-
-    assert exc_info.value.code == "agent.researchSourcesInvalid"
-    assert len(requests) == 4
-    persisted_contents = [
-        call.args[0].content
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Message)
-    ]
-    assert "Unbelegte finale Antwort" not in persisted_contents
-    assert all(event["type"] != "message.delta" for event in events)
-
-
-async def test_required_submission_must_select_every_inline_source(monkeypatch) -> None:
-    second_id = "src-second"
-    second_url = "https://second.example/source"
-    db, run, requests, _, _ = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="search-1",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                content=f"Belegt [zweite Quelle]({second_url})",
-                finish_reason="stop",
-            ),
-            _submission_result(),
-            _submission_result([SOURCE_ID, second_id]),
-        ],
-    )
-    tool_registry._execute_definition.return_value = ToolResult.json(
-        [
-            {"sourceId": SOURCE_ID, "url": SOURCE_URL},
-            {"sourceId": second_id, "url": second_url},
-        ],
-        metadata={
-            "resultCount": 2,
-            "evidenceUrls": [SOURCE_URL, second_url],
-            "sources": [
-                {"sourceId": SOURCE_ID, "url": SOURCE_URL, "kind": "search"},
-                {"sourceId": second_id, "url": second_url, "kind": "search"},
-            ],
-        },
-    )
-
-    await AgentRuntime._execute_loop(db, run)
-
-    assert len(requests) == 4
-    final = next(
-        call.args[0]
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Message)
-        and call.args[0].role == "assistant"
-        and call.args[0].tool_calls is None
-    )
-    assert final.provider_data["_matoloop"]["research"]["submissionAttempts"] == 2
-
-
-async def test_required_search_repair_respects_the_model_request_limit(monkeypatch) -> None:
-    db, run, requests, _, _ = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="search-1",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(content="Antwort ohne Quellen", finish_reason="stop"),
-        ],
-        max_model_requests=2,
-    )
-
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime._execute_loop(db, run)
-
-    assert exc_info.value.code == "agent.modelRequestLimitReached"
-    assert len(requests) == 2
-
-
-async def test_empty_required_search_result_cannot_support_a_final_answer(monkeypatch) -> None:
-    db, run, requests, _, _ = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                content="Suche ohne Treffer",
-                tool_calls=[
-                    ToolCall(
-                        id="search-empty",
-                        name="web_search",
-                        arguments={"query": "Sehr seltenes Thema"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(content="Keine belastbaren Quellen gefunden.", finish_reason="stop"),
-        ],
-    )
-    tool_registry._execute_definition.return_value = ToolResult(
-        "[]", {"resultCount": 0, "evidenceUrls": []}
-    )
-
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime._execute_loop(db, run)
-
-    assert exc_info.value.code == "agent.researchSourcesInvalid"
-    assert [request["tool_choice"] for request in requests] == ["required", "auto"]
-
-
-async def test_required_research_budget_forces_structured_submission(monkeypatch) -> None:
-    search_calls = [
-        ToolCall(
-            id=f"search-{index}",
-            name="web_search",
-            arguments={"query": f"Aktuelle Frage {index}"},
-        )
-        for index in range(3)
-    ]
-    db, run, requests, projections, _ = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(tool_calls=search_calls, finish_reason="tool_calls"),
-            ProviderResult(content="Budgetierte Antwort", finish_reason="stop"),
-            _submission_result(),
-        ],
-        max_research_tool_calls=2,
-    )
-
-    await AgentRuntime._execute_loop(db, run)
-
-    assert len(requests) == 3
-    assert [request["tool_choice"] for request in requests] == [
-        "required",
-        "auto",
-        "required",
-    ]
-    assert requests[1]["tools"] == []
-    assert [tool["name"] for tool in requests[2]["tools"]] == [
-        RESEARCH_SUBMISSION_TOOL_NAME
-    ]
-    assert tool_registry._execute_definition.await_count == 2
-    assert "Research evidence collection is complete" in projections[1]["system_prompt"]
-    assert "never expose sourceId as a visible label" in projections[1]["system_prompt"]
-    assert "2/2 tool calls used" in projections[2]["system_prompt"]
+    assert tool_registry._execute_definition.await_count == 1
+    assert "web_search" not in {tool["name"] for tool in requests[1]["tools"]}
+    assert "webfetch" not in {tool["name"] for tool in requests[1]["tools"]}
     tool_messages = [
         call.args[0]
         for call in db.add.call_args_list
@@ -790,36 +365,26 @@ async def test_required_research_budget_forces_structured_submission(monkeypatch
     assert any("agent.researchBudgetReached" in message.content for message in tool_messages)
 
 
-async def test_repeated_successful_research_call_is_not_executed_twice(
-    monkeypatch,
-) -> None:
-    repeated_call = ToolCall(
-        id="search-1",
-        name="web_search",
-        arguments={"query": "Aktuelle Frage"},
-    )
-    db, run, requests, _, _ = await _runtime_setup(
+async def test_repeated_successful_research_call_does_not_hit_the_network(monkeypatch) -> None:
+    db, run, requests, projections, _ = await _runtime_setup(
         monkeypatch,
         [
-            ProviderResult(tool_calls=[repeated_call], finish_reason="tool_calls"),
             ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="search-2",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
+                tool_calls=[_search_call("search-1", "Aktuelle Frage")],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[_search_call("search-2", "Aktuelle Frage")],
                 finish_reason="tool_calls",
             ),
             ProviderResult(content="Antwort nach Duplikat", finish_reason="stop"),
-            _submission_result(),
         ],
+        search_policy=WebSearchPolicy.AVAILABLE,
     )
 
     await AgentRuntime._execute_loop(db, run)
 
-    assert len(requests) == 4
+    assert len(requests) == 3
     assert tool_registry._execute_definition.await_count == 1
     tool_contents = [
         call.args[0].content
@@ -827,20 +392,19 @@ async def test_repeated_successful_research_call_is_not_executed_twice(
         if isinstance(call.args[0], Message) and call.args[0].role == "tool"
     ]
     assert any('"alreadyCompleted": true' in content for content in tool_contents)
+    assert "web_search" not in {tool["name"] for tool in requests[2]["tools"]}
+    assert "Research tools are unavailable for the rest of this turn" in projections[2][
+        "system_prompt"
+    ]
+    assert "7 remaining" not in projections[2]["system_prompt"]
 
 
-async def test_tool_call_limit_applies_across_model_steps(monkeypatch) -> None:
+async def test_tool_call_limit_applies_after_required_gate(monkeypatch) -> None:
     db, run, requests, _, _ = await _runtime_setup(
         monkeypatch,
         [
             ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="search-1",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
+                tool_calls=[_search_call("search-1", "Aktuelle Frage")],
                 finish_reason="tool_calls",
             ),
             ProviderResult(
@@ -865,55 +429,6 @@ async def test_tool_call_limit_applies_across_model_steps(monkeypatch) -> None:
     assert tool_registry._execute_definition.await_count == 1
 
 
-async def test_repeated_failed_tool_call_stops_run(monkeypatch) -> None:
-    db, run, requests, _, _ = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="search-1",
-                        name="web_search",
-                        arguments={"query": "Aktuelle Frage"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="read-1",
-                        name="read_file",
-                        arguments={"root": "session", "path": "files/missing.txt"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="read-2",
-                        name="read_file",
-                        arguments={"path": "files/missing.txt", "root": "session"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-        ],
-    )
-    tool_registry._execute_definition.side_effect = [
-        ToolResult.json([{"url": "https://example.test/source"}]),
-        ToolResult.error("file.fileNotFound"),
-    ]
-
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime._execute_loop(db, run)
-
-    assert exc_info.value.code == "agent.repeatedToolCall"
-    assert len(requests) == 3
-    assert tool_registry._execute_definition.await_count == 2
-
-
 async def test_required_search_stops_after_two_semantic_retries(monkeypatch) -> None:
     db, run, requests, _, events = await _runtime_setup(
         monkeypatch,
@@ -933,18 +448,18 @@ async def test_required_search_stops_after_two_semantic_retries(monkeypatch) -> 
     assert all(event["type"] != "message.delta" for event in events)
 
 
-async def test_cancel_does_not_capture_hidden_required_search_draft(monkeypatch) -> None:
+async def test_cancel_does_not_capture_required_gate_text(monkeypatch) -> None:
     db, run, _, _, events = await _runtime_setup(monkeypatch, [])
     visible_response = _VisibleResponse()
 
-    async def cancel_during_hidden_draft(_db, **kwargs):
+    async def cancel_during_gate(_db, **kwargs):
         await kwargs["on_delta"]("Nicht freigegebener Entwurf")
         raise asyncio.CancelledError
 
     monkeypatch.setattr(
         ProviderService,
         "complete",
-        staticmethod(cancel_during_hidden_draft),
+        staticmethod(cancel_during_gate),
     )
 
     with pytest.raises(asyncio.CancelledError):

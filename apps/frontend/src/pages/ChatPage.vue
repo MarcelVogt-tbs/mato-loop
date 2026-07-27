@@ -34,7 +34,7 @@
 
         <div v-else-if="!chat.current" class="chat-welcome text-center q-pa-lg">
           <AppLogo :size="72" />
-          <h1 class="text-h4 text-weight-bold q-mb-sm">Willkommen bei {{ identity.displayName }}</h1>
+          <h1 class="text-h4 text-weight-bold q-mb-sm">Willkommen bei MatoLoop</h1>
           <p class="text-body1 app-muted q-mx-auto">
             Was möchtest du tun?
           </p>
@@ -77,11 +77,16 @@
                 v-if="message.content && message.role === 'assistant'"
                 class="chat-message__content"
                 :content="message.content"
+                :research-sources="message.research?.linkedSources || []"
                 :trusted-image-origins="trustedImageOrigins"
                 @trust-image-origin="trustImageOrigin"
               />
               <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
             </template>
+            <ResearchSources
+              v-if="message.role === 'assistant' && message.research"
+              :research="message.research"
+            />
             <MessageAttachments
               v-if="message.attachments?.length"
               class="q-mt-sm"
@@ -266,6 +271,7 @@ import ChatComposer from 'components/ChatComposer.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ReasoningPanel from 'components/ReasoningPanel.vue'
+import ResearchSources from 'components/ResearchSources.vue'
 import ToolCallItem from 'components/ToolCallItem.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'

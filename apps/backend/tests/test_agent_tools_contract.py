@@ -141,7 +141,7 @@ def test_webfetch_schema_describes_verified_image_attachments() -> None:
     webfetch = next(item for item in schemas if item["name"] == "webfetch")
 
     assert "Successful images are validated and attached" in webfetch["description"]
-    assert "verify exact image URLs" in webfetch["description"]
+    assert "whether the URL is citationEligible" in webfetch["description"]
 
 
 def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
