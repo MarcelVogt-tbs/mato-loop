@@ -677,24 +677,27 @@ def test_general_system_prompt_enforces_pending_memory_write_outcome() -> None:
 
 
 @pytest.mark.parametrize(
-    ("current_datetime", "expected"),
+    ("current_datetime", "expected", "expected_weekday"),
     [
         (
             datetime(2026, 1, 21, 13, 5, tzinfo=UTC),
             "2026-01-21T14:05+01:00 (Europe/Berlin)",
+            "Wednesday",
         ),
         (
-            datetime(2026, 7, 21, 12, 5, tzinfo=UTC),
-            "2026-07-21T14:05+02:00 (Europe/Berlin)",
+            datetime(2026, 7, 27, 8, 31, tzinfo=UTC),
+            "2026-07-27T10:31+02:00 (Europe/Berlin)",
+            "Monday",
         ),
     ],
 )
 def test_general_system_prompt_contains_local_datetime(
-    current_datetime: datetime, expected: str
+    current_datetime: datetime, expected: str, expected_weekday: str
 ) -> None:
     prompt = general_system_prompt(_session(), current_datetime=current_datetime)
 
     assert f"Current local date and time: {expected}" in prompt
+    assert f"The local weekday is {expected_weekday}." in prompt
     assert "Use this timestamp to resolve relative dates and times" in prompt
     assert "It does not make prior knowledge current" in prompt
 

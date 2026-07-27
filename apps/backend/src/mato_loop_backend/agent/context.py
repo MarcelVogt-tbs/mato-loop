@@ -25,6 +25,15 @@ from mato_loop_backend.settings.models import (
 
 IMAGE_INPUT_RESERVE_TOKENS = 2_048
 MAX_ATTACHMENT_EXCERPT_CHARACTERS = 20_000
+WEEKDAY_NAMES = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
 _OMITTED_TOOL_OUTPUT = (
     "[Historical tool output omitted from the active context. "
     "Use session_read to retrieve the original message if needed.]"
@@ -427,7 +436,8 @@ def general_system_prompt(
     local_now = now.astimezone(ZoneInfo("Europe/Berlin"))
     parts.append(
         f"Current local date and time: {local_now.isoformat(timespec='minutes')} "
-        "(Europe/Berlin). Use this timestamp to resolve relative dates and times. "
+        f"(Europe/Berlin). The local weekday is {WEEKDAY_NAMES[local_now.weekday()]}. "
+        "Use this timestamp to resolve relative dates and times. "
         "It does not make prior knowledge current."
     )
     if web_search_required and not web_search_completed:
