@@ -329,6 +329,10 @@ def test_memory_write_arguments_require_explicit_update_target() -> None:
 
     assert valid.category == MemoryCategory.FACT
     assert "retrieval_level" not in type(valid).model_fields
+    with pytest.raises(ValidationError):
+        MemoryWriteArguments.model_validate(
+            {"content": "Der Nutzer kommt aus Ascholding.", "category": "identity"}
+        )
     create = MemoryWriteArguments.model_validate(
         {
             "action": "create",
@@ -836,7 +840,8 @@ def test_dreaming_candidate_schema_uses_small_model_friendly_fields() -> None:
 def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
     candidate_schema = _record_candidates_tool()["parameters"]
     candidate = candidate_schema["properties"]["candidates"]["items"]
-    reconciliation_schema = _reconciliation_tool()["parameters"]
+    reconciliation_schema = _reconciliation_tool(2)["parameters"]
+    decisions = reconciliation_schema["properties"]["decisions"]
 
     assert "$defs" not in candidate_schema
     assert "$ref" not in json.dumps(candidate_schema)
@@ -849,6 +854,23 @@ def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
     assert "$defs" not in reconciliation_schema
     assert "$ref" not in json.dumps(reconciliation_schema)
     assert reconciliation_schema["required"] == ["decisions"]
+    assert "minItems" not in decisions
+    assert decisions["maxItems"] == 2
+    assert decisions["items"]["properties"]["index"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1,
+    }
+    assert set(decisions["items"]["required"]) == {
+        "index",
+        "action",
+        "memoryId",
+        "memory",
+        "category",
+    }
+    assert decisions["items"]["properties"]["memoryId"]["anyOf"][-1] == {
+        "type": "null"
+    }
 
 
 async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) -> None:
@@ -906,6 +928,7 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
         instant_memories=[],
         max_candidates=10,
         evidence_ids={evidence_id},
+        user_evidence_ids={evidence_id},
     )
 
     assert output.candidates[0].content == "Der Nutzer ist verheiratet und hat ein Kind."
@@ -913,6 +936,152 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
     retry_messages = complete.await_args_list[1].kwargs["messages"]
     assert retry_messages[-1]["role"] == "tool"
     assert "memory, category, and evidence" in retry_messages[-1]["content"]
+    assert "usage attribution" not in retry_messages[-1]["content"]
+
+
+async def test_dreaming_repairs_assistant_only_evidence(monkeypatch) -> None:
+    user_id = uuid4()
+    assistant_id = uuid4()
+    provider = LlmProviderConfig(
+        name="Lokal", adapter_type="openai-compatible", trust_level="private"
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    complete = AsyncMock(
+        side_effect=[
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="assistant-only",
+                        name="record_memory_candidates",
+                        arguments={
+                            "candidates": [
+                                {
+                                    "memory": "Der Nutzer bevorzugt kurze Antworten.",
+                                    "category": "preference",
+                                    "evidence": [str(assistant_id)],
+                                }
+                            ]
+                        },
+                    )
+                ]
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="user-supported",
+                        name="record_memory_candidates",
+                        arguments={
+                            "candidates": [
+                                {
+                                    "memory": "Der Nutzer bevorzugt kurze Antworten.",
+                                    "category": "preference",
+                                    "evidence": [str(user_id)],
+                                }
+                            ]
+                        },
+                    )
+                ]
+            ),
+        ]
+    )
+    monkeypatch.setattr(ProviderService, "complete", complete)
+
+    output = await _extract_candidates(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        input_trust=TrustLevel.PRIVATE,
+        system_prompt=DREAMING_SYSTEM_PROMPT,
+        source=(
+            f"MESSAGE {user_id} [USER]\nBitte antworte kurz.\n\n"
+            f"MESSAGE {assistant_id} [ASSISTANT]\nVerstanden."
+        ),
+        instant_memories=[],
+        max_candidates=10,
+        evidence_ids={user_id, assistant_id},
+        user_evidence_ids={user_id},
+    )
+
+    assert output.candidates[0].evidence_message_ids == [user_id]
+    assert complete.await_count == 2
+    assert "at least one USER message UUID" in complete.await_args_list[1].kwargs[
+        "messages"
+    ][-1]["content"]
+
+
+async def test_dreaming_repairs_missing_usage_attribution(monkeypatch) -> None:
+    user_id = uuid4()
+    assistant_id = uuid4()
+    run_id = uuid4()
+    memory = MemoryRecord(
+        id=uuid4(),
+        source_type="manual",
+        retrieval_level="instant",
+        trust_level="private",
+        category="fact",
+        revision=1,
+        content="Der Nutzer verwendet OpenCode.",
+    )
+    provider = LlmProviderConfig(
+        name="Lokal", adapter_type="openai-compatible", trust_level="private"
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    complete = AsyncMock(
+        side_effect=[
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="missing-attribution",
+                        name="record_memory_candidates",
+                        arguments={"candidates": []},
+                    )
+                ]
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="valid-attribution",
+                        name="record_memory_candidates",
+                        arguments={
+                            "candidates": [],
+                            "usageAttributions": [
+                                {
+                                    "runId": str(run_id),
+                                    "usedMemoryIds": [str(memory.id)],
+                                }
+                            ],
+                        },
+                    )
+                ]
+            ),
+        ]
+    )
+    monkeypatch.setattr(ProviderService, "complete", complete)
+
+    output = await _extract_candidates(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        input_trust=TrustLevel.PRIVATE,
+        system_prompt=DREAMING_SYSTEM_PROMPT,
+        source=(
+            f"MESSAGE {user_id} [USER]\nHilf mir mit meiner Coding-Lösung.\n\n"
+            f"MESSAGE {assistant_id} [ASSISTANT]\nDu verwendest OpenCode."
+        ),
+        instant_memories=[memory],
+        max_candidates=10,
+        evidence_ids={user_id, assistant_id},
+        user_evidence_ids={user_id},
+        exposed_by_run={run_id: {memory.id}},
+        exposure_anchors={run_id: assistant_id},
+        exposure_responses={run_id: "Du verwendest OpenCode."},
+        exposed_memories={memory.id: memory},
+    )
+
+    assert output.usage_attributions[0].used_memory_ids == [memory.id]
+    assert complete.await_count == 2
+    retry = complete.await_args_list[1].kwargs["messages"][-1]["content"]
+    assert "exactly one attribution" in retry
 
 
 async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
@@ -981,6 +1150,7 @@ async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
         instant_memories=[instant],
         max_candidates=10,
         evidence_ids={first_evidence_id, second_evidence_id},
+        user_evidence_ids={first_evidence_id},
     )
 
     assert len(output.candidates) == 1
@@ -1042,12 +1212,13 @@ async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> No
         source="{}",
         candidate_count=1,
         supplied_ids={memory_id},
-        system_prompt=RECONCILIATION_SYSTEM_PROMPT + "\nCUSTOM CATEGORY GUIDANCE",
     )
 
     assert result.decisions[0].action == "unchanged"
     assert complete.await_count == 2
-    assert "CUSTOM CATEGORY GUIDANCE" in complete.await_args_list[0].kwargs["messages"][0]["content"]
+    assert complete.await_args_list[0].kwargs["messages"][0]["content"] == (
+        RECONCILIATION_SYSTEM_PROMPT
+    )
 
 
 async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> None:
@@ -1098,13 +1269,13 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
 
 
 def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
-    assert "cross-session knowledge" in DREAMING_SYSTEM_PROMPT
-    assert "Reason one or two steps beyond literal wording" in DREAMING_SYSTEM_PROMPT
-    assert "weather query for a place" in DREAMING_SYSTEM_PROMPT
-    assert "Write each memory" in DREAMING_SYSTEM_PROMPT
+    assert "durable cross-session knowledge" in DREAMING_SYSTEM_PROMPT
+    assert "empty candidates array" in DREAMING_SYSTEM_PROMPT
+    assert "one-off questions" in DREAMING_SYSTEM_PROMPT
+    assert "single request does not establish" in DREAMING_SYSTEM_PROMPT
+    assert "at least one user message ID" in DREAMING_SYSTEM_PROMPT
     assert "memory_retrieve" not in DREAMING_SYSTEM_PROMPT
     assert "record_memory_candidates" in DREAMING_SYSTEM_PROMPT
-    assert "evidence message IDs from the supplied batch" in DREAMING_SYSTEM_PROMPT
     assert "retrieval level" not in DREAMING_SYSTEM_PROMPT
     assert "web_search" not in DREAMING_SYSTEM_PROMPT
 
@@ -1139,6 +1310,8 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
     assert create.content is None
     assert result.decisions[0].memory_id == memory_id
     assert "Reference only supplied memory IDs" in RECONCILIATION_SYSTEM_PROMPT
+    assert "broader or weaker restatement" in RECONCILIATION_SYSTEM_PROMPT
+    assert "usefully connects" not in RECONCILIATION_SYSTEM_PROMPT
     with pytest.raises(ValidationError):
         DreamReconciliation.model_validate(
             {

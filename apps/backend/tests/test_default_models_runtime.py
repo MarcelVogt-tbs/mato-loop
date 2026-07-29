@@ -123,7 +123,7 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch) -> None
     )
 
     assert complete.await_args.kwargs["model"] is session_model
-    assert complete.await_args.kwargs["max_output_tokens"] == 512
+    assert complete.await_args.kwargs["max_output_tokens"] == 2_048
     statement = db.scalar.await_args.args[0]
     assert "chat_sessions.title" in str(statement)
     assert "Standardmodelle konfigurieren" in statement.compile().params.values()
@@ -176,8 +176,8 @@ def test_title_repair_budget_uses_provider_signals_and_model_limit() -> None:
         finish_reason="length",
     )
 
-    assert repair_title_output_budget(512, 16_384, reasoning_only) == 4_096
-    assert repair_title_output_budget(512, 2_048, reasoning_only) == 2_048
+    assert repair_title_output_budget(1_024, 16_384, reasoning_only) == 4_096
+    assert repair_title_output_budget(1_024, 2_048, reasoning_only) == 2_048
     assert repair_title_output_budget(256, 300, ProviderResult()) == 300
 
 
@@ -203,7 +203,7 @@ async def test_title_generation_repairs_empty_visible_output(monkeypatch) -> Non
         side_effect=[
             ProviderResult(
                 reasoning=PublicReasoning("Nur Reasoning"),
-                usage={"output_tokens": 512, "reasoning_tokens": 512},
+                usage={"output_tokens": 1_024, "reasoning_tokens": 1_024},
                 finish_reason="length",
             ),
             ProviderResult(content="Reparierter Titel", finish_reason="stop"),
@@ -221,7 +221,7 @@ async def test_title_generation_repairs_empty_visible_output(monkeypatch) -> Non
     assert complete.await_count == 2
     assert [
         call.kwargs["max_output_tokens"] for call in complete.await_args_list
-    ] == [512, 4_096]
+    ] == [2_048, 4_096]
     repair_prompt = complete.await_args.kwargs["messages"][0]["content"]
     assert "previous attempt" in repair_prompt
     assert "only the final title" in repair_prompt

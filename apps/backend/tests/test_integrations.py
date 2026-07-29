@@ -79,7 +79,12 @@ def test_no_key_provider_makes_search_available_without_configuration() -> None:
     properties = search_schema["parameters"]["properties"]
     assert set(properties) == {"query"}
     assert properties["query"]["description"] == (
-        "Compact search-engine query for exactly one information need."
+        "Compact search-engine query for exactly one information need. If the user supplies a "
+        "year, copy it exactly. If the user asks for current, latest, or today without a year, "
+        "the query must contain no year or date. Copy versions, model numbers, and exact names "
+        "needed by the requested scope. Examples: 'latest Python version' becomes 'latest stable "
+        "Python version'; 'Python 3.12 release notes from 2023' becomes 'Python 3.12 release notes "
+        "2023'."
     )
 
 

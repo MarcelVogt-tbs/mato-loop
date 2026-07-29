@@ -439,7 +439,14 @@ class WebSearchArguments(ToolArguments):
     query: str = Field(
         min_length=1,
         max_length=2_000,
-        description="Compact search-engine query for exactly one information need.",
+        description=(
+            "Compact search-engine query for exactly one information need. If the user supplies a "
+            "year, copy it exactly. If the user asks for current, latest, or today without a year, "
+            "the query must contain no year or date. Copy versions, model numbers, and exact names "
+            "needed by the requested scope. Examples: 'latest Python version' becomes 'latest stable "
+            "Python version'; 'Python 3.12 release notes from 2023' becomes 'Python 3.12 release notes "
+            "2023'."
+        ),
     )
 
 
@@ -492,11 +499,16 @@ class SessionSearchArguments(ToolArguments):
 
 
 class MemoryWriteArguments(ToolArguments):
-    action: Literal["create", "update"] = "create"
+    action: Literal["create", "update"]
     memory_id: UUID | None = None
     expected_revision: int | None = Field(default=None, ge=1)
     content: str = Field(min_length=1, max_length=20_000)
-    category: MemoryCategory
+    category: MemoryCategory = Field(
+        description=(
+            "Use exactly one of context, fact, goal, identity, or preference. "
+            "Names and personal identity use identity; occupations use fact."
+        )
+    )
 
     @field_validator("content")
     @classmethod
@@ -562,7 +574,14 @@ class MemoryRetrieveArguments(ToolArguments):
 
 class UpdateAgentIdentityArguments(ToolArguments):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
-    instructions: str | None = Field(default=None, max_length=16_000)
+    instructions: str | None = Field(
+        default=None,
+        max_length=16_000,
+        description=(
+            "Copy explicit user-supplied persona instructions exactly. Do not paraphrase, "
+            "translate, strengthen, or add qualifiers."
+        ),
+    )
 
     @field_validator("display_name")
     @classmethod
@@ -1624,7 +1643,8 @@ tool_registry = ToolRegistry(
             "Create or update durable memory when explicitly requested or when an unquoted "
             "first-person statement implicitly supplies stable self-context useful in future "
             "conversations. Do not merely acknowledge such context: persist it in the same turn. "
-            "Do not store transient, hypothetical, quoted, or third-party details. Store only the "
+            "Do not store transient, hypothetical, quoted, third-party, translation, rewriting, "
+            "analysis, or extraction source text. Store only the "
             "user-supported fact; never enrich it with inferred geography or other world knowledge. "
             "For create, omit memory_id and expected_revision. Use an injected memory ID and revision "
             "or retrieve an existing memory before updating it.",

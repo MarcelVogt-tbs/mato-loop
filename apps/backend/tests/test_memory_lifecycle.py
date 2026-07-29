@@ -509,10 +509,15 @@ def test_dreaming_usage_contract_is_added_only_for_pending_exposures() -> None:
     run_id = uuid4()
     memory_id = uuid4()
     plain = _record_candidates_tool()["parameters"]
-    attributed = _record_candidates_tool({run_id: {memory_id}})["parameters"]
+    attributed_tool = _record_candidates_tool({run_id: {memory_id}})
+    attributed = attributed_tool["parameters"]
 
     assert "usageAttributions" not in plain["properties"]
     assert "usageAttributions" in attributed["required"]
+    usage = attributed["properties"]["usageAttributions"]
+    assert "minItems" not in usage
+    assert usage["maxItems"] == 500
+    assert "exactly one usage attribution" in attributed_tool["description"]
 
 
 async def test_settings_budget_error_uses_stable_api_error(monkeypatch) -> None:

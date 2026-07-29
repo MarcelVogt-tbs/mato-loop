@@ -5,9 +5,14 @@ import re
 from mato_loop_backend.providers.base import ProviderResult
 
 TITLE_MAX_CHARACTERS = 80
-TITLE_INITIAL_OUTPUT_TOKENS = 512
+TITLE_INITIAL_OUTPUT_TOKENS = 2_048
 TITLE_MAX_OUTPUT_TOKENS = 4_096
 TITLE_REPAIR_RESERVE_TOKENS = 512
+TITLE_SYSTEM_PROMPT = (
+    "Create a short title for this conversation. Reply in the language "
+    "of the user message with exactly one line and at most 80 characters. "
+    "Return only the title without quotation marks, explanation, or reasoning."
+)
 
 
 def initial_session_title(content: str) -> str:

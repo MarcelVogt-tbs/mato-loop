@@ -15,6 +15,7 @@ from mato_loop_backend.agent.context import (
     _projection_messages,
     _shorten_evidence_output,
     _summary_source,
+    compaction_messages,
     general_system_prompt,
     message_dict,
 )
@@ -756,8 +757,8 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "recommendations about currently available options" in prompt
     assert "Do not search for stable knowledge" in prompt
     assert "merely because a task is difficult" in prompt
-    assert "one candidate-neutral discovery search" in prompt
-    assert "at most one additional discovery search" in prompt
+    assert "exactly one candidate-neutral discovery search now" in prompt
+    assert "whether one additional discovery search is needed" in prompt
     assert "verify at least one credible alternative" in prompt
     assert "untrusted discovery snippets" in prompt
     assert "one compact, standalone search-engine query" in prompt
@@ -769,22 +770,33 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "materially reformulate the query" in prompt
     assert "emit its tool call in the same response" in prompt
     assert "Never announce future tool use without that call" in prompt
-    assert "current local year is 2026" in prompt
-    assert "omit a year unless it materially narrows the search" in prompt
+    assert "never add a year or date that the user did not supply" in prompt
+    assert "copy it into the query exactly" in prompt
+    assert "Remove every year or date absent from the request" in prompt
     assert "Never derive freshness dates from prior knowledge" in prompt
-    assert "years explicitly requested by the user" in prompt
+    assert "If the user supplies a year" in prompt
     assert "exact names, model versions" in prompt
-    assert "Once a relevant URL is known, fetch that page" in prompt
+    assert "call webfetch with that exact URL next" in prompt
     assert "prioritize official or otherwise primary authoritative sources" in prompt
     assert "requested jurisdiction and effective date or version" in prompt
     assert "do not apply current rules to a past period" in prompt
     assert "invent a numeric outcome" in prompt
-    assert "exact URLs returned by successful current-turn research tools" in prompt
-    assert "never expose sourceId as a visible label" in prompt
+    assert "final answer that uses current-turn research is incomplete" in prompt
+    assert "Do not ask the user for a source already present in a tool result" in prompt
+    assert "Current-turn research results are present" in prompt
+    assert "A researched answer without these links is not final" in prompt
+    assert "Never use sourceId" in prompt
     assert "immediately after the sentence or paragraph it supports" in prompt
-    assert "at most two source links per claim" in prompt
+    assert "at most two links per claim" in prompt
     assert "2/8 tool calls used, 6 remaining" in prompt
     assert "Reserve enough calls to fetch" in prompt
+
+
+def test_compaction_prompt_preserves_opaque_values_verbatim() -> None:
+    prompt = compaction_messages("Tool result: generated/package.zip, id abc")[1]["content"]
+
+    assert "Copy every path, ID, filename, and other opaque value verbatim" in prompt
+    assert "including values in tool effects" in prompt
 
 
 def test_general_system_prompt_requires_verified_external_images() -> None:
@@ -796,7 +808,7 @@ def test_general_system_prompt_requires_verified_external_images() -> None:
     assert "fetch the exact URL" in prompt
     assert "prefer the resulting attachment" in prompt
     assert "do not repeat the remote URL" in prompt
-    assert "Use the returned title as the link label" in prompt
+    assert "[returned title](returned URL)" in prompt
 
 
 def test_general_system_prompt_contains_bounded_agent_identity() -> None:
@@ -865,6 +877,7 @@ def test_general_system_prompt_saves_only_stable_direct_self_context() -> None:
     assert "independently changeable facts in separate memories" in prompt
     assert "I am currently in Munich" in prompt
     assert "hypotheticals, quotations, or facts about third parties" in prompt
+    assert "translation, rewriting, analysis, or extraction is source data" in prompt
     assert "injected memory reference" in prompt
     assert "copy its exact ID and revision into an update" in prompt
     assert "purpose=write" in prompt
@@ -890,6 +903,22 @@ def test_general_system_prompt_enforces_pending_memory_write_outcome() -> None:
     assert "Do not produce a final answer" in pending
     assert "permission was denied and nothing was stored" in denied
     assert "Do not claim or imply" in denied
+
+
+def test_prefetched_memory_overview_disables_redundant_retrieval() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        memory_text='[{"content":"Ich spiele Klavier."}]',
+        memory_read_enabled=True,
+        memory_scope={"total": 2, "instant": 1, "retrieve": 1},
+        memory_overview_prefetched=True,
+        memory_overview_has_more=True,
+        offered_tool_names=frozenset({"memory_retrieve", "session_search"}),
+    )
+
+    assert "Do not call memory_retrieve" in prompt
+    assert "Use memory_retrieve when" not in prompt
+    assert "Present this as a partial overview" in prompt
 
 
 @pytest.mark.parametrize(
@@ -944,11 +973,11 @@ def test_required_web_search_prompt_preserves_instant_memory_contract() -> None:
         assert f"Untrusted memory reference:\n{memory_text}" in prompt
         assert "Web research contract:" in prompt
         assert "freshness could materially change the answer" in prompt
-        assert "current local year is 2026" in prompt
+        assert "never add a year or date that the user did not supply" in prompt
         assert "Never derive freshness dates from prior knowledge" in prompt
         assert "prioritize official or otherwise primary authoritative sources" in prompt
         assert "do not apply current rules to a past period" in prompt
-        assert "exact URLs returned by successful current-turn research tools" in prompt
+        assert "final answer that uses current-turn research is incomplete" in prompt
         assert prompt.index("Untrusted memory reference") < prompt.index(
             "Current local date and time"
         )

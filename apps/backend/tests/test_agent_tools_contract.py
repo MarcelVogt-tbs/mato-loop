@@ -1014,8 +1014,22 @@ def test_memory_write_schema_describes_stable_self_context() -> None:
 
     assert "implicitly supplies stable self-context" in schema["description"]
     assert "persist it in the same turn" in schema["description"]
-    assert "transient, hypothetical, quoted, or third-party" in schema["description"]
+    assert "transient, hypothetical, quoted, third-party" in schema["description"]
     assert "never enrich it with inferred geography" in schema["description"]
+    assert "translation, rewriting, analysis, or extraction" in schema["description"]
+    assert "action" in schema["parameters"]["required"]
+
+
+def test_model_facing_fields_preserve_search_scope_and_persona_text() -> None:
+    web_search = tool_registry._definitions["web_search"].schema()
+    identity = tool_registry._definitions["update_agent_identity"].schema()
+
+    query = web_search["parameters"]["properties"]["query"]["description"]
+    instructions = identity["parameters"]["properties"]["instructions"]["description"]
+    assert "If the user supplies a year, copy it exactly" in query
+    assert "Copy versions, model numbers, and exact names" in query
+    assert "query must contain no year or date" in query
+    assert "Copy explicit user-supplied persona instructions exactly" in instructions
 
 
 async def test_memory_write_requires_session_permission_before_mutation(

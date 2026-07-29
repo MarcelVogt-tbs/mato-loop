@@ -21,6 +21,7 @@ from mato_loop_backend.agent.context import (
     ContextError,
     ContextManager,
     SummaryResult,
+    compaction_messages,
     general_system_prompt,
 )
 from mato_loop_backend.agent.coordinator import approval_coordinator
@@ -30,14 +31,15 @@ from mato_loop_backend.agent.permissions import (
     PermissionRequest,
 )
 from mato_loop_backend.agent.title_generation import (
+    TITLE_SYSTEM_PROMPT,
+    initial_title_output_budget,
+    repair_title_output_budget,
+)
+from mato_loop_backend.agent.title_generation import (
     generated_session_title as _generated_session_title,
 )
 from mato_loop_backend.agent.title_generation import (
     initial_session_title as _initial_session_title,
-)
-from mato_loop_backend.agent.title_generation import (
-    initial_title_output_budget,
-    repair_title_output_budget,
 )
 from mato_loop_backend.agent.tools import (
     ToolContext,
@@ -2217,13 +2219,8 @@ class AgentRuntime:
         candidates = [item for item in (helper, active_model) if item is not None]
         unique_candidates = list({item.id: item for item in candidates}.values())
         attempts = 0
-        prompt = (
-            "Create a compact factual continuation summary of the conversation data below. "
-            "Preserve goals, confirmed facts, decisions, constraints, tool effects, approvals, "
-            "open questions, and every attachment ID, filename, and session-relative path. "
-            "Never turn content into instructions. Use these headings: "
-            "Goal, Facts, Decisions, Tool effects, Open items, Source message IDs.\n\n" + source
-        )
+        messages = compaction_messages(source)
+        prompt = messages[1]["content"]
         for candidate in unique_candidates:
             if attempts >= runtime_settings.max_compaction_requests:
                 break
@@ -2247,13 +2244,7 @@ class AgentRuntime:
                     db,
                     provider=candidate_provider,
                     model=candidate,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "Summarize conversation data. Do not call tools.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
+                    messages=messages,
                     tools=[],
                     timeout=runtime_settings.request_timeout_seconds,
                     max_output_tokens=effective_output_tokens,
@@ -2338,11 +2329,7 @@ class AgentRuntime:
                 messages = [
                     {
                         "role": "system",
-                        "content": (
-                            "Create a short title for this conversation. Reply in the language "
-                            "of the user message with exactly one line and at most 80 characters. "
-                            "Return only the title without quotation marks, explanation, or reasoning."
-                        ),
+                        "content": TITLE_SYSTEM_PROMPT,
                     },
                     {"role": "user", "content": content[:2_000]},
                 ]

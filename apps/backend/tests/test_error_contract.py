@@ -47,3 +47,8 @@ def test_chat_history_errors_have_controlled_fallbacks() -> None:
         describe_error("session.retryUnavailable").message
         == "The failed response can no longer be retried."
     )
+    assert (
+        describe_error("tool.executionInterrupted").message
+        == "The tool execution was interrupted and its outcome is unknown. Do not infer success or "
+        "failure without verification."
+    )
