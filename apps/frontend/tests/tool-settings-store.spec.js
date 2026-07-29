@@ -33,6 +33,8 @@ describe('tool settings store', () => {
       },
       webFetch: {
         enabled: true,
+        userAgent: 'ConfiguredBrowser/1.0',
+        maxResponseMiB: 96,
         defaultPolicy: 'auto_allowed',
         allowedPrivateOrigins: ['http://127.0.0.1:8080']
       },
@@ -92,7 +94,11 @@ describe('tool settings store', () => {
 
     expect(api.put).toHaveBeenCalledWith('/tools/settings', {
       webSearch: { primaryProvider: 'no_key', fallbackProvider: null },
-      webFetch: legacyResponse.webFetch,
+      webFetch: {
+        ...legacyResponse.webFetch,
+        userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+        maxResponseMiB: 64
+      },
       generateImage: { policy: 'ask', timeoutSeconds: 300 },
       generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
       generateAudio: { policy: 'disabled', timeoutSeconds: 300 },

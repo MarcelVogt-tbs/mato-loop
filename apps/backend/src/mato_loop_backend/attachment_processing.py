@@ -363,21 +363,67 @@ def _zip_safety_check(data: bytes) -> None:
         raise AttachmentProcessingError("attachment.invalidDocument") from exc
 
 
-def _extract_pdf(data: bytes) -> tuple[str, dict[str, int]]:
+def _pdf_page_has_image(page: Any) -> bool:
+    visited: set[int] = set()
+
+    def contains_image(resources: Any, depth: int = 0) -> bool:
+        if resources is None or depth > 5:
+            return False
+        resources = resources.get_object()
+        objects = resources.get("/XObject")
+        if objects is None:
+            return False
+        for reference in objects.get_object().values():
+            item = reference.get_object()
+            identity = id(item)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            subtype = item.get("/Subtype")
+            if subtype == "/Image":
+                return True
+            if subtype == "/Form" and contains_image(item.get("/Resources"), depth + 1):
+                return True
+        return False
+
+    return contains_image(page.get("/Resources"))
+
+
+def extract_pdf_pages(data: bytes) -> tuple[list[str], dict[str, Any]]:
     try:
         reader = PdfReader(BytesIO(data), strict=False)
         if reader.is_encrypted or not 1 <= len(reader.pages) <= MAX_PDF_PAGES:
             raise AttachmentProcessingError("attachment.invalidDocument")
-        parts: list[str] = []
+        pages = []
+        image_pages = []
+        budget_parts: list[str] = []
         count = 0
         for number, page in enumerate(reader.pages, 1):
-            count = _append_text(parts, f"--- Page {number} ---", count)
-            count = _append_text(parts, page.extract_text() or "", count)
+            text = page.extract_text() or ""
+            count = _append_text(budget_parts, f"--- Page {number} ---", count)
+            count = _append_text(budget_parts, text, count)
+            pages.append(text)
+            if not text.strip() and _pdf_page_has_image(page):
+                image_pages.append(number)
     except AttachmentProcessingError:
         raise
     except Exception as exc:
         raise AttachmentProcessingError("attachment.invalidDocument") from exc
-    return "\n".join(parts), {"pageCount": len(reader.pages)}
+    return pages, {"pageCount": len(reader.pages), "imagePages": image_pages}
+
+
+def format_pdf_pages(pages: list[str]) -> str:
+    parts: list[str] = []
+    count = 0
+    for number, text in enumerate(pages, 1):
+        count = _append_text(parts, f"--- Page {number} ---", count)
+        count = _append_text(parts, text, count)
+    return "\n".join(parts)
+
+
+def _extract_pdf(data: bytes) -> tuple[str, dict[str, Any]]:
+    pages, metadata = extract_pdf_pages(data)
+    return format_pdf_pages(pages), metadata
 
 
 def _extract_docx(data: bytes) -> tuple[str, dict[str, int]]:

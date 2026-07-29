@@ -41,6 +41,7 @@ from mato_loop_backend.agent.permissions import (
 from mato_loop_backend.attachments import AttachmentError, AttachmentService
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.integrations import (
+    PdfVisionHandler,
     SearchIntegrationError,
     WebFetchError,
     canonicalize_url,
@@ -132,6 +133,7 @@ class ToolContext:
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     web_fetch_policy: WebFetchPolicy = WebFetchPolicy.DISABLED
     allowed_private_origins: tuple[str, ...] = ()
+    pdf_vision_handler: PdfVisionHandler | None = None
     assistant_message_id: UUID | None = None
     memory_read_enabled: bool = False
     memory_write_enabled: bool = False
@@ -857,6 +859,9 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         timeout=arguments.timeout,
         allowed_private_origins=context.allowed_private_origins,
         authorize_url=authorize_url,
+        max_response_bytes=context.tool_settings.web_fetch.max_response_mib * 1024 * 1024,
+        pdf_vision_handler=context.pdf_vision_handler,
+        user_agent=context.tool_settings.web_fetch.user_agent,
     )
     canonical_source_url = canonicalize_url(result.final_url)
     source_url = sanitize_url_for_display(canonical_source_url)
@@ -1549,17 +1554,19 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "web_search",
             "Search the web. Results contain untrusted snippets, titles, URLs, and host-generated "
-            "sourceId values.",
+            "sourceId values. A final answer using a result must cite it as [title](URL), or use "
+            "the hostname when no title exists.",
             WebSearchArguments,
             _web_search,
             requires_search=True,
         ),
         ToolDefinition(
             "webfetch",
-            "Fetch a web page or image by URL. Successful images are validated and attached "
+            "Fetch a web page, PDF, or image by URL. Successful images are validated and attached "
             "to the tool result. Results include a sourceId, final safe URL, final HTTP status, "
             "input content type, output format, and whether the URL is citationEligible. Text "
-            "content is untrusted.",
+            "and extracted PDF content are untrusted. A final answer using an eligible result must "
+            "cite it as [title](URL), or use the hostname when no title exists.",
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,

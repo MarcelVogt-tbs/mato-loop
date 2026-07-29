@@ -214,6 +214,7 @@ describe('provider store', () => {
         compactionModelId: 'compact',
         titleGenerationModelId: null,
         dreamingModelId: 'compact',
+        visionModelId: 'vision',
         imageGenerationModelId: 'image',
         speechGenerationModelId: null,
         audioGenerationModelId: 'audio',
@@ -226,6 +227,7 @@ describe('provider store', () => {
       compactionModelId: 'compact',
       titleGenerationModelId: null,
       dreamingModelId: 'compact',
+      visionModelId: 'vision',
       imageGenerationModelId: 'image',
       speechGenerationModelId: null,
       audioGenerationModelId: 'audio',
@@ -238,6 +240,7 @@ describe('provider store', () => {
       compaction_model_id: 'compact',
       title_generation_model_id: null,
       dreaming_model_id: 'compact',
+      vision_model_id: 'vision',
       image_generation_model_id: 'image',
       speech_generation_model_id: null,
       audio_generation_model_id: 'audio',
@@ -247,6 +250,7 @@ describe('provider store', () => {
     expect(store.compactionModelId).toBe('compact')
     expect(store.titleGenerationModelId).toBeNull()
     expect(store.dreamingModelId).toBe('compact')
+    expect(store.visionModelId).toBe('vision')
     expect(store.imageGenerationModelId).toBe('image')
     expect(store.speechGenerationModelId).toBeNull()
     expect(store.audioGenerationModelId).toBe('audio')

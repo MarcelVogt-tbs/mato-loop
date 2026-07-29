@@ -61,6 +61,33 @@
       <q-separator />
 
       <q-card-section class="default-model-setting">
+        <q-avatar rounded color="blue-grey" text-color="white" icon="document_scanner" />
+        <div class="default-model-setting__description">
+          <div class="text-subtitle1 text-weight-bold">Bildanalyse</div>
+          <div class="text-body2 app-muted">
+            Liest bildbasierte PDF-Seiten, wenn das aktive Agentmodell keine Bilder verarbeiten kann.
+          </div>
+        </div>
+        <div>
+          <q-select
+            v-model="form.visionModelId"
+            outlined
+            clearable
+            emit-value
+            map-options
+            options-dense
+            label="Visionmodell"
+            :display-value="form.visionModelId ? undefined : 'Kein Standardmodell'"
+            :options="providers.visionModelOptions"
+            hint="Nur verfügbare Chatmodelle mit Bildeingabe."
+            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+          />
+        </div>
+      </q-card-section>
+
+      <q-separator />
+
+      <q-card-section class="default-model-setting">
         <q-avatar rounded color="secondary" text-color="white" icon="compress" />
         <div class="default-model-setting__description">
           <div class="text-subtitle1 text-weight-bold">Kontextkomprimierung</div>
@@ -223,6 +250,7 @@ const form = reactive({
   compactionModelId: null,
   titleGenerationModelId: null,
   dreamingModelId: null,
+  visionModelId: null,
   imageGenerationModelId: null,
   speechGenerationModelId: null,
   audioGenerationModelId: null,
@@ -233,6 +261,7 @@ const changed = computed(() => (
   || form.compactionModelId !== providers.compactionModelId
   || form.titleGenerationModelId !== providers.titleGenerationModelId
   || form.dreamingModelId !== providers.dreamingModelId
+  || form.visionModelId !== providers.visionModelId
   || mediaSettings.some((setting) => form[setting.field] !== providers[setting.field])
 ))
 
@@ -241,6 +270,7 @@ function assignForm() {
   form.compactionModelId = providers.compactionModelId
   form.titleGenerationModelId = providers.titleGenerationModelId
   form.dreamingModelId = providers.dreamingModelId
+  form.visionModelId = providers.visionModelId
   for (const setting of mediaSettings) form[setting.field] = providers[setting.field]
 }
 

@@ -26,7 +26,10 @@ from mato_loop_backend.privacy import (
 )
 from mato_loop_backend.providers import codex_oauth, lemonade, openai_compatible
 from mato_loop_backend.providers.base import (
+    MAX_PROVIDER_IMAGE_BYTES,
+    MAX_PROVIDER_IMAGES,
     ProviderError,
+    ProviderImageInput,
     ProviderMedia,
     ProviderRequest,
     ProviderResult,
@@ -133,6 +136,7 @@ async def _provider_projection(
     supports_image_input: bool,
     input_trust_level: TrustLevel,
     target_trust_level: TrustLevel,
+    image_inputs: list[ProviderImageInput] | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProviderMedia]]:
     projected_messages: list[dict[str, Any]] = []
     for message in messages:
@@ -156,13 +160,10 @@ async def _provider_projection(
         )
         for item in selected
     ]
-    if not selected:
-        return projected_messages, media
-    if not any(item.allow_raw for item in selected):
-        return projected_messages, media
-    storage = AttachmentStorage()
+    storage = AttachmentStorage() if any(item.allow_raw for item in selected) else None
 
     async def materialize(position: int, attachment: dict[str, Any]) -> None:
+        assert storage is not None
         mime_type = attachment.get("mime_type")
         size_bytes = attachment.get("size_bytes")
         sha256 = attachment.get("sha256")
@@ -187,13 +188,55 @@ async def _provider_projection(
         media[position].status = "ready"
 
     for position, item in enumerate(selected):
-        if item.allow_raw:
+        if item.allow_raw and storage is not None:
             await materialize(position, item.attachment)
     unavailable_count = sum(item.status != "ready" for item in media)
     if unavailable_count:
         logger.warning(
             "%s attachment file(s) could not be sent to the provider", unavailable_count
         )
+    direct_inputs = image_inputs or []
+    if direct_inputs:
+        if selected:
+            raise ProviderError(
+                "Direct and persisted image inputs cannot be combined",
+                code="provider.configurationInvalid",
+            )
+        if len(direct_inputs) > MAX_PROVIDER_IMAGES:
+            raise ProviderError(
+                "Too many direct image inputs", code="provider.modelCapabilityUnavailable"
+            )
+        if target_trust_level == TrustLevel.PUBLIC and input_trust_level == TrustLevel.PRIVATE:
+            raise ProviderError(
+                "Private images cannot be sent to a public model",
+                code="provider.modelCapabilityUnavailable",
+            )
+        total_bytes = 0
+        for image in direct_inputs:
+            if not 0 <= image.message_index < len(projected_messages):
+                raise ProviderError(
+                    "Invalid direct image message index", code="provider.configurationInvalid"
+                )
+            try:
+                validated = validate_image(image.data, image.mime_type)
+            except AttachmentError as exc:
+                raise ProviderError(
+                    "Invalid direct image input", code="provider.invalidResponse"
+                ) from exc
+            total_bytes += validated.size_bytes
+            if total_bytes > MAX_PROVIDER_IMAGE_BYTES:
+                raise ProviderError(
+                    "Direct image inputs are too large", code="provider.responseTooLarge"
+                )
+            encoded = base64.b64encode(image.data).decode("ascii")
+            media.append(
+                ProviderMedia(
+                    message_index=image.message_index,
+                    mime_type=validated.mime_type,
+                    data_url=f"data:{validated.mime_type};base64,{encoded}",
+                    status="ready",
+                )
+            )
     return projected_messages, media
 
 
@@ -291,6 +334,7 @@ class ProviderService:
         max_output_tokens: int | None = None,
         target_trust_level: TrustLevel | None = None,
         pseudonymization_enabled: bool | None = None,
+        image_inputs: list[ProviderImageInput] | None = None,
     ) -> ProviderResult:
         if model.provider_id != provider.id:
             raise ProviderError(
@@ -341,6 +385,7 @@ class ProviderService:
             supports_image_input=model.supports_image_input,
             input_trust_level=input_trust_level,
             target_trust_level=model_trust_level,
+            image_inputs=image_inputs,
         )
         pseudonymizer = RequestPseudonymizer() if use_pseudonymization else None
         if pseudonymizer is not None:

@@ -31,6 +31,11 @@ _MODEL_RUNTIME_KEYS = {
     "pseudonymization_enabled": "pseudonymizationEnabled",
 }
 
+DEFAULT_WEBFETCH_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+)
+
 
 class SettingsScope(StrEnum):
     GLOBAL = "global"
@@ -307,6 +312,18 @@ def canonicalize_http_origin(value: str) -> str:
 
 class WebFetchSettings(BaseModel):
     enabled: bool = True
+    user_agent: str = Field(
+        default=DEFAULT_WEBFETCH_USER_AGENT,
+        min_length=1,
+        max_length=512,
+        validation_alias=AliasChoices("user_agent", "userAgent"),
+    )
+    max_response_mib: int = Field(
+        default=64,
+        ge=1,
+        le=256,
+        validation_alias=AliasChoices("max_response_mib", "maxResponseMiB"),
+    )
     default_policy: WebFetchPolicy = Field(
         default=WebFetchPolicy.AUTO_PUBLIC,
         validation_alias=AliasChoices("default_policy", "defaultPolicy"),
@@ -315,6 +332,15 @@ class WebFetchSettings(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices("allowed_private_origins", "allowedPrivateOrigins"),
     )
+
+    @field_validator("user_agent", mode="before")
+    @classmethod
+    def validate_user_agent(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if any(not 32 <= ord(character) <= 126 for character in value):
+            raise ValueError("user_agent must contain visible ASCII characters only")
+        return value.strip()
 
     @field_validator("allowed_private_origins", mode="before")
     @classmethod
@@ -419,6 +445,7 @@ class AiSettings(SettingsDocument):
     compaction_model_id: UUID | None = None
     title_generation_model_id: UUID | None = None
     dreaming_model_id: UUID | None = None
+    vision_model_id: UUID | None = None
     image_generation_model_id: UUID | None = None
     speech_generation_model_id: UUID | None = None
     audio_generation_model_id: UUID | None = None

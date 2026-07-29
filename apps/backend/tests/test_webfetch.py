@@ -6,9 +6,12 @@ import ipaddress
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from io import BytesIO
 from unittest.mock import AsyncMock
 
 import pytest
+from PIL import Image
+from pypdf import PdfWriter
 
 from mato_loop_backend.integrations import (
     WebFetchError,
@@ -76,6 +79,20 @@ async def _error_code(awaitable: Awaitable[object]) -> str:
         await awaitable
     assert str(exc_info.value) == exc_info.value.code
     return exc_info.value.code
+
+
+def _blank_pdf() -> bytes:
+    buffer = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=100)
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def _scan_pdf() -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (200, 100), "white").save(buffer, format="PDF")
+    return buffer.getvalue()
 
 
 @pytest.mark.parametrize(
@@ -196,8 +213,12 @@ async def test_dns_is_pinned_and_request_headers_are_safe(monkeypatch) -> None:
 
     assert result.content == "pinned"
     assert seen_headers["host"] == f"pinned.test:{port}"
-    assert seen_headers["user-agent"] == "MatoLoop-WebFetch/1.0"
+    assert seen_headers["user-agent"] == (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+    )
     assert seen_headers["accept-encoding"] == "gzip, deflate"
+    assert "application/pdf" in seen_headers["accept"]
     assert {"authorization", "cookie", "referer"}.isdisjoint(seen_headers)
 
 
@@ -379,6 +400,77 @@ async def test_supported_image_returns_bytes_and_safe_filename() -> None:
     assert result.image_filename == "payload.png"
 
 
+async def test_text_pdf_is_extracted_without_vision(monkeypatch) -> None:
+    vision = AsyncMock(side_effect=AssertionError("Vision must not be used"))
+    monkeypatch.setattr(
+        webfetch,
+        "extract_pdf_pages",
+        lambda _data: (["Manual text"], {"pageCount": 1, "imagePages": []}),
+    )
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(b"%PDF-1.7 fake", headers={"Content-Type": "application/pdf"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(
+            f"{_origin(port)}/manual.pdf",
+            allowed_private_origins=(_origin(port),),
+            pdf_vision_handler=vision,
+        )
+
+    assert result.content_type == "application/pdf"
+    assert result.output_format == "text"
+    assert result.content == "--- Page 1 ---\nManual text"
+    vision.assert_not_awaited()
+
+
+async def test_scan_pdf_requires_vision_and_uses_rendered_pages() -> None:
+    document = _scan_pdf()
+    seen: list[tuple[int, bytes]] = []
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(document, headers={"Content-Type": "application/pdf"})
+
+    async def vision(
+        pages: list[tuple[int, bytes]], private_content: bool
+    ) -> dict[int, str]:
+        assert private_content is True
+        seen.extend(pages)
+        return {1: "Recognized scan text"}
+
+    async with _server(responder) as port:
+        url = f"{_origin(port)}/scan.pdf"
+        allowed = (_origin(port),)
+        assert await _error_code(
+            fetch_web(url, allowed_private_origins=allowed)
+        ) == "webfetch.pdfVisionUnavailable"
+        result = await fetch_web(
+            url,
+            allowed_private_origins=allowed,
+            pdf_vision_handler=vision,
+        )
+
+    assert len(seen) == 1
+    assert seen[0][0] == 1
+    assert seen[0][1].startswith(b"\xff\xd8\xff")
+    assert result.content == "--- Page 1 ---\nRecognized scan text"
+
+
+async def test_blank_pdf_does_not_require_vision() -> None:
+    document = _blank_pdf()
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(document, headers={"Content-Type": "application/pdf"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(
+            f"{_origin(port)}/blank.pdf",
+            allowed_private_origins=(_origin(port),),
+        )
+
+    assert result.content == "--- Page 1 ---"
+
+
 @pytest.mark.parametrize(
     ("content_type", "body", "code"),
     [
@@ -400,24 +492,31 @@ async def test_rejects_unsupported_or_spoofed_binary_content(
 
 
 async def test_content_length_is_rejected_before_body() -> None:
+    limit = 1_024
+
     async def responder(target: str, headers: dict[str, str]) -> bytes:
         return _response(
             headers={
                 "Content-Type": "text/plain",
-                "Content-Length": str(webfetch.MAX_RESPONSE_BYTES + 1),
+                "Content-Length": str(limit + 1),
             },
             content_length=False,
         )
 
     async with _server(responder) as port:
         assert await _error_code(
-            fetch_web(f"{_origin(port)}/large", allowed_private_origins=(_origin(port),))
+            fetch_web(
+                f"{_origin(port)}/large",
+                allowed_private_origins=(_origin(port),),
+                max_response_bytes=limit,
+            )
         ) == "webfetch.responseTooLarge"
 
 
 @pytest.mark.parametrize("compressed", [False, True])
 async def test_streamed_and_decompressed_bodies_are_limited(compressed: bool) -> None:
-    body = b"x" * (webfetch.MAX_RESPONSE_BYTES + 1)
+    limit = 1_024
+    body = b"x" * (limit + 1)
     wire_body = gzip.compress(body) if compressed else body
 
     async def responder(target: str, headers: dict[str, str]) -> bytes:
@@ -432,7 +531,11 @@ async def test_streamed_and_decompressed_bodies_are_limited(compressed: bool) ->
 
     async with _server(responder) as port:
         assert await _error_code(
-            fetch_web(f"{_origin(port)}/large", allowed_private_origins=(_origin(port),))
+            fetch_web(
+                f"{_origin(port)}/large",
+                allowed_private_origins=(_origin(port),),
+                max_response_bytes=limit,
+            )
         ) == "webfetch.responseTooLarge"
 
 

@@ -16,6 +16,7 @@ from mato_loop_backend.providers import lemonade
 from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import (
     ProviderError,
+    ProviderImageInput,
     ProviderResult,
     PublicReasoning,
     ToolCall,
@@ -486,6 +487,32 @@ async def test_projection_sends_current_user_images_but_not_unreferenced_history
     assert len(media) == 1
     assert media[0].message_index == 1
     assert base64.b64decode(media[0].data_url.split(",", 1)[1]) == current_data
+
+
+async def test_projection_accepts_bounded_transient_images() -> None:
+    data = _png_bytes()
+
+    projected, media = await service_module._provider_projection(
+        [{"role": "user", "content": "PDF page 1"}],
+        supports_image_input=True,
+        input_trust_level=TrustLevel.PUBLIC,
+        target_trust_level=TrustLevel.PUBLIC,
+        image_inputs=[ProviderImageInput(0, data, "image/png")],
+    )
+
+    assert projected == [{"role": "user", "content": "PDF page 1"}]
+    assert len(media) == 1
+    assert media[0].message_index == 0
+    assert base64.b64decode(media[0].data_url.split(",", 1)[1]) == data
+
+    with pytest.raises(ProviderError, match="Private images"):
+        await service_module._provider_projection(
+            [{"role": "user", "content": "PDF page 1"}],
+            supports_image_input=True,
+            input_trust_level=TrustLevel.PRIVATE,
+            target_trust_level=TrustLevel.PUBLIC,
+            image_inputs=[ProviderImageInput(0, data, "image/png")],
+        )
 
 
 async def test_session_read_result_reactivates_historical_image(monkeypatch) -> None:

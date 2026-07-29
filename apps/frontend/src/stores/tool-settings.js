@@ -1,8 +1,11 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { DEFAULT_WEBFETCH_USER_AGENT } from 'src/utils/webfetch'
 
 const defaultWebFetch = () => ({
   enabled: true,
+  userAgent: DEFAULT_WEBFETCH_USER_AGENT,
+  maxResponseMiB: 64,
   defaultPolicy: 'auto_public',
   allowedPrivateOrigins: []
 })

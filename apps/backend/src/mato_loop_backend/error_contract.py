@@ -43,9 +43,17 @@ _MESSAGES = {
     "session.messageNotFound": "The chat message was not found.",
     "session.retryUnavailable": "The failed response can no longer be retried.",
     "tool.executionFailed": "The tool execution failed.",
-    "tool.executionInterrupted": "The tool execution was interrupted.",
+    "tool.executionInterrupted": (
+        "The tool execution was interrupted and its outcome is unknown. Do not infer success or "
+        "failure without verification."
+    ),
     "validation.invalid": "The request contains invalid data.",
     "validation.required": "A required value is missing.",
+    "webfetch.pdfInvalid": "The PDF document is invalid or unsupported.",
+    "webfetch.pdfRenderFailed": "The PDF page could not be rendered.",
+    "webfetch.pdfVisionFailed": "The PDF page could not be read by the vision model.",
+    "webfetch.pdfVisionUnavailable": "No eligible vision model is available for this PDF.",
+    "webfetch.responseLimitInvalid": "The web response size limit is invalid.",
 }
 
 _NAMESPACE_MESSAGES = {

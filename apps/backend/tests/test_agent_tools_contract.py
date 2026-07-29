@@ -142,6 +142,7 @@ def test_webfetch_schema_describes_verified_image_attachments() -> None:
 
     assert "Successful images are validated and attached" in webfetch["description"]
     assert "whether the URL is citationEligible" in webfetch["description"]
+    assert "cite it as [title](URL)" in webfetch["description"]
 
 
 def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
@@ -1184,7 +1185,10 @@ def test_tool_schemas_remove_annotative_titles_recursively() -> None:
 async def test_webfetch_applies_the_effective_policy(
     tmp_path, monkeypatch, policy, allowed_origins, expected_asks
 ) -> None:
+    fetch_kwargs = {}
+
     async def fake_fetch(url, **kwargs):
+        fetch_kwargs.update(kwargs)
         await kwargs["authorize_url"]("https://example.com/page?token=secret")
         return WebFetchResult(
             final_url=url,
@@ -1208,6 +1212,7 @@ async def test_webfetch_applies_the_effective_policy(
         web_fetch_policy=policy,
         allowed_private_origins=allowed_origins,
     )
+    context.tool_settings.web_fetch.user_agent = "ConfiguredBrowser/1.0"
 
     result = await tool_registry.execute(call, context)
 
@@ -1236,6 +1241,9 @@ async def test_webfetch_applies_the_effective_policy(
         ]
     }
     assert context.ask_handler.await_count == expected_asks
+    assert fetch_kwargs["max_response_bytes"] == 64 * 1024 * 1024
+    assert fetch_kwargs["pdf_vision_handler"] is None
+    assert fetch_kwargs["user_agent"] == "ConfiguredBrowser/1.0"
     if expected_asks:
         request = context.ask_handler.await_args.args[0]
         assert request.capability == "network.fetch"

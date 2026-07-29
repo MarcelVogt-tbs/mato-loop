@@ -56,6 +56,11 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         },
         "webFetch": {
             "enabled": True,
+            "userAgent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+            ),
+            "maxResponseMiB": 64,
             "defaultPolicy": "auto_public",
             "allowedPrivateOrigins": [],
         },
@@ -93,6 +98,8 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
             },
             "webFetch": {
                 "enabled": True,
+                "userAgent": "ConfiguredBrowser/1.0",
+                "maxResponseMiB": 96,
                 "defaultPolicy": "auto_allowed",
                 "allowedPrivateOrigins": [
                     "HTTPS://Example.COM:443/",
@@ -112,6 +119,8 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
 
     assert result["webFetch"] == {
         "enabled": True,
+        "userAgent": "ConfiguredBrowser/1.0",
+        "maxResponseMiB": 96,
         "defaultPolicy": "auto_allowed",
         "allowedPrivateOrigins": [
             "https://example.com",
@@ -128,6 +137,7 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     assert saved.web_fetch.allowed_private_origins == result["webFetch"][
         "allowedPrivateOrigins"
     ]
+    assert saved.web_fetch.user_agent == "ConfiguredBrowser/1.0"
     assert saved.web_search.primary_provider == f"searxng:{integration.id}"
     assert saved.web_search.fallback_provider == "no_key"
     assert saved.generate_image.policy == "ask"
@@ -205,5 +215,38 @@ def test_tool_settings_reject_invalid_media_timeout(timeout: float) -> None:
                     "allowedPrivateOrigins": [],
                 },
                 "generateImage": {"policy": "ask", "timeoutSeconds": timeout},
+            }
+        )
+
+
+@pytest.mark.parametrize("limit", [0, 257, 1.5])
+def test_tool_settings_reject_invalid_webfetch_limit(limit: float) -> None:
+    with pytest.raises(ValidationError):
+        ToolSettingsRequest.model_validate(
+            {
+                "webFetch": {
+                    "enabled": True,
+                    "maxResponseMiB": limit,
+                    "defaultPolicy": "ask",
+                    "allowedPrivateOrigins": [],
+                }
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    ["", "   ", "Mozilla/5.0\r\nX-Injected: true", "Mözilla/5.0", "x" * 513],
+)
+def test_tool_settings_reject_invalid_webfetch_user_agent(user_agent: str) -> None:
+    with pytest.raises(ValidationError):
+        ToolSettingsRequest.model_validate(
+            {
+                "webFetch": {
+                    "enabled": True,
+                    "userAgent": user_agent,
+                    "defaultPolicy": "ask",
+                    "allowedPrivateOrigins": [],
+                }
             }
         )

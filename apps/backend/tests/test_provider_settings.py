@@ -560,6 +560,45 @@ async def test_capability_defaults_require_matching_models(monkeypatch) -> None:
     assert exc_info.value.field == "defaultModelId"
 
 
+async def test_vision_default_requires_image_input(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    text = ModelConfig(provider_id=provider.id, model_id="text")
+    vision = ModelConfig(
+        provider_id=provider.id,
+        model_id="vision",
+        supports_image_input=True,
+        supports_tools=False,
+    )
+    settings = AiSettings(providers=[provider], models=[text, vision])
+    _mock_settings(monkeypatch, settings)
+
+    result = await set_default_models(
+        DefaultModelsRequest(
+            default_model_id=None,
+            compaction_model_id=None,
+            title_generation_model_id=None,
+            vision_model_id=vision.id,
+        ),
+        _db(),
+    )
+
+    assert settings.vision_model_id == vision.id
+    assert result["visionModelId"] == str(vision.id)
+
+    with pytest.raises(ApiError) as exc_info:
+        await set_default_models(
+            DefaultModelsRequest(
+                default_model_id=None,
+                compaction_model_id=None,
+                title_generation_model_id=None,
+                vision_model_id=text.id,
+            ),
+            _db(),
+        )
+    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
+    assert exc_info.value.field == "visionModelId"
+
+
 async def test_media_default_rejects_unsupported_provider_adapter(monkeypatch) -> None:
     provider = LlmProviderConfig(name="OpenAI", adapter_type="openai-compatible")
     image = ModelConfig(

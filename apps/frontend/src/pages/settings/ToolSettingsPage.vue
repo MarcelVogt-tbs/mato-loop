@@ -103,6 +103,29 @@
             hint="Modelle mit „Globalen Standard übernehmen“ verwenden diese Policy."
           />
 
+          <q-input
+            v-model.trim="form.userAgent"
+            outlined
+            maxlength="512"
+            label="User-Agent"
+            hint="Browserkennung, die Webfetch bei HTTP-Anfragen sendet."
+            :rules="[userAgentRule]"
+            lazy-rules
+          />
+
+          <q-input
+            v-model.number="form.maxResponseMiB"
+            outlined
+            type="number"
+            min="1"
+            max="256"
+            suffix="MiB"
+            label="Maximale Antwortgröße"
+            hint="Gilt gemeinsam für Webseiten, PDFs, Text und Bilder."
+            :rules="[responseLimitRule]"
+            lazy-rules
+          />
+
           <q-banner v-if="form.defaultPolicy === 'auto_allowed'" rounded class="app-surface-tonal">
             <template #avatar><q-icon name="warning_amber" color="warning" /></template>
             Erlaubte private Origins können ohne einzelne Rückfrage abgerufen werden. Trage nur vertrauenswürdige interne Dienste ein.
@@ -251,7 +274,11 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useToolSettingsStore } from 'stores/tool-settings'
-import { WEBFETCH_DEFAULT_POLICY_OPTIONS, normalizePrivateOrigin } from 'src/utils/webfetch'
+import {
+  DEFAULT_WEBFETCH_USER_AGENT,
+  WEBFETCH_DEFAULT_POLICY_OPTIONS,
+  normalizePrivateOrigin
+} from 'src/utils/webfetch'
 
 defineOptions({ name: 'ToolSettingsPage' })
 
@@ -304,6 +331,8 @@ const form = reactive({
     providerOptions: []
   },
   enabled: true,
+  userAgent: DEFAULT_WEBFETCH_USER_AGENT,
+  maxResponseMiB: 64,
   defaultPolicy: 'auto_public',
   allowedPrivateOrigins: [],
   generateImage: { policy: 'disabled', timeoutSeconds: 300 },
@@ -353,6 +382,22 @@ function timeoutRule(value) {
     || 'Das Zeitlimit muss zwischen 10 und 3600 Sekunden liegen.'
 }
 
+function responseLimitRule(value) {
+  return (Number.isInteger(value) && value >= 1 && value <= 256)
+    || 'Die Antwortgröße muss zwischen 1 und 256 MiB liegen.'
+}
+
+function userAgentRule(value) {
+  const valid = typeof value === 'string'
+    && value.length >= 1
+    && value.length <= 512
+    && [...value].every((character) => {
+      const code = character.charCodeAt(0)
+      return code >= 32 && code <= 126
+    })
+  return valid || 'Der User-Agent muss aus 1 bis 512 sichtbaren ASCII-Zeichen bestehen.'
+}
+
 function originRule(value) {
   const result = normalizePrivateOrigin(value)
   return result.valid || result.message
@@ -370,6 +415,8 @@ async function save() {
     },
     webFetch: {
       enabled: form.enabled,
+      userAgent: form.userAgent,
+      maxResponseMiB: form.maxResponseMiB,
       defaultPolicy: form.defaultPolicy,
       allowedPrivateOrigins
     },

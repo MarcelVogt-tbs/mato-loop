@@ -26,7 +26,7 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolSettings,
 )
-from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig, TrustLevel
 
 SOURCE_ID = "src-test"
 SOURCE_URL = "https://example.test/source"
@@ -61,15 +61,36 @@ async def _runtime_setup(
     max_research_tool_calls: int = 8,
     max_model_requests: int = 10,
     search_policy: WebSearchPolicy = WebSearchPolicy.REQUIRED,
+    active_supports_image_input: bool = False,
+    vision_fallback: bool = False,
+    vision_fallback_private: bool = False,
 ):
     provider = LlmProviderConfig(
         name="Local",
         adapter_type="openai-compatible",
         config={"base_url": "https://llm.example.test/v1"},
     )
-    model = ModelConfig(provider_id=provider.id, model_id="local-model")
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="local-model",
+        supports_image_input=active_supports_image_input,
+    )
+    vision_model = (
+        ModelConfig(
+            provider_id=provider.id,
+            model_id="vision-model",
+            supports_image_input=True,
+            supports_tools=False,
+            trust_level=(TrustLevel.PRIVATE if vision_fallback_private else None),
+        )
+        if vision_fallback
+        else None
+    )
     ai_settings = AiSettings(
-        providers=[provider], models=[model], default_model_id=model.id
+        providers=[provider],
+        models=[item for item in (model, vision_model) if item is not None],
+        default_model_id=model.id,
+        vision_model_id=vision_model.id if vision_model is not None else None,
     )
     runtime_settings = AgentRuntimeSettings(
         max_steps=10,
@@ -446,6 +467,87 @@ async def test_required_search_stops_after_two_semantic_retries(monkeypatch) -> 
     assert len(requests) == 3
     assert db.add.call_count == 0
     assert all(event["type"] != "message.delta" for event in events)
+
+
+@pytest.mark.parametrize(
+    ("active_supports_image_input", "expected_model"),
+    [(True, "local-model"), (False, "vision-model")],
+)
+async def test_pdf_vision_prefers_active_model_then_configured_fallback(
+    monkeypatch, active_supports_image_input: bool, expected_model: str
+) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="fetch-pdf",
+                        name="webfetch",
+                        arguments={"url": "https://example.test/scan.pdf"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content='[{"page":1,"text":"Scan text"}]'),
+            ProviderResult(content="Fertige Antwort", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        active_supports_image_input=active_supports_image_input,
+        vision_fallback=True,
+    )
+
+    async def execute(_call, context, _tool):
+        assert context.pdf_vision_handler is not None
+        extracted = await context.pdf_vision_handler([(1, b"jpeg")], False)
+        return ToolResult.json({"content": extracted[1]})
+
+    tool_registry._execute_definition.side_effect = execute
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 3
+    assert requests[1]["model"].model_id == expected_model
+    assert requests[1]["tool_choice"] == "none"
+    assert requests[1]["image_inputs"][0].message_index == 1
+    assert requests[1]["image_inputs"][0].data == b"jpeg"
+
+
+async def test_private_pdf_pages_skip_public_active_vision_model(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="fetch-pdf",
+                        name="webfetch",
+                        arguments={"url": "http://private.test/scan.pdf"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content='[{"page":1,"text":"Private scan text"}]'),
+            ProviderResult(content="Fertige Antwort", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        active_supports_image_input=True,
+        vision_fallback=True,
+        vision_fallback_private=True,
+    )
+
+    async def execute(_call, context, _tool):
+        assert context.pdf_vision_handler is not None
+        extracted = await context.pdf_vision_handler([(1, b"jpeg")], True)
+        return ToolResult.json({"content": extracted[1]})
+
+    tool_registry._execute_definition.side_effect = execute
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert requests[1]["model"].model_id == "vision-model"
+    assert requests[1]["input_trust_level"] == TrustLevel.PRIVATE
+    assert requests[1]["target_trust_level"] == TrustLevel.PRIVATE
 
 
 async def test_cancel_does_not_capture_required_gate_text(monkeypatch) -> None:

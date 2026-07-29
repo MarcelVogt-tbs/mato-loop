@@ -39,6 +39,13 @@ class ProviderMedia:
 
 
 @dataclass(slots=True)
+class ProviderImageInput:
+    message_index: int
+    data: bytes = field(repr=False)
+    mime_type: str = "image/jpeg"
+
+
+@dataclass(slots=True)
 class ProviderImageSelection:
     message_index: int
     attachment: dict[str, Any]

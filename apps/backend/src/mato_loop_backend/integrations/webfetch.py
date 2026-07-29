@@ -6,6 +6,7 @@ import html
 import ipaddress
 import re
 import socket
+import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from email.message import Message
@@ -19,8 +20,17 @@ from bs4.element import Tag
 from markdownify import markdownify
 from yarl import URL
 
-MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+from mato_loop_backend.attachment_processing import (
+    AttachmentProcessingError,
+    extract_pdf_pages,
+    format_pdf_pages,
+)
+from mato_loop_backend.settings.models import DEFAULT_WEBFETCH_USER_AGENT
+
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_REDIRECTS = 5
+PDF_RENDER_TIMEOUT_SECONDS = 30
+PDF_VISION_BATCH_PAGES = 4
 
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _IMAGE_TYPES = {
@@ -30,6 +40,7 @@ _IMAGE_TYPES = {
     "image/webp": ".webp",
 }
 _TEXT_TYPES = {"application/xhtml+xml", "text/html", "text/markdown", "text/plain"}
+_PDF_TYPE = "application/pdf"
 _METADATA_ADDRESSES = {
     ipaddress.ip_address("100.100.100.200"),
     ipaddress.ip_address("169.254.169.254"),
@@ -82,6 +93,11 @@ class WebFetchResult:
     title: str | None = None
     image_mime_type: str | None = None
     image_filename: str | None = None
+
+
+PdfVisionHandler = Callable[
+    [list[tuple[int, bytes]], bool], Awaitable[dict[int, str]]
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +268,18 @@ def _validate_address(
         raise _error("addressBlocked")
 
 
+def _target_is_private(target: _Target) -> bool:
+    return any(
+        address.is_loopback
+        or any(
+            address in network
+            for network in _PRIVATE_NETWORKS
+            if address.version == network.version
+        )
+        for address in target.addresses
+    )
+
+
 async def _resolve_addresses(
     host: str, port: int
 ) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
@@ -291,18 +319,22 @@ async def _validate_target(
     return _Target(url=url, host=host, port=port, addresses=addresses)
 
 
-async def _read_limited(response: aiohttp.ClientResponse) -> bytes:
-    if response.content_length is not None and response.content_length > MAX_RESPONSE_BYTES:
+async def _read_limited(
+    response: aiohttp.ClientResponse, max_response_bytes: int
+) -> bytes:
+    if response.content_length is not None and response.content_length > max_response_bytes:
         raise _error("responseTooLarge")
     body = bytearray()
     async for chunk in response.content.iter_chunked(64 * 1024):
-        if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+        if len(body) + len(chunk) > max_response_bytes:
             raise _error("responseTooLarge")
         body.extend(chunk)
     return bytes(body)
 
 
-async def _request_once(target: _Target, timeout: float) -> _Response:
+async def _request_once(
+    target: _Target, timeout: float, max_response_bytes: int, user_agent: str
+) -> _Response:
     resolver = _PinnedResolver(target.host, target.addresses)
     connector = aiohttp.TCPConnector(
         resolver=resolver,
@@ -311,10 +343,13 @@ async def _request_once(target: _Target, timeout: float) -> _Response:
         limit=1,
     )
     headers = {
-        "Accept": "text/html, text/markdown, text/plain, image/png, image/jpeg, image/webp, image/gif",
+        "Accept": (
+            "text/html, text/markdown, text/plain, application/pdf, "
+            "image/png, image/jpeg, image/webp, image/gif"
+        ),
         "Accept-Encoding": "gzip, deflate",
         "Connection": "close",
-        "User-Agent": "MatoLoop-WebFetch/1.0",
+        "User-Agent": user_agent,
     }
     try:
         async with aiohttp.ClientSession(
@@ -346,10 +381,10 @@ async def _request_once(target: _Target, timeout: float) -> _Response:
                     )
                 if (
                     response.content_length is not None
-                    and response.content_length > MAX_RESPONSE_BYTES
+                    and response.content_length > max_response_bytes
                 ):
                     raise _error("responseTooLarge")
-                body = await _read_limited(response)
+                body = await _read_limited(response, max_response_bytes)
                 content_type = response.headers.get("Content-Type", "").split(";", 1)[0]
                 return _Response(
                     status=response.status,
@@ -489,6 +524,21 @@ def _html_title(body: bytes, content_type: str, charset: str | None) -> str | No
     return normalize_source_title(title_tag.get_text(" ", strip=True))
 
 
+def _text_content_and_title(
+    response: _Response, format: str, base_url: URL
+) -> tuple[str, str | None]:
+    return (
+        _convert_text(
+            response.body,
+            response.content_type,
+            format,
+            response.charset,
+            base_url,
+        ),
+        _html_title(response.body, response.content_type, response.charset),
+    )
+
+
 def _valid_image_signature(content_type: str, body: bytes) -> bool:
     if content_type == "image/png":
         return body.startswith(b"\x89PNG\r\n\x1a\n")
@@ -499,6 +549,80 @@ def _valid_image_signature(content_type: str, body: bytes) -> bool:
     if content_type == "image/webp":
         return len(body) >= 12 and body.startswith(b"RIFF") and body[8:12] == b"WEBP"
     return False
+
+
+def _render_pdf_page(data: bytes, page_number: int) -> bytes:
+    try:
+        result = subprocess.run(
+            [
+                "pdftoppm",
+                "-f",
+                str(page_number),
+                "-l",
+                str(page_number),
+                "-singlefile",
+                "-scale-to",
+                "1600",
+                "-jpeg",
+                "-jpegopt",
+                "quality=85",
+                "-q",
+                "-",
+            ],
+            input=data,
+            capture_output=True,
+            check=False,
+            timeout=PDF_RENDER_TIMEOUT_SECONDS,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise _error("pdfRenderFailed") from exc
+    if result.returncode != 0 or not result.stdout.startswith(b"\xff\xd8\xff"):
+        raise _error("pdfRenderFailed")
+    return result.stdout
+
+
+async def _convert_pdf(
+    body: bytes,
+    vision_handler: PdfVisionHandler | None,
+    *,
+    private_content: bool,
+) -> str:
+    if b"%PDF-" not in body[:1_024]:
+        raise _error("contentTypeMismatch")
+    try:
+        pages, metadata = await asyncio.to_thread(extract_pdf_pages, body)
+    except AttachmentProcessingError as exc:
+        raise _error("pdfInvalid") from exc
+    missing = [
+        number
+        for number in metadata.get("imagePages", [])
+        if isinstance(number, int) and 1 <= number <= len(pages)
+    ]
+    if missing and vision_handler is None:
+        raise _error("pdfVisionUnavailable")
+    for offset in range(0, len(missing), PDF_VISION_BATCH_PAGES):
+        batch_numbers = missing[offset : offset + PDF_VISION_BATCH_PAGES]
+        rendered = []
+        for number in batch_numbers:
+            image = await asyncio.to_thread(_render_pdf_page, body, number)
+            rendered.append((number, image))
+        assert vision_handler is not None
+        extracted = await vision_handler(rendered, private_content)
+        if set(extracted) != set(batch_numbers) or any(
+            not isinstance(text, str) for text in extracted.values()
+        ):
+            raise _error("pdfVisionFailed")
+        for number, text in extracted.items():
+            pages[number - 1] = text
+        try:
+            format_pdf_pages(pages)
+        except AttachmentProcessingError as exc:
+            raise _error("pdfInvalid") from exc
+    try:
+        return format_pdf_pages(pages)
+    except AttachmentProcessingError as exc:
+        raise _error("pdfInvalid") from exc
 
 
 def _image_filename(url: URL, content_disposition: str | None, content_type: str) -> str:
@@ -521,7 +645,12 @@ def _image_filename(url: URL, content_disposition: str | None, content_type: str
     return filename
 
 
-def _build_result(target: _Target, response: _Response, format: str) -> WebFetchResult:
+async def _build_result(
+    target: _Target,
+    response: _Response,
+    format: str,
+    vision_handler: PdfVisionHandler | None,
+) -> WebFetchResult:
     if response.content_type in _IMAGE_TYPES:
         if not _valid_image_signature(response.content_type, response.body):
             raise _error("contentTypeMismatch")
@@ -537,22 +666,32 @@ def _build_result(target: _Target, response: _Response, format: str) -> WebFetch
                 target.url, response.content_disposition, response.content_type
             ),
         )
+    if response.content_type == _PDF_TYPE:
+        return WebFetchResult(
+            final_url=str(target.url),
+            content_type=response.content_type,
+            content=await _convert_pdf(
+                response.body,
+                vision_handler,
+                private_content=_target_is_private(target),
+            ),
+            is_image=False,
+            status_code=response.status,
+            output_format="text",
+        )
     if response.content_type not in _TEXT_TYPES:
         raise _error("contentTypeUnsupported")
+    content, title = await asyncio.to_thread(
+        _text_content_and_title, response, format, target.url
+    )
     return WebFetchResult(
         final_url=str(target.url),
         content_type=response.content_type,
-        content=_convert_text(
-            response.body,
-            response.content_type,
-            format,
-            response.charset,
-            target.url,
-        ),
+        content=content,
         is_image=False,
         status_code=response.status,
         output_format=format,
-        title=_html_title(response.body, response.content_type, response.charset),
+        title=title,
     )
 
 
@@ -562,11 +701,20 @@ async def fetch_web(
     timeout: float = 30,
     allowed_private_origins: tuple[str, ...] | list[str] = (),
     authorize_url: Callable[[str], Awaitable[None]] | None = None,
+    max_response_bytes: int = MAX_RESPONSE_BYTES,
+    pdf_vision_handler: PdfVisionHandler | None = None,
+    user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
 ) -> WebFetchResult:
     if format not in {"html", "markdown", "text"}:
         raise _error("formatUnsupported")
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 120:
         raise _error("timeoutInvalid")
+    if (
+        isinstance(max_response_bytes, bool)
+        or not isinstance(max_response_bytes, int)
+        or max_response_bytes < 1
+    ):
+        raise _error("responseLimitInvalid")
     origins = _allowed_origins(allowed_private_origins)
     loop = asyncio.get_running_loop()
     remaining = float(timeout)
@@ -579,7 +727,9 @@ async def fetch_web(
             started = loop.time()
             async with asyncio.timeout(max(remaining, 0.001)):
                 target = await _validate_target(current_url, origins)
-                response = await _request_once(target, remaining)
+                response = await _request_once(
+                    target, remaining, max_response_bytes, user_agent
+                )
             remaining -= loop.time() - started
             if response.status in _REDIRECT_STATUSES:
                 if not response.location:
@@ -594,7 +744,13 @@ async def fetch_web(
             if not 200 <= response.status < 300:
                 raise _error("requestFailed", statusCode=response.status)
             try:
-                return _build_result(target, response, format)
+                started = loop.time()
+                async with asyncio.timeout(max(remaining, 0.001)):
+                    result = await _build_result(
+                        target, response, format, pdf_vision_handler
+                    )
+                remaining -= loop.time() - started
+                return result
             except WebFetchError as exc:
                 if exc.params is None:
                     exc.params = {"statusCode": response.status}

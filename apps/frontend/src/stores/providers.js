@@ -15,6 +15,7 @@ function assignProviderPayload(store, payload) {
   store.compactionModelId = payload.compactionModelId ?? null
   store.titleGenerationModelId = payload.titleGenerationModelId ?? null
   store.dreamingModelId = payload.dreamingModelId ?? null
+  store.visionModelId = payload.visionModelId ?? null
   store.imageGenerationModelId = payload.imageGenerationModelId ?? null
   store.speechGenerationModelId = payload.speechGenerationModelId ?? null
   store.audioGenerationModelId = payload.audioGenerationModelId ?? null
@@ -28,6 +29,17 @@ function effectiveModelOptions(state, capability = 'chat', requiresTools = false
     return isModelEffective(model, provider, state.codex, state.enabled)
       && modelSupportsCapability(model, capability)
       ? [modelOption(model, provider, requiresTools && model.supportsTools === false)]
+      : []
+  })
+}
+
+function effectiveVisionModelOptions(state) {
+  return state.models.flatMap((model) => {
+    const provider = state.providers.find((item) => item.id === model.providerId)
+    return isModelEffective(model, provider, state.codex, state.enabled)
+      && modelSupportsCapability(model, 'chat')
+      && model.supportsImageInput === true
+      ? [modelOption(model, provider)]
       : []
   })
 }
@@ -53,6 +65,7 @@ export const useProviderStore = defineStore('providers', {
     compactionModelId: null,
     titleGenerationModelId: null,
     dreamingModelId: null,
+    visionModelId: null,
     imageGenerationModelId: null,
     speechGenerationModelId: null,
     audioGenerationModelId: null,
@@ -66,6 +79,7 @@ export const useProviderStore = defineStore('providers', {
   getters: {
     modelOptions: (state) => effectiveModelOptions(state),
     capabilityOptions: (state) => (capability) => effectiveModelOptions(state, capability),
+    visionModelOptions: (state) => effectiveVisionModelOptions(state),
     selectionOptions: (state) => (modelId, requiresTools = false, capability = 'chat') => {
       const options = effectiveModelOptions(state, capability, requiresTools)
       if (!modelId || options.some((option) => option.value === modelId)) return options
@@ -191,6 +205,7 @@ export const useProviderStore = defineStore('providers', {
       compactionModelId,
       titleGenerationModelId,
       dreamingModelId,
+      visionModelId,
       imageGenerationModelId,
       speechGenerationModelId,
       audioGenerationModelId,
@@ -201,6 +216,7 @@ export const useProviderStore = defineStore('providers', {
         compaction_model_id: compactionModelId || null,
         title_generation_model_id: titleGenerationModelId || null,
         dreaming_model_id: dreamingModelId || null,
+        vision_model_id: visionModelId || null,
         image_generation_model_id: imageGenerationModelId || null,
         speech_generation_model_id: speechGenerationModelId || null,
         audio_generation_model_id: audioGenerationModelId || null,

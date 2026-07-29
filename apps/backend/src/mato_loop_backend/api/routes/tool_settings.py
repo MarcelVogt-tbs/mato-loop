@@ -66,6 +66,8 @@ def tool_settings_payload(
         },
         "webFetch": {
             "enabled": settings.web_fetch.enabled,
+            "userAgent": settings.web_fetch.user_agent,
+            "maxResponseMiB": settings.web_fetch.max_response_mib,
             "defaultPolicy": settings.web_fetch.default_policy.value,
             "allowedPrivateOrigins": settings.web_fetch.allowed_private_origins,
         },

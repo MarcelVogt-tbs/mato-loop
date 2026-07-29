@@ -14,6 +14,7 @@ from mato_loop_backend.integrations.service import (
     SearchIntegrationService,
 )
 from mato_loop_backend.integrations.webfetch import (
+    PdfVisionHandler,
     WebFetchError,
     WebFetchResult,
     canonicalize_url,
@@ -26,6 +27,7 @@ from mato_loop_backend.integrations.webfetch import (
 __all__ = [
     "SearchIntegrationError",
     "IntegrationSettingsError",
+    "PdfVisionHandler",
     "SearchIntegrationService",
     "WebFetchError",
     "WebFetchResult",

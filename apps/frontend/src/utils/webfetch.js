@@ -6,6 +6,14 @@ export const WEBFETCH_POLICY_OPTIONS = Object.freeze([
   { value: 'auto_allowed', label: 'Öffentliche und erlaubte private Ziele automatisch' }
 ])
 
+export const DEFAULT_WEBFETCH_USER_AGENT = [
+  'Mozilla/5.0 (X11; Linux x86_64)',
+  'AppleWebKit/537.36',
+  '(KHTML, like Gecko)',
+  'Chrome/138.0.0.0',
+  'Safari/537.36'
+].join(' ')
+
 export const WEBFETCH_DEFAULT_POLICY_OPTIONS = WEBFETCH_POLICY_OPTIONS.filter(
   (option) => option.value !== 'inherit'
 )
