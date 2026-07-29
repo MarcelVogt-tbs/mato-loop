@@ -28,7 +28,8 @@ usage() {
         "  db [args]           Run Alembic" \
         "  lock backend        Update the backend lockfile" \
         "  check [target]      Check the backend and/or frontend" \
-        "  test [target]       Test the backend, frontend, or local RAG stack"
+        "  test [target]       Test the backend, frontend, or local RAG stack" \
+        "  eval-prompts [args] Run serial live prompt evaluations"
 }
 
 run_backend() {
@@ -101,6 +102,7 @@ case "${1:-}" in
         ;;
     check) run_target check "${2:-all}" ;;
     test) run_target test "${2:-all}" ;;
+    eval-prompts) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.prompt_eval "$@" ;;
     help|-h|--help|'') usage ;;
     *) usage >&2; exit 1 ;;
 esac
