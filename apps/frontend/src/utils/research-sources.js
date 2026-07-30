@@ -9,14 +9,3 @@ export function canonicalResearchSourceUrl(value) {
     return null
   }
 }
-
-export function linkedResearchSources(research) {
-  if (!Array.isArray(research?.linkedSources)) return []
-
-  return research.linkedSources.flatMap((source) => {
-    if (typeof source?.url !== 'string' || typeof source?.title !== 'string') return []
-    const url = canonicalResearchSourceUrl(source.url)
-    if (!url) return []
-    return [{ title: source.title.trim() || new URL(url).hostname, url }]
-  })
-}

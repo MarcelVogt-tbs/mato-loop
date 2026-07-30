@@ -83,10 +83,6 @@
               />
               <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
             </template>
-            <ResearchSources
-              v-if="message.role === 'assistant' && message.research"
-              :research="message.research"
-            />
             <MessageAttachments
               v-if="message.attachments?.length"
               class="q-mt-sm"
@@ -271,7 +267,6 @@ import ChatComposer from 'components/ChatComposer.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ReasoningPanel from 'components/ReasoningPanel.vue'
-import ResearchSources from 'components/ResearchSources.vue'
 import ToolCallItem from 'components/ToolCallItem.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
