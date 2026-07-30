@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   formatToolArguments,
+  memoryWriteContent,
   parseToolResult,
   toolIdentity,
   toolStatus,
@@ -101,6 +102,27 @@ describe('tool display', () => {
     expect(parsed.text).toContain('Sichtbarer Inhalt')
     expect(parsed.text).toContain('private')
     expect(parsed.text).toContain('cursor_updated_at')
+  })
+
+  it('shows the complete memory write content without exposing it as generic metadata', () => {
+    const content = 'Dauerhafter Kontext. '.repeat(1000)
+    const tool = {
+      name: 'memory_write',
+      arguments: { action: 'create', content, category: 'context' }
+    }
+
+    expect(memoryWriteContent(tool)).toBe(content)
+    expect(toolSummary(tool)).toContain('Dauerhafter Kontext')
+    expect(formatToolArguments(tool.arguments, tool.name)).not.toContain(content)
+    expect(formatToolArguments(tool.arguments, tool.name)).toContain('context')
+  })
+
+  it('shows persisted legacy memory previews', () => {
+    const content = 'Kurzes vollständiges Memory'
+    expect(memoryWriteContent({
+      name: 'memory_write',
+      arguments: { content: { preview: content, characters: content.length } }
+    })).toBe(content)
   })
 
   it('redacts sensitive arguments and bounds their output', () => {

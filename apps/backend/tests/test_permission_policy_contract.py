@@ -17,12 +17,14 @@ from mato_loop_backend.agent.permissions import (
     webfetch_permission,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.tools import ToolAction, tool_registry
 from mato_loop_backend.integrations import canonicalize_url
 from mato_loop_backend.models import AgentRun, ChatSession, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
+    IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
     ToolExecutionPolicy,
@@ -191,6 +193,132 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
     )
 
     assert decision == PermissionDecision.DENY
+
+
+async def test_runtime_uses_bound_integration_resource_policy(
+    tmp_path, monkeypatch
+) -> None:
+    session = _session()
+    integration_id = uuid4()
+    integration = IntegrationInstance(
+        id=integration_id,
+        name="Kalender",
+        integration_type="search",
+        adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    request = PermissionRequest(
+        capability="network.search",
+        resource_type="network_service",
+        resource_scope="calendar-search",
+        action_kind="calendar_search",
+        risk_level="medium",
+        title="Kalender durchsuchen?",
+        summary="Der Agent möchte einen Kalender durchsuchen.",
+        policy_integration_id=integration_id,
+        policy_resource_key="calendar:work",
+    )
+    tools = ToolSettings.model_validate(
+        {
+            "policies": {"network.search": "ask"},
+            "resourcePolicies": {
+                str(integration_id): {
+                    "calendar:work": {"network.search": "auto"}
+                }
+            },
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return (
+            IntegrationSettings(instances=[integration])
+            if settings_type is IntegrationSettings
+            else tools
+        )
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(
+        tool_registry,
+        "integration_resource_actions",
+        Mock(
+            return_value=(
+                ToolAction("network.search", "Suchen", ToolExecutionPolicy.AUTO),
+            )
+        ),
+    )
+    request_approval = AsyncMock(side_effect=AssertionError("Approval must not be requested"))
+    monkeypatch.setattr(AgentRuntime, "_request_approval", request_approval)
+
+    decision = await AgentRuntime._authorize(
+        _db_with_grants(),
+        AgentRun(id=uuid4(), session_id=session.id),
+        session,
+        ToolCall(id="search", name="calendar_search", arguments={}),
+        request,
+        _root_files(tmp_path, session),
+        AgentRuntimeSettings(),
+    )
+
+    assert decision == PermissionDecision.ALLOW
+    request_approval.assert_not_awaited()
+
+
+async def test_runtime_ignores_override_after_resource_contract_removal(
+    tmp_path, monkeypatch
+) -> None:
+    session = _session()
+    integration = IntegrationInstance(
+        name="Kalender",
+        integration_type="search",
+        adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    request = PermissionRequest(
+        capability="network.search",
+        resource_type="network_service",
+        resource_scope="calendar-search",
+        action_kind="calendar_search",
+        risk_level="medium",
+        title="Kalender durchsuchen?",
+        summary="Der Agent möchte einen Kalender durchsuchen.",
+        policy_integration_id=integration.id,
+        policy_resource_key="calendar:work",
+    )
+    tools = ToolSettings.model_validate(
+        {
+            "policies": {"network.search": "ask"},
+            "resourcePolicies": {
+                str(integration.id): {
+                    "calendar:work": {"network.search": "auto"}
+                }
+            },
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return (
+            IntegrationSettings(instances=[integration])
+            if settings_type is IntegrationSettings
+            else tools
+        )
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(
+        AgentRuntime, "_request_approval", AsyncMock(return_value="deny")
+    )
+
+    decision = await AgentRuntime._authorize(
+        _db_with_grants(),
+        AgentRun(id=uuid4(), session_id=session.id),
+        session,
+        ToolCall(id="search", name="calendar_search", arguments={}),
+        request,
+        _root_files(tmp_path, session),
+        AgentRuntimeSettings(),
+    )
+
+    assert decision == PermissionDecision.DENY
+    AgentRuntime._request_approval.assert_awaited_once()
 
 
 async def test_stale_or_missing_workspace_cannot_be_approved(tmp_path) -> None:

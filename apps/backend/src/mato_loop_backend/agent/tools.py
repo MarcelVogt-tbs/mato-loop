@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -55,7 +55,10 @@ from mato_loop_backend.integrations import (
     sanitize_url_for_display,
     search_web,
 )
-from mato_loop_backend.integrations.registry import effective_integration_contributions
+from mato_loop_backend.integrations.registry import (
+    effective_integration_contributions,
+    integration_adapter,
+)
 from mato_loop_backend.memory import MemoryService
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
 from mato_loop_backend.models import (
@@ -70,6 +73,7 @@ from mato_loop_backend.providers.media import MediaService, available_media_capa
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AiSettings,
+    IntegrationInstance,
     IntegrationSettings,
     MemorySettings,
     ModelCapability,
@@ -522,6 +526,29 @@ class ToolRegistry:
             raise ValueError(f"conflicting defaults for capability: {capability}")
         return next(iter(defaults), ToolExecutionPolicy.ASK)
 
+    def integration_resource_actions(
+        self, instance: IntegrationInstance
+    ) -> tuple[ToolAction, ...]:
+        adapter = integration_adapter(instance.integration_type, instance.adapter_type)
+        if adapter is None:
+            return ()
+        try:
+            contributions = adapter.contributions(instance)
+        except ValueError:
+            return ()
+        executable: dict[str, set[ToolAction]] = {}
+        for contribution in contributions.tools:
+            if contribution.authorization_factory is None:
+                continue
+            for action in contribution.actions:
+                executable.setdefault(action.capability, set()).add(action)
+        if any(
+            executable.get(action.capability) != {action}
+            for action in adapter.resource_actions
+        ):
+            return ()
+        return adapter.resource_actions
+
     async def execute(self, call: ToolCall, context: ToolContext) -> ToolResult:
         definition = self._definitions.get(call.name)
         if definition is None:
@@ -596,7 +623,10 @@ class ToolRegistry:
             if tool.source_id is not None and definition.actions:
                 if definition.authorization_factory is None:
                     return ToolResult.error("tool.unavailable")
-                requests = definition.authorization_factory(arguments, context)
+                requests = tuple(
+                    replace(request, policy_integration_id=UUID(tool.source_id))
+                    for request in definition.authorization_factory(arguments, context)
+                )
                 declared = {action.capability for action in definition.actions}
                 if {request.capability for request in requests} != declared:
                     return ToolResult.error("tool.unavailable")
@@ -1233,16 +1263,30 @@ def tool_execution_policy(
     settings: ToolSettings,
     capability: str,
     default: ToolExecutionPolicy = ToolExecutionPolicy.ASK,
+    *,
+    integration_id: UUID | None = None,
+    resource_key: str | None = None,
 ) -> ToolExecutionPolicy:
     configured = settings.policies.get(capability)
     if configured is not None:
-        return configured
-    field_name = _MEDIA_SETTINGS_FIELDS.get(capability)
-    if field_name is not None:
-        return getattr(settings, field_name).policy
-    if capability == "settings.agent_identity.update":
-        return settings.update_agent_identity.policy
-    return default
+        policy = configured
+    else:
+        field_name = _MEDIA_SETTINGS_FIELDS.get(capability)
+        if field_name is not None:
+            policy = getattr(settings, field_name).policy
+        elif capability == "settings.agent_identity.update":
+            policy = settings.update_agent_identity.policy
+        else:
+            policy = default
+    if policy == ToolExecutionPolicy.DISABLED:
+        return policy
+    if integration_id is not None and resource_key is not None:
+        return (
+            settings.resource_policies.get(str(integration_id), {})
+            .get(resource_key, {})
+            .get(capability, policy)
+        )
+    return policy
 
 
 def effective_tool_capabilities(

@@ -32,6 +32,8 @@ Tool groups are host-controlled catalog and UI metadata. They do not grant acces
 
 Permission evaluation validates immutable host boundaries first. `disabled` then denies even when a matching grant exists, `auto` allows only inside those boundaries, and `ask` checks an exact typed session grant before creating an approval. After an approval, the host reloads policy and boundary state before allowing the effect. Groups are never permission matcher inputs.
 
+Global action policies may have integration-resource overrides stored in `ToolSettings`. An override is keyed by the bound integration UUID, an adapter-generated stable resource key, and the action capability. Missing overrides inherit the global action policy. A globally disabled action is a hard boundary and cannot be enabled by a resource override. The permission request keeps this policy target separate from its typed grant matcher, so a calendar-level policy can govern an operation while a session grant remains limited to one concrete event.
+
 Configured integrations resolve through a static host catalog. An adapter can contribute statically implemented tools or values to a configuration field declared extensible by a base tool. Such values do not automatically become model arguments. Adapters cannot load foreign handlers or arbitrary remote schemas. Prompt fragments come only from adapter code; names, responses, and other external data are never treated as instructions.
 
 A contributed tool with configurable actions must provide a host-side authorization factory. The registry validates every produced permission request against the actions declared by that tool before its handler runs. Integration settings cannot declare capabilities or authorization behavior.
@@ -49,6 +51,8 @@ Every execution receives host context containing at least run ID, current sessio
 5. Only for `allow_session` and a live run, persist the grant in the approval transaction and then resume the waiter.
 
 Model arguments cannot bypass registry selection, `Context.ask`, capability boundaries, or resource matchers. The tool performs effects only after an allowing result.
+
+Resource policies are global installation settings. They are not approval-derived grants and are not agent profiles. If persistent agent profiles are added later, they may carry the same override shape as an additional resolver layer; no placeholder agent identity or policy fields exist before that aggregate is implemented. Global disabled actions and resources remain hard boundaries for every agent.
 
 ## Typed Resource Matchers
 

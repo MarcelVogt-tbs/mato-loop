@@ -32,6 +32,8 @@ class PermissionRequest:
     title: str
     summary: str
     resource_display: str | None = None
+    policy_integration_id: UUID | None = None
+    policy_resource_key: str | None = None
 
 
 def path_permission(

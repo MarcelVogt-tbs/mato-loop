@@ -133,6 +133,37 @@ _TEX_ENVIRONMENT_PATTERN = re.compile(
 )
 
 
+def _tool_policy(
+    tool_settings: ToolSettings,
+    integration_settings: IntegrationSettings,
+    request: PermissionRequest,
+):
+    integration_id = request.policy_integration_id
+    resource_key = request.policy_resource_key
+    if integration_id is not None and resource_key is not None:
+        instance = next(
+            (
+                item
+                for item in integration_settings.instances
+                if item.id == integration_id
+            ),
+            None,
+        )
+        if instance is None or not any(
+            action.capability == request.capability
+            for action in tool_registry.integration_resource_actions(instance)
+        ):
+            integration_id = None
+            resource_key = None
+    return tool_execution_policy(
+        tool_settings,
+        request.capability,
+        tool_registry.action_default(request.capability, integration_settings),
+        integration_id=integration_id,
+        resource_key=resource_key,
+    )
+
+
 @dataclass(slots=True)
 class _VisibleResponse:
     content_parts: list[str] = field(default_factory=list)
@@ -593,7 +624,7 @@ def _bounded_memory_overview(
 def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     safe = dict(arguments)
     content = safe.get("content")
-    if isinstance(content, str):
+    if isinstance(content, str) and tool_name != "memory_write":
         safe["content"] = (
             {"characters": len(content), "redacted": True}
             if tool_name == "write_file"
@@ -2448,11 +2479,7 @@ class AgentRuntime:
     ) -> PermissionDecision:
         tool_settings = await SettingsStore.load(db, ToolSettings)
         integration_settings = await SettingsStore.load(db, IntegrationSettings)
-        policy = tool_execution_policy(
-            tool_settings,
-            request.capability,
-            tool_registry.action_default(request.capability, integration_settings),
-        )
+        policy = _tool_policy(tool_settings, integration_settings, request)
         decision = await PermissionPolicy.evaluate(
             db, chat_session, request, root_files, policy
         )
@@ -2471,11 +2498,7 @@ class AgentRuntime:
         await db.refresh(chat_session)
         tool_settings = await SettingsStore.load(db, ToolSettings)
         integration_settings = await SettingsStore.load(db, IntegrationSettings)
-        current_policy = tool_execution_policy(
-            tool_settings,
-            request.capability,
-            tool_registry.action_default(request.capability, integration_settings),
-        )
+        current_policy = _tool_policy(tool_settings, integration_settings, request)
         current_decision = await PermissionPolicy.evaluate(
             db, chat_session, request, root_files, current_policy
         )
@@ -2523,6 +2546,12 @@ class AgentRuntime:
                 "tool": call.name,
                 "arguments": _safe_tool_arguments(call.name, call.arguments),
                 "resourceDisplay": permission.resource_display,
+                "policyIntegrationId": (
+                    str(permission.policy_integration_id)
+                    if permission.policy_integration_id is not None
+                    else None
+                ),
+                "policyResourceKey": permission.policy_resource_key,
             },
             available_decisions=["allow_once", "allow_session", "deny"],
         )

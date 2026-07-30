@@ -399,6 +399,12 @@ class ToolSettings(SettingsDocument):
     settings_key = "tools"
 
     policies: dict[str, ToolExecutionPolicy] = Field(default_factory=dict)
+    resource_policies: dict[
+        str, dict[str, dict[str, ToolExecutionPolicy]]
+    ] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("resource_policies", "resourcePolicies"),
+    )
     web_search: WebSearchToolSettings = Field(
         default_factory=WebSearchToolSettings,
         validation_alias=AliasChoices("web_search", "webSearch"),

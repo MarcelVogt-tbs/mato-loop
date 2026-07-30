@@ -33,6 +33,16 @@ export function toolIdentity(name) {
   return TOOL_DISPLAY[name] || { label: 'Tool ausführen', icon: 'build' }
 }
 
+export function memoryWriteContent(tool) {
+  if (tool?.name !== 'memory_write') return ''
+  const content = tool?.arguments?.content
+  if (typeof content === 'string') return content
+  if (typeof content?.preview !== 'string') return ''
+  return Number(content.characters) > content.preview.length
+    ? `${content.preview}\n... [älterer Verlauf gekürzt]`
+    : content.preview
+}
+
 export function toolSummary(tool) {
   const argumentsValue = tool?.arguments
   if (!argumentsValue || typeof argumentsValue !== 'object') return tool?.name || ''
@@ -56,6 +66,7 @@ export function toolSummary(tool) {
     const suffix = offset > 0 ? `, ab Zeichen ${offset}` : ''
     return `Nachricht ${truncate(argumentsValue.message_id, 36)}${suffix}`
   }
+  if (tool?.name === 'memory_write') return truncate(memoryWriteContent(tool))
   if (tool?.name === 'update_agent_identity') {
     if (typeof argumentsValue.display_name === 'string') {
       return `Agent-Name: ${truncate(argumentsValue.display_name, 80)}`
@@ -75,7 +86,12 @@ export function toolSummary(tool) {
   return tool?.name || ''
 }
 
-export function formatToolArguments(argumentsValue) {
+export function formatToolArguments(argumentsValue, toolName = null) {
+  if (toolName === 'memory_write' && argumentsValue && typeof argumentsValue === 'object') {
+    const metadata = { ...argumentsValue }
+    delete metadata.content
+    return formatTechnicalDetails(metadata)
+  }
   return formatTechnicalDetails(argumentsValue)
 }
 

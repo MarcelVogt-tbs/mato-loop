@@ -526,6 +526,17 @@ def test_write_file_content_is_fully_redacted_before_persistence() -> None:
     assert secret not in str(arguments)
 
 
+def test_memory_write_content_is_preserved_for_user_review() -> None:
+    content = "Stabiler Selbstkontext " * 1000
+
+    arguments = _safe_tool_arguments(
+        "memory_write",
+        {"action": "create", "content": content, "category": "context"},
+    )
+
+    assert arguments["content"] == content
+
+
 def test_responses_replay_write_file_content_is_fully_redacted() -> None:
     secret = "nicht persistieren"
     call = ToolCall(

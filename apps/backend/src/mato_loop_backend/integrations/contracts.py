@@ -12,6 +12,18 @@ ToolHandler = Callable[[Any, Any], Awaitable[Any]]
 
 
 @dataclass(frozen=True, slots=True)
+class IntegrationResource:
+    key: str
+    label: str
+
+
+ResourceLoader = Callable[
+    [IntegrationInstance, dict[str, Any] | None],
+    Awaitable[tuple[IntegrationResource, ...]],
+]
+
+
+@dataclass(frozen=True, slots=True)
 class ToolContribution:
     name: str
     description: str
@@ -63,7 +75,17 @@ class IntegrationAdapterDefinition:
     contribution_factory: Callable[[IntegrationInstance], IntegrationContributions] = field(
         default=lambda _instance: IntegrationContributions()
     )
+    resource_actions: tuple[Any, ...] = ()
+    resource_loader: ResourceLoader | None = None
 
     def contributions(self, instance: IntegrationInstance) -> IntegrationContributions:
         self.config_model.model_validate(instance.config)
         return self.contribution_factory(instance)
+
+    async def resources(
+        self, instance: IntegrationInstance, credential: dict[str, Any] | None
+    ) -> tuple[IntegrationResource, ...]:
+        self.config_model.model_validate(instance.config)
+        if self.resource_loader is None:
+            return ()
+        return await self.resource_loader(instance, credential)

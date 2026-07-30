@@ -10,7 +10,13 @@ const emptySearch = () => ({
 })
 
 export const useIntegrationStore = defineStore('integrations', {
-  state: () => ({ search: emptySearch(), loading: false, loaded: false, loadFailed: false }),
+  state: () => ({
+    search: emptySearch(),
+    accessByIntegration: {},
+    loading: false,
+    loaded: false,
+    loadFailed: false
+  }),
   actions: {
     async fetchSearch() {
       this.loading = true
@@ -35,10 +41,21 @@ export const useIntegrationStore = defineStore('integrations', {
     },
     async removeSearch(id) {
       await api.delete(`/integrations/search/providers/${id}`)
+      delete this.accessByIntegration[id]
       await this.fetchSearch()
     },
     async testSearch(id) {
       return (await api.post(`/integrations/search/providers/${id}/test`)).data
+    },
+    async fetchAccess(id) {
+      const { data } = await api.get(`/integrations/${id}/access`)
+      this.accessByIntegration[id] = data
+      return data
+    },
+    async saveAccess(id, resources) {
+      const { data } = await api.put(`/integrations/${id}/access`, { resources })
+      this.accessByIntegration[id] = data
+      return data
     }
   }
 })

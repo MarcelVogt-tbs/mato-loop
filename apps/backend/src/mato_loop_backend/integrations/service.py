@@ -29,10 +29,22 @@ class SearchIntegrationService:
         settings: IntegrationSettings,
         *,
         normalize_tools: bool = False,
+        remove_resource_policies: UUID | None = None,
     ) -> IntegrationSettings:
-        if normalize_tools:
+        if normalize_tools or remove_resource_policies is not None:
             tool_settings = await SettingsStore.load(db, ToolSettings, for_update=True)
-            if normalize_search_tool_settings(tool_settings, settings):
+            changed = normalize_tools and normalize_search_tool_settings(
+                tool_settings, settings
+            )
+            if remove_resource_policies is not None:
+                changed = (
+                    tool_settings.resource_policies.pop(
+                        str(remove_resource_policies), None
+                    )
+                    is not None
+                    or changed
+                )
+            if changed:
                 await SettingsStore.save(db, tool_settings)
         await SettingsStore.save(db, settings)
         await db.commit()
@@ -84,11 +96,18 @@ class SearchIntegrationService:
         )
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
+        config = {"base_url": base_url.rstrip("/")}
+        connection_changed = instance.config != config
         instance.name = name
         instance.enabled = enabled
-        instance.config = {"base_url": base_url.rstrip("/")}
+        instance.config = config
         validate_integration(instance)
-        return await cls._save(db, settings, normalize_tools=True)
+        return await cls._save(
+            db,
+            settings,
+            normalize_tools=True,
+            remove_resource_policies=integration_id if connection_changed else None,
+        )
 
     @classmethod
     async def delete(
@@ -108,4 +127,9 @@ class SearchIntegrationService:
         settings.instances = [item for item in settings.instances if item.id != integration_id]
         if instance.credential_id:
             await db.execute(delete(Credential).where(Credential.id == instance.credential_id))
-        return await cls._save(db, settings, normalize_tools=True)
+        return await cls._save(
+            db,
+            settings,
+            normalize_tools=True,
+            remove_resource_policies=integration_id,
+        )

@@ -17,6 +17,7 @@ from mato_loop_backend.agent.tools import (
     ToolRegistry,
     ToolResult,
     permission_for,
+    tool_execution_policy,
     tool_registry,
 )
 from mato_loop_backend.integrations import WebFetchError, WebFetchResult
@@ -195,6 +196,7 @@ async def test_bound_integration_tool_rechecks_source_after_approval(
         risk_level="medium",
         title="Integration verwenden?",
         summary="Der Agent möchte eine Integration verwenden.",
+        policy_resource_key="calendar:work",
     )
     contribution = ToolContribution(
         name="integration_example",
@@ -229,9 +231,13 @@ async def test_bound_integration_tool_rechecks_source_after_approval(
         id="integration", name="integration_example", arguments={"value": "test"}
     )
 
-    result = await effective.execute(call, _context(tmp_path, call))
+    context = _context(tmp_path, call)
+    result = await effective.execute(call, context)
 
     assert result.metadata == {"errorCode": "tool.unavailable"}
+    permission = context.ask_handler.await_args.args[0]
+    assert permission.policy_integration_id == integration.id
+    assert permission.policy_resource_key == "calendar:work"
 
 
 async def test_contributed_authorization_must_cover_every_declared_action(
@@ -279,6 +285,84 @@ async def test_contributed_authorization_must_cover_every_declared_action(
     result = await effective.execute(call, _context(tmp_path, call))
 
     assert result.metadata == {"errorCode": "tool.unavailable"}
+
+
+async def test_resource_policy_disabled_blocks_contributed_tool_effect(
+    tmp_path, monkeypatch
+) -> None:
+    integration = IntegrationInstance(
+        name="Intern",
+        integration_type="search",
+        adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    action = ToolAction(
+        "integration.resource.read", "Lesen", ToolExecutionPolicy.ASK
+    )
+    request = PermissionRequest(
+        capability=action.capability,
+        resource_type="network_service",
+        resource_scope="calendar:work",
+        action_kind="integration_example",
+        risk_level="medium",
+        title="Ressource lesen?",
+        summary="Der Agent möchte eine Integrationsressource lesen.",
+        policy_resource_key="calendar:work",
+    )
+    handler = AsyncMock(return_value=ToolResult.json({"ok": True}))
+    contribution = ToolContribution(
+        name="integration_example",
+        description="Example integration tool.",
+        arguments_model=_RequiredArguments,
+        handler=handler,
+        actions=(action,),
+        integration_id=str(integration.id),
+        authorization_factory=lambda _arguments, _context: (request,),
+    )
+    monkeypatch.setattr(
+        tools_module,
+        "effective_integration_contributions",
+        Mock(return_value=IntegrationContributions(tools=(contribution,))),
+    )
+    integration_settings = IntegrationSettings(instances=[integration])
+    effective = ToolRegistry([]).effective(integration_settings, "read-only")
+    settings = ToolSettings.model_validate(
+        {
+            "resourcePolicies": {
+                str(integration.id): {
+                    "calendar:work": {action.capability: "disabled"}
+                }
+            }
+        }
+    )
+
+    async def authorize(permission):
+        policy = tool_execution_policy(
+            settings,
+            permission.capability,
+            action.default_policy,
+            integration_id=permission.policy_integration_id,
+            resource_key=permission.policy_resource_key,
+        )
+        return (
+            PermissionDecision.DENY
+            if policy == ToolExecutionPolicy.DISABLED
+            else PermissionDecision.ALLOW
+        )
+
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=integration_settings)
+    )
+    call = ToolCall(
+        id="integration", name="integration_example", arguments={"value": "test"}
+    )
+    context = _context(tmp_path, call)
+    context.ask_handler = AsyncMock(side_effect=authorize)
+
+    result = await effective.execute(call, context)
+
+    assert result.metadata == {"errorCode": "permission.denied"}
+    handler.assert_not_awaited()
 
 
 def test_webfetch_schema_describes_verified_image_attachments() -> None:

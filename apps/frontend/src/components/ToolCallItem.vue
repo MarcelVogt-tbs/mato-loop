@@ -33,7 +33,12 @@
     </template>
 
     <div class="tool-call__body">
-      <div v-if="argumentsText" class="tool-call__section">
+      <div v-if="memoryContent" class="tool-call__section">
+        <div class="tool-call__section-label">Memory-Inhalt</div>
+        <pre class="tool-call__details">{{ memoryContent }}</pre>
+      </div>
+
+      <div v-if="argumentsText" class="tool-call__section" :class="{ 'q-mt-md': memoryContent }">
         <div class="tool-call__section-label">Argumente</div>
         <pre class="tool-call__details">{{ argumentsText }}</pre>
       </div>
@@ -75,6 +80,7 @@ import MessageAttachments from 'components/MessageAttachments.vue'
 import { supportedAttachments } from 'src/utils/attachments'
 import {
   formatToolArguments,
+  memoryWriteContent,
   parseToolResult,
   toolIdentity,
   toolStatus,
@@ -92,7 +98,8 @@ const props = defineProps({
 
 const identity = computed(() => toolIdentity(props.tool.name))
 const summary = computed(() => toolSummary(props.tool))
-const argumentsText = computed(() => formatToolArguments(props.tool.arguments))
+const memoryContent = computed(() => memoryWriteContent(props.tool))
+const argumentsText = computed(() => formatToolArguments(props.tool.arguments, props.tool.name))
 const resultData = computed(() => parseToolResult(props.result?.content, props.tool.name))
 const attachments = computed(() => supportedAttachments(props.result?.attachments))
 const status = computed(() => toolStatus(props))

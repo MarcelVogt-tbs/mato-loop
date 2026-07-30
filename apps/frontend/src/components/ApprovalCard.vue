@@ -16,6 +16,10 @@
         <div class="text-caption app-muted">{{ resource.label }}</div>
         <code>{{ resource.value }}</code>
       </div>
+      <div v-if="memoryContent" class="approval-resource q-mt-md">
+        <div class="text-caption app-muted">Memory-Inhalt</div>
+        <pre class="approval-details q-mt-xs">{{ memoryContent }}</pre>
+      </div>
       <q-expansion-item
         v-if="technicalDetails"
         dense
@@ -67,6 +71,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { approvalResource, formatTechnicalDetails } from 'src/utils/approval-display'
+import { formatToolArguments, memoryWriteContent } from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 
@@ -86,7 +91,14 @@ const actionIcon = computed(() => {
   return 'approval'
 })
 const resource = computed(() => approvalResource(props.approval, chat.sessions))
-const technicalDetails = computed(() => formatTechnicalDetails(props.approval.details))
+const approvalTool = computed(() => ({
+  name: props.approval.details?.tool,
+  arguments: props.approval.details?.arguments
+}))
+const memoryContent = computed(() => memoryWriteContent(approvalTool.value))
+const technicalDetails = computed(() => memoryContent.value
+  ? formatToolArguments(approvalTool.value.arguments, approvalTool.value.name)
+  : formatTechnicalDetails(props.approval.details))
 
 function hasDecision(decision) {
   return props.approval.availableDecisions.includes(decision)

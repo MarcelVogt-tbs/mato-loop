@@ -1,16 +1,29 @@
 import json
+from dataclasses import replace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.integrations.registry as integration_registry
 import mato_loop_backend.integrations.search as search_module
-from mato_loop_backend.agent.tools import available_tool_schemas
+from mato_loop_backend.agent.permissions import PermissionRequest
+from mato_loop_backend.agent.tools import (
+    ToolAction,
+    ToolResult,
+    available_tool_schemas,
+)
+from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.integrations import (
+    IntegrationAccessRequest,
     SearchIntegrationRequest,
     create_search_integration,
     delete_search_integration,
+    get_integration_access,
+    search_settings_payload,
+    update_integration_access,
     update_search_integration,
 )
 from mato_loop_backend.integrations import (
@@ -19,10 +32,16 @@ from mato_loop_backend.integrations import (
     search_provider_options,
     search_web,
 )
+from mato_loop_backend.integrations.contracts import (
+    IntegrationContributions,
+    IntegrationResource,
+    ToolContribution,
+)
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
+    ToolExecutionPolicy,
     ToolSettings,
 )
 
@@ -70,6 +89,64 @@ def _searxng(*, name: str = "SearXNG", enabled: bool = True) -> IntegrationInsta
     )
 
 
+class _ResourceArguments(BaseModel):
+    resource_key: str
+
+
+async def _resource_handler(_arguments, _context) -> ToolResult:
+    return ToolResult.json({"ok": True})
+
+
+def _resource_adapter(monkeypatch) -> None:
+    async def load_resources(_instance, _credential):
+        return (
+            IntegrationResource("calendar:private", "Privat"),
+            IntegrationResource("calendar:work", "Arbeit"),
+        )
+
+    current = integration_registry._ADAPTERS[("search", "searxng")]
+    action = ToolAction("network.search", "Suchen", ToolExecutionPolicy.AUTO)
+
+    def contributions(instance):
+        base = current.contributions(instance)
+        return IntegrationContributions(
+            tools=(
+                ToolContribution(
+                    name="integration_resource_search",
+                    description="Search one integration resource.",
+                    arguments_model=_ResourceArguments,
+                    handler=_resource_handler,
+                    actions=(action,),
+                    authorization_factory=lambda arguments, _context: (
+                        PermissionRequest(
+                            capability="network.search",
+                            resource_type="network_service",
+                            resource_scope=arguments.resource_key,
+                            action_kind="integration_resource_search",
+                            risk_level="medium",
+                            title="Ressource durchsuchen?",
+                            summary="Der Agent möchte eine Integrationsressource durchsuchen.",
+                            policy_resource_key=arguments.resource_key,
+                        ),
+                    ),
+                ),
+            ),
+            tool_options=base.tool_options,
+            prompt_fragments=base.prompt_fragments,
+        )
+
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("search", "searxng"),
+        replace(
+            current,
+            contribution_factory=contributions,
+            resource_actions=(action,),
+            resource_loader=load_resources,
+        ),
+    )
+
+
 def test_no_key_provider_makes_search_available_without_configuration() -> None:
     settings = IntegrationSettings()
 
@@ -98,6 +175,158 @@ def test_active_integrations_extend_the_host_search_provider_catalog() -> None:
     options = search_provider_options(settings)
     assert [item["value"] for item in options] == expected
     assert str(disabled.id) not in str(options)
+
+
+async def test_integration_access_inherits_and_overrides_global_policy(
+    monkeypatch,
+) -> None:
+    _resource_adapter(monkeypatch)
+    integration = _searxng()
+    integrations = IntegrationSettings(instances=[integration])
+    tools = ToolSettings.model_validate(
+        {
+            "policies": {"network.search": "ask"},
+            "resourcePolicies": {
+                str(integration.id): {
+                    "calendar:private": {"network.search": "auto"}
+                }
+            },
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+
+    result = await get_integration_access(integration.id, AsyncMock(spec=AsyncSession))
+
+    resources = {item["key"]: item for item in result["resources"]}
+    assert resources["calendar:private"]["policies"] == {"network.search": "auto"}
+    assert resources["calendar:private"]["effectivePolicies"] == {
+        "network.search": "auto"
+    }
+    assert resources["calendar:work"]["policies"] == {}
+    assert resources["calendar:work"]["effectivePolicies"] == {
+        "network.search": "ask"
+    }
+
+
+async def test_global_disabled_is_a_hard_resource_policy_limit(monkeypatch) -> None:
+    _resource_adapter(monkeypatch)
+    integration = _searxng()
+    integrations = IntegrationSettings(instances=[integration])
+    tools = ToolSettings.model_validate(
+        {
+            "policies": {"network.search": "disabled"},
+            "resourcePolicies": {
+                str(integration.id): {
+                    "calendar:private": {"network.search": "auto"}
+                }
+            },
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+
+    result = await get_integration_access(integration.id, AsyncMock(spec=AsyncSession))
+
+    private = next(item for item in result["resources"] if item["key"] == "calendar:private")
+    assert private["effectivePolicies"] == {"network.search": "disabled"}
+
+
+async def test_integration_access_replaces_only_its_resource_overrides(
+    monkeypatch,
+) -> None:
+    _resource_adapter(monkeypatch)
+    integration = _searxng()
+    other_id = uuid4()
+    integrations = IntegrationSettings(instances=[integration])
+    tools = ToolSettings.model_validate(
+        {
+            "resourcePolicies": {
+                str(other_id): {
+                    "calendar:other": {"network.search": "disabled"}
+                }
+            }
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    load = AsyncMock(side_effect=load_settings)
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db = AsyncMock(spec=AsyncSession)
+
+    result = await update_integration_access(
+        integration.id,
+        IntegrationAccessRequest.model_validate(
+            {
+                "resources": {
+                    "calendar:work": {"network.search": "auto"}
+                }
+            }
+        ),
+        db,
+    )
+
+    assert tools.resource_policies[str(integration.id)] == {
+        "calendar:work": {"network.search": ToolExecutionPolicy.AUTO}
+    }
+    assert str(other_id) in tools.resource_policies
+    assert result["resources"][1]["effectivePolicies"] == {
+        "network.search": "auto"
+    }
+    assert load.await_args_list[-2].kwargs == {"for_update": True}
+    assert load.await_args_list[-1].kwargs == {"for_update": True}
+    save.assert_awaited_once_with(db, tools)
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "resources",
+    [
+        {"calendar:unknown": {"network.search": "auto"}},
+        {"calendar:work": {"calendar.unknown": "auto"}},
+    ],
+)
+async def test_integration_access_rejects_unknown_resources(
+    monkeypatch, resources
+) -> None:
+    _resource_adapter(monkeypatch)
+    integration = _searxng()
+    integrations = IntegrationSettings(instances=[integration])
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=integrations)
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await update_integration_access(
+            integration.id,
+            IntegrationAccessRequest.model_validate({"resources": resources}),
+            AsyncMock(spec=AsyncSession),
+        )
+
+    assert getattr(exc_info.value, "code", None) == "validation.invalidChoice"
+
+
+def test_integration_payload_marks_resource_policy_support(monkeypatch) -> None:
+    integration = _searxng()
+    assert search_settings_payload(IntegrationSettings(instances=[integration]))[
+        "providers"
+    ][0]["supportsResourcePolicies"] is False
+
+    _resource_adapter(monkeypatch)
+
+    assert search_settings_payload(IntegrationSettings(instances=[integration]))[
+        "providers"
+    ][0]["supportsResourcePolicies"] is True
 
 
 def test_search_snippet_preserves_escaped_technical_syntax() -> None:
@@ -301,7 +530,12 @@ async def test_deleting_selected_fallback_removes_it_from_tool_settings(monkeypa
             "webSearch": {
                 "primaryProvider": "no_key",
                 "fallbackProvider": f"searxng:{integration.id}",
-            }
+            },
+            "resourcePolicies": {
+                str(integration.id): {
+                    "calendar:work": {"network.search": "ask"}
+                }
+            },
         }
     )
     db = AsyncMock(spec=AsyncSession)
@@ -317,7 +551,40 @@ async def test_deleting_selected_fallback_removes_it_from_tool_settings(monkeypa
 
     assert tools.web_search.primary_provider == "no_key"
     assert tools.web_search.fallback_provider is None
+    assert str(integration.id) not in tools.resource_policies
     assert any(call.args[1] is tools for call in save.await_args_list)
+
+
+async def test_changing_connection_clears_its_resource_policies(monkeypatch) -> None:
+    integration = _searxng()
+    settings = IntegrationSettings(instances=[integration])
+    tools = ToolSettings.model_validate(
+        {
+            "resourcePolicies": {
+                str(integration.id): {
+                    "calendar:work": {"network.search": "auto"}
+                }
+            }
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return settings if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+
+    await update_search_integration(
+        integration.id,
+        SearchIntegrationRequest(
+            name="SearXNG",
+            base_url="https://other.example.com",
+            enabled=True,
+        ),
+        AsyncMock(spec=AsyncSession),
+    )
+
+    assert str(integration.id) not in tools.resource_policies
 
 
 async def test_search_uses_fallback_only_for_temporary_errors(monkeypatch) -> None:

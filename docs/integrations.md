@@ -14,6 +14,14 @@ Every contributed tool declares its host-controlled group, German UI metadata, a
 
 Persisted configuration and external responses must not provide handlers, arbitrary JSON schemas, or prompt instructions. Duplicate tool names and contributions to undeclared configuration fields are programming errors. Host configuration values never become model arguments merely because an adapter contributes them.
 
+## Resource Policies
+
+An adapter may optionally declare host-controlled resource actions and an asynchronous resource loader. Resource actions must exactly match actions of a tool contributed by that adapter and that tool must have an authorization factory; tool-option integrations are unsupported until their built-in tool explicitly binds resource policy targets. The loader receives the validated integration instance and an optional decrypted credential payload, but no database session. It returns only stable adapter-generated keys and display labels, for example calendars or repositories. External services never define capabilities, policy modes, matchers, or prompt text. Resource keys use a bounded host-safe character set and labels are rendered only as untrusted UI text.
+
+Global action defaults remain under **Settings > Tools**. Per-resource overrides are configured from the integration and use `disabled`, `ask`, or `auto`; an absent value inherits the global default. Overrides are stored in `ToolSettings` by integration UUID and resource key rather than mixed into connection configuration. Deleting an integration removes its overrides, while disabling it preserves them.
+
+Resource discovery occurs before the settings transaction. Saving then locks integration settings, verifies that the instance revision is unchanged, locks tool settings, replaces only that integration's overrides, and commits once. Existing adapters without a resource loader expose no access editor and keep their current behavior.
+
 ## Effective Tool Set
 
 Before every model request, the registry combines built-ins, session mode, model capabilities, tool policies, and active integration contributions into an immutable tool set. This object exports provider schemas and validates returned calls. A provider therefore cannot execute a tool that was not offered for that request.

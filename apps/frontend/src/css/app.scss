@@ -1621,6 +1621,22 @@ body.body--dark .chat-composer__card {
   max-width: 560px;
 }
 
+.integration-access-dialog {
+  width: min(900px, calc(100vw - 32px));
+  max-width: 900px;
+  max-height: calc(100dvh - 32px);
+}
+
+.integration-access-resource {
+  overflow: hidden;
+}
+
+.integration-access-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
+}
+
 .provider-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1925,6 +1941,16 @@ body.body--dark .chat-composer__card {
 
   .settings-section-header .q-btn {
     width: 100%;
+  }
+
+  .integration-access-dialog {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+  }
+
+  .integration-access-actions {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .provider-settings-actions {

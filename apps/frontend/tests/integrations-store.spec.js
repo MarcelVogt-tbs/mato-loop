@@ -21,6 +21,7 @@ const searchResponse = {
       integrationType: 'search',
       providerType: 'searxng',
       enabled: true,
+      supportsResourcePolicies: false,
       config: { baseUrl: 'https://search.example.com' }
     }
   ]
@@ -72,5 +73,34 @@ describe('integration store', () => {
 
     expect(api.post).toHaveBeenCalledWith('/integrations/search/providers', payload)
     expect(store.search.providers).toHaveLength(1)
+  })
+
+  it('loads and saves resource policies for one integration', async () => {
+    const access = {
+      integrationId: 'integration-id',
+      actions: [{ capability: 'calendar.read', label: 'Lesen', globalPolicy: 'ask' }],
+      resources: [
+        {
+          key: 'calendar:work',
+          label: 'Arbeit',
+          policies: { 'calendar.read': 'auto' },
+          effectivePolicies: { 'calendar.read': 'auto' }
+        }
+      ]
+    }
+    api.get.mockResolvedValue({ data: access })
+    api.put.mockResolvedValue({ data: access })
+    const store = useIntegrationStore()
+
+    await store.fetchAccess('integration-id')
+    await store.saveAccess('integration-id', {
+      'calendar:work': { 'calendar.read': 'auto' }
+    })
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/integration-id/access')
+    expect(api.put).toHaveBeenCalledWith('/integrations/integration-id/access', {
+      resources: { 'calendar:work': { 'calendar.read': 'auto' } }
+    })
+    expect(store.accessByIntegration['integration-id']).toEqual(access)
   })
 })

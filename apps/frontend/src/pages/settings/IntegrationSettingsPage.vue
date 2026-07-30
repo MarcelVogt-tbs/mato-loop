@@ -53,6 +53,15 @@
           </q-item-section>
           <q-item-section side class="integration-list-actions">
             <q-btn
+              v-if="integration.supportsResourcePolicies"
+              flat
+              dense
+              no-caps
+              icon="policy"
+              label="Zugriff"
+              @click="openAccessDialog(integration)"
+            />
+            <q-btn
               flat
               dense
               no-caps
@@ -85,6 +94,7 @@
     </q-card>
 
     <IntegrationConfigDialog v-model="dialogOpen" :integration="selectedIntegration" />
+    <IntegrationAccessDialog v-model="accessDialogOpen" :integration="accessIntegration" />
   </section>
 </template>
 
@@ -92,6 +102,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import IntegrationConfigDialog from 'components/IntegrationConfigDialog.vue'
+import IntegrationAccessDialog from 'components/IntegrationAccessDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useIntegrationStore } from 'stores/integrations'
 
@@ -102,6 +113,8 @@ const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
 const dialogOpen = ref(false)
 const selectedIntegration = ref(null)
+const accessDialogOpen = ref(false)
+const accessIntegration = ref(null)
 const testingId = ref(null)
 const searchProviders = computed(() => integrations.search.providers)
 
@@ -113,6 +126,11 @@ function openCreateDialog() {
 function openEditDialog(integration) {
   selectedIntegration.value = integration
   dialogOpen.value = true
+}
+
+function openAccessDialog(integration) {
+  accessIntegration.value = integration
+  accessDialogOpen.value = true
 }
 
 function providerLabel(providerType) {
