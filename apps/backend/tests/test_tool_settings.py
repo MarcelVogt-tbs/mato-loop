@@ -41,7 +41,18 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
 
     result = await get_tool_settings(_db())
 
-    assert result == {
+    assert {
+        key: result[key]
+        for key in (
+            "webSearch",
+            "webFetch",
+            "generateImage",
+            "generateSpeech",
+            "generateAudio",
+            "transcribeAudio",
+            "updateAgentIdentity",
+        )
+    } == {
         "webSearch": {
             "primaryProvider": "no_key",
             "fallbackProvider": None,
@@ -70,6 +81,29 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "transcribeAudio": {"policy": "disabled", "timeoutSeconds": 300},
         "updateAgentIdentity": {"policy": "ask"},
     }
+    assert result["policies"] == {
+        "filesystem.read": "auto",
+        "filesystem.write": "auto",
+        "filesystem.delete": "auto",
+        "network.search": "auto",
+        "media.generate.image": "disabled",
+        "media.generate.speech": "disabled",
+        "media.generate.audio": "disabled",
+        "media.transcribe.audio": "disabled",
+        "session.read": "ask",
+        "session.search": "ask",
+        "memory.write": "ask",
+        "memory.read": "auto",
+        "settings.agent_identity.update": "ask",
+    }
+    assert [group["id"] for group in result["groups"]] == [
+        "filesystem",
+        "web",
+        "media",
+        "sessions",
+        "memory",
+        "agent",
+    ]
 
 
 async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch) -> None:
@@ -92,6 +126,7 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     db = _db()
     payload = ToolSettingsRequest.model_validate(
         {
+            "policies": {"filesystem.delete": "ask"},
             "webSearch": {
                 "primaryProvider": f"searxng:{integration.id}",
                 "fallbackProvider": "no_key",
@@ -149,6 +184,9 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     assert saved.transcribe_audio.policy == "ask"
     assert saved.transcribe_audio.timeout_seconds == 180
     assert saved.update_agent_identity.policy == "auto"
+    assert saved.policies["filesystem.delete"] == "ask"
+    assert saved.policies["media.generate.image"] == "ask"
+    assert result["policies"]["filesystem.delete"] == "ask"
     db.commit.assert_awaited_once()
 
 

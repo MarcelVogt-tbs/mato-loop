@@ -55,6 +55,12 @@ export function approvalResource(approval, sessions = []) {
       value: name ? `„${name}“` : allSessions ? 'Alle Sessions' : scope
     }
   }
+  if (approval?.resourceType === 'network_service') {
+    return { label: 'Netzwerkdienst', value: approval?.resourceDisplay || 'Konfigurierte Websuche' }
+  }
+  if (approval?.resourceType === 'memory_collection') {
+    return { label: 'Memory-Sammlung', value: approval?.resourceDisplay || 'Eigene Memories' }
+  }
   return { label: 'Angeforderter Scope', value: scope || 'Nicht angegeben' }
 }
 
@@ -100,8 +106,11 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'filesystem.read': { label: 'Dateien lesen', icon: 'visibility' },
     'filesystem.write': { label: 'Dateien schreiben', icon: 'edit' },
     'filesystem.delete': { label: 'Dateien löschen', icon: 'delete_outline' },
+    'network.search': { label: 'Websuche verwenden', icon: 'travel_explore' },
     'session.read': { label: 'Session lesen', icon: 'forum' },
-    'session.search': { label: 'Sessions durchsuchen', icon: 'manage_search' }
+    'session.search': { label: 'Sessions durchsuchen', icon: 'manage_search' },
+    'memory.read': { label: 'Memories lesen', icon: 'psychology' },
+    'memory.write': { label: 'Memory speichern', icon: 'save' }
   }[grant?.capability]
   return {
     label: capability?.label || 'Tool-Zugriff',

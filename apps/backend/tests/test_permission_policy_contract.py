@@ -16,9 +16,18 @@ from mato_loop_backend.agent.permissions import (
     session_search_permission,
     webfetch_permission,
 )
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.integrations import canonicalize_url
-from mato_loop_backend.models import ChatSession, PermissionGrant
+from mato_loop_backend.models import AgentRun, ChatSession, PermissionGrant
+from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.settings import (
+    AgentRuntimeSettings,
+    IntegrationSettings,
+    SettingsStore,
+    ToolExecutionPolicy,
+    ToolSettings,
+)
 from mato_loop_backend.workspace import RootFileService
 
 
@@ -119,6 +128,69 @@ async def test_file_access_is_decided_only_for_current_host_bound_roots(
         root_files,
     ) == expected
     db.scalars.assert_not_awaited()
+
+
+async def test_global_policy_can_require_or_deny_a_host_bound_file_action(tmp_path) -> None:
+    session = _session(working_directory="project", workspace_access="read-write")
+    root_files = _root_files(tmp_path, session)
+    request = _path_request(
+        root_files,
+        "notes.txt",
+        root="workspace",
+        capability="filesystem.delete",
+    )
+
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(), session, request, root_files, ToolExecutionPolicy.ASK
+    ) == PermissionDecision.ASK
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(), session, request, root_files, ToolExecutionPolicy.DISABLED
+    ) == PermissionDecision.DENY
+
+
+async def test_policy_revocation_while_waiting_for_approval_stops_action(
+    tmp_path, monkeypatch
+) -> None:
+    session = _session(working_directory="project", workspace_access="read-write")
+    root_files = _root_files(tmp_path, session)
+    request = _path_request(
+        root_files,
+        "notes.txt",
+        root="workspace",
+        capability="filesystem.delete",
+    )
+    settings_loads = 0
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        nonlocal settings_loads
+        if settings_type is IntegrationSettings:
+            return IntegrationSettings()
+        settings_loads += 1
+        return ToolSettings.model_validate(
+            {
+                "policies": {
+                    "filesystem.delete": "ask" if settings_loads == 1 else "disabled"
+                }
+            }
+        )
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(
+        AgentRuntime, "_request_approval", AsyncMock(return_value="allow_once")
+    )
+    db = _db_with_grants()
+
+    decision = await AgentRuntime._authorize(
+        db,
+        AgentRun(id=uuid4(), session_id=session.id),
+        session,
+        ToolCall(id="delete", name="delete_path", arguments={}),
+        request,
+        root_files,
+        AgentRuntimeSettings(),
+    )
+
+    assert decision == PermissionDecision.DENY
 
 
 async def test_stale_or_missing_workspace_cannot_be_approved(tmp_path) -> None:

@@ -398,6 +398,7 @@ class PolicyToolSettings(BaseModel):
 class ToolSettings(SettingsDocument):
     settings_key = "tools"
 
+    policies: dict[str, ToolExecutionPolicy] = Field(default_factory=dict)
     web_search: WebSearchToolSettings = Field(
         default_factory=WebSearchToolSettings,
         validation_alias=AliasChoices("web_search", "webSearch"),

@@ -23,6 +23,15 @@ describe('tool settings store', () => {
 
   it('loads and saves the complete tool settings contract without changing field names', async () => {
     const response = {
+      groups: [
+        {
+          id: 'filesystem',
+          label: 'Dateisystem',
+          icon: 'folder',
+          tools: []
+        }
+      ],
+      policies: { 'filesystem.read': 'ask' },
       webSearch: {
         primaryProvider: 'searxng:integration-id',
         fallbackProvider: 'no_key',
@@ -53,6 +62,7 @@ describe('tool settings store', () => {
 
     expect(api.get).toHaveBeenCalledWith('/tools/settings')
     expect(api.put).toHaveBeenCalledWith('/tools/settings', expect.objectContaining({
+      policies: expect.objectContaining({ 'filesystem.read': 'ask' }),
       webSearch: {
         primaryProvider: 'searxng:integration-id',
         fallbackProvider: 'no_key'
@@ -61,6 +71,8 @@ describe('tool settings store', () => {
     }))
     expect(store.webSearch).toEqual(response.webSearch)
     expect(store.webFetch).toEqual(response.webFetch)
+    expect(store.groups).toEqual(response.groups)
+    expect(store.policies).toEqual({ 'filesystem.read': 'ask' })
     expect(store.generateSpeech).toEqual({ policy: 'auto', timeoutSeconds: 120 })
     expect(store.loaded).toBe(true)
   })
@@ -93,6 +105,7 @@ describe('tool settings store', () => {
     await store.saveSettings({ generateImage: { policy: 'ask' } })
 
     expect(api.put).toHaveBeenCalledWith('/tools/settings', {
+      policies: { 'media.generate.image': 'ask' },
       webSearch: { primaryProvider: 'no_key', fallbackProvider: null },
       webFetch: {
         ...legacyResponse.webFetch,

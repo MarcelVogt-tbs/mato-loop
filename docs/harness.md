@@ -28,9 +28,17 @@ Research tools return structured results with safe URLs. `web_search` labels con
 
 The tool registry is the only name resolver for tool calls. It rejects duplicate names during construction, validates input before execution, and exports only tools available for the session, mode, and effective integrations. Unknown tools, invalid arguments, and execution failures become stable tool errors. Exception text and secrets never enter model context or API responses.
 
+Tool groups are host-controlled catalog and UI metadata. They do not grant access and have no policy inheritance. A tool declares zero or more security actions. Each configurable action has a stable capability, a controlled UI label, and a safe default execution policy. Global overrides use `disabled`, `ask`, or `auto`; domain-specific policies such as webfetch remain typed when a generic mode would lose resource semantics. Disabling any action required by a tool removes that tool from the effective set.
+
+Permission evaluation validates immutable host boundaries first. `disabled` then denies even when a matching grant exists, `auto` allows only inside those boundaries, and `ask` checks an exact typed session grant before creating an approval. After an approval, the host reloads policy and boundary state before allowing the effect. Groups are never permission matcher inputs.
+
 Configured integrations resolve through a static host catalog. An adapter can contribute statically implemented tools or values to a configuration field declared extensible by a base tool. Such values do not automatically become model arguments. Adapters cannot load foreign handlers or arbitrary remote schemas. Prompt fragments come only from adapter code; names, responses, and other external data are never treated as instructions.
 
+A contributed tool with configurable actions must provide a host-side authorization factory. The registry validates every produced permission request against the actions declared by that tool before its handler runs. Integration settings cannot declare capabilities or authorization behavior.
+
 The effective tool set is bound for exactly one model request. Schema export, option validation, and subsequent execution use the same binding. Calls outside this set are rejected even when a global tool definition with that name exists. Before external effects, handlers reload revocable integration, tool, and capability configuration.
+
+Bindings retain their source integration ID and a canonical revision of that integration instance. Deletion, disabling, credential replacement, or configuration changes invalidate an already offered contributed tool. Host-selected provider options are bound to the same request; execution never silently switches a stale call to a different provider.
 
 Every execution receives host context containing at least run ID, current session ID, registry-independent services, and `Context.ask`. Tools do not access coordinator waiters, approval tables, or provider objects directly. `Context.ask` accepts a typed permission request and centrally performs this sequence:
 

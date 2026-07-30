@@ -8,8 +8,9 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.tools as tools_module
-from mato_loop_backend.agent.permissions import PermissionDecision
+from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
 from mato_loop_backend.agent.tools import (
+    ToolAction,
     ToolAttachment,
     ToolContext,
     ToolDefinition,
@@ -38,6 +39,7 @@ from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
+    ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
     WebFetchPolicy,
@@ -136,6 +138,149 @@ def test_effective_toolset_accepts_host_registered_integration_tools(monkeypatch
     assert effective.prompt_fragments == ("Trusted integration instruction.",)
 
 
+async def test_bound_integration_tool_rejects_changed_source(tmp_path, monkeypatch) -> None:
+    integration = IntegrationInstance(
+        name="Intern",
+        integration_type="search",
+        adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    contribution = ToolContribution(
+        name="integration_example",
+        description="Example integration tool.",
+        arguments_model=_RequiredArguments,
+        handler=_successful_handler,
+        integration_id=str(integration.id),
+    )
+    monkeypatch.setattr(
+        tools_module,
+        "effective_integration_contributions",
+        Mock(return_value=IntegrationContributions(tools=(contribution,))),
+    )
+    effective = ToolRegistry([]).effective(
+        IntegrationSettings(instances=[integration]), "read-only"
+    )
+    changed = integration.model_copy(deep=True)
+    changed.config = {"base_url": "https://other.example.com"}
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=IntegrationSettings(instances=[changed])),
+    )
+    call = ToolCall(
+        id="integration", name="integration_example", arguments={"value": "test"}
+    )
+
+    result = await effective.execute(call, _context(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+
+
+async def test_bound_integration_tool_rechecks_source_after_approval(
+    tmp_path, monkeypatch
+) -> None:
+    integration = IntegrationInstance(
+        name="Intern",
+        integration_type="search",
+        adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    changed = integration.model_copy(deep=True)
+    changed.enabled = False
+    request = PermissionRequest(
+        capability="integration.example",
+        resource_type="network_service",
+        resource_scope="example",
+        action_kind="integration_example",
+        risk_level="medium",
+        title="Integration verwenden?",
+        summary="Der Agent möchte eine Integration verwenden.",
+    )
+    contribution = ToolContribution(
+        name="integration_example",
+        description="Example integration tool.",
+        arguments_model=_RequiredArguments,
+        handler=_successful_handler,
+        actions=(
+            ToolAction(
+                "integration.example", "Integration verwenden", ToolExecutionPolicy.ASK
+            ),
+        ),
+        integration_id=str(integration.id),
+        authorization_factory=lambda _arguments, _context: (request,),
+    )
+    monkeypatch.setattr(
+        tools_module,
+        "effective_integration_contributions",
+        Mock(return_value=IntegrationContributions(tools=(contribution,))),
+    )
+    effective = ToolRegistry([]).effective(
+        IntegrationSettings(instances=[integration]), "read-only"
+    )
+    loads = 0
+
+    async def load_integrations(_db, _settings_type, **_kwargs):
+        nonlocal loads
+        loads += 1
+        return IntegrationSettings(instances=[integration if loads == 1 else changed])
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_integrations))
+    call = ToolCall(
+        id="integration", name="integration_example", arguments={"value": "test"}
+    )
+
+    result = await effective.execute(call, _context(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+
+
+async def test_contributed_authorization_must_cover_every_declared_action(
+    tmp_path, monkeypatch
+) -> None:
+    integration = IntegrationInstance(
+        name="Intern",
+        integration_type="search",
+        adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    request = PermissionRequest(
+        capability="integration.read",
+        resource_type="network_service",
+        resource_scope="example",
+        action_kind="integration_example",
+        risk_level="medium",
+        title="Integration lesen?",
+        summary="Der Agent möchte eine Integration lesen.",
+    )
+    contribution = ToolContribution(
+        name="integration_example",
+        description="Example integration tool.",
+        arguments_model=_RequiredArguments,
+        handler=_successful_handler,
+        actions=(
+            ToolAction("integration.read", "Lesen", ToolExecutionPolicy.ASK),
+            ToolAction("integration.write", "Schreiben", ToolExecutionPolicy.ASK),
+        ),
+        integration_id=str(integration.id),
+        authorization_factory=lambda _arguments, _context: (request,),
+    )
+    monkeypatch.setattr(
+        tools_module,
+        "effective_integration_contributions",
+        Mock(return_value=IntegrationContributions(tools=(contribution,))),
+    )
+    settings = IntegrationSettings(instances=[integration])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    effective = ToolRegistry([]).effective(settings, "read-only")
+    call = ToolCall(
+        id="integration", name="integration_example", arguments={"value": "test"}
+    )
+
+    result = await effective.execute(call, _context(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+
+
 def test_webfetch_schema_describes_verified_image_attachments() -> None:
     schemas = tool_registry.schemas(IntegrationSettings(), "read-only", webfetch_enabled=True)
     webfetch = next(item for item in schemas if item["name"] == "webfetch")
@@ -222,6 +367,25 @@ async def test_effective_toolset_rejects_a_call_that_was_not_offered(tmp_path) -
     assert result.metadata == {"errorCode": "tool.unavailable"}
 
 
+def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:
+    settings = ToolSettings.model_validate(
+        {"policies": {"filesystem.delete": "disabled"}}
+    )
+
+    offered = {
+        item["name"]
+        for item in tool_registry.effective(
+            IntegrationSettings(),
+            "read-write",
+            tool_settings=settings,
+        ).schemas()
+    }
+
+    assert "delete_path" not in offered
+    assert "move_path" not in offered
+    assert "write_file" in offered
+
+
 async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
     tmp_path, monkeypatch
 ) -> None:
@@ -231,8 +395,13 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
         adapter_type="searxng",
         config={"base_url": "https://search.example.com"},
     )
-    settings = IntegrationSettings(instances=[integration])
-    effective = tool_registry.effective(settings, "read-only")
+    settings = IntegrationSettings()
+    current_tools = ToolSettings.model_validate(
+        {"webSearch": {"primaryProvider": f"searxng:{integration.id}"}}
+    )
+    effective = tool_registry.effective(
+        settings, "read-only", tool_settings=current_tools
+    )
     call = ToolCall(
         id="stale-search",
         name="web_search",
@@ -240,10 +409,6 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
     )
     context = _context(tmp_path, call)
     context.integration_settings = settings
-    current_tools = ToolSettings.model_validate(
-        {"webSearch": {"primaryProvider": f"searxng:{integration.id}"}}
-    )
-
     async def load_settings(_db, settings_type, **_kwargs):
         if settings_type is IntegrationSettings:
             return IntegrationSettings()
@@ -286,6 +451,45 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
         "fallback_provider": None,
     }
     assert search.await_args.args[1] == "OpenWrt TL-MR6400 support status 2024 2025"
+
+
+async def test_web_search_rejects_changed_bound_provider_configuration(
+    tmp_path, monkeypatch
+) -> None:
+    integration = IntegrationInstance(
+        name="Intern",
+        integration_type="search",
+        adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    integrations = IntegrationSettings(instances=[integration])
+    tool_settings = ToolSettings.model_validate(
+        {"webSearch": {"primaryProvider": f"searxng:{integration.id}"}}
+    )
+    effective = tool_registry.effective(
+        integrations, "read-only", tool_settings=tool_settings
+    )
+    changed = integration.model_copy(deep=True)
+    changed.config = {"base_url": "https://other.example.com"}
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return (
+            IntegrationSettings(instances=[changed])
+            if settings_type is IntegrationSettings
+            else tool_settings
+        )
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    search = AsyncMock(side_effect=AssertionError("Changed provider must not be used"))
+    monkeypatch.setattr(tools_module, "search_web", search)
+    call = ToolCall(
+        id="search", name="web_search", arguments={"query": "MatoLoop"}
+    )
+
+    result = await effective.execute(call, _context(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+    search.assert_not_awaited()
 
 
 async def test_web_search_rejects_an_invalid_provider_result(tmp_path, monkeypatch) -> None:
@@ -1287,6 +1491,33 @@ async def test_webfetch_denial_stops_before_the_fetch_continues(tmp_path, monkey
 
     assert result.metadata == {"errorCode": "permission.denied"}
     assert continued is False
+
+
+async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) -> None:
+    settings = ToolSettings()
+    effective = tool_registry.effective(
+        IntegrationSettings(),
+        "read-only",
+        webfetch_enabled=True,
+        tool_settings=settings,
+    )
+    disabled = ToolSettings.model_validate({"webFetch": {"enabled": False}})
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=disabled))
+    fetch = AsyncMock(side_effect=AssertionError("Disabled webfetch must not run"))
+    monkeypatch.setattr(tools_module, "fetch_web", fetch)
+    call = ToolCall(
+        id="fetch", name="webfetch", arguments={"url": "https://example.com"}
+    )
+    context = _context(
+        tmp_path,
+        call,
+        web_fetch_policy=WebFetchPolicy.AUTO_PUBLIC,
+    )
+
+    result = await effective.execute(call, context)
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+    fetch.assert_not_awaited()
 
 
 async def test_webfetch_source_ids_distinguish_redacted_query_values(

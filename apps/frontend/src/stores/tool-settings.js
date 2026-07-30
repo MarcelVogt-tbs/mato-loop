@@ -27,6 +27,8 @@ const defaultAgentIdentityPolicy = () => ({ policy: 'ask' })
 
 function settingsPayload(state) {
   return {
+    groups: state.groups,
+    policies: state.policies,
     webSearch: state.webSearch,
     webFetch: state.webFetch,
     generateImage: state.generateImage,
@@ -39,6 +41,8 @@ function settingsPayload(state) {
 
 export const useToolSettingsStore = defineStore('tool-settings', {
   state: () => ({
+    groups: [],
+    policies: {},
     webSearch: defaultWebSearch(),
     webFetch: defaultWebFetch(),
     generateImage: defaultMediaPolicy(),
@@ -70,7 +74,18 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     async saveSettings(settings) {
       this.saving = true
       try {
+        const policies = { ...this.policies, ...(settings.policies || {}) }
+        for (const [field, capability] of Object.entries({
+          generateImage: 'media.generate.image',
+          generateSpeech: 'media.generate.speech',
+          generateAudio: 'media.generate.audio',
+          transcribeAudio: 'media.transcribe.audio',
+          updateAgentIdentity: 'settings.agent_identity.update'
+        })) {
+          if (settings[field]?.policy) policies[capability] = settings[field].policy
+        }
         const payload = {
+          policies,
           webSearch: {
             primaryProvider: settings.webSearch
               ? settings.webSearch.primaryProvider
@@ -98,6 +113,8 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       }
     },
     assignSettings(data) {
+      this.groups = Array.isArray(data?.groups) ? data.groups : []
+      this.policies = { ...(data?.policies || {}) }
       this.webSearch = { ...defaultWebSearch(), ...data?.webSearch }
       this.webFetch = { ...defaultWebFetch(), ...data?.webFetch }
       for (const field of ['generateImage', 'generateSpeech', 'generateAudio', 'transcribeAudio']) {

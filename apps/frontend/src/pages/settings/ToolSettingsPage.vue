@@ -4,7 +4,7 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Tools</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Netzwerk- und Medienwerkzeuge des Agents global steuern.
+          Werkzeuge des Agents gruppiert und global steuern.
         </p>
       </div>
       <q-btn
@@ -27,245 +27,235 @@
           <q-btn flat no-caps color="white" label="Erneut laden" @click="load" />
         </template>
       </q-banner>
-      <q-card flat class="app-surface tool-settings-card">
-        <q-card-section class="row items-start no-wrap q-gutter-md">
-          <q-avatar color="primary" text-color="white" icon="travel_explore" />
-          <div class="col">
-            <div class="text-subtitle1 text-weight-bold">Websuche</div>
-            <div class="text-body2 app-muted">
-              Wählt den Suchanbieter des hostkontrollierten <code>web_search</code>-Tools.
-            </div>
-          </div>
-        </q-card-section>
 
-        <q-separator />
-
-        <q-card-section class="q-gutter-md">
-          <q-select
-            v-model="form.webSearch.primaryProvider"
-            outlined
-            emit-value
-            map-options
-            label="Primärprovider"
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-            :options="primaryProviderOptions"
-            @update:model-value="ensureDistinctProviders"
-          />
-          <q-select
-            v-model="form.webSearch.fallbackProvider"
-            outlined
-            emit-value
-            map-options
-            clearable
-            label="Fallback-Provider"
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-            :options="fallbackProviderOptions"
-            hint="Wird nur bei temporären Fehlern des Primärproviders verwendet."
-            persistent-hint
-          />
-          <q-banner rounded class="app-surface-tonal">
-            <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
-            Suchbegriffe werden an den gewählten Dienst übertragen. Die integrierte No-Key-Suche
-            verwendet je nach Verfügbarkeit öffentliche Suchdienste; zusätzliche Provider werden
-            unter Integrationen konfiguriert.
-          </q-banner>
-        </q-card-section>
-        <q-inner-loading :showing="tools.loading" />
-      </q-card>
-
-      <q-card flat class="app-surface tool-settings-card q-mt-md">
-        <q-card-section class="row items-start no-wrap q-gutter-md">
-          <q-avatar color="primary" text-color="white" icon="language" />
-          <div class="col">
-            <div class="text-subtitle1 text-weight-bold">Webfetch</div>
-            <div class="text-body2 app-muted">
-              Ruft HTTP(S)-Inhalte ab. Weiterleitungen und Zieladressen werden serverseitig geprüft.
-            </div>
-          </div>
-          <q-toggle v-model="form.enabled" color="primary" label="Global aktiv" />
-        </q-card-section>
-
-        <q-separator />
-
-        <q-card-section class="q-gutter-md">
-          <q-banner v-if="!form.enabled" rounded class="app-surface-tonal">
-            <template #avatar><q-icon name="block" color="warning" /></template>
-            Webfetch ist für alle Modelle deaktiviert. Modell-Overrides bleiben gespeichert, werden aber nicht wirksam.
-          </q-banner>
-
-          <q-select
-            v-model="form.defaultPolicy"
-            outlined
-            emit-value
-            map-options
-            label="Globale Standardpolicy"
-            :options="WEBFETCH_DEFAULT_POLICY_OPTIONS"
-            hint="Modelle mit „Globalen Standard übernehmen“ verwenden diese Policy."
-          />
-
-          <q-input
-            v-model.trim="form.userAgent"
-            outlined
-            maxlength="512"
-            label="User-Agent"
-            hint="Browserkennung, die Webfetch bei HTTP-Anfragen sendet."
-            :rules="[userAgentRule]"
-            lazy-rules
-          />
-
-          <q-input
-            v-model.number="form.maxResponseMiB"
-            outlined
-            type="number"
-            min="1"
-            max="256"
-            suffix="MiB"
-            label="Maximale Antwortgröße"
-            hint="Gilt gemeinsam für Webseiten, PDFs, Text und Bilder."
-            :rules="[responseLimitRule]"
-            lazy-rules
-          />
-
-          <q-banner v-if="form.defaultPolicy === 'auto_allowed'" rounded class="app-surface-tonal">
-            <template #avatar><q-icon name="warning_amber" color="warning" /></template>
-            Erlaubte private Origins können ohne einzelne Rückfrage abgerufen werden. Trage nur vertrauenswürdige interne Dienste ein.
-          </q-banner>
-
+      <q-card
+        v-for="group in tools.groups"
+        :key="group.id"
+        flat
+        class="app-surface tool-settings-card q-mb-md"
+      >
+        <q-card-section class="row items-center q-gutter-md">
+          <q-avatar color="primary" text-color="white" :icon="group.icon" />
           <div>
-            <div class="text-subtitle2">Erlaubte private Origins</div>
-            <div class="text-caption app-muted q-mb-sm">
-              Nur vollständige Origins wie <code>http://127.0.0.1:8080</code>, ohne Pfad oder Zugangsdaten.
-              Metadaten-, Link-Local- und andere gefährliche Adressen bleiben blockiert.
-            </div>
-
-            <div v-for="(_, index) in form.allowedPrivateOrigins" :key="index" class="tool-origin-row q-mb-sm">
-              <q-input
-                v-model="form.allowedPrivateOrigins[index]"
-                outlined
-                dense
-                :label="`Private Origin ${index + 1}`"
-                :rules="[originRule]"
-                lazy-rules
-              >
-                <template #prepend><q-icon name="lan" /></template>
-              </q-input>
-              <q-btn
-                flat
-                round
-                dense
-                color="negative"
-                icon="delete_outline"
-                :aria-label="`Private Origin ${index + 1} entfernen`"
-                @click="form.allowedPrivateOrigins.splice(index, 1)"
-              />
-            </div>
-
-            <q-btn
-              outline
-              no-caps
-              color="primary"
-              icon="add"
-              label="Origin hinzufügen"
-              @click="form.allowedPrivateOrigins.push('')"
-            />
-          </div>
-        </q-card-section>
-        <q-inner-loading :showing="tools.loading" />
-      </q-card>
-
-      <q-card flat class="app-surface tool-settings-card q-mt-md">
-        <q-card-section class="row items-start no-wrap q-gutter-md">
-          <q-avatar color="primary" text-color="white" icon="face" />
-          <div class="col">
-            <div class="text-subtitle1 text-weight-bold">Agent-Persona ändern</div>
-            <div class="text-body2 app-muted">
-              Erlaubt dem Agenten, einen ausdrücklichen Änderungswunsch aus dem Chat in der
-              gemeinsamen Persona zu speichern.
-            </div>
+            <div class="text-subtitle1 text-weight-bold">{{ group.label }}</div>
+            <div class="text-body2 app-muted">Tools und Richtlinien dieser Gruppe.</div>
           </div>
         </q-card-section>
         <q-separator />
-        <q-card-section class="q-gutter-md">
-          <q-select
-            v-model="form.updateAgentIdentity.policy"
-            outlined
-            emit-value
-            map-options
-            label="Ausführungsrichtlinie"
-            :options="MEDIA_POLICY_OPTIONS"
-            :hint="policyHint(form.updateAgentIdentity.policy)"
-            persistent-hint
-          />
-          <q-banner rounded class="app-surface-tonal">
-            <template #avatar>
-              <q-icon
-                :name="form.updateAgentIdentity.policy === 'auto' ? 'warning_amber' : 'manage_accounts'"
-                :color="form.updateAgentIdentity.policy === 'auto' ? 'warning' : 'primary'"
-              />
-            </template>
-            Das Tool darf nur ausdrückliche Wünsche des Nutzers übernehmen. Im Modus
-            „Automatisch“ wird die persistente Persona dennoch ohne einzelne Rückfrage geändert.
-          </q-banner>
-        </q-card-section>
-        <q-inner-loading :showing="tools.loading" />
-      </q-card>
 
-      <div class="media-tool-settings-grid q-mt-md">
-        <q-card
-          v-for="item in mediaTools"
-          :key="item.field"
-          flat
-          class="app-surface media-tool-settings-card"
-        >
-          <q-card-section class="row items-start no-wrap q-gutter-md">
-            <q-avatar color="primary" text-color="white" :icon="item.icon" />
-            <div class="col">
-              <div class="text-subtitle1 text-weight-bold">{{ item.label }}</div>
-              <div class="text-body2 app-muted">{{ item.description }}</div>
+        <template v-for="(tool, toolIndex) in group.tools" :key="tool.name">
+          <q-card-section class="tool-settings-item">
+            <div class="row items-start q-col-gutter-md">
+              <div class="col-12 col-md row items-start no-wrap q-gutter-md">
+                <q-avatar color="primary" text-color="white" :icon="tool.icon" />
+                <div class="col">
+                  <div class="row items-center q-gutter-sm">
+                    <div class="text-subtitle2 text-weight-bold">{{ tool.label }}</div>
+                    <q-chip
+                      v-if="tool.source?.type !== 'builtin'"
+                      dense
+                      outline
+                      color="primary"
+                      label="Integration"
+                    />
+                  </div>
+                  <div class="text-caption app-muted">
+                    {{ TOOL_DESCRIPTIONS[tool.name] || tool.name }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-12 col-md-5 q-gutter-sm">
+                <q-select
+                  v-for="action in configurableActions(tool)"
+                  :key="action.capability"
+                  v-model="form.policies[action.capability]"
+                  outlined
+                  dense
+                  emit-value
+                  map-options
+                  :label="actionLabel(tool, action)"
+                  :options="MEDIA_POLICY_OPTIONS"
+                  :hint="policyHint(form.policies[action.capability])"
+                />
+                <q-chip
+                  v-for="action in fixedActions(tool)"
+                  :key="action.capability"
+                  dense
+                  outline
+                  color="primary"
+                  :label="fixedActionLabel(tool, action)"
+                />
+              </div>
             </div>
-          </q-card-section>
-          <q-separator />
-          <q-card-section class="q-gutter-md">
-            <q-select
-              v-model="form[item.field].policy"
-              outlined
-              emit-value
-              map-options
-              label="Ausführungsrichtlinie"
-              :options="MEDIA_POLICY_OPTIONS"
-              :hint="policyHint(form[item.field].policy)"
-              persistent-hint
-            />
-            <q-input
-              v-model.number="form[item.field].timeoutSeconds"
-              outlined
-              type="number"
-              min="10"
-              max="3600"
-              step="10"
-              label="Zeitlimit"
-              suffix="Sekunden"
-              :rules="[timeoutRule]"
-              lazy-rules
-              hint="Nach dieser Dauer wird die Provider-Anfrage abgebrochen."
-              persistent-hint
-            />
-            <q-banner rounded class="app-surface-tonal">
+
+            <div v-if="tool.name === 'web_search'" class="tool-settings-detail q-gutter-md">
+              <q-select
+                v-model="form.webSearch.primaryProvider"
+                outlined
+                emit-value
+                map-options
+                label="Primärprovider"
+                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                :options="primaryProviderOptions"
+                @update:model-value="ensureDistinctProviders"
+              />
+              <q-select
+                v-model="form.webSearch.fallbackProvider"
+                outlined
+                emit-value
+                map-options
+                clearable
+                label="Fallback-Provider"
+                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                :options="fallbackProviderOptions"
+                hint="Wird nur bei temporären Fehlern des Primärproviders verwendet."
+                persistent-hint
+              />
+              <q-banner rounded class="app-surface-tonal">
+                <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
+                Suchbegriffe werden an den gewählten Dienst übertragen. Zusätzliche Provider
+                werden unter Integrationen konfiguriert.
+              </q-banner>
+            </div>
+
+            <div v-else-if="tool.name === 'webfetch'" class="tool-settings-detail q-gutter-md">
+              <q-toggle v-model="form.enabled" color="primary" label="Global aktiv" />
+              <q-banner v-if="!form.enabled" rounded class="app-surface-tonal">
+                <template #avatar><q-icon name="block" color="warning" /></template>
+                Webfetch ist für alle Modelle deaktiviert. Modell-Overrides bleiben gespeichert.
+              </q-banner>
+              <q-select
+                v-model="form.defaultPolicy"
+                outlined
+                emit-value
+                map-options
+                label="Globale Standardpolicy"
+                :options="WEBFETCH_DEFAULT_POLICY_OPTIONS"
+                hint="Modelle mit „Globalen Standard übernehmen“ verwenden diese Policy."
+              />
+              <q-input
+                v-model.trim="form.userAgent"
+                outlined
+                maxlength="512"
+                label="User-Agent"
+                hint="Browserkennung, die Webfetch bei HTTP-Anfragen sendet."
+                :rules="[userAgentRule]"
+                lazy-rules
+              />
+              <q-input
+                v-model.number="form.maxResponseMiB"
+                outlined
+                type="number"
+                min="1"
+                max="256"
+                suffix="MiB"
+                label="Maximale Antwortgröße"
+                hint="Gilt gemeinsam für Webseiten, PDFs, Text und Bilder."
+                :rules="[responseLimitRule]"
+                lazy-rules
+              />
+              <q-banner v-if="form.defaultPolicy === 'auto_allowed'" rounded class="app-surface-tonal">
+                <template #avatar><q-icon name="warning_amber" color="warning" /></template>
+                Erlaubte private Origins können ohne einzelne Rückfrage abgerufen werden.
+              </q-banner>
+              <div>
+                <div class="text-subtitle2">Erlaubte private Origins</div>
+                <div class="text-caption app-muted q-mb-sm">
+                  Nur vollständige Origins ohne Pfad oder Zugangsdaten. Gefährliche Adressen bleiben blockiert.
+                </div>
+                <div
+                  v-for="(_, index) in form.allowedPrivateOrigins"
+                  :key="index"
+                  class="tool-origin-row q-mb-sm"
+                >
+                  <q-input
+                    v-model="form.allowedPrivateOrigins[index]"
+                    outlined
+                    dense
+                    :label="`Private Origin ${index + 1}`"
+                    :rules="[originRule]"
+                    lazy-rules
+                  >
+                    <template #prepend><q-icon name="lan" /></template>
+                  </q-input>
+                  <q-btn
+                    flat
+                    round
+                    dense
+                    color="negative"
+                    icon="delete_outline"
+                    :aria-label="`Private Origin ${index + 1} entfernen`"
+                    @click="form.allowedPrivateOrigins.splice(index, 1)"
+                  />
+                </div>
+                <q-btn
+                  outline
+                  no-caps
+                  color="primary"
+                  icon="add"
+                  label="Origin hinzufügen"
+                  @click="form.allowedPrivateOrigins.push('')"
+                />
+              </div>
+            </div>
+
+            <div v-else-if="mediaToolsByName[tool.name]" class="tool-settings-detail q-gutter-md">
+              <q-input
+                v-model.number="form[mediaToolsByName[tool.name].field].timeoutSeconds"
+                outlined
+                type="number"
+                min="10"
+                max="3600"
+                step="10"
+                label="Zeitlimit"
+                suffix="Sekunden"
+                :rules="[timeoutRule]"
+                lazy-rules
+                hint="Nach dieser Dauer wird die Provider-Anfrage abgebrochen."
+                persistent-hint
+              />
+              <q-banner rounded class="app-surface-tonal">
+                <template #avatar>
+                  <q-icon
+                    :name="form.policies[mediaToolsByName[tool.name].capability] === 'auto'
+                      ? 'warning_amber'
+                      : mediaToolsByName[tool.name].warningIcon"
+                    :color="form.policies[mediaToolsByName[tool.name].capability] === 'auto'
+                      ? 'warning'
+                      : 'primary'"
+                  />
+                </template>
+                {{ mediaToolsByName[tool.name].warning }}
+                <span v-if="form.policies[mediaToolsByName[tool.name].capability] === 'auto'">
+                  Im Modus „Automatisch“ kann das Modell dies ohne einzelne Rückfrage auslösen.
+                </span>
+              </q-banner>
+            </div>
+
+            <q-banner
+              v-else-if="tool.name === 'update_agent_identity'"
+              rounded
+              class="tool-settings-detail app-surface-tonal"
+            >
               <template #avatar>
                 <q-icon
-                  :name="form[item.field].policy === 'auto' ? 'warning_amber' : item.warningIcon"
-                  :color="form[item.field].policy === 'auto' ? 'warning' : 'primary'"
+                  :name="form.policies['settings.agent_identity.update'] === 'auto'
+                    ? 'warning_amber'
+                    : 'manage_accounts'"
+                  :color="form.policies['settings.agent_identity.update'] === 'auto'
+                    ? 'warning'
+                    : 'primary'"
                 />
               </template>
-              {{ item.warning }}
-              <span v-if="form[item.field].policy === 'auto'">
-                Im Modus „Automatisch“ kann das Modell dies ohne einzelne Rückfrage auslösen.
-              </span>
+              Das Tool darf nur ausdrückliche Wünsche des Nutzers übernehmen. Im Modus
+              „Automatisch“ wird die persistente Persona ohne einzelne Rückfrage geändert.
             </q-banner>
           </q-card-section>
-          <q-inner-loading :showing="tools.loading" />
-        </q-card>
-      </div>
+          <q-separator v-if="toolIndex < group.tools.length - 1" />
+        </template>
+        <q-inner-loading :showing="tools.loading" />
+      </q-card>
     </q-form>
   </section>
 </template>
@@ -292,39 +282,58 @@ const MEDIA_POLICY_OPTIONS = [
 ]
 const mediaTools = [
   {
+    name: 'generate_image',
     field: 'generateImage',
-    label: 'Bilder erzeugen',
-    icon: 'image',
+    capability: 'media.generate.image',
     warningIcon: 'cloud_upload',
-    description: 'Erzeugt Bilder aus einer textlichen Beschreibung.',
     warning: 'Prompts werden an den konfigurierten Mediendienst übertragen; die Erzeugung kann länger dauern.'
   },
   {
+    name: 'generate_speech',
     field: 'generateSpeech',
-    label: 'Sprache erzeugen',
-    icon: 'record_voice_over',
+    capability: 'media.generate.speech',
     warningIcon: 'cloud_upload',
-    description: 'Erzeugt gesprochene WAV-Audiodateien aus Text.',
     warning: 'Text wird an den konfigurierten Mediendienst übertragen; lange Texte erhöhen Laufzeit und Datenmenge.'
   },
   {
+    name: 'generate_audio',
     field: 'generateAudio',
-    label: 'Audio erzeugen',
-    icon: 'graphic_eq',
+    capability: 'media.generate.audio',
     warningIcon: 'schedule',
-    description: 'Erzeugt Audio oder Musik aus einem Prompt.',
     warning: 'Die Audioerzeugung kann viel Laufzeit und Rechenleistung beanspruchen und externe Datenübertragung auslösen.'
   },
   {
+    name: 'transcribe_audio',
     field: 'transcribeAudio',
-    label: 'Audio transkribieren',
-    icon: 'mic',
+    capability: 'media.transcribe.audio',
     warningIcon: 'privacy_tip',
-    description: 'Transkribiert WAV-Anhänge und ermöglicht das Diktat im Chat.',
     warning: 'Audioaufnahmen können an den konfigurierten Transkriptionsdienst übertragen werden.'
   }
 ]
+const mediaToolsByName = Object.fromEntries(mediaTools.map((item) => [item.name, item]))
+const TOOL_DESCRIPTIONS = {
+  list_directory: 'Listet Dateien und Unterordner eines Verzeichnisses auf.',
+  read_file: 'Liest Textdateien aus Session oder Workspace.',
+  write_file: 'Erstellt oder ersetzt Textdateien.',
+  create_directory: 'Legt ein neues Verzeichnis an.',
+  delete_path: 'Löscht Dateien oder Verzeichnisse.',
+  copy_path: 'Kopiert Dateien oder Verzeichnisse zwischen erlaubten Bereichen.',
+  move_path: 'Verschiebt Dateien oder Verzeichnisse zwischen erlaubten Bereichen.',
+  web_search: 'Sucht über den hostseitig gewählten Provider im Web.',
+  webfetch: 'Ruft geprüfte HTTP(S)-Inhalte ab.',
+  generate_image: 'Erzeugt Bilder aus einer textlichen Beschreibung.',
+  generate_speech: 'Erzeugt gesprochene WAV-Audiodateien aus Text.',
+  generate_audio: 'Erzeugt Audio oder Musik aus einem Prompt.',
+  transcribe_audio: 'Transkribiert WAV-Anhänge aus der aktuellen Session.',
+  session_read: 'Liest Nachrichten aus der aktuellen oder einer anderen Session.',
+  session_tool_result_read: 'Liest ein persistiertes Tool-Ergebnis der aktuellen Session.',
+  session_search: 'Durchsucht Titel und Inhalte vorhandener Sessions.',
+  memory_retrieve: 'Liest passende persistente Memories.',
+  memory_write: 'Erstellt oder aktualisiert persistente Memories.',
+  update_agent_identity: 'Ändert Name oder Persona-Anweisungen des Agents.'
+}
 const form = reactive({
+  policies: {},
   webSearch: {
     primaryProvider: 'no_key',
     fallbackProvider: null,
@@ -338,11 +347,11 @@ const form = reactive({
   generateImage: { policy: 'disabled', timeoutSeconds: 300 },
   generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
   generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
-  transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
-  updateAgentIdentity: { policy: 'ask' }
+  transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 }
 })
 
 function assignForm(settings) {
+  form.policies = { ...settings.policies }
   form.webSearch = {
     ...settings.webSearch,
     providerOptions: [...settings.webSearch.providerOptions]
@@ -350,8 +359,11 @@ function assignForm(settings) {
   Object.assign(form, settings.webFetch, {
     allowedPrivateOrigins: [...settings.webFetch.allowedPrivateOrigins]
   })
-  for (const { field } of mediaTools) form[field] = { ...settings[field] }
-  form.updateAgentIdentity = { ...settings.updateAgentIdentity }
+  for (const { field, capability } of mediaTools) {
+    form[field] = { ...settings[field] }
+    form.policies[capability] ??= settings[field].policy
+  }
+  form.policies['settings.agent_identity.update'] ??= settings.updateAgentIdentity.policy
 }
 
 const primaryProviderOptions = computed(() => form.webSearch.providerOptions.map((provider) => ({
@@ -367,6 +379,33 @@ function ensureDistinctProviders() {
   if (form.webSearch.fallbackProvider === form.webSearch.primaryProvider) {
     form.webSearch.fallbackProvider = null
   }
+}
+
+function configurableActions(tool) {
+  return (tool.actions || []).filter((action) => action.configurable)
+}
+
+function fixedActions(tool) {
+  return (tool.actions || []).filter((action) => !action.configurable)
+}
+
+function actionLabel(tool, action) {
+  return configurableActions(tool).length > 1
+    ? `${action.label}: Richtlinie`
+    : 'Ausführungsrichtlinie'
+}
+
+function fixedActionLabel(tool, action) {
+  if (tool.name === 'webfetch') return 'Spezialrichtlinie'
+  return `Hostgesteuert · ${policyLabel(action.policy)}`
+}
+
+function policyLabel(policy) {
+  return {
+    disabled: 'Deaktiviert',
+    ask: 'Nachfragen',
+    auto: 'Automatisch'
+  }[policy] || policy
 }
 
 function policyHint(policy) {
@@ -409,6 +448,7 @@ async function save() {
     form.allowedPrivateOrigins.map((origin) => normalizePrivateOrigin(origin).value)
   )]
   const saved = await tools.saveSettings({
+    policies: { ...form.policies },
     webSearch: {
       primaryProvider: form.webSearch.primaryProvider,
       fallbackProvider: form.webSearch.fallbackProvider
@@ -420,11 +460,25 @@ async function save() {
       defaultPolicy: form.defaultPolicy,
       allowedPrivateOrigins
     },
-    generateImage: { ...form.generateImage },
-    generateSpeech: { ...form.generateSpeech },
-    generateAudio: { ...form.generateAudio },
-    transcribeAudio: { ...form.transcribeAudio },
-    updateAgentIdentity: { ...form.updateAgentIdentity }
+    generateImage: {
+      ...form.generateImage,
+      policy: form.policies['media.generate.image']
+    },
+    generateSpeech: {
+      ...form.generateSpeech,
+      policy: form.policies['media.generate.speech']
+    },
+    generateAudio: {
+      ...form.generateAudio,
+      policy: form.policies['media.generate.audio']
+    },
+    transcribeAudio: {
+      ...form.transcribeAudio,
+      policy: form.policies['media.transcribe.audio']
+    },
+    updateAgentIdentity: {
+      policy: form.policies['settings.agent_identity.update']
+    }
   })
   assignForm(saved)
   $q.notify({ type: 'positive', message: 'Tool-Einstellungen gespeichert' })

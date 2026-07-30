@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.integrations import canonicalize_url, sanitize_url_for_display
 from mato_loop_backend.models import ChatSession, PermissionGrant
+from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 
@@ -125,6 +126,32 @@ def webfetch_permission(url: str) -> PermissionRequest:
     )
 
 
+def web_search_permission() -> PermissionRequest:
+    return PermissionRequest(
+        capability="network.search",
+        resource_type="network_service",
+        resource_scope="web_search",
+        action_kind="web_search",
+        risk_level="medium",
+        title="Websuche ausführen?",
+        summary="Der Agent möchte einen konfigurierten Websuchdienst verwenden.",
+        resource_display="Konfigurierte Websuche",
+    )
+
+
+def memory_read_permission(user_id: UUID) -> PermissionRequest:
+    return PermissionRequest(
+        capability="memory.read",
+        resource_type="memory_collection",
+        resource_scope=str(user_id),
+        action_kind="memory_retrieve",
+        risk_level="medium",
+        title="Memories lesen?",
+        summary="Der Agent möchte gespeicherte Memories lesen.",
+        resource_display="Eigene Memories",
+    )
+
+
 def media_permission(session_id: UUID, capability: str, tool_name: str) -> PermissionRequest:
     labels = {
         "media.generate.image": ("Bild erzeugen?", "ein Bild erzeugen"),
@@ -195,11 +222,16 @@ class PermissionPolicy:
         chat_session: ChatSession,
         request: PermissionRequest,
         root_files: RootFileService,
+        policy: ToolExecutionPolicy | None = None,
     ) -> PermissionDecision:
         if request.resource_type == "session" and request.capability == "session.read":
             try:
                 if UUID(request.resource_scope) == chat_session.id:
-                    return PermissionDecision.ALLOW
+                    return (
+                        PermissionDecision.DENY
+                        if policy == ToolExecutionPolicy.DISABLED
+                        else PermissionDecision.ALLOW
+                    )
             except ValueError:
                 return PermissionDecision.DENY
 
@@ -221,18 +253,29 @@ class PermissionPolicy:
                 or root_files.working_directory != chat_session.working_directory
             ):
                 return PermissionDecision.DENY
-            if request.capability == "filesystem.read":
+            if request.capability not in {
+                "filesystem.read",
+                "filesystem.write",
+                "filesystem.delete",
+            }:
+                return PermissionDecision.DENY
+            if (
+                request.capability in {"filesystem.write", "filesystem.delete"}
+                and chat_session.workspace_access != "read-write"
+            ):
+                return PermissionDecision.DENY
+            if policy == ToolExecutionPolicy.DISABLED:
+                return PermissionDecision.DENY
+            if policy in {None, ToolExecutionPolicy.AUTO}:
                 return PermissionDecision.ALLOW
-            if request.capability in {"filesystem.write", "filesystem.delete"}:
-                return (
-                    PermissionDecision.ALLOW
-                    if chat_session.workspace_access == "read-write"
-                    else PermissionDecision.DENY
-                )
+
+        elif request.capability.startswith("filesystem."):
             return PermissionDecision.DENY
 
-        if request.capability.startswith("filesystem."):
+        if policy == ToolExecutionPolicy.DISABLED:
             return PermissionDecision.DENY
+        if policy == ToolExecutionPolicy.AUTO:
+            return PermissionDecision.ALLOW
 
         grants = list(
             (
@@ -282,6 +325,8 @@ class PermissionPolicy:
         if request.resource_type == "session_collection":
             return request.resource_scope == grant.resource_scope == "all"
         if request.resource_type == "url":
+            return request.resource_scope == grant.resource_scope
+        if request.resource_type in {"network_service", "memory_collection"}:
             return request.resource_scope == grant.resource_scope
         if request.resource_type == "agent_identity":
             try:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pydantic import BaseModel, HttpUrl
 
 from mato_loop_backend.integrations.contracts import (
@@ -71,7 +73,10 @@ def effective_integration_contributions(
             contribution = adapter.contributions(instance)
         except ValueError:
             continue
-        tools.extend(contribution.tools)
+        tools.extend(
+            replace(tool, integration_id=str(instance.id))
+            for tool in contribution.tools
+        )
         options.extend(contribution.tool_options)
         prompt_fragments.extend(contribution.prompt_fragments)
     return IntegrationContributions(

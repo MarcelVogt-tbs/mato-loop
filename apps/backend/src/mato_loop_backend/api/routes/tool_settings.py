@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.tools import tool_execution_policy, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations import (
@@ -16,6 +17,7 @@ from mato_loop_backend.settings import (
     MediaToolSettings,
     PolicyToolSettings,
     SettingsStore,
+    ToolExecutionPolicy,
     ToolSettings,
     WebFetchSettings,
     WebSearchToolSettings,
@@ -27,6 +29,7 @@ router = APIRouter(prefix="/tools", dependencies=[Depends(require_user)])
 class ToolSettingsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    policies: dict[str, ToolExecutionPolicy] | None = None
     web_search: WebSearchToolSettings | None = Field(
         default=None, validation_alias=AliasChoices("webSearch", "web_search")
     )
@@ -58,7 +61,17 @@ def tool_settings_payload(
     effective_settings = settings.model_copy(deep=True)
     normalize_search_tool_settings(effective_settings, integration_settings)
     provider_options = search_provider_options(integration_settings)
+    groups = tool_registry.catalog(settings, integration_settings)
+    policies = {
+        action["capability"]: action["policy"]
+        for group in groups
+        for tool in group["tools"]
+        for action in tool["actions"]
+        if action["configurable"]
+    }
     return {
+        "groups": groups,
+        "policies": policies,
         "webSearch": {
             "primaryProvider": effective_settings.web_search.primary_provider,
             "fallbackProvider": effective_settings.web_search.fallback_provider,
@@ -72,23 +85,35 @@ def tool_settings_payload(
             "allowedPrivateOrigins": settings.web_fetch.allowed_private_origins,
         },
         "generateImage": {
-            "policy": settings.generate_image.policy.value,
+            "policy": tool_execution_policy(
+                settings, "media.generate.image", settings.generate_image.policy
+            ).value,
             "timeoutSeconds": settings.generate_image.timeout_seconds,
         },
         "generateSpeech": {
-            "policy": settings.generate_speech.policy.value,
+            "policy": tool_execution_policy(
+                settings, "media.generate.speech", settings.generate_speech.policy
+            ).value,
             "timeoutSeconds": settings.generate_speech.timeout_seconds,
         },
         "generateAudio": {
-            "policy": settings.generate_audio.policy.value,
+            "policy": tool_execution_policy(
+                settings, "media.generate.audio", settings.generate_audio.policy
+            ).value,
             "timeoutSeconds": settings.generate_audio.timeout_seconds,
         },
         "transcribeAudio": {
-            "policy": settings.transcribe_audio.policy.value,
+            "policy": tool_execution_policy(
+                settings, "media.transcribe.audio", settings.transcribe_audio.policy
+            ).value,
             "timeoutSeconds": settings.transcribe_audio.timeout_seconds,
         },
         "updateAgentIdentity": {
-            "policy": settings.update_agent_identity.policy.value,
+            "policy": tool_execution_policy(
+                settings,
+                "settings.agent_identity.update",
+                settings.update_agent_identity.policy,
+            ).value,
         },
     }
 
@@ -136,6 +161,48 @@ async def update_tool_settings(
         value = getattr(payload, field_name)
         if value is not None:
             setattr(settings, field_name, value)
+    legacy_policies = {
+        "media.generate.image": settings.generate_image.policy,
+        "media.generate.speech": settings.generate_speech.policy,
+        "media.generate.audio": settings.generate_audio.policy,
+        "media.transcribe.audio": settings.transcribe_audio.policy,
+        "settings.agent_identity.update": settings.update_agent_identity.policy,
+    }
+    for capability, policy in legacy_policies.items():
+        field_name = {
+            "media.generate.image": "generate_image",
+            "media.generate.speech": "generate_speech",
+            "media.generate.audio": "generate_audio",
+            "media.transcribe.audio": "transcribe_audio",
+            "settings.agent_identity.update": "update_agent_identity",
+        }[capability]
+        if getattr(payload, field_name) is not None:
+            settings.policies[capability] = policy
+        else:
+            settings.policies.setdefault(capability, policy)
+    if payload.policies is not None:
+        groups = tool_registry.catalog(settings, integrations)
+        configurable = {
+            action["capability"]
+            for group in groups
+            for tool in group["tools"]
+            for action in tool["actions"]
+            if action["configurable"]
+        }
+        unknown = set(payload.policies) - configurable
+        if unknown:
+            raise ApiError(422, "validation.invalidChoice", field="policies")
+        settings.policies.update(payload.policies)
+    for capability, field_name in {
+        "media.generate.image": "generate_image",
+        "media.generate.speech": "generate_speech",
+        "media.generate.audio": "generate_audio",
+        "media.transcribe.audio": "transcribe_audio",
+        "settings.agent_identity.update": "update_agent_identity",
+    }.items():
+        getattr(settings, field_name).policy = tool_execution_policy(
+            settings, capability, getattr(settings, field_name).policy
+        )
     await SettingsStore.save(db, settings)
     await db.commit()
     return tool_settings_payload(settings, integrations)

@@ -32,10 +32,12 @@ from mato_loop_backend.agent.permissions import (
     PermissionRequest,
     agent_identity_permission,
     media_permission,
+    memory_read_permission,
     memory_write_permission,
     path_permission,
     session_permission,
     session_search_permission,
+    web_search_permission,
     webfetch_permission,
 )
 from mato_loop_backend.attachments import AttachmentError, AttachmentService
@@ -76,6 +78,7 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
     WebFetchPolicy,
+    resolve_web_fetch_policy,
 )
 from mato_loop_backend.settings.models import normalize_agent_display_name
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService, WorkspaceError
@@ -83,6 +86,25 @@ from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 logger = logging.getLogger(__name__)
 AskHandler = Callable[[PermissionRequest], Awaitable[PermissionDecision]]
 SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
+
+
+def _model_revision(value: BaseModel) -> str:
+    return json.dumps(
+        value.model_dump(mode="json"),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _provider_revision(value: str | None, settings: IntegrationSettings) -> str | None:
+    if value is None or ":" not in value:
+        return None
+    integration_id = value.split(":", 1)[1]
+    instance = next(
+        (item for item in settings.instances if str(item.id) == integration_id), None
+    )
+    return _model_revision(instance) if instance is not None else None
 
 
 @dataclass(slots=True)
@@ -139,9 +161,30 @@ class ToolContext:
     memory_write_enabled: bool = False
     memory_trust_level: TrustLevel = TrustLevel.PUBLIC
     memory_write_trust_level: TrustLevel = TrustLevel.PUBLIC
+    bound_options: dict[str, str | None] = field(default_factory=dict)
+    model_id: UUID | None = None
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
         return await self.ask_handler(request)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolAction:
+    capability: str
+    label: str
+    default_policy: ToolExecutionPolicy
+    configurable: bool = True
+
+
+TOOL_GROUPS = (
+    {"id": "filesystem", "label": "Dateisystem", "icon": "folder"},
+    {"id": "web", "label": "Web", "icon": "language"},
+    {"id": "media", "label": "Medien", "icon": "perm_media"},
+    {"id": "sessions", "label": "Sessions", "icon": "forum"},
+    {"id": "memory", "label": "Memory", "icon": "psychology"},
+    {"id": "agent", "label": "Agent", "icon": "smart_toy"},
+    {"id": "integrations", "label": "Integrationen", "icon": "extension"},
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +199,13 @@ class ToolDefinition:
     requires_memory: bool = False
     requires_memory_write: bool = False
     required_capability: str | None = None
+    group: str = "agent"
+    label: str | None = None
+    icon: str = "build"
+    actions: tuple[ToolAction, ...] = ()
+    authorization_factory: (
+        Callable[[Any, ToolContext], tuple[PermissionRequest, ...]] | None
+    ) = None
 
     def schema(self) -> dict[str, Any]:
         schema = self.arguments_model.model_json_schema()
@@ -176,6 +226,10 @@ def _remove_schema_titles(value: Any) -> None:
 @dataclass(frozen=True, slots=True)
 class BoundTool:
     definition: ToolDefinition
+    source_type: str = "builtin"
+    source_id: str | None = None
+    source_revision: str | None = None
+    selected_options: dict[str, str | None] = field(default_factory=dict)
 
     def schema(self) -> dict[str, Any]:
         return self.definition.schema()
@@ -213,6 +267,57 @@ class ToolRegistry:
             if definition.name in self._definitions:
                 raise ValueError(f"duplicate tool: {definition.name}")
             self._definitions[definition.name] = definition
+
+    def _combined_definitions(
+        self, integration_settings: IntegrationSettings
+    ) -> tuple[
+        dict[str, ToolDefinition],
+        dict[str, tuple[str, str | None, str | None]],
+        tuple[str, ...],
+    ]:
+        contributions = effective_integration_contributions(integration_settings)
+        definitions = dict(self._definitions)
+        sources: dict[str, tuple[str, str | None, str | None]] = {
+            name: ("builtin", None, None) for name in definitions
+        }
+        for contribution in contributions.tools:
+            if contribution.name in definitions:
+                raise ValueError(f"duplicate contributed tool: {contribution.name}")
+            definitions[contribution.name] = ToolDefinition(
+                name=contribution.name,
+                description=contribution.description,
+                arguments_model=contribution.arguments_model,
+                handler=contribution.handler,
+                write=contribution.write,
+                requires_search=contribution.requires_search,
+                requires_webfetch=contribution.requires_webfetch,
+                requires_memory=contribution.requires_memory,
+                requires_memory_write=contribution.requires_memory_write,
+                required_capability=contribution.required_capability,
+                group=contribution.group,
+                label=contribution.label,
+                icon=contribution.icon,
+                actions=contribution.actions,
+                authorization_factory=contribution.authorization_factory,
+            )
+            source_instance = next(
+                (
+                    instance
+                    for instance in integration_settings.instances
+                    if str(instance.id) == contribution.integration_id
+                ),
+                None,
+            )
+            sources[contribution.name] = (
+                "integration",
+                contribution.integration_id,
+                (
+                    _model_revision(source_instance)
+                    if source_instance is not None
+                    else None
+                ),
+            )
+        return definitions, sources, contributions.prompt_fragments
 
     def available(
         self,
@@ -290,24 +395,11 @@ class ToolRegistry:
         memory_enabled: bool = False,
         memory_write_enabled: bool = False,
         tool_capabilities: set[str] | frozenset[str] = frozenset(),
+        tool_settings: ToolSettings | None = None,
     ) -> EffectiveToolSet:
-        contributions = effective_integration_contributions(integration_settings)
-        definitions = dict(self._definitions)
-        for contribution in contributions.tools:
-            if contribution.name in definitions:
-                raise ValueError(f"duplicate contributed tool: {contribution.name}")
-            definitions[contribution.name] = ToolDefinition(
-                name=contribution.name,
-                description=contribution.description,
-                arguments_model=contribution.arguments_model,
-                handler=contribution.handler,
-                write=contribution.write,
-                requires_search=contribution.requires_search,
-                requires_webfetch=contribution.requires_webfetch,
-                requires_memory=contribution.requires_memory,
-                requires_memory_write=contribution.requires_memory_write,
-                required_capability=contribution.required_capability,
-            )
+        definitions, sources, prompt_fragments = self._combined_definitions(
+            integration_settings
+        )
         available_names = {
             item.name
             for item in definitions.values()
@@ -320,13 +412,115 @@ class ToolRegistry:
                 memory_write_enabled=memory_write_enabled,
                 tool_capabilities=tool_capabilities,
             )
+            and (
+                tool_settings is None
+                or all(
+                    tool_execution_policy(
+                        tool_settings, action.capability, action.default_policy
+                    )
+                    != ToolExecutionPolicy.DISABLED
+                    for action in item.actions
+                )
+            )
         }
+        search_providers = (
+            effective_search_providers(tool_settings, integration_settings)
+            if tool_settings is not None
+            else None
+        )
         tools = {
-            name: BoundTool(definition)
+            name: BoundTool(
+                definition,
+                *sources[name],
+                selected_options=(
+                    {
+                        "provider": search_providers[0],
+                        "fallback_provider": search_providers[1],
+                        "provider_revision": _provider_revision(
+                            search_providers[0], integration_settings
+                        ),
+                        "fallback_provider_revision": _provider_revision(
+                            search_providers[1], integration_settings
+                        ),
+                    }
+                    if name == "web_search" and search_providers is not None
+                    else (
+                        {
+                            "settings_revision": _model_revision(
+                                tool_settings.web_fetch
+                            )
+                        }
+                        if name == "webfetch" and tool_settings is not None
+                        else {}
+                    )
+                ),
+            )
             for name, definition in definitions.items()
             if name in available_names
         }
-        return EffectiveToolSet(self, tools, contributions.prompt_fragments)
+        return EffectiveToolSet(self, tools, prompt_fragments)
+
+    def catalog(
+        self, tool_settings: ToolSettings, integration_settings: IntegrationSettings
+    ) -> list[dict[str, Any]]:
+        definitions, sources, _prompt_fragments = self._combined_definitions(
+            integration_settings
+        )
+        tools_by_group: dict[str, list[dict[str, Any]]] = {}
+        for definition in definitions.values():
+            source_type, source_id, _source_revision = sources[definition.name]
+            actions = [
+                {
+                    "capability": action.capability,
+                    "label": action.label,
+                    "policy": tool_execution_policy(
+                        tool_settings, action.capability, action.default_policy
+                    ).value,
+                    "configurable": action.configurable,
+                }
+                for action in definition.actions
+            ]
+            tools_by_group.setdefault(definition.group, []).append(
+                {
+                    "name": definition.name,
+                    "label": definition.label or definition.name,
+                    "icon": definition.icon,
+                    "source": {"type": source_type, "id": source_id},
+                    "actions": actions,
+                }
+            )
+        group_metadata = {item["id"]: item for item in TOOL_GROUPS}
+        group_ids = [item["id"] for item in TOOL_GROUPS]
+        group_ids.extend(group for group in tools_by_group if group not in group_metadata)
+        return [
+            {
+                **group_metadata.get(
+                    group_id,
+                    {"id": group_id, "label": group_id, "icon": "extension"},
+                ),
+                "tools": tools_by_group.get(group_id, []),
+            }
+            for group_id in group_ids
+            if tools_by_group.get(group_id)
+        ]
+
+    def action_default(
+        self, capability: str, integration_settings: IntegrationSettings | None = None
+    ) -> ToolExecutionPolicy:
+        definitions = (
+            self._combined_definitions(integration_settings)[0]
+            if integration_settings is not None
+            else self._definitions
+        )
+        defaults = {
+            action.default_policy
+            for definition in definitions.values()
+            for action in definition.actions
+            if action.capability == capability
+        }
+        if len(defaults) > 1:
+            raise ValueError(f"conflicting defaults for capability: {capability}")
+        return next(iter(defaults), ToolExecutionPolicy.ASK)
 
     async def execute(self, call: ToolCall, context: ToolContext) -> ToolResult:
         definition = self._definitions.get(call.name)
@@ -338,6 +532,35 @@ class ToolRegistry:
         self, call: ToolCall, context: ToolContext, tool: BoundTool
     ) -> ToolResult:
         definition = tool.definition
+        context.bound_options = dict(tool.selected_options)
+
+        async def integration_is_current() -> bool:
+            if tool.source_id is None:
+                return True
+            current_integrations = await SettingsStore.load(context.db, IntegrationSettings)
+            current_instance = next(
+                (
+                    instance
+                    for instance in current_integrations.instances
+                    if str(instance.id) == tool.source_id
+                ),
+                None,
+            )
+            current_revision = (
+                _model_revision(current_instance)
+                if current_instance is not None
+                else None
+            )
+            return current_revision == tool.source_revision and any(
+                contribution.name == definition.name
+                and contribution.integration_id == tool.source_id
+                for contribution in effective_integration_contributions(
+                    current_integrations
+                ).tools
+            )
+
+        if not await integration_is_current():
+            return ToolResult.error("tool.unavailable")
         if definition.write and context.session.workspace_access != "read-write":
             return ToolResult.error("tool.writeDisabled")
         if (
@@ -370,6 +593,18 @@ class ToolRegistry:
             )
             return ToolResult.error("tool.invalidArguments", field=field)
         try:
+            if tool.source_id is not None and definition.actions:
+                if definition.authorization_factory is None:
+                    return ToolResult.error("tool.unavailable")
+                requests = definition.authorization_factory(arguments, context)
+                declared = {action.capability for action in definition.actions}
+                if {request.capability for request in requests} != declared:
+                    return ToolResult.error("tool.unavailable")
+                for request in requests:
+                    if not await _allow(context, request):
+                        return ToolResult.error("permission.denied")
+                if not await integration_is_current():
+                    return ToolResult.error("tool.unavailable")
             return await definition.handler(arguments, context)
         except (
             AttachmentError,
@@ -819,11 +1054,36 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
 
 
 async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> ToolResult:
+    def binding_matches(
+        primary_provider: str,
+        fallback_provider: str | None,
+        integrations: IntegrationSettings,
+    ) -> bool:
+        return not context.bound_options or (
+            primary_provider == context.bound_options.get("provider")
+            and fallback_provider == context.bound_options.get("fallback_provider")
+            and _provider_revision(primary_provider, integrations)
+            == context.bound_options.get("provider_revision")
+            and _provider_revision(fallback_provider, integrations)
+            == context.bound_options.get("fallback_provider_revision")
+        )
+
     current_integrations = await SettingsStore.load(context.db, IntegrationSettings)
     current_tools = await SettingsStore.load(context.db, ToolSettings)
     primary_provider, fallback_provider = effective_search_providers(
         current_tools, current_integrations
     )
+    if not binding_matches(primary_provider, fallback_provider, current_integrations):
+        return ToolResult.error("tool.unavailable")
+    if not await _allow(context, web_search_permission()):
+        return ToolResult.error("permission.denied")
+    current_integrations = await SettingsStore.load(context.db, IntegrationSettings)
+    current_tools = await SettingsStore.load(context.db, ToolSettings)
+    primary_provider, fallback_provider = effective_search_providers(
+        current_tools, current_integrations
+    )
+    if not binding_matches(primary_provider, fallback_provider, current_integrations):
+        return ToolResult.error("tool.unavailable")
     content = await search_web(
         current_integrations,
         arguments.query,
@@ -864,14 +1124,43 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 
 
 async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
+    async def ensure_binding_is_current() -> None:
+        revision = context.bound_options.get("settings_revision")
+        if revision is None:
+            return
+        current_tools = await SettingsStore.load(context.db, ToolSettings)
+        if (
+            not current_tools.web_fetch.enabled
+            or _model_revision(current_tools.web_fetch) != revision
+        ):
+            raise WebFetchError("tool.unavailable")
+        if context.model_id is not None:
+            current_ai = await SettingsStore.load(context.db, AiSettings)
+            current_model = next(
+                (item for item in current_ai.models if item.id == context.model_id), None
+            )
+            if (
+                current_model is None
+                or resolve_web_fetch_policy(current_tools, current_model)
+                != context.web_fetch_policy
+            ):
+                raise WebFetchError("tool.unavailable")
+        context.tool_settings = current_tools
+        context.allowed_private_origins = tuple(
+            current_tools.web_fetch.allowed_private_origins
+        )
+
     async def authorize_url(url: str) -> None:
+        await ensure_binding_is_current()
         requires_approval = context.web_fetch_policy == WebFetchPolicy.ASK or (
             context.web_fetch_policy == WebFetchPolicy.AUTO_PUBLIC
             and private_origin_is_allowed(url, context.allowed_private_origins)
         )
         if requires_approval and not await _allow(context, webfetch_permission(url)):
             raise WebFetchError("permission.denied")
+        await ensure_binding_is_current()
 
+    await ensure_binding_is_current()
     result = await fetch_web(
         arguments.url,
         format=arguments.format,
@@ -940,6 +1229,22 @@ _MEDIA_MODEL_CAPABILITIES = {
 }
 
 
+def tool_execution_policy(
+    settings: ToolSettings,
+    capability: str,
+    default: ToolExecutionPolicy = ToolExecutionPolicy.ASK,
+) -> ToolExecutionPolicy:
+    configured = settings.policies.get(capability)
+    if configured is not None:
+        return configured
+    field_name = _MEDIA_SETTINGS_FIELDS.get(capability)
+    if field_name is not None:
+        return getattr(settings, field_name).policy
+    if capability == "settings.agent_identity.update":
+        return settings.update_agent_identity.policy
+    return default
+
+
 def effective_tool_capabilities(
     settings: ToolSettings,
     media_capabilities: set[ModelCapability] | None = None,
@@ -947,20 +1252,32 @@ def effective_tool_capabilities(
     capabilities = {
         capability
         for capability, field_name in _MEDIA_SETTINGS_FIELDS.items()
-        if getattr(settings, field_name).policy != ToolExecutionPolicy.DISABLED
+        if tool_execution_policy(
+            settings, capability, getattr(settings, field_name).policy
+        )
+        != ToolExecutionPolicy.DISABLED
         and (
             media_capabilities is None
             or _MEDIA_MODEL_CAPABILITIES[capability] in media_capabilities
         )
     }
-    if settings.update_agent_identity.policy != ToolExecutionPolicy.DISABLED:
+    if (
+        tool_execution_policy(
+            settings,
+            "settings.agent_identity.update",
+            settings.update_agent_identity.policy,
+        )
+        != ToolExecutionPolicy.DISABLED
+    ):
         capabilities.add("settings.agent_identity.update")
     return capabilities
 
 
 async def _authorize_media(context: ToolContext, capability: str) -> ToolResult | None:
     field_name = _MEDIA_SETTINGS_FIELDS[capability]
-    policy = getattr(context.tool_settings, field_name).policy
+    policy = tool_execution_policy(
+        context.tool_settings, capability, getattr(context.tool_settings, field_name).policy
+    )
     if policy == ToolExecutionPolicy.DISABLED:
         return ToolResult.error("tool.unavailable")
     if policy == ToolExecutionPolicy.ASK:
@@ -971,7 +1288,11 @@ async def _authorize_media(context: ToolContext, capability: str) -> ToolResult 
             return ToolResult.error("permission.denied")
         context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
         if (
-            getattr(context.tool_settings, field_name).policy
+            tool_execution_policy(
+                context.tool_settings,
+                capability,
+                getattr(context.tool_settings, field_name).policy,
+            )
             == ToolExecutionPolicy.DISABLED
         ):
             return ToolResult.error("tool.unavailable")
@@ -982,7 +1303,11 @@ async def _update_agent_identity(
     arguments: UpdateAgentIdentityArguments, context: ToolContext
 ) -> ToolResult:
     context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
-    policy = context.tool_settings.update_agent_identity.policy
+    policy = tool_execution_policy(
+        context.tool_settings,
+        "settings.agent_identity.update",
+        context.tool_settings.update_agent_identity.policy,
+    )
     if policy == ToolExecutionPolicy.DISABLED:
         return ToolResult.error("tool.unavailable")
     approval_received = False
@@ -1002,7 +1327,11 @@ async def _update_agent_identity(
     context.tool_settings = await SettingsStore.load(
         context.db, ToolSettings, for_update=True
     )
-    current_policy = context.tool_settings.update_agent_identity.policy
+    current_policy = tool_execution_policy(
+        context.tool_settings,
+        "settings.agent_identity.update",
+        context.tool_settings.update_agent_identity.policy,
+    )
     if current_policy == ToolExecutionPolicy.DISABLED or (
         current_policy == ToolExecutionPolicy.ASK and not approval_received
     ):
@@ -1430,6 +1759,8 @@ async def _memory_write(
 async def _memory_retrieve(
     arguments: MemoryRetrieveArguments, context: ToolContext
 ) -> ToolResult:
+    if not await _allow(context, memory_read_permission(context.session.user_id)):
+        return ToolResult.error("permission.denied")
     result = await MemoryRetrievalService.retrieve(
         context.db,
         mode=MemoryRetrieveMode(arguments.mode),
@@ -1502,6 +1833,33 @@ async def _memory_retrieve(
     )
 
 
+_FILESYSTEM_READ = ToolAction(
+    "filesystem.read", "Lesen", ToolExecutionPolicy.AUTO
+)
+_FILESYSTEM_WRITE = ToolAction(
+    "filesystem.write", "Schreiben", ToolExecutionPolicy.AUTO
+)
+_FILESYSTEM_DELETE = ToolAction(
+    "filesystem.delete", "Löschen", ToolExecutionPolicy.AUTO
+)
+_WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO)
+_WEB_FETCH = ToolAction(
+    "network.fetch", "Webseiten abrufen", ToolExecutionPolicy.ASK, configurable=False
+)
+_SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.ASK)
+_SESSION_SEARCH = ToolAction(
+    "session.search", "Sessions durchsuchen", ToolExecutionPolicy.ASK
+)
+_SESSION_TOOL_RESULT_READ = ToolAction(
+    "session.tool_result.read",
+    "Historische Tool-Ergebnisse lesen",
+    ToolExecutionPolicy.AUTO,
+    configurable=False,
+)
+_MEMORY_READ = ToolAction("memory.read", "Memories lesen", ToolExecutionPolicy.AUTO)
+_MEMORY_WRITE = ToolAction("memory.write", "Memories speichern", ToolExecutionPolicy.ASK)
+
+
 tool_registry = ToolRegistry(
     [
         ToolDefinition(
@@ -1512,6 +1870,10 @@ tool_registry = ToolRegistry(
             "directory is selected.",
             ListDirectoryArguments,
             _list_directory,
+            group="filesystem",
+            label="Ordner auflisten",
+            icon="folder_open",
+            actions=(_FILESYSTEM_READ,),
         ),
         ToolDefinition(
             "read_file",
@@ -1522,6 +1884,10 @@ tool_registry = ToolRegistry(
             "under files.",
             ReadFileArguments,
             _read_file,
+            group="filesystem",
+            label="Datei lesen",
+            icon="description",
+            actions=(_FILESYSTEM_READ,),
         ),
         ToolDefinition(
             "write_file",
@@ -1532,6 +1898,10 @@ tool_registry = ToolRegistry(
             WriteFileArguments,
             _write_file,
             write=True,
+            group="filesystem",
+            label="Datei schreiben",
+            icon="edit_document",
+            actions=(_FILESYSTEM_WRITE,),
         ),
         ToolDefinition(
             "create_directory",
@@ -1540,6 +1910,10 @@ tool_registry = ToolRegistry(
             CreateDirectoryArguments,
             _create_directory,
             write=True,
+            group="filesystem",
+            label="Ordner erstellen",
+            icon="create_new_folder",
+            actions=(_FILESYSTEM_WRITE,),
         ),
         ToolDefinition(
             "delete_path",
@@ -1549,6 +1923,10 @@ tool_registry = ToolRegistry(
             DeletePathArguments,
             _delete_path,
             write=True,
+            group="filesystem",
+            label="Pfad löschen",
+            icon="delete_outline",
+            actions=(_FILESYSTEM_DELETE,),
         ),
         ToolDefinition(
             "copy_path",
@@ -1559,6 +1937,10 @@ tool_registry = ToolRegistry(
             CopyPathArguments,
             _copy_path,
             write=True,
+            group="filesystem",
+            label="Pfad kopieren",
+            icon="content_copy",
+            actions=(_FILESYSTEM_READ, _FILESYSTEM_WRITE),
         ),
         ToolDefinition(
             "move_path",
@@ -1569,6 +1951,10 @@ tool_registry = ToolRegistry(
             MovePathArguments,
             _move_path,
             write=True,
+            group="filesystem",
+            label="Pfad verschieben",
+            icon="drive_file_move",
+            actions=(_FILESYSTEM_DELETE, _FILESYSTEM_WRITE),
         ),
         ToolDefinition(
             "web_search",
@@ -1578,6 +1964,10 @@ tool_registry = ToolRegistry(
             WebSearchArguments,
             _web_search,
             requires_search=True,
+            group="web",
+            label="Im Web suchen",
+            icon="travel_explore",
+            actions=(_WEB_SEARCH,),
         ),
         ToolDefinition(
             "webfetch",
@@ -1589,6 +1979,10 @@ tool_registry = ToolRegistry(
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,
+            group="web",
+            label="Webseite abrufen",
+            icon="language",
+            actions=(_WEB_FETCH,),
         ),
         ToolDefinition(
             "generate_image",
@@ -1596,6 +1990,14 @@ tool_registry = ToolRegistry(
             GenerateImageArguments,
             _generate_image,
             required_capability="media.generate.image",
+            group="media",
+            label="Bild erzeugen",
+            icon="image",
+            actions=(
+                ToolAction(
+                    "media.generate.image", "Bilder erzeugen", ToolExecutionPolicy.DISABLED
+                ),
+            ),
         ),
         ToolDefinition(
             "generate_speech",
@@ -1603,6 +2005,16 @@ tool_registry = ToolRegistry(
             GenerateSpeechArguments,
             _generate_speech,
             required_capability="media.generate.speech",
+            group="media",
+            label="Sprache erzeugen",
+            icon="record_voice_over",
+            actions=(
+                ToolAction(
+                    "media.generate.speech",
+                    "Sprache erzeugen",
+                    ToolExecutionPolicy.DISABLED,
+                ),
+            ),
         ),
         ToolDefinition(
             "generate_audio",
@@ -1610,6 +2022,14 @@ tool_registry = ToolRegistry(
             GenerateAudioArguments,
             _generate_audio,
             required_capability="media.generate.audio",
+            group="media",
+            label="Audio erzeugen",
+            icon="graphic_eq",
+            actions=(
+                ToolAction(
+                    "media.generate.audio", "Audio erzeugen", ToolExecutionPolicy.DISABLED
+                ),
+            ),
         ),
         ToolDefinition(
             "transcribe_audio",
@@ -1617,12 +2037,26 @@ tool_registry = ToolRegistry(
             TranscribeAudioArguments,
             _transcribe_audio,
             required_capability="media.transcribe.audio",
+            group="media",
+            label="Audio transkribieren",
+            icon="mic",
+            actions=(
+                ToolAction(
+                    "media.transcribe.audio",
+                    "Audio transkribieren",
+                    ToolExecutionPolicy.DISABLED,
+                ),
+            ),
         ),
         ToolDefinition(
             "session_read",
             "Read paginated original messages from this or another chat session.",
             SessionReadArguments,
             _session_read,
+            group="sessions",
+            label="Session lesen",
+            icon="forum",
+            actions=(_SESSION_READ,),
         ),
         ToolDefinition(
             "session_tool_result_read",
@@ -1631,12 +2065,20 @@ tool_registry = ToolRegistry(
             "output and does not execute the original tool again.",
             SessionToolResultReadArguments,
             _session_tool_result_read,
+            group="sessions",
+            label="Tool-Ergebnis lesen",
+            icon="history",
+            actions=(_SESSION_TOOL_RESULT_READ,),
         ),
         ToolDefinition(
             "session_search",
             "Search chat sessions and return IDs for later reading.",
             SessionSearchArguments,
             _session_search,
+            group="sessions",
+            label="Sessions durchsuchen",
+            icon="manage_search",
+            actions=(_SESSION_SEARCH,),
         ),
         ToolDefinition(
             "memory_write",
@@ -1652,6 +2094,10 @@ tool_registry = ToolRegistry(
             _memory_write,
             requires_memory=True,
             requires_memory_write=True,
+            group="memory",
+            label="Memory speichern",
+            icon="save",
+            actions=(_MEMORY_WRITE,),
         ),
         ToolDefinition(
             "memory_retrieve",
@@ -1664,6 +2110,10 @@ tool_registry = ToolRegistry(
             MemoryRetrieveArguments,
             _memory_retrieve,
             requires_memory=True,
+            group="memory",
+            label="Memory abrufen",
+            icon="psychology",
+            actions=(_MEMORY_READ,),
         ),
         ToolDefinition(
             "update_agent_identity",
@@ -1673,6 +2123,16 @@ tool_registry = ToolRegistry(
             UpdateAgentIdentityArguments,
             _update_agent_identity,
             required_capability="settings.agent_identity.update",
+            group="agent",
+            label="Persona ändern",
+            icon="face",
+            actions=(
+                ToolAction(
+                    "settings.agent_identity.update",
+                    "Persona ändern",
+                    ToolExecutionPolicy.ASK,
+                ),
+            ),
         ),
     ]
 )

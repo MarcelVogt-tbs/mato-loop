@@ -45,6 +45,7 @@ from mato_loop_backend.agent.tools import (
     ToolContext,
     ToolPermission,
     effective_tool_capabilities,
+    tool_execution_policy,
     tool_registry,
 )
 from mato_loop_backend.attachments import AttachmentError, AttachmentInput, AttachmentService
@@ -1255,6 +1256,7 @@ class AgentRuntime:
                     tool_capabilities=effective_tool_capabilities(
                         tool_settings, available_media_capabilities(ai_settings)
                     ),
+                    tool_settings=tool_settings,
                 )
                 if model.supports_tools
                 else None
@@ -1884,6 +1886,7 @@ class AgentRuntime:
                         memory_write_enabled=current_memory_state.write_enabled,
                         memory_trust_level=current_memory_trust,
                         memory_write_trust_level=model_trust_level,
+                        model_id=model.id,
                     )
                     assert effective_toolset is not None
                     tool_result = await effective_toolset.execute(call, tool_context)
@@ -2443,7 +2446,16 @@ class AgentRuntime:
         root_files: RootFileService,
         runtime_settings: AgentRuntimeSettings,
     ) -> PermissionDecision:
-        decision = await PermissionPolicy.evaluate(db, chat_session, request, root_files)
+        tool_settings = await SettingsStore.load(db, ToolSettings)
+        integration_settings = await SettingsStore.load(db, IntegrationSettings)
+        policy = tool_execution_policy(
+            tool_settings,
+            request.capability,
+            tool_registry.action_default(request.capability, integration_settings),
+        )
+        decision = await PermissionPolicy.evaluate(
+            db, chat_session, request, root_files, policy
+        )
         if decision != PermissionDecision.ASK:
             return decision
         approval_decision = await cls._request_approval(
@@ -2454,10 +2466,23 @@ class AgentRuntime:
             request,
             runtime_settings.approval_timeout_seconds,
         )
+        if approval_decision not in {"allow_once", "allow_session"}:
+            return PermissionDecision.DENY
+        await db.refresh(chat_session)
+        tool_settings = await SettingsStore.load(db, ToolSettings)
+        integration_settings = await SettingsStore.load(db, IntegrationSettings)
+        current_policy = tool_execution_policy(
+            tool_settings,
+            request.capability,
+            tool_registry.action_default(request.capability, integration_settings),
+        )
+        current_decision = await PermissionPolicy.evaluate(
+            db, chat_session, request, root_files, current_policy
+        )
         return (
-            PermissionDecision.ALLOW
-            if approval_decision in {"allow_once", "allow_session"}
-            else PermissionDecision.DENY
+            PermissionDecision.DENY
+            if current_decision == PermissionDecision.DENY
+            else PermissionDecision.ALLOW
         )
 
     @staticmethod

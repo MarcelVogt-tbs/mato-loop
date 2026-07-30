@@ -1652,15 +1652,8 @@ body.body--dark .chat-composer__card {
   gap: 8px;
 }
 
-.media-tool-settings-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.media-tool-settings-card {
-  position: relative;
-  min-width: 0;
+.tool-settings-detail {
+  margin-top: 20px;
 }
 
 .tool-call__attachments {
@@ -1932,10 +1925,6 @@ body.body--dark .chat-composer__card {
 
   .settings-section-header .q-btn {
     width: 100%;
-  }
-
-  .media-tool-settings-grid {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .provider-settings-actions {

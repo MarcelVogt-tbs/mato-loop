@@ -23,6 +23,12 @@ class ToolContribution:
     requires_memory: bool = False
     requires_memory_write: bool = False
     required_capability: str | None = None
+    group: str = "integrations"
+    label: str | None = None
+    icon: str = "extension"
+    actions: tuple[Any, ...] = ()
+    integration_id: str | None = None
+    authorization_factory: Callable[[Any, Any], tuple[Any, ...]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
