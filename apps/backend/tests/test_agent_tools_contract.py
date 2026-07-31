@@ -916,6 +916,52 @@ async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_
     context.ask_handler.assert_not_awaited()
 
 
+async def test_session_tool_result_read_exposes_attachment_references(tmp_path) -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="tool",
+        content="Image generated.",
+        trust_level=TrustLevel.PUBLIC.value,
+    )
+    attachment = MessageAttachment(
+        id=uuid4(),
+        message_id=message.id,
+        position=0,
+        filename="generated.png",
+        kind="image",
+        category="generated",
+        processing_status="ready",
+        mime_type="image/png",
+        size_bytes=123,
+        sha256="a" * 64,
+        storage_path=f"generated/{uuid4()}/generated.png",
+    )
+    message.attachments = [attachment]
+    call = ToolCall(
+        id="read-result",
+        name="session_tool_result_read",
+        arguments={"message_id": str(message.id)},
+    )
+    context = _context(tmp_path, call)
+    message.session_id = context.session.id
+    context.db.scalar.return_value = message
+
+    result = await tool_registry.execute(call, context)
+
+    assert json.loads(result.content)["attachments"] == [
+        {
+            "id": str(attachment.id),
+            "filename": "generated.png",
+            "kind": "image",
+            "mimeType": "image/png",
+            "category": "generated",
+            "processingStatus": "ready",
+            "path": attachment.storage_path,
+        }
+    ]
+
+
 async def test_session_tool_result_read_hides_unavailable_messages(tmp_path) -> None:
     message_id = uuid4()
     call = ToolCall(

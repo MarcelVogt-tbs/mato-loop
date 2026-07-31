@@ -515,7 +515,7 @@ async def test_projection_accepts_bounded_transient_images() -> None:
         )
 
 
-async def test_session_read_result_reactivates_historical_image(monkeypatch) -> None:
+async def test_session_tool_result_read_reactivates_historical_image(monkeypatch) -> None:
     attachment_id = uuid4()
     reference = _attachment_reference(
         uuid4(),
@@ -551,17 +551,18 @@ async def test_session_read_result_reactivates_historical_image(monkeypatch) -> 
                 "tool_call_id": "read",
                 "content": json.dumps(
                     {
-                        "messages": [
+                        "messageId": str(uuid4()),
+                        "offset": 0,
+                        "content": "Image generated.",
+                        "attachments": [
                             {
-                                "attachments": [
-                                    {
-                                        "id": str(attachment_id),
-                                        "filename": "scan.png",
-                                        "path": reference["storage_path"],
-                                    }
-                                ]
+                                "id": str(attachment_id),
+                                "filename": "scan.png",
+                                "kind": "image",
+                                "mimeType": "image/png",
+                                "path": reference["storage_path"],
                             }
-                        ]
+                        ],
                     }
                 ),
             },

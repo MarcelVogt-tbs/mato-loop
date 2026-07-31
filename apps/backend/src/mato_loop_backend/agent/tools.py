@@ -1520,6 +1520,21 @@ async def _transcribe_audio(
     return ToolResult(result.text, {})
 
 
+def _attachment_items(message: Message) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(attachment.id),
+            "filename": attachment.filename,
+            "kind": attachment.kind,
+            "mimeType": attachment.mime_type,
+            "category": attachment.category,
+            "processingStatus": attachment.processing_status,
+            "path": attachment.storage_path,
+        }
+        for attachment in message.attachments
+    ]
+
+
 def _message_item(
     message: Message,
     remaining: int,
@@ -1560,19 +1575,8 @@ def _message_item(
         item["toolCalls"] = [
             {"id": call.get("id"), "name": call.get("name")} for call in message.tool_calls
         ]
-    if message.attachments:
-        item["attachments"] = [
-            {
-                "id": str(attachment.id),
-                "filename": attachment.filename,
-                "kind": attachment.kind,
-                "mimeType": attachment.mime_type,
-                "category": attachment.category,
-                "processingStatus": attachment.processing_status,
-                "path": attachment.storage_path,
-            }
-            for attachment in message.attachments
-        ]
+    if attachments := _attachment_items(message):
+        item["attachments"] = attachments
     return item, remaining - len(content)
 
 
@@ -1587,7 +1591,9 @@ async def _session_tool_result_read(
     ]
     if context.memory_trust_level == TrustLevel.PUBLIC:
         filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
-    message = await context.db.scalar(select(Message).where(*filters))
+    message = await context.db.scalar(
+        select(Message).options(selectinload(Message.attachments)).where(*filters)
+    )
     if message is None:
         return ToolResult.error("session.messageNotFound")
 
@@ -1597,17 +1603,18 @@ async def _session_tool_result_read(
     content = _sanitize_tool_result_reference_fields(content)
     end = min(len(content), arguments.offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
     has_more = end < len(content)
-    return ToolResult.json(
-        {
-            "messageId": str(message.id),
-            "offset": arguments.offset,
-            "content": content[arguments.offset:end],
-            "totalCharacters": len(content),
-            "hasMore": has_more,
-            "nextOffset": end if has_more else None,
-            "contentIsUntrusted": True,
-        }
-    )
+    payload = {
+        "messageId": str(message.id),
+        "offset": arguments.offset,
+        "content": content[arguments.offset:end],
+        "totalCharacters": len(content),
+        "hasMore": has_more,
+        "nextOffset": end if has_more else None,
+        "contentIsUntrusted": True,
+    }
+    if attachments := _attachment_items(message):
+        payload["attachments"] = attachments
+    return ToolResult.json(payload)
 
 
 async def _session_read(arguments: SessionReadArguments, context: ToolContext) -> ToolResult:
