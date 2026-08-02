@@ -179,6 +179,7 @@ def message_dict(
     message: Message,
     *,
     include_attachment_text: bool = False,
+    include_attachment_markers: bool = True,
     attachment_service: AttachmentService | None = None,
 ) -> dict[str, Any]:
     content = message.content
@@ -201,7 +202,7 @@ def message_dict(
             f"{attachment.filename or 'attachment'}, kind {attachment.kind}, "
             f"MIME {attachment.mime_type}, path {attachment.storage_path}{derived}{duration}]"
         )
-    if attachment_markers:
+    if include_attachment_markers and attachment_markers:
         content = "\n\n".join(
             part for part in (content, "\n".join(attachment_markers)) if part
         )
@@ -623,10 +624,23 @@ def _projection_messages(
     historical_omitted_markers: dict[int, str] = {}
     current_tool_indices: list[int] = []
     for record_index, item in enumerate(records):
+        private_resources = (
+            target_trust_level == TrustLevel.PUBLIC
+            and (item.trust_level or TrustLevel.PUBLIC.value)
+            == TrustLevel.PRIVATE.value
+        )
         projected = message_dict(
             item,
-            include_attachment_text=include_attachment_text and item.id == latest_user_id,
+            include_attachment_text=(
+                include_attachment_text
+                and item.id == latest_user_id
+                and not private_resources
+            ),
+            include_attachment_markers=not private_resources,
         )
+        if private_resources and projected.get("tool_calls"):
+            for call in projected["tool_calls"]:
+                call["arguments"] = {}
         for attachment in projected.get("attachments") or []:
             attachment["source_order"] = source_order.get(item.id, len(source_order))
             projected_attachment_ids.add(str(attachment.get("id") or ""))
@@ -682,7 +696,7 @@ def _projection_messages(
     if available_records is not None:
         historical_references = []
         for order, item in enumerate(available_records):
-            projected = message_dict(item)
+            projected = message_dict(item, include_attachment_markers=False)
             for attachment in projected.get("attachments") or []:
                 if str(attachment.get("id") or "") in projected_attachment_ids:
                     continue
@@ -1195,7 +1209,6 @@ def _image_input_tokens(
 ) -> int:
     selected = select_provider_images(
         messages,
-        input_trust_level=target_trust_level.value,
         target_trust_level=target_trust_level.value,
     )
     return IMAGE_INPUT_RESERVE_TOKENS * sum(item.allow_raw for item in selected)

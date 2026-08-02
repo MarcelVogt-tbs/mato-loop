@@ -144,7 +144,6 @@
                         class="session-list-item__title text-body2"
                         :class="{ 'text-weight-medium': route.query.session === session.id }"
                       >
-                        <q-icon v-if="session.trustLevel === 'private'" name="lock" size="13px" class="q-mr-xs" />
                         {{ session.title }}
                       </q-item-label>
                       <q-tooltip

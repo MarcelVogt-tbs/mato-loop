@@ -175,7 +175,6 @@ async def test_provider_rejects_model_from_another_provider_before_database_acce
             db,
             provider=provider,
             model=model,
-            input_trust_level=TrustLevel.PUBLIC,
             messages=[],
             tools=[],
         )
@@ -184,7 +183,7 @@ async def test_provider_rejects_model_from_another_provider_before_database_acce
     db.get.assert_not_awaited()
 
 
-async def test_provider_allows_private_input_for_public_pseudonymized_request(
+async def test_provider_allows_chat_text_for_public_pseudonymized_request(
     monkeypatch,
 ) -> None:
     db = AsyncMock(spec=AsyncSession)
@@ -204,7 +203,6 @@ async def test_provider_allows_private_input_for_public_pseudonymized_request(
         db,
         provider=provider,
         model=model,
-        input_trust_level=TrustLevel.PRIVATE,
         messages=[],
         tools=[],
     )
@@ -566,21 +564,19 @@ def test_memory_tools_are_gated_independently_from_workspace_write_mode() -> Non
     )
 
 
-async def test_public_model_can_read_private_session_after_approval(
+async def test_public_model_can_read_another_session_after_approval(
     tmp_path,
 ) -> None:
     source = ChatSession(
         id=uuid4(),
         user_id=uuid4(),
         title="Public",
-        trust_level="public",
         workspace_access="read-only",
     )
     target = ChatSession(
         id=uuid4(),
         user_id=source.user_id,
         title="Privat",
-        trust_level="private",
         workspace_access="read-only",
     )
     db = AsyncMock(spec=AsyncSession)
@@ -922,7 +918,6 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
         AsyncMock(spec=AsyncSession),
         provider=provider,
         model=model,
-        input_trust=TrustLevel.PRIVATE,
         system_prompt=DREAMING_SYSTEM_PROMPT,
         source=f"MESSAGE {evidence_id} [USER]\nmeine Frau und unser Kind",
         instant_memories=[],
@@ -990,7 +985,6 @@ async def test_dreaming_repairs_assistant_only_evidence(monkeypatch) -> None:
         AsyncMock(spec=AsyncSession),
         provider=provider,
         model=model,
-        input_trust=TrustLevel.PRIVATE,
         system_prompt=DREAMING_SYSTEM_PROMPT,
         source=(
             f"MESSAGE {user_id} [USER]\nBitte antworte kurz.\n\n"
@@ -1062,7 +1056,6 @@ async def test_dreaming_repairs_missing_usage_attribution(monkeypatch) -> None:
         AsyncMock(spec=AsyncSession),
         provider=provider,
         model=model,
-        input_trust=TrustLevel.PRIVATE,
         system_prompt=DREAMING_SYSTEM_PROMPT,
         source=(
             f"MESSAGE {user_id} [USER]\nHilf mir mit meiner Coding-Lösung.\n\n"
@@ -1141,7 +1134,6 @@ async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
         db,
         provider=provider,
         model=model,
-        input_trust=TrustLevel.PRIVATE,
         system_prompt=DREAMING_SYSTEM_PROMPT,
         source=(
             f"MESSAGE {first_evidence_id} [USER]\nMeine Familie ist wichtig.\n\n"
@@ -1208,7 +1200,6 @@ async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> No
         AsyncMock(spec=AsyncSession),
         provider=provider,
         model=model,
-        input_trust=TrustLevel.PRIVATE,
         source="{}",
         candidate_count=1,
         supplied_ids={memory_id},
@@ -1257,7 +1248,6 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
         AsyncMock(spec=AsyncSession),
         provider=provider,
         model=model,
-        input_trust=TrustLevel.PRIVATE,
         source="{}",
         candidate_count=2,
         supplied_ids={memory_id},

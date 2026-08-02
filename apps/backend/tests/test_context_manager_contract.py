@@ -453,8 +453,17 @@ def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
 
 def test_public_projection_does_not_reference_private_historical_tool_results() -> None:
     session = _session()
-    assistant = _message(session.id, "assistant", "")
-    assistant.tool_calls = [{"id": "fetch", "name": "webfetch", "arguments": {}}]
+    assistant = _message(session.id, "assistant", "Normale Antwort")
+    assistant.trust_level = TrustLevel.PRIVATE.value
+    assistant.tool_calls = [
+        {
+            "id": "fetch",
+            "name": "webfetch",
+            "arguments": {"url": "https://secret.example.test/private"},
+        }
+    ]
+    attachment = _attach_image(assistant)
+    attachment.filename = "private.png"
     tool_result = _message(session.id, "tool", "privater Toolinhalt")
     tool_result.tool_call_id = "fetch"
     tool_result.trust_level = TrustLevel.PRIVATE.value
@@ -470,6 +479,14 @@ def test_public_projection_does_not_reference_private_historical_tool_results() 
     content = next(item["content"] for item in projected if item["role"] == "tool")
     assert content == "[Historical private tool output unavailable to the current model.]"
     assert str(tool_result.id) not in content
+    projected_assistant = next(
+        item for item in projected if item["role"] == "assistant"
+    )
+    assert projected_assistant["content"] == "Normale Antwort"
+    assert projected_assistant["tool_calls"][0]["arguments"] == {}
+    assert "secret.example.test" not in str(projected)
+    assert "private.png" not in projected_assistant["content"]
+    assert attachment.storage_path not in projected_assistant["content"]
     summary_source = _summary_source(None, [assistant, tool_result])
     assert "privater Toolinhalt" not in summary_source
     assert str(tool_result.id) not in summary_source

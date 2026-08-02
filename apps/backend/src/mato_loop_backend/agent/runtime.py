@@ -748,15 +748,9 @@ class AgentRuntime:
             raise AgentRunError("session.modelUnavailable")
         if model is not None and not model.supports_tools:
             raise AgentRunError("session.modelToolsUnavailable")
-        trust_level = (
-            effective_model_trust(provider, model)
-            if model is not None and provider is not None
-            else TrustLevel(chat_session.trust_level or TrustLevel.PUBLIC.value)
-        )
+        trust_level = effective_model_trust(provider, model)
         pseudonymization_enabled = (
-            provider is not None
-            and model is not None
-            and trust_level == TrustLevel.PUBLIC
+            trust_level == TrustLevel.PUBLIC
             and effective_model_pseudonymization(provider, model)
         )
         message = Message(
@@ -774,8 +768,6 @@ class AgentRuntime:
             pseudonymization_enabled=pseudonymization_enabled,
         )
         db.add_all([message, run])
-        if trust_level == TrustLevel.PRIVATE:
-            chat_session.trust_level = TrustLevel.PRIVATE.value
         generate_title = (
             chat_session.title == "Neue Session"
             and chat_session.title_generation_status
@@ -1071,7 +1063,6 @@ class AgentRuntime:
         model_trust_level = TrustLevel(
             run.trust_level or effective_model_trust(provider, model).value
         )
-        input_trust_level = model_trust_level
         run_pseudonymization_enabled = (
             run.pseudonymization_enabled
             if run.pseudonymization_enabled is not None
@@ -1132,9 +1123,6 @@ class AgentRuntime:
             )
             integration_settings = await SettingsStore.load(db, IntegrationSettings)
             tool_settings = await SettingsStore.load(db, ToolSettings)
-            input_trust_level = TrustLevel(
-                chat_session.trust_level or TrustLevel.PUBLIC.value
-            )
             web_fetch_policy = resolve_web_fetch_policy(tool_settings, model)
             memory_state = memory_policy.effective_memory(
                 chat_session, memory_settings, provider, model
@@ -1358,7 +1346,6 @@ class AgentRuntime:
                 active_ai_settings: AiSettings = ai_settings,
                 active_model: ModelConfig = model,
                 active_runtime_settings: AgentRuntimeSettings = runtime_settings,
-                active_trust_level: TrustLevel = input_trust_level,
             ) -> SummaryResult:
                 await _publish_run_phase(run.id, "compacting_context")
                 return await cls._summarize(
@@ -1368,7 +1355,6 @@ class AgentRuntime:
                     ai_settings=active_ai_settings,
                     active_model=active_model,
                     runtime_settings=active_runtime_settings,
-                    input_trust_level=active_trust_level,
                 )
 
             projection = await ContextManager.build(
@@ -1477,7 +1463,6 @@ class AgentRuntime:
                 on_delta=on_delta,
                 on_reasoning=on_reasoning,
                 timeout=runtime_settings.request_timeout_seconds,
-                input_trust_level=input_trust_level,
                 target_trust_level=model_trust_level,
                 pseudonymization_enabled=run_pseudonymization_enabled,
             )
@@ -1860,10 +1845,9 @@ class AgentRuntime:
                             tools=[],
                             tool_choice="none",
                             timeout=active_runtime_settings.request_timeout_seconds,
-                            input_trust_level=source_trust,
                             target_trust_level=active_vision_trust,
                             image_inputs=[
-                                ProviderImageInput(index + 1, image)
+                                ProviderImageInput(index + 1, image, source_trust.value)
                                 for index, (_number, image) in enumerate(pages)
                             ],
                         )
@@ -2237,7 +2221,6 @@ class AgentRuntime:
         ai_settings: AiSettings,
         active_model: ModelConfig,
         runtime_settings: AgentRuntimeSettings,
-        input_trust_level: TrustLevel = TrustLevel.PUBLIC,
     ) -> SummaryResult:
         helper = next(
             (
@@ -2282,7 +2265,6 @@ class AgentRuntime:
                     tools=[],
                     timeout=runtime_settings.request_timeout_seconds,
                     max_output_tokens=effective_output_tokens,
-                    input_trust_level=input_trust_level,
                 )
             except Exception:
                 logger.warning("Context compaction with model %s failed", candidate.id, exc_info=True)
@@ -2378,9 +2360,6 @@ class AgentRuntime:
                         tools=[],
                         timeout=runtime_settings.request_timeout_seconds,
                         max_output_tokens=output_budget,
-                        input_trust_level=TrustLevel(
-                            chat_session.trust_level or TrustLevel.PUBLIC.value
-                        ),
                     )
                     title = _generated_session_title(result.content)
                     if title is not None:

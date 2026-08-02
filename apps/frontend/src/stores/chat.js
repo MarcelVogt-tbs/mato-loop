@@ -61,7 +61,6 @@ function defaultSessionOptions() {
     effectiveMemoryMode: 'full',
     memoryToolsAvailable: true,
     memoryUnavailableReason: null,
-    trustLevel: 'public',
     webSearchPolicy: 'available',
     workingDirectory: null,
     workspaceAccess: 'read-only'
@@ -75,7 +74,6 @@ function optionsFromSession(session) {
     effectiveMemoryMode: session.effectiveMemoryMode,
     memoryToolsAvailable: session.memoryToolsAvailable,
     memoryUnavailableReason: session.memoryUnavailableReason,
-    trustLevel: session.trustLevel,
     webSearchPolicy: session.webSearchPolicy,
     workingDirectory: session.workingDirectory,
     workspaceAccess: session.workspaceAccess
@@ -173,7 +171,6 @@ function loadDrafts() {
           memoryUnavailableReason: typeof options.memoryUnavailableReason === 'string'
             ? options.memoryUnavailableReason
             : null,
-          trustLevel: options.trustLevel === 'private' ? 'private' : 'public',
           webSearchPolicy: ['required', 'available', 'disabled'].includes(options.webSearchPolicy)
             ? options.webSearchPolicy
             : (options.forceWebSearch === true ? 'required' : 'available'),
@@ -276,7 +273,6 @@ export const useChatStore = defineStore('chat', {
         options.effectiveMemoryMode = data.effectiveMemoryMode
         options.memoryToolsAvailable = data.memoryToolsAvailable
         options.memoryUnavailableReason = data.memoryUnavailableReason
-        options.trustLevel = data.trustLevel === 'private' ? 'private' : 'public'
       }
       this.persistDrafts()
     },
@@ -299,12 +295,10 @@ export const useChatStore = defineStore('chat', {
             options.memoryToolsAvailable = this.sessionDefaults.memoryToolsAvailable
             options.memoryUnavailableReason = this.sessionDefaults.memoryUnavailableReason
           }
-          options.trustLevel = this.sessionDefaults.trustLevel
         } else {
           options.effectiveMemoryMode = 'disabled'
           options.memoryToolsAvailable = false
           options.memoryUnavailableReason = 'session.modelUnavailable'
-          options.trustLevel = 'public'
         }
       }
       if (!searchAvailable && options.webSearchPolicy === 'required') {
@@ -591,7 +585,6 @@ export const useChatStore = defineStore('chat', {
           options.effectiveMemoryMode = data.effectiveMemoryMode
           options.memoryToolsAvailable = data.memoryToolsAvailable
           options.memoryUnavailableReason = data.memoryUnavailableReason
-          options.trustLevel = data.trustLevel
         }
       }
       this.persistDrafts()

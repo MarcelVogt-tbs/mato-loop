@@ -48,12 +48,10 @@ from mato_loop_backend.settings import (
     AiSettings,
     MemorySettings,
     SettingsStore,
-    effective_model_trust,
 )
 from mato_loop_backend.settings.models import (
     ModelAvailability,
     ModelCapability,
-    TrustLevel,
 )
 from mato_loop_backend.workspace import WorkspaceError, WorkspaceService
 
@@ -224,7 +222,6 @@ def session_payload(
         "pinned": bool(item.is_pinned),
         "modelId": str(item.model_config_id) if item.model_config_id else None,
         "memoryMode": item.memory_mode,
-        "trustLevel": item.trust_level or TrustLevel.PUBLIC.value,
         "webSearchPolicy": item.web_search_policy,
         "workingDirectory": item.working_directory,
         "workspaceAccess": item.workspace_access,
@@ -460,8 +457,6 @@ async def _create_session(
         if not directory.is_dir() or directory.is_symlink():
             raise ApiError(400, "session.invalidWorkingDirectory")
         working_directory = WorkspaceService().relative(directory)
-    initial_model = _model_for_session(ai, model_id)
-    initial_provider = _provider_for_session(ai, initial_model)
     item = ChatSession(
         id=uuid4(),
         user_id=user.id,
@@ -469,11 +464,6 @@ async def _create_session(
         title_generation_status=TitleGenerationStatus.PENDING.value,
         model_config_id=model_id,
         memory_mode=payload.memory_mode.value,
-        trust_level=(
-            effective_model_trust(initial_provider, initial_model).value
-            if _model_available(ai, model_id) and initial_model and initial_provider
-            else TrustLevel.PUBLIC.value
-        ),
         web_search_policy=payload.web_search_policy.value,
         working_directory=working_directory,
         workspace_access=payload.workspace_access,
@@ -567,11 +557,6 @@ async def session_defaults(
         "effectiveMemoryMode": state.mode.value,
         "memoryToolsAvailable": state.tools_enabled,
         "memoryUnavailableReason": state.unavailable_reason,
-        "trustLevel": (
-            effective_model_trust(_provider_for_session(ai, model), model).value
-            if model and _provider_for_session(ai, model)
-            else TrustLevel.PUBLIC.value
-        ),
         "webSearchPolicy": WebSearchPolicy.AVAILABLE.value,
         "workingDirectory": None,
         "workspaceAccess": "read-only",

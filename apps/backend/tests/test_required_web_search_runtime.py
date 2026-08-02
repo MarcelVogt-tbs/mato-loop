@@ -546,8 +546,8 @@ async def test_private_pdf_pages_skip_public_active_vision_model(monkeypatch) ->
     await AgentRuntime._execute_loop(db, run)
 
     assert requests[1]["model"].model_id == "vision-model"
-    assert requests[1]["input_trust_level"] == TrustLevel.PRIVATE
     assert requests[1]["target_trust_level"] == TrustLevel.PRIVATE
+    assert requests[1]["image_inputs"][0].trust_level == TrustLevel.PRIVATE.value
 
 
 async def test_cancel_does_not_capture_required_gate_text(monkeypatch) -> None:

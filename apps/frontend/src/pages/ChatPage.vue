@@ -109,9 +109,29 @@
               <span>Anfrage abgebrochen</span>
             </div>
             <div
-              v-if="message.createdAt || (message.role === 'assistant' && message.modelName)"
-              class="chat-message__meta"
+              v-if="message.createdAt
+                || (message.role === 'assistant' && message.modelName)
+                || isMessageTrustLevel(message.trustLevel)"
+              class="chat-message__meta items-center"
             >
+              <span
+                v-if="isMessageTrustLevel(message.trustLevel)"
+                class="row inline items-center"
+                role="img"
+                :aria-label="`Datenfreigabe: ${messageTrustLabel(message.trustLevel)}`"
+              >
+                <q-icon
+                  :name="message.trustLevel === 'private' ? 'lock' : 'public'"
+                  size="1em"
+                  aria-hidden="true"
+                />
+                <q-tooltip>{{ messageTrustLabel(message.trustLevel) }}</q-tooltip>
+              </span>
+              <span
+                v-if="isMessageTrustLevel(message.trustLevel)
+                  && ((message.role === 'assistant' && message.modelName) || message.createdAt)"
+                aria-hidden="true"
+              >·</span>
               <span
                 v-if="message.role === 'assistant' && message.modelName"
                 class="chat-message__meta-model"
@@ -188,7 +208,7 @@
               streaming
               @trust-image-origin="trustImageOrigin"
             />
-            <div v-if="chat.streamModelName" class="chat-message__meta">
+            <div v-if="chat.streamModelName" class="chat-message__meta items-center">
               <span class="chat-message__meta-model" :title="chat.streamModelName">
                 {{ chat.streamModelName }}
               </span>
@@ -345,6 +365,14 @@ function trustImageOrigin(origin) {
   const next = new Map(trustedImageOriginsBySession.value)
   next.set(sessionId, [...trustedImageOrigins.value, origin])
   trustedImageOriginsBySession.value = next
+}
+
+function isMessageTrustLevel(value) {
+  return value === 'public' || value === 'private'
+}
+
+function messageTrustLabel(value) {
+  return value === 'private' ? 'Privat' : 'Öffentlich'
 }
 
 function canRetryMessage(message) {

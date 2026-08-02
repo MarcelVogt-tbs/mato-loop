@@ -42,6 +42,7 @@ class ProviderMedia:
 class ProviderImageInput:
     message_index: int
     data: bytes = field(repr=False)
+    trust_level: Literal["public", "private"]
     mime_type: str = "image/jpeg"
 
 
@@ -71,7 +72,6 @@ def _references_value(
 def select_provider_images(
     messages: list[dict[str, Any]],
     *,
-    input_trust_level: str,
     target_trust_level: str,
 ) -> list[ProviderImageSelection]:
     references: list[tuple[int, int, dict[str, Any]]] = []
@@ -142,9 +142,7 @@ def select_provider_images(
         if len(selected) >= MAX_PROVIDER_IMAGES:
             break
         source_trust = attachment.get("trust_level")
-        if source_trust not in {"public", "private"}:
-            source_trust = input_trust_level
-        allow_raw = not (target_trust_level == "public" and source_trust == "private")
+        allow_raw = target_trust_level == "private" or source_trust == "public"
         size_bytes = attachment.get("size_bytes")
         if allow_raw:
             if (

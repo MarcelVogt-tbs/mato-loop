@@ -874,7 +874,6 @@ async def test_model(
             model=model,
             messages=[{"role": "user", "content": "Reply with OK only."}],
             tools=[],
-            input_trust_level=TrustLevel.PUBLIC,
         )
     except ProviderError as exc:
         logger.warning("Model connection test failed: %s", exc.public_code)

@@ -103,7 +103,6 @@ async def test_complete_passes_model_capabilities_and_explicit_timeout(monkeypat
         tools=[{"name": "read_file", "parameters": {}}],
         tool_choice="required",
         timeout=12,
-        input_trust_level=TrustLevel.PUBLIC,
     )
 
     request = captured["request"]
@@ -175,7 +174,6 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
         tools=[],
         on_delta=lambda text: _append_async(streamed, text),
         on_reasoning=lambda text, kind: _append_async(reasoned, (text, kind)),
-        input_trust_level=TrustLevel.PRIVATE,
     )
 
     assert "".join(streamed) == "Kontakt: anna@example.com"
@@ -223,7 +221,6 @@ async def test_public_complete_rejects_unknown_pseudonym_marker(monkeypatch) -> 
             model=model,
             messages=[{"role": "user", "content": "Schreibe an anna@example.com"}],
             tools=[],
-            input_trust_level=TrustLevel.PRIVATE,
         )
 
     assert exc_info.value.code == "privacy.pseudonymizationFailed"
@@ -278,7 +275,6 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
         messages=[{"role": "user", "content": "Test"}],
         tools=[{"name": "read_file", "parameters": {}}],
         max_output_tokens=1_024,
-        input_trust_level=TrustLevel.PUBLIC,
     )
 
     request = captured["request"]
@@ -334,7 +330,6 @@ async def test_complete_does_not_touch_attachment_storage_without_image_capabili
             }
         ],
         tools=[],
-        input_trust_level=TrustLevel.PUBLIC,
     )
 
     request = captured["request"]
@@ -379,7 +374,6 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
             }
         ],
         tools=[],
-        input_trust_level=TrustLevel.PUBLIC,
     )
 
     request = captured["request"]
@@ -432,7 +426,6 @@ async def test_complete_uses_unavailable_marker_for_missing_attachment_file(
             }
         ],
         tools=[],
-        input_trust_level=TrustLevel.PUBLIC,
     )
 
     request = captured["request"]
@@ -479,7 +472,6 @@ async def test_projection_sends_current_user_images_but_not_unreferenced_history
             },
         ],
         supports_image_input=True,
-        input_trust_level=TrustLevel.PUBLIC,
         target_trust_level=TrustLevel.PUBLIC,
     )
 
@@ -495,9 +487,12 @@ async def test_projection_accepts_bounded_transient_images() -> None:
     projected, media = await service_module._provider_projection(
         [{"role": "user", "content": "PDF page 1"}],
         supports_image_input=True,
-        input_trust_level=TrustLevel.PUBLIC,
         target_trust_level=TrustLevel.PUBLIC,
-        image_inputs=[ProviderImageInput(0, data, "image/png")],
+        image_inputs=[
+            ProviderImageInput(
+                0, data, trust_level=TrustLevel.PUBLIC.value, mime_type="image/png"
+            )
+        ],
     )
 
     assert projected == [{"role": "user", "content": "PDF page 1"}]
@@ -509,9 +504,12 @@ async def test_projection_accepts_bounded_transient_images() -> None:
         await service_module._provider_projection(
             [{"role": "user", "content": "PDF page 1"}],
             supports_image_input=True,
-            input_trust_level=TrustLevel.PRIVATE,
             target_trust_level=TrustLevel.PUBLIC,
-            image_inputs=[ProviderImageInput(0, data, "image/png")],
+            image_inputs=[
+                ProviderImageInput(
+                    0, data, trust_level=TrustLevel.PRIVATE.value, mime_type="image/png"
+                )
+            ],
         )
 
 
@@ -568,7 +566,6 @@ async def test_session_tool_result_read_reactivates_historical_image(monkeypatch
             },
         ],
         supports_image_input=True,
-        input_trust_level=TrustLevel.PUBLIC,
         target_trust_level=TrustLevel.PUBLIC,
     )
 
@@ -606,7 +603,6 @@ async def test_historical_image_limit_prefers_newest_references(monkeypatch) -> 
             },
         ],
         supports_image_input=True,
-        input_trust_level=TrustLevel.PUBLIC,
         target_trust_level=TrustLevel.PUBLIC,
     )
 
@@ -637,11 +633,34 @@ async def test_public_target_blocks_private_image_without_reading_storage(monkey
             {"role": "user", "content": private_reference["id"]},
         ],
         supports_image_input=True,
-        input_trust_level=TrustLevel.PRIVATE,
         target_trust_level=TrustLevel.PUBLIC,
     )
 
     assert len(media) == 1
+    assert media[0].status == "unavailable"
+    assert media[0].data_url is None
+
+
+async def test_public_target_blocks_image_without_provenance(monkeypatch) -> None:
+    reference = _attachment_reference(
+        uuid4(), f"attachments/{uuid4()}/unknown.png", _png_bytes()
+    )
+    reference.pop("trust_level")
+
+    def fail_storage():
+        raise AssertionError("Image data without provenance must not be read")
+
+    monkeypatch.setattr(service_module, "AttachmentStorage", fail_storage)
+
+    _projected, media = await service_module._provider_projection(
+        [
+            {"role": "system", "content": "System", "attachments": [reference]},
+            {"role": "user", "content": reference["id"]},
+        ],
+        supports_image_input=True,
+        target_trust_level=TrustLevel.PUBLIC,
+    )
+
     assert media[0].status == "unavailable"
     assert media[0].data_url is None
 
@@ -671,7 +690,6 @@ async def test_private_target_can_read_private_image(monkeypatch, tmp_path: Path
             }
         ],
         supports_image_input=True,
-        input_trust_level=TrustLevel.PRIVATE,
         target_trust_level=TrustLevel.PRIVATE,
     )
 
@@ -692,7 +710,6 @@ async def test_internal_storage_path_never_reaches_openai_payload(monkeypatch) -
     projected, media = await service_module._provider_projection(
         [{"role": "user", "content": "Bild", "attachments": [reference]}],
         supports_image_input=True,
-        input_trust_level=TrustLevel.PUBLIC,
         target_trust_level=TrustLevel.PUBLIC,
     )
     request = service_module.ProviderRequest(
@@ -765,7 +782,6 @@ async def test_media_selection_precedes_pseudonymization(monkeypatch) -> None:
             {"role": "user", "content": "Zeige anna@example.com.png"},
         ],
         tools=[],
-        input_trust_level=TrustLevel.PUBLIC,
         target_trust_level=TrustLevel.PUBLIC,
         pseudonymization_enabled=True,
     )
@@ -1061,7 +1077,6 @@ async def test_lemonade_complete_explicitly_uses_chat_completions(monkeypatch) -
         model=model,
         messages=[{"role": "user", "content": "Test"}],
         tools=[],
-        input_trust_level=TrustLevel.PUBLIC,
     )
 
     assert result.content == "OK"
@@ -1084,7 +1099,6 @@ async def test_complete_rejects_unknown_adapter_before_transport(monkeypatch) ->
             model=model,
             messages=[],
             tools=[],
-            input_trust_level=TrustLevel.PUBLIC,
         )
 
     assert exc_info.value.public_code == "provider.configurationInvalid"

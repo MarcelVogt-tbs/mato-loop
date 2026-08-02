@@ -145,10 +145,6 @@ class ChatSession(Base):
             name="web_search_policy_valid",
         ),
         CheckConstraint(
-            "trust_level IN ('public', 'private')",
-            name="trust_level_valid",
-        ),
-        CheckConstraint(
             "memory_mode IN ('full', 'read_only', 'disabled')",
             name="memory_mode_valid",
         ),
@@ -171,9 +167,6 @@ class ChatSession(Base):
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
     memory_mode: Mapped[str] = mapped_column(
         String(20), nullable=False, default=MemoryMode.FULL.value
-    )
-    trust_level: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=TrustLevel.PUBLIC.value
     )
     web_search_policy: Mapped[str] = mapped_column(
         String(20), nullable=False, default=WebSearchPolicy.AVAILABLE.value

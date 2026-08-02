@@ -184,7 +184,6 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     session = db.add.call_args.args[0]
     assert session.model_config_id == model.id
     assert session.user_id == user.id
-    assert session.trust_level == "private"
     assert session.memory_mode == "full"
     assert session.web_search_policy == "available"
     assert session.working_directory is None
@@ -194,6 +193,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert result["session"]["id"] == str(session.id)
     assert result["session"]["titleGenerationStatus"] == "pending"
     assert result["session"]["webSearchPolicy"] == "available"
+    assert "trustLevel" not in result["session"]
     assert result["runId"] == str(run.id)
     assert result["modelName"] == "Test"
     assert result["message"]["id"] == str(persisted_message.id)
@@ -224,6 +224,7 @@ async def test_session_defaults_report_effective_memory_state(monkeypatch) -> No
     assert result["effectiveMemoryMode"] == "disabled"
     assert result["memoryToolsAvailable"] is False
     assert result["memoryUnavailableReason"] == "memory.disabled"
+    assert "trustLevel" not in result
 
 
 async def test_session_is_not_created_for_blank_first_message() -> None:
@@ -699,7 +700,7 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
     assert result["runId"] == str(run.id)
 
 
-async def test_private_session_can_switch_to_public_model(monkeypatch) -> None:
+async def test_session_can_switch_to_public_model(monkeypatch) -> None:
     user = _user()
     provider = LlmProviderConfig(name="Cloud", adapter_type="openai-compatible")
     public_model = ModelConfig(provider_id=provider.id, model_id="public")
@@ -709,7 +710,6 @@ async def test_private_session_can_switch_to_public_model(monkeypatch) -> None:
         user_id=user.id,
         title="Privat gestartet",
         model_config_id=None,
-        trust_level="private",
         memory_mode="disabled",
     )
     monkeypatch.setattr(
@@ -729,7 +729,6 @@ async def test_private_session_can_switch_to_public_model(monkeypatch) -> None:
     )
 
     assert session.model_config_id == public_model.id
-    assert session.trust_level == "private"
 
 
 async def test_workspace_mode_is_preserved_without_workdir() -> None:

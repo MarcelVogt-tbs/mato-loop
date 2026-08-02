@@ -134,7 +134,6 @@ async def _provider_projection(
     messages: list[dict[str, Any]],
     *,
     supports_image_input: bool,
-    input_trust_level: TrustLevel,
     target_trust_level: TrustLevel,
     image_inputs: list[ProviderImageInput] | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProviderMedia]]:
@@ -149,7 +148,6 @@ async def _provider_projection(
 
     selected = select_provider_images(
         messages,
-        input_trust_level=input_trust_level.value,
         target_trust_level=target_trust_level.value,
     )
     media = [
@@ -206,13 +204,20 @@ async def _provider_projection(
             raise ProviderError(
                 "Too many direct image inputs", code="provider.modelCapabilityUnavailable"
             )
-        if target_trust_level == TrustLevel.PUBLIC and input_trust_level == TrustLevel.PRIVATE:
-            raise ProviderError(
-                "Private images cannot be sent to a public model",
-                code="provider.modelCapabilityUnavailable",
-            )
         total_bytes = 0
         for image in direct_inputs:
+            if image.trust_level not in {"public", "private"}:
+                raise ProviderError(
+                    "Invalid direct image trust level", code="provider.configurationInvalid"
+                )
+            if (
+                target_trust_level == TrustLevel.PUBLIC
+                and image.trust_level == TrustLevel.PRIVATE.value
+            ):
+                raise ProviderError(
+                    "Private images cannot be sent to a public model",
+                    code="provider.modelCapabilityUnavailable",
+                )
             if not 0 <= image.message_index < len(projected_messages):
                 raise ProviderError(
                     "Invalid direct image message index", code="provider.configurationInvalid"
@@ -324,7 +329,6 @@ class ProviderService:
         *,
         provider: LlmProviderConfig,
         model: ModelConfig,
-        input_trust_level: TrustLevel,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         tool_choice: Literal["auto", "required", "none"] = "auto",
@@ -383,7 +387,6 @@ class ProviderService:
         provider_messages, media = await _provider_projection(
             messages,
             supports_image_input=model.supports_image_input,
-            input_trust_level=input_trust_level,
             target_trust_level=model_trust_level,
             image_inputs=image_inputs,
         )

@@ -124,6 +124,20 @@ describe('chat drafts', () => {
     expect(chat.activeContext.webSearchPolicy).toBe('required')
   })
 
+  it('drops aggregate trust from a legacy persisted draft', () => {
+    window.localStorage.setItem('matoLoopChatDrafts', JSON.stringify({
+      newSession: { message: 'Alt', options: { modelId: 'model-1', trustLevel: 'private' } },
+      sessionMessages: {}
+    }))
+
+    const chat = useChatStore()
+
+    expect(chat.activeContext).not.toHaveProperty('trustLevel')
+    chat.setDraft('Neu')
+    const stored = JSON.parse(window.localStorage.getItem('matoLoopChatDrafts'))
+    expect(stored.newSession.options).not.toHaveProperty('trustLevel')
+  })
+
   it('sends the selected web-search policy when creating a session', async () => {
     api.post.mockResolvedValue({
       data: {
@@ -321,8 +335,7 @@ describe('chat drafts', () => {
         modelId: 'private-model',
         effectiveMemoryMode: 'disabled',
         memoryToolsAvailable: false,
-        memoryUnavailableReason: 'memory.modelDenied',
-        trustLevel: 'private'
+        memoryUnavailableReason: 'memory.modelDenied'
       }
     })
     const chat = useChatStore()
@@ -336,8 +349,7 @@ describe('chat drafts', () => {
       modelId: 'private-model',
       effectiveMemoryMode: 'disabled',
       memoryToolsAvailable: false,
-      memoryUnavailableReason: 'memory.modelDenied',
-      trustLevel: 'private'
+      memoryUnavailableReason: 'memory.modelDenied'
     })
   })
 
@@ -351,8 +363,7 @@ describe('chat drafts', () => {
         data: {
           effectiveMemoryMode: 'read_only',
           memoryToolsAvailable: true,
-          memoryUnavailableReason: null,
-          trustLevel: 'private'
+          memoryUnavailableReason: null
         }
       })
 
@@ -364,8 +375,7 @@ describe('chat drafts', () => {
     expect(chat.activeContext).toMatchObject({
       modelId: 'saved-model',
       memoryMode: 'read_only',
-      effectiveMemoryMode: 'read_only',
-      trustLevel: 'private'
+      effectiveMemoryMode: 'read_only'
     })
   })
 
@@ -375,16 +385,14 @@ describe('chat drafts', () => {
       modelId: 'default-model',
       effectiveMemoryMode: 'full',
       memoryToolsAvailable: true,
-      memoryUnavailableReason: null,
-      trustLevel: 'private'
+      memoryUnavailableReason: null
     }
     Object.assign(chat.activeContext, {
       modelId: 'removed-model',
       memoryMode: 'read_only',
       effectiveMemoryMode: 'disabled',
       memoryToolsAvailable: false,
-      memoryUnavailableReason: 'session.modelUnavailable',
-      trustLevel: 'public'
+      memoryUnavailableReason: 'session.modelUnavailable'
     })
 
     chat.reconcileNewSession(['default-model'], true)
@@ -394,8 +402,7 @@ describe('chat drafts', () => {
       memoryMode: 'read_only',
       effectiveMemoryMode: 'read_only',
       memoryToolsAvailable: true,
-      memoryUnavailableReason: null,
-      trustLevel: 'private'
+      memoryUnavailableReason: null
     })
   })
 

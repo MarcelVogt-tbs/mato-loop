@@ -63,7 +63,6 @@ async def _runtime_setup(
         title="Memory",
         model_config_id=model.id,
         memory_mode="full",
-        trust_level="private",
         web_search_policy="available",
         workspace_access="read-only",
     )

@@ -240,7 +240,7 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
         user = UserAccount(username=f"merge-{uuid4().hex}", password_hash="test")
         db.add(user)
         await db.flush()
-        session = ChatSession(user_id=user.id, trust_level=TrustLevel.PRIVATE.value)
+        session = ChatSession(user_id=user.id)
         db.add(session)
         await db.flush()
         source_message = Message(

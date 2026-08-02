@@ -114,7 +114,6 @@ async def test_start_persists_effective_run_policy_snapshot(
         user_id=uuid4(),
         title="Test",
         model_config_id=model.id,
-        trust_level=TrustLevel.PUBLIC.value,
     )
     db = AsyncMock(spec=AsyncSession)
 
@@ -127,7 +126,6 @@ async def test_start_persists_effective_run_policy_snapshot(
     assert run.model_name == "Anzeigename"
     assert run.trust_level == expected_trust.value
     assert run.pseudonymization_enabled is expected_pseudonymization
-    assert session.trust_level == expected_trust.value
     db.commit.assert_awaited_once()
     task.add_done_callback.assert_called_once()
     AgentRuntime._tasks.pop(run.id, None)
@@ -149,7 +147,6 @@ async def test_start_rejects_unavailable_model_before_persisting(monkeypatch) ->
         user_id=uuid4(),
         title="Test",
         model_config_id=missing_model_id,
-        trust_level="private",
     )
     db = AsyncMock(spec=AsyncSession)
 
