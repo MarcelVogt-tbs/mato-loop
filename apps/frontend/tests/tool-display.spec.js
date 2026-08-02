@@ -18,6 +18,9 @@ describe('tool display', () => {
     expect(toolIdentity('update_agent_identity')).toEqual({ label: 'Persona ändern', icon: 'face' })
     expect(toolIdentity('session_tool_result_read'))
       .toEqual({ label: 'Tool-Ergebnis lesen', icon: 'history' })
+    expect(toolIdentity('session_browse'))
+      .toEqual({ label: 'Letzte Sessions anzeigen', icon: 'view_list' })
+    expect(toolSummary({ name: 'session_browse', arguments: {} })).toBe('Letzte Sessions')
     expect(toolSummary({
       name: 'copy_path',
       arguments: {

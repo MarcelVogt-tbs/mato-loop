@@ -327,6 +327,7 @@ const TOOL_DESCRIPTIONS = {
   transcribe_audio: 'Transkribiert WAV-Anhänge aus der aktuellen Session.',
   session_read: 'Liest Nachrichten aus der aktuellen oder einer anderen Session.',
   session_tool_result_read: 'Liest ein persistiertes Tool-Ergebnis der aktuellen Session.',
+  session_browse: 'Listet letzte Sessions auf. Nutzt dieselbe Richtlinie wie die Session-Suche.',
   session_search: 'Durchsucht Titel und Inhalte vorhandener Sessions.',
   memory_retrieve: 'Liest passende persistente Memories.',
   memory_write: 'Erstellt oder aktualisiert persistente Memories.',
@@ -382,6 +383,7 @@ function ensureDistinctProviders() {
 }
 
 function configurableActions(tool) {
+  if (tool.name === 'session_browse') return []
   return (tool.actions || []).filter((action) => action.configurable)
 }
 

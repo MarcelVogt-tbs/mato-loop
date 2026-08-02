@@ -956,12 +956,29 @@ def test_prefetched_memory_overview_disables_redundant_retrieval() -> None:
         memory_scope={"total": 2, "instant": 1, "retrieve": 1},
         memory_overview_prefetched=True,
         memory_overview_has_more=True,
-        offered_tool_names=frozenset({"memory_retrieve", "session_search"}),
+        offered_tool_names=frozenset(
+            {"memory_retrieve", "session_search", "session_browse"}
+        ),
     )
 
     assert "Do not call memory_retrieve" in prompt
+    assert "session_search or session_browse" in prompt
     assert "Use memory_retrieve when" not in prompt
     assert "Present this as a partial overview" in prompt
+
+
+def test_general_system_prompt_separates_session_discovery_and_reading() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset(
+            {"session_browse", "session_search", "session_read"}
+        ),
+    )
+
+    assert "Use session_browse" in prompt
+    assert "Use session_search" in prompt
+    assert "call session_read with the returned exact sessionReadArguments" in prompt
+    assert "Do not call both discovery tools speculatively" in prompt
 
 
 @pytest.mark.parametrize(

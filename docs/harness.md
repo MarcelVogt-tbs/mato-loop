@@ -26,6 +26,8 @@ Research tools return structured results with safe URLs. `web_search` labels con
 
 `session_tool_result_read` reads a persisted current-session tool result by message ID without executing the original tool again. The host returns fixed chunks of at most 12,000 characters from a zero-based offset and reports continuation through `hasMore` and `nextOffset`. Historical omission markers and shortened current-session tool messages returned by `session_read` contain a host-generated `toolResultReference` with exact retrieval arguments. Shortened tool messages from another approved session contain no unusable current-session reference.
 
+Session discovery and reading remain separate operations. `session_browse` lists the most recently active prior sessions, while `session_search` performs literal topic discovery. Both return a bounded untrusted preview and exact `sessionReadArguments`; the model must use `session_read` before relying on conversation details. Session titles inherit the first persisted user message's trust level and follow the same public/private release boundary. `session_read` can project a bounded window around `around_message_id` and continue forward with `nextAfterMessageId`. Its 50,000-character page budget advances only through messages actually returned, so continuation never skips an omitted record.
+
 The tool registry is the only name resolver for tool calls. It rejects duplicate names during construction, validates input before execution, and exports only tools available for the session, mode, and effective integrations. Unknown tools, invalid arguments, and execution failures become stable tool errors. Exception text and secrets never enter model context or API responses.
 
 Tool groups are host-controlled catalog and UI metadata. They do not grant access and have no policy inheritance. A tool declares zero or more security actions. Each configurable action has a stable capability, a controlled UI label, and a safe default execution policy. Global overrides use `disabled`, `ask`, or `auto`; domain-specific policies such as webfetch remain typed when a generic mode would lose resource semantics. Disabling any action required by a tool removes that tool from the effective set.
@@ -60,7 +62,7 @@ A permission consists of a capability and typed resource matcher. Security decis
 
 - Path matchers contain explicit `session` or `workspace` root and compare relative paths component by component inside the host-bound root; string-prefix matching is forbidden.
 - Session matchers compare UUIDs and distinguish the current session from an explicitly named other session.
-- Session-search matchers represent search as its own resource. A grant to read one session does not allow search.
+- Session-search matchers represent browse and search as one collection resource. A grant to read one session does not allow either discovery operation.
 - URL matchers use the SHA-256 hash of the complete canonical URL. Display metadata is persisted separately without query values.
 - Persisted matchers deserialize losslessly to the same typed matcher.
 - Approval display title, summary, and risk are metadata, not matching inputs.
@@ -78,9 +80,9 @@ The binding baseline for session tools is:
 | Read session history | current run session | `allow` |
 | Read session history | another session | `ask` |
 | Read persisted tool result | current run session | `allow` |
-| Search sessions or session content | session-search resource | `ask` |
+| Browse or search sessions | session-search resource | `ask` |
 
-`current-session read allow` is a narrow host rule, not a persistent wildcard grant. `session_tool_result_read` accepts only tool messages from the same session. `other session read ask` and `session search ask` apply even when the model supplies a known session ID or harmless-looking query. A suitable session grant can allow a later identical request but never expands matcher type or scope.
+`current-session read allow` is a narrow host rule, not a persistent wildcard grant. `session_tool_result_read` accepts only tool messages from the same session. `other session read ask` and session discovery `ask` apply even when the model supplies a known session ID or harmless-looking query. Browse and search share one collection grant; reading a discovered session still requires its separate exact session grant. A suitable session grant can allow a later identical request but never expands matcher type or scope.
 
 ## History and Request Context
 

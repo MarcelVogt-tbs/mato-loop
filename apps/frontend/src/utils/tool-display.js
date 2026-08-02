@@ -18,6 +18,7 @@ const TOOL_DISPLAY = {
   transcribe_audio: { label: 'Audio transkribieren', icon: 'mic' },
   session_read: { label: 'Session lesen', icon: 'forum' },
   session_tool_result_read: { label: 'Tool-Ergebnis lesen', icon: 'history' },
+  session_browse: { label: 'Letzte Sessions anzeigen', icon: 'view_list' },
   session_search: { label: 'Sessions durchsuchen', icon: 'manage_search' },
   memory_retrieve: { label: 'Memory abrufen', icon: 'psychology' },
   memory_write: { label: 'Memory speichern', icon: 'save' },
@@ -49,6 +50,7 @@ export function toolSummary(tool) {
   if (tool?.name === 'memory_retrieve' && argumentsValue.mode === 'browse') {
     return argumentsValue.cursor_id ? 'Memory-Übersicht fortsetzen' : 'Memory-Übersicht'
   }
+  if (tool?.name === 'session_browse') return 'Letzte Sessions'
   if (tool?.name === 'generate_speech' && typeof argumentsValue.text === 'string') {
     return truncate(argumentsValue.text)
   }

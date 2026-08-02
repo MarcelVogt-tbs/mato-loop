@@ -811,6 +811,7 @@ async def test_tool_registry_returns_stable_errors_for_unknown_tools_and_invalid
     ("name", "arguments", "resource_type"),
     [
         ("session_read", {}, "session"),
+        ("session_browse", {}, "session_collection"),
         ("session_search", {"query": "vertraulich"}, "session_collection"),
     ],
 )
@@ -853,11 +854,243 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
     result = await tool_registry.execute(call, context)
 
     assert result.is_error is False
-    assert json.loads(result.content)["session"] == {"id": str(expected_id), "title": "Ziel"}
+    assert json.loads(result.content)["session"] == {"id": str(expected_id), "title": None}
     request = context.ask_handler.await_args.args[0]
     assert request.resource_scope == str(expected_id)
     context.db.scalar.assert_awaited_once()
     context.db.scalars.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("source_trust", "reader_trust", "expected_title"),
+    [
+        (TrustLevel.PUBLIC, TrustLevel.PUBLIC, "Ziel"),
+        (TrustLevel.PRIVATE, TrustLevel.PUBLIC, None),
+        (TrustLevel.PUBLIC, TrustLevel.PRIVATE, "Ziel"),
+        (TrustLevel.PRIVATE, TrustLevel.PRIVATE, "Ziel"),
+    ],
+)
+async def test_session_read_derives_title_visibility_from_first_user_message(
+    tmp_path,
+    source_trust: TrustLevel,
+    reader_trust: TrustLevel,
+    expected_title: str | None,
+) -> None:
+    session_id = uuid4()
+    call = ToolCall(
+        id="read",
+        name="session_read",
+        arguments={"session_id": str(session_id)},
+    )
+    context = _context(tmp_path, call)
+    context.memory_trust_level = reader_trust
+    context.db.scalar.return_value = ChatSession(
+        id=session_id,
+        user_id=context.session.user_id,
+        title="Ziel",
+    )
+    messages = Mock()
+    messages.all.return_value = [
+        Message(
+            id=uuid4(),
+            session_id=session_id,
+            role="user",
+            content="Start",
+            trust_level=source_trust.value,
+        )
+    ]
+    context.db.scalars.return_value = messages
+
+    result = await tool_registry.execute(call, context)
+
+    assert json.loads(result.content)["session"]["title"] == expected_title
+
+
+async def test_session_read_returns_a_window_around_discovery_anchor(tmp_path) -> None:
+    session_id = uuid4()
+    messages = [
+        Message(
+            id=uuid4(),
+            session_id=session_id,
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"Nachricht {index}",
+            trust_level=TrustLevel.PUBLIC.value,
+            created_at=datetime(2026, 7, 20, 10, index, tzinfo=UTC),
+        )
+        for index in range(5)
+    ]
+    call = ToolCall(
+        id="read",
+        name="session_read",
+        arguments={
+            "session_id": str(session_id),
+            "around_message_id": str(messages[2].id),
+            "limit": 3,
+        },
+    )
+    context = _context(tmp_path, call)
+    context.db.scalar.return_value = ChatSession(
+        id=session_id,
+        user_id=context.session.user_id,
+        title="Ziel",
+    )
+    rows = Mock()
+    rows.all.return_value = messages
+    context.db.scalars.return_value = rows
+
+    result = await tool_registry.execute(call, context)
+    payload = json.loads(result.content)
+
+    assert [item["id"] for item in payload["messages"]] == [
+        str(item.id) for item in messages[1:4]
+    ]
+    assert payload["hasEarlier"] is True
+    assert payload["nextAfterMessageId"] == str(messages[3].id)
+
+
+async def test_session_read_cursor_uses_last_emitted_message(tmp_path) -> None:
+    session_id = uuid4()
+    messages = [
+        Message(
+            id=uuid4(),
+            session_id=session_id,
+            role="user",
+            content=str(index) * 12_000,
+            trust_level=TrustLevel.PUBLIC.value,
+        )
+        for index in range(6)
+    ]
+    call = ToolCall(
+        id="read",
+        name="session_read",
+        arguments={"session_id": str(session_id), "limit": 6},
+    )
+    context = _context(tmp_path, call)
+    context.db.scalar.return_value = ChatSession(
+        id=session_id,
+        user_id=context.session.user_id,
+        title="Ziel",
+    )
+    rows = Mock()
+    rows.all.return_value = messages
+    context.db.scalars.return_value = rows
+
+    result = await tool_registry.execute(call, context)
+    payload = json.loads(result.content)
+
+    assert len(payload["messages"]) == 5
+    assert payload["nextAfterMessageId"] == str(messages[4].id)
+
+
+@pytest.mark.parametrize(
+    ("name", "result_key"),
+    [("session_browse", "sessions"), ("session_search", "results")],
+)
+async def test_session_discovery_returns_private_anchor_for_direct_read(
+    tmp_path, name: str, result_key: str
+) -> None:
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Projekt Aurora")
+    message_id = uuid4()
+    message_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
+    call = ToolCall(
+        id="discover",
+        name=name,
+        arguments={} if name == "session_browse" else {"query": "Aurora"},
+    )
+    context = _context(tmp_path, call)
+    context.memory_trust_level = TrustLevel.PRIVATE
+    session.user_id = context.session.user_id
+    rows = Mock()
+    rows.all.return_value = [
+        (
+            session,
+            message_id,
+            "user",
+            "Aurora bleibt unser Hauptprojekt.",
+            message_at,
+            TrustLevel.PRIVATE.value,
+        )
+    ]
+    context.db.execute.return_value = rows
+
+    result = await tool_registry.execute(call, context)
+    item = json.loads(result.content)[result_key][0]
+
+    assert item["title"] == "Projekt Aurora"
+    assert item["anchorMessage"] == {
+        "id": str(message_id),
+        "role": "user",
+        "createdAt": message_at.isoformat(),
+        "preview": "Aurora bleibt unser Hauptprojekt.",
+    }
+    assert item["sessionReadArguments"] == {
+        "session_id": str(session.id),
+        "around_message_id": str(message_id),
+    }
+    statement = context.db.execute.await_args.args[0]
+    assert "chat_sessions.user_id" in str(statement)
+    assert "chat_sessions.id !=" in str(statement)
+
+
+async def test_session_browse_shows_public_derived_titles_to_public_models(
+    tmp_path,
+) -> None:
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Öffentlicher Titel")
+    call = ToolCall(id="browse", name="session_browse", arguments={})
+    context = _context(tmp_path, call)
+    session.user_id = context.session.user_id
+    rows = Mock()
+    rows.all.return_value = [
+        (
+            session,
+            uuid4(),
+            "user",
+            "Öffentlicher Ausschnitt",
+            datetime.now(UTC),
+            TrustLevel.PUBLIC.value,
+        )
+    ]
+    context.db.execute.return_value = rows
+
+    result = await tool_registry.execute(call, context)
+    item = json.loads(result.content)["sessions"][0]
+
+    assert item["title"] == "Öffentlicher Titel"
+    assert item["anchorMessage"]["preview"] == "Öffentlicher Ausschnitt"
+    assert "messages.trust_level" in str(context.db.execute.await_args.args[0])
+
+
+async def test_session_search_hides_private_derived_titles_from_public_models(
+    tmp_path,
+) -> None:
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Projekt Aurora")
+    call = ToolCall(
+        id="search",
+        name="session_search",
+        arguments={"query": "Aurora"},
+    )
+    context = _context(tmp_path, call)
+    session.user_id = context.session.user_id
+    rows = Mock()
+    rows.all.return_value = [
+        (
+            session,
+            uuid4(),
+            "user",
+            "Öffentlicher Ausschnitt",
+            datetime.now(UTC),
+            TrustLevel.PRIVATE.value,
+        )
+    ]
+    context.db.execute.return_value = rows
+
+    result = await tool_registry.execute(call, context)
+    item = json.loads(result.content)["results"][0]
+
+    assert item["title"] is None
+    statement = str(context.db.execute.await_args.args[0])
+    assert "chat_sessions.title" in statement
+    assert "messages.trust_level" in statement
 
 
 def test_session_tool_result_read_schema_uses_a_fixed_host_chunk_size() -> None:
@@ -870,6 +1103,35 @@ def test_session_tool_result_read_schema_uses_a_fixed_host_chunk_size() -> None:
         "type": "integer",
     }
     assert "limit" not in schema["parameters"]["properties"]
+
+
+def test_session_discovery_and_anchor_schemas_keep_tasks_separate() -> None:
+    browse = tool_registry._definitions["session_browse"].schema()
+    search = tool_registry._definitions["session_search"].schema()
+    read = tool_registry._definitions["session_read"].schema()
+
+    assert "required" not in browse["parameters"]
+    assert "query" not in browse["parameters"]["properties"]
+    assert search["parameters"]["required"] == ["query"]
+    assert "around_message_id" in read["parameters"]["properties"]
+
+
+async def test_session_read_rejects_two_positions_before_database_access(tmp_path) -> None:
+    call = ToolCall(
+        id="read",
+        name="session_read",
+        arguments={
+            "after_message_id": str(uuid4()),
+            "around_message_id": str(uuid4()),
+        },
+    )
+    context = _context(tmp_path, call)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+    context.db.scalar.assert_not_awaited()
+    context.db.scalars.assert_not_awaited()
 
 
 async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_path) -> None:

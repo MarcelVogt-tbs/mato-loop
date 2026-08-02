@@ -96,6 +96,18 @@ def session_search_permission() -> PermissionRequest:
     )
 
 
+def session_browse_permission() -> PermissionRequest:
+    return PermissionRequest(
+        capability="session.search",
+        resource_type="session_collection",
+        resource_scope="all",
+        action_kind="session_browse",
+        risk_level="medium",
+        title="Sessions anzeigen?",
+        summary="Der Agent möchte kürzlich aktive Sessions anzeigen.",
+    )
+
+
 def memory_write_permission(session_id: UUID, action: str) -> PermissionRequest:
     updating = action == "update"
     return PermissionRequest(

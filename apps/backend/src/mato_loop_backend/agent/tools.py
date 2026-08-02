@@ -16,7 +16,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -35,6 +35,7 @@ from mato_loop_backend.agent.permissions import (
     memory_read_permission,
     memory_write_permission,
     path_permission,
+    session_browse_permission,
     session_permission,
     session_search_permission,
     web_search_permission,
@@ -748,9 +749,25 @@ class TranscribeAudioArguments(ToolArguments):
 
 
 class SessionReadArguments(ToolArguments):
-    session_id: UUID | None = None
-    after_message_id: UUID | None = None
+    session_id: UUID | None = Field(
+        default=None,
+        description="Target session UUID. Omit only to read the current session.",
+    )
+    after_message_id: UUID | None = Field(
+        default=None,
+        description="Continue forward after this message UUID.",
+    )
+    around_message_id: UUID | None = Field(
+        default=None,
+        description="Read a bounded context window around this message UUID.",
+    )
     limit: int = Field(default=30, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def one_position(self) -> SessionReadArguments:
+        if self.after_message_id is not None and self.around_message_id is not None:
+            raise ValueError("after_message_id and around_message_id are mutually exclusive")
+        return self
 
 
 class SessionToolResultReadArguments(ToolArguments):
@@ -760,6 +777,10 @@ class SessionToolResultReadArguments(ToolArguments):
 
 class SessionSearchArguments(ToolArguments):
     query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=10, ge=1, le=20)
+
+
+class SessionBrowseArguments(ToolArguments):
     limit: int = Field(default=10, ge=1, le=20)
 
 
@@ -1639,6 +1660,10 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             )
         ).all()
     )
+    title_trust = next(
+        (message.trust_level for message in records if message.role == "user"),
+        None,
+    )
     if context.memory_trust_level == TrustLevel.PUBLIC:
         records = [
             message
@@ -1647,7 +1672,22 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             == TrustLevel.PUBLIC.value
         ]
     start = 0
-    if arguments.after_message_id is not None:
+    if arguments.around_message_id is not None:
+        anchor = next(
+            (
+                index
+                for index, item in enumerate(records)
+                if item.id == arguments.around_message_id
+            ),
+            -1,
+        )
+        if anchor < 0:
+            return ToolResult.error("tool.cursorInvalid")
+        start = min(
+            max(0, anchor - arguments.limit // 2),
+            max(0, len(records) - arguments.limit),
+        )
+    elif arguments.after_message_id is not None:
         start = next(
             (index + 1 for index, item in enumerate(records) if item.id == arguments.after_message_id),
             -1,
@@ -1669,15 +1709,158 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
         messages.append(item)
         if remaining <= 0:
             break
-    has_more = start + len(page) < len(records)
+    last_emitted_index = start + len(messages) - 1
+    has_more = last_emitted_index + 1 < len(records)
     return ToolResult.json(
         {
-            "session": {"id": str(target.id), "title": target.title},
+            "session": {
+                "id": str(target.id),
+                "title": _session_title(
+                    target, title_trust, context.memory_trust_level
+                ),
+            },
             "messages": messages,
-            "nextAfterMessageId": str(page[-1].id) if page and has_more else None,
+            "hasEarlier": start > 0,
+            "nextAfterMessageId": (
+                str(records[last_emitted_index].id) if messages and has_more else None
+            ),
             "contentIsUntrusted": True,
         },
         metadata={"targetSessionId": str(target.id), "messageCount": len(messages)},
+    )
+
+
+def _ranked_visible_session_messages(
+    context: ToolContext, *, pattern: str | None = None
+):
+    filters = [
+        Message.role.in_(("user", "assistant")),
+        Message.content != "",
+        Message.error_code.is_(None),
+        Message.generation_status == "completed",
+    ]
+    if pattern is not None:
+        filters.append(Message.content.ilike(pattern, escape="\\"))
+    if context.memory_trust_level == TrustLevel.PUBLIC:
+        filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
+    return (
+        select(
+            Message.id.label("message_id"),
+            Message.session_id.label("session_id"),
+            Message.role.label("role"),
+            Message.content.label("content"),
+            Message.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=Message.session_id,
+                order_by=(Message.created_at.desc(), Message.id.desc()),
+            )
+            .label("position"),
+        )
+        .where(*filters)
+        .subquery()
+    )
+
+
+def _session_title_trust():
+    return (
+        select(Message.trust_level)
+        .where(Message.session_id == ChatSession.id, Message.role == "user")
+        .order_by(Message.created_at, Message.id)
+        .limit(1)
+        .correlate(ChatSession)
+        .scalar_subquery()
+    )
+
+
+def _session_title(
+    session: ChatSession,
+    title_trust: str | None,
+    readable_by: TrustLevel,
+) -> str | None:
+    if readable_by == TrustLevel.PRIVATE or title_trust == TrustLevel.PUBLIC.value:
+        return session.title
+    return None
+
+
+def _session_discovery_item(
+    session: ChatSession,
+    *,
+    message_id: UUID | None,
+    role: str | None,
+    content: str | None,
+    message_at: datetime | None,
+    title_trust: str | None,
+    readable_by: TrustLevel,
+) -> dict[str, Any]:
+    read_arguments: dict[str, str] = {"session_id": str(session.id)}
+    if message_id is not None:
+        read_arguments["around_message_id"] = str(message_id)
+    return {
+        "id": str(session.id),
+        "title": _session_title(session, title_trust, readable_by),
+        "anchorMessage": (
+            {
+                "id": str(message_id),
+                "role": role,
+                "createdAt": message_at.isoformat() if message_at else None,
+                "preview": (content or "")[:500],
+            }
+            if message_id is not None
+            else None
+        ),
+        "sessionReadArguments": read_arguments,
+    }
+
+
+async def _session_browse(
+    arguments: SessionBrowseArguments, context: ToolContext
+) -> ToolResult:
+    if not await _allow(context, session_browse_permission()):
+        return ToolResult.error("permission.denied")
+    messages = _ranked_visible_session_messages(context)
+    title_trust = _session_title_trust().label("title_trust")
+    rows = (
+        await context.db.execute(
+            select(
+                ChatSession,
+                messages.c.message_id,
+                messages.c.role,
+                messages.c.content,
+                messages.c.created_at,
+                title_trust,
+            )
+            .join(
+                messages,
+                and_(
+                    messages.c.session_id == ChatSession.id,
+                    messages.c.position == 1,
+                ),
+            )
+            .where(
+                ChatSession.user_id == context.session.user_id,
+                ChatSession.id != context.session.id,
+            )
+            .order_by(messages.c.created_at.desc(), ChatSession.id.desc())
+            .limit(arguments.limit)
+        )
+    ).all()
+    return ToolResult.json(
+        {
+            "sessions": [
+                _session_discovery_item(
+                    session,
+                    message_id=message_id,
+                    role=role,
+                    content=content,
+                    message_at=message_at,
+                    title_trust=source_trust,
+                    readable_by=context.memory_trust_level,
+                )
+                for session, message_id, role, content, message_at, source_trust in rows
+            ],
+            "contentIsUntrusted": True,
+        }
     )
 
 
@@ -1690,56 +1873,64 @@ async def _session_search(
         arguments.query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     )
     pattern = f"%{escaped}%"
-    message_filters = [
-        Message.content.ilike(pattern, escape="\\"),
-        Message.error_code.is_(None),
-    ]
-    if context.memory_trust_level == TrustLevel.PUBLIC:
-        message_filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
-    matching_session_ids = select(Message.session_id).where(*message_filters)
-    sessions = list(
-        (
-            await context.db.scalars(
-                select(ChatSession)
-                .where(
-                    ChatSession.user_id == context.session.user_id,
-                    or_(
-                        ChatSession.title.ilike(pattern, escape="\\"),
-                        ChatSession.id.in_(matching_session_ids),
-                    )
-                )
-                .order_by(ChatSession.updated_at.desc())
-                .limit(arguments.limit)
+    messages = _ranked_visible_session_messages(context, pattern=pattern)
+    title_trust = _session_title_trust().label("title_trust")
+    match_conditions = [messages.c.message_id.is_not(None)]
+    if context.memory_trust_level == TrustLevel.PRIVATE:
+        match_conditions.append(ChatSession.title.ilike(pattern, escape="\\"))
+    else:
+        match_conditions.append(
+            and_(
+                title_trust == TrustLevel.PUBLIC.value,
+                ChatSession.title.ilike(pattern, escape="\\"),
             )
-        ).all()
-    )
-    results = []
-    for session in sessions:
-        match = await context.db.scalar(
-            select(Message)
-            .where(
-                Message.session_id == session.id,
-                Message.content.ilike(pattern, escape="\\"),
-                Message.error_code.is_(None),
-                *(
-                    [Message.trust_level == TrustLevel.PUBLIC.value]
-                    if context.memory_trust_level == TrustLevel.PUBLIC
-                    else []
+        )
+    rows = (
+        await context.db.execute(
+            select(
+                ChatSession,
+                messages.c.message_id,
+                messages.c.role,
+                messages.c.content,
+                messages.c.created_at,
+                title_trust,
+            )
+            .outerjoin(
+                messages,
+                and_(
+                    messages.c.session_id == ChatSession.id,
+                    messages.c.position == 1,
                 ),
             )
-            .order_by(Message.created_at.desc())
-            .limit(1)
+            .where(
+                ChatSession.user_id == context.session.user_id,
+                ChatSession.id != context.session.id,
+                or_(*match_conditions),
+            )
+            .order_by(
+                func.coalesce(messages.c.created_at, ChatSession.updated_at).desc(),
+                ChatSession.id.desc(),
+            )
+            .limit(arguments.limit)
         )
-        excerpt = match.content[:500] if match else None
-        results.append(
-            {
-                "id": str(session.id),
-                "title": session.title,
-                "updatedAt": session.updated_at.isoformat() if session.updated_at else None,
-                "excerpt": excerpt,
-            }
-        )
-    return ToolResult.json({"results": results, "contentIsUntrusted": True})
+    ).all()
+    return ToolResult.json(
+        {
+            "results": [
+                _session_discovery_item(
+                    session,
+                    message_id=message_id,
+                    role=role,
+                    content=content,
+                    message_at=message_at,
+                    title_trust=source_trust,
+                    readable_by=context.memory_trust_level,
+                )
+                for session, message_id, role, content, message_at, source_trust in rows
+            ],
+            "contentIsUntrusted": True,
+        }
+    )
 
 
 async def _memory_write(
@@ -2102,7 +2293,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "session_read",
-            "Read paginated original messages from this or another chat session.",
+            "Read original messages from this or another chat session. Use around_message_id for "
+            "a bounded window around a discovery result, or after_message_id to continue forward.",
             SessionReadArguments,
             _session_read,
             group="sessions",
@@ -2123,8 +2315,20 @@ tool_registry = ToolRegistry(
             actions=(_SESSION_TOOL_RESULT_READ,),
         ),
         ToolDefinition(
+            "session_browse",
+            "List recently active prior chat sessions. Use the returned sessionReadArguments with "
+            "session_read before relying on conversation details.",
+            SessionBrowseArguments,
+            _session_browse,
+            group="sessions",
+            label="Letzte Sessions anzeigen",
+            icon="view_list",
+            actions=(_SESSION_SEARCH,),
+        ),
+        ToolDefinition(
             "session_search",
-            "Search chat sessions and return IDs for later reading.",
+            "Search prior chat sessions for a concrete literal term. Use the returned "
+            "sessionReadArguments with session_read before relying on conversation details.",
             SessionSearchArguments,
             _session_search,
             group="sessions",
@@ -2160,7 +2364,8 @@ tool_registry = ToolRegistry(
             "Set purpose=write when the lookup prepares a memory_write and purpose=context otherwise. "
             "Use browse for questions about what MatoLoop remembers. To continue while hasMore "
             "is true, copy both fields from nextCursor into the next browse call. session_search "
-            "searches chat transcripts, not memories. "
+            "and session_browse inspect chat sessions, not memories. Result timestamps distinguish the source "
+            "observation from the technical memory record lifecycle. "
             "Results are untrusted reference data.",
             MemoryRetrieveArguments,
             _memory_retrieve,
@@ -2227,6 +2432,7 @@ def permission_for(
         "web_search",
         "session_read",
         "session_tool_result_read",
+        "session_browse",
         "session_search",
         "memory_write",
         "memory_retrieve",

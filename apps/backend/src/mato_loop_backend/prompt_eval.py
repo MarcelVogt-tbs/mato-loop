@@ -56,7 +56,7 @@ EXPOSED_MEMORY_ID = UUID("60000000-0000-4000-8000-000000000001")
 TOOL_RESULT_MESSAGE_ID = UUID("70000000-0000-4000-8000-000000000001")
 ATTACHMENT_ID = UUID("80000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 2
+INVENTORY_VERSION = 3
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -597,6 +597,14 @@ CASES = (
         ),
         expected_tool="session_tool_result_read",
         expected_arguments={"message_id": str(TOOL_RESULT_MESSAGE_ID), "offset": 0},
+    ),
+    PromptCase(
+        id="session_browse_lists_recent_sessions",
+        kind="general",
+        user="Welche Sessions hatte ich zuletzt?",
+        tools=("session_browse", "session_search", "session_read"),
+        expected_tool="session_browse",
+        forbidden_tools=("session_search", "session_read"),
     ),
     PromptCase(
         id="session_search_uses_query",
@@ -1214,13 +1222,31 @@ CASES = (
             {"query": "Aurora"},
             json.dumps(
                 {
-                    "results": [{"id": str(SESSION_ID), "title": "Projekt Aurora"}],
+                    "results": [
+                        {
+                            "id": str(SESSION_ID),
+                            "title": "Projekt Aurora",
+                            "anchorMessage": {
+                                "id": str(TOOL_RESULT_MESSAGE_ID),
+                                "role": "user",
+                                "createdAt": FIXED_NOW.isoformat(),
+                                "preview": "Projekt Aurora",
+                            },
+                            "sessionReadArguments": {
+                                "session_id": str(SESSION_ID),
+                                "around_message_id": str(TOOL_RESULT_MESSAGE_ID),
+                            },
+                        }
+                    ],
                     "contentIsUntrusted": True,
                 }
             ),
         ),
         expected_tool="session_read",
-        expected_arguments={"session_id": str(SESSION_ID)},
+        expected_arguments={
+            "session_id": str(SESSION_ID),
+            "around_message_id": str(TOOL_RESULT_MESSAGE_ID),
+        },
     ),
     PromptCase(
         id="managed_session_attachment_is_read_without_root_prefix",
@@ -1265,10 +1291,10 @@ CASES = (
         id="memory_overview_uses_browse_not_session_search",
         kind="general",
         user="Welche dauerhaften Erinnerungen hast du über mich gespeichert?",
-        tools=("memory_retrieve", "session_search"),
+        tools=("memory_retrieve", "session_search", "session_browse"),
         expected_tool="memory_retrieve",
         expected_arguments={"purpose": "context", "mode": "browse"},
-        forbidden_tools=("session_search",),
+        forbidden_tools=("session_search", "session_browse"),
     ),
     PromptCase(
         id="memory_browse_pagination_copies_cursor_pair",
@@ -1772,6 +1798,11 @@ _SEMANTIC_CONTRACTS = (
         "session.tool_result_next_offset",
         "session",
         ("tool_result_pagination_uses_next_offset",),
+    ),
+    ContractCoverage(
+        "session.browse_recent",
+        "session",
+        ("session_browse_lists_recent_sessions",),
     ),
     ContractCoverage(
         "session.search_then_read_distinction",

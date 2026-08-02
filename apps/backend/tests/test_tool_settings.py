@@ -104,6 +104,16 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "memory",
         "agent",
     ]
+    session_tools = next(group for group in result["groups"] if group["id"] == "sessions")
+    discovery = {
+        tool["name"]: tool["actions"][0]["capability"]
+        for tool in session_tools["tools"]
+        if tool["name"] in {"session_browse", "session_search"}
+    }
+    assert discovery == {
+        "session_browse": "session.search",
+        "session_search": "session.search",
+    }
 
 
 async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch) -> None:

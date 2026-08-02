@@ -12,6 +12,7 @@ from mato_loop_backend.agent.permissions import (
     media_permission,
     memory_write_permission,
     path_permission,
+    session_browse_permission,
     session_permission,
     session_search_permission,
     webfetch_permission,
@@ -519,6 +520,9 @@ async def test_session_search_and_session_read_grants_remain_separate(tmp_path) 
     ) == PermissionDecision.ASK
     assert await PermissionPolicy.evaluate(
         _db_with_grants(search_grant), session, session_search_permission(), root_files
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(search_grant), session, session_browse_permission(), root_files
     ) == PermissionDecision.ALLOW
 
 
