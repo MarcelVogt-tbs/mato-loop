@@ -133,7 +133,7 @@
                     clickable
                     dense
                     v-ripple
-                    class="session-list-item rounded-borders q-px-sm q-py-xs q-my-xs"
+                    class="session-list-item items-center rounded-borders q-px-sm q-py-xs q-my-xs"
                     :active="route.query.session === session.id"
                     :active-class="$q.dark.isActive ? 'bg-grey-9 text-white' : 'bg-grey-3 text-dark'"
                     @click="openSession(session.id)"
@@ -147,6 +147,7 @@
                         {{ session.title }}
                       </q-item-label>
                       <q-tooltip
+                        v-if="$q.platform.is.mobile !== true"
                         :delay="700"
                         anchor="bottom middle"
                         self="top middle"
@@ -159,7 +160,7 @@
                         </div>
                       </q-tooltip>
                     </q-item-section>
-                    <q-item-section side class="session-list-item__actions row no-wrap items-center q-pl-xs">
+                    <q-item-section side class="session-list-item__actions row no-wrap items-center self-center q-pl-xs">
                       <q-btn
                         flat
                         round
