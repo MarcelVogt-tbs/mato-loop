@@ -39,6 +39,7 @@ from mato_loop_backend.models import (
     MemoryRecord,
     MemoryRetrievalLevel,
     MemorySourceType,
+    Message,
     UserAccount,
 )
 from mato_loop_backend.settings import (
@@ -381,7 +382,17 @@ async def test_record_exposure_persists_content_hash() -> None:
 def test_exposure_context_contains_one_catalog_and_final_response() -> None:
     run_id = uuid4()
     assistant_message_id = uuid4()
-    first = MemoryRecord(id=uuid4(), revision=2, content="Erster Fakt")
+    source_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
+    created_at = datetime(2026, 7, 20, 11, tzinfo=UTC)
+    updated_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
+    first = MemoryRecord(
+        id=uuid4(),
+        revision=2,
+        content="Erster Fakt",
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+    first.source_message = Message(created_at=source_at)
     second = MemoryRecord(id=uuid4(), revision=3, content="Zweiter Fakt")
 
     payload = _exposure_context(
@@ -395,6 +406,12 @@ def test_exposure_context_contains_one_catalog_and_final_response() -> None:
         str(first.id),
         str(second.id),
     }
+    first_payload = next(
+        item for item in payload["memories"] if item["id"] == str(first.id)
+    )
+    assert first_payload["sourceMessageAt"] == source_at.isoformat()
+    assert first_payload["memoryCreatedAt"] == created_at.isoformat()
+    assert first_payload["memoryUpdatedAt"] == updated_at.isoformat()
     assert payload["runs"] == [
         {
             "runId": str(run_id),

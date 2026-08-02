@@ -59,8 +59,8 @@ from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
     integration_adapter,
 )
-from mato_loop_backend.memory import MemoryService
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
+from mato_loop_backend.memory.service import MemoryService, memory_reference_timestamps
 from mato_loop_backend.models import (
     ChatSession,
     MemoryCategory,
@@ -1863,6 +1863,7 @@ async def _memory_retrieve(
                     "category": item.category,
                     "retrievalLevel": item.retrieval_level,
                     "trustLevel": item.trust_level,
+                    **memory_reference_timestamps(item),
                     "sourceSession": (
                         {"id": str(item.source_session.id)}
                         if item.source_session
@@ -2134,8 +2135,11 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "memory_write",
             "Create or update durable memory when explicitly requested or when an unquoted "
-            "first-person statement implicitly supplies stable self-context useful in future "
+            "first-person statement implicitly supplies durable self-context useful in future "
             "conversations. Do not merely acknowledge such context: persist it in the same turn. "
+            "Slowly changing details such as age are durable observations, not timeless facts. "
+            "Do not infer a birth date or add the host date only to timestamp the content; source "
+            "timestamps are stored separately. "
             "Do not store transient, hypothetical, quoted, third-party, translation, rewriting, "
             "analysis, or extraction source text. Store only the "
             "user-supported fact; never enrich it with inferred geography or other world knowledge. "

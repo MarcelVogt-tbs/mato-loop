@@ -10,7 +10,7 @@ from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Load, selectinload
 
 from mato_loop_backend.memory.indexing import MemoryIndexService
 from mato_loop_backend.models import (
@@ -24,6 +24,7 @@ from mato_loop_backend.models import (
     MemoryRetrievalLevel,
     MemorySourceMessage,
     MemorySourceType,
+    Message,
 )
 from mato_loop_backend.settings import MemorySettings, TrustLevel
 
@@ -31,6 +32,25 @@ from mato_loop_backend.settings import MemorySettings, TrustLevel
 def normalize_content(content: str) -> tuple[str, str]:
     normalized = re.sub(r"\s+", " ", content.strip()).casefold()
     return normalized, hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def memory_reference_options() -> tuple[Load, Load]:
+    return (
+        selectinload(MemoryRecord.source_session),
+        selectinload(MemoryRecord.source_message).load_only(Message.created_at),
+    )
+
+
+def memory_reference_timestamps(item: MemoryRecord) -> dict[str, str | None]:
+    return {
+        "sourceMessageAt": (
+            item.source_message.created_at.isoformat()
+            if item.source_message and item.source_message.created_at
+            else None
+        ),
+        "memoryCreatedAt": item.created_at.isoformat() if item.created_at else None,
+        "memoryUpdatedAt": item.updated_at.isoformat() if item.updated_at else None,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +309,7 @@ class MemoryService:
                         source_type=MemorySourceType.DREAMING,
                         trust_level=trust_level,
                         session_id=session_id,
+                        message_id=(evidence_message_ids[0] if evidence_message_ids else None),
                         dream_run_id=run_id,
                         evidence_message_ids=evidence_message_ids,
                     )
@@ -397,7 +418,7 @@ class MemoryService:
                 select(MemoryRecord).where(
                     MemoryRecord.normalized_content_hash == content_hash,
                     *trust_filters,
-                ).options(selectinload(MemoryRecord.source_session))
+                ).options(*memory_reference_options())
             )
             if exact is not None:
                 selected[exact.id] = exact
@@ -409,7 +430,7 @@ class MemoryService:
                     (
                         await db.scalars(
                             select(MemoryRecord)
-                            .options(selectinload(MemoryRecord.source_session))
+                            .options(*memory_reference_options())
                             .where(
                                 MemoryRecord.search_vector.op("@@")(tsquery),
                                 *trust_filters,
@@ -428,7 +449,7 @@ class MemoryService:
                 (
                     await db.scalars(
                         select(MemoryRecord)
-                        .options(selectinload(MemoryRecord.source_session))
+                        .options(*memory_reference_options())
                         .where(MemoryRecord.category == category.value, *trust_filters)
                         .order_by(MemoryRecord.updated_at.desc(), MemoryRecord.id.desc())
                         .limit(5)
@@ -709,7 +730,7 @@ class MemoryService:
             select(MemoryRecord)
             .where(*filters)
             .options(
-                selectinload(MemoryRecord.source_session),
+                *memory_reference_options(),
                 selectinload(MemoryRecord.source_messages),
             )
         )
@@ -758,7 +779,7 @@ class MemoryService:
                 await db.scalars(
                     select(MemoryRecord)
                     .where(*filters)
-                    .options(selectinload(MemoryRecord.source_session))
+                    .options(*memory_reference_options())
                     .order_by(MemoryRecord.created_at, MemoryRecord.id)
                 )
             ).all()

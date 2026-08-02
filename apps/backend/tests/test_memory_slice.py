@@ -1,4 +1,5 @@
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -34,6 +35,7 @@ from mato_loop_backend.memory.service import (
     MemoryDuplicateError,
     MemoryMutation,
     MemoryService,
+    memory_reference_timestamps,
     normalize_content,
 )
 from mato_loop_backend.models import (
@@ -42,6 +44,7 @@ from mato_loop_backend.models import (
     MemoryDreamRun,
     MemoryRecord,
     MemorySourceMessage,
+    Message,
     UserAccount,
 )
 from mato_loop_backend.providers import ToolCall
@@ -219,6 +222,20 @@ def test_memory_normalization_is_whitespace_and_case_stable() -> None:
     assert first_hash == second_hash
 
 
+def test_memory_reference_timestamps_distinguish_source_and_record_lifecycle() -> None:
+    source_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
+    created_at = datetime(2026, 7, 20, 11, tzinfo=UTC)
+    updated_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
+    item = MemoryRecord(created_at=created_at, updated_at=updated_at)
+    item.source_message = Message(created_at=source_at)
+
+    assert memory_reference_timestamps(item) == {
+        "sourceMessageAt": source_at.isoformat(),
+        "memoryCreatedAt": created_at.isoformat(),
+        "memoryUpdatedAt": updated_at.isoformat(),
+    }
+
+
 async def test_instant_context_uses_only_whole_items_within_budget() -> None:
     records = [
         MemoryRecord(content="viel-zu-lang", retrieval_level="instant"),
@@ -238,7 +255,40 @@ async def test_instant_context_uses_only_whole_items_within_budget() -> None:
     )
 
     assert [item.content for item in selected] == ["abc", "de", "f"]
-    assert "memories.trust_level" in str(db.scalars.await_args.args[0])
+    statement = db.scalars.await_args.args[0]
+    assert "memories.trust_level" in str(statement)
+    assert "source_session_id =" not in str(statement)
+    assert any("source_message" in str(option.path) for option in statement._with_options)
+
+
+async def test_dreaming_create_uses_first_evidence_as_current_source(monkeypatch) -> None:
+    evidence_id = uuid4()
+    item = MemoryRecord(id=uuid4(), content="Dauerhafter Fakt")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+
+    @asynccontextmanager
+    async def nested():
+        yield
+
+    db.begin_nested = Mock(return_value=nested())
+    create = AsyncMock(return_value=item)
+    monkeypatch.setattr(MemoryService, "_create", create)
+    monkeypatch.setattr(MemoryService, "enforce_capacity", AsyncMock())
+
+    result = await MemoryService.create_dreaming(
+        db,
+        content=item.content,
+        category=MemoryCategory.FACT,
+        trust_level=TrustLevel.PRIVATE,
+        session_id=uuid4(),
+        run_id=uuid4(),
+        evidence_message_ids=[evidence_id],
+        max_context_characters=20_000,
+    )
+
+    assert result.created is True
+    assert create.await_args.kwargs["message_id"] == evidence_id
 
 
 async def test_private_dreaming_candidate_upgrades_public_duplicate() -> None:

@@ -62,7 +62,7 @@ from mato_loop_backend.integrations import (
 )
 from mato_loop_backend.memory import policy as memory_policy
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
-from mato_loop_backend.memory.service import MemoryService
+from mato_loop_backend.memory.service import MemoryService, memory_reference_timestamps
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -607,6 +607,7 @@ def _bounded_memory_overview(
                 "category": item.category,
                 "retrievalLevel": item.retrieval_level,
                 "content": content,
+                **memory_reference_timestamps(item),
                 "sourceSession": (
                     {"id": str(item.source_session.id)}
                     if item.source_session
@@ -1252,6 +1253,7 @@ class AgentRuntime:
                                     "category": item.category,
                                     "retrievalLevel": item.retrieval_level,
                                     "content": item.content,
+                                    **memory_reference_timestamps(item),
                                     "sourceSession": (
                                         {"id": str(item.source_session.id)}
                                         if item.source_session

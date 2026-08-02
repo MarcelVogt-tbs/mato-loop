@@ -480,6 +480,7 @@ class MemoryRecord(Base):
     )
 
     source_session: Mapped[ChatSession | None] = relationship()
+    source_message: Mapped[Message | None] = relationship(foreign_keys=[source_message_id])
     source_messages: Mapped[list[MemorySourceMessage]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True
     )

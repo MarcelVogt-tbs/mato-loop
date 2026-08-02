@@ -153,6 +153,9 @@ async def _runtime_setup(
 
 async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> None:
     session_id = uuid4()
+    source_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
+    created_at = datetime(2026, 7, 20, 11, tzinfo=UTC)
+    updated_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     user = Message(
         id=uuid4(), session_id=session_id, role="user", content="Wie alt ist mein Sohn?"
     )
@@ -163,7 +166,10 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
         retrieval_level="retrieve",
         trust_level="private",
         revision=1,
+        created_at=created_at,
+        updated_at=updated_at,
     )
+    relevant.source_message = Message(created_at=source_at)
     db, run, requests, projections, retrieve, _ = await _runtime_setup(
         monkeypatch,
         [ProviderResult(content="Neun Monate.", finish_reason="stop")],
@@ -184,6 +190,15 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
     assert instant_kwargs["max_characters"] == 20_000
     assert '"source": "relevant"' in projections[0]["system_prompt"]
     assert relevant.content in projections[0]["system_prompt"]
+    assert f'"sourceMessageAt": "{source_at.isoformat()}"' in projections[0][
+        "system_prompt"
+    ]
+    assert f'"memoryCreatedAt": "{created_at.isoformat()}"' in projections[0][
+        "system_prompt"
+    ]
+    assert f'"memoryUpdatedAt": "{updated_at.isoformat()}"' in projections[0][
+        "system_prompt"
+    ]
     assert "15 total, 2 active, 13 long-term" in projections[0]["system_prompt"]
     assert requests[0]["tool_choice"] == "auto"
 
@@ -325,6 +340,9 @@ def test_memory_overview_stops_before_exceeding_its_character_budget() -> None:
 
 async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
     session_id = uuid4()
+    source_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
+    created_at = datetime(2026, 7, 20, 11, tzinfo=UTC)
+    updated_at = datetime(2026, 7, 23, 12, tzinfo=UTC)
     user = Message(
         id=uuid4(),
         session_id=session_id,
@@ -338,8 +356,10 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         retrieval_level="retrieve",
         trust_level="private",
         revision=1,
-        updated_at=datetime(2026, 7, 23, 12, tzinfo=UTC),
+        created_at=created_at,
+        updated_at=updated_at,
     )
+    memory.source_message = Message(created_at=source_at)
     db, run, requests, projections, retrieve, execute_tool = await _runtime_setup(
         monkeypatch,
         [ProviderResult(content="Übersicht", finish_reason="stop")],
@@ -363,6 +383,15 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         "system_prompt"
     ]
     assert memory.content in projections[0]["system_prompt"]
+    assert f'"sourceMessageAt": "{source_at.isoformat()}"' in projections[0][
+        "system_prompt"
+    ]
+    assert f'"memoryCreatedAt": "{created_at.isoformat()}"' in projections[0][
+        "system_prompt"
+    ]
+    assert f'"memoryUpdatedAt": "{updated_at.isoformat()}"' in projections[0][
+        "system_prompt"
+    ]
     assert retrieve.await_args.kwargs["mode"] == MemoryRetrieveMode.BROWSE
     assert retrieve.await_args.kwargs["limit"] == 50
     execute_tool.assert_not_awaited()

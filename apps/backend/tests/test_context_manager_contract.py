@@ -899,6 +899,8 @@ def test_general_system_prompt_saves_only_stable_direct_self_context() -> None:
     assert "fact found only in earlier turns" in prompt
     assert "assistant messages, memories, or tool results" in prompt
     assert "My name is Lara" in prompt
+    assert "details such as age are durable enough to store" in prompt
+    assert "host preserves source timestamps separately" in prompt
     assert "I am from Munich" in prompt
     assert "I am married to Daniel" in prompt
     assert "independently changeable facts in separate memories" in prompt
@@ -912,6 +914,20 @@ def test_general_system_prompt_saves_only_stable_direct_self_context() -> None:
     assert "do not ask for conversational confirmation" in prompt
     assert "Viktor" not in prompt
     assert "Regina" not in prompt
+
+
+def test_general_system_prompt_explains_memory_timestamp_semantics() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        memory_text='[{"content":"Der Nutzer ist 37 Jahre alt."}]',
+        memory_read_enabled=True,
+        memory_scope={"total": 1, "instant": 1, "retrieve": 0},
+        offered_tool_names=frozenset({"memory_retrieve"}),
+    )
+
+    assert "sourceMessageAt is the best available time" in prompt
+    assert "technical changes can advance memoryUpdatedAt" in prompt
+    assert "do not assume it remains current" in prompt
 
 
 def test_general_system_prompt_enforces_pending_memory_write_outcome() -> None:

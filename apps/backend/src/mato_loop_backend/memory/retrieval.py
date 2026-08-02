@@ -9,7 +9,6 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.memory.embeddings import (
@@ -17,7 +16,7 @@ from mato_loop_backend.memory.embeddings import (
     EmbeddingError,
     embedding_client,
 )
-from mato_loop_backend.memory.service import MemoryService
+from mato_loop_backend.memory.service import MemoryService, memory_reference_options
 from mato_loop_backend.models import (
     MemoryCategory,
     MemoryEmbedding,
@@ -140,7 +139,7 @@ class MemoryRetrievalService:
             (
                 await db.scalars(
                     select(MemoryRecord)
-                    .options(selectinload(MemoryRecord.source_session))
+                    .options(*memory_reference_options())
                     .where(MemoryRecord.search_vector.op("@@")(tsquery), *filters)
                     .order_by(
                         func.ts_rank_cd(MemoryRecord.search_vector, tsquery).desc(),
@@ -173,7 +172,7 @@ class MemoryRetrievalService:
                         (
                             await db.scalars(
                                 select(MemoryRecord)
-                                .options(selectinload(MemoryRecord.source_session))
+                                .options(*memory_reference_options())
                                 .join(
                                     MemoryEmbedding,
                                     MemoryEmbedding.memory_id == MemoryRecord.id,

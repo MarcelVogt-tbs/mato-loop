@@ -1233,6 +1233,8 @@ async def test_session_read_redacts_private_memory_for_public_model(tmp_path) ->
 
 async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatch) -> None:
     cursor_time = datetime(2026, 7, 23, 12, tzinfo=UTC)
+    source_time = datetime(2026, 7, 20, 10, tzinfo=UTC)
+    created_time = datetime(2026, 7, 20, 11, tzinfo=UTC)
     item = MemoryRecord(
         id=uuid4(),
         content="Sichtbarer Fakt",
@@ -1240,7 +1242,10 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
         retrieval_level="retrieve",
         trust_level="public",
         revision=2,
+        created_at=created_time,
+        updated_at=cursor_time,
     )
+    item.source_message = Message(created_at=source_time)
     retrieve = AsyncMock(
         return_value=MemoryRetrieval(
             items=[item],
@@ -1271,6 +1276,14 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
         "retrievalLevel": "all",
     }
     assert payload["items"][0]["revision"] == 2
+    assert {
+        key: payload["items"][0][key]
+        for key in ("sourceMessageAt", "memoryCreatedAt", "memoryUpdatedAt")
+    } == {
+        "sourceMessageAt": source_time.isoformat(),
+        "memoryCreatedAt": created_time.isoformat(),
+        "memoryUpdatedAt": cursor_time.isoformat(),
+    }
     assert payload["total"] is None
     assert payload["nextCursor"] == {
         "cursor_updated_at": cursor_time.isoformat(),
@@ -1346,8 +1359,9 @@ async def test_memory_write_reports_invalid_identifier_field(tmp_path) -> None:
 def test_memory_write_schema_describes_stable_self_context() -> None:
     schema = tool_registry._definitions["memory_write"].schema()
 
-    assert "implicitly supplies stable self-context" in schema["description"]
+    assert "implicitly supplies durable self-context" in schema["description"]
     assert "persist it in the same turn" in schema["description"]
+    assert "Slowly changing details such as age" in schema["description"]
     assert "transient, hypothetical, quoted, third-party" in schema["description"]
     assert "never enrich it with inferred geography" in schema["description"]
     assert "translation, rewriting, analysis, or extraction" in schema["description"]

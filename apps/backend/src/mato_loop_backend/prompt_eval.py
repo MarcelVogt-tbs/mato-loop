@@ -311,10 +311,10 @@ CASES = (
     PromptCase(
         id="stable_self_context_writes_memory",
         kind="general",
-        user="Ich heiße Lara und arbeite dauerhaft als Architektin.",
+        user="Ich heiße Lara und bin 37 Jahre alt.",
         tools=("memory_retrieve", "memory_write"),
         expected_tool="memory_write",
-        minimum_tool_calls=2,
+        expected_tool_call_count=2,
     ),
     PromptCase(
         id="transient_context_avoids_memory",
@@ -2461,6 +2461,9 @@ def _reconciliation_case(
                     "content": "Mein Name ist Lara.",
                     "category": "identity",
                     "retrievalLevel": "instant",
+                    "sourceMessageAt": FIXED_NOW.isoformat(),
+                    "memoryCreatedAt": FIXED_NOW.isoformat(),
+                    "memoryUpdatedAt": FIXED_NOW.isoformat(),
                     "sourceSession": None,
                 }
             ],

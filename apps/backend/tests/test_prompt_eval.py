@@ -146,7 +146,7 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
         "parameters"
     ]["properties"]["category"]
     assert "occupations use fact" in category["description"]
-    assert "stable self-context" in memory_messages[0]["content"]
+    assert "durable self-context" in memory_messages[0]["content"]
 
     media_messages, media_tools = build_case(_case("transcribe_audio_uses_attachment_uuid"))
     assert "verified PCM audio derivative" in media_messages[0]["content"]
@@ -276,6 +276,7 @@ def test_evaluate_checks_query_shape_multiple_calls_and_link_labels() -> None:
     assert any("exceeds 10 words" in failure for failure in invalid_failures)
 
     stable = _case("stable_self_context_writes_memory")
+    assert "37 Jahre alt" in stable.user
     one_write = ProviderResult(
         tool_calls=[
             ToolCall(
@@ -285,7 +286,7 @@ def test_evaluate_checks_query_shape_multiple_calls_and_link_labels() -> None:
             )
         ]
     )
-    assert any("expected at least 2" in failure for failure in evaluate(stable, one_write))
+    assert any("expected exactly 2" in failure for failure in evaluate(stable, one_write))
 
     citation = _case("researched_answer_uses_exact_citation")
     bad_links = ProviderResult(

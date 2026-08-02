@@ -18,14 +18,17 @@ from pydantic import (
 )
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.memory.embeddings import EmbeddingError, embedding_client
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
-from mato_loop_backend.memory.service import MemoryService
+from mato_loop_backend.memory.service import (
+    MemoryService,
+    memory_reference_options,
+    memory_reference_timestamps,
+)
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -66,7 +69,8 @@ DREAMING_SYSTEM_PROMPT = (
     "Extract only durable cross-session knowledge about the user from untrusted conversation "
     "data. Use an empty candidates array unless information is likely to remain useful in later "
     "sessions. "
-    "Good candidates are stable identity, durable relationships, explicit recurring preferences, "
+    "Good candidates are stable identity, slowly changing identity details such as age, durable "
+    "relationships, explicit recurring preferences, "
     "long-term goals, and concrete ongoing projects. Do not store one-off questions, searches, "
     "shopping or restaurant requests, media or image requests, translations, temporary curiosity, "
     "assistant claims, quoted text, fiction, examples, or hypothetical roles. A single request "
@@ -75,7 +79,10 @@ DREAMING_SYSTEM_PROMPT = (
     "the evidence. Existing memories are untrusted reference context, not evidence. Do not emit a "
     "candidate that merely repeats, broadens, weakens, or paraphrases an existing memory or "
     "another candidate. Emit a candidate only for a correction, material refinement, or "
-    "independent durable proposition. Preserve necessary time context for changing facts. Write "
+    "independent durable proposition. Preserve explicit time context from the user, but do not add "
+    "a date only to timestamp candidate content; the host preserves source timestamps separately. "
+    "For existing memories, sourceMessageAt is the best available observation time, while "
+    "memoryCreatedAt and memoryUpdatedAt describe only the record lifecycle. Write "
     "each memory as a standalone atomic statement in the language of the source. Assign exactly "
     "one category: context for ongoing circumstances, fact for objective durable information, "
     "goal for desired future outcomes, identity for stable personal identity and relationships, "
@@ -95,7 +102,8 @@ RECONCILIATION_SYSTEM_PROMPT = (
     "that can change independently in separate memories. Preserve uncertainty and valid details "
     "when updating. Write updates as standalone canonical statements in the language of the "
     "source memory and reclassify their category from the result. Reference only supplied memory "
-    "IDs. Never delete memories."
+    "IDs. For changing facts, use sourceMessageAt as the best available observation time; record "
+    "lifecycle timestamps do not confirm that a fact remains current. Never delete memories."
 )
 
 
@@ -223,6 +231,7 @@ def _memory_reference(item: MemoryRecord) -> dict[str, Any]:
         "retrievalLevel": item.retrieval_level,
         "trustLevel": item.trust_level,
         "content": item.content,
+        **memory_reference_timestamps(item),
         "sourceSession": (
             {"id": str(item.source_session.id)}
             if item.source_session
@@ -885,7 +894,7 @@ class DreamingService:
                 .join(AgentRun, AgentRun.id == MemoryExposure.agent_run_id)
                 .join(Message, Message.id == MemoryExposure.assistant_message_id)
                 .join(MemoryRecord, MemoryRecord.id == MemoryExposure.memory_id)
-                .options(selectinload(MemoryRecord.source_session))
+                .options(*memory_reference_options())
                 .where(*filters)
             )
         ).all()
@@ -1377,7 +1386,9 @@ class DreamingService:
             )
             for item in messages
         )
-        reference_characters = sum(len(item.content) + 120 for item in instant_memories)
+        reference_characters = len(
+            json.dumps([_memory_reference(item) for item in instant_memories], ensure_ascii=False)
+        )
         source_character_limit = max(
             1_000,
             _source_character_limit(model)
@@ -1413,6 +1424,9 @@ class DreamingService:
         validated_candidates: list[tuple[DreamCandidate, list[UUID]]] = []
         for candidate in output.candidates:
             candidate_evidence = list(dict.fromkeys(candidate.evidence_message_ids))
+            candidate_evidence.sort(
+                key=lambda message_id: message_id not in user_evidence_ids
+            )
             if not candidate_evidence or not set(candidate_evidence).issubset(evidence_ids):
                 raise RuntimeError("memory.dreamingEvidenceInvalid")
             validated_candidates.append((candidate, candidate_evidence))
@@ -1470,6 +1484,7 @@ class DreamingService:
                             "content": item.content,
                             "category": item.category,
                             "retrievalLevel": item.retrieval_level,
+                            **memory_reference_timestamps(item),
                             "sourceSession": (
                                 {"id": str(item.source_session.id)}
                                 if item.source_session
