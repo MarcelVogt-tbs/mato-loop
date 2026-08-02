@@ -441,10 +441,13 @@ def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
         None,
         [first_user, search_call, search_result, fetch_call, fetch_result, answer],
     )
-    assert "https://example.test/source" in summary_source
+    assert first_user.content in summary_source
+    assert answer.content in summary_source
+    assert "https://example.test/source" not in summary_source
     assert "x" * 1_000 not in summary_source
     assert "y" * 1_000 not in summary_source
-    assert summary_source.count(str(fetch_result.id)) == 1
+    assert str(search_result.id) not in summary_source
+    assert str(fetch_result.id) not in summary_source
     assert "toolResultReference" not in summary_source
 
 
@@ -467,13 +470,9 @@ def test_public_projection_does_not_reference_private_historical_tool_results() 
     content = next(item["content"] for item in projected if item["role"] == "tool")
     assert content == "[Historical private tool output unavailable to the current model.]"
     assert str(tool_result.id) not in content
-    summary_source = _summary_source(
-        None,
-        [assistant, tool_result],
-        target_trust_level=TrustLevel.PUBLIC,
-    )
-    assert "Historical private tool output unavailable" in summary_source
-    assert summary_source.count(str(tool_result.id)) == 1
+    summary_source = _summary_source(None, [assistant, tool_result])
+    assert "privater Toolinhalt" not in summary_source
+    assert str(tool_result.id) not in summary_source
     assert "toolResultReference" not in summary_source
 
 
@@ -727,7 +726,7 @@ def test_session_tool_result_prompt_only_appears_when_the_tool_is_offered() -> N
     assert "toolResultReference" not in unavailable
 
 
-def test_summary_source_excludes_retrieved_tool_result_chunks() -> None:
+def test_summary_source_excludes_tool_calls_and_results() -> None:
     session = _session()
     assistant = _message(session.id, "assistant", "")
     assistant.tool_calls = [
@@ -738,8 +737,19 @@ def test_summary_source_excludes_retrieved_tool_result_chunks() -> None:
 
     source = _summary_source(None, [assistant, tool])
 
-    assert "session_tool_result_read" in source
+    assert "session_tool_result_read" not in source
     assert "vertraulicher wiederabgerufener Ausschnitt" not in source
+
+
+def test_summary_source_keeps_chat_text_without_attachment_metadata() -> None:
+    user = _message(_session().id, "user", "Beschreibe mein Bild")
+    attachment = _attach_image(user)
+
+    source = _summary_source(None, [user])
+
+    assert user.content in source
+    assert str(attachment.id) not in source
+    assert attachment.storage_path not in source
 
 
 def test_available_web_research_prompt_balances_freshness_and_search_cost() -> None:
@@ -1348,9 +1358,9 @@ async def test_compaction_preserves_history_and_records_stable_summary_boundary(
     assert str(records[0].id) in source
     assert str(records[1].id) in source
     assert str(records[2].id) not in source
-    assert str(records[1].attachments[0].id) in source
-    assert "diagram.png" in source
-    assert "generated/00000000-0000-4000-8000-000000000002/image.png" in source
+    assert str(records[1].attachments[0].id) not in source
+    assert records[1].attachments[0].storage_path not in source
+    assert "diagram.png" not in source
     assert "cd/cdef" not in source
     assert "base64" not in source
     assert projection.messages[0]["attachments"][0]["historical"] is True

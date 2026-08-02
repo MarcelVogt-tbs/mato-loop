@@ -1156,52 +1156,17 @@ def _protected_start(records: list[Message], turns: int) -> int:
 def _summary_source(
     summary: ContextSummary | None,
     records: list[Message],
-    *,
-    target_trust_level: TrustLevel = TrustLevel.PRIVATE,
 ) -> str:
     parts = []
     if summary is not None:
         parts.append("PREVIOUS SUMMARY\n" + summary.content)
-    tool_names = _tool_names_by_message_id(records)
     for item in records:
-        if (
-            item.role == "tool"
-            and item.tool_call_id
-            and tool_names.get(item.id)
-            in {"memory_retrieve", "session_read", "session_tool_result_read"}
-        ):
+        if item.role not in {"user", "assistant"}:
             continue
         role = item.role.upper()
         content = item.content
-        if item.role == "tool":
-            private_for_target = (
-                target_trust_level == TrustLevel.PUBLIC
-                and (item.trust_level or TrustLevel.PUBLIC.value)
-                == TrustLevel.PRIVATE.value
-            )
-            content = (
-                _PRIVATE_TOOL_OUTPUT
-                if private_for_target
-                else _historical_tool_result(
-                    tool_names.get(item.id),
-                    content,
-                    item.id,
-                    include_reference=False,
-                )
-            )
         if item.role == "assistant" and item.generation_status == "interrupted":
             content = f"{content}\n[Response interrupted by the user]".strip()
-        if item.tool_calls:
-            calls = ", ".join(str(call.get("name") or "unknown") for call in item.tool_calls)
-            content = f"{content}\nTool calls: {calls}".strip()
-        if item.attachments:
-            markers = "\n".join(
-                f"[Attachment: ID {attachment.id}, name "
-                f"{attachment.filename or 'attachment'}, kind {attachment.kind}, "
-                f"path {attachment.storage_path}]"
-                for attachment in item.attachments
-            )
-            content = f"{content}\n{markers}".strip()
         parts.append(f"MESSAGE {item.id} [{role}]\n{content}")
     return "\n\n".join(parts)
 
@@ -1399,9 +1364,7 @@ class ContextManager:
             target_tokens = max(256, int(input_budget * settings.compaction_target_ratio))
             summary_limit = max(256, min(2_048, target_tokens // 3))
             result = await summarize(
-                _summary_source(
-                    latest, prefix, target_trust_level=target_trust_level
-                ),
+                _summary_source(latest, prefix),
                 summary_limit,
             )
             content = result.content.strip()

@@ -96,7 +96,7 @@ Tool call and result are indivisible when slicing context. A request cannot begi
 
 Compaction creates a persistent marked summary of a completed canonical-history prefix. The summary has an unambiguous coverage boundary so the request builder selects exactly that summary and messages after it. It never replaces, edits, or deletes covered messages.
 
-A summary preserves goals, relevant facts, decisions, open items, tool effects, and approval outcomes. Unconfirmed model claims must not appear as executed effects. Failed compaction leaves existing history and the latest valid summary unchanged.
+A summary preserves goals, relevant facts, decisions, and open items stated in user and assistant chat text. Tool calls, tool outputs, attachment metadata, and approval details remain only in canonical history. Failed compaction leaves existing history and the latest valid summary unchanged.
 
 Compaction triggers from estimated input budget, not message count. Repeated compaction must not reinsert already compacted prefixes without bounds. The implementation deterministically chooses the active summary among generations.
 
