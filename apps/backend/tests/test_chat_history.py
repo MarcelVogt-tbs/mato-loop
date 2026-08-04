@@ -28,7 +28,6 @@ async def test_undo_removes_user_message_suffix_and_returns_draft(monkeypatch) -
     monkeypatch.setattr(
         ChatHistoryService, "_lock_after_cancelling_active_run", AsyncMock(return_value=session)
     )
-    monkeypatch.setattr(ChatHistoryService, "_ensure_dreaming_inactive", AsyncMock())
     monkeypatch.setattr(ChatHistoryService, "_messages", AsyncMock(return_value=messages))
     monkeypatch.setattr(ChatHistoryService, "_delete_message_suffix", remove_suffix)
     monkeypatch.setattr(ChatHistoryService, "_commit_and_discard", commit)
@@ -75,7 +74,6 @@ async def test_undo_of_first_user_message_deletes_session(monkeypatch) -> None:
     monkeypatch.setattr(
         ChatHistoryService, "_lock_after_cancelling_active_run", AsyncMock(return_value=session)
     )
-    monkeypatch.setattr(ChatHistoryService, "_ensure_dreaming_inactive", AsyncMock())
     monkeypatch.setattr(ChatHistoryService, "_messages", AsyncMock(return_value=messages))
     monkeypatch.setattr(ChatHistoryService, "_delete_session", delete_session)
 
@@ -108,7 +106,6 @@ async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeyp
     remove_suffix = AsyncMock(return_value=[])
     retry = AsyncMock(return_value=replacement_run)
     monkeypatch.setattr(ChatHistoryService, "_owned_session", AsyncMock(return_value=session))
-    monkeypatch.setattr(ChatHistoryService, "_ensure_dreaming_inactive", AsyncMock())
     monkeypatch.setattr(ChatHistoryService, "_active_run", AsyncMock(return_value=None))
     monkeypatch.setattr(ChatHistoryService, "_messages", AsyncMock(return_value=messages))
     monkeypatch.setattr(ChatHistoryService, "_delete_message_suffix", remove_suffix)
@@ -139,7 +136,6 @@ async def test_retry_rejects_a_non_latest_error(monkeypatch) -> None:
     messages.insert(2, old_error)
     db = AsyncMock(spec=AsyncSession)
     monkeypatch.setattr(ChatHistoryService, "_owned_session", AsyncMock(return_value=session))
-    monkeypatch.setattr(ChatHistoryService, "_ensure_dreaming_inactive", AsyncMock())
     monkeypatch.setattr(ChatHistoryService, "_active_run", AsyncMock(return_value=None))
     monkeypatch.setattr(ChatHistoryService, "_messages", AsyncMock(return_value=messages))
 

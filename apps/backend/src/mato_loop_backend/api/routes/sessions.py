@@ -400,6 +400,17 @@ async def list_sessions(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[dict]:
+    active_run_status = (
+        select(AgentRun.status)
+        .where(
+            AgentRun.session_id == ChatSession.id,
+            AgentRun.status.in_(["queued", "running", "waiting_approval"]),
+        )
+        .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+        .limit(1)
+        .correlate(ChatSession)
+        .scalar_subquery()
+    )
     latest_messages = (
         select(
             Message.session_id.label("session_id"),
@@ -415,7 +426,11 @@ async def list_sessions(
     )
     rows = (
         await db.execute(
-            select(ChatSession, latest_messages.c.last_message_at)
+            select(
+                ChatSession,
+                latest_messages.c.last_message_at,
+                active_run_status.label("active_run_status"),
+            )
             .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
             .where(ChatSession.user_id == user.id)
             .order_by(
@@ -428,8 +443,11 @@ async def list_sessions(
         )
     ).all()
     return [
-        await _session_payload(db, item, last_message_at=last_message_at)
-        for item, last_message_at in rows
+        {
+            **(await _session_payload(db, item, last_message_at=last_message_at)),
+            "activeRunStatus": active_status,
+        }
+        for item, last_message_at, active_status in rows
     ]
 
 
@@ -450,6 +468,11 @@ async def _create_session(
         raise ApiError(409, "session.modelToolsUnavailable", field="modelId")
     working_directory = None
     if payload.working_directory is not None:
+        await db.scalar(
+            select(UserAccount.id)
+            .where(UserAccount.id == user.id)
+            .with_for_update()
+        )
         try:
             directory = WorkspaceService().resolve(payload.working_directory)
         except WorkspaceError as exc:
@@ -582,10 +605,16 @@ async def update_session(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
+    fields = payload.model_fields_set
+    if "working_directory" in fields:
+        await db.scalar(
+            select(UserAccount.id)
+            .where(UserAccount.id == user.id)
+            .with_for_update()
+        )
     item = await _owned_session(db, session_id, user.id)
     if item is None:
         raise ApiError(404, "session.notFound")
-    fields = payload.model_fields_set
     policy_fields = {
         "memory_mode",
         "model_id",
@@ -923,9 +952,18 @@ async def stream_run_events(
     run_status = run.status
     run_error = run.error
     error_message = (
-        await db.scalar(select(Message).where(Message.error_run_id == run_id).limit(1))
+        await db.scalar(
+            select(Message)
+            .where(Message.error_run_id == run_id)
+            .options(selectinload(Message.attachments))
+            .limit(1)
+        )
         if run_status == "failed"
         else None
+    )
+    error_params = error_message.error_params if error_message is not None else None
+    error_message_payload = (
+        message_payload(error_message) if error_message is not None else None
     )
     await db.rollback()
 
@@ -934,12 +972,12 @@ async def stream_run_events(
             if run_status == "failed":
                 error = describe_error(
                     run_error or "agent.failed",
-                    params=error_message.error_params if error_message is not None else None,
+                    params=error_params,
                 )
-                if error_message is not None:
+                if error_message_payload is not None:
                     event = {
                         "type": "message.completed",
-                        "message": message_payload(error_message),
+                        "message": error_message_payload,
                     }
                     yield f"event: message.completed\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
                 event = {"type": "run.failed", "error": error.payload()}

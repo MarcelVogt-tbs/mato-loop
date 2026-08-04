@@ -24,6 +24,7 @@ from mato_loop_backend.api.routes.sessions import (
     message_payload,
     send_message,
     session_defaults,
+    stream_run_events,
     update_session,
 )
 from mato_loop_backend.attachments import AttachmentService, AttachmentStorage
@@ -117,17 +118,21 @@ async def test_session_list_uses_latest_visible_message_timestamp() -> None:
     )
     last_message_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
     execution_result = MagicMock()
-    execution_result.all.return_value = [(session, last_message_at)]
+    execution_result.all.return_value = [(session, last_message_at, "running")]
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = execution_result
 
     result = await list_sessions(user, db)
 
     assert result[0]["lastMessageAt"] == last_message_at.isoformat()
+    assert result[0]["activeRunStatus"] == "running"
     statement = db.execute.await_args.args[0]
     sql = str(statement)
     assert "max(messages.created_at)" in sql
     assert "messages.role IN" in sql
+    assert "agent_runs.status IN" in sql
+    assert "agent_runs.created_at DESC, agent_runs.id DESC" in sql
+    assert "LIMIT" in sql
     assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC" in sql
     assert "chat_sessions.updated_at DESC" not in sql
 
@@ -454,6 +459,52 @@ def test_message_payload_recreates_safe_english_runtime_error() -> None:
     assert secret not in str(payload)
 
 
+async def test_terminal_failure_is_serialized_before_sse_transaction_ends(
+    monkeypatch,
+) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
+    run = AgentRun(
+        id=uuid4(),
+        session_id=session.id,
+        status="failed",
+        error="provider.requestFailed",
+    )
+    error_message = Message(
+        id=uuid4(),
+        session_id=session.id,
+        role="assistant",
+        content="secret upstream response",
+        error_code="provider.requestFailed",
+        error_params={"retryable": True},
+        error_run_id=run.id,
+    )
+    error_message.attachments = []
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [session, run]
+    db.scalar.return_value = error_message
+    original_message_payload = message_payload
+
+    def serialize_before_rollback(message):
+        assert db.rollback.await_count == 0
+        return original_message_payload(message)
+
+    monkeypatch.setattr(sessions_route, "message_payload", serialize_before_rollback)
+
+    response = await stream_run_events(session.id, run.id, user, db)
+    chunks = [chunk async for chunk in response.body_iterator]
+    body = "".join(
+        chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks
+    )
+
+    assert db.rollback.await_count == 1
+    assert body.index("event: message.completed") < body.index("event: run.failed")
+    assert '"retryable": true' in body
+    assert "secret upstream response" not in body
+
+
 def test_message_payload_contains_public_attachment_metadata_only() -> None:
     session_id = uuid4()
     message_id = uuid4()
@@ -756,6 +807,8 @@ async def test_workspace_mode_is_preserved_without_workdir() -> None:
 
     assert session.working_directory is None
     assert session.workspace_access == "read-write"
+    assert db.scalar.await_count == 2
+    assert "FOR UPDATE" in str(db.scalar.await_args_list[0].args[0])
 
 
 async def test_manual_title_change_skips_automatic_generation(monkeypatch) -> None:

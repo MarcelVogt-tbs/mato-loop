@@ -14,7 +14,6 @@ from mato_loop_backend.attachments import AttachmentService
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
-    MemoryDreamRun,
     Message,
     MessageAttachment,
 )
@@ -22,7 +21,6 @@ from mato_loop_backend.session_storage import SessionStorage, SessionStorageErro
 
 logger = logging.getLogger(__name__)
 _ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval")
-_ACTIVE_DREAM_STATUSES = ("queued", "running")
 
 
 class ChatHistoryError(RuntimeError):
@@ -74,20 +72,6 @@ class ChatHistoryService:
                 )
             ).all()
         )
-
-    @staticmethod
-    async def _ensure_dreaming_inactive(db: AsyncSession, session_id: UUID) -> None:
-        runs = list(
-            (
-                await db.scalars(
-                    select(MemoryDreamRun)
-                    .where(MemoryDreamRun.session_id == session_id)
-                    .with_for_update()
-                )
-            ).all()
-        )
-        if any(run.status in _ACTIVE_DREAM_STATUSES for run in runs):
-            raise ChatHistoryError("memory.dreamRunActive", 409)
 
     @staticmethod
     async def _active_run(db: AsyncSession, session_id: UUID) -> AgentRun | None:
@@ -234,7 +218,6 @@ class ChatHistoryService:
         message_id: UUID,
     ) -> UndoUserMessageResult:
         session = await cls._lock_after_cancelling_active_run(db, session_id, user_id)
-        await cls._ensure_dreaming_inactive(db, session_id)
         messages = await cls._messages(db, session_id)
         target = next((message for message in messages if message.id == message_id), None)
         if target is None or target.role != "user":
@@ -262,7 +245,6 @@ class ChatHistoryService:
         message_id: UUID,
     ) -> RetryFailedMessageResult:
         session = await cls._owned_session(db, session_id, user_id)
-        await cls._ensure_dreaming_inactive(db, session_id)
         if await cls._active_run(db, session_id) is not None:
             raise ChatHistoryError("session.runAlreadyActive", 409)
         messages = await cls._messages(db, session_id)

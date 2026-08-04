@@ -39,7 +39,11 @@ export async function downloadMessageAttachmentFiles(message) {
   return Promise.all((message?.attachments || []).map(async (attachment) => {
     const url = safeAttachmentUrl(attachment.url)
     if (!url) throw new Error('Invalid internal attachment URL')
-    const { data } = await api.get(url, { responseType: 'blob', suppressErrorToast: true })
+    const { data } = await api.get(url, {
+      baseURL: '',
+      responseType: 'blob',
+      suppressErrorToast: true
+    })
     const type = attachment.mimeType || data?.type || 'application/octet-stream'
     return new File([data], attachment.filename || 'datei', { type })
   }))
@@ -204,6 +208,7 @@ export const useChatStore = defineStore('chat', {
     reconnectAttempts: 0,
     activity: emptyActivity(),
     sessionLoadVersion: 0,
+    sessionListVersion: 0,
     historyActionPending: false,
     sessionRequestController: null,
     loadError: null,
@@ -444,8 +449,13 @@ export const useChatStore = defineStore('chat', {
       }
       this.persistDrafts()
     },
-    async fetchSessions() {
-      this.sessions = sortSessions((await api.get('/sessions')).data)
+    async fetchSessions(config = null) {
+      const version = ++this.sessionListVersion
+      const response = config
+        ? await api.get('/sessions', config)
+        : await api.get('/sessions')
+      if (version !== this.sessionListVersion) return
+      this.sessions = sortSessions(response.data)
       const sessionIds = new Set(this.sessions.map((session) => session.id))
       for (const id of Object.keys(this.drafts.sessionMessages)) {
         if (!sessionIds.has(id)) delete this.drafts.sessionMessages[id]
@@ -623,6 +633,7 @@ export const useChatStore = defineStore('chat', {
       if (this.current?.id === id) this.current = null
     },
     clearRunTracking() {
+      const sessionId = this.runSessionId
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
       this.reconnectAttempts = 0
@@ -637,6 +648,12 @@ export const useChatStore = defineStore('chat', {
       this.streamReasoning = null
       this.streamModelName = null
       this.clearActivity()
+      if (sessionId) this.setSessionRunStatus(sessionId, null)
+    },
+    setSessionRunStatus(sessionId, status) {
+      this.sessionListVersion += 1
+      const session = this.sessions.find((item) => item.id === sessionId)
+      if (session) session.activeRunStatus = status
     },
     updateSessionSummary(session) {
       const summary = { ...session }
@@ -960,6 +977,7 @@ export const useChatStore = defineStore('chat', {
       this.runSessionId = sessionId
       this.runId = runId
       this.running = true
+      if (run.status) this.setSessionRunStatus(sessionId, run.status)
       this.streamModelName = run.modelName || this.streamModelName
       source.onopen = () => {
         if (this.eventSource !== source) return
@@ -983,6 +1001,7 @@ export const useChatStore = defineStore('chat', {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
         this.streamModelName = payload.modelName || this.streamModelName
+        this.setSessionRunStatus(sessionId, 'running')
         this.setActivity('preparing_context', { startedAt: payload.createdAt })
       })
       source.addEventListener('run.phase', (event) => {
@@ -1060,6 +1079,7 @@ export const useChatStore = defineStore('chat', {
           tool: approval.details?.tool,
           toolCallId: approval.details?.toolCallId
         })
+        this.setSessionRunStatus(sessionId, 'waiting_approval')
         useApprovalStore().add(approval)
       })
       source.addEventListener('approval.resolved', () => {
@@ -1068,6 +1088,7 @@ export const useChatStore = defineStore('chat', {
           tool: this.activity.tool,
           toolCallId: this.activity.toolCallId
         })
+        this.setSessionRunStatus(sessionId, 'running')
         useApprovalStore().fetchPending()
       })
       source.addEventListener('approval.expired', () => {
@@ -1076,6 +1097,7 @@ export const useChatStore = defineStore('chat', {
           tool: this.activity.tool,
           toolCallId: this.activity.toolCallId
         })
+        this.setSessionRunStatus(sessionId, 'running')
         useApprovalStore().fetchPending()
       })
       const finish = () => {
@@ -1099,6 +1121,7 @@ export const useChatStore = defineStore('chat', {
         this.streamReasoning = null
         this.streamModelName = null
         this.clearActivity()
+        this.setSessionRunStatus(sessionId, null)
         this.refreshSession(sessionId)
         this.fetchSessions()
         useApprovalStore().fetchPending()
@@ -1136,6 +1159,7 @@ export const useChatStore = defineStore('chat', {
           this.cancelRequested = false
           this.streamModelName = null
           this.clearActivity()
+          this.setSessionRunStatus(sessionId, null)
           this.refreshSession(sessionId)
           this.fetchSessions()
           useApprovalStore().fetchPending()

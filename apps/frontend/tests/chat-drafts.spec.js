@@ -607,6 +607,7 @@ describe('chat drafts', () => {
 
   it('tracks model, streaming and approval phases from SSE', () => {
     global.EventSource = EventSourceMock
+    api.get.mockResolvedValue({ data: [] })
     const chat = useChatStore()
     chat.current = { id: 'session-1', messages: [] }
     chat.sessions = [{ id: 'session-1', title: 'Erste Nachricht' }]
@@ -616,6 +617,7 @@ describe('chat drafts', () => {
       status: 'queued',
       createdAt: '2026-07-19T12:00:00Z'
     })
+    expect(chat.sessions[0].activeRunStatus).toBe('queued')
     const source = EventSourceMock.instances[0]
     source.emit('run.started', {
       modelName: 'Streaming-Modell',
@@ -623,6 +625,7 @@ describe('chat drafts', () => {
     })
     expect(chat.activity.phase).toBe('preparing_context')
     expect(chat.streamModelName).toBe('Streaming-Modell')
+    expect(chat.sessions[0].activeRunStatus).toBe('running')
 
     source.emit('run.phase', { phase: 'waiting_model', modelRequest: 1 })
     expect(chat.activity).toMatchObject({ phase: 'waiting_model', modelRequest: 1 })
@@ -653,6 +656,26 @@ describe('chat drafts', () => {
       tool: 'write_file',
       toolCallId: 'call-1'
     })
+    expect(chat.sessions[0].activeRunStatus).toBe('waiting_approval')
+
+    source.emit('approval.resolved', {})
+    expect(chat.sessions[0].activeRunStatus).toBe('running')
+  })
+
+  it('does not replace a newer run status with a stale session list', async () => {
+    let resolveSessions
+    api.get.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSessions = resolve
+    }))
+    const chat = useChatStore()
+    chat.sessions = [{ id: 'session-1', title: 'Test', activeRunStatus: null }]
+
+    const request = chat.fetchSessions()
+    chat.setSessionRunStatus('session-1', 'running')
+    resolveSessions({ data: [{ id: 'session-1', title: 'Test', activeRunStatus: null }] })
+    await request
+
+    expect(chat.sessions[0].activeRunStatus).toBe('running')
   })
 
   it('promotes streamed content before refreshing the persisted message', async () => {
@@ -843,9 +866,10 @@ describe('chat drafts', () => {
     api.get.mockImplementation((url) => Promise.resolve({
       data: url === '/sessions/session-1'
         ? { id: 'session-1', messages: [], activeRun: null }
-        : []
+        : [{ id: 'session-1', title: 'Test', activeRunStatus: null }]
     }))
     const chat = useChatStore()
+    chat.sessions = [{ id: 'session-1', title: 'Test' }]
     chat.current = { id: 'session-1', messages: [] }
     chat.selectedSessionId = 'session-1'
     chat.watchRun('session-1', 'run-1', { status: 'running' })
@@ -861,6 +885,7 @@ describe('chat drafts', () => {
     expect(chat.running).toBe(false)
     expect(chat.stopping).toBe(false)
     expect(chat.runId).toBeNull()
+    expect(chat.sessions[0].activeRunStatus).toBeNull()
   })
 
   it('reloads the persisted runtime error after a failed run', async () => {
@@ -1065,6 +1090,11 @@ describe('chat drafts', () => {
 
     await chat.undoUserMessage(message)
 
+    expect(api.get).toHaveBeenCalledWith(url, {
+      baseURL: '',
+      responseType: 'blob',
+      suppressErrorToast: true
+    })
     expect(chat.activeAttachmentDraft).toHaveLength(1)
     expect(chat.activeAttachmentDraft[0].file.name).toBe('notiz.txt')
     expect(chat.activeAttachmentDraft[0].file.type).toBe('text/plain')
