@@ -1,10 +1,17 @@
+import hashlib
+from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 
 from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
+from mato_loop_backend.workspace import (
+    MAX_EDITABLE_TEXT_BYTES,
+    FileRoot,
+    RootFileError,
+    RootFileService,
+)
 
 
 def make_service(
@@ -168,6 +175,157 @@ def test_root_file_service_writes_atomically_and_only_below_session_files(tmp_pa
         service.write_file(FileRoot.SESSION, "files", "verboten")
     with pytest.raises(RootFileError):
         service.delete_path(FileRoot.SESSION, ".", recursive=True)
+
+
+def test_replace_text_file_is_existing_only_revision_checked_and_exact_byte_limited(
+    tmp_path: Path,
+) -> None:
+    service, session_root, workspace_root = make_service(tmp_path)
+    target = session_root / "files" / "notes.txt"
+    target.write_bytes(b"alt")
+
+    revision = service.replace_text_file(
+        FileRoot.SESSION,
+        "files/notes.txt",
+        "ä" * (MAX_EDITABLE_TEXT_BYTES // 2),
+        hashlib.sha256(b"alt").hexdigest(),
+    )
+
+    assert target.stat().st_size == MAX_EDITABLE_TEXT_BYTES
+    assert revision == hashlib.sha256(target.read_bytes()).hexdigest()
+    with pytest.raises(RootFileError) as stale:
+        service.replace_text_file(
+            FileRoot.SESSION,
+            "files/notes.txt",
+            "changed",
+            hashlib.sha256(b"alt").hexdigest(),
+        )
+    assert stale.value.code == "file.changed"
+    with pytest.raises(RootFileError) as too_large:
+        service.replace_text_file(
+            FileRoot.SESSION,
+            "files/notes.txt",
+            "x" * (MAX_EDITABLE_TEXT_BYTES + 1),
+            revision,
+        )
+    assert too_large.value.code == "file.tooLarge"
+    with pytest.raises(RootFileError) as missing:
+        service.replace_text_file(
+            FileRoot.SESSION,
+            "files/missing.txt",
+            "new",
+            hashlib.sha256(b"").hexdigest(),
+        )
+    assert missing.value.code == "file.fileNotFound"
+    assert not (session_root / "files" / "missing.txt").exists()
+
+    workspace_target = workspace_root / "selected.txt"
+    workspace_target.write_text("old", encoding="utf-8")
+    service.replace_text_file(
+        FileRoot.WORKSPACE,
+        "selected.txt",
+        "new",
+        hashlib.sha256(b"old").hexdigest(),
+    )
+    assert workspace_target.read_text(encoding="utf-8") == "new"
+
+
+def test_replace_text_file_rejects_invalid_targets_and_preserves_session_quota(
+    tmp_path: Path,
+) -> None:
+    service, session_root, _ = make_service(tmp_path)
+    files = session_root / "files"
+    invalid = files / "invalid.txt"
+    invalid.write_bytes(b"\xff")
+    link = files / "link.txt"
+    link.symlink_to(invalid)
+
+    for path, code in (
+        ("files/invalid.txt", "file.invalidEncoding"),
+        ("files/link.txt", "file.symlinkForbidden"),
+        ("files", "file.sessionMutationForbidden"),
+    ):
+        with pytest.raises(RootFileError) as exc_info:
+            service.replace_text_file(
+                FileRoot.SESSION,
+                path,
+                "new",
+                hashlib.sha256(b"\xff").hexdigest(),
+            )
+        assert exc_info.value.code == code
+
+    target = files / "quota.txt"
+    target.write_text("old", encoding="utf-8")
+    service.SESSION_QUOTA_BYTES = service.session_usage()
+    with pytest.raises(RootFileError) as quota:
+        service.replace_text_file(
+            FileRoot.SESSION,
+            "files/quota.txt",
+            "larger",
+            hashlib.sha256(b"old").hexdigest(),
+        )
+    assert quota.value.code == "file.sessionQuotaExceeded"
+    assert target.read_text(encoding="utf-8") == "old"
+    assert not list(files.glob(".upload-*.tmp"))
+
+
+def test_root_file_service_uploads_only_below_session_files(tmp_path: Path) -> None:
+    service, session_root, _ = make_service(tmp_path)
+
+    entry = service.create_file(
+        FileRoot.SESSION,
+        "files/archive.bin",
+        BytesIO(b"\x00\xff"),
+        max_bytes=10,
+    )
+
+    assert entry.path == "files/archive.bin"
+    assert service.open_file(FileRoot.SESSION, entry.path).read() == b"\x00\xff"
+    assert (session_root / entry.path).stat().st_mode & 0o777 == 0o600
+    with pytest.raises(RootFileError) as exc_info:
+        service.create_file(
+            FileRoot.SESSION,
+            "generated/result.bin",
+            BytesIO(b"result"),
+            max_bytes=10,
+        )
+    assert exc_info.value.code == "file.sessionMutationForbidden"
+
+
+def test_root_file_service_renames_only_mutable_entries_without_overwriting(
+    tmp_path: Path,
+) -> None:
+    service, session_root, _ = make_service(tmp_path)
+    files = session_root / "files"
+    (files / "old.txt").write_text("old", encoding="utf-8")
+    (files / "target.txt").write_text("target", encoding="utf-8")
+    (files / "folder").mkdir()
+
+    renamed_file = service.rename_path(
+        FileRoot.SESSION, "files/old.txt", "renamed.txt"
+    )
+    renamed_directory = service.rename_path(
+        FileRoot.SESSION, "files/folder", "renamed-folder"
+    )
+
+    assert renamed_file.path == "files/renamed.txt"
+    assert renamed_directory.kind == "directory"
+    with pytest.raises(RootFileError) as exc_info:
+        service.rename_path(
+            FileRoot.SESSION, "files/renamed.txt", "target.txt"
+        )
+    assert exc_info.value.code == "file.pathAlreadyExists"
+    with pytest.raises(RootFileError) as exc_info:
+        service.rename_path(
+            FileRoot.SESSION, "generated", "renamed-generated"
+        )
+    assert exc_info.value.code == "file.sessionMutationForbidden"
+    (files / "link").symlink_to(files / "renamed.txt")
+    with pytest.raises(RootFileError) as exc_info:
+        service.rename_path(FileRoot.SESSION, "files/link", "renamed-link")
+    assert exc_info.value.code == "file.symlinkForbidden"
+    assert (files / "renamed.txt").read_text(encoding="utf-8") == "old"
+    assert (files / "target.txt").read_text(encoding="utf-8") == "target"
 
 
 def test_root_file_service_never_follows_symlinks(tmp_path: Path) -> None:

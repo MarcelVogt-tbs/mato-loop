@@ -7,12 +7,19 @@ from starlette.types import Message, Receive, Scope, Send
 
 from mato_loop_backend.attachments import MAX_FILE_ATTACHMENT_BYTES
 from mato_loop_backend.error_contract import error_payload
+from mato_loop_backend.workspace import MAX_EDITABLE_TEXT_BYTES
 
 _MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 TRANSCRIPTION_REQUEST_LIMIT = MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
 SESSION_ATTACHMENTS_REQUEST_LIMIT = 4 * MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
+WORKSPACE_UPLOAD_REQUEST_LIMIT = MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
+# JSON escapes each ASCII control byte as up to six bytes.
+WORKSPACE_FILE_EDIT_REQUEST_LIMIT = 6 * MAX_EDITABLE_TEXT_BYTES + 64 * 1024
 _TOO_LARGE_BODY = json.dumps(
     error_payload("attachment.tooLarge"), separators=(",", ":")
+).encode("utf-8")
+_FILE_TOO_LARGE_BODY = json.dumps(
+    error_payload("file.tooLarge"), separators=(",", ":")
 ).encode("utf-8")
 
 
@@ -21,13 +28,20 @@ class _RequestBodyTooLarge(Exception):
 
 
 def _request_limit(scope: Scope) -> int | None:
-    if scope.get("type") != "http" or scope.get("method") != "POST":
+    if scope.get("type") != "http":
         return None
     path = scope.get("path")
+    method = scope.get("method")
+    if path == "/api/workspace/files" and method == "PUT":
+        return WORKSPACE_FILE_EDIT_REQUEST_LIMIT
+    if method != "POST":
+        return None
     if path == "/api/media/transcriptions":
         return TRANSCRIPTION_REQUEST_LIMIT
     if path == "/api/sessions/with-attachments":
         return SESSION_ATTACHMENTS_REQUEST_LIMIT
+    if path == "/api/workspace/files":
+        return WORKSPACE_UPLOAD_REQUEST_LIMIT
     parts = str(path).split("/")
     if (
         len(parts) == 6
@@ -39,18 +53,18 @@ def _request_limit(scope: Scope) -> int | None:
     return None
 
 
-async def _send_too_large(send: Send) -> None:
+async def _send_too_large(send: Send, body: bytes) -> None:
     await send(
         {
             "type": "http.response.start",
             "status": 413,
             "headers": [
                 (b"content-type", b"application/json"),
-                (b"content-length", str(len(_TOO_LARGE_BODY)).encode("ascii")),
+                (b"content-length", str(len(body)).encode("ascii")),
             ],
         }
     )
-    await send({"type": "http.response.body", "body": _TOO_LARGE_BODY})
+    await send({"type": "http.response.body", "body": body})
 
 
 class MediaRequestBodyLimitMiddleware:
@@ -65,13 +79,18 @@ class MediaRequestBodyLimitMiddleware:
         if limit is None:
             await self.app(scope, receive, send)
             return
+        error_body = (
+            _FILE_TOO_LARGE_BODY
+            if scope.get("path") == "/api/workspace/files"
+            else _TOO_LARGE_BODY
+        )
 
         for name, value in scope.get("headers", []):
             if name.lower() != b"content-length":
                 continue
             try:
                 if int(value) > limit:
-                    await _send_too_large(send)
+                    await _send_too_large(send, error_body)
                     return
             except ValueError:
                 pass
@@ -90,4 +109,4 @@ class MediaRequestBodyLimitMiddleware:
         try:
             await self.app(scope, limited_receive, send)
         except _RequestBodyTooLarge:
-            await _send_too_large(send)
+            await _send_too_large(send, error_body)

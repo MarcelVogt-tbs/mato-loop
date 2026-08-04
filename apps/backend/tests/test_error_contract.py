@@ -52,3 +52,7 @@ def test_chat_history_errors_have_controlled_fallbacks() -> None:
         == "The tool execution was interrupted and its outcome is unknown. Do not infer success or "
         "failure without verification."
     )
+
+
+def test_changed_file_error_has_controlled_fallback() -> None:
+    assert describe_error("file.changed").message == "The file changed since it was opened."

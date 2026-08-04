@@ -1,3 +1,5 @@
+import hashlib
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
@@ -25,6 +27,45 @@ def test_workspace_manages_directories_and_files(tmp_path: Path) -> None:
 
     workspace.delete("project")
     assert not (tmp_path / "project").exists()
+
+
+def test_workspace_uploads_generic_files_without_overwriting(tmp_path: Path) -> None:
+    workspace = WorkspaceService(tmp_path)
+
+    created = workspace.create_file(".", ".env", BytesIO(b""), max_bytes=10)
+
+    assert created["path"] == ".env"
+    assert created["size"] == 0
+    assert workspace.open_file(".env").read() == b""
+    with pytest.raises(WorkspaceError) as exc_info:
+        workspace.create_file(".", ".env", BytesIO(b"changed"), max_bytes=10)
+    assert exc_info.value.code == "workspace.pathAlreadyExists"
+
+    with pytest.raises(WorkspaceError) as exc_info:
+        workspace.create_file(".", "large.bin", BytesIO(b"123"), max_bytes=2)
+    assert exc_info.value.code == "workspace.fileTooLarge"
+    assert not (tmp_path / "large.bin").exists()
+
+
+def test_workspace_renames_files_and_directories_without_overwriting(tmp_path: Path) -> None:
+    workspace = WorkspaceService(tmp_path)
+    (tmp_path / "old.txt").write_text("old", encoding="utf-8")
+    (tmp_path / "target.txt").write_text("target", encoding="utf-8")
+    (tmp_path / "folder").mkdir()
+    (tmp_path / "folder" / "child.txt").write_text("child", encoding="utf-8")
+
+    renamed_file = workspace.rename("old.txt", "renamed.txt")
+    renamed_directory = workspace.rename("folder", "renamed-folder")
+
+    assert renamed_file["path"] == "renamed.txt"
+    assert renamed_directory["kind"] == "directory"
+    assert (tmp_path / "renamed.txt").read_text(encoding="utf-8") == "old"
+    assert (tmp_path / "renamed-folder" / "child.txt").is_file()
+    with pytest.raises(WorkspaceError) as exc_info:
+        workspace.rename("renamed.txt", "target.txt")
+    assert exc_info.value.code == "workspace.pathAlreadyExists"
+    assert (tmp_path / "renamed.txt").read_text(encoding="utf-8") == "old"
+    assert (tmp_path / "target.txt").read_text(encoding="utf-8") == "target"
 
 
 def test_workspace_rejects_escape_and_does_not_follow_symlinks(tmp_path: Path) -> None:
@@ -125,6 +166,24 @@ def test_workspace_returns_stable_error_for_invalid_utf8(tmp_path: Path) -> None
         workspace.read_file("binary.txt", base=None, offset=1, limit=2_000)
 
     assert exc_info.value.code == "workspace.invalidEncoding"
+
+
+def test_global_workspace_replaces_existing_utf8_text_by_revision(tmp_path: Path) -> None:
+    workspace = WorkspaceService(tmp_path)
+    target = tmp_path / "notes.txt"
+    target.write_text("old", encoding="utf-8")
+
+    revision = workspace.replace_text_file(
+        "notes.txt", "new", hashlib.sha256(b"old").hexdigest()
+    )
+
+    assert target.read_text(encoding="utf-8") == "new"
+    assert revision == hashlib.sha256(b"new").hexdigest()
+    with pytest.raises(WorkspaceError) as missing:
+        workspace.replace_text_file(
+            "missing.txt", "new", hashlib.sha256(b"").hexdigest()
+        )
+    assert missing.value.code == "file.fileNotFound"
 
 
 def test_workspace_cannot_delete_home(tmp_path: Path) -> None:

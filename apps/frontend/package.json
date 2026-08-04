@@ -12,6 +12,7 @@
   "dependencies": {
     "@mdit/plugin-tex": "1.0.1",
     "@quasar/extras": "1.17.0",
+    "@toast-ui/editor": "3.2.2",
     "axios": "1.8.4",
     "dompurify": "3.4.12",
     "highlight.js": "11.11.1",

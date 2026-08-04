@@ -1,5 +1,14 @@
 <template>
   <q-page :style-fn="chatPageStyle" class="chat-page column no-wrap">
+    <q-splitter
+      v-model="splitPosition"
+      class="chat-workspace-splitter col"
+      :limits="splitLimits"
+      :disable="!desktopExplorerOpen"
+      :separator-style="desktopExplorerOpen ? undefined : { display: 'none' }"
+    >
+      <template #before>
+        <div class="chat-page__pane column no-wrap full-height">
     <q-scroll-area
       ref="scrollArea"
       class="chat-page__content col"
@@ -273,6 +282,37 @@
     <span class="app-sr-only" role="status" aria-live="polite" aria-atomic="true">
       {{ announcedRunStatus }}
     </span>
+        </div>
+      </template>
+
+      <template #separator>
+        <div
+          v-if="desktopExplorerOpen"
+          class="chat-workspace-splitter__handle flex flex-center"
+          role="separator"
+          aria-label="Breite des Chat-Bereichs ändern"
+          aria-orientation="vertical"
+          :aria-valuemin="MIN_WORKSPACE_SPLIT_RATIO"
+          :aria-valuemax="MAX_WORKSPACE_SPLIT_RATIO"
+          :aria-valuenow="workspace.splitRatio"
+          tabindex="0"
+          @keydown="resizeWorkspacePane"
+        >
+          <q-icon name="drag_indicator" size="18px" />
+        </div>
+      </template>
+
+      <template #after>
+        <aside
+          v-if="desktopExplorerOpen"
+          id="workspace-file-panel"
+          class="chat-workspace-pane full-height"
+          aria-label="Datei-Explorer"
+        >
+          <FileExplorerPanel />
+        </aside>
+      </template>
+    </q-splitter>
   </q-page>
 </template>
 
@@ -284,6 +324,7 @@ import ApprovalCard from 'components/ApprovalCard.vue'
 import AgentActivity from 'components/AgentActivity.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
+import FileExplorerPanel from 'components/FileExplorerPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ReasoningPanel from 'components/ReasoningPanel.vue'
@@ -295,6 +336,11 @@ import { useAuthStore } from 'stores/auth'
 import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
 import { useToolSettingsStore } from 'stores/tool-settings'
+import {
+  MAX_WORKSPACE_SPLIT_RATIO,
+  MIN_WORKSPACE_SPLIT_RATIO,
+  useWorkspaceStore
+} from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import { agentRunPresentation } from 'src/utils/agent-activity'
 import { chatBottomDistance, scrollChatToBottom } from 'src/utils/chat-scroll'
@@ -315,6 +361,7 @@ const approvals = useApprovalStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
+const workspace = useWorkspaceStore()
 const scrollArea = ref(null)
 const scrollContent = ref(null)
 const composer = ref(null)
@@ -358,6 +405,32 @@ const trustedImageOrigins = computed(() => (
 const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
 ))
+const desktopExplorerOpen = computed(() => workspace.open && $q.screen.gt.sm)
+const splitLimits = computed(() => (
+  desktopExplorerOpen.value
+    ? [MIN_WORKSPACE_SPLIT_RATIO, MAX_WORKSPACE_SPLIT_RATIO]
+    : [100, 100]
+))
+const splitPosition = computed({
+  get: () => desktopExplorerOpen.value ? workspace.splitRatio : 100,
+  set: (value) => {
+    if (desktopExplorerOpen.value) workspace.setSplitRatio(value)
+  }
+})
+
+function resizeWorkspacePane(event) {
+  let ratio = workspace.splitRatio
+  if (event.key === 'ArrowLeft') ratio -= 2
+  else if (event.key === 'ArrowRight') ratio += 2
+  else if (event.key === 'Home') ratio = MIN_WORKSPACE_SPLIT_RATIO
+  else if (event.key === 'End') ratio = MAX_WORKSPACE_SPLIT_RATIO
+  else return
+  event.preventDefault()
+  workspace.setSplitRatio(Math.min(
+    MAX_WORKSPACE_SPLIT_RATIO,
+    Math.max(MIN_WORKSPACE_SPLIT_RATIO, ratio)
+  ))
+}
 
 function trustImageOrigin(origin) {
   const sessionId = chat.current?.id

@@ -60,6 +60,21 @@ def test_attachment_download_requires_authentication() -> None:
     }
 
 
+def test_workspace_file_update_requires_authentication() -> None:
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/workspace/files",
+            json={
+                "path": "notes.txt",
+                "content": "new",
+                "expected_revision": "0" * 64,
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "auth.notAuthenticated"
+
+
 def test_general_attachment_routes_replace_audio_only_routes() -> None:
     paths = app.openapi()["paths"]
 

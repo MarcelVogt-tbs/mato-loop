@@ -34,15 +34,19 @@
           {{ approvals.pending.length }} Freigaben
         </q-chip>
         <q-btn
+          v-if="route.name === 'chat'"
+          id="workspace-explorer-toggle"
           flat
           round
           dense
           icon="folder_open"
-          aria-label="Datei-Explorer öffnen"
+          :aria-label="workspace.open ? 'Datei-Explorer schließen' : 'Datei-Explorer öffnen'"
+          :aria-expanded="workspace.open"
+          aria-controls="workspace-file-panel"
           :class="{ 'app-header-action--active': workspace.open }"
-          @click="workspace.show()"
+          @click="toggleWorkspace"
         >
-          <q-tooltip>Datei-Explorer öffnen</q-tooltip>
+          <q-tooltip>{{ workspace.open ? 'Datei-Explorer schließen' : 'Datei-Explorer öffnen' }}</q-tooltip>
         </q-btn>
       </q-toolbar>
     </q-header>
@@ -51,7 +55,7 @@
       v-model="drawerOpen"
       show-if-above
       :width="288"
-      :breakpoint="1024"
+      :breakpoint="1023"
       class="app-drawer"
     >
       <div class="column full-height no-wrap drawer-layout">
@@ -161,6 +165,24 @@
                       </q-tooltip>
                     </q-item-section>
                     <q-item-section side class="session-list-item__actions row no-wrap items-center self-center q-pl-xs">
+                      <span
+                        v-if="session.activeRunStatus === 'queued' || session.activeRunStatus === 'running'"
+                        class="session-list-item__status row items-center q-mr-xs"
+                        role="status"
+                        aria-label="Agent arbeitet"
+                      >
+                        <q-spinner-dots color="primary" size="16px" />
+                        <q-tooltip v-if="$q.platform.is.mobile !== true">Agent arbeitet</q-tooltip>
+                      </span>
+                      <span
+                        v-else-if="session.activeRunStatus === 'waiting_approval'"
+                        class="session-list-item__status row items-center q-mr-xs"
+                        role="img"
+                        aria-label="Freigabe erforderlich"
+                      >
+                        <q-icon name="pending_actions" color="warning" size="16px" />
+                        <q-tooltip v-if="$q.platform.is.mobile !== true">Freigabe erforderlich</q-tooltip>
+                      </span>
                       <q-btn
                         flat
                         round
@@ -315,16 +337,19 @@
       </q-card>
     </q-dialog>
 
-    <q-drawer
-      v-model="workspace.open"
-      side="right"
-      overlay
-      bordered
-      :width="$q.screen.lt.sm ? $q.screen.width : 420"
-      class="app-file-drawer"
+    <q-dialog
+      v-if="route.name === 'chat' && $q.screen.lt.md"
+      :model-value="workspace.open"
+      :persistent="workspace.editorDirty"
+      maximized
+      transition-show="slide-left"
+      transition-hide="slide-right"
+      @update:model-value="setWorkspaceOpen"
     >
-      <FileExplorerPanel />
-    </q-drawer>
+      <q-card id="workspace-file-panel" class="app-file-dialog">
+        <FileExplorerPanel />
+      </q-card>
+    </q-dialog>
 
     <q-page-container>
       <router-view />
@@ -335,7 +360,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import AppLogo from 'components/AppLogo.vue'
 import FileExplorerPanel from 'components/FileExplorerPanel.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
@@ -343,11 +368,14 @@ import { useApprovalStore } from 'stores/approvals'
 import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
 import { useWorkspaceStore } from 'stores/workspace'
+import { useConfirm } from 'src/composables/confirm'
 import { groupSessionsByRecency } from 'src/utils/session-groups'
 
 defineOptions({ name: 'MainLayout' })
 
 const SESSION_PREVIEW_LIMIT = 10
+const ACTIVE_RUN_STATUSES = new Set(['queued', 'running', 'waiting_approval'])
+const SESSION_ACTIVITY_REFRESH_MS = 5000
 
 const drawerOpen = ref(true)
 const $q = useQuasar()
@@ -357,6 +385,7 @@ const auth = useAuthStore()
 const identity = useAgentIdentityStore()
 const chat = useChatStore()
 const workspace = useWorkspaceStore()
+const { confirm } = useConfirm()
 const approvals = useApprovalStore()
 const sessionsExpanded = ref(false)
 const visibleSessions = computed(() => (
@@ -369,6 +398,8 @@ const renameSessionId = ref(null)
 const renameTitle = ref('')
 const renaming = ref(false)
 const pinningSessionId = ref(null)
+let sessionActivityTimer = null
+let sessionActivityRefreshPending = false
 const visualViewportHeight = ref(null)
 const visualViewportOffsetTop = ref(0)
 const visualViewportStyle = computed(() => {
@@ -434,6 +465,7 @@ async function toggleSessionPinned(session) {
 }
 
 async function openNewSession() {
+  if (!await confirmDiscardedEdit()) return
   if ($q.screen.lt.md) drawerOpen.value = false
   await chat.loadSession(null)
   await router.push({ name: 'chat' })
@@ -453,19 +485,71 @@ function refreshSessionsWhenVisible() {
   void chat.fetchSessions().catch(() => {})
 }
 
+async function refreshActiveSessions() {
+  if (
+    document.visibilityState !== 'visible'
+    || sessionActivityRefreshPending
+    || !chat.sessions.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))
+  ) return
+  sessionActivityRefreshPending = true
+  try {
+    await chat.fetchSessions({ suppressErrorToast: true })
+  } catch {
+    // The next interval reconciles transient background refresh failures.
+  } finally {
+    sessionActivityRefreshPending = false
+  }
+}
+
 async function removeSession(id) {
+  if (!await confirmDiscardedEdit()) return
   await chat.deleteSession(id)
   if (route.query.session === id) await router.push({ name: 'chat' })
 }
 
 async function logout() {
+  if (!await confirmDiscardedEdit()) return
   await auth.logout()
   await router.replace({ name: 'login' })
 }
 
-watch(() => workspace.open, (open) => {
-  if (open && $q.screen.lt.md) drawerOpen.value = false
+async function confirmDiscardedEdit() {
+  if (!workspace.editorDirty) return true
+  const accepted = await confirm(
+    'Sollen die ungespeicherten Änderungen verworfen werden?',
+    'Änderungen verwerfen?',
+    { okLabel: 'Verwerfen' }
+  )
+  if (accepted) workspace.discardEdit()
+  return accepted
+}
+
+async function toggleWorkspace() {
+  if (workspace.open && !await confirmDiscardedEdit()) return
+  workspace.toggle()
+}
+
+async function setWorkspaceOpen(open) {
+  if (open) {
+    workspace.show()
+    return
+  }
+  if (await confirmDiscardedEdit()) workspace.open = false
+}
+
+watch(
+  () => [workspace.open, $q.screen.lt.lg],
+  ([open, narrow]) => {
+    if (open && narrow) drawerOpen.value = false
+  }
+)
+
+watch(() => route.name, (name) => {
+  if (name !== 'chat') workspace.open = false
 })
+
+onBeforeRouteUpdate(confirmDiscardedEdit)
+onBeforeRouteLeave(confirmDiscardedEdit)
 
 onMounted(async () => {
   updateVisualViewport()
@@ -473,6 +557,7 @@ onMounted(async () => {
   window.visualViewport?.addEventListener('scroll', updateVisualViewport)
   window.addEventListener('resize', updateVisualViewport)
   document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
+  sessionActivityTimer = window.setInterval(refreshActiveSessions, SESSION_ACTIVITY_REFRESH_MS)
   await Promise.all([chat.fetchSessions(), approvals.fetchPending(), identity.fetchIdentity()])
 })
 
@@ -481,5 +566,7 @@ onBeforeUnmount(() => {
   window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
   window.removeEventListener('resize', updateVisualViewport)
   document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)
+  window.clearInterval(sessionActivityTimer)
+  sessionActivityTimer = null
 })
 </script>

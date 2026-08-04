@@ -210,9 +210,9 @@ body {
   overflow-x: hidden;
 }
 
-.app-file-drawer,
-.app-file-drawer .q-drawer {
-  border-left-color: var(--app-surface-border) !important;
+.app-file-dialog {
+  width: 100%;
+  height: 100%;
   background: var(--app-shell-bg);
 }
 
@@ -440,6 +440,35 @@ body {
   height: calc(100dvh - var(--app-header-height));
   min-height: 0;
   overflow: hidden;
+}
+
+.chat-workspace-splitter,
+.chat-workspace-splitter .q-splitter__before,
+.chat-workspace-splitter .q-splitter__after,
+.chat-page__pane,
+.chat-workspace-pane {
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-workspace-splitter__handle {
+  width: 24px;
+  height: 100%;
+  color: var(--app-muted);
+  cursor: col-resize;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.chat-workspace-splitter__handle:hover,
+.chat-workspace-splitter__handle:focus-visible {
+  outline: none;
+  background: var(--app-active);
+  color: var(--q-primary);
+}
+
+.chat-workspace-pane {
+  overflow: hidden;
+  border-left: 1px solid var(--app-surface-border);
 }
 
 .chat-page__content {
@@ -1840,6 +1869,26 @@ body.body--dark .chat-composer__card {
   cursor: pointer;
 }
 
+.file-tree-row:focus-visible,
+.file-tree-row__main:focus-visible {
+  outline: 2px solid var(--q-primary);
+  outline-offset: -2px;
+}
+
+.file-tree-row__main {
+  min-width: 0;
+  min-height: 30px;
+  border-radius: 8px;
+}
+
+.file-tree-row__menu {
+  flex: 0 0 auto;
+}
+
+.file-actions-menu {
+  min-width: 168px;
+}
+
 .file-tree-row:hover {
   background: var(--app-hover);
   color: var(--app-text);
@@ -1853,6 +1902,107 @@ body.body--dark .chat-composer__card {
 .file-tree-spacer {
   display: inline-block;
   width: 32px;
+}
+
+.file-viewer {
+  width: 100%;
+  height: 100%;
+  background: var(--app-shell-bg);
+}
+
+.file-viewer__content {
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-editor {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-editor__actions {
+  flex: 0 0 auto;
+}
+
+.workspace-editor__visual,
+.workspace-editor__toast,
+.workspace-editor__textarea,
+.workspace-editor__textarea .q-field__inner,
+.workspace-editor__textarea .q-field__control,
+.workspace-editor__textarea .q-field__control-container {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.workspace-editor__textarea textarea.workspace-editor__textarea-input {
+  height: 100% !important;
+  resize: none;
+  color: var(--app-text);
+  font: 0.875rem/1.55 monospace;
+  tab-size: 2;
+}
+
+.workspace-editor__toast .toastui-editor-defaultUI {
+  height: 100% !important;
+  border: 0;
+  border-radius: 0;
+}
+
+.workspace-editor__toast .toastui-editor-toolbar {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.workspace-editor__toast .toastui-editor-toolbar-group {
+  flex: 0 0 auto;
+}
+
+.workspace-editor__toast .toastui-editor-mode-switch {
+  display: none;
+}
+
+.workspace-editor__toast .toastui-editor-main {
+  height: calc(100% - 46px) !important;
+}
+
+.file-viewer__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.file-viewer__text {
+  min-width: max-content;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--app-text);
+  font: 0.875rem/1.55 monospace;
+}
+
+.file-viewer__markdown {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.file-rename-dialog,
+.file-create-dialog {
+  width: min(420px, calc(100vw - 32px));
+}
+
+@media (max-width: 599.98px) {
+  .workspace-editor__actions {
+    flex-wrap: wrap;
+  }
+}
+
+@media (pointer: coarse) {
+  .file-tree-row {
+    min-height: 44px;
+  }
 }
 
 .approval-resource {

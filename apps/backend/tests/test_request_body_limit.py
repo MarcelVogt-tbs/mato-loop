@@ -4,10 +4,10 @@ from mato_loop_backend.api import request_body_limit
 from mato_loop_backend.api.request_body_limit import MediaRequestBodyLimitMiddleware
 
 
-def scope(path: str, headers=()):
+def scope(path: str, headers=(), *, method: str = "POST"):
     return {
         "type": "http",
-        "method": "POST",
+        "method": method,
         "path": path,
         "headers": list(headers),
     }
@@ -82,3 +82,55 @@ async def test_chunked_session_body_is_counted_across_all_chunks(monkeypatch) ->
     assert app_completed is False
     assert messages[0]["status"] == 413
     assert json.loads(messages[1]["body"])["error"]["code"] == "attachment.tooLarge"
+
+
+async def test_workspace_upload_uses_file_error(monkeypatch) -> None:
+    monkeypatch.setattr(request_body_limit, "WORKSPACE_UPLOAD_REQUEST_LIMIT", 4)
+    messages = []
+
+    async def app(_scope, _receive, _send):
+        raise AssertionError("Oversized request reached the application")
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    async def send(message):
+        messages.append(message)
+
+    middleware = MediaRequestBodyLimitMiddleware(app)
+    await middleware(
+        scope("/api/workspace/files", [(b"content-length", b"5")]),
+        receive,
+        send,
+    )
+
+    assert messages[0]["status"] == 413
+    assert json.loads(messages[1]["body"])["error"]["code"] == "file.tooLarge"
+
+
+async def test_workspace_file_edit_has_json_body_limit(monkeypatch) -> None:
+    monkeypatch.setattr(request_body_limit, "WORKSPACE_FILE_EDIT_REQUEST_LIMIT", 4)
+    messages = []
+
+    async def app(_scope, _receive, _send):
+        raise AssertionError("Oversized request reached the application")
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    async def send(message):
+        messages.append(message)
+
+    middleware = MediaRequestBodyLimitMiddleware(app)
+    await middleware(
+        scope(
+            "/api/workspace/files",
+            [(b"content-length", b"5")],
+            method="PUT",
+        ),
+        receive,
+        send,
+    )
+
+    assert messages[0]["status"] == 413
+    assert json.loads(messages[1]["body"])["error"]["code"] == "file.tooLarge"

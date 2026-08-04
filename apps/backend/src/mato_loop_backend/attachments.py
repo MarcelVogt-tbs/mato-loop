@@ -146,6 +146,10 @@ def _magic_mime_type(data: bytes) -> str | None:
     return None
 
 
+def image_mime_type(data: bytes) -> str | None:
+    return _magic_mime_type(data)
+
+
 def validate_image(data: bytes, mime_type: str) -> ValidatedImage:
     if not data:
         raise AttachmentError("attachment.empty")

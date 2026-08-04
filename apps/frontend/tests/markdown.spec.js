@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { verifyExternalImage } from '../src/utils/image-verification'
 import {
   classifyMarkdownImageUrl,
+  containsMarkdownImage,
   renderMarkdown,
   safeMarkdownLinkUrl
 } from '../src/utils/markdown'
@@ -19,6 +20,24 @@ function renderedDom(markdown, options) {
 }
 
 describe('assistant markdown rendering', () => {
+  it('detects active Markdown and HTML image syntax for safe editor mode selection', () => {
+    expect(containsMarkdownImage('![Alt](https://example.com/image.png)')).toBe(true)
+    expect(containsMarkdownImage('<img src="https://example.com/image.png">')).toBe(true)
+    expect(containsMarkdownImage('\\![nur Text](https://example.com/image.png)')).toBe(false)
+    expect(containsMarkdownImage('[normaler Link](https://example.com)')).toBe(false)
+  })
+
+  it('blocks all markdown images in static file previews', () => {
+    const { root, externalImages } = renderedDom('![Extern](https://example.com/image.png)', {
+      allowImages: false,
+      interactive: false
+    })
+
+    expect(root.querySelector('img')).toBeNull()
+    expect(root.textContent).toContain('[Bild: Extern]')
+    expect(externalImages).toEqual([])
+  })
+
   it('renders rich text, GFM tables, task lists and highlighted code', () => {
     const { root, codeBlocks, html } = renderedDom([
       '## Ergebnis',
@@ -46,6 +65,21 @@ describe('assistant markdown rendering', () => {
     expect(root.querySelector('[data-markdown-code]')?.getAttribute('aria-label')).toBe('Codeblock kopieren')
     expect(codeBlocks).toEqual(['const answer = 42\n'])
     expect(html).not.toContain('data-markdown-code="const answer')
+  })
+
+  it('renders safe HTML breaks without enabling raw HTML', () => {
+    const { root } = renderedDom([
+      'Eins<br>Zwei<br/>Drei<br />Vier',
+      '',
+      '`<br>`',
+      '',
+      '<br onclick="alert(1)">'
+    ].join('\n'))
+
+    expect(root.querySelectorAll('br')).toHaveLength(3)
+    expect(root.querySelector('code')?.textContent).toBe('<br>')
+    expect(root.textContent).toContain('<br onclick="alert(1)">')
+    expect(root.querySelector('[onclick]')).toBeNull()
   })
 
   it('keeps multiple code block sources separate from rendered markup', () => {

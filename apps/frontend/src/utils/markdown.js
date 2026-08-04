@@ -90,6 +90,16 @@ function precedingBackslashes(source, position, minimum = 0) {
   return count
 }
 
+export function containsMarkdownImage(content) {
+  const source = String(content || '')
+  let position = source.indexOf('![')
+  while (position !== -1) {
+    if (precedingBackslashes(source, position) % 2 === 0) return true
+    position = source.indexOf('![', position + 2)
+  }
+  return /<img(?:\s|\/?>)/i.test(source)
+}
+
 function dollarBoundary(state, position) {
   const before = state.src.charCodeAt(position - 1)
   const after = state.src.charCodeAt(position + 1)
@@ -135,6 +145,14 @@ function safeInlineDollar(state, silent) {
   return literalDollar(state, silent)
 }
 
+function safeHtmlBreak(state, silent) {
+  const match = /^<br\s*\/?>/i.exec(state.src.slice(state.pos))
+  if (!match) return false
+  if (!silent) state.push('hardbreak', 'br', 0)
+  state.pos += match[0].length
+  return true
+}
+
 const markdown = new MarkdownIt({
   breaks: true,
   highlight: highlightedCode,
@@ -151,6 +169,7 @@ const markdown = new MarkdownIt({
   })
 
 markdown.inline.ruler.at('math_inline_dollar', safeInlineDollar)
+markdown.inline.ruler.before('text', 'safe_html_break', safeHtmlBreak)
 
 DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
   if (data.attrName === 'style' && !node.closest?.('.katex')) data.keepAttr = false
@@ -207,6 +226,7 @@ function imageHtml(image, alt, title, requestId = null) {
 function configureRenderRules() {
   markdown.renderer.rules.fence = (tokens, index, options, env) => {
     const token = tokens[index]
+    if (!env.interactive) return highlightedCode(token.content, token.info)
     const codeIndex = String(env.codeBlocks.length)
     env.codeBlocks.push(token.content)
     return `<div class="chat-markdown__code-block">
@@ -242,6 +262,9 @@ function configureRenderRules() {
 
   markdown.renderer.rules.image = (tokens, index, options, env) => {
     const token = tokens[index]
+    if (!env.allowImages) {
+      return `<span class="chat-markdown__image-unavailable">[Bild: ${markdown.utils.escapeHtml(token.content || 'Bild')}]</span>`
+    }
     const image = classifyMarkdownImageUrl(token.attrGet('src'))
     const alt = token.content || 'Bild'
     const title = token.attrGet('title') || ''
@@ -290,7 +313,14 @@ configureRenderRules()
 
 export function renderMarkdown(
   content,
-  { imageStates = {}, researchSources = [], streaming = false, trustedImageOrigins = [] } = {}
+  {
+    allowImages = true,
+    imageStates = {},
+    interactive = true,
+    researchSources = [],
+    streaming = false,
+    trustedImageOrigins = []
+  } = {}
 ) {
   const sourceMap = new Map()
   for (const source of researchSources) {
@@ -300,7 +330,9 @@ export function renderMarkdown(
   const env = {
     codeBlocks: [],
     externalImages: [],
+    allowImages,
     imageStates,
+    interactive,
     researchSources: sourceMap,
     streaming,
     trustedOrigins: new Set(trustedImageOrigins)
