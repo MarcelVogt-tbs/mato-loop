@@ -28,10 +28,26 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.settings import MemorySettings, TrustLevel
 
+_MAX_LEXICAL_TERMS = 20
+_MAX_LEXICAL_TERM_CHARACTERS = 256
+
 
 def normalize_content(content: str) -> tuple[str, str]:
     normalized = re.sub(r"\s+", " ", content.strip()).casefold()
     return normalized, hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def memory_lexical_terms(content: str) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for term in re.findall(r"\w+", content.casefold()):
+        if len(term) > _MAX_LEXICAL_TERM_CHARACTERS or term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+        if len(terms) == _MAX_LEXICAL_TERMS:
+            break
+    return terms
 
 
 def memory_reference_options() -> tuple[Load, Load]:
@@ -423,7 +439,7 @@ class MemoryService:
             if exact is not None:
                 selected[exact.id] = exact
 
-            terms = list(dict.fromkeys(re.findall(r"\w+", content.casefold())))[:20]
+            terms = memory_lexical_terms(content)
             if terms:
                 tsquery = func.to_tsquery("simple", " | ".join(terms))
                 lexical = list(
@@ -710,7 +726,9 @@ class MemoryService:
         cleaned_query = (query or "").strip()
         rank = None
         if cleaned_query:
-            tsquery = func.websearch_to_tsquery("simple", cleaned_query)
+            tsquery = func.plainto_tsquery(
+                "simple", " ".join(memory_lexical_terms(cleaned_query))
+            )
             filters.append(MemoryRecord.search_vector.op("@@")(tsquery))
             rank = func.ts_rank_cd(MemoryRecord.search_vector, tsquery)
         total = int(

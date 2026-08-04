@@ -118,7 +118,7 @@ async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
         result = await MemoryRetrievalService.retrieve(
             db,
             mode=MemoryRetrieveMode.SEARCH,
-            query=query,
+            query=f"{'-' * 40} {query}",
             readable_by=TrustLevel.PUBLIC,
             limit=1,
         )

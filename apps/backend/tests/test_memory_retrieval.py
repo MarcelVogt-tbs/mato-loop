@@ -11,7 +11,7 @@ from mato_loop_backend.memory.retrieval import (
     MemoryRetrievalStrategy,
     MemoryRetrieveMode,
 )
-from mato_loop_backend.memory.service import MemoryService
+from mato_loop_backend.memory.service import MemoryService, memory_lexical_terms
 from mato_loop_backend.models import MemoryRecord
 from mato_loop_backend.settings import TrustLevel
 
@@ -34,6 +34,15 @@ def _record(content: str, *, trust: str = "public") -> MemoryRecord:
         normalized_content_hash=content,
         updated_at=datetime.now(UTC),
     )
+
+
+def test_memory_lexical_terms_are_safe_and_bounded() -> None:
+    terms = memory_lexical_terms(
+        f"{'-' * 40} First FIRST {'x' * 257} "
+        + " ".join(f"term{index}" for index in range(30))
+    )
+
+    assert terms == ["first", *(f"term{index}" for index in range(19))]
 
 
 async def test_hybrid_retrieval_boosts_candidates_found_by_both_strategies(
@@ -95,7 +104,10 @@ async def test_search_uses_lexical_fallback_when_embeddings_are_disabled(
 
     assert result.strategy == MemoryRetrievalStrategy.LEXICAL
     assert result.items == [item]
-    assert "memories.trust_level =" not in str(db.scalars.await_args.args[0])
+    statement = str(db.scalars.await_args.args[0])
+    assert "memories.trust_level =" not in statement
+    assert "plainto_tsquery" in statement
+    assert "websearch_to_tsquery" not in statement
 
 
 async def test_browse_returns_stable_cursor_for_the_last_visible_item(

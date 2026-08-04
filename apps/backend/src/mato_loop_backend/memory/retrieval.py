@@ -16,7 +16,11 @@ from mato_loop_backend.memory.embeddings import (
     EmbeddingError,
     embedding_client,
 )
-from mato_loop_backend.memory.service import MemoryService, memory_reference_options
+from mato_loop_backend.memory.service import (
+    MemoryService,
+    memory_lexical_terms,
+    memory_reference_options,
+)
 from mato_loop_backend.models import (
     MemoryCategory,
     MemoryEmbedding,
@@ -134,7 +138,9 @@ class MemoryRetrievalService:
             retrieval_level=retrieval_level,
             category=category,
         )
-        tsquery = func.websearch_to_tsquery("simple", cleaned_query)
+        tsquery = func.plainto_tsquery(
+            "simple", " ".join(memory_lexical_terms(cleaned_query))
+        )
         lexical = list(
             (
                 await db.scalars(
