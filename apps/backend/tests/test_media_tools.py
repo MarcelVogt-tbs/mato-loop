@@ -1,7 +1,7 @@
 import json
 import wave
 from io import BytesIO
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,10 +12,16 @@ from mato_loop_backend.agent.tools import (
     effective_tool_capabilities,
     tool_registry,
 )
-from mato_loop_backend.models import ChatSession
+from mato_loop_backend.attachments import AttachmentService
+from mato_loop_backend.models import ChatSession, Message, MessageAttachment
 from mato_loop_backend.providers import MediaResult, ToolCall
 from mato_loop_backend.providers.base import ProviderError
-from mato_loop_backend.providers.media import MediaService, available_media_capabilities
+from mato_loop_backend.providers.media import (
+    MediaService,
+    available_media_capabilities,
+    media_model_available,
+    resolve_media_target,
+)
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AiSettings,
@@ -27,6 +33,7 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
+    TrustLevel,
 )
 from mato_loop_backend.workspace import RootFileService
 
@@ -64,7 +71,11 @@ def context(tmp_path, call: ToolCall, decision=PermissionDecision.ALLOW) -> Tool
 
 
 def media_settings(capability: ModelCapability) -> AiSettings:
-    provider = LlmProviderConfig(name="Lemonade", adapter_type="lemonade")
+    provider = LlmProviderConfig(
+        name="Lemonade",
+        adapter_type="lemonade",
+        config={"base_url": "https://lemonade.test/v1"},
+    )
     model = ModelConfig(
         provider_id=provider.id,
         model_id="media",
@@ -81,6 +92,25 @@ def media_settings(capability: ModelCapability) -> AiSettings:
         models=[model],
         **{defaults[capability]: model.id},
     )
+
+
+def codex_edit_settings() -> tuple[AiSettings, ModelConfig]:
+    provider = LlmProviderConfig(
+        name="Codex",
+        adapter_type="openai-codex",
+        credential_id=uuid4(),
+    )
+    chat = ModelConfig(provider_id=provider.id, model_id="openai-codex/gpt-test")
+    image = ModelConfig(
+        provider_id=provider.id,
+        model_id="openai-codex/gpt-image-2",
+        capabilities={
+            ModelCapability.IMAGE_GENERATION,
+            ModelCapability.IMAGE_EDITING,
+        },
+        discovery_metadata={"native_for_chat_provider": True},
+    )
+    return AiSettings(providers=[provider], models=[chat, image]), chat
 
 
 def mock_settings_load(monkeypatch, tools: ToolSettings, ai: AiSettings) -> AsyncMock:
@@ -146,9 +176,8 @@ async def test_ask_denial_stops_before_media_service(tmp_path, monkeypatch) -> N
     settings = ToolSettings.model_validate({"generateImage": {"policy": "ask"}})
     call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
     tool_context = context(tmp_path, call, PermissionDecision.DENY)
-    mock_settings_load(
-        monkeypatch, settings, media_settings(ModelCapability.IMAGE_GENERATION)
-    )
+    ai = media_settings(ModelCapability.IMAGE_GENERATION)
+    mock_settings_load(monkeypatch, settings, ai)
     generate = AsyncMock(side_effect=AssertionError("Provider must not be called"))
     monkeypatch.setattr(MediaService, "generate_image", generate)
 
@@ -157,9 +186,190 @@ async def test_ask_denial_stops_before_media_service(tmp_path, monkeypatch) -> N
     assert result.metadata == {"errorCode": "permission.denied"}
     generate.assert_not_awaited()
     request = tool_context.ask_handler.await_args.args[0]
+    provider, model = ai.providers[0], ai.models[0]
     assert request == media_permission(
-        tool_context.session.id, "media.generate.image", "generate_image"
+        tool_context.session.id,
+        "media.generate.image",
+        "generate_image",
+        provider_id=provider.id,
+        model_id=model.id,
+        model_name=model.model_id,
+        trust_level="public",
     )
+
+
+def test_image_target_prefers_native_provider_model_over_global_default() -> None:
+    codex = LlmProviderConfig(
+        name="Codex",
+        adapter_type="openai-codex",
+        credential_id=uuid4(),
+    )
+    lemonade = LlmProviderConfig(name="Lemonade", adapter_type="lemonade")
+    chat = ModelConfig(provider_id=codex.id, model_id="openai-codex/gpt-test")
+    native = ModelConfig(
+        provider_id=codex.id,
+        model_id="openai-codex/gpt-image-2",
+        capabilities={
+            ModelCapability.IMAGE_GENERATION,
+            ModelCapability.IMAGE_EDITING,
+        },
+        discovery_metadata={"native_for_chat_provider": True},
+    )
+    fallback = ModelConfig(
+        provider_id=lemonade.id,
+        model_id="image-fallback",
+        capabilities={ModelCapability.IMAGE_GENERATION},
+    )
+    settings = AiSettings(
+        providers=[codex, lemonade],
+        models=[chat, native, fallback],
+        image_generation_model_id=fallback.id,
+    )
+    impostor = ModelConfig(
+        provider_id=codex.id,
+        model_id="openai-codex/not-an-image-model",
+        capabilities={ModelCapability.IMAGE_GENERATION},
+    )
+    settings.models.append(impostor)
+
+    assert not media_model_available(
+        settings, ModelCapability.IMAGE_GENERATION, impostor.id
+    )
+
+    assert resolve_media_target(
+        settings,
+        ModelCapability.IMAGE_GENERATION,
+        active_model_id=chat.id,
+    ) == (codex, native)
+    assert resolve_media_target(
+        settings,
+        ModelCapability.IMAGE_EDITING,
+        active_model_id=chat.id,
+    ) == (codex, native)
+
+    native.enabled = False
+    assert resolve_media_target(
+        settings,
+        ModelCapability.IMAGE_GENERATION,
+        active_model_id=chat.id,
+    ) == (lemonade, fallback)
+
+
+async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
+    tmp_path, monkeypatch
+) -> None:
+    attachment_ids = [uuid4(), uuid4()]
+    call = ToolCall(
+        id="edit",
+        name="edit_image",
+        arguments={
+            "prompt": "Change only the background; keep both subjects unchanged.",
+            "attachment_ids": [str(item) for item in attachment_ids],
+        },
+    )
+    tool_context = context(tmp_path, call)
+    ai, chat = codex_edit_settings()
+    tool_context.model_id = chat.id
+    tools = ToolSettings.model_validate({"editImage": {"policy": "ask"}})
+    mock_settings_load(monkeypatch, tools, ai)
+    tool_context.db.get.return_value = object()
+    message = Message(
+        id=uuid4(),
+        session_id=tool_context.session.id,
+        role="user",
+        content="Bearbeite diese Bilder",
+        trust_level="public",
+    )
+    attachments = [
+        MessageAttachment(
+            id=attachment_id,
+            message_id=message.id,
+            message=message,
+            position=position,
+            kind="image",
+            category="user_upload",
+            processing_status="ready",
+            mime_type="image/png",
+            size_bytes=5,
+            sha256="0" * 64,
+            storage_path=f"attachments/{attachment_id}/image.png",
+        )
+        for position, attachment_id in enumerate(attachment_ids)
+    ]
+    scalars = MagicMock()
+    scalars.all.return_value = list(reversed(attachments))
+    tool_context.db.scalars.return_value = scalars
+    read_image = AsyncMock(side_effect=[b"first", b"second"])
+    monkeypatch.setattr(AttachmentService, "read_image", read_image)
+    edit = AsyncMock(
+        return_value=MediaResult(
+            b"result",
+            "image/png",
+            "generated.png",
+            trust_level=TrustLevel.PUBLIC,
+        )
+    )
+    monkeypatch.setattr(MediaService, "edit_image", edit)
+
+    result = await tool_registry.execute(call, tool_context)
+
+    assert result.is_error is False
+    assert result.content == "Image edited."
+    assert edit.await_args.kwargs["images"] == (
+        (b"first", "image/png"),
+        (b"second", "image/png"),
+    )
+    request = tool_context.ask_handler.await_args.args[0]
+    scope = json.loads(request.resource_scope)
+    assert request.capability == "media.edit.image"
+    assert scope["sourceAttachmentIds"] == sorted(str(item) for item in attachment_ids)
+
+
+async def test_edit_image_blocks_private_sources_for_public_target(
+    tmp_path, monkeypatch
+) -> None:
+    attachment_id = uuid4()
+    call = ToolCall(
+        id="edit",
+        name="edit_image",
+        arguments={"prompt": "Change the background", "attachment_ids": [str(attachment_id)]},
+    )
+    tool_context = context(tmp_path, call)
+    ai, chat = codex_edit_settings()
+    tool_context.model_id = chat.id
+    tools = ToolSettings.model_validate({"editImage": {"policy": "auto"}})
+    mock_settings_load(monkeypatch, tools, ai)
+    tool_context.db.get.return_value = object()
+    message = Message(
+        id=uuid4(),
+        session_id=tool_context.session.id,
+        role="user",
+        content="Privat",
+        trust_level="private",
+    )
+    attachment = MessageAttachment(
+        id=attachment_id,
+        message_id=message.id,
+        message=message,
+        position=0,
+        kind="image",
+        category="user_upload",
+        processing_status="ready",
+        mime_type="image/png",
+        size_bytes=5,
+        sha256="0" * 64,
+        storage_path=f"attachments/{attachment_id}/image.png",
+    )
+    scalars = MagicMock()
+    scalars.all.return_value = [attachment]
+    tool_context.db.scalars.return_value = scalars
+    edit = AsyncMock()
+    monkeypatch.setattr(MediaService, "edit_image", edit)
+
+    result = await tool_registry.execute(call, tool_context)
+
+    assert result.metadata == {"errorCode": "privacy.privateContentBlocked"}
+    edit.assert_not_awaited()
 
 
 async def test_policy_revocation_during_approval_stops_media_service(

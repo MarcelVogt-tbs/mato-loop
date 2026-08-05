@@ -101,6 +101,7 @@ class ModelAvailability(StrEnum):
 class ModelCapability(StrEnum):
     CHAT = "chat"
     IMAGE_GENERATION = "image_generation"
+    IMAGE_EDITING = "image_editing"
     SPEECH_GENERATION = "speech_generation"
     AUDIO_GENERATION = "audio_generation"
     AUDIO_TRANSCRIPTION = "audio_transcription"
@@ -416,6 +417,10 @@ class ToolSettings(SettingsDocument):
     generate_image: MediaToolSettings = Field(
         default_factory=MediaToolSettings,
         validation_alias=AliasChoices("generate_image", "generateImage"),
+    )
+    edit_image: MediaToolSettings = Field(
+        default_factory=lambda: MediaToolSettings(policy=ToolExecutionPolicy.ASK),
+        validation_alias=AliasChoices("edit_image", "editImage"),
     )
     generate_speech: MediaToolSettings = Field(
         default_factory=MediaToolSettings,

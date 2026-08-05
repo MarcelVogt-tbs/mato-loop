@@ -35,9 +35,8 @@ from mato_loop_backend.models import ChatSession, Message, MessageAttachment
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
-MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024
-MAX_ATTACHMENT_BYTES = MAX_IMAGE_ATTACHMENT_BYTES
 MAX_FILE_ATTACHMENT_BYTES = 64 * 1024 * 1024
+MAX_IMAGE_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
 MAX_AUDIO_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
 MAX_ATTACHMENTS_PER_MESSAGE = 4
 SESSION_ATTACHMENT_QUOTA_BYTES = 500 * 1024 * 1024
@@ -45,6 +44,7 @@ SESSION_ATTACHMENT_QUOTA_BYTES = 500 * 1024 * 1024
 _FORMAT_MIME_TYPES = {
     "PNG": "image/png",
     "JPEG": "image/jpeg",
+    "MPO": "image/jpeg",
     "WEBP": "image/webp",
     "GIF": "image/gif",
 }
@@ -95,9 +95,10 @@ _STORAGE_PATH_PATTERN = re.compile(
 
 
 class AttachmentError(Exception):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, diagnostic: str | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.diagnostic = diagnostic
 
 
 class AttachmentStorageError(Exception):
@@ -161,25 +162,40 @@ def validate_image(data: bytes, mime_type: str) -> ValidatedImage:
         raise AttachmentError("attachment.unsupportedType")
     if claimed != magic:
         raise AttachmentError("attachment.mimeMismatch")
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        try:
             with Image.open(BytesIO(data)) as image:
                 pillow_mime = _FORMAT_MIME_TYPES.get(image.format or "")
                 width, height = image.size
                 image.verify()
+        except (
+            Image.DecompressionBombError,
+            Image.DecompressionBombWarning,
+            OSError,
+            SyntaxError,
+            ValueError,
+        ) as exc:
+            raise AttachmentError(
+                "attachment.invalidImage",
+                diagnostic=f"verify:{type(exc).__name__}:{str(exc)[:200]}",
+            ) from exc
+        try:
             with Image.open(BytesIO(data)) as image:
                 image.load()
-    except (
-        Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
-        OSError,
-        SyntaxError,
-        ValueError,
-    ) as exc:
-        raise AttachmentError("attachment.invalidImage") from exc
+        except (
+            Image.DecompressionBombError,
+            Image.DecompressionBombWarning,
+            OSError,
+            SyntaxError,
+            ValueError,
+        ) as exc:
+            raise AttachmentError(
+                "attachment.invalidImage",
+                diagnostic=f"decode:{type(exc).__name__}:{str(exc)[:200]}",
+            ) from exc
     if pillow_mime != magic or width <= 0 or height <= 0:
-        raise AttachmentError("attachment.invalidImage")
+        raise AttachmentError("attachment.invalidImage", diagnostic="metadata")
     return ValidatedImage(magic, width, height, len(data), hashlib.sha256(data).hexdigest())
 
 
@@ -227,12 +243,23 @@ def _safe_metadata(metadata: dict | None) -> dict:
         if key not in {
             "channels",
             "created",
+            "background",
+            "modelId",
+            "modelName",
+            "providerAdapter",
+            "providerName",
+            "quality",
             "sampleRate",
             "sampleWidth",
+            "size",
+            "sourceAttachmentIds",
+            "targetTrustLevel",
         }:
             continue
         if isinstance(value, str):
             safe[key] = value[:500]
+        elif key == "sourceAttachmentIds" and isinstance(value, list):
+            safe[key] = [item[:100] for item in value[:5] if isinstance(item, str)]
         elif isinstance(value, (bool, int, float)) or value is None:
             safe[key] = value
     return safe
@@ -245,8 +272,6 @@ def classify_attachment(data: bytes, browser_mime_type: str, filename: str | Non
         raise AttachmentError("attachment.tooLarge")
     cleaned_name = safe_filename(filename)
     image_mime = _magic_mime_type(data)
-    if image_mime is not None and len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
-        raise AttachmentError("attachment.tooLarge")
     if image_mime is not None:
         validate_image(data, image_mime)
         return AttachmentInput(data, image_mime, cleaned_name, "image")
@@ -707,6 +732,26 @@ class AttachmentService:
         except AttachmentError as exc:
             raise AttachmentError("attachment.notFound") from exc
         if attachment.duration_ms is not None and validated.duration_ms != attachment.duration_ms:
+            raise AttachmentError("attachment.notFound")
+        return data
+
+    async def read_image(self, attachment: MessageAttachment, session_id: UUID) -> bytes:
+        if (
+            attachment.kind != "image"
+            or attachment.processing_status != "ready"
+            or attachment.size_bytes > MAX_IMAGE_ATTACHMENT_BYTES
+        ):
+            raise AttachmentError("attachment.notFound")
+        path = await self.verified_path(attachment, session_id)
+        try:
+            data = await asyncio.to_thread(path.read_bytes)
+            validated = validate_image(data, attachment.mime_type)
+        except (OSError, AttachmentError) as exc:
+            raise AttachmentError("attachment.notFound") from exc
+        if (
+            (attachment.width is not None and validated.width != attachment.width)
+            or (attachment.height is not None and validated.height != attachment.height)
+        ):
             raise AttachmentError("attachment.notFound")
         return data
 

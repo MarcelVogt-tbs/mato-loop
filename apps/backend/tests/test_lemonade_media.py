@@ -1,9 +1,11 @@
 import base64
 import json
+from io import BytesIO
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.providers import lemonade
@@ -14,6 +16,7 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
+    TrustLevel,
 )
 
 
@@ -25,6 +28,12 @@ def _mock_client(monkeypatch, handler) -> None:
         "AsyncClient",
         lambda **kwargs: real_client(transport=transport, **kwargs),
     )
+
+
+def _png() -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (1, 1)).save(buffer, "PNG")
+    return buffer.getvalue()
 
 
 async def test_generate_image_sends_strict_payload_and_decodes_result(monkeypatch) -> None:
@@ -192,15 +201,59 @@ async def test_media_service_resolves_host_default_without_model_argument(monkey
         image_generation_model_id=model.id,
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    transport = AsyncMock(return_value=(b"image", {"created": 123}))
+    image = _png()
+    transport = AsyncMock(return_value=(image, {"created": 123}))
     monkeypatch.setattr(lemonade, "generate_image", transport)
 
     result = await MediaService.generate_image(
         AsyncMock(spec=AsyncSession), prompt="Ein Bergsee"
     )
 
-    assert result.data == b"image"
+    assert result.data == image
     assert result.mime_type == "image/png"
     assert result.filename == "generated.png"
-    assert result.metadata == {"created": 123}
+    assert result.metadata == {
+        "created": 123,
+        "providerAdapter": "lemonade",
+        "providerName": "Lemonade",
+        "modelId": "SD-Turbo",
+        "modelName": "SD-Turbo",
+        "targetTrustLevel": "private",
+    }
+    assert result.trust_level == TrustLevel.PRIVATE
     assert transport.await_args.kwargs["model"] == "SD-Turbo"
+
+
+async def test_media_service_rejects_changed_target_trust_before_transport(
+    monkeypatch,
+) -> None:
+    provider = LlmProviderConfig(
+        name="Lemonade",
+        adapter_type="lemonade",
+        trust_level="private",
+        config={"base_url": "https://lemonade.test/v1"},
+    )
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="SD-Turbo",
+        capabilities={ModelCapability.IMAGE_GENERATION},
+    )
+    settings = AiSettings(
+        providers=[provider],
+        models=[model],
+        image_generation_model_id=model.id,
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    transport = AsyncMock()
+    monkeypatch.setattr(lemonade, "generate_image", transport)
+
+    with pytest.raises(ProviderError) as exc_info:
+        await MediaService.generate_image(
+            AsyncMock(spec=AsyncSession),
+            prompt="Ein Bergsee",
+            expected_model_id=model.id,
+            expected_trust_level=TrustLevel.PUBLIC,
+        )
+
+    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
+    transport.assert_not_awaited()

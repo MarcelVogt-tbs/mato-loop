@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
+from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import func, select
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,6 +27,7 @@ from mato_loop_backend.attachments import (
     AttachmentInput,
     AttachmentService,
     classify_attachment,
+    image_mime_type,
     safe_filename,
 )
 from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
@@ -53,12 +57,51 @@ from mato_loop_backend.settings.models import (
     ModelAvailability,
     ModelCapability,
 )
-from mato_loop_backend.workspace import WorkspaceError, WorkspaceService
+from mato_loop_backend.workspace import (
+    RootFileError,
+    RootFileService,
+    WorkspaceError,
+    WorkspaceService,
+)
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
 _LAST_MESSAGE_AT_UNSET = object()
 _VISIBLE_MESSAGE_ROLES = ("user", "assistant")
+
+
+def _encode_session_cursor(
+    user_id: UUID, pinned: bool, activity_at: datetime, session_id: UUID
+) -> str:
+    value = json.dumps(
+        [str(user_id), pinned, activity_at.isoformat(), str(session_id)],
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
+
+
+def _decode_session_cursor(
+    value: str, user_id: UUID
+) -> tuple[bool, datetime, UUID]:
+    try:
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+        )
+        payload = json.loads(decoded)
+        if not (
+            isinstance(payload, list)
+            and len(payload) == 4
+            and all(isinstance(item, str) for item in (payload[0], payload[2], payload[3]))
+            and type(payload[1]) is bool
+            and UUID(payload[0]) == user_id
+        ):
+            raise ValueError
+        activity_at = datetime.fromisoformat(payload[2])
+        if activity_at.tzinfo is None:
+            raise ValueError
+        return payload[1], activity_at, UUID(payload[3])
+    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError) as exc:
+        raise ApiError(400, "validation.invalid", field="cursor") from exc
 
 
 def _public_research_payload(item: Message) -> dict[str, Any] | None:
@@ -91,6 +134,63 @@ def _public_research_payload(item: Message) -> dict[str, Any] | None:
                 {"title": title.strip()[:500], "url": safe_url}
             )
     return {"policy": policy, "used": used, "linkedSources": linked_sources}
+
+
+class _StoredFileAction(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    operation: Literal["write", "copy", "move"]
+    root: Literal["session", "workspace"]
+    root_identity: str = Field(alias="rootIdentity", min_length=1, max_length=1_000)
+    path: str = Field(min_length=1, max_length=1_000)
+    filename: str = Field(min_length=1, max_length=1_000)
+    size_bytes: int = Field(alias="sizeBytes", ge=0)
+
+    @model_validator(mode="after")
+    def validate_paths(self) -> _StoredFileAction:
+        service = RootFileService(UUID(int=0))
+        if service.normalize_relative_path(self.path) != self.path or self.path == ".":
+            raise ValueError("path must be a normalized file path")
+        if self.filename != self.path.rsplit("/", 1)[-1]:
+            raise ValueError("filename must match path")
+        if self.root == "workspace" and (
+            service.normalize_relative_path(self.root_identity) != self.root_identity
+        ):
+            raise ValueError("root identity must be normalized")
+        return self
+
+
+def _public_file_actions(item: Message) -> list[dict[str, Any]]:
+    if item.role != "tool" or not isinstance(item.provider_data, dict):
+        return []
+    runtime_data = item.provider_data.get("_matoloop")
+    raw_actions = runtime_data.get("fileActions") if isinstance(runtime_data, dict) else None
+    if not isinstance(raw_actions, list) or len(raw_actions) > 1:
+        return []
+    actions = []
+    for raw_action in raw_actions:
+        try:
+            action = _StoredFileAction.model_validate(raw_action)
+        except (RootFileError, ValidationError, ValueError):
+            continue
+        if action.root == "session" and action.root_identity != str(item.session_id):
+            continue
+        scope = "session" if action.root == "session" else "filesystem"
+        actions.append(
+            {
+                **action.model_dump(mode="json", by_alias=True),
+                "downloadUrl": "/api/workspace/files/download?"
+                + urlencode(
+                    {
+                        "path": action.path,
+                        "scope": scope,
+                        "session_id": str(item.session_id),
+                        "root_identity": action.root_identity,
+                    }
+                ),
+            }
+        )
+    return actions
 
 
 def _model_available(ai: AiSettings, model_id: UUID | None) -> bool:
@@ -192,12 +292,27 @@ async def _attachment_uploads(files: list[UploadFile]) -> list[AttachmentInput]:
                 field="attachments",
                 params={"maxItems": MAX_ATTACHMENTS_PER_MESSAGE},
             )
-        for upload in files:
+        for index, upload in enumerate(files):
             data = await upload.read(MAX_FILE_ATTACHMENT_BYTES + 1)
             mime_type = (upload.content_type or "").split(";", 1)[0].strip().lower()
             try:
                 attachments.append(classify_attachment(data, mime_type, upload.filename))
             except AttachmentError as exc:
+                if exc.code == "attachment.invalidImage":
+                    filename = safe_filename(upload.filename)
+                    suffix = (
+                        f".{filename.rsplit('.', 1)[1].casefold()}" if "." in filename else ""
+                    )
+                    logger.warning(
+                        "Attachment image validation failed index=%d size_bytes=%d "
+                        "content_type=%r detected_type=%r suffix=%r diagnostic=%r",
+                        index,
+                        len(data),
+                        mime_type,
+                        image_mime_type(data),
+                        suffix,
+                        exc.diagnostic,
+                    )
                 raise ApiError(
                     413 if exc.code == "attachment.tooLarge" else 400, exc.code
                 ) from exc
@@ -303,6 +418,7 @@ def message_payload(item: Message) -> dict[str, Any]:
         "toolCalls": item.tool_calls,
         "reasoning": item.public_reasoning,
         "research": _public_research_payload(item),
+        "fileActions": _public_file_actions(item),
         "error": error.payload() if error else None,
         "attachments": [
             {
@@ -399,7 +515,9 @@ def run_payload(run: AgentRun) -> dict[str, Any]:
 async def list_sessions(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> list[dict]:
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+    cursor: Annotated[str | None, Query()] = None,
+) -> dict[str, Any]:
     active_run_status = (
         select(AgentRun.status)
         .where(
@@ -424,31 +542,58 @@ async def list_sessions(
         .group_by(Message.session_id)
         .subquery()
     )
+    activity_at = func.coalesce(latest_messages.c.last_message_at, ChatSession.created_at)
+    statement = (
+        select(
+            ChatSession,
+            latest_messages.c.last_message_at,
+            active_run_status.label("active_run_status"),
+            activity_at.label("activity_at"),
+        )
+        .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
+        .where(ChatSession.user_id == user.id)
+    )
+    if cursor is not None:
+        cursor_pinned, cursor_activity_at, cursor_id = _decode_session_cursor(
+            cursor, user.id
+        )
+        activity_tail = or_(
+            activity_at < cursor_activity_at,
+            and_(activity_at == cursor_activity_at, ChatSession.id < cursor_id),
+        )
+        statement = statement.where(
+            or_(
+                ChatSession.is_pinned.is_(False),
+                and_(ChatSession.is_pinned.is_(True), activity_tail),
+            )
+            if cursor_pinned
+            else and_(ChatSession.is_pinned.is_(False), activity_tail)
+        )
     rows = (
         await db.execute(
-            select(
-                ChatSession,
-                latest_messages.c.last_message_at,
-                active_run_status.label("active_run_status"),
-            )
-            .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
-            .where(ChatSession.user_id == user.id)
-            .order_by(
+            statement.order_by(
                 ChatSession.is_pinned.desc(),
-                func.coalesce(
-                    latest_messages.c.last_message_at, ChatSession.created_at
-                ).desc(),
+                activity_at.desc(),
                 ChatSession.id.desc(),
             )
+            .limit(page_size + 1)
         )
     ).all()
-    return [
+    page = rows[:page_size]
+    items = [
         {
             **(await _session_payload(db, item, last_message_at=last_message_at)),
             "activeRunStatus": active_status,
         }
-        for item, last_message_at, active_status in rows
+        for item, last_message_at, active_status, _activity_at in page
     ]
+    next_cursor = None
+    if len(rows) > page_size:
+        item, _last_message_at, _active_status, item_activity_at = page[-1]
+        next_cursor = _encode_session_cursor(
+            user.id, bool(item.is_pinned), item_activity_at, item.id
+        )
+    return {"items": items, "nextCursor": next_cursor}
 
 
 async def _create_session(

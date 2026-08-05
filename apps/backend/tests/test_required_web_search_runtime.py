@@ -12,7 +12,7 @@ from mato_loop_backend.agent.runtime import (
     _linked_research_source_ids,
     _VisibleResponse,
 )
-from mato_loop_backend.agent.tools import ToolResult, tool_registry
+from mato_loop_backend.agent.tools import ToolFileAction, ToolResult, tool_registry
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
@@ -64,6 +64,8 @@ async def _runtime_setup(
     active_supports_image_input: bool = False,
     vision_fallback: bool = False,
     vision_fallback_private: bool = False,
+    tool_result: ToolResult | None = None,
+    workspace_access: str = "read-only",
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -105,7 +107,7 @@ async def _runtime_setup(
         model_config_id=model.id,
         memory_mode="disabled",
         web_search_policy=search_policy.value,
-        workspace_access="read-only",
+        workspace_access=workspace_access,
     )
     run = AgentRun(id=uuid4(), session_id=session.id, status="running")
     user = Message(id=uuid4(), session_id=session.id, role="user", content="Aktuelle Frage")
@@ -155,7 +157,9 @@ async def _runtime_setup(
     monkeypatch.setattr(ContextManager, "build", build_context)
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
     monkeypatch.setattr(
-        tool_registry, "_execute_definition", AsyncMock(return_value=_search_result())
+        tool_registry,
+        "_execute_definition",
+        AsyncMock(return_value=tool_result or _search_result()),
     )
     monkeypatch.setattr(run_events, "publish", publish)
     return db, run, requests, projections, events
@@ -167,6 +171,65 @@ def _assistant_messages(db) -> list[Message]:
         for call in db.add.call_args_list
         if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
     ]
+
+
+async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) -> None:
+    action = ToolFileAction(
+        "write",
+        "session",
+        "9fbd5cf9-70fd-41ad-a88a-ff74be2c3a1a",
+        "files/report.txt",
+        "report.txt",
+        7,
+    )
+    db, run, *_ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="write-1",
+                        name="write_file",
+                        arguments={
+                            "root": "session",
+                            "path": "files/report.txt",
+                            "content": "report",
+                        },
+                    )
+                ]
+            ),
+            ProviderResult(content="Fertig", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        workspace_access="read-write",
+        tool_result=ToolResult.json(
+            {"root": "session", "written": "files/report.txt"},
+            file_actions=(action,),
+        ),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    tool_message = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message) and call.args[0].role == "tool"
+    )
+    assert tool_message.provider_data == {
+        "_matoloop": {
+            "fileActions": [
+                {
+                    "operation": "write",
+                    "root": "session",
+                    "rootIdentity": action.root_identity,
+                    "path": "files/report.txt",
+                    "filename": "report.txt",
+                    "sizeBytes": 7,
+                }
+            ]
+        }
+    }
+    assert "download" not in str(tool_message.provider_data).casefold()
 
 
 def test_linked_research_sources_ignore_hidden_and_foreign_links() -> None:

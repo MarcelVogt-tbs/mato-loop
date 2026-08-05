@@ -25,7 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.attachments import (
     MAX_FILE_ATTACHMENT_BYTES,
-    MAX_IMAGE_ATTACHMENT_BYTES,
     AttachmentError,
     image_mime_type,
     validate_image,
@@ -47,6 +46,7 @@ from mato_loop_backend.workspace import (
 router = APIRouter(prefix="/workspace", dependencies=[Depends(require_user)])
 
 MAX_TEXT_PREVIEW_BYTES = MAX_EDITABLE_TEXT_BYTES
+_IMAGE_PREVIEW_BYTES = 5 * 1024 * 1024
 _IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 _MARKDOWN_SUFFIXES = {".md", ".markdown"}
 _SVG_NAMESPACE = "http://www.w3.org/2000/svg"
@@ -121,6 +121,7 @@ async def _file_context(
     db: AsyncSession,
     *,
     working_directory: str | None = None,
+    root_identity: str | None = None,
     for_update: bool = False,
 ) -> _FileContext:
     session = None
@@ -136,15 +137,33 @@ async def _file_context(
         if candidate is None or candidate.user_id != user.id:
             raise ApiError(404, "session.notFound")
         session = candidate
+    if root_identity is not None and session is None:
+        raise ApiError(400, "file.sessionRequired")
     if scope is FileScope.SESSION:
         if session is None:
             raise ApiError(400, "file.sessionRequired")
+        if root_identity is not None and root_identity != str(session.id):
+            raise ApiError(404, "file.fileNotFound")
         return _FileContext(
             root_files=RootFileService(
                 session.id,
                 working_directory=session.working_directory,
             ),
             root=FileRoot.SESSION,
+        )
+    if session is not None and root_identity is not None:
+        try:
+            root_files = RootFileService(
+                session.id,
+                working_directory=root_identity,
+            )
+            root_files.root_identity(FileRoot.WORKSPACE)
+        except RootFileError as exc:
+            raise ApiError(404, "file.fileNotFound") from exc
+        return _FileContext(
+            root_files=root_files,
+            root=FileRoot.WORKSPACE,
+            working_directory=root_identity,
         )
     if session is not None and session.working_directory:
         return _FileContext(
@@ -363,7 +382,7 @@ def _validate_svg_references(value: str) -> None:
 
 
 def _validate_svg(data: bytes) -> None:
-    if len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
+    if len(data) > _IMAGE_PREVIEW_BYTES:
         raise ValueError("tooLarge")
     try:
         source = data.decode("utf-8", errors="strict")
@@ -414,6 +433,7 @@ async def list_entries(
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
     working_directory: str | None = None,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
 ) -> dict:
     context = await _file_context(
         scope,
@@ -421,6 +441,7 @@ async def list_entries(
         user,
         db,
         working_directory=working_directory,
+        root_identity=root_identity,
     )
     try:
         entries, has_more, next_offset = await asyncio.to_thread(
@@ -527,13 +548,19 @@ async def preview_file(
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
     working_directory: str | None = None,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
 ) -> dict:
     context = await _file_context(
-        scope, session_id, user, db, working_directory=working_directory
+        scope,
+        session_id,
+        user,
+        db,
+        working_directory=working_directory,
+        root_identity=root_identity,
     )
     try:
         data = await asyncio.to_thread(
-            _read_context, context, path, MAX_IMAGE_ATTACHMENT_BYTES
+            _read_context, context, path, _IMAGE_PREVIEW_BYTES
         )
     except (WorkspaceError, RootFileError) as exc:
         raise _context_error(exc) from exc
@@ -541,7 +568,7 @@ async def preview_file(
     suffix = PurePosixPath(path).suffix.casefold()
     mime_type = image_mime_type(data)
     if mime_type is not None:
-        if len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
+        if len(data) > _IMAGE_PREVIEW_BYTES:
             return {"kind": "none", "reason": "tooLarge"}
         try:
             validated = await asyncio.to_thread(validate_image, data, mime_type)
@@ -665,20 +692,26 @@ async def preview_image(
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
     working_directory: str | None = None,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
 ) -> Response:
     context = await _file_context(
-        scope, session_id, user, db, working_directory=working_directory
+        scope,
+        session_id,
+        user,
+        db,
+        working_directory=working_directory,
+        root_identity=root_identity,
     )
     try:
         data = await asyncio.to_thread(
-            _read_context, context, path, MAX_IMAGE_ATTACHMENT_BYTES
+            _read_context, context, path, _IMAGE_PREVIEW_BYTES
         )
         if PurePosixPath(path).suffix.casefold() == ".svg":
             await asyncio.to_thread(_validate_svg, data)
             mime_type = "image/svg+xml"
         else:
             mime_type = image_mime_type(data)
-            if mime_type is None or len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
+            if mime_type is None or len(data) > _IMAGE_PREVIEW_BYTES:
                 raise ApiError(415, "file.previewUnavailable")
             await asyncio.to_thread(validate_image, data, mime_type)
     except (WorkspaceError, RootFileError) as exc:
@@ -697,9 +730,15 @@ async def download_file(
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
     working_directory: str | None = None,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
 ) -> StreamingResponse:
     context = await _file_context(
-        scope, session_id, user, db, working_directory=working_directory
+        scope,
+        session_id,
+        user,
+        db,
+        working_directory=working_directory,
+        root_identity=root_identity,
     )
     try:
         handle = await asyncio.to_thread(_open_context, context, path)

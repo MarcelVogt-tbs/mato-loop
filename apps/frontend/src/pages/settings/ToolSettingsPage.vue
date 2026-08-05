@@ -289,6 +289,13 @@ const mediaTools = [
     warning: 'Prompts werden an den konfigurierten Mediendienst übertragen; die Erzeugung kann länger dauern.'
   },
   {
+    name: 'edit_image',
+    field: 'editImage',
+    capability: 'media.edit.image',
+    warningIcon: 'privacy_tip',
+    warning: 'Ausgewählte Bilder und der Bearbeitungsprompt werden an den konfigurierten Mediendienst übertragen.'
+  },
+  {
     name: 'generate_speech',
     field: 'generateSpeech',
     capability: 'media.generate.speech',
@@ -322,6 +329,7 @@ const TOOL_DESCRIPTIONS = {
   web_search: 'Sucht über den hostseitig gewählten Provider im Web.',
   webfetch: 'Ruft geprüfte HTTP(S)-Inhalte ab.',
   generate_image: 'Erzeugt Bilder aus einer textlichen Beschreibung.',
+  edit_image: 'Bearbeitet Bildanhänge, ohne die Originale zu verändern.',
   generate_speech: 'Erzeugt gesprochene WAV-Audiodateien aus Text.',
   generate_audio: 'Erzeugt Audio oder Musik aus einem Prompt.',
   transcribe_audio: 'Transkribiert WAV-Anhänge aus der aktuellen Session.',
@@ -346,6 +354,7 @@ const form = reactive({
   defaultPolicy: 'auto_public',
   allowedPrivateOrigins: [],
   generateImage: { policy: 'disabled', timeoutSeconds: 300 },
+  editImage: { policy: 'ask', timeoutSeconds: 300 },
   generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
   generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
   transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 }
@@ -465,6 +474,10 @@ async function save() {
     generateImage: {
       ...form.generateImage,
       policy: form.policies['media.generate.image']
+    },
+    editImage: {
+      ...form.editImage,
+      policy: form.policies['media.edit.image']
     },
     generateSpeech: {
       ...form.generateSpeech,

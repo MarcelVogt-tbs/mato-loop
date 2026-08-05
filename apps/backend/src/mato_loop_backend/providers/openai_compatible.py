@@ -53,6 +53,8 @@ class DiscoveredModel(BaseModel):
             "supports_image_input",
             "supports_tools",
             "supports_parallel_tool_calls",
+            "capabilities_authoritative",
+            "native_for_chat_provider",
         }
         metadata: dict[str, Any] = {}
         for key, value in self.model_dump(exclude={"id", "capabilities"}).items():

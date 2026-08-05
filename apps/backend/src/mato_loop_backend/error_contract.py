@@ -53,6 +53,7 @@ _MESSAGES = {
     "provider.notFound": "The model provider is unavailable.",
     "provider.requestFailed": "The model provider request failed.",
     "provider.unavailable": "The model provider is unavailable.",
+    "privacy.privateContentBlocked": "Private image content cannot be sent to the selected public model.",
     "session.modelToolsUnavailable": "The selected model does not support the required tools.",
     "session.modelUnavailable": "The selected model is unavailable.",
     "session.messageNotFound": "The chat message was not found.",

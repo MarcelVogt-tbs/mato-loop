@@ -2,6 +2,7 @@ import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import pytest
@@ -106,7 +107,7 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
     }
 
 
-async def test_session_list_uses_latest_visible_message_timestamp() -> None:
+async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None:
     user = _user()
     session = ChatSession(
         id=uuid4(),
@@ -116,16 +117,32 @@ async def test_session_list_uses_latest_visible_message_timestamp() -> None:
         created_at=datetime(2026, 7, 1, 8, 0, tzinfo=UTC),
         updated_at=datetime(2026, 7, 2, 8, 0, tzinfo=UTC),
     )
+    next_session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Nächste Session",
+        memory_mode="disabled",
+        created_at=datetime(2026, 6, 1, 8, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 6, 2, 8, 0, tzinfo=UTC),
+    )
     last_message_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
     execution_result = MagicMock()
-    execution_result.all.return_value = [(session, last_message_at, "running")]
+    execution_result.all.return_value = [
+        (session, last_message_at, "running", last_message_at),
+        (next_session, None, None, next_session.created_at),
+    ]
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = execution_result
 
-    result = await list_sessions(user, db)
+    result = await list_sessions(user, db, page_size=1)
 
-    assert result[0]["lastMessageAt"] == last_message_at.isoformat()
-    assert result[0]["activeRunStatus"] == "running"
+    assert set(result) == {"items", "nextCursor"}
+    assert len(result["items"]) == 1
+    assert result["nextCursor"] is not None
+    assert result["items"][0]["createdAt"] == session.created_at.isoformat()
+    assert result["items"][0]["updatedAt"] == session.updated_at.isoformat()
+    assert result["items"][0]["lastMessageAt"] == last_message_at.isoformat()
+    assert result["items"][0]["activeRunStatus"] == "running"
     statement = db.execute.await_args.args[0]
     sql = str(statement)
     assert "max(messages.created_at)" in sql
@@ -135,6 +152,71 @@ async def test_session_list_uses_latest_visible_message_timestamp() -> None:
     assert "LIMIT" in sql
     assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC" in sql
     assert "chat_sessions.updated_at DESC" not in sql
+    assert 2 in statement.compile().params.values()
+
+
+async def test_session_list_next_page_uses_full_keyset_and_preserves_order() -> None:
+    user = _user()
+    pinned = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Angeheftet",
+        is_pinned=True,
+        memory_mode="disabled",
+        created_at=datetime(2026, 7, 20, 8, 0, tzinfo=UTC),
+    )
+    overflow = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Weitere Session",
+        memory_mode="disabled",
+        created_at=datetime(2026, 7, 19, 8, 0, tzinfo=UTC),
+    )
+    first_result = MagicMock()
+    first_result.all.return_value = [
+        (pinned, None, None, pinned.created_at),
+        (overflow, None, None, overflow.created_at),
+    ]
+    first_db = AsyncMock(spec=AsyncSession)
+    first_db.execute.return_value = first_result
+    first_page = await list_sessions(user, first_db, page_size=1)
+
+    second_result = MagicMock()
+    second_result.all.return_value = [
+        (overflow, None, "waiting_approval", overflow.created_at)
+    ]
+    second_db = AsyncMock(spec=AsyncSession)
+    second_db.execute.return_value = second_result
+    second_page = await list_sessions(
+        user, second_db, page_size=2, cursor=first_page["nextCursor"]
+    )
+
+    assert [item["id"] for item in second_page["items"]] == [str(overflow.id)]
+    assert second_page["nextCursor"] is None
+    statement = second_db.execute.await_args.args[0]
+    sql = str(statement)
+    assert "chat_sessions.is_pinned IS false OR chat_sessions.is_pinned IS true" in sql
+    assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) <" in sql
+    assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) =" in sql
+    assert "chat_sessions.id <" in sql
+    assert sql.index("chat_sessions.is_pinned DESC") < sql.index(
+        "coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC"
+    ) < sql.index("chat_sessions.id DESC")
+    assert user.id in statement.compile().params.values()
+    assert pinned.created_at in statement.compile().params.values()
+    assert pinned.id in statement.compile().params.values()
+
+
+async def test_session_list_rejects_malformed_cursor() -> None:
+    db = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(ApiError) as exc_info:
+        await list_sessions(_user(), db, cursor="not-a-cursor")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "validation.invalid"
+    assert exc_info.value.field == "cursor"
+    db.execute.assert_not_awaited()
 
 
 async def test_session_is_created_with_first_message_and_run(monkeypatch) -> None:
@@ -433,6 +515,97 @@ def test_message_payload_exposes_only_validated_research_snapshot() -> None:
     }
     assert "private-state" not in str(payload)
     assert "not-public" not in str(payload)
+
+
+def test_message_payload_validates_file_actions_and_derives_download_url() -> None:
+    session_id = uuid4()
+    stored_action = {
+        "operation": "copy",
+        "root": "workspace",
+        "rootIdentity": "original project",
+        "path": "reports/result.txt",
+        "filename": "result.txt",
+        "sizeBytes": 7,
+    }
+    message = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="tool",
+        content="{}",
+        provider_data={"_matoloop": {"fileActions": [stored_action]}},
+    )
+
+    payload = message_payload(message)
+
+    action = payload["fileActions"][0]
+    query = parse_qs(urlparse(action.pop("downloadUrl")).query)
+    assert action == stored_action
+    assert query == {
+        "path": ["reports/result.txt"],
+        "scope": ["filesystem"],
+        "session_id": [str(session_id)],
+        "root_identity": ["original project"],
+    }
+    assert "downloadUrl" not in str(message.provider_data)
+
+
+@pytest.mark.parametrize(
+    "file_actions",
+    [
+        [
+            {
+                "operation": "write",
+                "root": "session",
+                "rootIdentity": str(uuid4()),
+                "path": "files/result.txt",
+                "filename": "result.txt",
+                "sizeBytes": 7,
+            }
+        ],
+        [
+            {
+                "operation": "write",
+                "root": "workspace",
+                "rootIdentity": "project",
+                "path": "../result.txt",
+                "filename": "result.txt",
+                "sizeBytes": 7,
+            }
+        ],
+        [
+            {
+                "operation": "write",
+                "root": "workspace",
+                "rootIdentity": "project",
+                "path": "result.txt",
+                "filename": "result.txt",
+                "sizeBytes": "7",
+            }
+        ],
+        [
+            {
+                "operation": "write",
+                "root": "workspace",
+                "rootIdentity": "project",
+                "path": "result.txt",
+                "filename": "result.txt",
+                "sizeBytes": 7,
+                "downloadUrl": "https://evil.test/file",
+            }
+        ],
+        [{}, {}],
+    ],
+)
+def test_message_payload_rejects_untrusted_file_action_metadata(file_actions) -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="tool",
+        content="{}",
+        provider_data={"_matoloop": {"fileActions": file_actions}},
+    )
+
+    assert message_payload(message)["fileActions"] == []
 
 
 def test_message_payload_recreates_safe_english_runtime_error() -> None:

@@ -1,87 +1,97 @@
 <template>
-  <q-dialog :model-value="modelValue" @hide="close">
+  <q-dialog
+    :model-value="modelValue"
+    :maximized="$q.screen.lt.sm"
+    :persistent="saving"
+    @hide="close"
+  >
     <q-card class="provider-dialog model-dialog app-surface">
-      <q-card-section class="row items-start no-wrap q-gutter-md">
-        <q-avatar color="primary" text-color="white" icon="smart_toy" />
-        <div class="col">
-          <div class="text-h6">{{ title }}</div>
-          <div class="text-body2 app-muted">
-            {{ model ? 'Anzeigename, Status und Laufzeit bearbeiten.' : `Manuelles Modell für ${provider?.name || 'den Provider'} hinzufügen.` }}
+      <q-form class="column full-height" @submit.prevent="save">
+        <q-card-section class="row items-start no-wrap q-gutter-md">
+          <q-avatar color="primary" text-color="white" icon="smart_toy" />
+          <div class="col">
+            <div class="text-h6">{{ title }}</div>
+            <div class="text-body2 app-muted">
+              {{ model ? 'Anzeigename, Status und Laufzeit bearbeiten.' : `Manuelles Modell für ${provider?.name || 'den Provider'} hinzufügen.` }}
+            </div>
           </div>
-        </div>
-        <q-btn flat round dense icon="close" aria-label="Dialog schließen" @click="close" />
-      </q-card-section>
+          <q-btn flat round dense icon="close" aria-label="Dialog schließen" :disable="saving" @click="close" />
+        </q-card-section>
 
-      <q-separator />
+        <q-separator />
 
-      <q-card-section class="provider-dialog__body scroll">
-        <q-form ref="formRef" class="provider-form-grid">
-          <q-input
-            v-model="form.modelId"
-            outlined
-            label="Modell-ID"
-            lazy-rules
-            :readonly="isDiscovered"
-            :rules="[requiredRule]"
-            :hint="isDiscovered ? 'Die ID eines entdeckten Modells wird vom Provider vorgegeben.' : ''"
-          />
-          <q-input
-            v-model="form.name"
-            outlined
-            label="Anzeigename (optional)"
-            hint="Ohne Anzeigename wird die Modell-ID verwendet."
-          />
-          <q-toggle
-            v-model="form.enabled"
-            class="provider-form-section"
+        <q-card-section class="provider-dialog__body col scroll">
+          <div class="provider-form-grid">
+            <q-input
+              v-model="form.modelId"
+              outlined
+              hide-bottom-space
+              label="Modell-ID"
+              lazy-rules
+              :readonly="isDiscovered"
+              :rules="[requiredRule]"
+              :hint="isDiscovered ? 'Die ID eines entdeckten Modells wird vom Provider vorgegeben.' : ''"
+            />
+            <q-input
+              v-model="form.name"
+              outlined
+              hide-bottom-space
+              label="Anzeigename (optional)"
+              hint="Ohne Anzeigename wird die Modell-ID verwendet."
+            />
+            <q-toggle
+              v-model="form.enabled"
+              class="provider-form-section"
+              color="primary"
+              label="Modell aktiv"
+              aria-label="Modell aktiv"
+              :disable="model?.availability === 'missing'"
+            />
+            <q-select
+              v-model="form.capabilities"
+              class="provider-form-section"
+              outlined
+              hide-bottom-space
+              multiple
+              use-chips
+              emit-value
+              map-options
+              label="Modellfähigkeiten"
+              :options="MODEL_CAPABILITY_OPTIONS"
+              :readonly="isDiscovered"
+              :hint="capabilityHint"
+              lazy-rules
+              :rules="[capabilityRule]"
+            />
+            <ModelRuntimeFields
+              v-if="supportsChat"
+              :model-value="form"
+              :reasoning-summary-available="reasoningSummaryAvailable"
+              :reasoning-summary-forced="provider?.adapterType === 'openai-codex'"
+              :effective-webfetch-policy="effectiveWebfetchPolicy"
+              :provider-trust-level="provider?.trustLevel"
+              :provider-pseudonymization-enabled="provider?.pseudonymizationEnabled"
+            />
+            <q-banner v-else rounded class="provider-form-section app-surface-tonal">
+              Die LLM-Laufzeitfelder gelten nur für Chatmodelle. Die ausgewählten Medienfähigkeiten bleiben davon unabhängig.
+            </q-banner>
+          </div>
+        </q-card-section>
+
+        <q-separator />
+        <q-card-actions class="q-pa-md">
+          <q-btn flat no-caps label="Abbrechen" :disable="saving" @click="close" />
+          <q-space />
+          <q-btn
+            unelevated
+            no-caps
             color="primary"
-            label="Modell aktiv"
-            aria-label="Modell aktiv"
-            :disable="model?.availability === 'missing'"
+            type="submit"
+            :label="model ? 'Änderungen speichern' : 'Modell hinzufügen'"
+            :loading="saving"
           />
-          <q-select
-            v-model="form.capabilities"
-            class="provider-form-section"
-            outlined
-            multiple
-            use-chips
-            emit-value
-            map-options
-            label="Modellfähigkeiten"
-            :options="MODEL_CAPABILITY_OPTIONS"
-            :readonly="isDiscovered"
-            :hint="capabilityHint"
-            lazy-rules
-            :rules="[capabilityRule]"
-          />
-          <ModelRuntimeFields
-            v-if="supportsChat"
-            :model-value="form"
-            :reasoning-summary-available="reasoningSummaryAvailable"
-            :reasoning-summary-forced="provider?.adapterType === 'openai-codex'"
-            :effective-webfetch-policy="effectiveWebfetchPolicy"
-            :provider-trust-level="provider?.trustLevel"
-            :provider-pseudonymization-enabled="provider?.pseudonymizationEnabled"
-          />
-          <q-banner v-else rounded class="provider-form-section app-surface-tonal">
-            Die LLM-Laufzeitfelder gelten nur für Chatmodelle. Die ausgewählten Medienfähigkeiten bleiben davon unabhängig.
-          </q-banner>
-        </q-form>
-      </q-card-section>
-
-      <q-separator />
-      <q-card-actions class="q-pa-md">
-        <q-btn flat no-caps label="Abbrechen" @click="close" />
-        <q-space />
-        <q-btn
-          unelevated
-          no-caps
-          color="primary"
-          :label="model ? 'Änderungen speichern' : 'Modell hinzufügen'"
-          :loading="saving"
-          @click="save"
-        />
-      </q-card-actions>
+        </q-card-actions>
+      </q-form>
     </q-card>
   </q-dialog>
 </template>
@@ -107,16 +117,18 @@ const emit = defineEmits(['update:modelValue', 'saved'])
 const $q = useQuasar()
 const providers = useProviderStore()
 const tools = useToolSettingsStore()
-const formRef = ref(null)
 const saving = ref(false)
 const form = reactive(defaultForm())
 const isDiscovered = computed(() => props.model?.origin === 'discovered')
 const capabilitiesAreAuthoritative = computed(() => (
-  isDiscovered.value && props.provider?.adapterType === 'lemonade'
+  isDiscovered.value && (
+    props.provider?.adapterType === 'lemonade'
+    || props.model?.discoveryMetadata?.capabilities_authoritative === true
+  )
 ))
 const supportsChat = computed(() => modelSupportsCapability({ capabilities: form.capabilities }, 'chat'))
 const capabilityHint = computed(() => {
-  if (capabilitiesAreAuthoritative.value) return 'Lemonade gibt diese Fähigkeiten bei der Modellerkennung verbindlich vor.'
+  if (capabilitiesAreAuthoritative.value) return 'Der Provider gibt diese Fähigkeiten bei der Modellerkennung verbindlich vor.'
   if (isDiscovered.value) return 'Die Fähigkeiten wurden bei der Modellerkennung ermittelt.'
   return 'Bestimmt, für welche Aufgaben das Modell auswählbar ist.'
 })
@@ -156,7 +168,7 @@ function capabilityRule(value) {
 }
 
 async function save() {
-  if (!await formRef.value?.validate() || !props.provider) return
+  if (!props.provider) return
   saving.value = true
   try {
     const runtimePayload = modelRuntimePayload(form)

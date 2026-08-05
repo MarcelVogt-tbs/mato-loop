@@ -229,16 +229,21 @@ describe('assistant markdown rendering', () => {
   })
 
   it('restricts links and handles incomplete streaming markdown', () => {
+    const downloadUrl = '/api/workspace/files/download?path=files%2Freport.pdf&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440000'
     expect(safeMarkdownLinkUrl('https://example.com/path')).toBe('https://example.com/path')
     expect(safeMarkdownLinkUrl('mailto:test@example.com')).toBe('mailto:test@example.com')
+    expect(safeMarkdownLinkUrl(downloadUrl)).toBe(downloadUrl)
     expect(safeMarkdownLinkUrl('javascript:alert(1)')).toBeNull()
     expect(safeMarkdownLinkUrl('/relative/path')).toBeNull()
 
-    const links = renderedDom('[Extern](https://example.com) [Relativ](/relative/path)').root
+    const links = renderedDom(`[Extern](https://example.com) [Download](${downloadUrl}) [Relativ](/relative/path)`).root
     const externalLink = links.querySelector('a[href="https://example.com/"]')
+    const downloadLink = links.querySelector(`a[href="${downloadUrl}"]`)
     const invalidLink = links.querySelector('.chat-markdown__link--invalid')
     expect(externalLink?.getAttribute('target')).toBe('_blank')
     expect(externalLink?.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(downloadLink).not.toBeNull()
+    expect(downloadLink?.hasAttribute('target')).toBe(false)
     expect(invalidLink?.hasAttribute('href')).toBe(false)
 
     const { root } = renderedDom('```js\nconst streaming = true')

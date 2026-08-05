@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import wave
 from io import BytesIO
 from unittest.mock import AsyncMock
@@ -130,6 +131,28 @@ async def test_attachment_upload_count_is_bounded() -> None:
 
     assert exc_info.value.code == "validation.tooManyItems"
     assert exc_info.value.params == {"maxItems": 4}
+
+
+async def test_invalid_image_upload_logs_safe_decoder_context(caplog) -> None:
+    data = b"\xff\xd8\xffprivate-image-bytes"
+    image = UploadFile(
+        BytesIO(data),
+        filename="private-location-name.jpeg",
+        headers=Headers({"content-type": "image/jpeg"}),
+    )
+    caplog.set_level(logging.WARNING, logger=sessions_route.__name__)
+
+    with pytest.raises(ApiError) as exc_info:
+        await sessions_route._attachment_uploads([image])
+
+    assert exc_info.value.code == "attachment.invalidImage"
+    assert f"size_bytes={len(data)}" in caplog.text
+    assert "content_type='image/jpeg'" in caplog.text
+    assert "detected_type='image/jpeg'" in caplog.text
+    assert "suffix='.jpeg'" in caplog.text
+    assert "diagnostic='verify:" in caplog.text
+    assert "private-location-name" not in caplog.text
+    assert "private-image-bytes" not in caplog.text
 
 
 async def test_runtime_cleans_stored_audio_when_transaction_fails(monkeypatch) -> None:

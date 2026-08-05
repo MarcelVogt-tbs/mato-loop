@@ -34,8 +34,8 @@ export const useApprovalStore = defineStore('approvals', {
         this.submittingId = null
       }
     },
-    async permissions(sessionId) {
-      return (await api.get(`/approvals/sessions/${sessionId}/permissions`)).data
+    async permissions(sessionId, config = {}) {
+      return (await api.get(`/approvals/sessions/${sessionId}/permissions`, config)).data
     },
     async revoke(sessionId, grantId) {
       await api.delete(`/approvals/sessions/${sessionId}/permissions/${grantId}`)

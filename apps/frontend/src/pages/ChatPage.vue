@@ -14,7 +14,7 @@
       class="chat-page__content col"
       :aria-busy="chat.loading ? 'true' : 'false'"
     >
-      <div ref="scrollContent">
+      <div ref="scrollContent" class="chat-page__scroll-content">
         <div v-if="chat.loading" class="chat-transcript q-pa-md" aria-label="Session wird geladen">
           <div v-for="width in ['42%', '86%', '64%']" :key="width" class="chat-session-skeleton">
             <q-skeleton type="text" width="88px" />
@@ -107,6 +107,7 @@
                 v-for="item in message.toolCalls"
                 :key="item.tool.id"
                 v-bind="item"
+                @open-file="openToolFile"
               />
             </div>
             <div
@@ -295,6 +296,7 @@
           :aria-valuemin="MIN_WORKSPACE_SPLIT_RATIO"
           :aria-valuemax="MAX_WORKSPACE_SPLIT_RATIO"
           :aria-valuenow="workspace.splitRatio"
+          :aria-valuetext="`${workspace.splitRatio} Prozent Chat, ${100 - workspace.splitRatio} Prozent Dateien`"
           tabindex="0"
           @keydown="resizeWorkspacePane"
         >
@@ -430,6 +432,26 @@ function resizeWorkspacePane(event) {
     MAX_WORKSPACE_SPLIT_RATIO,
     Math.max(MIN_WORKSPACE_SPLIT_RATIO, ratio)
   ))
+}
+
+async function openToolFile(action) {
+  const sessionId = action?.sessionId
+  if (!sessionId || chat.current?.id !== sessionId) return
+  if (workspace.editorDirty) {
+    const accepted = await confirm(
+      'Sollen die ungespeicherten Änderungen verworfen werden?',
+      'Änderungen verwerfen?',
+      { okLabel: 'Verwerfen' }
+    )
+    if (!accepted) return
+    workspace.discardEdit()
+  }
+  if (chat.current?.id !== sessionId) return
+  workspace.configure({
+    sessionId,
+    workingDirectory: chat.current.workingDirectory
+  })
+  await workspace.openToolFile(action)
 }
 
 function trustImageOrigin(origin) {

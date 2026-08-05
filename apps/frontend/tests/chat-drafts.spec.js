@@ -14,6 +14,7 @@ vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
 import { MAX_ATTACHMENT_DRAFT_BYTES, useChatStore } from '../src/stores/chat'
+import { useWorkspaceStore } from '../src/stores/workspace'
 
 const originalURL = globalThis.URL
 
@@ -24,6 +25,10 @@ function createStorage() {
     setItem: (key, value) => values.set(key, value),
     removeItem: (key) => values.delete(key)
   }
+}
+
+function sessionPage(items = [], nextCursor = null) {
+  return { data: { items, nextCursor } }
 }
 
 class EventSourceMock {
@@ -607,7 +612,7 @@ describe('chat drafts', () => {
 
   it('tracks model, streaming and approval phases from SSE', () => {
     global.EventSource = EventSourceMock
-    api.get.mockResolvedValue({ data: [] })
+    api.get.mockResolvedValue(sessionPage())
     const chat = useChatStore()
     chat.current = { id: 'session-1', messages: [] }
     chat.sessions = [{ id: 'session-1', title: 'Erste Nachricht' }]
@@ -662,6 +667,37 @@ describe('chat drafts', () => {
     expect(chat.sessions[0].activeRunStatus).toBe('running')
   })
 
+  it('refreshes session files after a successful filesystem tool completes', () => {
+    global.EventSource = EventSourceMock
+    api.get.mockResolvedValue({ data: { id: 'session-1', messages: [] } })
+    const workspace = useWorkspaceStore()
+    workspace.sessionId = 'session-1'
+    const refresh = vi.spyOn(workspace, 'refresh').mockResolvedValue([])
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    const source = EventSourceMock.instances[0]
+
+    source.emit('tool.completed', {
+      tool: 'write_file',
+      metadata: {},
+      output: '{"root":"session","written":"files/live.txt"}'
+    })
+    source.emit('tool.completed', {
+      tool: 'write_file',
+      metadata: { errorCode: 'permission.denied' },
+      output: '{}'
+    })
+    source.emit('tool.completed', {
+      tool: 'read_file',
+      metadata: {},
+      output: '{}'
+    })
+
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
   it('does not replace a newer run status with a stale session list', async () => {
     let resolveSessions
     api.get.mockImplementationOnce(() => new Promise((resolve) => {
@@ -672,10 +708,64 @@ describe('chat drafts', () => {
 
     const request = chat.fetchSessions()
     chat.setSessionRunStatus('session-1', 'running')
-    resolveSessions({ data: [{ id: 'session-1', title: 'Test', activeRunStatus: null }] })
+    resolveSessions(sessionPage([{ id: 'session-1', title: 'Test', activeRunStatus: null }]))
     await request
 
     expect(chat.sessions[0].activeRunStatus).toBe('running')
+  })
+
+  it('appends paginated sessions without duplicates and stops at the end', async () => {
+    api.get
+      .mockResolvedValueOnce(sessionPage([
+        { id: 'session-1', title: 'Neu', lastMessageAt: '2026-07-20T12:00:00Z' },
+        { id: 'session-2', title: 'Alt', lastMessageAt: '2026-07-19T12:00:00Z' }
+      ], 'cursor-1'))
+      .mockResolvedValueOnce(sessionPage([
+        { id: 'session-2', title: 'Aktualisiert', lastMessageAt: '2026-07-19T12:00:00Z' },
+        { id: 'session-3', title: 'Älter', lastMessageAt: '2026-07-18T12:00:00Z' }
+      ]))
+    const chat = useChatStore()
+
+    await chat.fetchSessions()
+    await chat.fetchMoreSessions()
+
+    expect(chat.sessions.map((session) => session.id)).toEqual([
+      'session-1', 'session-2', 'session-3'
+    ])
+    expect(chat.sessions[1].title).toBe('Aktualisiert')
+    expect(chat.sessionsNextCursor).toBeNull()
+    expect(api.get).toHaveBeenNthCalledWith(2, '/sessions', {
+      params: { pageSize: 10, cursor: 'cursor-1' }
+    })
+  })
+
+  it('shares an in-flight page request with consumers loading the complete list', async () => {
+    let resolvePage
+    api.get.mockReturnValue(new Promise((resolve) => { resolvePage = resolve }))
+    const chat = useChatStore()
+    chat.sessions = [{ id: 'session-1' }]
+    chat.sessionsLoaded = true
+    chat.sessionsNextCursor = 'cursor-1'
+
+    const loadingPage = chat.fetchMoreSessions()
+    const loadingAll = chat.fetchAllSessions()
+    resolvePage(sessionPage([{ id: 'session-2' }]))
+    await Promise.all([loadingPage, loadingAll])
+
+    expect(api.get).toHaveBeenCalledOnce()
+    expect(chat.sessionsLoadingMore).toBe(false)
+    expect(chat.sessionsNextCursor).toBeNull()
+  })
+
+  it('replaces stale loaded summaries when refreshing the visible depth', async () => {
+    api.get.mockResolvedValue(sessionPage([{ id: 'session-1', title: 'Aktuell' }]))
+    const chat = useChatStore()
+    chat.sessions = [{ id: 'session-1', title: 'Alt' }, { id: 'deleted' }]
+    chat.sessionsLoaded = true
+
+    await chat.refreshSessions()
+
+    expect(chat.sessions).toEqual([{ id: 'session-1', title: 'Aktuell' }])
   })
 
   it('promotes streamed content before refreshing the persisted message', async () => {
@@ -729,13 +819,11 @@ describe('chat drafts', () => {
 
   it('refreshes a generated title after the first run', async () => {
     vi.useFakeTimers()
-    api.get.mockResolvedValue({
-      data: [{
+    api.get.mockResolvedValue(sessionPage([{
         id: 'session-1',
         title: 'Standardmodelle konfigurieren',
         titleGenerationStatus: 'completed'
-      }]
-    })
+      }]))
     const chat = useChatStore()
     chat.current = {
       id: 'session-1',
@@ -755,18 +843,16 @@ describe('chat drafts', () => {
 
     expect(chat.current.title).toBe('Standardmodelle konfigurieren')
     expect(chat.current.titleGenerationStatus).toBe('completed')
-    expect(api.get).toHaveBeenCalledWith('/sessions')
+    expect(api.get).toHaveBeenCalledWith('/sessions', { params: { pageSize: 10 } })
   })
 
   it('stops generated title polling after a terminal failure', async () => {
     vi.useFakeTimers()
-    api.get.mockResolvedValue({
-      data: [{
+    api.get.mockResolvedValue(sessionPage([{
         id: 'session-1',
         title: 'Lokaler Titel',
         titleGenerationStatus: 'failed'
-      }]
-    })
+      }]))
     const chat = useChatStore()
     chat.current = {
       id: 'session-1',
@@ -866,7 +952,7 @@ describe('chat drafts', () => {
     api.get.mockImplementation((url) => Promise.resolve({
       data: url === '/sessions/session-1'
         ? { id: 'session-1', messages: [], activeRun: null }
-        : [{ id: 'session-1', title: 'Test', activeRunStatus: null }]
+        : { items: [{ id: 'session-1', title: 'Test', activeRunStatus: null }], nextCursor: null }
     }))
     const chat = useChatStore()
     chat.sessions = [{ id: 'session-1', title: 'Test' }]
@@ -906,7 +992,7 @@ describe('chat drafts', () => {
               }
             }]
           }
-        : []
+        : { items: [], nextCursor: null }
     }))
     const chat = useChatStore()
     chat.current = { id: 'session-1', messages: [] }
@@ -1119,7 +1205,7 @@ describe('chat drafts', () => {
   it('keeps an undone message as a draft after navigating away', async () => {
     let resolveUndo
     api.post.mockReturnValue(new Promise((resolve) => { resolveUndo = resolve }))
-    api.get.mockResolvedValue({ data: [] })
+    api.get.mockResolvedValue(sessionPage())
     const chat = useChatStore()
     const message = { id: 'user-2', role: 'user', content: 'Später bearbeiten', attachments: [] }
     chat.sessions = [{ id: 'session-1' }, { id: 'session-2' }]
@@ -1165,7 +1251,7 @@ describe('chat drafts', () => {
 
   it('retries the latest runtime error without replacing the user draft', async () => {
     global.EventSource = EventSourceMock
-    api.get.mockResolvedValue({ data: [] })
+    api.get.mockResolvedValue(sessionPage())
     api.post.mockResolvedValue({
       data: {
         runId: 'run-2',

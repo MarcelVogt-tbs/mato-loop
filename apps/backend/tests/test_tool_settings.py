@@ -47,6 +47,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
             "webSearch",
             "webFetch",
             "generateImage",
+            "editImage",
             "generateSpeech",
             "generateAudio",
             "transcribeAudio",
@@ -76,6 +77,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
             "allowedPrivateOrigins": [],
         },
         "generateImage": {"policy": "disabled", "timeoutSeconds": 300},
+        "editImage": {"policy": "ask", "timeoutSeconds": 300},
         "generateSpeech": {"policy": "disabled", "timeoutSeconds": 300},
         "generateAudio": {"policy": "disabled", "timeoutSeconds": 300},
         "transcribeAudio": {"policy": "disabled", "timeoutSeconds": 300},
@@ -87,6 +89,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "filesystem.delete": "auto",
         "network.search": "auto",
         "media.generate.image": "disabled",
+        "media.edit.image": "ask",
         "media.generate.speech": "disabled",
         "media.generate.audio": "disabled",
         "media.transcribe.audio": "disabled",
@@ -153,6 +156,7 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
                 ],
             },
             "generateImage": {"policy": "ask", "timeoutSeconds": 600},
+            "editImage": {"policy": "ask", "timeoutSeconds": 450},
             "generateSpeech": {"policy": "auto", "timeoutSeconds": 120},
             "generateAudio": {"policy": "disabled", "timeoutSeconds": 900},
             "transcribeAudio": {"policy": "ask", "timeoutSeconds": 180},
@@ -187,6 +191,8 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     assert saved.web_search.fallback_provider == "no_key"
     assert saved.generate_image.policy == "ask"
     assert saved.generate_image.timeout_seconds == 600
+    assert saved.edit_image.policy == "ask"
+    assert saved.edit_image.timeout_seconds == 450
     assert saved.generate_speech.policy == "auto"
     assert saved.generate_speech.timeout_seconds == 120
     assert saved.generate_audio.policy == "disabled"
@@ -196,6 +202,7 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     assert saved.update_agent_identity.policy == "auto"
     assert saved.policies["filesystem.delete"] == "ask"
     assert saved.policies["media.generate.image"] == "ask"
+    assert saved.policies["media.edit.image"] == "ask"
     assert result["policies"]["filesystem.delete"] == "ask"
     db.commit.assert_awaited_once()
 

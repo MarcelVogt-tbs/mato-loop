@@ -5,17 +5,20 @@ import base64
 import logging
 import math
 from collections.abc import Awaitable, Callable
+from io import BytesIO
 from typing import Any, Literal
 from uuid import UUID
 
 import httpx
+from PIL import Image, ImageOps
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.attachments import (
-    MAX_ATTACHMENT_BYTES,
+    MAX_IMAGE_ATTACHMENT_BYTES,
     AttachmentError,
     AttachmentStorage,
     AttachmentStorageError,
+    ValidatedImage,
     validate_image,
 )
 from mato_loop_backend.models import Credential
@@ -36,12 +39,13 @@ from mato_loop_backend.providers.base import (
     ReasoningDeltaCallback,
     select_provider_images,
 )
+from mato_loop_backend.providers.codex_auth import codex_headers, refresh_codex_credential
 from mato_loop_backend.providers.openai_compatible import (
     DiscoveredModel,
     chat_completions,
     responses_api,
 )
-from mato_loop_backend.security import read_credential, store_credential
+from mato_loop_backend.security import read_credential
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelCapability,
@@ -54,50 +58,12 @@ from mato_loop_backend.settings.models import (
 logger = logging.getLogger(__name__)
 
 _IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+_MODEL_IMAGE_MAX_EDGE = 2048
+_MODEL_IMAGE_MAX_BYTES = MAX_PROVIDER_IMAGE_BYTES // MAX_PROVIDER_IMAGES
 
 
 def _pseudonymization_provider_error(exc: PseudonymizationError) -> ProviderError:
     return ProviderError("Local pseudonymization failed", code=str(exc))
-
-
-async def _refresh_codex_credential(
-    db: AsyncSession,
-    credential: Credential,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    try:
-        refreshed = await codex_oauth.refresh_token(payload)
-    except httpx.HTTPStatusError as exc:
-        code = (
-            "provider.authenticationFailed"
-            if exc.response.status_code in {400, 401, 403}
-            else None
-        )
-        raise ProviderError(
-            "ChatGPT Codex token refresh failed",
-            status_code=exc.response.status_code,
-            code=code,
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise ProviderError(
-            "ChatGPT Codex is unavailable", code="provider.unavailable"
-        ) from exc
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ProviderError(
-            "ChatGPT Codex credential is invalid",
-            code="provider.authenticationFailed",
-        ) from exc
-    if refreshed != payload:
-        await store_credential(
-            db,
-            kind=credential.kind,
-            label=credential.label,
-            payload=refreshed,
-            metadata=credential.metadata_json,
-            credential=credential,
-        )
-        await db.commit()
-    return refreshed
 
 
 def _boolean_option(config: dict[str, Any], name: str, default: bool) -> bool:
@@ -117,17 +83,48 @@ def _temperature_option(config: dict[str, Any]) -> float | None:
     return None
 
 
+def _model_image_data(data: bytes, validated: ValidatedImage) -> tuple[bytes, str]:
+    if (
+        validated.size_bytes <= _MODEL_IMAGE_MAX_BYTES
+        and validated.width <= _MODEL_IMAGE_MAX_EDGE
+        and validated.height <= _MODEL_IMAGE_MAX_EDGE
+    ):
+        return data, validated.mime_type
+    try:
+        with Image.open(BytesIO(data)) as source:
+            resized = ImageOps.exif_transpose(source)
+            resized.thumbnail(
+                (_MODEL_IMAGE_MAX_EDGE, _MODEL_IMAGE_MAX_EDGE), Image.Resampling.LANCZOS
+            )
+            rgba = resized.convert("RGBA")
+            image = Image.new("RGB", rgba.size, "white")
+            image.paste(rgba, mask=rgba.getchannel("A"))
+        while True:
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=85, optimize=True)
+            normalized = buffer.getvalue()
+            if len(normalized) <= _MODEL_IMAGE_MAX_BYTES:
+                return normalized, "image/jpeg"
+            next_size = tuple(max(1, dimension * 3 // 4) for dimension in image.size)
+            if next_size == image.size:
+                raise AttachmentError("attachment.tooLarge")
+            image = image.resize(next_size, Image.Resampling.LANCZOS)
+    except (OSError, SyntaxError, ValueError) as exc:
+        raise AttachmentError("attachment.invalidImage") from exc
+
+
 def _read_image_data_url(storage: AttachmentStorage, attachment: dict[str, Any]) -> str:
     path = storage.path(UUID(attachment["session_id"]), attachment["storage_path"])
     with path.open("rb") as file:
-        data = file.read(MAX_ATTACHMENT_BYTES + 1)
-    if len(data) > MAX_ATTACHMENT_BYTES or len(data) != attachment["size_bytes"]:
+        data = file.read(MAX_IMAGE_ATTACHMENT_BYTES + 1)
+    if len(data) > MAX_IMAGE_ATTACHMENT_BYTES or len(data) != attachment["size_bytes"]:
         raise AttachmentStorageError("Invalid attachment file size")
     validated = validate_image(data, attachment["mime_type"])
     if validated.sha256 != attachment["sha256"]:
         raise AttachmentStorageError("Invalid attachment file content")
-    encoded = base64.b64encode(data).decode("ascii")
-    return f"data:{validated.mime_type};base64,{encoded}"
+    normalized, mime_type = _model_image_data(data, validated)
+    encoded = base64.b64encode(normalized).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 async def _provider_projection(
@@ -171,7 +168,7 @@ async def _provider_projection(
             mime_type not in _IMAGE_MIME_TYPES
             or not isinstance(size_bytes, int)
             or isinstance(size_bytes, bool)
-            or not 0 < size_bytes <= MAX_ATTACHMENT_BYTES
+            or not 0 < size_bytes <= MAX_IMAGE_ATTACHMENT_BYTES
             or not isinstance(sha256, str)
             or len(sha256) != 64
             or not isinstance(session_id, str)
@@ -224,21 +221,22 @@ async def _provider_projection(
                 )
             try:
                 validated = validate_image(image.data, image.mime_type)
+                normalized, mime_type = _model_image_data(image.data, validated)
             except AttachmentError as exc:
                 raise ProviderError(
                     "Invalid direct image input", code="provider.invalidResponse"
                 ) from exc
-            total_bytes += validated.size_bytes
+            total_bytes += len(normalized)
             if total_bytes > MAX_PROVIDER_IMAGE_BYTES:
                 raise ProviderError(
                     "Direct image inputs are too large", code="provider.responseTooLarge"
                 )
-            encoded = base64.b64encode(image.data).decode("ascii")
+            encoded = base64.b64encode(normalized).decode("ascii")
             media.append(
                 ProviderMedia(
                     message_index=image.message_index,
-                    mime_type=validated.mime_type,
-                    data_url=f"data:{validated.mime_type};base64,{encoded}",
+                    mime_type=mime_type,
+                    data_url=f"data:{mime_type};base64,{encoded}",
                     status="ready",
                 )
             )
@@ -284,18 +282,18 @@ class ProviderService:
             if provider.credential_id
             else None
         )
-        payload = read_credential(credential) if credential else {}
         if provider.adapter_type == "openai-codex":
             if credential is None:
                 raise ProviderError(
                     "ChatGPT Codex is not connected", code="provider.notConnected"
                 )
-            refreshed = await _refresh_codex_credential(db, credential, payload)
+            refreshed = await refresh_codex_credential(db, credential)
             return await codex_oauth.discover_models(
                 access_token=refreshed["access"],
                 account_id=refreshed.get("account_id"),
                 timeout=timeout,
             )
+        payload = read_credential(credential) if credential else {}
         if provider.adapter_type == "lemonade":
             base_url = str(provider.config.get("base_url") or "").rstrip("/")
             if not base_url:
@@ -368,8 +366,8 @@ class ProviderService:
             if provider.credential_id
             else None
         )
-        payload = read_credential(credential) if credential else {}
         is_codex = provider.adapter_type == "openai-codex"
+        payload = read_credential(credential) if credential and not is_codex else {}
         endpoint = (
             codex_oauth.CODEX_RESPONSES_URL
             if is_codex
@@ -499,16 +497,12 @@ class ProviderService:
                 raise ProviderError(
                     "ChatGPT Codex is not connected", code="provider.notConnected"
                 )
-            refreshed = await _refresh_codex_credential(db, credential, payload)
-            headers = {
-                "Authorization": f"Bearer {refreshed['access']}",
-                "chatgpt-account-id": refreshed.get("account_id") or "",
-                "OpenAI-Beta": "responses=experimental",
-                "originator": "mato-loop",
-                "User-Agent": "MatoLoop/0.1",
-                "Accept": "text/event-stream" if request.stream else "application/json",
-                "Content-Type": "application/json",
-            }
+            refreshed = await refresh_codex_credential(db, credential)
+            headers = codex_headers(
+                refreshed,
+                accept="text/event-stream" if request.stream else "application/json",
+            )
+            headers["OpenAI-Beta"] = "responses=experimental"
 
             async def execute_codex() -> ProviderResult:
                 return await responses_api(

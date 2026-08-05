@@ -2,64 +2,24 @@
   <q-layout
     view="hHh Lpr fFf"
     class="app-shell"
-    :class="{ 'app-shell--chat': route.name === 'chat' }"
+    :class="{
+      'app-shell--chat': route.name === 'chat',
+      'app-shell--navigation-overlay': showFloatingNavigation,
+      'app-shell--floating-chat-controls': route.name === 'chat' && showFloatingControls
+    }"
     :style="visualViewportStyle"
   >
-    <q-header class="app-header text-dark">
-      <q-toolbar class="app-toolbar">
-        <div class="app-toolbar__drawer-controls row no-wrap items-center">
-          <router-link to="/" class="app-brand row no-wrap items-center q-gutter-sm gt-sm">
-            <AppLogo />
-            <div>
-              <div class="app-brand__name">MatoLoop</div>
-              <div class="app-brand__tagline gt-xs">Personal Agent Workspace</div>
-            </div>
-          </router-link>
-
-          <q-space class="gt-sm" />
-
-          <q-btn
-            flat
-            round
-            dense
-            icon="menu"
-            aria-label="Navigation umschalten"
-            @click="drawerOpen = !drawerOpen"
-          />
-        </div>
-
-        <q-space />
-
-        <q-chip v-if="approvals.pending.length" dense square color="warning" text-color="dark" icon="pending_actions">
-          {{ approvals.pending.length }} Freigaben
-        </q-chip>
-        <q-btn
-          v-if="route.name === 'chat'"
-          id="workspace-explorer-toggle"
-          flat
-          round
-          dense
-          icon="folder_open"
-          :aria-label="workspace.open ? 'Datei-Explorer schließen' : 'Datei-Explorer öffnen'"
-          :aria-expanded="workspace.open"
-          aria-controls="workspace-file-panel"
-          :class="{ 'app-header-action--active': workspace.open }"
-          @click="toggleWorkspace"
-        >
-          <q-tooltip>{{ workspace.open ? 'Datei-Explorer schließen' : 'Datei-Explorer öffnen' }}</q-tooltip>
-        </q-btn>
-      </q-toolbar>
-    </q-header>
-
     <q-drawer
+      id="app-navigation-drawer"
       v-model="drawerOpen"
       show-if-above
+      bordered
       :width="288"
       :breakpoint="1023"
       class="app-drawer"
     >
       <div class="column full-height no-wrap drawer-layout">
-        <q-toolbar class="lt-md q-px-sm">
+        <q-toolbar class="drawer-toolbar q-px-sm">
           <router-link
             to="/"
             class="app-brand row no-wrap items-center q-gutter-sm"
@@ -78,15 +38,15 @@
             flat
             round
             dense
-            icon="close"
+            icon="menu"
             aria-label="Navigation schließen"
-            @click="drawerOpen = false"
+            @click="closeNavigation"
           />
         </q-toolbar>
         <q-separator class="lt-md" />
 
-        <div class="col drawer-navigation q-py-sm">
-          <section class="drawer-section drawer-section--sessions" aria-labelledby="sessions-heading">
+        <div class="col column no-wrap drawer-navigation q-py-sm">
+          <section class="col drawer-section drawer-section--sessions" aria-labelledby="sessions-heading">
             <q-item dense tag="div" class="q-px-md q-py-xs">
               <q-item-section>
                 <q-item-label
@@ -115,9 +75,21 @@
               </q-item-section>
             </q-item>
 
-            <div class="drawer-section__body">
-              <q-list id="session-list" class="session-list q-px-sm q-pb-sm">
-                <q-item v-if="!chat.sessions.length" dense class="q-px-sm q-py-xs">
+            <div class="drawer-section__body column no-wrap">
+              <q-scroll-area
+                class="col session-scroll-area"
+                visible
+                tabindex="0"
+                aria-label="Session-Liste"
+              >
+                <q-infinite-scroll
+                  ref="sessionInfiniteScroll"
+                  :offset="40"
+                  :disable="!chat.sessionsNextCursor || chat.sessionsLoadMoreFailed"
+                  @load="loadMoreSessions"
+                >
+                <q-list id="session-list" class="session-list q-px-sm">
+                <q-item v-if="chat.sessionsLoaded && !chat.sessions.length" dense class="q-px-sm q-py-xs">
                   <q-item-section>
                     <q-item-label class="text-body2">Noch keine Sessions</q-item-label>
                     <q-item-label caption class="text-caption">Starte eine neue Unterhaltung.</q-item-label>
@@ -164,24 +136,32 @@
                         </div>
                       </q-tooltip>
                     </q-item-section>
-                    <q-item-section side class="session-list-item__actions row no-wrap items-center self-center q-pl-xs">
+                    <q-item-section side class="session-list-item__actions row no-wrap items-center self-center">
                       <span
-                        v-if="session.activeRunStatus === 'queued' || session.activeRunStatus === 'running'"
-                        class="session-list-item__status row items-center q-mr-xs"
+                        v-if="sessionStatuses.get(session.id)"
+                        class="session-list-item__status-slot row items-center justify-center q-mr-xs"
                         role="status"
-                        aria-label="Agent arbeitet"
+                        :aria-label="sessionStatuses.get(session.id)?.label"
                       >
-                        <q-spinner-dots color="primary" size="16px" />
-                        <q-tooltip v-if="$q.platform.is.mobile !== true">Agent arbeitet</q-tooltip>
-                      </span>
-                      <span
-                        v-else-if="session.activeRunStatus === 'waiting_approval'"
-                        class="session-list-item__status row items-center q-mr-xs"
-                        role="img"
-                        aria-label="Freigabe erforderlich"
-                      >
-                        <q-icon name="pending_actions" color="warning" size="16px" />
-                        <q-tooltip v-if="$q.platform.is.mobile !== true">Freigabe erforderlich</q-tooltip>
+                        <template v-if="sessionStatuses.get(session.id)?.kind === 'approval'">
+                          <q-icon name="pending_actions" color="warning" size="18px" />
+                          <q-badge
+                            v-if="sessionStatuses.get(session.id).count > 1"
+                            floating
+                            rounded
+                            color="warning"
+                            text-color="dark"
+                            :label="sessionStatuses.get(session.id).count"
+                          />
+                        </template>
+                        <q-spinner-dots
+                          v-else-if="sessionStatuses.get(session.id)?.kind === 'active'"
+                          color="primary"
+                          size="18px"
+                        />
+                        <q-tooltip v-if="sessionStatuses.get(session.id) && $q.platform.is.mobile !== true">
+                          {{ sessionStatuses.get(session.id).label }}
+                        </q-tooltip>
                       </span>
                       <q-btn
                         flat
@@ -238,20 +218,26 @@
                     </q-item-section>
                   </q-item>
                 </template>
-              </q-list>
-              <div v-if="hasSessionOverflow" class="q-px-md q-pb-sm">
-                <q-btn
-                  flat
-                  dense
-                  no-caps
-                  class="full-width"
-                  :color="$q.dark.isActive ? 'grey-5' : 'grey-7'"
-                  :label="sessionsExpanded ? 'Weniger anzeigen' : 'Mehr anzeigen'"
-                  :aria-expanded="sessionsExpanded"
-                  aria-controls="session-list"
-                  @click="sessionsExpanded = !sessionsExpanded"
-                />
-              </div>
+                </q-list>
+                  <template #loading>
+                    <div class="row justify-center" aria-label="Weitere Sessions werden geladen">
+                      <q-spinner-dots color="primary" size="24px" />
+                    </div>
+                  </template>
+                </q-infinite-scroll>
+                <div v-if="chat.sessionsLoadMoreFailed" class="q-px-md q-pb-sm">
+                  <q-btn
+                    flat
+                    dense
+                    no-caps
+                    class="full-width"
+                    color="primary"
+                    label="Weitere Sessions laden"
+                    icon-right="refresh"
+                    @click="retrySessionPagination"
+                  />
+                </div>
+              </q-scroll-area>
             </div>
           </section>
 
@@ -305,6 +291,36 @@
       </div>
     </q-drawer>
 
+    <div v-if="showFloatingControls" class="app-floating-controls" aria-label="Schnellaktionen">
+      <q-btn
+        v-if="showFloatingNavigation"
+        id="app-navigation-toggle"
+        class="app-floating-control app-floating-control--flat"
+        round
+        flat
+        icon="menu"
+        aria-label="Navigation öffnen"
+        aria-controls="app-navigation-drawer"
+        :aria-expanded="drawerOpen"
+        @click="openNavigation"
+      />
+      <q-space />
+      <q-btn
+        v-if="showFloatingWorkspace"
+        id="workspace-explorer-toggle"
+        class="app-floating-control"
+        round
+        unelevated
+        icon="folder_open"
+        aria-label="Datei-Explorer öffnen"
+        :aria-expanded="workspace.open"
+        aria-controls="workspace-file-panel"
+        @click="toggleWorkspace"
+      >
+        <q-tooltip>Datei-Explorer öffnen</q-tooltip>
+      </q-btn>
+    </div>
+
     <q-dialog v-model="renameDialogOpen">
       <q-card class="session-rename-dialog app-surface">
         <q-form @submit.prevent="renameSession">
@@ -340,7 +356,6 @@
     <q-dialog
       v-if="route.name === 'chat' && $q.screen.lt.md"
       :model-value="workspace.open"
-      :persistent="workspace.editorDirty"
       maximized
       transition-show="slide-left"
       transition-hide="slide-right"
@@ -358,7 +373,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import AppLogo from 'components/AppLogo.vue'
@@ -369,11 +384,10 @@ import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
-import { groupSessionsByRecency } from 'src/utils/session-groups'
+import { groupSessionsByRecency, sessionSidebarStatus } from 'src/utils/session-groups'
 
 defineOptions({ name: 'MainLayout' })
 
-const SESSION_PREVIEW_LIMIT = 10
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'running', 'waiting_approval'])
 const SESSION_ACTIVITY_REFRESH_MS = 5000
 
@@ -387,12 +401,17 @@ const chat = useChatStore()
 const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()
 const approvals = useApprovalStore()
-const sessionsExpanded = ref(false)
-const visibleSessions = computed(() => (
-  sessionsExpanded.value ? chat.sessions : chat.sessions.slice(0, SESSION_PREVIEW_LIMIT)
+const sessionInfiniteScroll = ref(null)
+const groupedSessions = computed(() => groupSessionsByRecency(chat.sessions))
+const sessionStatuses = computed(() => new Map(chat.sessions.map((session) => [
+  session.id,
+  sessionSidebarStatus(session, approvals.forSession(session.id).length)
+])))
+const showFloatingNavigation = computed(() => !drawerOpen.value)
+const showFloatingWorkspace = computed(() => route.name === 'chat' && !workspace.open)
+const showFloatingControls = computed(() => (
+  showFloatingNavigation.value || showFloatingWorkspace.value
 ))
-const hasSessionOverflow = computed(() => chat.sessions.length > SESSION_PREVIEW_LIMIT)
-const groupedSessions = computed(() => groupSessionsByRecency(visibleSessions.value))
 const renameDialogOpen = ref(false)
 const renameSessionId = ref(null)
 const renameTitle = ref('')
@@ -480,9 +499,19 @@ function closeDrawerOnMobile() {
   if ($q.screen.lt.md) drawerOpen.value = false
 }
 
+function openNavigation() {
+  drawerOpen.value = true
+}
+
+async function closeNavigation() {
+  drawerOpen.value = false
+  await nextTick()
+  document.getElementById('app-navigation-toggle')?.focus()
+}
+
 function refreshSessionsWhenVisible() {
   if (document.visibilityState !== 'visible') return
-  void chat.fetchSessions().catch(() => {})
+  void chat.refreshSessions().catch(() => {})
 }
 
 async function refreshActiveSessions() {
@@ -493,12 +522,27 @@ async function refreshActiveSessions() {
   ) return
   sessionActivityRefreshPending = true
   try {
-    await chat.fetchSessions({ suppressErrorToast: true })
+    await chat.refreshSessions({ suppressErrorToast: true })
   } catch {
     // The next interval reconciles transient background refresh failures.
   } finally {
     sessionActivityRefreshPending = false
   }
+}
+
+async function loadMoreSessions(_index, done) {
+  try {
+    await chat.fetchMoreSessions()
+    done(!chat.sessionsNextCursor)
+  } catch {
+    done(true)
+  }
+}
+
+async function retrySessionPagination() {
+  chat.retrySessionPagination()
+  await nextTick()
+  sessionInfiniteScroll.value?.resume()
 }
 
 async function removeSession(id) {
@@ -559,6 +603,8 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
   sessionActivityTimer = window.setInterval(refreshActiveSessions, SESSION_ACTIVITY_REFRESH_MS)
   await Promise.all([chat.fetchSessions(), approvals.fetchPending(), identity.fetchIdentity()])
+  await nextTick()
+  sessionInfiniteScroll.value?.resume()
 })
 
 onBeforeUnmount(() => {

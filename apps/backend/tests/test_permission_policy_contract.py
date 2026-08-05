@@ -442,6 +442,46 @@ async def test_media_session_grant_matches_capability_and_current_session(tmp_pa
     ) == PermissionDecision.ASK
 
 
+async def test_media_model_grant_matches_only_exact_target(tmp_path) -> None:
+    session = _session()
+    provider_id = uuid4()
+    model_id = uuid4()
+    request = media_permission(
+        session.id,
+        "media.generate.image",
+        "generate_image",
+        provider_id=provider_id,
+        model_id=model_id,
+        model_name="Image",
+        trust_level="public",
+    )
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=request.capability,
+        resource_type=request.resource_type,
+        resource_scope=request.resource_scope,
+    )
+    root_files = _root_files(tmp_path, session)
+
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant), session, request, root_files
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant),
+        session,
+        media_permission(
+            session.id,
+            "media.generate.image",
+            "generate_image",
+            provider_id=provider_id,
+            model_id=uuid4(),
+            model_name="Other image",
+            trust_level="public",
+        ),
+        root_files,
+    ) == PermissionDecision.ASK
+
+
 async def test_memory_write_uses_current_session_grant(tmp_path) -> None:
     session = _session()
     request = memory_write_permission(session.id, "create")

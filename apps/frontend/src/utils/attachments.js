@@ -4,9 +4,122 @@ const INTERNAL_ATTACHMENT_URL = new RegExp(
   `^/api/sessions/${UUID}/messages/${UUID}/attachments/${UUID}$`,
   'i'
 )
+const INTERNAL_FILE_DOWNLOAD_PATH = '/api/workspace/files/download'
+
+function validRelativePath(value, allowRoot = false) {
+  if (value === '.') return allowRoot
+  return typeof value === 'string'
+    && value.length > 0
+    && !value.includes('\\')
+    && ![...value].some((character) => {
+      const code = character.charCodeAt(0)
+      return code < 32 || (code >= 127 && code <= 159)
+    })
+    && value.split('/').every((part) => part && part !== '.' && part !== '..')
+}
 
 export function safeAttachmentUrl(value) {
   return typeof value === 'string' && INTERNAL_ATTACHMENT_URL.test(value) ? value : null
+}
+
+export function safeFileDownloadUrl(value) {
+  if (typeof value !== 'string' || !value.startsWith(`${INTERNAL_FILE_DOWNLOAD_PATH}?`)) return null
+  let parsed
+  try {
+    parsed = new URL(value, 'https://mato-loop.invalid')
+  } catch {
+    return null
+  }
+  const keys = [...parsed.searchParams.keys()]
+  const allowedKeys = new Set(['path', 'scope', 'session_id', 'root_identity'])
+  if (
+    parsed.origin !== 'https://mato-loop.invalid'
+    || parsed.pathname !== INTERNAL_FILE_DOWNLOAD_PATH
+    || parsed.hash
+    || keys.length !== allowedKeys.size
+    || new Set(keys).size !== keys.length
+    || keys.some((key) => !allowedKeys.has(key))
+  ) return null
+  const path = parsed.searchParams.get('path')
+  const scope = parsed.searchParams.get('scope')
+  const sessionId = parsed.searchParams.get('session_id')
+  const rootIdentity = parsed.searchParams.get('root_identity')
+  if (!validRelativePath(path) || !new RegExp(`^${UUID}$`, 'i').test(sessionId || '')) return null
+  if (scope === 'session') return rootIdentity === sessionId ? value : null
+  return scope === 'filesystem' && validRelativePath(rootIdentity, true) ? value : null
+}
+
+export function toolFileAttachment(tool, result) {
+  if (tool?.name !== 'provide_file' || typeof result?.content !== 'string') return null
+  let value
+  try {
+    value = JSON.parse(result.content)
+  } catch {
+    return null
+  }
+  const safeUrl = safeFileDownloadUrl(value?.downloadUrl)
+  const size = Number(value?.sizeBytes)
+  const path = typeof value?.path === 'string' ? value.path : ''
+  const filename = typeof value?.filename === 'string' ? value.filename : ''
+  const expectedScope = value?.root === 'session' ? 'session' : value?.root === 'workspace' ? 'filesystem' : null
+  if (
+    !safeUrl
+    || !expectedScope
+    || !Number.isSafeInteger(size)
+    || size < 0
+    || filename !== path.split('/').at(-1)
+    || filename.length > 255
+  ) return null
+  const params = new URL(safeUrl, 'https://mato-loop.invalid').searchParams
+  if (params.get('scope') !== expectedScope || params.get('path') !== path) return null
+  return {
+    id: `provided-${result.id || tool.id || path}`,
+    kind: 'file',
+    mimeType: 'application/octet-stream',
+    sizeBytes: size,
+    filename,
+    url: safeUrl
+  }
+}
+
+export function toolFileActions(result) {
+  if (!Array.isArray(result?.fileActions) || result.fileActions.length > 1) return []
+  return result.fileActions.flatMap((action) => {
+    if (!action || typeof action !== 'object') return []
+    const safeUrl = safeFileDownloadUrl(action.downloadUrl)
+    const size = Number(action.sizeBytes)
+    const path = typeof action.path === 'string' ? action.path : ''
+    const filename = typeof action.filename === 'string' ? action.filename : ''
+    const rootIdentity = typeof action.rootIdentity === 'string' ? action.rootIdentity : ''
+    const scope = action.root === 'session' ? 'session' : action.root === 'workspace' ? 'filesystem' : null
+    if (
+      !safeUrl
+      || !scope
+      || !['write', 'copy', 'move'].includes(action.operation)
+      || !Number.isSafeInteger(size)
+      || size < 0
+      || filename !== path.split('/').at(-1)
+      || filename.length > 255
+    ) return []
+    const params = new URL(safeUrl, 'https://mato-loop.invalid').searchParams
+    const sessionId = params.get('session_id')
+    if (
+      params.get('scope') !== scope
+      || params.get('path') !== path
+      || params.get('root_identity') !== rootIdentity
+      || !sessionId
+    ) return []
+    return [{
+      operation: action.operation,
+      root: action.root,
+      rootIdentity,
+      path,
+      filename,
+      sizeBytes: size,
+      sessionId,
+      downloadUrl: safeUrl
+    }]
+  })
 }
 
 export function imageAttachments(attachments) {
@@ -25,6 +138,8 @@ export function supportedAttachments(attachments) {
     const mimeType = typeof attachment.mimeType === 'string'
       ? attachment.mimeType.split(';', 1)[0].trim().toLowerCase()
       : ''
+    const safeUrl = safeAttachmentUrl(attachment.url)
+      || (attachment.kind === 'file' ? safeFileDownloadUrl(attachment.url) : null)
     return [{
       ...attachment,
       mimeType,
@@ -32,7 +147,7 @@ export function supportedAttachments(attachments) {
       metadata: attachment.metadata && typeof attachment.metadata === 'object' && !Array.isArray(attachment.metadata)
         ? attachment.metadata
         : {},
-      safeUrl: safeAttachmentUrl(attachment.url)
+      safeUrl
     }]
   })
 }

@@ -260,10 +260,9 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
         )
         return ProviderResult(content="OK")
 
-    monkeypatch.setattr(service_module, "read_credential", lambda _credential: payload)
     monkeypatch.setattr(
         service_module,
-        "_refresh_codex_credential",
+        "refresh_codex_credential",
         AsyncMock(return_value=payload),
     )
     monkeypatch.setattr(service_module, "responses_api", fake_responses_api)
@@ -511,6 +510,36 @@ async def test_projection_accepts_bounded_transient_images() -> None:
                 )
             ],
         )
+
+
+async def test_projection_accepts_and_downsizes_mpo_images_for_provider() -> None:
+    buffer = BytesIO()
+    Image.new("RGB", (3000, 2000), (10, 20, 30)).save(
+        buffer,
+        format="MPO",
+        save_all=True,
+        append_images=[Image.new("RGB", (3, 2), (30, 20, 10))],
+    )
+
+    _projected, media = await service_module._provider_projection(
+        [{"role": "user", "content": "Großes Bild"}],
+        supports_image_input=True,
+        target_trust_level=TrustLevel.PUBLIC,
+        image_inputs=[
+            ProviderImageInput(
+                0,
+                buffer.getvalue(),
+                trust_level=TrustLevel.PUBLIC.value,
+                mime_type="image/jpeg",
+            )
+        ],
+    )
+
+    normalized = base64.b64decode(media[0].data_url.split(",", 1)[1])
+    with Image.open(BytesIO(normalized)) as image:
+        assert image.format == "JPEG"
+        assert image.size == (2048, 1365)
+    assert len(normalized) <= service_module._MODEL_IMAGE_MAX_BYTES
 
 
 async def test_session_tool_result_read_reactivates_historical_image(monkeypatch) -> None:
@@ -942,7 +971,12 @@ async def test_provider_discovery_uses_codex_credential(monkeypatch) -> None:
     credential = type(
         "CredentialStub",
         (),
-        {"kind": "codex-oauth", "label": "Codex", "metadata_json": {}},
+        {
+            "id": credential_id,
+            "kind": "codex-oauth",
+            "label": "Codex",
+            "metadata_json": {},
+        },
     )()
     provider = LlmProviderConfig(
         name="Codex",
@@ -952,8 +986,11 @@ async def test_provider_discovery_uses_codex_credential(monkeypatch) -> None:
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = credential
     payload = {"access": "access", "refresh": "refresh", "account_id": "account"}
-    monkeypatch.setattr(service_module, "read_credential", lambda _credential: payload)
-    monkeypatch.setattr(service_module.codex_oauth, "refresh_token", AsyncMock(return_value=payload))
+    monkeypatch.setattr(
+        service_module,
+        "refresh_codex_credential",
+        AsyncMock(return_value=payload),
+    )
     remote_discovery = AsyncMock(return_value=[])
     monkeypatch.setattr(service_module.codex_oauth, "discover_models", remote_discovery)
 

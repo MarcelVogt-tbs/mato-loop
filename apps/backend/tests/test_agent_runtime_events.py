@@ -642,7 +642,13 @@ def test_object_responses_replay_webfetch_arguments_are_redacted() -> None:
 
 def test_provider_cannot_set_internal_runtime_state() -> None:
     result = _safe_provider_data(
-        {"_matoloop": {"memoryOverview": {"hasMore": True}}}, []
+        {
+            "_matoloop": {
+                "memoryOverview": {"hasMore": True},
+                "fileActions": [{"downloadUrl": "https://evil.test"}],
+            }
+        },
+        [],
     )
 
     assert "_matoloop" not in result

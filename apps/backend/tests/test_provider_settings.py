@@ -272,7 +272,15 @@ async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
                     max_model_len=272_000,
                     supports_parallel_tool_calls=False,
                     supports_image_input=True,
-                )
+                ),
+                DiscoveredModel(
+                    id="openai-codex/gpt-image-2",
+                    name="GPT Image 2",
+                    capabilities={"image_generation", "image_editing"},
+                    capabilities_authoritative=True,
+                    native_for_chat_provider=True,
+                    supports_tools=False,
+                ),
             ]
         ),
     )
@@ -289,6 +297,11 @@ async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
     assert model.supports_parallel_tool_calls is False
     assert model.supports_image_input is True
     assert result["models"][0]["modelId"] == "openai-codex/gpt-test"
+    assert settings.models[1].enabled is True
+    assert settings.models[1].capabilities == {
+        ModelCapability.IMAGE_GENERATION,
+        ModelCapability.IMAGE_EDITING,
+    }
 
 
 async def test_lemonade_sync_updates_capabilities_without_replacing_context_override(

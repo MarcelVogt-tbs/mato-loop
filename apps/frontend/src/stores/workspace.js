@@ -38,11 +38,18 @@ function renamedPath(current, source, destination) {
 }
 
 function clearCachedSubtree(store, path) {
-  for (const key of Object.keys(store.entries)) {
+  const cachedPaths = new Set([
+    ...Object.keys(store.entries),
+    ...Object.keys(store.hasMore),
+    ...Object.keys(store.nextOffset),
+    ...Object.keys(store.loadErrors)
+  ])
+  for (const key of cachedPaths) {
     if (key === path || key.startsWith(`${path}/`)) {
       delete store.entries[key]
       delete store.hasMore[key]
       delete store.nextOffset[key]
+      delete store.loadErrors[key]
     }
   }
 }
@@ -53,6 +60,10 @@ function replaceCachedEntry(store, entry) {
       store.entries[path] = entries.map((item) => item.path === entry.path ? entry : item)
     }
   }
+}
+
+function requireWritableContext(store) {
+  if (store.rootIdentity) throw new Error('Tool file contexts are read-only')
 }
 
 export function withFileSuffix(name, suffix) {
@@ -66,9 +77,12 @@ export const useWorkspaceStore = defineStore('workspace', {
     scope: 'filesystem',
     sessionId: null,
     workingDirectory: null,
+    rootIdentity: null,
     entries: {},
     hasMore: {},
     loading: {},
+    loadVersions: {},
+    loadErrors: {},
     nextOffset: {},
     uploading: false,
     selectedPath: '.',
@@ -84,6 +98,7 @@ export const useWorkspaceStore = defineStore('workspace', {
   }),
   actions: {
     show() {
+      if (this.rootIdentity) this.reset()
       this.open = true
       this.load('.')
     },
@@ -99,7 +114,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (changed) this.reset()
     },
     setScope(scope) {
-      if (scope === this.scope || (scope === 'session' && !this.sessionId)) return
+      if (scope === 'session' && !this.sessionId) return
+      if (scope === this.scope && !this.rootIdentity) return
       this.scope = scope
       this.reset()
       return this.load('.')
@@ -109,6 +125,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.entries = {}
       this.hasMore = {}
       this.loading = {}
+      this.loadVersions = {}
+      this.loadErrors = {}
       this.nextOffset = {}
       this.selectedPath = '.'
       this.viewedEntry = null
@@ -117,6 +135,29 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
+      this.filter = ''
+      this.rootIdentity = null
+    },
+    openToolFile(action) {
+      if (
+        !['session', 'workspace'].includes(action?.root)
+        || action.sessionId !== this.sessionId
+        || !action.rootIdentity
+        || !action.path
+        || !action.filename
+      ) return
+      this.scope = action.root === 'session' ? 'session' : 'filesystem'
+      this.reset()
+      this.rootIdentity = action.rootIdentity
+      this.selectedPath = action.path
+      this.viewedEntry = {
+        kind: 'file',
+        name: action.filename,
+        path: action.path,
+        size: action.sizeBytes
+      }
+      this.open = true
+      return this.load('.')
     },
     openEntry(entry, edit = false) {
       if (entry?.kind !== 'file') return
@@ -166,36 +207,61 @@ export const useWorkspaceStore = defineStore('workspace', {
         ...extra
       }
     },
+    readRequestParams(extra = {}) {
+      return {
+        ...this.requestParams(),
+        ...(this.rootIdentity ? { root_identity: this.rootIdentity } : {}),
+        ...extra
+      }
+    },
     fileUrl(action, path) {
-      const params = new URLSearchParams(this.requestParams({ path }))
+      const params = new URLSearchParams(this.readRequestParams({ path }))
       return `/api/workspace/files/${action}?${params}`
     },
-    async load(path = '.', append = false) {
-      if (this.loading[path]) return
+    async load(path = '.', append = false, force = false) {
+      if (this.loading[path] && !force) return
       const version = this.contextVersion
+      const loadVersion = (this.loadVersions[path] || 0) + 1
+      this.loadVersions[path] = loadVersion
       this.loading[path] = true
       try {
         const response = await api.get('/workspace/entries', {
-          params: this.requestParams({ path, ...(append ? { offset: this.nextOffset[path] } : {}) })
+          params: this.readRequestParams({ path, ...(append ? { offset: this.nextOffset[path] } : {}) }),
+          suppressErrorToast: true
         })
-        if (version === this.contextVersion) {
+        if (version === this.contextVersion && loadVersion === this.loadVersions[path]) {
           this.entries[path] = append
             ? [...(this.entries[path] || []), ...response.data.entries]
             : response.data.entries
           this.hasMore[path] = response.data.hasMore === true
           this.nextOffset[path] = response.data.nextOffset ?? null
+          delete this.loadErrors[path]
         }
+      } catch (error) {
+        if (version === this.contextVersion && loadVersion === this.loadVersions[path]) {
+          this.loadErrors[path] = error
+        }
+        return false
       } finally {
-        if (version === this.contextVersion) this.loading[path] = false
+        if (version === this.contextVersion && loadVersion === this.loadVersions[path]) {
+          this.loading[path] = false
+        }
       }
+      return true
+    },
+    refresh() {
+      const paths = new Set(['.', ...Object.keys(this.entries), ...Object.keys(this.loadErrors)])
+      return Promise.all([...paths].map((path) => this.load(path, false, true)))
     },
     async createDirectory(parent, name) {
+      requireWritableContext(this)
       await api.post('/workspace/directories', { parent, name }, {
         params: this.requestParams()
       })
       await this.load(parent)
     },
     async deleteEntry(path) {
+      requireWritableContext(this)
       const version = this.contextVersion
       await api.delete('/workspace/entries', {
         params: this.requestParams({ path })
@@ -211,6 +277,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       await this.load(this.selectedPath)
     },
     async renameEntry(path, name) {
+      requireWritableContext(this)
       const version = this.contextVersion
       const params = this.requestParams()
       const { data } = await api.patch(
@@ -234,6 +301,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       return data.entry
     },
     async uploadFiles(parent, files) {
+      requireWritableContext(this)
       const version = this.contextVersion
       const params = this.requestParams({ parent })
       this.uploading = true
@@ -268,6 +336,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
     async createFile(parent, name) {
+      requireWritableContext(this)
       const version = this.contextVersion
       const body = new FormData()
       body.append('file', new File([''], name, { type: 'text/plain;charset=utf-8' }), name)
@@ -287,7 +356,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       const previewVersion = (this.previewVersions[path] || 0) + 1
       this.previewVersions[path] = previewVersion
       const data = (await api.get('/workspace/files/preview', {
-        params: this.requestParams({ path })
+        params: this.readRequestParams({ path }),
+        suppressErrorToast: true
       })).data
       if (
         contextVersion !== this.contextVersion
@@ -297,13 +367,15 @@ export const useWorkspaceStore = defineStore('workspace', {
       return data
     },
     async saveFile(path, content, expectedRevision) {
+      requireWritableContext(this)
       const version = this.contextVersion
       const { data } = await api.put('/workspace/files', {
         path,
         content,
         expected_revision: expectedRevision
       }, {
-        params: this.requestParams()
+        params: this.requestParams(),
+        suppressErrorToast: true
       })
       if (version !== this.contextVersion) return null
       this.contextVersion += 1

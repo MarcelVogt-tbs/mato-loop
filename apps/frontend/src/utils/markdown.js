@@ -5,7 +5,7 @@ import katex from 'katex'
 import MarkdownIt from 'markdown-it'
 import taskLists from 'markdown-it-task-lists'
 
-import { safeAttachmentUrl } from './attachments'
+import { safeAttachmentUrl, safeFileDownloadUrl } from './attachments'
 import { canonicalResearchSourceUrl } from './research-sources'
 
 const ALLOWED_TAGS = [
@@ -178,6 +178,7 @@ DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
 export function safeMarkdownLinkUrl(value) {
   const raw = String(value || '').trim()
   if (SAFE_FRAGMENT.test(raw)) return raw
+  if (safeFileDownloadUrl(raw)) return raw
   if (!LINK_PROTOCOL.test(raw) && !raw.startsWith('//')) return null
   try {
     const parsed = new URL(raw, currentOrigin())

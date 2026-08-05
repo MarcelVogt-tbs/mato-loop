@@ -28,6 +28,11 @@ function effectiveModelOptions(state, capability = 'chat', requiresTools = false
     const provider = state.providers.find((item) => item.id === model.providerId)
     return isModelEffective(model, provider, state.codex, state.enabled)
       && modelSupportsCapability(model, capability)
+      && (
+        capability === 'chat'
+        || !Array.isArray(model.executableCapabilities)
+        || model.executableCapabilities.includes(capability)
+      )
       ? [modelOption(model, provider, requiresTools && model.supportsTools === false)]
       : []
   })

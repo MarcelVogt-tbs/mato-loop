@@ -110,12 +110,22 @@ async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) 
         account_id="account",
     )
 
-    assert [model.id for model in models] == ["openai-codex/gpt-test"]
+    assert [model.id for model in models] == [
+        "openai-codex/gpt-test",
+        "openai-codex/gpt-image-2",
+    ]
     assert models[0].metadata == {
         "name": "GPT Test",
         "max_model_len": 272000,
         "supports_parallel_tool_calls": True,
         "supports_image_input": True,
+    }
+    assert models[1].capabilities == {"image_generation", "image_editing"}
+    assert models[1].metadata == {
+        "name": "GPT Image 2",
+        "supports_tools": False,
+        "capabilities_authoritative": True,
+        "native_for_chat_provider": True,
     }
 
 

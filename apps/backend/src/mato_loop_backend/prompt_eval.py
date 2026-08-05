@@ -56,7 +56,7 @@ EXPOSED_MEMORY_ID = UUID("60000000-0000-4000-8000-000000000001")
 TOOL_RESULT_MESSAGE_ID = UUID("70000000-0000-4000-8000-000000000001")
 ATTACHMENT_ID = UUID("80000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 3
+INVENTORY_VERSION = 4
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -477,6 +477,14 @@ CASES = (
         expected_arguments={"root": "session", "path": "files"},
     ),
     PromptCase(
+        id="provide_file_creates_download",
+        kind="general",
+        user="Stelle mir die Session-Datei files/report.pdf zum Download bereit.",
+        tools=("provide_file",),
+        expected_tool="provide_file",
+        expected_arguments={"root": "session", "path": "files/report.pdf"},
+    ),
+    PromptCase(
         id="create_directory_uses_exact_path",
         kind="general",
         user="Erstelle im Workspace den Ordner notes.",
@@ -539,6 +547,17 @@ CASES = (
         tools=("generate_image",),
         expected_tool="generate_image",
         expected_arguments={"width": 512, "height": 512},
+    ),
+    PromptCase(
+        id="edit_image_preserves_unspecified_content",
+        kind="general",
+        user=(
+            f"Bearbeite das Bild mit Attachment-ID {ATTACHMENT_ID}. Ändere nur den Hintergrund "
+            "zu Blau und lasse Motiv und Bildausschnitt unverändert."
+        ),
+        tools=("edit_image",),
+        expected_tool="edit_image",
+        expected_arguments={"attachment_ids": [str(ATTACHMENT_ID)]},
     ),
     PromptCase(
         id="generate_speech_uses_text",
@@ -1752,6 +1771,7 @@ _SEMANTIC_CONTRACTS = (
     ),
     ContractCoverage("file.list_directory", "file", ("list_directory_uses_session_root",)),
     ContractCoverage("file.read", "file", ("workspace_read_uses_exact_root",)),
+    ContractCoverage("file.provide", "file", ("provide_file_creates_download",)),
     ContractCoverage("file.write", "file", ("readwrite_write_uses_tool",)),
     ContractCoverage("file.create_directory", "file", ("create_directory_uses_exact_path",)),
     ContractCoverage("file.delete", "file", ("delete_path_uses_recursive_field",)),
@@ -2182,6 +2202,7 @@ _SEMANTIC_CONTRACTS = (
         "media",
         (
             "generate_image_uses_prompt",
+            "edit_image_preserves_unspecified_content",
             "generate_speech_uses_text",
             "generate_audio_uses_duration",
             "transcribe_audio_uses_attachment_uuid",
@@ -2293,6 +2314,7 @@ def _general_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[str
     )
     capability_by_tool = {
         "generate_image": "media.generate.image",
+        "edit_image": "media.edit.image",
         "generate_speech": "media.generate.speech",
         "generate_audio": "media.generate.audio",
         "transcribe_audio": "media.transcribe.audio",

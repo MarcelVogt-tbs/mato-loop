@@ -165,7 +165,10 @@ def test_message_projection_hides_internal_runtime_state() -> None:
     message = _message(uuid4(), "assistant", "Antwort")
     message.provider_data = {
         "responses_output_items": [{"id": "provider-state"}],
-        "_matoloop": {"memoryOverview": {"hasMore": True}},
+        "_matoloop": {
+            "memoryOverview": {"hasMore": True},
+            "fileActions": [{"path": "files/result.txt"}],
+        },
     }
 
     projected = message_dict(message)
@@ -856,7 +859,7 @@ def test_general_system_prompt_contains_bounded_agent_identity() -> None:
 def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
     prompt = general_system_prompt(
         _session(),
-        offered_tool_names=frozenset({"list_directory", "read_file"}),
+        offered_tool_names=frozenset({"list_directory", "read_file", "provide_file"}),
     )
 
     assert "Workspace mode: read-only" in prompt
@@ -870,6 +873,24 @@ def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
     assert "exact new destination" in prompt
     assert "approval cannot make a missing workspace available" in prompt
     assert "Do not emit stale mutation calls" in prompt
+    assert "A path in chat text and read_file output do not create a download" in prompt
+    assert "automatically exposes its regular-file destination" in prompt
+    assert "Use provide_file only for an existing regular file" in prompt
+    assert "use the host-rendered download card" in prompt
+
+
+def test_image_editing_does_not_require_workspace_write_mode() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"read_file", "edit_image"}),
+    )
+
+    assert "edit_image is a media operation" in prompt
+    assert "creates a new host-managed generated attachment" in prompt
+    assert "never changes the source images, session files, or workspace" in prompt
+    assert "without asking the user to switch workspace mode" in prompt
+    assert "restriction applies only to file tools and paths" in prompt
+    assert "not to media tools or host-managed generated attachments" in prompt
 
 
 def test_read_write_system_prompt_does_not_request_a_mode_switch() -> None:

@@ -66,10 +66,15 @@
     </div>
 
     <div v-if="files.length" class="file-attachment-list">
-      <article
+      <component
         v-for="attachment in files"
         :key="attachment.id"
+        :is="attachment.safeUrl ? 'a' : 'article'"
         class="file-attachment app-surface"
+        :class="{ 'file-attachment--download': attachment.safeUrl }"
+        :href="attachment.safeUrl || undefined"
+        :download="attachment.safeUrl ? attachment.filename || 'datei' : undefined"
+        :aria-label="attachment.safeUrl ? `${attachment.filename || 'Datei'} herunterladen` : undefined"
       >
         <div class="file-attachment__icon">
           <q-icon :name="attachmentIcon(attachment)" size="25px" />
@@ -78,22 +83,11 @@
           <div class="text-weight-medium ellipsis">{{ attachment.filename || 'Dateianhang' }}</div>
           <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
         </div>
-        <q-btn
-          v-if="attachment.safeUrl"
-          flat
-          round
-          dense
-          icon="download"
-          :href="attachment.safeUrl"
-          :download="attachment.filename || 'datei'"
-          :aria-label="`${attachment.filename || 'Datei'} herunterladen`"
-        >
-          <q-tooltip>Herunterladen</q-tooltip>
-        </q-btn>
+        <q-icon v-if="attachment.safeUrl" name="download" size="24px" aria-hidden="true" />
         <q-icon v-else name="link_off" class="app-muted" size="20px">
           <q-tooltip>Keine sichere interne Downloadadresse verfügbar</q-tooltip>
         </q-icon>
-      </article>
+      </component>
     </div>
 
     <q-dialog v-model="attachmentDialog" :maximized="$q.screen.lt.sm">

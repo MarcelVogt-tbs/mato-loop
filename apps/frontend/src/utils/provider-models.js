@@ -3,6 +3,7 @@ const unavailableStates = new Set(['missing', 'unavailable'])
 export const MODEL_CAPABILITY_OPTIONS = Object.freeze([
   { label: 'Chat', value: 'chat', icon: 'chat' },
   { label: 'Bildgenerierung', value: 'image_generation', icon: 'image' },
+  { label: 'Bildbearbeitung', value: 'image_editing', icon: 'edit' },
   { label: 'Sprachausgabe', value: 'speech_generation', icon: 'record_voice_over' },
   { label: 'Audio und Musik', value: 'audio_generation', icon: 'music_note' },
   { label: 'Transkription', value: 'audio_transcription', icon: 'graphic_eq' }

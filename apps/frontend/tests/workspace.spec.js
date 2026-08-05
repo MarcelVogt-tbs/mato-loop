@@ -93,13 +93,16 @@ describe('workspace store', () => {
     workspace.configure({ sessionId: 'session-a', workingDirectory: 'project' })
     await workspace.load('.')
     workspace.openEntry({ kind: 'file', path: 'old.txt' })
+    workspace.filter = 'old'
     await workspace.setScope('session')
 
     expect(workspace.entries).toEqual({ '.': [] })
     expect(workspace.selectedPath).toBe('.')
     expect(workspace.viewedEntry).toBeNull()
+    expect(workspace.filter).toBe('')
     expect(api.get).toHaveBeenLastCalledWith('/workspace/entries', {
-      params: { path: '.', scope: 'session', session_id: 'session-a' }
+      params: { path: '.', scope: 'session', session_id: 'session-a' },
+      suppressErrorToast: true
     })
   })
 
@@ -125,7 +128,8 @@ describe('workspace store', () => {
       session_id: 'session-a'
     })
     expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
-      params: { path: 'files', scope: 'session', session_id: 'session-a' }
+      params: { path: 'files', scope: 'session', session_id: 'session-a' },
+      suppressErrorToast: true
     })
   })
 
@@ -141,8 +145,113 @@ describe('workspace store', () => {
         path: '.',
         scope: 'filesystem',
         working_directory: 'draft-project'
-      }
+      },
+      suppressErrorToast: true
     })
+  })
+
+  it('opens a tool file through the existing read-only explorer context', async () => {
+    api.get
+      .mockResolvedValueOnce({ data: { entries: [] } })
+      .mockResolvedValueOnce({ data: { kind: 'text', content: 'Bericht' } })
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a', workingDirectory: 'current' })
+
+    await workspace.openToolFile({
+      root: 'workspace',
+      sessionId: 'session-a',
+      rootIdentity: 'original',
+      path: 'reports/result.txt',
+      filename: 'result.txt',
+      sizeBytes: 7
+    })
+    await workspace.preview('reports/result.txt')
+
+    expect(workspace.open).toBe(true)
+    expect(workspace.viewedEntry).toEqual({
+      kind: 'file', name: 'result.txt', path: 'reports/result.txt', size: 7
+    })
+    expect(api.get.mock.calls.map(([, config]) => config.params)).toEqual([
+      {
+        path: '.',
+        scope: 'filesystem',
+        session_id: 'session-a',
+        root_identity: 'original'
+      },
+      {
+        path: 'reports/result.txt',
+        scope: 'filesystem',
+        session_id: 'session-a',
+        root_identity: 'original'
+      }
+    ])
+    expect(workspace.fileUrl('download', 'reports/result.txt')).toContain('root_identity=original')
+    await expect(workspace.createDirectory('.', 'blocked')).rejects.toThrow('Tool file contexts are read-only')
+    workspace.show()
+    expect(workspace.rootIdentity).toBeNull()
+  })
+
+  it('keeps directory data and an inline error until retry succeeds', async () => {
+    const error = { response: { data: { error: { code: 'workspace.directoryNotFound' } } } }
+    api.get
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce({ data: { entries: [{ path: 'notes.txt' }], hasMore: false } })
+    const workspace = useWorkspaceStore()
+    workspace.entries['.'] = [{ path: 'stale.txt' }]
+
+    expect(await workspace.load('.')).toBe(false)
+    expect(workspace.entries['.']).toEqual([{ path: 'stale.txt' }])
+    expect(workspace.loadErrors['.']).toEqual(error)
+
+    expect(await workspace.load('.')).toBe(true)
+    expect(workspace.entries['.']).toEqual([{ path: 'notes.txt' }])
+    expect(workspace.loadErrors['.']).toBeUndefined()
+    expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
+      params: { path: '.', scope: 'filesystem' },
+      suppressErrorToast: true
+    })
+  })
+
+  it('refreshes cached directories and ignores superseded responses', async () => {
+    let resolveStale
+    let fileRequests = 0
+    const rootEntry = { kind: 'directory', name: 'files', path: 'files' }
+    const freshEntry = { kind: 'file', name: 'live.txt', path: 'files/live.txt' }
+    api.get.mockImplementation((_url, { params }) => {
+      if (params.path === 'files' && fileRequests++ === 0) {
+        return new Promise((resolve) => { resolveStale = resolve })
+      }
+      return Promise.resolve({
+        data: {
+          entries: params.path === 'files' ? [freshEntry] : [rootEntry],
+          hasMore: false,
+          nextOffset: null
+        }
+      })
+    })
+    const workspace = useWorkspaceStore()
+    workspace.scope = 'session'
+    workspace.sessionId = 'session-a'
+    workspace.entries = {
+      '.': [rootEntry],
+      files: [{ kind: 'file', name: 'stale.txt', path: 'files/stale.txt' }]
+    }
+    workspace.hasMore.files = true
+    workspace.nextOffset.files = 1000
+    const contextVersion = workspace.contextVersion
+
+    const staleLoad = workspace.load('files')
+    await workspace.refresh()
+    resolveStale({ data: { entries: [{ path: 'files/stale.txt' }] } })
+    await staleLoad
+
+    expect(workspace.contextVersion).toBe(contextVersion)
+    expect(workspace.entries.files).toEqual([freshEntry])
+    expect(workspace.hasMore.files).toBe(false)
+    expect(workspace.nextOffset.files).toBeNull()
+    expect(api.get.mock.calls.map(([, config]) => config.params.path)).toEqual([
+      'files', '.', 'files'
+    ])
   })
 
   it('renames an entry and clears its cached subtree', async () => {
@@ -182,7 +291,8 @@ describe('workspace store', () => {
     expect(workspace.selectedPath).toBe('renamed/nested/file.txt')
     expect(workspace.viewedEntry.path).toBe('renamed/nested/file.txt')
     expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
-      params: { path: '.', scope: 'filesystem' }
+      params: { path: '.', scope: 'filesystem' },
+      suppressErrorToast: true
     })
   })
 
@@ -222,6 +332,20 @@ describe('workspace store', () => {
     expect(workspace.entries['.']).toEqual([])
     expect(workspace.entries.folder).toBeUndefined()
     expect(workspace.viewedEntry).toBeNull()
+  })
+
+  it('ignores a stale directory error after the workspace context changes', async () => {
+    let rejectStale
+    api.get.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectStale = reject }))
+    const workspace = useWorkspaceStore()
+
+    const staleLoad = workspace.load('.')
+    workspace.configure({ sessionId: 'session-b', workingDirectory: 'project' })
+    rejectStale(new Error('stale request'))
+    await staleLoad
+
+    expect(workspace.loadErrors).toEqual({})
+    expect(workspace.loading).toEqual({})
   })
 
   it('adds only the selected missing file suffix', () => {
@@ -288,10 +412,14 @@ describe('workspace store', () => {
 
     expect(api.put).toHaveBeenCalledWith('/workspace/files', {
       path: 'notes.md', content: '# Neu\n', expected_revision: 'revision-1'
-    }, { params: { scope: 'filesystem' } })
+    }, { params: { scope: 'filesystem' }, suppressErrorToast: true })
     expect(workspace.filePreviews['notes.md']).toEqual({
       kind: 'markdown', content: '# Neu\n', revision: 'revision-2'
     })
     expect(workspace.viewedEntry.size).toBe(6)
+    expect(api.get).toHaveBeenCalledWith('/workspace/files/preview', {
+      params: { path: 'notes.md', scope: 'filesystem' },
+      suppressErrorToast: true
+    })
   })
 })

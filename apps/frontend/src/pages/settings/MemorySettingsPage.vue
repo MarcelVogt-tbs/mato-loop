@@ -875,7 +875,7 @@ onMounted(() => {
   void loadMemories(0)
   void loadSettings()
   void refreshDreamRuns()
-  if (!chat.sessions.length) chat.fetchSessions().catch(() => {})
+  void chat.fetchAllSessions().catch(() => {})
 })
 </script>
 

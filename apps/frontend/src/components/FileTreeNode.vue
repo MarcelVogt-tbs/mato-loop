@@ -1,21 +1,21 @@
 <template>
-  <div v-if="visible" class="file-tree-node">
+  <div v-if="visible" class="file-tree-node" role="none">
     <div
       :class="['file-tree-row row items-center no-wrap', { 'file-tree-row--selected': selected }]"
+      role="treeitem"
+      :tabindex="focusPath === entry.path ? 0 : -1"
+      :data-file-path="entry.path"
+      :data-file-kind="entry.kind"
+      :aria-level="level + 2"
+      :aria-selected="selected"
+      :aria-current="selected ? 'true' : undefined"
+      :aria-expanded="entry.kind === 'directory' ? expanded : undefined"
+      @click="activate"
+      @focus="emit('focus-entry', entry.path)"
     >
       <div
         class="file-tree-row__main col row items-center no-wrap"
         :style="{ paddingLeft: `${level * 18 + 8}px` }"
-        role="button"
-        tabindex="0"
-        :data-file-path="entry.path"
-        :aria-current="selected ? 'true' : undefined"
-        :aria-expanded="entry.kind === 'directory' ? expanded : undefined"
-        @click="activate"
-        @keydown.enter="activate"
-        @keydown.space.prevent="activate"
-        @keydown.right.prevent="expand"
-        @keydown.left.prevent="collapse"
       >
         <span class="file-tree-spacer flex flex-center" aria-hidden="true">
           <q-icon
@@ -28,7 +28,7 @@
         <span class="ellipsis q-ml-sm">{{ entry.name }}</span>
       </div>
       <q-btn
-        v-if="canMutate"
+        v-if="canMutate || entry.kind === 'file'"
         flat
         round
         dense
@@ -38,14 +38,20 @@
         :aria-label="`Aktionen für ${entry.name}`"
         @click.stop="selectOnly"
       >
+        <q-tooltip>Aktionen</q-tooltip>
         <q-menu anchor="bottom right" self="top right" :offset="[0, 6]" class="app-action-menu">
           <q-list padding class="file-actions-menu">
-            <q-item clickable v-ripple v-close-popup @click="emit('rename-entry', entry)">
+            <q-item v-if="entry.kind === 'file'" clickable v-ripple v-close-popup @click="emit('download-entry', entry)">
+              <q-item-section avatar><q-icon name="download" /></q-item-section>
+              <q-item-section>Herunterladen</q-item-section>
+            </q-item>
+            <q-item v-if="canMutate" clickable v-ripple v-close-popup @click="emit('rename-entry', entry)">
               <q-item-section avatar><q-icon name="edit" /></q-item-section>
               <q-item-section>Umbenennen</q-item-section>
             </q-item>
-            <q-separator class="q-my-xs" />
+            <q-separator v-if="canMutate" class="q-my-xs" />
             <q-item
+              v-if="canMutate"
               clickable
               v-ripple
               v-close-popup
@@ -60,19 +66,34 @@
       </q-btn>
     </div>
     <div v-if="expanded && entry.kind === 'directory'">
-      <div v-if="workspace.loading[entry.path]" class="q-pa-sm text-center">
+      <div v-if="workspace.loadErrors[entry.path]" class="file-inline-state q-ml-xl q-pa-sm" role="alert">
+        <span>{{ directoryError }}</span>
+        <q-btn flat dense no-caps color="primary" label="Erneut versuchen" @click="workspace.load(entry.path)" />
+      </div>
+      <div v-if="workspace.loading[entry.path] && !workspace.entries[entry.path]" class="q-pa-sm text-center">
         <q-spinner color="primary" size="20px" />
       </div>
-      <FileTreeNode
-        v-for="child in workspace.entries[entry.path] || []"
-        :key="child.path"
-        :entry="child"
-        :level="level + 1"
-        :filter="filter"
-        @open-file="emit('open-file', $event)"
-        @rename-entry="emit('rename-entry', $event)"
-        @delete-entry="emit('delete-entry', $event)"
-      />
+      <div
+        v-else-if="workspace.entries[entry.path] && !workspace.entries[entry.path].length && !workspace.loadErrors[entry.path]"
+        class="file-inline-state app-muted q-ml-xl q-pa-sm"
+      >
+        Dieser Ordner ist leer.
+      </div>
+      <div role="group">
+        <FileTreeNode
+          v-for="child in workspace.entries[entry.path] || []"
+          :key="child.path"
+          :entry="child"
+          :level="level + 1"
+          :filter="filter"
+          :focus-path="focusPath"
+          @open-file="emit('open-file', $event)"
+          @focus-entry="emit('focus-entry', $event)"
+          @download-entry="emit('download-entry', $event)"
+          @rename-entry="emit('rename-entry', $event)"
+          @delete-entry="emit('delete-entry', $event)"
+        />
+      </div>
       <q-btn
         v-if="workspace.hasMore[entry.path]"
         flat
@@ -90,6 +111,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { apiErrorMessage } from 'src/utils/api-errors'
 import { useWorkspaceStore } from 'stores/workspace'
 
 defineOptions({ name: 'FileTreeNode' })
@@ -97,17 +119,29 @@ const props = defineProps({
   entry: { type: Object, required: true },
   level: { type: Number, default: 0 },
   filter: { type: String, default: '' },
+  focusPath: { type: String, default: '.' }
 })
-const emit = defineEmits(['open-file', 'rename-entry', 'delete-entry'])
+const emit = defineEmits(['open-file', 'focus-entry', 'download-entry', 'rename-entry', 'delete-entry'])
 const workspace = useWorkspaceStore()
 const expanded = ref(false)
 const selected = computed(() => workspace.selectedPath === props.entry.path)
 const canMutate = computed(() => (
-  ['file', 'directory'].includes(props.entry.kind)
+  !workspace.rootIdentity
+  && ['file', 'directory'].includes(props.entry.kind)
   && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
 ))
-const visible = computed(() => !props.filter || props.entry.name.toLowerCase().includes(props.filter.toLowerCase()) || expanded.value)
+const visible = computed(() => !props.filter || cachedSubtreeMatches(props.entry) || expanded.value)
 const icon = computed(() => ({ directory: expanded.value ? 'folder_open' : 'folder', symlink: 'link', file: 'description' })[props.entry.kind])
+const directoryError = computed(() => apiErrorMessage(
+  workspace.loadErrors[props.entry.path],
+  'Der Ordner konnte nicht geladen werden.'
+))
+
+function cachedSubtreeMatches(entry) {
+  const filter = props.filter.toLocaleLowerCase()
+  return entry.name.toLocaleLowerCase().includes(filter)
+    || (entry.kind === 'directory' && (workspace.entries[entry.path] || []).some(cachedSubtreeMatches))
+}
 
 function activate() {
   workspace.selectedPath = props.entry.path
@@ -125,12 +159,4 @@ async function toggle() {
   if (expanded.value && !workspace.entries[props.entry.path]) await workspace.load(props.entry.path)
 }
 
-async function expand() {
-  if (props.entry.kind !== 'directory' || expanded.value) return
-  await toggle()
-}
-
-function collapse() {
-  if (props.entry.kind === 'directory' && expanded.value) expanded.value = false
-}
 </script>

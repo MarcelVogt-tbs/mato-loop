@@ -166,22 +166,63 @@ def memory_read_permission(user_id: UUID) -> PermissionRequest:
     )
 
 
-def media_permission(session_id: UUID, capability: str, tool_name: str) -> PermissionRequest:
+def media_permission(
+    session_id: UUID,
+    capability: str,
+    tool_name: str,
+    *,
+    provider_id: UUID | None = None,
+    model_id: UUID | None = None,
+    model_name: str | None = None,
+    trust_level: str | None = None,
+    source_attachment_ids: tuple[UUID, ...] = (),
+) -> PermissionRequest:
     labels = {
         "media.generate.image": ("Bild erzeugen?", "ein Bild erzeugen"),
+        "media.edit.image": ("Bild bearbeiten?", "Bilder bearbeiten"),
         "media.generate.speech": ("Sprache erzeugen?", "eine Sprachaufnahme erzeugen"),
         "media.generate.audio": ("Audio erzeugen?", "eine Audiodatei erzeugen"),
         "media.transcribe.audio": ("Audio transkribieren?", "einen Audioanhang transkribieren"),
     }
     title, action = labels.get(capability, ("Medienaktion erlauben?", "Medien verarbeiten"))
+    targeted = provider_id is not None and model_id is not None
     return PermissionRequest(
         capability=capability,
-        resource_type="session",
-        resource_scope=str(session_id),
+        resource_type="media_model" if targeted else "session",
+        resource_scope=(
+            json.dumps(
+                {
+                    "sessionId": str(session_id),
+                    "providerId": str(provider_id),
+                    "modelId": str(model_id),
+                    "trustLevel": trust_level,
+                    **(
+                        {
+                            "sourceAttachmentIds": sorted(
+                                str(attachment_id)
+                                for attachment_id in source_attachment_ids
+                            )
+                        }
+                        if source_attachment_ids
+                        else {}
+                    ),
+                },
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            if targeted
+            else str(session_id)
+        ),
         action_kind=tool_name,
         risk_level="medium",
         title=title,
-        summary=f"Der Agent möchte in der aktuellen Session {action}.",
+        summary=(
+            f"Der Agent möchte mit {model_name} {action}."
+            if targeted and model_name
+            else f"Der Agent möchte in der aktuellen Session {action}."
+        ),
+        resource_display=model_name if targeted else None,
     )
 
 
@@ -340,7 +381,11 @@ class PermissionPolicy:
             return request.resource_scope == grant.resource_scope == "all"
         if request.resource_type == "url":
             return request.resource_scope == grant.resource_scope
-        if request.resource_type in {"network_service", "memory_collection"}:
+        if request.resource_type in {
+            "network_service",
+            "memory_collection",
+            "media_model",
+        }:
             return request.resource_scope == grant.resource_scope
         if request.resource_type == "agent_identity":
             try:

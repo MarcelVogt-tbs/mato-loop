@@ -1275,7 +1275,10 @@ class AgentRuntime:
                     memory_enabled=memory_state.read_enabled,
                     memory_write_enabled=memory_state.write_enabled,
                     tool_capabilities=effective_tool_capabilities(
-                        tool_settings, available_media_capabilities(ai_settings)
+                        tool_settings,
+                        available_media_capabilities(
+                            ai_settings, active_model_id=model.id
+                        ),
                     ),
                     tool_settings=tool_settings,
                 )
@@ -1666,6 +1669,7 @@ class AgentRuntime:
                 )
                 await db.refresh(chat_session)
                 tool_attachments = ()
+                tool_file_actions = ()
                 memory_available_now = True
                 memory_write_available_now = True
                 current_memory_state = memory_state
@@ -1707,6 +1711,7 @@ class AgentRuntime:
                     and not repeated_successful_research_call
                 ):
                     research_tool_calls_used += 1
+                tool_trust_level = model_trust_level
                 if not within_tool_call_budget:
                     tool_call_limit_reached = True
                     tool_result_content = json.dumps(
@@ -1910,6 +1915,13 @@ class AgentRuntime:
                     tool_result_content = tool_result.content
                     metadata = tool_result.metadata
                     tool_attachments = tool_result.attachments
+                    tool_file_actions = tool_result.file_actions
+                    tool_trust_level = (
+                        TrustLevel.PRIVATE
+                        if model_trust_level == TrustLevel.PRIVATE
+                        or tool_result.trust_level == TrustLevel.PRIVATE
+                        else TrustLevel.PUBLIC
+                    )
                     if (
                         any(attachment.kind == "image" for attachment in tool_attachments)
                         and not model.supports_image_input
@@ -1922,7 +1934,26 @@ class AgentRuntime:
                     role="tool",
                     content=tool_result_content,
                     tool_call_id=call.id,
-                    trust_level=model_trust_level.value,
+                    trust_level=tool_trust_level.value,
+                    provider_data=(
+                        {
+                            "_matoloop": {
+                                "fileActions": [
+                                    {
+                                        "operation": action.operation,
+                                        "root": action.root,
+                                        "rootIdentity": action.root_identity,
+                                        "path": action.path,
+                                        "filename": action.filename,
+                                        "sizeBytes": action.size_bytes,
+                                    }
+                                    for action in tool_file_actions
+                                ]
+                            }
+                        }
+                        if tool_file_actions
+                        else {}
+                    ),
                 )
                 db.add(tool_message)
                 created_attachments = []
@@ -1969,7 +2000,7 @@ class AgentRuntime:
                         role="tool",
                         content=tool_result_content,
                         tool_call_id=call.id,
-                        trust_level=model_trust_level.value,
+                        trust_level=tool_trust_level.value,
                     )
                     db.add(tool_message)
                     await db.commit()

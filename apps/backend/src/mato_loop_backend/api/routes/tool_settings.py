@@ -39,6 +39,9 @@ class ToolSettingsRequest(BaseModel):
     generate_image: MediaToolSettings | None = Field(
         default=None, validation_alias=AliasChoices("generateImage", "generate_image")
     )
+    edit_image: MediaToolSettings | None = Field(
+        default=None, validation_alias=AliasChoices("editImage", "edit_image")
+    )
     generate_speech: MediaToolSettings | None = Field(
         default=None, validation_alias=AliasChoices("generateSpeech", "generate_speech")
     )
@@ -89,6 +92,12 @@ def tool_settings_payload(
                 settings, "media.generate.image", settings.generate_image.policy
             ).value,
             "timeoutSeconds": settings.generate_image.timeout_seconds,
+        },
+        "editImage": {
+            "policy": tool_execution_policy(
+                settings, "media.edit.image", settings.edit_image.policy
+            ).value,
+            "timeoutSeconds": settings.edit_image.timeout_seconds,
         },
         "generateSpeech": {
             "policy": tool_execution_policy(
@@ -153,6 +162,7 @@ async def update_tool_settings(
     settings.web_fetch = payload.web_fetch
     for field_name in (
         "generate_image",
+        "edit_image",
         "generate_speech",
         "generate_audio",
         "transcribe_audio",
@@ -163,6 +173,7 @@ async def update_tool_settings(
             setattr(settings, field_name, value)
     legacy_policies = {
         "media.generate.image": settings.generate_image.policy,
+        "media.edit.image": settings.edit_image.policy,
         "media.generate.speech": settings.generate_speech.policy,
         "media.generate.audio": settings.generate_audio.policy,
         "media.transcribe.audio": settings.transcribe_audio.policy,
@@ -171,6 +182,7 @@ async def update_tool_settings(
     for capability, policy in legacy_policies.items():
         field_name = {
             "media.generate.image": "generate_image",
+            "media.edit.image": "edit_image",
             "media.generate.speech": "generate_speech",
             "media.generate.audio": "generate_audio",
             "media.transcribe.audio": "transcribe_audio",
@@ -195,6 +207,7 @@ async def update_tool_settings(
         settings.policies.update(payload.policies)
     for capability, field_name in {
         "media.generate.image": "generate_image",
+        "media.edit.image": "edit_image",
         "media.generate.speech": "generate_speech",
         "media.generate.audio": "generate_audio",
         "media.transcribe.audio": "transcribe_audio",

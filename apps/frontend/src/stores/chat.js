@@ -3,12 +3,21 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
+import { useWorkspaceStore } from 'src/stores/workspace'
 import { agentActivityDisplayKey } from 'src/utils/agent-activity'
 import { safeAttachmentUrl } from 'src/utils/attachments'
 import { notifyError } from 'src/utils/notifications'
 
 const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
+const SESSION_PAGE_SIZE = 10
 const ACTIVE_TITLE_GENERATION_STATUSES = new Set(['pending', 'running'])
+const FILESYSTEM_MUTATION_TOOLS = new Set([
+  'write_file',
+  'create_directory',
+  'delete_path',
+  'copy_path',
+  'move_path'
+])
 export const MAX_ATTACHMENT_DRAFTS = 4
 export const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
 export const MAX_ATTACHMENT_DRAFT_BYTES = 256 * 1024 * 1024
@@ -209,6 +218,11 @@ export const useChatStore = defineStore('chat', {
     activity: emptyActivity(),
     sessionLoadVersion: 0,
     sessionListVersion: 0,
+    sessionsLoaded: false,
+    sessionsNextCursor: null,
+    sessionsLoadingMore: false,
+    sessionsLoadMoreFailed: false,
+    sessionPageRequest: null,
     historyActionPending: false,
     sessionRequestController: null,
     loadError: null,
@@ -451,11 +465,77 @@ export const useChatStore = defineStore('chat', {
     },
     async fetchSessions(config = null) {
       const version = ++this.sessionListVersion
-      const response = config
-        ? await api.get('/sessions', config)
-        : await api.get('/sessions')
+      const response = await api.get('/sessions', {
+        ...(config || {}),
+        params: { ...(config?.params || {}), pageSize: SESSION_PAGE_SIZE }
+      })
       if (version !== this.sessionListVersion) return
-      this.sessions = sortSessions(response.data)
+      this.sessions = sortSessions(response.data.items)
+      this.sessionsNextCursor = response.data.nextCursor
+      this.sessionsLoaded = true
+      this.sessionsLoadMoreFailed = false
+      if (this.sessionsNextCursor) return
+      this.pruneOrphanedSessionState()
+    },
+    async refreshSessions(config = null) {
+      if (!this.sessionsLoaded) return this.fetchSessions(config)
+      const version = ++this.sessionListVersion
+      const targetCount = Math.max(SESSION_PAGE_SIZE, this.sessions.length)
+      const sessions = []
+      let cursor = null
+      do {
+        const pageSize = Math.min(100, targetCount - sessions.length)
+        const response = await api.get('/sessions', {
+          ...(config || {}),
+          params: { ...(config?.params || {}), pageSize, cursor: cursor || undefined }
+        })
+        if (version !== this.sessionListVersion) return
+        sessions.push(...response.data.items)
+        cursor = response.data.nextCursor
+      } while (cursor && sessions.length < targetCount)
+      this.sessions = sortSessions([...new Map(sessions.map((session) => [session.id, session])).values()])
+      this.sessionsNextCursor = cursor
+      this.sessionsLoadMoreFailed = false
+      if (!cursor) this.pruneOrphanedSessionState()
+    },
+    async fetchMoreSessions(config = null) {
+      const cursor = this.sessionsNextCursor
+      if (!cursor) return
+      if (this.sessionPageRequest) return this.sessionPageRequest
+      const version = ++this.sessionListVersion
+      this.sessionsLoadingMore = true
+      this.sessionsLoadMoreFailed = false
+      const request = (async () => {
+        const response = await api.get('/sessions', {
+          ...(config || {}),
+          params: { ...(config?.params || {}), pageSize: SESSION_PAGE_SIZE, cursor }
+        })
+        if (version !== this.sessionListVersion || cursor !== this.sessionsNextCursor) return
+        const sessions = new Map(this.sessions.map((session) => [session.id, session]))
+        for (const session of response.data.items) sessions.set(session.id, session)
+        this.sessions = sortSessions([...sessions.values()])
+        this.sessionsNextCursor = response.data.nextCursor
+        if (!this.sessionsNextCursor) this.pruneOrphanedSessionState()
+      })()
+      this.sessionPageRequest = markRaw(request)
+      try {
+        await request
+      } catch (error) {
+        if (version === this.sessionListVersion) this.sessionsLoadMoreFailed = true
+        throw error
+      } finally {
+        if (this.sessionPageRequest === request) this.sessionPageRequest = null
+        this.sessionsLoadingMore = false
+      }
+    },
+    async fetchAllSessions(config = null) {
+      if (!this.sessionsLoaded) await this.fetchSessions(config)
+      while (this.sessionsNextCursor) await this.fetchMoreSessions(config)
+    },
+    retrySessionPagination() {
+      this.sessionsLoadMoreFailed = false
+    },
+    pruneOrphanedSessionState() {
       const sessionIds = new Set(this.sessions.map((session) => session.id))
       for (const id of Object.keys(this.drafts.sessionMessages)) {
         if (!sessionIds.has(id)) delete this.drafts.sessionMessages[id]
@@ -476,7 +556,7 @@ export const useChatStore = defineStore('chat', {
           : this.sessions.find((item) => item.id === sessionId)
         if (!ACTIVE_TITLE_GENERATION_STATUSES.has(localSession?.titleGenerationStatus)) return
         try {
-          await this.fetchSessions()
+          await this.refreshSessions()
         } catch {
           continue
         }
@@ -948,7 +1028,7 @@ export const useChatStore = defineStore('chat', {
           this.watchRun(session.id, data.runId, { status: 'queued', modelName: data.modelName })
           await this.cancelActiveRun()
         } else {
-          void this.fetchSessions().catch(() => {})
+          void this.refreshSessions().catch(() => {})
         }
         return { created: false, sessionId: session.id }
       } catch (error) {
@@ -1068,9 +1148,17 @@ export const useChatStore = defineStore('chat', {
         if (this.eventSource !== source) return
         promoteStreamedMessage(JSON.parse(event.data).message)
       })
-      source.addEventListener('tool.completed', () => {
+      source.addEventListener('tool.completed', (event) => {
         if (this.eventSource !== source) return
+        const payload = JSON.parse(event.data)
         this.refreshSession(sessionId)
+        if (
+          FILESYSTEM_MUTATION_TOOLS.has(payload.tool)
+          && !payload.metadata?.errorCode
+        ) {
+          const workspace = useWorkspaceStore()
+          if (workspace.sessionId === sessionId) void workspace.refresh()
+        }
       })
       source.addEventListener('approval.created', (event) => {
         if (this.eventSource !== source) return
@@ -1123,7 +1211,7 @@ export const useChatStore = defineStore('chat', {
         this.clearActivity()
         this.setSessionRunStatus(sessionId, null)
         this.refreshSession(sessionId)
-        this.fetchSessions()
+        this.refreshSessions()
         useApprovalStore().fetchPending()
         void useAgentIdentityStore().fetchIdentity({ suppressErrorToast: true }).catch(() => {})
         if (titleGenerationActive) void this.refreshGeneratedTitle(sessionId)
@@ -1161,7 +1249,7 @@ export const useChatStore = defineStore('chat', {
           this.clearActivity()
           this.setSessionRunStatus(sessionId, null)
           this.refreshSession(sessionId)
-          this.fetchSessions()
+          this.refreshSessions()
           useApprovalStore().fetchPending()
         }
         const scheduleReconnect = (runState = {}) => {

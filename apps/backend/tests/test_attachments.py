@@ -89,6 +89,7 @@ def test_corrupt_image_with_known_magic_is_rejected() -> None:
     with pytest.raises(AttachmentError) as exc_info:
         validate_image(b"\x89PNG\r\n\x1a\ncorrupt", "image/png")
     assert exc_info.value.code == "attachment.invalidImage"
+    assert exc_info.value.diagnostic.startswith("verify:")
 
 
 def test_attachment_classification_does_not_trust_browser_mime() -> None:
@@ -174,6 +175,23 @@ async def test_service_persists_validated_metadata_and_relative_path(tmp_path: P
     assert storage.path(session_id, attachment.storage_path).read_bytes() == data
 
 
+async def test_image_read_revalidates_persisted_content(tmp_path: Path) -> None:
+    session_id = uuid4()
+    _sessions, storage = provisioned_storage(tmp_path, session_id)
+    message = Message(id=uuid4(), session_id=session_id, role="user", content="Bild")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session_id, None]
+    service = AttachmentService(storage)
+    data = image_bytes("PNG")
+    attachment = await service.create_image(db, message, data, "image/png")
+
+    assert await service.read_image(attachment, session_id) == data
+
+    attachment.sha256 = "0" * 64
+    with pytest.raises(AttachmentError, match="attachment.notFound"):
+        await service.read_image(attachment, session_id)
+
+
 async def test_service_persists_audio_duration_and_safe_metadata(tmp_path: Path) -> None:
     session_id = uuid4()
     _sessions, storage = provisioned_storage(tmp_path, session_id)
@@ -246,5 +264,13 @@ async def test_service_removes_file_when_database_flush_fails(tmp_path: Path) ->
     assert list((sessions.session_path(session_id) / "attachments").iterdir()) == []
 
 
-def test_image_limit_remains_five_mib() -> None:
-    assert MAX_IMAGE_ATTACHMENT_BYTES == 5 * 1024 * 1024
+def test_images_use_the_general_file_limit() -> None:
+    assert MAX_IMAGE_ATTACHMENT_BYTES == MAX_FILE_ATTACHMENT_BYTES
+    buffer = BytesIO()
+    Image.new("RGB", (1500, 1500), (20, 40, 60)).save(
+        buffer, format="PNG", compress_level=0
+    )
+    data = buffer.getvalue()
+
+    assert len(data) > 5 * 1024 * 1024
+    assert validate_image(data, "image/png").size_bytes == len(data)

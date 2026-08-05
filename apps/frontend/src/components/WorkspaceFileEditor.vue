@@ -1,5 +1,5 @@
 <template>
-  <div class="workspace-editor column no-wrap">
+  <div class="workspace-editor column no-wrap" @keydown="handleKeydown">
     <div class="workspace-editor__actions row items-center q-pa-sm q-gutter-sm">
       <q-btn-toggle
         v-if="markdown"
@@ -12,6 +12,9 @@
         @update:model-value="setMode"
       />
       <q-space />
+      <span class="workspace-editor__status" aria-live="polite" aria-atomic="true">
+        <q-badge v-if="dirty" color="warning" text-color="black" label="Ungespeichert" />
+      </span>
       <q-btn flat no-caps label="Abbrechen" :disable="saving" @click="emit('cancel')" />
       <q-btn
         unelevated
@@ -20,6 +23,7 @@
         icon="save"
         label="Speichern"
         :loading="saving"
+        :disable="!dirty"
         @click="emit('save')"
       />
     </div>
@@ -34,6 +38,7 @@
     </div>
     <q-input
       v-else
+      ref="sourceEditor"
       class="workspace-editor__textarea col"
       input-class="workspace-editor__textarea-input"
       type="textarea"
@@ -56,11 +61,13 @@ defineOptions({ name: 'WorkspaceFileEditor' })
 const props = defineProps({
   modelValue: { type: String, default: '' },
   markdown: Boolean,
-  saving: Boolean
+  saving: Boolean,
+  dirty: Boolean
 })
 const emit = defineEmits(['update:modelValue', 'save', 'cancel'])
 const $q = useQuasar()
 const toastRoot = ref(null)
+const sourceEditor = ref(null)
 const visualAvailable = computed(() => props.markdown && !containsMarkdownImage(props.modelValue))
 const mode = ref(visualAvailable.value ? 'visual' : 'source')
 const loading = ref(false)
@@ -111,6 +118,7 @@ async function mountToastEditor() {
       hooks: { addImageBlobHook: () => false }
     })
     editor.on('change', () => emit('update:modelValue', editor.getMarkdown()))
+    editor.focus()
   } catch {
     if (version === mountVersion) {
       mode.value = 'source'
@@ -130,6 +138,18 @@ async function setMode(value) {
   }
   mode.value = value
   if (value === 'visual') await mountToastEditor()
+  else await nextTick(() => sourceEditor.value?.focus())
+}
+
+function handleKeydown(event) {
+  if (event.key.toLocaleLowerCase() !== 's' || (!event.ctrlKey && !event.metaKey) || event.altKey) return
+  event.preventDefault()
+  if (props.dirty && !props.saving) emit('save')
+}
+
+async function focusEditor() {
+  if (mode.value === 'visual') await mountToastEditor()
+  else await nextTick(() => sourceEditor.value?.focus())
 }
 
 watch(() => $q.dark.isActive, () => {
@@ -139,7 +159,7 @@ watch(visualAvailable, (available) => {
   if (!available && mode.value === 'visual') setMode('source')
 })
 
-onMounted(mountToastEditor)
+onMounted(focusEditor)
 onBeforeUnmount(() => {
   mountVersion += 1
   editor?.destroy()

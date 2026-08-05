@@ -2,6 +2,7 @@ import hashlib
 import json
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ import pytest
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.workspace as workspace_module
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import workspace as workspace_route
 from mato_loop_backend.api.routes.workspace import (
@@ -36,6 +38,81 @@ async def test_file_context_hides_foreign_sessions() -> None:
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.code == "session.notFound"
+
+
+async def test_file_context_keeps_a_bound_workspace_after_session_switch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    user = _user()
+    original = tmp_path / "original"
+    current = tmp_path / "current"
+    original.mkdir()
+    current.mkdir()
+    (original / "report.bin").write_bytes(b"report")
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Test",
+        working_directory="current",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    monkeypatch.setattr(
+        workspace_module,
+        "get_runtime_config",
+        lambda: SimpleNamespace(agent_home=tmp_path),
+    )
+
+    context = await workspace_route._file_context(
+        FileScope.FILESYSTEM,
+        session.id,
+        user,
+        db,
+        root_identity="original",
+    )
+
+    assert context.working_directory == "original"
+    assert context.root_files is not None
+    with context.root_files.open_file(FileRoot.WORKSPACE, "report.bin") as handle:
+        assert handle.read() == b"report"
+
+
+async def test_download_file_streams_the_bound_workspace_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    session_id = uuid4()
+    project = tmp_path / "original"
+    project.mkdir()
+    (project / "report.bin").write_bytes(b"streamed report")
+    context = workspace_route._FileContext(
+        root_files=RootFileService(
+            session_id,
+            workspace_home=tmp_path,
+            working_directory="original",
+        ),
+        root=FileRoot.WORKSPACE,
+        working_directory="original",
+    )
+
+    async def file_context(*_args, **kwargs):
+        assert kwargs["root_identity"] == "original"
+        return context
+
+    monkeypatch.setattr(workspace_route, "_file_context", file_context)
+
+    response = await workspace_route.download_file(
+        _user(),
+        AsyncMock(spec=AsyncSession),
+        "report.bin",
+        scope=FileScope.FILESYSTEM,
+        session_id=session_id,
+        root_identity="original",
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    assert body == b"streamed report"
+    assert response.media_type == "application/octet-stream"
+    assert "filename*=UTF-8''report.bin" in response.headers["content-disposition"]
 
 
 async def test_rename_session_entry_clears_source_and_destination_grants(
@@ -95,16 +172,28 @@ async def test_preview_returns_markdown_and_only_validated_image_content(
     (tmp_path / "image.png").write_bytes(image_data.getvalue())
     context = workspace_route._FileContext(workspace=workspace)
 
-    async def file_context(*_args, **_kwargs):
+    root_identities = []
+
+    async def file_context(*_args, **kwargs):
+        root_identities.append(kwargs.get("root_identity"))
         return context
 
     monkeypatch.setattr(workspace_route, "_file_context", file_context)
     user = _user()
     db = AsyncMock(spec=AsyncSession)
 
-    preview = await workspace_route.preview_file(user, db, "readme.md")
-    image = await workspace_route.preview_image(user, db, "image.png")
+    entries = await workspace_route.list_entries(
+        user, db, path=".", offset=0, root_identity="original"
+    )
+    preview = await workspace_route.preview_file(
+        user, db, "readme.md", root_identity="original"
+    )
+    image = await workspace_route.preview_image(
+        user, db, "image.png", root_identity="original"
+    )
 
+    assert {entry["path"] for entry in entries["entries"]} == {"image.png", "readme.md"}
+    assert root_identities == ["original", "original", "original"]
     assert preview == {
         "kind": "markdown",
         "content": "# Title\n![Remote](https://example.com/x.png)",

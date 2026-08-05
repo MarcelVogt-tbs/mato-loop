@@ -19,6 +19,7 @@ describe('tool settings store', () => {
     const store = useToolSettingsStore()
 
     expect(store.webFetch.defaultPolicy).toBe('auto_public')
+    expect(store.editImage.policy).toBe('ask')
   })
 
   it('loads and saves the complete tool settings contract without changing field names', async () => {
@@ -48,6 +49,7 @@ describe('tool settings store', () => {
         allowedPrivateOrigins: ['http://127.0.0.1:8080']
       },
       generateImage: { policy: 'ask', timeoutSeconds: 600 },
+      editImage: { policy: 'ask', timeoutSeconds: 450 },
       generateSpeech: { policy: 'auto', timeoutSeconds: 120 },
       generateAudio: { policy: 'disabled', timeoutSeconds: 900 },
       transcribeAudio: { policy: 'ask', timeoutSeconds: 180 },
@@ -93,6 +95,7 @@ describe('tool settings store', () => {
           ]
         },
         generateImage: { policy: 'disabled', timeoutSeconds: 300 },
+        editImage: { policy: 'ask', timeoutSeconds: 300 },
         generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
         generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
         transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
@@ -113,6 +116,7 @@ describe('tool settings store', () => {
         maxResponseMiB: 64
       },
       generateImage: { policy: 'ask', timeoutSeconds: 300 },
+      editImage: { policy: 'ask', timeoutSeconds: 300 },
       generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
       generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
       transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },

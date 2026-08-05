@@ -12,6 +12,7 @@ import {
 describe('tool display', () => {
   it('uses readable labels and concise resource summaries', () => {
     expect(toolIdentity('read_file')).toEqual({ label: 'Datei lesen', icon: 'description' })
+    expect(toolIdentity('provide_file')).toEqual({ label: 'Datei bereitstellen', icon: 'download' })
     expect(toolSummary({ name: 'read_file', arguments: { path: 'Projekte/plan.md' } })).toBe('Projekte/plan.md')
     expect(toolIdentity('copy_path')).toEqual({ label: 'Pfad kopieren', icon: 'content_copy' })
     expect(toolIdentity('move_path')).toEqual({ label: 'Pfad verschieben', icon: 'drive_file_move' })

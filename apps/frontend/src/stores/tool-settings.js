@@ -23,6 +23,7 @@ const defaultWebSearch = () => ({
 })
 
 const defaultMediaPolicy = () => ({ policy: 'disabled', timeoutSeconds: 300 })
+const defaultImageEditPolicy = () => ({ policy: 'ask', timeoutSeconds: 300 })
 const defaultAgentIdentityPolicy = () => ({ policy: 'ask' })
 
 function settingsPayload(state) {
@@ -32,6 +33,7 @@ function settingsPayload(state) {
     webSearch: state.webSearch,
     webFetch: state.webFetch,
     generateImage: state.generateImage,
+    editImage: state.editImage,
     generateSpeech: state.generateSpeech,
     generateAudio: state.generateAudio,
     transcribeAudio: state.transcribeAudio,
@@ -46,6 +48,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     webSearch: defaultWebSearch(),
     webFetch: defaultWebFetch(),
     generateImage: defaultMediaPolicy(),
+    editImage: defaultImageEditPolicy(),
     generateSpeech: defaultMediaPolicy(),
     generateAudio: defaultMediaPolicy(),
     transcribeAudio: defaultMediaPolicy(),
@@ -77,6 +80,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         const policies = { ...this.policies, ...(settings.policies || {}) }
         for (const [field, capability] of Object.entries({
           generateImage: 'media.generate.image',
+          editImage: 'media.edit.image',
           generateSpeech: 'media.generate.speech',
           generateAudio: 'media.generate.audio',
           transcribeAudio: 'media.transcribe.audio',
@@ -96,6 +100,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
           },
           webFetch: settings.webFetch || this.webFetch,
           generateImage: { ...this.generateImage, ...settings.generateImage },
+          editImage: { ...this.editImage, ...settings.editImage },
           generateSpeech: { ...this.generateSpeech, ...settings.generateSpeech },
           generateAudio: { ...this.generateAudio, ...settings.generateAudio },
           transcribeAudio: { ...this.transcribeAudio, ...settings.transcribeAudio },
@@ -120,6 +125,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       for (const field of ['generateImage', 'generateSpeech', 'generateAudio', 'transcribeAudio']) {
         this[field] = { ...defaultMediaPolicy(), ...data?.[field] }
       }
+      this.editImage = { ...defaultImageEditPolicy(), ...data?.editImage }
       this.updateAgentIdentity = {
         ...defaultAgentIdentityPolicy(),
         ...data?.updateAgentIdentity

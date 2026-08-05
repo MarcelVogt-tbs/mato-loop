@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import pytest
@@ -14,6 +15,7 @@ from mato_loop_backend.agent.tools import (
     ToolAttachment,
     ToolContext,
     ToolDefinition,
+    ToolFileAction,
     ToolRegistry,
     ToolResult,
     permission_for,
@@ -383,6 +385,7 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
     for name in {
         "list_directory",
         "read_file",
+        "provide_file",
         "write_file",
         "create_directory",
         "delete_path",
@@ -413,6 +416,7 @@ async def test_read_only_mode_offers_only_read_file_tools_and_blocks_stale_mutat
     file_tools = {
         "list_directory",
         "read_file",
+        "provide_file",
         "write_file",
         "create_directory",
         "delete_path",
@@ -422,7 +426,7 @@ async def test_read_only_mode_offers_only_read_file_tools_and_blocks_stale_mutat
     offered = {
         item["name"] for item in tool_registry.schemas(IntegrationSettings(), "read-only")
     }
-    assert offered & file_tools == {"list_directory", "read_file"}
+    assert offered & file_tools == {"list_directory", "read_file", "provide_file"}
 
     call = ToolCall(
         id="stale",
@@ -734,6 +738,9 @@ async def test_copy_and_move_handlers_check_both_roots_before_effect(tmp_path) -
     copied = await tool_registry.execute(copy_call, context)
 
     assert json.loads(copied.content) == {"root": "workspace", "copied": "result.txt"}
+    assert copied.file_actions == (
+        ToolFileAction("copy", "workspace", "project", "result.txt", "result.txt", 8),
+    )
     assert (project / "result.txt").read_text(encoding="utf-8") == "Ergebnis"
     assert context.ask_handler.await_count == 2
 
@@ -751,6 +758,16 @@ async def test_copy_and_move_handlers_check_both_roots_before_effect(tmp_path) -
     moved = await tool_registry.execute(move_call, context)
 
     assert json.loads(moved.content) == {"root": "session", "moved": "files/result.txt"}
+    assert moved.file_actions == (
+        ToolFileAction(
+            "move",
+            "session",
+            str(context.session.id),
+            "files/result.txt",
+            "result.txt",
+            8,
+        ),
+    )
     assert not (project / "result.txt").exists()
     assert (session_root / "files" / "result.txt").read_text(encoding="utf-8") == "Ergebnis"
 
@@ -777,7 +794,61 @@ async def test_copy_denied_destination_has_no_partial_effect(tmp_path) -> None:
     result = await tool_registry.execute(call, context)
 
     assert result.metadata == {"errorCode": "permission.denied"}
+    assert result.file_actions == ()
     assert not (project / "destination.txt").exists()
+
+
+async def test_write_file_action_uses_post_write_host_metadata(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    call = ToolCall(
+        id="write",
+        name="write_file",
+        arguments={"root": "workspace", "path": "report.txt", "content": "Ergebnis"},
+    )
+    context = _context_with_workdir(tmp_path, call)
+    context.session.workspace_access = "read-write"
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.file_actions == (
+        ToolFileAction("write", "workspace", "project", "report.txt", "report.txt", 8),
+    )
+
+
+async def test_directory_copy_and_move_create_no_file_actions(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    call = ToolCall(
+        id="copy-directory",
+        name="copy_path",
+        arguments={
+            "source_root": "session",
+            "source_path": "files/source",
+            "destination_root": "workspace",
+            "destination_path": "copied",
+        },
+    )
+    context = _context_with_workdir(tmp_path, call)
+    context.session.workspace_access = "read-write"
+    session_root = context.root_files.session_storage.session_path(context.session.id)
+    (session_root / "files" / "source").mkdir()
+
+    copied = await tool_registry.execute(call, context)
+    context.tool_call = ToolCall(
+        id="move-directory",
+        name="move_path",
+        arguments={
+            "source_root": "workspace",
+            "source_path": "copied",
+            "destination_root": "session",
+            "destination_path": "files/moved",
+        },
+    )
+    moved = await tool_registry.execute(context.tool_call, context)
+
+    assert copied.file_actions == ()
+    assert moved.file_actions == ()
 
 
 @pytest.mark.parametrize(
@@ -1696,6 +1767,95 @@ async def test_read_file_returns_numbered_page_and_continuation(tmp_path) -> Non
         "nextOffset": 3,
         "truncatedLines": [],
     }
+
+
+async def test_provide_file_returns_a_bound_download_without_reading_contents(
+    tmp_path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    target = project / "large.bin"
+    with target.open("wb") as handle:
+        handle.truncate(128 * 1024 * 1024)
+    call = ToolCall(
+        id="provide",
+        name="provide_file",
+        arguments={"root": "workspace", "path": "large.bin"},
+    )
+    context = _context_with_workdir(tmp_path, call)
+    context.root_files.read_bytes = Mock(side_effect=AssertionError("must not read contents"))
+
+    result = await tool_registry.execute(call, context)
+
+    payload = json.loads(result.content)
+    query = parse_qs(urlparse(payload["downloadUrl"]).query)
+    assert payload == {
+        "root": "workspace",
+        "path": "large.bin",
+        "filename": "large.bin",
+        "sizeBytes": 128 * 1024 * 1024,
+        "downloadUrl": payload["downloadUrl"],
+    }
+    assert query == {
+        "path": ["large.bin"],
+        "scope": ["filesystem"],
+        "session_id": [str(context.session.id)],
+        "root_identity": ["project"],
+    }
+    context.root_files.read_bytes.assert_not_called()
+    request = context.ask_handler.await_args.args[0]
+    assert request.capability == "filesystem.read"
+    assert request.action_kind == "provide_file"
+
+
+async def test_provide_file_does_not_open_after_denial(tmp_path) -> None:
+    call = ToolCall(
+        id="provide",
+        name="provide_file",
+        arguments={"root": "session", "path": "files/report.pdf"},
+    )
+    context = _context(tmp_path, call, decision=PermissionDecision.DENY)
+    context.root_files.open_file = Mock(side_effect=AssertionError("must not open"))
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "permission.denied"}
+    context.root_files.open_file.assert_not_called()
+
+
+async def test_provide_file_supports_session_files(tmp_path) -> None:
+    call = ToolCall(
+        id="provide",
+        name="provide_file",
+        arguments={"root": "session", "path": "files/report.pdf"},
+    )
+    context = _context(tmp_path, call)
+    context.root_files.write_file("session", "files/report.pdf", "report")
+
+    result = await tool_registry.execute(call, context)
+
+    payload = json.loads(result.content)
+    query = parse_qs(urlparse(payload["downloadUrl"]).query)
+    assert payload["filename"] == "report.pdf"
+    assert payload["sizeBytes"] == 6
+    assert query["scope"] == ["session"]
+    assert query["root_identity"] == [str(context.session.id)]
+
+
+async def test_provide_file_rejects_workspace_symlinks(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (tmp_path / "secret.txt").write_text("secret", encoding="utf-8")
+    (project / "link.txt").symlink_to(tmp_path / "secret.txt")
+    call = ToolCall(
+        id="provide",
+        name="provide_file",
+        arguments={"root": "workspace", "path": "link.txt"},
+    )
+
+    result = await tool_registry.execute(call, _context_with_workdir(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "file.fileNotFound"}
 
 
 async def test_read_file_rejects_workspace_symlinks(tmp_path) -> None:

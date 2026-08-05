@@ -5,6 +5,7 @@ import { cleanUrlForDisplay } from 'src/utils/webfetch'
 const TOOL_DISPLAY = {
   list_directory: { label: 'Ordner auflisten', icon: 'folder_open' },
   read_file: { label: 'Datei lesen', icon: 'description' },
+  provide_file: { label: 'Datei bereitstellen', icon: 'download' },
   write_file: { label: 'Datei schreiben', icon: 'edit_document' },
   create_directory: { label: 'Ordner erstellen', icon: 'create_new_folder' },
   delete_path: { label: 'Pfad löschen', icon: 'delete_outline' },

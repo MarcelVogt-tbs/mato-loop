@@ -48,7 +48,8 @@ describe('provider store', () => {
     store.models = [
       { id: 'legacy', providerId: 'p1', name: 'Legacy Chat', enabled: true },
       { id: 'empty', providerId: 'p1', name: 'Ohne Fähigkeit', enabled: true, capabilities: [] },
-      { id: 'image', providerId: 'p1', name: 'Bild', enabled: true, capabilities: ['image_generation'] },
+      { id: 'image', providerId: 'p1', name: 'Bild', enabled: true, capabilities: ['image_generation'], executableCapabilities: ['image_generation'] },
+      { id: 'unsupported', providerId: 'p1', name: 'Nicht ausführbar', enabled: true, capabilities: ['image_generation'], executableCapabilities: [] },
       { id: 'speech', providerId: 'p1', name: 'Sprache', enabled: false, capabilities: ['speech_generation'] }
     ]
 

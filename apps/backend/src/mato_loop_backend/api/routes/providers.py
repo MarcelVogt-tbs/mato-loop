@@ -398,6 +398,12 @@ def _settings_payload(
                 "lastSeenAt": model.last_seen_at.isoformat() if model.last_seen_at else None,
                 "discoveryMetadata": model.discovery_metadata,
                 "capabilities": sorted(item.value for item in model.capabilities),
+                "executableCapabilities": sorted(
+                    capability.value
+                    for capability in model.capabilities
+                    if capability == ModelCapability.CHAT
+                    or media_model_available(settings, capability, model.id)
+                ),
                 "contextWindowTokens": model.context_window_tokens,
                 "discoveredContextWindowTokens": model.discovered_context_window_tokens,
                 "useDiscoveredContextWindow": model.use_discovered_context_window,
@@ -691,7 +697,10 @@ async def sync_provider_models(
                     provider_id=provider.id,
                     model_id=external_id,
                     name=name if isinstance(name, str) else None,
-                    enabled=False,
+                    enabled=(
+                        discovered_model.metadata.get("native_for_chat_provider")
+                        is True
+                    ),
                     origin=ModelOrigin.DISCOVERED,
                     last_seen_at=synced_at,
                     discovery_metadata=discovered_model.metadata,
@@ -724,7 +733,10 @@ async def sync_provider_models(
             _apply_discovered_context_window(
                 model, _discovered_context_window(discovered_model.metadata)
             )
-            if provider.adapter_type == "lemonade":
+            if (
+                provider.adapter_type == "lemonade"
+                or discovered_model.metadata.get("capabilities_authoritative") is True
+            ):
                 model.capabilities = discovered_model.capabilities
                 supports_parallel = discovered_model.metadata.get(
                     "supports_parallel_tool_calls"

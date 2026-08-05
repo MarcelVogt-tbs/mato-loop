@@ -6,35 +6,33 @@
     class="provider-form-section model-runtime-expansion"
   >
     <q-card-section class="model-runtime-grid q-px-none q-pb-none">
-      <q-input
-        v-model.number="form.contextWindowTokens"
-        outlined
-        type="number"
-        min="2"
-        step="1"
-        label="Kontextfenster (Tokens)"
-        hint="Maximale Anzahl von Eingabe- und Ausgabe-Tokens."
-        :disable="form.useDiscoveredContextWindow && form.discoveredContextWindowTokens != null"
-        lazy-rules
-        :rules="[positiveIntegerRule, contextRule]"
-      >
-        <template v-if="form.discoveredContextWindowTokens != null" #after>
-          <q-btn
-            flat
-            dense
-            no-caps
-            color="primary"
-            :label="form.useDiscoveredContextWindow ? 'Manuell festlegen' : 'Providerwert verwenden'"
-            @click="toggleProviderContextWindow"
-          />
-        </template>
-      </q-input>
-      <div class="text-caption app-muted model-runtime-context-source">
-        {{ contextWindowHint }}
+      <div class="model-runtime-context-field">
+        <q-input
+          v-model.number="form.contextWindowTokens"
+          outlined
+          hide-bottom-space
+          type="number"
+          min="2"
+          step="1"
+          label="Kontextfenster (Tokens)"
+          :hint="contextWindowHint"
+          :disable="form.useDiscoveredContextWindow && form.discoveredContextWindowTokens != null"
+          lazy-rules
+          :rules="[positiveIntegerRule, contextRule]"
+        />
+        <q-btn
+          v-if="form.discoveredContextWindowTokens != null"
+          flat
+          no-caps
+          color="primary"
+          :label="form.useDiscoveredContextWindow ? 'Manuell festlegen' : 'Providerwert verwenden'"
+          @click="toggleProviderContextWindow"
+        />
       </div>
       <q-input
         v-model.number="form.maxOutputTokens"
         outlined
+        hide-bottom-space
         type="number"
         min="1"
         step="1"
@@ -46,6 +44,7 @@
       <q-input
         v-model.number="form.charactersPerToken"
         outlined
+        hide-bottom-space
         type="number"
         min="0.1"
         step="0.1"
@@ -57,6 +56,7 @@
       <q-select
         :model-value="form.trustLevel ?? 'inherit'"
         outlined
+        hide-bottom-space
         emit-value
         map-options
         label="Vertrauenslevel"
@@ -67,6 +67,7 @@
       <q-select
         :model-value="form.pseudonymizationEnabled ?? 'inherit'"
         outlined
+        hide-bottom-space
         emit-value
         map-options
         label="Schutz von Kennungen und Secrets"
@@ -77,42 +78,40 @@
       <q-select
         v-model="form.memoryPolicy"
         outlined
+        hide-bottom-space
         emit-value
         map-options
         label="Memory-Policy"
         :options="memoryPolicyOptions"
         hint="Kann Memory für dieses Modell explizit erlauben oder sperren."
       />
-      <div class="model-runtime-toggles row q-col-gutter-md">
+      <div class="model-runtime-toggles">
         <q-toggle
           v-model="form.supportsTools"
-          class="col-12 col-sm-3"
           color="primary"
           label="Tools unterstützt"
         />
         <q-toggle
           v-model="form.supportsParallelToolCalls"
-          class="col-12 col-sm-3"
           color="primary"
           label="Parallele Tool-Aufrufe"
           :disable="!form.supportsTools"
         />
         <q-toggle
           v-model="form.supportsStreaming"
-          class="col-12 col-sm-3"
           color="primary"
           label="Streaming unterstützt"
         />
         <q-toggle
           v-model="form.supportsImageInput"
-          class="col-12 col-sm-3"
           color="primary"
           label="Bildeingaben unterstützt"
         />
-        <div class="col-12 q-mt-sm">
+        <div class="model-runtime-wide">
           <q-select
             v-model="form.webfetchPolicy"
             outlined
+            hide-bottom-space
             emit-value
             map-options
             label="Webfetch-Override"
@@ -129,7 +128,7 @@
             </span>
           </div>
         </div>
-        <div v-if="reasoningSummaryAvailable" class="col-12">
+        <div v-if="reasoningSummaryAvailable" class="model-runtime-wide">
           <q-toggle
             :model-value="reasoningSummaryForced || form.reasoningSummary"
             color="primary"
@@ -228,10 +227,3 @@ function toggleProviderContextWindow() {
   }
 }
 </script>
-
-<style scoped>
-.model-runtime-context-source {
-  align-self: start;
-  margin-top: -12px;
-}
-</style>

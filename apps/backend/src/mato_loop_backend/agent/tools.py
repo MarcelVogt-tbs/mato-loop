@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlencode
 from uuid import UUID
 
 from pydantic import (
@@ -18,7 +20,7 @@ from pydantic import (
 )
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from mato_loop_backend.agent.context import (
     _public_tool_result,
@@ -69,8 +71,16 @@ from mato_loop_backend.models import (
     Message,
     MessageAttachment,
 )
-from mato_loop_backend.providers.base import ProviderError, ToolCall
-from mato_loop_backend.providers.media import MediaService, available_media_capabilities
+from mato_loop_backend.providers.base import (
+    MAX_PROVIDER_IMAGE_BYTES,
+    ProviderError,
+    ToolCall,
+)
+from mato_loop_backend.providers.media import (
+    MediaService,
+    ResolvedMediaModel,
+    available_media_capabilities,
+)
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AiSettings,
@@ -122,16 +132,38 @@ class ToolAttachment:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class ToolFileAction:
+    operation: Literal["write", "copy", "move"]
+    root: Literal["session", "workspace"]
+    root_identity: str
+    path: str
+    filename: str
+    size_bytes: int
+
+
 @dataclass(slots=True)
 class ToolResult:
     content: str
     metadata: dict[str, Any]
     is_error: bool = False
     attachments: tuple[ToolAttachment, ...] = ()
+    file_actions: tuple[ToolFileAction, ...] = ()
+    trust_level: TrustLevel | None = None
 
     @classmethod
-    def json(cls, value: Any, *, metadata: dict[str, Any] | None = None) -> ToolResult:
-        return cls(json.dumps(value, ensure_ascii=False), metadata or {})
+    def json(
+        cls,
+        value: Any,
+        *,
+        metadata: dict[str, Any] | None = None,
+        file_actions: tuple[ToolFileAction, ...] = (),
+    ) -> ToolResult:
+        return cls(
+            json.dumps(value, ensure_ascii=False),
+            metadata or {},
+            file_actions=file_actions,
+        )
 
     @classmethod
     def error(
@@ -604,7 +636,10 @@ class ToolRegistry:
             context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
             ai_settings = await SettingsStore.load(context.db, AiSettings)
             if definition.required_capability not in effective_tool_capabilities(
-                context.tool_settings, available_media_capabilities(ai_settings)
+                context.tool_settings,
+                available_media_capabilities(
+                    ai_settings, active_model_id=context.model_id
+                ),
             ):
                 return ToolResult.error("tool.unavailable")
         try:
@@ -673,6 +708,11 @@ class ReadFileArguments(ToolArguments):
     limit: int = Field(default=2_000, ge=1, le=2_000)
 
 
+class ProvideFileArguments(ToolArguments):
+    root: Literal["session", "workspace"]
+    path: str = Field(min_length=1, max_length=1_000)
+
+
 class WriteFileArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
@@ -727,6 +767,35 @@ class GenerateImageArguments(ToolArguments):
     width: int | None = Field(default=None, ge=64, le=4_096)
     height: int | None = Field(default=None, ge=64, le=4_096)
     seed: int | None = Field(default=None, ge=0)
+
+
+class EditImageArguments(ToolArguments):
+    prompt: str = Field(
+        min_length=1,
+        max_length=20_000,
+        description=(
+            "Complete standalone edit brief. Refer to input images by their array order. State "
+            "exactly what must change and what must remain unchanged. Quote text that must appear "
+            "verbatim. Do not add unrelated subjects, objects, or style changes."
+        ),
+    )
+    attachment_ids: list[UUID] = Field(
+        min_length=1,
+        max_length=5,
+        description=(
+            "One to five image attachment IDs from the current session, ordered as Image 1, "
+            "Image 2, and so on."
+        ),
+    )
+    width: int | None = Field(default=None, ge=64, le=4_096)
+    height: int | None = Field(default=None, ge=64, le=4_096)
+
+    @field_validator("attachment_ids")
+    @classmethod
+    def unique_attachment_ids(cls, value: list[UUID]) -> list[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("attachment_ids must be unique")
+        return value
 
 
 class GenerateSpeechArguments(ToolArguments):
@@ -995,6 +1064,68 @@ async def _read_file(arguments: ReadFileArguments, context: ToolContext) -> Tool
     )
 
 
+async def _provide_file(
+    arguments: ProvideFileArguments, context: ToolContext
+) -> ToolResult:
+    request = _filesystem_permission(
+        context,
+        root=arguments.root,
+        path=arguments.path,
+        capability="filesystem.read",
+        action_kind="provide_file",
+        action_label="Datei bereitstellen",
+    )
+    if not await _allow(context, request):
+        return ToolResult.error("permission.denied")
+    path = context.root_files.normalize_relative_path(arguments.path)
+    with context.root_files.open_file(arguments.root, path) as handle:
+        size = os.fstat(handle.fileno()).st_size
+    scope = "session" if arguments.root == "session" else "filesystem"
+    download_url = "/api/workspace/files/download?" + urlencode(
+        {
+            "path": path,
+            "scope": scope,
+            "session_id": str(context.session.id),
+            "root_identity": context.root_files.root_identity(arguments.root),
+        }
+    )
+    return ToolResult.json(
+        {
+            "root": arguments.root,
+            "path": path,
+            "filename": path.rsplit("/", 1)[-1],
+            "sizeBytes": size,
+            "downloadUrl": download_url,
+        }
+    )
+
+
+def _regular_file_action(
+    context: ToolContext,
+    operation: Literal["write", "copy", "move"],
+    root: Literal["session", "workspace"],
+    path: str,
+) -> tuple[ToolFileAction, ...]:
+    path = context.root_files.normalize_relative_path(path)
+    try:
+        with context.root_files.open_file(root, path) as handle:
+            size = os.fstat(handle.fileno()).st_size
+    except RootFileError as exc:
+        if exc.code == "file.fileNotFound":
+            return ()
+        raise
+    return (
+        ToolFileAction(
+            operation=operation,
+            root=root,
+            root_identity=context.root_files.root_identity(root),
+            path=path,
+            filename=path.rsplit("/", 1)[-1],
+            size_bytes=size,
+        ),
+    )
+
+
 async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> ToolResult:
     request = _filesystem_permission(
         context,
@@ -1007,7 +1138,10 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
     written = context.root_files.write_file(arguments.root, arguments.path, arguments.content)
-    return ToolResult.json({"root": arguments.root, "written": written})
+    return ToolResult.json(
+        {"root": arguments.root, "written": written},
+        file_actions=_regular_file_action(context, "write", arguments.root, written),
+    )
 
 
 async def _create_directory(
@@ -1071,7 +1205,12 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
         arguments.destination_root,
         arguments.destination_path,
     )
-    return ToolResult.json({"root": arguments.destination_root, "copied": copied})
+    return ToolResult.json(
+        {"root": arguments.destination_root, "copied": copied},
+        file_actions=_regular_file_action(
+            context, "copy", arguments.destination_root, copied
+        ),
+    )
 
 
 async def _move_path(arguments: MovePathArguments, context: ToolContext) -> ToolResult:
@@ -1101,7 +1240,12 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
         arguments.destination_root,
         arguments.destination_path,
     )
-    return ToolResult.json({"root": arguments.destination_root, "moved": moved})
+    return ToolResult.json(
+        {"root": arguments.destination_root, "moved": moved},
+        file_actions=_regular_file_action(
+            context, "move", arguments.destination_root, moved
+        ),
+    )
 
 
 async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> ToolResult:
@@ -1267,6 +1411,7 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
 
 _MEDIA_SETTINGS_FIELDS = {
     "media.generate.image": "generate_image",
+    "media.edit.image": "edit_image",
     "media.generate.speech": "generate_speech",
     "media.generate.audio": "generate_audio",
     "media.transcribe.audio": "transcribe_audio",
@@ -1274,6 +1419,7 @@ _MEDIA_SETTINGS_FIELDS = {
 
 _MEDIA_MODEL_CAPABILITIES = {
     "media.generate.image": ModelCapability.IMAGE_GENERATION,
+    "media.edit.image": ModelCapability.IMAGE_EDITING,
     "media.generate.speech": ModelCapability.SPEECH_GENERATION,
     "media.generate.audio": ModelCapability.AUDIO_GENERATION,
     "media.transcribe.audio": ModelCapability.AUDIO_TRANSCRIPTION,
@@ -1338,7 +1484,12 @@ def effective_tool_capabilities(
     return capabilities
 
 
-async def _authorize_media(context: ToolContext, capability: str) -> ToolResult | None:
+async def _authorize_media(
+    context: ToolContext,
+    capability: str,
+    target: ResolvedMediaModel | None = None,
+    source_attachment_ids: tuple[UUID, ...] = (),
+) -> ToolResult | None:
     field_name = _MEDIA_SETTINGS_FIELDS[capability]
     policy = tool_execution_policy(
         context.tool_settings, capability, getattr(context.tool_settings, field_name).policy
@@ -1347,7 +1498,21 @@ async def _authorize_media(context: ToolContext, capability: str) -> ToolResult 
         return ToolResult.error("tool.unavailable")
     if policy == ToolExecutionPolicy.ASK:
         allowed = await _allow(
-            context, media_permission(context.session.id, capability, context.tool_call.name)
+            context,
+            media_permission(
+                context.session.id,
+                capability,
+                context.tool_call.name,
+                provider_id=target.provider.id if target else None,
+                model_id=target.model.id if target else None,
+                model_name=(target.model.name or target.model.model_id) if target else None,
+                trust_level=(
+                    (target.model.trust_level or target.provider.trust_level).value
+                    if target
+                    else None
+                ),
+                source_attachment_ids=source_attachment_ids,
+            ),
         )
         if not allowed:
             return ToolResult.error("permission.denied")
@@ -1432,14 +1597,29 @@ async def _update_agent_identity(
 async def _generate_image(
     arguments: GenerateImageArguments, context: ToolContext
 ) -> ToolResult:
-    if error := await _authorize_media(context, "media.generate.image"):
+    target = await MediaService.resolve_model(
+        context.db,
+        ModelCapability.IMAGE_GENERATION,
+        active_model_id=context.model_id,
+    )
+    target_trust_level = target.model.trust_level or target.provider.trust_level
+    if error := await _authorize_media(
+        context, "media.generate.image", target
+    ):
         return error
     result = await MediaService.generate_image(
         context.db,
         prompt=arguments.prompt,
-        size=f"{arguments.width or 512}x{arguments.height or 512}",
+        size=(
+            f"{arguments.width or 512}x{arguments.height or 512}"
+            if arguments.width is not None or arguments.height is not None
+            else None
+        ),
         seed=arguments.seed,
         timeout=context.tool_settings.generate_image.timeout_seconds,
+        active_model_id=context.model_id,
+        expected_model_id=target.model.id,
+        expected_trust_level=target_trust_level,
     )
     return ToolResult(
         "Image generated.",
@@ -1453,6 +1633,93 @@ async def _generate_image(
                 metadata=result.metadata,
             ),
         ),
+        trust_level=result.trust_level,
+    )
+
+
+async def _edit_image(
+    arguments: EditImageArguments, context: ToolContext
+) -> ToolResult:
+    target = await MediaService.resolve_model(
+        context.db,
+        ModelCapability.IMAGE_EDITING,
+        active_model_id=context.model_id,
+    )
+    target_trust_level = target.model.trust_level or target.provider.trust_level
+    attachments = list(
+        (
+            await context.db.scalars(
+                select(MessageAttachment)
+                .join(Message, Message.id == MessageAttachment.message_id)
+                .options(joinedload(MessageAttachment.message))
+                .where(
+                    MessageAttachment.id.in_(arguments.attachment_ids),
+                    MessageAttachment.kind == "image",
+                    Message.session_id == context.session.id,
+                )
+            )
+        ).all()
+    )
+    by_id = {attachment.id: attachment for attachment in attachments}
+    if len(by_id) != len(arguments.attachment_ids):
+        return ToolResult.error("attachment.notFound")
+    ordered = [by_id[attachment_id] for attachment_id in arguments.attachment_ids]
+    if sum(attachment.size_bytes for attachment in ordered) > MAX_PROVIDER_IMAGE_BYTES:
+        return ToolResult.error("attachment.tooLarge")
+    if target_trust_level == TrustLevel.PUBLIC and any(
+        (attachment.message.trust_level or TrustLevel.PUBLIC.value)
+        == TrustLevel.PRIVATE.value
+        for attachment in ordered
+    ):
+        return ToolResult.error("privacy.privateContentBlocked")
+    source_attachment_ids = tuple(arguments.attachment_ids)
+    if error := await _authorize_media(
+        context,
+        "media.edit.image",
+        target,
+        source_attachment_ids=source_attachment_ids,
+    ):
+        return error
+    service = AttachmentService()
+    try:
+        images = []
+        for attachment in ordered:
+            images.append(
+                (
+                    await service.read_image(attachment, context.session.id),
+                    attachment.mime_type,
+                )
+            )
+    except AttachmentError:
+        return ToolResult.error("attachment.notFound")
+    result = await MediaService.edit_image(
+        context.db,
+        prompt=arguments.prompt,
+        images=tuple(images),
+        source_attachment_ids=source_attachment_ids,
+        size=(
+            f"{arguments.width or 512}x{arguments.height or 512}"
+            if arguments.width is not None or arguments.height is not None
+            else None
+        ),
+        timeout=context.tool_settings.edit_image.timeout_seconds,
+        active_model_id=context.model_id,
+        expected_model_id=target.model.id,
+        expected_trust_level=target_trust_level,
+    )
+    return ToolResult(
+        "Image edited.",
+        {},
+        attachments=(
+            ToolAttachment(
+                result.data,
+                result.mime_type,
+                result.filename,
+                kind="image",
+                metadata=result.metadata,
+            ),
+        ),
+        trust_level=result.trust_level,
     )
 
 
@@ -2133,6 +2400,20 @@ tool_registry = ToolRegistry(
             actions=(_FILESYSTEM_READ,),
         ),
         ToolDefinition(
+            "provide_file",
+            "Provide one existing regular file from root=session or root=workspace as a "
+            "download in the chat. Use this when the user asks to receive, download, export, "
+            "or be given a file. path is a relative POSIX path and must not start with the "
+            "root name. The download reads the current file without loading its contents into "
+            "the model or copying it into session storage.",
+            ProvideFileArguments,
+            _provide_file,
+            group="filesystem",
+            label="Datei bereitstellen",
+            icon="download",
+            actions=(_FILESYSTEM_READ,),
+        ),
+        ToolDefinition(
             "write_file",
             "Create or replace a UTF-8 text file at a relative POSIX path in the explicit "
             "root. In the session root only paths below files are writable; attachments, "
@@ -2229,7 +2510,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "generate_image",
-            "Generate an image from a text prompt and attach the validated result.",
+            "Generate a new image from a complete standalone visual brief. Preserve the user's "
+            "intent, quote text that must appear verbatim, and do not invent unrelated content. "
+            "Use edit_image instead when modifying an existing image.",
             GenerateImageArguments,
             _generate_image,
             required_capability="media.generate.image",
@@ -2239,6 +2522,24 @@ tool_registry = ToolRegistry(
             actions=(
                 ToolAction(
                     "media.generate.image", "Bilder erzeugen", ToolExecutionPolicy.DISABLED
+                ),
+            ),
+        ),
+        ToolDefinition(
+            "edit_image",
+            "Edit one to five image attachments from the current session and attach a new validated "
+            "result without changing the originals. Use a standalone edit brief that identifies "
+            "each input by order, states only the requested changes, and repeats everything that "
+            "must remain unchanged.",
+            EditImageArguments,
+            _edit_image,
+            required_capability="media.edit.image",
+            group="media",
+            label="Bild bearbeiten",
+            icon="edit",
+            actions=(
+                ToolAction(
+                    "media.edit.image", "Bilder bearbeiten", ToolExecutionPolicy.ASK
                 ),
             ),
         ),
@@ -2447,6 +2748,7 @@ def permission_for(
     capability = {
         "list_directory": "filesystem.read",
         "read_file": "filesystem.read",
+        "provide_file": "filesystem.read",
         "write_file": "filesystem.write",
         "create_directory": "filesystem.write",
         "delete_path": "filesystem.delete",
@@ -2459,6 +2761,7 @@ def permission_for(
         action = {
             "list_directory": "Ordner anzeigen",
             "read_file": "Datei lesen",
+            "provide_file": "Datei bereitstellen",
             "write_file": "Datei schreiben",
             "create_directory": "Ordner erstellen",
             "delete_path": "Pfad löschen",

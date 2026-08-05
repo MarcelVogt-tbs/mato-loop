@@ -25,6 +25,11 @@ CODEX_DEVICE_TOKEN_URL = f"{CODEX_AUTH_BASE_URL}/api/accounts/deviceauth/token"
 CODEX_TOKEN_URL = f"{CODEX_AUTH_BASE_URL}/oauth/token"
 CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
 CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
+CODEX_IMAGES_GENERATIONS_URL = (
+    "https://chatgpt.com/backend-api/codex/images/generations"
+)
+CODEX_IMAGES_EDITS_URL = "https://chatgpt.com/backend-api/codex/images/edits"
+CODEX_IMAGE_MODEL_ID = "openai-codex/gpt-image-2"
 CODEX_COMPATIBILITY_VERSION = "0.144.6"
 LOGIN_TTL_SECONDS = 15 * 60
 
@@ -292,7 +297,7 @@ async def discover_models(
             "Codex returned an invalid model list",
             code="provider.invalidResponse",
         ) from exc
-    return [
+    models = [
         DiscoveredModel(
             id=f"openai-codex/{model.slug}",
             name=model.display_name or model.slug,
@@ -303,6 +308,17 @@ async def discover_models(
         for model in parsed.models
         if model.visibility == "list"
     ]
+    models.append(
+        DiscoveredModel(
+            id=CODEX_IMAGE_MODEL_ID,
+            name="GPT Image 2",
+            capabilities={"image_generation", "image_editing"},
+            capabilities_authoritative=True,
+            native_for_chat_provider=True,
+            supports_tools=False,
+        )
+    )
+    return models
 
 
 oauth_manager = CodexOAuthManager()

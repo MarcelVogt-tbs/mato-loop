@@ -193,6 +193,7 @@ const messages = {
   'provider.unavailable': () => 'Der Provider ist derzeit nicht erreichbar.',
   'privacy.pseudonymizationFailed': () => 'Die lokale Pseudonymisierung ist fehlgeschlagen.',
   'privacy.pseudonymizationUnavailable': () => 'Die lokale Pseudonymisierung ist derzeit nicht verfügbar.',
+  'privacy.privateContentBlocked': () => 'Private Bildinhalte dürfen nicht an das ausgewählte öffentliche Modell gesendet werden.',
   'session.invalidWorkingDirectory': () => 'Das Arbeitsverzeichnis ist nicht gültig.',
   'session.messageNotFound': () => 'Die Chatnachricht wurde nicht gefunden.',
   'session.modelUnavailable': () => 'Das ausgewählte Modell ist nicht verfügbar.',

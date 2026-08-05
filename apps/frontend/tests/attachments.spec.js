@@ -8,16 +8,78 @@ import {
   formatAttachmentDuration,
   imageAttachments,
   safeAttachmentUrl,
-  supportedAttachments
+  safeFileDownloadUrl,
+  supportedAttachments,
+  toolFileActions,
+  toolFileAttachment
 } from '../src/utils/attachments'
 
 const url = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
+const downloadUrl = '/api/workspace/files/download?path=reports%2Flarge.zip&scope=filesystem&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=original-workspace'
 
 describe('persisted attachments', () => {
   it('only permits the internal hierarchical attachment route', () => {
     expect(safeAttachmentUrl(url)).toBe(url)
     expect(safeAttachmentUrl(`https://example.com${url}`)).toBeNull()
     expect(safeAttachmentUrl('/api/sessions/../secrets')).toBeNull()
+  })
+
+  it('accepts only bound internal file-download URLs', () => {
+    expect(safeFileDownloadUrl(downloadUrl)).toBe(downloadUrl)
+    expect(safeFileDownloadUrl(`${downloadUrl}&working_directory=other`)).toBeNull()
+    expect(safeFileDownloadUrl(downloadUrl.replace('reports%2Flarge.zip', '..%2Fsecret'))).toBeNull()
+    expect(safeFileDownloadUrl(`https://example.com${downloadUrl}`)).toBeNull()
+    const sessionUrl = '/api/workspace/files/download?path=files%2Freport.pdf&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440000'
+    expect(safeFileDownloadUrl(sessionUrl)).toBe(sessionUrl)
+    expect(safeFileDownloadUrl(sessionUrl.replace(/root_identity=[^&]+/u, 'root_identity=other'))).toBeNull()
+  })
+
+  it('turns only a valid provide_file result into a download attachment', () => {
+    const result = {
+      id: 'result-1',
+      content: JSON.stringify({
+        root: 'workspace',
+        path: 'reports/large.zip',
+        filename: 'large.zip',
+        sizeBytes: 3_000_000_000,
+        downloadUrl
+      })
+    }
+
+    expect(toolFileAttachment({ id: 'call-1', name: 'provide_file' }, result)).toEqual({
+      id: 'provided-result-1',
+      kind: 'file',
+      mimeType: 'application/octet-stream',
+      sizeBytes: 3_000_000_000,
+      filename: 'large.zip',
+      url: downloadUrl
+    })
+    expect(toolFileAttachment({ id: 'call-1', name: 'read_file' }, result)).toBeNull()
+    expect(toolFileAttachment({ id: 'call-1', name: 'provide_file' }, {
+      ...result,
+      content: result.content.replace('large.zip",', 'other.zip",')
+    })).toBeNull()
+  })
+
+  it('accepts only host-bound file actions', () => {
+    const action = {
+      operation: 'write',
+      root: 'workspace',
+      rootIdentity: 'original-workspace',
+      path: 'reports/large.zip',
+      filename: 'large.zip',
+      sizeBytes: 3_000_000_000,
+      downloadUrl
+    }
+    const expected = {
+      ...action,
+      sessionId: '550e8400-e29b-41d4-a716-446655440000'
+    }
+
+    expect(toolFileActions({ fileActions: [action] })).toEqual([expected])
+    expect(toolFileActions({ fileActions: [{ ...action, path: 'reports/other.zip' }] })).toEqual([])
+    expect(toolFileActions({ fileActions: [{ ...action, rootIdentity: 'other' }] })).toEqual([])
+    expect(toolFileActions({ fileActions: [{ ...action, operation: 'delete' }] })).toEqual([])
   })
 
   it('keeps supported image metadata and marks unsafe URLs', () => {

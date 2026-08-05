@@ -284,6 +284,7 @@ def general_system_prompt(
     file_tool_names = {
         "list_directory",
         "read_file",
+        "provide_file",
         "write_file",
         "create_directory",
         "delete_path",
@@ -428,8 +429,24 @@ def general_system_prompt(
             "Attachment markers may name host-derived readable text or PCM audio paths under "
             "session/derived; read those paths with read_file."
         )
+    if "provide_file" in offered_tool_names:
+        parts.append(
+            "A successful write_file, copy_path, or move_path automatically exposes its regular-file "
+            "destination in the UI. Use provide_file only for an existing regular file that was not "
+            "already exposed by one of those successful actions. A path in chat text and read_file "
+            "output do not create a download. After provide_file succeeds, do not copy or rewrite its "
+            "internal URL and do not create a Markdown file link. Tell the user to use the host-rendered "
+            "download card."
+        )
     if "transcribe_audio" in offered_tool_names:
         parts.append("transcribe_audio uses the verified PCM audio derivative automatically.")
+    if "edit_image" in offered_tool_names:
+        parts.append(
+            "edit_image is a media operation. It reads verified current-session image attachments, "
+            "creates a new host-managed generated attachment, and never changes the source images, "
+            "session files, or workspace. Use it for requested image edits without asking the user "
+            "to switch workspace mode."
+        )
     if "memory_write" in offered_tool_names:
         parts.append(
             "Use memory_write when the user explicitly asks to retain something. Also treat an "
@@ -523,11 +540,13 @@ def general_system_prompt(
         )
     if file_tools_available and chat_session.workspace_access == "read-only":
         parts.append(
-            "Workspace mode: read-only. Write tools are unavailable in this mode. When a user "
-            "asks to create, modify, or delete files, tell them to switch Agent-Modus from Lesen "
-            "to Schreiben and retry the request. Do not claim that MatoLoop generally cannot "
-            "perform the action. Do not emit stale mutation calls: they are rejected even if they "
-            "were offered earlier."
+            "Workspace mode: read-only. Write file tools are unavailable in this mode. This "
+            "restriction applies only to file tools and paths, not to media tools or host-managed "
+            "generated attachments. When a user asks for a file or path mutation that specifically "
+            "requires an unavailable write tool, tell them to switch Agent-Modus from Lesen to "
+            "Schreiben and retry the request. Do not claim that MatoLoop generally cannot perform "
+            "the action. Do not emit stale mutation calls: they are rejected even if they were "
+            "offered earlier."
         )
     elif file_tools_available:
         parts.append("Workspace mode: read-write. Write tools are available when permitted.")
