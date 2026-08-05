@@ -189,3 +189,9 @@ The prepared production stack uses two bind mounts:
 ```
 
 The production SPA is served by the MatoLoop container together with FastAPI. The development stack keeps separate frontend and backend processes for HMR. The production stack is not used for development work.
+
+## User Documentation
+
+German user and administration documentation lives under `docs/user` and is built with the pinned Material for MkDocs dependency. Existing English files directly under `docs` remain repository architecture documentation and are not published in the user site.
+
+The production image builds the site in a separate stage and copies only generated files to `/app/static/docs`. FastAPI serves that directory publicly at `/docs/` before the SPA fallback; OpenAPI remains at `/api/docs`. The frontend development server proxies `/docs` to the backend, whose startup command builds the same sources into temporary container storage. Documentation pages contain no session or user data.

@@ -36,6 +36,7 @@ The development stack is the standard environment for all local work:
 The following endpoints are then available:
 
 - Web UI: `http://localhost:10020`
+- User documentation: `http://localhost:10020/docs/`
 - Backend: `http://localhost:6020/api`
 - OpenAPI: `http://localhost:6020/api/docs`
 
@@ -144,6 +145,7 @@ API keys and OAuth tokens are encrypted in PostgreSQL. The local Fernet key is s
 
 ## Documentation
 
+- [User handbook](docs/user/index.md)
 - [Coding agent rules](AGENTS.md)
 - [Architecture](docs/architecture.md)
 - [Backend](apps/backend/README.md)

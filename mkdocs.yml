@@ -1,0 +1,75 @@
+site_name: MatoLoop Dokumentation
+site_description: Benutzer- und Administrationshandbuch für MatoLoop
+site_url: ""
+
+docs_dir: docs/user
+
+theme:
+  name: material
+  language: de
+  logo: assets/images/matoloop.svg
+  favicon: assets/images/matoloop.svg
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Zum Dunkelmodus wechseln
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Zum Hellmodus wechseln
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+
+extra_css:
+  - assets/stylesheets/theme.css
+
+nav:
+  - Startseite: index.md
+  - Einstieg:
+      - Schnellstart: schnellstart.md
+      - Anmeldung und Oberfläche: anmeldung-und-oberflaeche.md
+  - Arbeiten mit MatoLoop:
+      - Chat und Sessions: chat-und-sessions.md
+      - Dateien und Arbeitsordner: dateien-und-arbeitsordner.md
+      - Anhänge, Diktat und Medien: anhaenge-und-medien.md
+      - Webrecherche und Quellen: webrecherche-und-quellen.md
+      - Freigaben und Datenfreigabe: freigaben-und-datenfreigabe.md
+  - Personalisierung:
+      - Persona: persona.md
+      - Memory und Dreaming: memory-und-dreaming.md
+  - Administration:
+      - Provider und Modelle: provider-und-modelle.md
+      - Tools und Integrationen: tools-und-integrationen.md
+      - Betrieb und Datensicherung: betrieb-und-datensicherung.md
+  - Hilfe:
+      - Häufige Fragen: haeufige-fragen.md
+
+plugins:
+  - search:
+      lang: de
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true

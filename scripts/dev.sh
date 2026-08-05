@@ -41,7 +41,7 @@ run_frontend() {
 }
 
 check_backend() {
-    run_backend "uv sync --frozen && uv run python -m compileall src/mato_loop_backend && uv run ruff check src tests"
+    run_backend "uv sync --frozen --group docs && uv run --no-sync mkdocs build --strict --config-file /workspace/mkdocs.yml --site-dir /tmp/mato-loop-docs && uv run python -m compileall src/mato_loop_backend && uv run ruff check src tests"
 }
 
 check_frontend() {

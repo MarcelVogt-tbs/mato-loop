@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, update
 
@@ -39,6 +39,18 @@ def _static_path(static_root: Path, full_path: str) -> Path | None:
     except ValueError:
         return None
     return requested
+
+
+def _mount_documentation(target: FastAPI, docs_dir: Path) -> None:
+    @target.get("/docs", include_in_schema=False)
+    async def documentation_redirect() -> RedirectResponse:
+        return RedirectResponse("/docs/", status_code=308)
+
+    target.mount(
+        "/docs",
+        StaticFiles(directory=docs_dir, html=True),
+        name="documentation",
+    )
 
 
 @asynccontextmanager
@@ -114,6 +126,10 @@ app.include_router(api_router, prefix="/api")
 register_error_handlers(app)
 
 if runtime_config.static_dir and runtime_config.static_dir.exists():
+    docs_dir = runtime_config.static_dir / "docs"
+    if docs_dir.is_dir():
+        _mount_documentation(app, docs_dir)
+
     assets_dir = runtime_config.static_dir / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")

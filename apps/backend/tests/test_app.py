@@ -1,9 +1,10 @@
 from pathlib import Path
 from uuid import uuid4
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from mato_loop_backend.app import _static_path, app
+from mato_loop_backend.app import _mount_documentation, _static_path, app
 
 
 def test_liveness() -> None:
@@ -90,3 +91,34 @@ def test_static_paths_cannot_escape_static_root(tmp_path: Path) -> None:
 
     assert _static_path(static_root, "assets/app.js") == static_root / "assets/app.js"
     assert _static_path(static_root, "../secret.txt") is None
+
+
+def test_documentation_serves_public_directory_urls(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    guide_dir = docs_dir / "guide"
+    guide_dir.mkdir(parents=True)
+    (docs_dir / "index.html").write_text("Documentation", encoding="utf-8")
+    (guide_dir / "index.html").write_text("Guide", encoding="utf-8")
+
+    documentation_app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    _mount_documentation(documentation_app, docs_dir)
+
+    @documentation_app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str) -> str:
+        return f"SPA: {full_path}"
+
+    with TestClient(documentation_app) as client:
+        redirect = client.get("/docs")
+        index = client.get("/docs/")
+        guide = client.get("/docs/guide/")
+        missing = client.get("/docs/missing/")
+
+    assert [response.status_code for response in redirect.history] == [308]
+    assert redirect.history[0].headers["location"] == "/docs/"
+    assert redirect.text == "Documentation"
+    assert index.status_code == 200
+    assert index.text == "Documentation"
+    assert guide.status_code == 200
+    assert guide.text == "Guide"
+    assert missing.status_code == 404
+    assert "SPA" not in missing.text

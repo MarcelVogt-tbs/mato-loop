@@ -279,6 +279,17 @@
                     {{ $q.dark.isActive ? 'Heller Modus' : 'Dunkler Modus' }}
                   </q-item-section>
                 </q-item>
+                <q-item
+                  clickable
+                  v-ripple
+                  href="/docs/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  v-close-popup
+                >
+                  <q-item-section avatar><q-icon name="menu_book" /></q-item-section>
+                  <q-item-section>Dokumentation</q-item-section>
+                </q-item>
                 <q-separator class="q-my-sm" />
                 <q-item clickable v-ripple v-close-popup class="text-negative" @click="logout">
                   <q-item-section avatar><q-icon name="logout" /></q-item-section>
