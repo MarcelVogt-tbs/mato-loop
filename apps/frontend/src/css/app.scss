@@ -786,7 +786,7 @@ body.body--dark .app-floating-control--flat {
 }
 
 .chat-message--turn-continues {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .chat-message--user {
@@ -1406,12 +1406,8 @@ body.body--dark .app-floating-control--flat {
   background: var(--app-hover);
 }
 
-.tool-history__avatar-section {
-  min-width: 28px;
-  padding-right: 8px;
-}
-
 .tool-history__icon {
+  flex: 0 0 auto;
   color: var(--app-muted);
 }
 
@@ -1421,12 +1417,28 @@ body.body--dark .app-floating-control--flat {
 }
 
 .tool-history__identity-content,
-.tool-history__label {
+.tool-history__activity,
+.tool-history__activity-label {
   min-width: 0;
 }
 
-.tool-history__label {
+.tool-history__identity-content {
+  gap: 16px;
+}
+
+.tool-history__activity {
   flex: 0 1 auto;
+  gap: 8px;
+}
+
+.tool-history__activity-label {
+  min-width: 0;
+}
+
+.tool-history__summary,
+.tool-history__message-count {
+  flex: 0 0 auto;
+  gap: 5px;
 }
 
 .tool-history__calls {
@@ -1438,10 +1450,34 @@ body.body--dark .app-floating-control--flat {
   margin: 8px 4px 12px 34px;
 }
 
-.tool-history__problem-count {
-  color: var(--q-negative);
+.tool-history__message-count {
   font-size: 0.75rem;
   font-weight: 600;
+}
+
+.tool-history__message-count--error {
+  color: var(--q-negative);
+}
+
+.tool-history__message-count--warning {
+  color: var(--q-warning);
+}
+
+.tool-history__activity-icon {
+  color: var(--q-primary);
+  animation: tool-history-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes tool-history-breathe {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+
+  50% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
 }
 
 .tool-history__output + .tool-history__output {
@@ -1606,6 +1642,11 @@ body.body--dark .tool-call--completed .tool-call__status { color: var(--app-mute
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .tool-history__activity-icon {
+    opacity: 1;
+    animation: none;
+  }
+
   .agent-activity__spinner {
     display: none;
   }

@@ -63,13 +63,15 @@ export function buildChatTranscript(
     const reasoningItems = assistantSection.flatMap((message) => message.reasoning ? [message.reasoning] : [])
     const carrier = assistantSection.find((message) => message.toolCalls.length || message.reasoning)
       || assistantSection[0]
+    const reasoningCarrier = [...assistantSection].reverse().find((message) => message.reasoning)
+      || carrier
     if (toolItems.length) {
       carrier.toolHistory = { id: `tool-history-${carrier.id}`, items: toolItems }
     }
     if (reasoningItems.length) {
       const durations = reasoningItems.map((item) => item.observedDurationMs).filter(Number.isFinite)
       const tokens = reasoningItems.map((item) => item.reasoningTokens).filter(Number.isFinite)
-      carrier.reasoningHistory = {
+      reasoningCarrier.reasoningHistory = {
         kind: reasoningItems.every((item) => item.kind === 'summary') ? 'summary' : 'content',
         entries: reasoningItems,
         observedDurationMs: durations.length ? durations.reduce((total, value) => total + value, 0) : null,

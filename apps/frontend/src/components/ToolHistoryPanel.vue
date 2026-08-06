@@ -8,30 +8,40 @@
       :duration="180"
     >
       <template #header>
-        <q-item-section avatar class="tool-history__avatar-section">
-          <q-icon :name="headerIcon" class="tool-history__icon" size="18px" />
-        </q-item-section>
         <q-item-section class="tool-history__identity" :aria-label="headerAriaLabel">
-          <div class="tool-history__identity-content row items-center no-wrap q-gutter-sm">
-            <span class="tool-history__label text-weight-medium ellipsis">
-              {{ headerTool ? toolIdentity(headerTool.tool.name).label : items.length }}
-            </span>
+          <div class="tool-history__identity-content row items-center no-wrap">
+            <div v-if="activityDisplay" class="tool-history__activity row items-center no-wrap">
+              <q-icon
+                :name="activityDisplay.icon"
+                class="tool-history__icon tool-history__activity-icon"
+                size="18px"
+              />
+              <span class="tool-history__activity-label text-weight-medium ellipsis">
+                {{ activityDisplay.label }}
+              </span>
+            </div>
+            <div class="tool-history__summary row items-center no-wrap">
+              <q-icon name="build" class="tool-history__icon" size="18px" />
+              <span class="text-weight-medium">{{ items.length }}</span>
+            </div>
             <span
-              v-if="problemItems.length"
-              class="tool-history__problem-count row items-center no-wrap q-gutter-xs"
+              v-if="errorItems.length"
+              class="tool-history__message-count tool-history__message-count--error row items-center no-wrap"
               role="img"
-              :aria-label="problemLabel"
+              :aria-label="errorLabel"
             >
               <q-icon name="error" color="negative" size="18px" />
-              <span>{{ problemItems.length }}</span>
+              <span>{{ errorItems.length }}</span>
             </span>
-            <q-spinner v-if="aggregateStatus.name === 'running'" color="primary" size="18px" />
-            <q-icon
-              v-else-if="['approval', 'pending'].includes(aggregateStatus.name)"
-              :name="aggregateStatus.icon"
-              :color="aggregateStatus.color"
-              size="18px"
-            />
+            <span
+              v-if="warningItems.length"
+              class="tool-history__message-count tool-history__message-count--warning row items-center no-wrap"
+              role="img"
+              :aria-label="warningLabel"
+            >
+              <q-icon name="warning" color="warning" size="18px" />
+              <span>{{ warningItems.length }}</span>
+            </span>
           </div>
         </q-item-section>
       </template>
@@ -107,12 +117,15 @@ import {
   toolFileActions,
   toolFileAttachment
 } from 'src/utils/attachments'
+import { agentActivityLabel } from 'src/utils/agent-activity'
 import { toolIdentity, toolStatus } from 'src/utils/tool-display'
 
 defineOptions({ name: 'ToolHistoryPanel' })
 
 const props = defineProps({
-  history: { type: Object, required: true }
+  history: { type: Object, required: true },
+  activity: { type: Object, default: null },
+  running: Boolean
 })
 const emit = defineEmits(['open-file'])
 const expanded = ref(false)
@@ -120,43 +133,43 @@ const items = computed(() => props.history?.items || [])
 const states = computed(() => items.value.map((item) => ({ item, status: toolStatus(item) })))
 const activeItem = computed(() => items.value.find((item) => item.active) || null)
 const approvalItems = computed(() => items.value.filter((item) => item.approval))
-const problemItems = computed(() => states.value.filter(({ status }) => (
-  ['failed', 'denied', 'interrupted'].includes(status.name)
+const errorItems = computed(() => states.value.filter(({ status }) => (
+  ['failed', 'denied'].includes(status.name)
 )))
-const headerTool = computed(() => activeItem.value || (items.value.length === 1 ? items.value[0] : null))
-const headerIcon = computed(() => headerTool.value
-  ? toolIdentity(headerTool.value.tool.name).icon
-  : 'history'
-)
-const aggregateStatus = computed(() => {
-  if (activeItem.value) return { name: 'running', label: 'Wird ausgeführt', icon: null, color: 'primary' }
-  if (approvalItems.value.length) {
-    return { name: 'approval', label: 'Freigabe erforderlich', icon: 'pending_actions', color: 'warning' }
+const warningItems = computed(() => states.value.filter(({ status }) => status.name === 'interrupted'))
+const currentTurn = computed(() => items.value.some((item) => item.current))
+const activityDisplay = computed(() => {
+  if (!props.running || !currentTurn.value) return null
+  if (activeItem.value) {
+    const identity = toolIdentity(activeItem.value.tool.name)
+    return { icon: identity.icon, label: identity.label }
   }
-  if (problemItems.value.length) {
-    return {
-      name: 'warning',
-      label: `${problemItems.value.length} nicht erfolgreich`,
-      icon: 'error',
-      color: 'negative'
-    }
+  const phase = props.activity?.phase
+  if (!phase || ['streaming', 'finalizing'].includes(phase)) return null
+  if (phase === 'processing_tool' && props.activity?.tool) {
+    const identity = toolIdentity(props.activity.tool)
+    return { icon: identity.icon, label: identity.label }
   }
-  if (states.value.length && states.value.every(({ status }) => status.name === 'completed')) {
-    return { name: 'completed', label: 'Erledigt', icon: 'check_circle', color: 'positive' }
+  const icons = {
+    preparing_tools: 'pending_actions',
+    waiting_approval: 'pending_actions'
   }
-  return { name: 'pending', label: 'Ausstehend', icon: 'schedule', color: 'grey-7' }
+  return icons[phase] ? { icon: icons[phase], label: agentActivityLabel(props.activity) } : null
 })
 const headerAriaLabel = computed(() => {
-  const subject = headerTool.value
-    ? toolIdentity(headerTool.value.tool.name).label
-    : `${items.value.length} Tool-Aufrufe`
-  const problems = problemItems.value.length && aggregateStatus.value.name !== 'warning'
-    ? `, ${problemLabel.value}`
-    : ''
-  return `${subject}: ${aggregateStatus.value.label}${problems}`
+  const parts = [
+    ...(activityDisplay.value ? [`Aktuell: ${activityDisplay.value.label}`] : []),
+    `${items.value.length} ${items.value.length === 1 ? 'Tool-Aufruf' : 'Tool-Aufrufe'}`,
+    ...(errorItems.value.length ? [errorLabel.value] : []),
+    ...(warningItems.value.length ? [warningLabel.value] : [])
+  ]
+  return parts.join(', ')
 })
-const problemLabel = computed(() => (
-  `${problemItems.value.length} ${problemItems.value.length === 1 ? 'Tool-Aufruf war' : 'Tool-Aufrufe waren'} nicht erfolgreich.`
+const errorLabel = computed(() => (
+  `${errorItems.value.length} Fehler`
+))
+const warningLabel = computed(() => (
+  `${warningItems.value.length} ${warningItems.value.length === 1 ? 'Warnung' : 'Warnungen'}`
 ))
 const outputs = computed(() => items.value.flatMap((item) => {
   const providedFile = toolFileAttachment(item.tool, item.result)

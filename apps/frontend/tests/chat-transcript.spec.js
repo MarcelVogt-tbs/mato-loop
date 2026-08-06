@@ -142,14 +142,14 @@ describe('chat transcript', () => {
     const transcript = buildChatTranscript(messages)
 
     expect(transcript.messages.map((message) => message.id))
-      .toEqual(['user-1', 'assistant-1', 'assistant-3'])
+      .toEqual(['user-1', 'assistant-1', 'assistant-2', 'assistant-3'])
     expect(transcript.messages[1].toolHistory.items.map((item) => item.tool.name))
       .toEqual(['web_search', 'webfetch'])
-    expect(transcript.messages[1].reasoningHistory).toMatchObject({
+    expect(transcript.messages[2].reasoningHistory).toMatchObject({
       observedDurationMs: 500,
       reasoningTokens: 30
     })
-    expect(transcript.messages[1].reasoningHistory.entries.map((item) => item.text))
+    expect(transcript.messages[2].reasoningHistory.entries.map((item) => item.text))
       .toEqual(['Suche planen', 'Treffer prüfen'])
     expect(transcript.messages[1]).toMatchObject({
       showAgentLabel: true,
@@ -158,7 +158,7 @@ describe('chat transcript', () => {
       modelName: null,
       trustLevel: null
     })
-    expect(transcript.messages[2]).toMatchObject({
+    expect(transcript.messages[3]).toMatchObject({
       hasAssistantContent: true,
       createdAt: '2026-08-06T12:00:03Z',
       modelName: 'Antwortmodell',

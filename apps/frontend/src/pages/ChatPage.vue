@@ -85,7 +85,12 @@
                 v-if="message.reasoningHistory || message.reasoning"
                 :reasoning="message.reasoningHistory || message.reasoning"
                 :expanded="auth.preferences.thinkingExpanded"
-                class="q-mb-md"
+                :class="{
+                  'q-mb-sm': message.content
+                    || message.attachments?.length
+                    || message.toolHistory
+                    || message.generationStatus === 'interrupted'
+                }"
                 @update:expanded="updateThinkingExpanded"
               />
               <MessageContent
@@ -107,6 +112,8 @@
               v-if="message.toolHistory"
               :class="{ 'q-mt-md': message.content }"
               :history="message.toolHistory"
+              :activity="chat.activity"
+              :running="chat.running"
               @open-file="openToolFile"
             />
             <div
@@ -206,7 +213,7 @@
               :activity="chat.activity"
               :running="chat.running"
               :expanded="auth.preferences.thinkingExpanded"
-              class="q-mb-md"
+              :class="{ 'q-mb-sm': chat.streamContent }"
               @update:expanded="updateThinkingExpanded"
             />
             <MessageContent

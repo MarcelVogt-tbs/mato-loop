@@ -55,6 +55,7 @@ export function agentRunPresentation({
   const toolItems = (transcript?.messages || []).flatMap((message) => (
     message.toolHistory?.items || message.toolCalls || []
   ))
+  const currentToolItems = toolItems.filter((item) => item.current)
   const approval = toolItems.find((item) => item.approval)?.approval
     || transcript?.unmatchedApprovals?.[0]
   if (approval) {
@@ -69,9 +70,8 @@ export function agentRunPresentation({
   if (toolItems.some((item) => item.active)) {
     return { showActivity: false, announcement: agentActivityLabel(activity) }
   }
-  if (activity?.phase === 'preparing_tools'
-    && toolItems.some((item) => item.current && !item.result)) {
-    return { showActivity: false, announcement: 'Tool-Aufrufe werden vorbereitet' }
+  if (currentToolItems.length && ['processing_tool', 'preparing_tools', 'waiting_approval'].includes(activity?.phase)) {
+    return { showActivity: false, announcement: agentActivityLabel(activity) }
   }
   if (streamContent) {
     return { showActivity: false, announcement: 'Antwort wird erstellt' }

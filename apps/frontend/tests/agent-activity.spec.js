@@ -47,6 +47,26 @@ describe('agent activity', () => {
       .toEqual({ showActivity: false, announcement: 'Antwort wird erstellt' })
     expect(agentRunPresentation({
       running: true,
+      activity: { phase: 'waiting_model', modelRequest: 2 },
+      transcript: {
+        messages: [{ toolHistory: { items: [{ current: true, result: {} }] } }],
+        unmatchedApprovals: []
+      }
+    })).toEqual({
+      showActivity: true,
+      announcement: 'Modell wertet Tool-Ergebnisse aus'
+    })
+    expect(agentRunPresentation({
+      running: true,
+      activity: { phase: 'waiting_model', modelRequest: 2 },
+      streamReasoning: { text: 'Ergebnisse prüfen' },
+      transcript: {
+        messages: [{ toolHistory: { items: [{ current: true, result: {} }] } }],
+        unmatchedApprovals: []
+      }
+    })).toEqual({ showActivity: false, announcement: 'Denkprozess' })
+    expect(agentRunPresentation({
+      running: true,
       activity: { phase: 'processing_tool', tool: 'read_file' },
       transcript: {
         messages: [{ toolHistory: { items: [{ active: true }] } }],
