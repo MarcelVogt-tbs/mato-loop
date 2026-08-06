@@ -26,7 +26,7 @@ Research tools return structured results with safe URLs. `web_search` labels con
 
 `session_tool_result_read` reads a persisted current-session tool result by message ID without executing the original tool again. The host returns fixed chunks of at most 12,000 characters from a zero-based offset and reports continuation through `hasMore` and `nextOffset`. Historical omission markers and shortened current-session tool messages returned by `session_read` contain a host-generated `toolResultReference` with exact retrieval arguments. Shortened tool messages from another approved session contain no unusable current-session reference.
 
-Session discovery and reading remain separate operations. `session_browse` lists the most recently active prior sessions, while `session_search` performs literal topic discovery. Both return a bounded untrusted preview and exact `sessionReadArguments`; the model must use `session_read` before relying on conversation details. Session titles inherit the first persisted user message's trust level and follow the same public/private release boundary. `session_read` can project a bounded window around `around_message_id` and continue forward with `nextAfterMessageId`. Its 50,000-character page budget advances only through messages actually returned, so continuation never skips an omitted record.
+Automatic episodic retrieval may place bounded, trust-filtered prior-session excerpts directly in request context when the session memory mode allows it. These excerpts are untrusted and do not grant access to the complete transcript. Explicit discovery and reading remain separate operations: `session_browse` lists the most recently active prior sessions, while `session_search` performs literal topic discovery. Both return a bounded untrusted preview and exact `sessionReadArguments`; the model must use separately permission-controlled `session_read` before relying on details beyond the supplied excerpt or preview. Session titles inherit the first persisted user message's trust level and follow the same public/private release boundary. `session_read` can project a bounded window around `around_message_id` and continue forward with `nextAfterMessageId`. Its 50,000-character page budget advances only through messages actually returned, so continuation never skips an omitted record.
 
 The tool registry is the only name resolver for tool calls. It rejects duplicate names during construction, validates input before execution, and exports only tools available for the session, mode, and effective integrations. Unknown tools, invalid arguments, and execution failures become stable tool errors. Exception text and secrets never enter model context or API responses.
 
@@ -35,6 +35,8 @@ Tool groups are host-controlled catalog and UI metadata. They do not grant acces
 Permission evaluation validates immutable host boundaries first. `disabled` then denies even when a matching grant exists, `auto` allows only inside those boundaries, and `ask` checks an exact typed session grant before creating an approval. After an approval, the host reloads policy and boundary state before allowing the effect. Groups are never permission matcher inputs.
 
 Global action policies may have integration-resource overrides stored in `ToolSettings`. An override is keyed by the bound integration UUID, an adapter-generated stable resource key, and the action capability. Missing overrides inherit the global action policy. A globally disabled action is a hard boundary and cannot be enabled by a resource override. The permission request keeps this policy target separate from its typed grant matcher, so a calendar-level policy can govern an operation while a session grant remains limited to one concrete event.
+
+Integration actions additionally support a sparse instance default between the global and resource levels. New resources inherit the instance default, which initially inherits the static action default. Every action declares its allowed policy modes; invalid or disallowed persisted modes fail closed. Remote service privileges are transient hard limits evaluated after local authorization and cannot be raised by policies or grants.
 
 Configured integrations resolve through a static host catalog. An adapter can contribute statically implemented tools or values to a configuration field declared extensible by a base tool. Such values do not automatically become model arguments. Adapters cannot load foreign handlers or arbitrary remote schemas. Prompt fragments come only from adapter code; names, responses, and other external data are never treated as instructions.
 
@@ -66,6 +68,9 @@ A permission consists of a capability and typed resource matcher. Security decis
 - URL matchers use the SHA-256 hash of the complete canonical URL. Display metadata is persisted separately without query values.
 - Persisted matchers deserialize losslessly to the same typed matcher.
 - Approval display title, summary, and risk are metadata, not matching inputs.
+- Integration-operation matchers compare the exact integration UUID, canonical binding-revision hash, optional opaque resource key, and host-generated operation key. Remote labels and URLs are never matcher inputs.
+
+Private integration data uses a separate session release. Sensitive integration tools require `integration.private_data.release` before a public model can receive a result. Successful use marks the session conservatively; later public requests recheck the revocable session grant before context projection and provider transport. This is deliberately a session-level boundary, not field-level taint tracking.
 
 For `read_file` and `list_directory`, the host resolves the root before permission checks. `root=session` is always bound to the current session; `root=workspace` is bound only to the selected working directory and is unavailable otherwise. Agent file tools never follow symlinks. In the session root, `attachments`, `generated`, `downloads`, and `derived` are readable and may be copy sources, but are immutable; only `files` permits mutations.
 
@@ -88,7 +93,7 @@ The binding baseline for session tools is:
 
 Canonical history is the persistent normalized sequence of session messages, including assistant tool calls and results. It remains complete and available in stable order. Provider payloads may be persisted additionally but never replace normalized history.
 
-Request context is a transient projection for one model request. It can contain system instructions, released memories, a compaction summary, and a budgeted slice of canonical history. Shortening, reordering, and provider conversion never modify or delete canonical messages.
+Request context is a transient projection for one model request. It can contain system instructions, released pinned and retrieved durable memories, bounded prior-session episodes, a compaction summary, and a budgeted slice of canonical current-session history. Shortening, reordering, and provider conversion never modify or delete canonical messages.
 
 When context omits a historical tool result, it inserts a structured reference to the canonical message ID. The model reads required details through `session_tool_result_read` instead of rerunning the tool. Results of that read are not duplicated in compaction summaries.
 

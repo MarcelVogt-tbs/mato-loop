@@ -29,9 +29,11 @@ The backend container uses reload mode and mounts the source tree through `/work
 - `src/mato_loop_backend/settings`: typed operational settings
 - `src/mato_loop_backend/integrations/contracts.py`: static adapter and tool contribution contracts
 - `src/mato_loop_backend/integrations/search.py`: no-key metasearch and SearXNG with controlled fallback
+- `src/mato_loop_backend/integrations/caldav.py`: CalDAV accounts, static tools, resource policies, and encrypted event references
+- `src/mato_loop_backend/integrations/caldav_client.py`: bounded asynchronous DAV and iCalendar transport
 - `src/mato_loop_backend/integrations/webfetch.py`: SSRF-protected fetching of concrete HTTP(S) URLs
 - `src/mato_loop_backend/attachments.py`: validated persistent image storage
-- `src/mato_loop_backend/memory`: CRUD, dreaming, Infinity client, indexer, and hybrid retrieval
+- `src/mato_loop_backend/memory`: durable-memory CRUD, optional dreaming, local indexing, and hybrid durable/episodic retrieval
 - `src/mato_loop_backend/workspace.py`: canonical paths and agent-home boundary
 - `alembic`: migrations and Alembic runtime
 - `tests`: backend unit and contract tests
@@ -55,7 +57,7 @@ Every relational schema change requires an Alembic migration generated only from
 
 Review the generated diff completely. Adjust generated revisions manually for renames, data migrations, extensions, and other operations Alembic cannot detect safely; fully handwritten revision files are not allowed. At minimum, `upgrade head` and `check` must then succeed. Operational settings remain typed Pydantic documents and additive fields require defaults.
 
-The initial migration enables pgvector and creates `memory_embeddings` as vector storage and a persistent queue. Existing memories are indexed asynchronously after backend startup; the migration never calls Infinity. The active profile uses `intfloat/multilingual-e5-small`, 384 dimensions, and the E5 prefixes `query: ` and `passage: `. Content hashes and profile fingerprints prevent stale vectors from being used.
+The initial migration enables pgvector and creates `memory_embeddings` as vector storage and a persistent queue. The episodic-memory migration adds deterministic `message_search_chunks` with its own persistent vector queue. Existing memories and eligible prior-session text are indexed asynchronously after backend startup; migrations never call Infinity. The active profile uses `intfloat/multilingual-e5-small`, 384 dimensions, and the E5 prefixes `query: ` and `passage: `. Content hashes and profile fingerprints prevent stale vectors from being used.
 
 Infinity is not a hard readiness dependency. `/api/health` reports `degraded` when it is unavailable, while FTS, CRUD, and agent runs remain available. `./scripts/dev.sh doctor` displays the extension version, column type, queue states, and Infinity health.
 

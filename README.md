@@ -14,13 +14,14 @@ The current implementation includes:
 - file explorer and working directories under `/data/home`
 - persistent permission grants and approval decisions
 - built-in web search without an API key and additional SearXNG providers
+- CalDAV accounts with per-calendar read, write, and delete policies
 - language-neutral API error codes and human-readable frontend toasts
 
 ## Stack
 
 - FastAPI and Pydantic v2
 - asynchronous SQLAlchemy 2.x, PostgreSQL, and Alembic
-- pgvector and local Infinity for hybrid memory retrieval
+- pgvector and local Infinity for hybrid durable-memory and prior-session retrieval
 - Vue 3, Quasar, Pinia, and Vue Router
 - `uv` and Yarn 4
 - Docker Compose
@@ -89,7 +90,7 @@ The development stack uses named volumes:
 
 Docker prefixes volume names with the Compose project name by default, for example `mato-loop_app_data`. The repository bind mount at `/workspace` exists only for HMR and live code changes.
 
-On first startup, Infinity downloads the pinned `intfloat/multilingual-e5-small` revision. This cold start can take several minutes; the backend and lexical memory search remain available. The cache does not require backup. `./scripts/dev.sh doctor` checks pgvector, vector dimensions, indexing state, and the Infinity health endpoint.
+On first startup, Infinity downloads the pinned `intfloat/multilingual-e5-small` revision. This cold start can take several minutes; the backend and lexical durable-memory and prior-session searches remain available. The cache does not require backup. `./scripts/dev.sh doctor` checks pgvector, durable-memory and episode indexing state, and the Infinity health endpoint.
 
 The following command deletes containers and all development volumes, including the database, users, secrets, and agent files:
 
