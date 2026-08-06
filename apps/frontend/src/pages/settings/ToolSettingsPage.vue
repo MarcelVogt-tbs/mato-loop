@@ -75,7 +75,7 @@
                   emit-value
                   map-options
                   :label="actionLabel(tool, action)"
-                  :options="MEDIA_POLICY_OPTIONS"
+                  :options="actionPolicyOptions(action)"
                   :hint="policyHint(form.policies[action.capability])"
                 />
                 <q-chip
@@ -315,6 +315,13 @@ const mediaTools = [
     capability: 'media.transcribe.audio',
     warningIcon: 'privacy_tip',
     warning: 'Audioaufnahmen können an den konfigurierten Transkriptionsdienst übertragen werden.'
+  },
+  {
+    name: 'analyze_video',
+    field: 'analyzeVideo',
+    capability: 'media.analyze.video',
+    warningIcon: 'privacy_tip',
+    warning: 'Videobilder und Tonspuren können an die konfigurierten Analyse- und Transkriptionsmodelle übertragen werden.'
   }
 ]
 const mediaToolsByName = Object.fromEntries(mediaTools.map((item) => [item.name, item]))
@@ -333,13 +340,20 @@ const TOOL_DESCRIPTIONS = {
   generate_speech: 'Erzeugt gesprochene WAV-Audiodateien aus Text.',
   generate_audio: 'Erzeugt Audio oder Musik aus einem Prompt.',
   transcribe_audio: 'Transkribiert WAV-Anhänge aus der aktuellen Session.',
+  analyze_video: 'Analysiert MP4- und WebM-Videos aus Session oder Workspace.',
   session_read: 'Liest Nachrichten aus der aktuellen oder einer anderen Session.',
   session_tool_result_read: 'Liest ein persistiertes Tool-Ergebnis der aktuellen Session.',
   session_browse: 'Listet letzte Sessions auf. Nutzt dieselbe Richtlinie wie die Session-Suche.',
   session_search: 'Durchsucht Titel und Inhalte vorhandener Sessions.',
   memory_retrieve: 'Liest passende persistente Memories.',
   memory_write: 'Erstellt oder aktualisiert persistente Memories.',
-  update_agent_identity: 'Ändert Name oder Persona-Anweisungen des Agents.'
+  update_agent_identity: 'Ändert Name oder Persona-Anweisungen des Agents.',
+  calendar_list_accounts: 'Listet die konfigurierten CalDAV-Konten auf.',
+  calendar_list_calendars: 'Listet Kalender eines CalDAV-Kontos auf.',
+  calendar_query_events: 'Liest Termine aus einem ausgewählten Kalender.',
+  calendar_create_event: 'Erstellt einen Termin in einem ausgewählten Kalender.',
+  calendar_update_event: 'Ändert einen zuvor gelesenen Termin.',
+  calendar_delete_event: 'Löscht einen zuvor gelesenen Termin.'
 }
 const form = reactive({
   policies: {},
@@ -357,7 +371,8 @@ const form = reactive({
   editImage: { policy: 'ask', timeoutSeconds: 300 },
   generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
   generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
-  transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 }
+  transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
+  analyzeVideo: { policy: 'ask', timeoutSeconds: 900 }
 })
 
 function assignForm(settings) {
@@ -398,6 +413,11 @@ function configurableActions(tool) {
 
 function fixedActions(tool) {
   return (tool.actions || []).filter((action) => !action.configurable)
+}
+
+function actionPolicyOptions(action) {
+  const allowed = action.allowedPolicies || MEDIA_POLICY_OPTIONS.map(({ value }) => value)
+  return MEDIA_POLICY_OPTIONS.filter(({ value }) => allowed.includes(value))
 }
 
 function actionLabel(tool, action) {
@@ -490,6 +510,10 @@ async function save() {
     transcribeAudio: {
       ...form.transcribeAudio,
       policy: form.policies['media.transcribe.audio']
+    },
+    analyzeVideo: {
+      ...form.analyzeVideo,
+      policy: form.policies['media.analyze.video']
     },
     updateAgentIdentity: {
       policy: form.policies['settings.agent_identity.update']

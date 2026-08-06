@@ -51,6 +51,9 @@ class ToolSettingsRequest(BaseModel):
     transcribe_audio: MediaToolSettings | None = Field(
         default=None, validation_alias=AliasChoices("transcribeAudio", "transcribe_audio")
     )
+    analyze_video: MediaToolSettings | None = Field(
+        default=None, validation_alias=AliasChoices("analyzeVideo", "analyze_video")
+    )
     update_agent_identity: PolicyToolSettings | None = Field(
         default=None,
         validation_alias=AliasChoices("updateAgentIdentity", "update_agent_identity"),
@@ -117,6 +120,12 @@ def tool_settings_payload(
             ).value,
             "timeoutSeconds": settings.transcribe_audio.timeout_seconds,
         },
+        "analyzeVideo": {
+            "policy": tool_execution_policy(
+                settings, "media.analyze.video", settings.analyze_video.policy
+            ).value,
+            "timeoutSeconds": settings.analyze_video.timeout_seconds,
+        },
         "updateAgentIdentity": {
             "policy": tool_execution_policy(
                 settings,
@@ -166,6 +175,7 @@ async def update_tool_settings(
         "generate_speech",
         "generate_audio",
         "transcribe_audio",
+        "analyze_video",
         "update_agent_identity",
     ):
         value = getattr(payload, field_name)
@@ -177,6 +187,7 @@ async def update_tool_settings(
         "media.generate.speech": settings.generate_speech.policy,
         "media.generate.audio": settings.generate_audio.policy,
         "media.transcribe.audio": settings.transcribe_audio.policy,
+        "media.analyze.video": settings.analyze_video.policy,
         "settings.agent_identity.update": settings.update_agent_identity.policy,
     }
     for capability, policy in legacy_policies.items():
@@ -186,6 +197,7 @@ async def update_tool_settings(
             "media.generate.speech": "generate_speech",
             "media.generate.audio": "generate_audio",
             "media.transcribe.audio": "transcribe_audio",
+            "media.analyze.video": "analyze_video",
             "settings.agent_identity.update": "update_agent_identity",
         }[capability]
         if getattr(payload, field_name) is not None:
@@ -204,6 +216,24 @@ async def update_tool_settings(
         unknown = set(payload.policies) - configurable
         if unknown:
             raise ApiError(422, "validation.invalidChoice", field="policies")
+        allowed: dict[str, set[ToolExecutionPolicy]] = {}
+        for group in groups:
+            for tool in group["tools"]:
+                for action in tool["actions"]:
+                    if not action["configurable"]:
+                        continue
+                    modes = {
+                        ToolExecutionPolicy(value)
+                        for value in action["allowedPolicies"]
+                    }
+                    allowed.setdefault(action["capability"], modes).intersection_update(
+                        modes
+                    )
+        if any(
+            policy not in allowed[capability]
+            for capability, policy in payload.policies.items()
+        ):
+            raise ApiError(422, "validation.invalidChoice", field="policies")
         settings.policies.update(payload.policies)
     for capability, field_name in {
         "media.generate.image": "generate_image",
@@ -211,6 +241,7 @@ async def update_tool_settings(
         "media.generate.speech": "generate_speech",
         "media.generate.audio": "generate_audio",
         "media.transcribe.audio": "transcribe_audio",
+        "media.analyze.video": "analyze_video",
         "settings.agent_identity.update": "update_agent_identity",
     }.items():
         getattr(settings, field_name).policy = tool_execution_policy(

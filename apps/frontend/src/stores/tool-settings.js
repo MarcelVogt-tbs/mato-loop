@@ -24,6 +24,7 @@ const defaultWebSearch = () => ({
 
 const defaultMediaPolicy = () => ({ policy: 'disabled', timeoutSeconds: 300 })
 const defaultImageEditPolicy = () => ({ policy: 'ask', timeoutSeconds: 300 })
+const defaultVideoAnalysisPolicy = () => ({ policy: 'ask', timeoutSeconds: 900 })
 const defaultAgentIdentityPolicy = () => ({ policy: 'ask' })
 
 function settingsPayload(state) {
@@ -37,6 +38,7 @@ function settingsPayload(state) {
     generateSpeech: state.generateSpeech,
     generateAudio: state.generateAudio,
     transcribeAudio: state.transcribeAudio,
+    analyzeVideo: state.analyzeVideo,
     updateAgentIdentity: state.updateAgentIdentity
   }
 }
@@ -52,6 +54,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     generateSpeech: defaultMediaPolicy(),
     generateAudio: defaultMediaPolicy(),
     transcribeAudio: defaultMediaPolicy(),
+    analyzeVideo: defaultVideoAnalysisPolicy(),
     updateAgentIdentity: defaultAgentIdentityPolicy(),
     loaded: false,
     loadFailed: false,
@@ -84,6 +87,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
           generateSpeech: 'media.generate.speech',
           generateAudio: 'media.generate.audio',
           transcribeAudio: 'media.transcribe.audio',
+          analyzeVideo: 'media.analyze.video',
           updateAgentIdentity: 'settings.agent_identity.update'
         })) {
           if (settings[field]?.policy) policies[capability] = settings[field].policy
@@ -104,6 +108,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
           generateSpeech: { ...this.generateSpeech, ...settings.generateSpeech },
           generateAudio: { ...this.generateAudio, ...settings.generateAudio },
           transcribeAudio: { ...this.transcribeAudio, ...settings.transcribeAudio },
+          analyzeVideo: { ...this.analyzeVideo, ...settings.analyzeVideo },
           updateAgentIdentity: {
             ...this.updateAgentIdentity,
             ...settings.updateAgentIdentity
@@ -126,6 +131,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         this[field] = { ...defaultMediaPolicy(), ...data?.[field] }
       }
       this.editImage = { ...defaultImageEditPolicy(), ...data?.editImage }
+      this.analyzeVideo = { ...defaultVideoAnalysisPolicy(), ...data?.analyzeVideo }
       this.updateAgentIdentity = {
         ...defaultAgentIdentityPolicy(),
         ...data?.updateAgentIdentity

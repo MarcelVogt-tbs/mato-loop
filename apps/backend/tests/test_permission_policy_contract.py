@@ -9,6 +9,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionPolicy,
     PermissionRequest,
     agent_identity_permission,
+    integration_operation_permission,
     media_permission,
     memory_write_permission,
     path_permission,
@@ -18,7 +19,11 @@ from mato_loop_backend.agent.permissions import (
     webfetch_permission,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tools import ToolAction, tool_registry
+from mato_loop_backend.agent.tools import (
+    ToolAction,
+    resolve_tool_execution_policy,
+    tool_registry,
+)
 from mato_loop_backend.integrations import canonicalize_url
 from mato_loop_backend.models import AgentRun, ChatSession, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
@@ -319,7 +324,163 @@ async def test_runtime_ignores_override_after_resource_contract_removal(
     )
 
     assert decision == PermissionDecision.DENY
-    AgentRuntime._request_approval.assert_awaited_once()
+    AgentRuntime._request_approval.assert_not_awaited()
+
+
+def test_integration_policy_precedence_allowed_modes_and_hard_limits() -> None:
+    integration_id = uuid4()
+    action = ToolAction(
+        "tasks.read",
+        "Aufgaben lesen",
+        ToolExecutionPolicy.ASK,
+        allowed_policies=(
+            ToolExecutionPolicy.DISABLED,
+            ToolExecutionPolicy.ASK,
+            ToolExecutionPolicy.AUTO,
+        ),
+    )
+    settings = ToolSettings.model_validate(
+        {
+            "policies": {action.capability: "ask"},
+            "integrationPolicies": {
+                str(integration_id): {action.capability: "auto"}
+            },
+            "resourcePolicies": {
+                str(integration_id): {
+                    "project:main": {action.capability: "ask"}
+                }
+            },
+        }
+    )
+
+    integration = resolve_tool_execution_policy(
+        settings,
+        action.capability,
+        action.default_policy,
+        allowed_policies=action.allowed_policies,
+        integration_id=integration_id,
+    )
+    resource = resolve_tool_execution_policy(
+        settings,
+        action.capability,
+        action.default_policy,
+        allowed_policies=action.allowed_policies,
+        integration_id=integration_id,
+        resource_key="project:main",
+    )
+    hard_limit = resolve_tool_execution_policy(
+        settings,
+        action.capability,
+        action.default_policy,
+        allowed_policies=action.allowed_policies,
+        integration_id=integration_id,
+        resource_key="project:main",
+        hard_unavailable_capabilities=frozenset({action.capability}),
+    )
+
+    assert (integration.policy, integration.source) == (
+        ToolExecutionPolicy.AUTO,
+        "integration",
+    )
+    assert (resource.policy, resource.source) == (
+        ToolExecutionPolicy.ASK,
+        "resource",
+    )
+    assert (hard_limit.policy, hard_limit.reason) == (
+        ToolExecutionPolicy.DISABLED,
+        "hard_unavailable",
+    )
+
+    settings.policies[action.capability] = ToolExecutionPolicy.DISABLED
+    assert resolve_tool_execution_policy(
+        settings,
+        action.capability,
+        action.default_policy,
+        integration_id=integration_id,
+        resource_key="project:main",
+    ).reason == "global_disabled"
+
+    restricted = ToolAction(
+        "tasks.delete",
+        "Aufgaben löschen",
+        ToolExecutionPolicy.ASK,
+        allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
+    )
+    settings.policies[restricted.capability] = ToolExecutionPolicy.AUTO
+    failed_closed = resolve_tool_execution_policy(
+        settings,
+        restricted.capability,
+        restricted.default_policy,
+        allowed_policies=restricted.allowed_policies,
+    )
+    assert (failed_closed.policy, failed_closed.reason) == (
+        ToolExecutionPolicy.DISABLED,
+        "policy_not_allowed",
+    )
+
+    settings.policies[action.capability] = ToolExecutionPolicy.ASK
+    settings.integration_policies[str(integration_id)] = {
+        action.capability: "invalid"  # type: ignore[dict-item]
+    }
+    invalid = resolve_tool_execution_policy(
+        settings,
+        action.capability,
+        action.default_policy,
+        integration_id=integration_id,
+        resource_key="project:main",
+    )
+    assert (invalid.policy, invalid.reason) == (
+        ToolExecutionPolicy.DISABLED,
+        "invalid_policy",
+    )
+
+
+def test_integration_operation_grants_match_only_exact_canonical_scope(tmp_path) -> None:
+    session = _session()
+    root_files = _root_files(tmp_path, session)
+    integration_id = uuid4()
+    revision = '{"adapter_type":"synthetic","enabled":true}'
+
+    def request(
+        *,
+        selected_id=integration_id,
+        selected_revision=revision,
+        resource_key="project:main",
+        operation_key="read:8d7f",
+    ):
+        return integration_operation_permission(
+            capability="tasks.read",
+            integration_id=selected_id,
+            binding_revision=selected_revision,
+            resource_key=resource_key,
+            operation_key=operation_key,
+            title="Aufgaben lesen?",
+            summary="Der Agent möchte Aufgaben lesen.",
+        )
+
+    granted = request()
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=granted.capability,
+        resource_type=granted.resource_type,
+        resource_scope=granted.resource_scope,
+    )
+
+    assert PermissionPolicy.grant_matches(grant, granted, root_files)
+    assert not PermissionPolicy.grant_matches(
+        grant, request(selected_id=uuid4()), root_files
+    )
+    assert not PermissionPolicy.grant_matches(
+        grant,
+        request(selected_revision='{"adapter_type":"other","enabled":true}'),
+        root_files,
+    )
+    assert not PermissionPolicy.grant_matches(
+        grant, request(resource_key="project:other"), root_files
+    )
+    assert not PermissionPolicy.grant_matches(
+        grant, request(operation_key="read:other"), root_files
+    )
 
 
 async def test_stale_or_missing_workspace_cannot_be_approved(tmp_path) -> None:

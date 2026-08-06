@@ -20,6 +20,7 @@ describe('tool settings store', () => {
 
     expect(store.webFetch.defaultPolicy).toBe('auto_public')
     expect(store.editImage.policy).toBe('ask')
+    expect(store.analyzeVideo).toEqual({ policy: 'ask', timeoutSeconds: 900 })
   })
 
   it('loads and saves the complete tool settings contract without changing field names', async () => {
@@ -53,6 +54,7 @@ describe('tool settings store', () => {
       generateSpeech: { policy: 'auto', timeoutSeconds: 120 },
       generateAudio: { policy: 'disabled', timeoutSeconds: 900 },
       transcribeAudio: { policy: 'ask', timeoutSeconds: 180 },
+      analyzeVideo: { policy: 'auto', timeoutSeconds: 1200 },
       updateAgentIdentity: { policy: 'auto' }
     }
     api.get.mockResolvedValue({ data: response })
@@ -64,7 +66,10 @@ describe('tool settings store', () => {
 
     expect(api.get).toHaveBeenCalledWith('/tools/settings')
     expect(api.put).toHaveBeenCalledWith('/tools/settings', expect.objectContaining({
-      policies: expect.objectContaining({ 'filesystem.read': 'ask' }),
+      policies: expect.objectContaining({
+        'filesystem.read': 'ask',
+        'media.analyze.video': 'auto'
+      }),
       webSearch: {
         primaryProvider: 'searxng:integration-id',
         fallbackProvider: 'no_key'
@@ -76,6 +81,7 @@ describe('tool settings store', () => {
     expect(store.groups).toEqual(response.groups)
     expect(store.policies).toEqual({ 'filesystem.read': 'ask' })
     expect(store.generateSpeech).toEqual({ policy: 'auto', timeoutSeconds: 120 })
+    expect(store.analyzeVideo).toEqual(response.analyzeVideo)
     expect(store.loaded).toBe(true)
   })
 
@@ -99,6 +105,7 @@ describe('tool settings store', () => {
         generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
         generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
         transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
+        analyzeVideo: { policy: 'ask', timeoutSeconds: 900 },
         updateAgentIdentity: { policy: 'ask' }
       }
     })
@@ -120,6 +127,7 @@ describe('tool settings store', () => {
       generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
       generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
       transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
+      analyzeVideo: { policy: 'ask', timeoutSeconds: 900 },
       updateAgentIdentity: { policy: 'ask' }
     })
   })

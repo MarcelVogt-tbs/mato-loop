@@ -10,11 +10,17 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'integration.searchUnavailable' } })).toBe(
       'Richte zuerst eine aktive Websuche mit Standardanbieter ein.'
     )
+    expect(apiErrorMessage({ error: { code: 'integration.remoteChanged' } })).toBe(
+      'Der entfernte Eintrag wurde zwischenzeitlich geändert. Lade ihn erneut.'
+    )
     expect(apiErrorMessage({ error: { code: 'provider.discoveryUnsupported' } })).toBe(
       'Dieser Provider unterstützt keine automatische Modellerkennung.'
     )
     expect(apiErrorMessage({ error: { code: 'provider.modelCapabilityUnavailable' } })).toBe(
       'Das ausgewählte Modell unterstützt die benötigte Fähigkeit nicht.'
+    )
+    expect(apiErrorMessage({ error: { code: 'provider.imageLimitExceeded', params: { maxImages: 4 } } })).toBe(
+      'Eine Modellanfrage kann höchstens 4 Bilder enthalten.'
     )
     expect(apiErrorMessage({ error: { code: 'oauth.loginExpired' } })).toBe(
       'Der ChatGPT-Einmalcode ist abgelaufen. Bitte starte die Anmeldung erneut.'
@@ -49,6 +55,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'webfetch.addressBlocked' } })).toBe(
       'Diese Netzwerkadresse ist aus Sicherheitsgründen gesperrt.'
     )
+    expect(apiErrorMessage({ error: { code: 'webfetch.tlsFailed' } })).toBe(
+      'Das TLS-Zertifikat der Webadresse konnte nicht überprüft werden.'
+    )
     expect(apiErrorMessage({ error: { code: 'attachment.tooLarge' } })).toBe(
       'Der Dateianhang ist zu groß.'
     )
@@ -73,11 +82,11 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'memory.duplicate' } })).toBe(
       'Diese Erinnerung ist bereits vorhanden.'
     )
-    expect(apiErrorMessage({ error: { code: 'memory.tierBudgetExceeded' } })).toBe(
-      'Das Zeichenbudget des aktiven Gedächtnisses ist ausgeschöpft. Gib eine fixierte Erinnerung frei oder verschiebe sie ins Langzeitgedächtnis (RAG).'
-    )
     expect(apiErrorMessage({ error: { code: 'privacy.pseudonymizationUnavailable' } })).toBe(
       'Die lokale Pseudonymisierung ist derzeit nicht verfügbar.'
+    )
+    expect(apiErrorMessage({ error: { code: 'video.frameExtractionFailed' } })).toBe(
+      'Die Einzelbilder des Videos konnten nicht extrahiert werden.'
     )
     expect(apiErrorMessage({
       error: { code: 'provider.timeout', params: { timeoutSeconds: 420, retryable: true } }

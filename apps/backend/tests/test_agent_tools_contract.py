@@ -2,13 +2,14 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
 from urllib.parse import parse_qs, urlparse
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.tools as tools_module
+import mato_loop_backend.integrations.registry as integration_registry
 from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
 from mato_loop_backend.agent.tools import (
     ToolAction,
@@ -24,7 +25,9 @@ from mato_loop_backend.agent.tools import (
 )
 from mato_loop_backend.integrations import WebFetchError, WebFetchResult
 from mato_loop_backend.integrations.contracts import (
+    IntegrationAdapterDefinition,
     IntegrationContributions,
+    IntegrationResource,
     ToolContribution,
 )
 from mato_loop_backend.memory.retrieval import (
@@ -52,6 +55,20 @@ from mato_loop_backend.workspace import RootFileService
 
 class _RequiredArguments(BaseModel):
     value: str
+
+
+class _SharedArguments(BaseModel):
+    integration_id: UUID
+    resource_key: str
+    value: str
+
+
+class _EmptyArguments(BaseModel):
+    pass
+
+
+class _SharedConfig(BaseModel):
+    endpoint: str
 
 
 async def _successful_handler(_arguments, _context) -> ToolResult:
@@ -110,6 +127,64 @@ def _context_with_workdir(
     context.session.working_directory = "project"
     context.root_files.working_directory = "project"
     return context
+
+
+def _shared_integration(name: str) -> IntegrationInstance:
+    return IntegrationInstance(
+        name=name,
+        integration_type="tasks",
+        adapter_type="synthetic",
+        config={"endpoint": name.casefold()},
+    )
+
+
+def _shared_adapter(
+    monkeypatch, handler: AsyncMock, *, releases_private_data: bool = False
+) -> ToolAction:
+    action = ToolAction(
+        "tasks.read",
+        "Aufgaben lesen",
+        ToolExecutionPolicy.ASK,
+    )
+
+    async def resources(_instance, _credential):
+        return (IntegrationResource("project:main", "Hauptprojekt"),)
+
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("tasks", "synthetic"),
+        IntegrationAdapterDefinition(
+            integration_type="tasks",
+            adapter_type="synthetic",
+            config_model=_SharedConfig,
+            resource_actions=(action,),
+            resource_loader=resources,
+            shared_tools=(
+                ToolContribution(
+                    name="tasks_read",
+                    description="Read tasks from one configured task service.",
+                    arguments_model=_SharedArguments,
+                    handler=handler,
+                    actions=(action,),
+                    instance_argument="integration_id",
+                    resource_argument="resource_key",
+                    releases_private_data=releases_private_data,
+                    authorization_factory=lambda arguments, _context: (
+                        PermissionRequest(
+                            capability=action.capability,
+                            resource_type="network_service",
+                            resource_scope=arguments.resource_key,
+                            action_kind="tasks_read",
+                            risk_level="medium",
+                            title="Aufgaben lesen?",
+                            summary="Der Agent möchte Aufgaben lesen.",
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    return action
 
 
 def test_tool_registry_rejects_duplicate_names() -> None:
@@ -240,6 +315,171 @@ async def test_bound_integration_tool_rechecks_source_after_approval(
     permission = context.ask_handler.await_args.args[0]
     assert permission.policy_integration_id == integration.id
     assert permission.policy_resource_key == "calendar:work"
+
+
+async def test_shared_tool_binds_two_instances_and_targets_selected_resource(
+    tmp_path, monkeypatch
+) -> None:
+    handler = AsyncMock(return_value=ToolResult.json({"ok": True}))
+    _shared_adapter(monkeypatch, handler)
+    first = _shared_integration("First")
+    second = _shared_integration("Second")
+    settings = IntegrationSettings(instances=[first, second])
+    effective = ToolRegistry([]).effective(settings, "read-only")
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    call = ToolCall(
+        id="shared",
+        name="tasks_read",
+        arguments={
+            "integration_id": str(second.id),
+            "resource_key": "project:main",
+            "value": "open",
+        },
+    )
+    context = _context(tmp_path, call)
+
+    result = await effective.execute(call, context)
+
+    assert [schema["name"] for schema in effective.schemas()] == ["tasks_read"]
+    assert len(effective.tools["tasks_read"].integration_revisions) == 2
+    assert result.is_error is False
+    permission = context.ask_handler.await_args.args[0]
+    assert permission.policy_integration_id == second.id
+    assert permission.policy_resource_key == "project:main"
+    assert context.bound_options["integration_id"] == str(second.id)
+    assert context.bound_options["binding_revision"] == dict(
+        effective.tools["tasks_read"].integration_revisions
+    )[str(second.id)]
+    handler.assert_awaited_once()
+
+
+async def test_shared_tool_rejects_unbound_and_stale_instance_ids(
+    tmp_path, monkeypatch
+) -> None:
+    handler = AsyncMock(return_value=ToolResult.json({"ok": True}))
+    _shared_adapter(monkeypatch, handler)
+    integration = _shared_integration("First")
+    settings = IntegrationSettings(instances=[integration])
+    effective = ToolRegistry([]).effective(settings, "read-only")
+
+    unbound_call = ToolCall(
+        id="unbound",
+        name="tasks_read",
+        arguments={
+            "integration_id": str(uuid4()),
+            "resource_key": "project:main",
+            "value": "open",
+        },
+    )
+    unbound = await effective.execute(unbound_call, _context(tmp_path, unbound_call))
+
+    changed = integration.model_copy(deep=True)
+    changed.config["endpoint"] = "changed"
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=IntegrationSettings(instances=[changed])),
+    )
+    stale_call = ToolCall(
+        id="stale",
+        name="tasks_read",
+        arguments={
+            "integration_id": str(integration.id),
+            "resource_key": "project:main",
+            "value": "open",
+        },
+    )
+    stale = await effective.execute(stale_call, _context(tmp_path, stale_call))
+
+    assert unbound.metadata == {"errorCode": "tool.unavailable"}
+    assert stale.metadata == {"errorCode": "tool.unavailable"}
+    handler.assert_not_awaited()
+
+
+async def test_aggregate_shared_tool_binds_all_current_instances(
+    tmp_path, monkeypatch
+) -> None:
+    action = ToolAction("tasks.read", "Aufgaben lesen", ToolExecutionPolicy.ASK)
+
+    async def handler(_arguments, context):
+        return ToolResult.json({"ids": list(context.bound_options["integration_ids"])})
+
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("tasks", "synthetic"),
+        IntegrationAdapterDefinition(
+            integration_type="tasks",
+            adapter_type="synthetic",
+            config_model=_SharedConfig,
+            resource_actions=(action,),
+            shared_tools=(
+                ToolContribution(
+                    name="tasks_list_accounts",
+                    description="List task accounts.",
+                    arguments_model=_EmptyArguments,
+                    handler=handler,
+                    actions=(action,),
+                    authorization_factory=lambda _arguments, _context: (
+                        PermissionRequest(
+                            capability=action.capability,
+                            resource_type="network_service",
+                            resource_scope="task_accounts",
+                            action_kind="tasks_list_accounts",
+                            risk_level="medium",
+                            title="Aufgabenkonten lesen?",
+                            summary="Der Agent möchte Aufgabenkonten lesen.",
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    first = _shared_integration("First")
+    second = _shared_integration("Second")
+    settings = IntegrationSettings(instances=[first, second])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    effective = ToolRegistry([]).effective(settings, "read-only")
+    call = ToolCall(id="aggregate", name="tasks_list_accounts", arguments={})
+    context = _context(tmp_path, call)
+
+    result = await effective.execute(call, context)
+
+    assert json.loads(result.content) == {
+        "ids": [str(first.id), str(second.id)]
+    }
+    request = context.ask_handler.await_args.args[0]
+    assert request.policy_integration_id is None
+
+
+async def test_private_integration_tool_requires_release_before_action(
+    tmp_path, monkeypatch
+) -> None:
+    handler = AsyncMock(return_value=ToolResult.json({"ok": True}))
+    _shared_adapter(monkeypatch, handler, releases_private_data=True)
+    integration = _shared_integration("Private")
+    settings = IntegrationSettings(instances=[integration])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    effective = ToolRegistry([]).effective(settings, "read-only")
+    call = ToolCall(
+        id="private",
+        name="tasks_read",
+        arguments={
+            "integration_id": str(integration.id),
+            "resource_key": "project:main",
+            "value": "open",
+        },
+    )
+    context = _context(tmp_path, call)
+
+    result = await effective.execute(call, context)
+
+    requests = [item.args[0] for item in context.ask_handler.await_args_list]
+    assert [request.capability for request in requests] == [
+        "integration.private_data.release",
+        "tasks.read",
+    ]
+    assert requests[0].available_decisions == ("allow_session", "deny")
+    assert result.metadata["privateIntegrationData"] is True
 
 
 async def test_contributed_authorization_must_cover_every_declared_action(
@@ -1355,7 +1595,6 @@ async def test_session_tool_result_read_redacts_public_memory_content(tmp_path) 
     assert empty_content["scope"] == {
         "readableBy": "public",
         "includesPrivate": False,
-        "retrievalLevel": "all",
     }
 
 
@@ -1572,7 +1811,7 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
         id=uuid4(),
         content="Sichtbarer Fakt",
         category="fact",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="public",
         revision=2,
         created_at=created_time,
@@ -1606,7 +1845,6 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
     assert payload["scope"] == {
         "readableBy": "public",
         "includesPrivate": False,
-        "retrievalLevel": "all",
     }
     assert payload["items"][0]["revision"] == 2
     assert {
@@ -1623,7 +1861,7 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
         "cursor_id": str(item.id),
     }
     retrieve.assert_awaited_once()
-    assert retrieve.await_args.kwargs["retrieval_level"] is None
+    assert "retrieval_level" not in retrieve.await_args.kwargs
     assert result.metadata["memoryWritePending"] is False
 
 

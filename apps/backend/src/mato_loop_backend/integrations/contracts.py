@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
+from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.settings.models import IntegrationInstance
 
 ToolHandler = Callable[[Any, Any], Awaitable[Any]]
@@ -15,6 +16,15 @@ ToolHandler = Callable[[Any, Any], Awaitable[Any]]
 class IntegrationResource:
     key: str
     label: str
+    hard_unavailable_capabilities: frozenset[str] = frozenset()
+    binding: object | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "hard_unavailable_capabilities",
+            frozenset(self.hard_unavailable_capabilities),
+        )
 
 
 ResourceLoader = Callable[
@@ -38,8 +48,12 @@ class ToolContribution:
     group: str = "integrations"
     label: str | None = None
     icon: str = "extension"
-    actions: tuple[Any, ...] = ()
+    actions: tuple[ToolAction, ...] = ()
     integration_id: str | None = None
+    integration_ids: tuple[str, ...] = ()
+    instance_argument: str | None = None
+    resource_argument: str | None = None
+    releases_private_data: bool = False
     authorization_factory: Callable[[Any, Any], tuple[Any, ...]] | None = None
 
 
@@ -75,8 +89,9 @@ class IntegrationAdapterDefinition:
     contribution_factory: Callable[[IntegrationInstance], IntegrationContributions] = field(
         default=lambda _instance: IntegrationContributions()
     )
-    resource_actions: tuple[Any, ...] = ()
+    resource_actions: tuple[ToolAction, ...] = ()
     resource_loader: ResourceLoader | None = None
+    shared_tools: tuple[ToolContribution, ...] = ()
 
     def contributions(self, instance: IntegrationInstance) -> IntegrationContributions:
         self.config_model.model_validate(instance.config)
@@ -88,4 +103,11 @@ class IntegrationAdapterDefinition:
         self.config_model.model_validate(instance.config)
         if self.resource_loader is None:
             return ()
-        return await self.resource_loader(instance, credential)
+        resources = await self.resource_loader(instance, credential)
+        capabilities = {action.capability for action in self.resource_actions}
+        if any(
+            not resource.hard_unavailable_capabilities <= capabilities
+            for resource in resources
+        ):
+            raise ValueError("resource capabilities must be declared by the adapter")
+        return resources

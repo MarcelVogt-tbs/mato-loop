@@ -126,7 +126,7 @@ async def list_permissions(
     payloads = []
     for item in grants:
         resource_display = None
-        if item.resource_type == "url" and item.source_approval_id is not None:
+        if item.source_approval_id is not None:
             source = await db.get(ApprovalRequest, item.source_approval_id)
             if source and isinstance(source.payload.get("resourceDisplay"), str):
                 resource_display = source.payload["resourceDisplay"]

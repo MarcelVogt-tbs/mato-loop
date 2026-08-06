@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -34,6 +35,142 @@ class PermissionRequest:
     resource_display: str | None = None
     policy_integration_id: UUID | None = None
     policy_resource_key: str | None = None
+    policy_hard_unavailable_capabilities: frozenset[str] = frozenset()
+    available_decisions: tuple[str, ...] = (
+        "allow_once",
+        "allow_session",
+        "deny",
+    )
+
+
+_INTEGRATION_OPERATION_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_INTEGRATION_RESOURCE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}$")
+
+
+def integration_operation_scope(
+    integration_id: UUID,
+    binding_revision: str,
+    operation_key: str,
+    *,
+    resource_key: str | None = None,
+) -> str:
+    if len(binding_revision) > 50_000:
+        raise ValueError("binding revision is too large")
+    try:
+        revision_value = json.loads(
+            binding_revision,
+            parse_constant=lambda _value: None,
+        )
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("binding revision must be canonical JSON") from exc
+    if not isinstance(revision_value, dict):
+        raise ValueError("binding revision must be a canonical object")
+    if json.dumps(
+        revision_value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ) != binding_revision:
+        raise ValueError("binding revision must be canonical JSON")
+    if _INTEGRATION_OPERATION_KEY.fullmatch(operation_key) is None:
+        raise ValueError("operation key is invalid")
+    if resource_key is not None and _INTEGRATION_RESOURCE_KEY.fullmatch(resource_key) is None:
+        raise ValueError("resource key is invalid")
+    return json.dumps(
+        {
+            "bindingRevision": hashlib.sha256(binding_revision.encode()).hexdigest(),
+            "integrationId": str(integration_id),
+            "operationKey": operation_key,
+            **({"resourceKey": resource_key} if resource_key is not None else {}),
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def integration_operation_permission(
+    *,
+    capability: str,
+    integration_id: UUID,
+    binding_revision: str,
+    operation_key: str,
+    title: str,
+    summary: str,
+    resource_key: str | None = None,
+    resource_display: str | None = None,
+    action_kind: str = "integration_operation",
+    risk_level: str = "medium",
+    available_decisions: tuple[str, ...] = (
+        "allow_once",
+        "allow_session",
+        "deny",
+    ),
+) -> PermissionRequest:
+    return PermissionRequest(
+        capability=capability,
+        resource_type="integration_operation",
+        resource_scope=integration_operation_scope(
+            integration_id,
+            binding_revision,
+            operation_key,
+            resource_key=resource_key,
+        ),
+        action_kind=action_kind,
+        risk_level=risk_level,
+        title=title,
+        summary=summary,
+        resource_display=resource_display,
+        policy_integration_id=integration_id,
+        policy_resource_key=resource_key,
+        available_decisions=available_decisions,
+    )
+
+
+def private_integration_data_release_permission(session_id: UUID) -> PermissionRequest:
+    return PermissionRequest(
+        capability="integration.private_data.release",
+        resource_type="session",
+        resource_scope=str(session_id),
+        action_kind="integration_private_data_release",
+        risk_level="high",
+        title="Private Integrationsdaten freigeben?",
+        summary=(
+            "Private Daten aus Integrationen dürfen in dieser Session an das "
+            "öffentliche Modell übermittelt werden."
+        ),
+        resource_display="Aktuelle Session",
+        available_decisions=("allow_session", "deny"),
+    )
+
+
+def _integration_operation_scope(resource_scope: str) -> dict[str, str] | None:
+    try:
+        value = json.loads(resource_scope)
+        if not isinstance(value, dict) or set(value) not in (
+            {"bindingRevision", "integrationId", "operationKey"},
+            {"bindingRevision", "integrationId", "operationKey", "resourceKey"},
+        ):
+            return None
+        integration_id = UUID(value["integrationId"])
+        if str(integration_id) != value["integrationId"]:
+            return None
+        if re.fullmatch(r"[0-9a-f]{64}", value["bindingRevision"]) is None:
+            return None
+        if _INTEGRATION_OPERATION_KEY.fullmatch(value["operationKey"]) is None:
+            return None
+        resource_key = value.get("resourceKey")
+        if resource_key is not None and _INTEGRATION_RESOURCE_KEY.fullmatch(resource_key) is None:
+            return None
+        canonical = json.dumps(
+            value,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return value if canonical == resource_scope else None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def path_permission(
@@ -183,6 +320,7 @@ def media_permission(
         "media.generate.speech": ("Sprache erzeugen?", "eine Sprachaufnahme erzeugen"),
         "media.generate.audio": ("Audio erzeugen?", "eine Audiodatei erzeugen"),
         "media.transcribe.audio": ("Audio transkribieren?", "einen Audioanhang transkribieren"),
+        "media.analyze.video": ("Video analysieren?", "ein Video analysieren"),
     }
     title, action = labels.get(capability, ("Medienaktion erlauben?", "Medien verarbeiten"))
     targeted = provider_id is not None and model_id is not None
@@ -381,6 +519,12 @@ class PermissionPolicy:
             return request.resource_scope == grant.resource_scope == "all"
         if request.resource_type == "url":
             return request.resource_scope == grant.resource_scope
+        if request.resource_type == "integration_operation":
+            return (
+                _integration_operation_scope(request.resource_scope) is not None
+                and _integration_operation_scope(grant.resource_scope) is not None
+                and request.resource_scope == grant.resource_scope
+            )
         if request.resource_type in {
             "network_service",
             "memory_collection",

@@ -56,3 +56,32 @@ def test_chat_history_errors_have_controlled_fallbacks() -> None:
 
 def test_changed_file_error_has_controlled_fallback() -> None:
     assert describe_error("file.changed").message == "The file changed since it was opened."
+
+
+def test_tls_error_has_controlled_fallback() -> None:
+    assert (
+        describe_error("webfetch.tlsFailed").message
+        == "The web server's TLS certificate could not be verified."
+    )
+
+
+def test_video_processing_errors_have_controlled_fallbacks() -> None:
+    assert (
+        describe_error("video.frameExtractionFailed").message
+        == "The video frames could not be extracted."
+    )
+    assert (
+        describe_error("video.audioExtractionFailed").message
+        == "The video audio track could not be extracted."
+    )
+
+
+def test_image_limit_error_has_controlled_fallback() -> None:
+    assert (
+        describe_error("provider.imageLimitExceeded", params={"maxImages": 4}).payload()
+        == {
+            "code": "provider.imageLimitExceeded",
+            "message": "The request contains too many images.",
+            "params": {"maxImages": 4},
+        }
+    )

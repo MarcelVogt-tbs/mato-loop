@@ -51,6 +51,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
             "generateSpeech",
             "generateAudio",
             "transcribeAudio",
+            "analyzeVideo",
             "updateAgentIdentity",
         )
     } == {
@@ -81,6 +82,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "generateSpeech": {"policy": "disabled", "timeoutSeconds": 300},
         "generateAudio": {"policy": "disabled", "timeoutSeconds": 300},
         "transcribeAudio": {"policy": "disabled", "timeoutSeconds": 300},
+        "analyzeVideo": {"policy": "ask", "timeoutSeconds": 900},
         "updateAgentIdentity": {"policy": "ask"},
     }
     assert result["policies"] == {
@@ -93,6 +95,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "media.generate.speech": "disabled",
         "media.generate.audio": "disabled",
         "media.transcribe.audio": "disabled",
+        "media.analyze.video": "ask",
         "session.read": "ask",
         "session.search": "ask",
         "memory.write": "ask",

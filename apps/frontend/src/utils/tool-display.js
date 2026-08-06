@@ -14,9 +14,17 @@ const TOOL_DISPLAY = {
   web_search: { label: 'Im Web suchen', icon: 'travel_explore' },
   webfetch: { label: 'Webseite abrufen', icon: 'language' },
   generate_image: { label: 'Bild erzeugen', icon: 'image' },
+  edit_image: { label: 'Bild bearbeiten', icon: 'auto_fix_high' },
   generate_speech: { label: 'Sprache erzeugen', icon: 'record_voice_over' },
   generate_audio: { label: 'Audio erzeugen', icon: 'graphic_eq' },
   transcribe_audio: { label: 'Audio transkribieren', icon: 'mic' },
+  analyze_video: { label: 'Video analysieren', icon: 'video_file' },
+  calendar_list_accounts: { label: 'Kalenderkonten auflisten', icon: 'account_circle' },
+  calendar_list_calendars: { label: 'Kalender auflisten', icon: 'calendar_month' },
+  calendar_query_events: { label: 'Termine lesen', icon: 'event' },
+  calendar_create_event: { label: 'Termin erstellen', icon: 'event_available' },
+  calendar_update_event: { label: 'Termin ändern', icon: 'edit_calendar' },
+  calendar_delete_event: { label: 'Termin löschen', icon: 'event_busy' },
   session_read: { label: 'Session lesen', icon: 'forum' },
   session_tool_result_read: { label: 'Tool-Ergebnis lesen', icon: 'history' },
   session_browse: { label: 'Letzte Sessions anzeigen', icon: 'view_list' },
@@ -55,7 +63,7 @@ export function toolSummary(tool) {
   if (tool?.name === 'generate_speech' && typeof argumentsValue.text === 'string') {
     return truncate(argumentsValue.text)
   }
-  if (['generate_image', 'generate_audio'].includes(tool?.name) && typeof argumentsValue.prompt === 'string') {
+  if (['generate_image', 'edit_image', 'generate_audio'].includes(tool?.name) && typeof argumentsValue.prompt === 'string') {
     const duration = Number(argumentsValue.duration_seconds) > 0
       ? ` (${argumentsValue.duration_seconds} s)`
       : ''
@@ -63,6 +71,10 @@ export function toolSummary(tool) {
   }
   if (tool?.name === 'transcribe_audio' && typeof argumentsValue.attachment_id === 'string') {
     return `Audioanhang ${truncate(argumentsValue.attachment_id, 36)}`
+  }
+  if (tool?.name === 'analyze_video' && typeof argumentsValue.path === 'string') {
+    const root = argumentsValue.root ? `${argumentsValue.root}:` : ''
+    return truncate(`${root}${argumentsValue.path}`)
   }
   if (tool?.name === 'session_tool_result_read' && typeof argumentsValue.message_id === 'string') {
     const offset = Number(argumentsValue.offset) || 0
@@ -137,7 +149,7 @@ export function parseToolResult(content, toolName = null) {
           items: value.items.slice(0, 20).map((item) => ({
             id: item.id,
             category: item.category,
-            retrievalLevel: item.retrievalLevel,
+            pinned: item.pinned,
             trustLevel: item.trustLevel,
             memory: truncate(item.content, 500)
           }))

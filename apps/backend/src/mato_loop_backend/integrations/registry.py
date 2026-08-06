@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from pydantic import BaseModel, HttpUrl
 
+from mato_loop_backend.integrations.caldav import CALDAV_ADAPTER
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
@@ -40,7 +41,8 @@ _ADAPTERS = {
         adapter_type="searxng",
         config_model=SearxngConfig,
         contribution_factory=_searxng_contributions,
-    )
+    ),
+    ("calendar", "caldav"): CALDAV_ADAPTER,
 }
 
 
@@ -63,6 +65,7 @@ def effective_integration_contributions(
     tools = []
     options = []
     prompt_fragments = []
+    shared_instances: dict[tuple[str, str], list[IntegrationInstance]] = {}
     for instance in settings.instances:
         if not instance.enabled:
             continue
@@ -73,12 +76,22 @@ def effective_integration_contributions(
             contribution = adapter.contributions(instance)
         except ValueError:
             continue
+        shared_instances.setdefault(
+            (instance.integration_type, instance.adapter_type), []
+        ).append(instance)
         tools.extend(
             replace(tool, integration_id=str(instance.id))
             for tool in contribution.tools
         )
         options.extend(contribution.tool_options)
         prompt_fragments.extend(contribution.prompt_fragments)
+    for adapter_key, instances in shared_instances.items():
+        adapter = _ADAPTERS[adapter_key]
+        integration_ids = tuple(str(instance.id) for instance in instances)
+        tools.extend(
+            replace(tool, integration_ids=integration_ids)
+            for tool in adapter.shared_tools
+        )
     return IntegrationContributions(
         tools=tuple(tools),
         tool_options=tuple(options),

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -37,11 +39,21 @@ from mato_loop_backend.agent.permissions import (
     memory_read_permission,
     memory_write_permission,
     path_permission,
+    private_integration_data_release_permission,
     session_browse_permission,
     session_permission,
     session_search_permission,
     web_search_permission,
     webfetch_permission,
+)
+from mato_loop_backend.agent.tool_contracts import (
+    ToolAction,
+    ToolPolicyResolution,
+)
+from mato_loop_backend.agent.video_analysis import (
+    ResolvedVideoModel,
+    VideoAnalysisError,
+    video_analysis_available,
 )
 from mato_loop_backend.attachments import AttachmentError, AttachmentService
 from mato_loop_backend.error_contract import error_payload
@@ -58,6 +70,7 @@ from mato_loop_backend.integrations import (
     sanitize_url_for_display,
     search_web,
 )
+from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
     integration_adapter,
@@ -66,8 +79,8 @@ from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRet
 from mato_loop_backend.memory.service import MemoryService, memory_reference_timestamps
 from mato_loop_backend.models import (
     ChatSession,
+    Credential,
     MemoryCategory,
-    MemoryRetrievalLevel,
     Message,
     MessageAttachment,
 )
@@ -81,12 +94,12 @@ from mato_loop_backend.providers.media import (
     ResolvedMediaModel,
     available_media_capabilities,
 )
+from mato_loop_backend.security import read_credential
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AiSettings,
     IntegrationInstance,
     IntegrationSettings,
-    MemorySettings,
     ModelCapability,
     SettingsStore,
     ToolExecutionPolicy,
@@ -96,11 +109,18 @@ from mato_loop_backend.settings import (
     resolve_web_fetch_policy,
 )
 from mato_loop_backend.settings.models import normalize_agent_display_name
+from mato_loop_backend.video_processing import MAX_VIDEO_BYTES
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService, WorkspaceError
 
 logger = logging.getLogger(__name__)
 AskHandler = Callable[[PermissionRequest], Awaitable[PermissionDecision]]
+VideoAnalysisHandler = Callable[
+    [bytes, TrustLevel, str | None, Literal["standard", "detailed"], str | None],
+    Awaitable[dict[str, Any]],
+]
+VideoAnalysisTargetResolver = Callable[[int], ResolvedVideoModel | None]
 SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
+ALL_TOOL_EXECUTION_POLICIES = tuple(ToolExecutionPolicy)
 
 
 def _model_revision(value: BaseModel) -> str:
@@ -158,11 +178,13 @@ class ToolResult:
         *,
         metadata: dict[str, Any] | None = None,
         file_actions: tuple[ToolFileAction, ...] = (),
+        trust_level: TrustLevel | None = None,
     ) -> ToolResult:
         return cls(
             json.dumps(value, ensure_ascii=False),
             metadata or {},
             file_actions=file_actions,
+            trust_level=trust_level,
         )
 
     @classmethod
@@ -193,24 +215,20 @@ class ToolContext:
     web_fetch_policy: WebFetchPolicy = WebFetchPolicy.DISABLED
     allowed_private_origins: tuple[str, ...] = ()
     pdf_vision_handler: PdfVisionHandler | None = None
+    video_analysis_handler: VideoAnalysisHandler | None = None
+    video_analysis_target: VideoAnalysisTargetResolver | None = None
     assistant_message_id: UUID | None = None
     memory_read_enabled: bool = False
     memory_write_enabled: bool = False
     memory_trust_level: TrustLevel = TrustLevel.PUBLIC
     memory_write_trust_level: TrustLevel = TrustLevel.PUBLIC
-    bound_options: dict[str, str | None] = field(default_factory=dict)
+    bound_options: dict[str, Any] = field(default_factory=dict)
     model_id: UUID | None = None
+    model_trust_level: TrustLevel = TrustLevel.PUBLIC
+    bound_resource: IntegrationResource | None = None
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
         return await self.ask_handler(request)
-
-
-@dataclass(frozen=True, slots=True)
-class ToolAction:
-    capability: str
-    label: str
-    default_policy: ToolExecutionPolicy
-    configurable: bool = True
 
 
 TOOL_GROUPS = (
@@ -240,6 +258,9 @@ class ToolDefinition:
     label: str | None = None
     icon: str = "build"
     actions: tuple[ToolAction, ...] = ()
+    instance_argument: str | None = None
+    resource_argument: str | None = None
+    releases_private_data: bool = False
     authorization_factory: (
         Callable[[Any, ToolContext], tuple[PermissionRequest, ...]] | None
     ) = None
@@ -266,6 +287,7 @@ class BoundTool:
     source_type: str = "builtin"
     source_id: str | None = None
     source_revision: str | None = None
+    integration_revisions: tuple[tuple[str, str], ...] = ()
     selected_options: dict[str, str | None] = field(default_factory=dict)
 
     def schema(self) -> dict[str, Any]:
@@ -309,13 +331,24 @@ class ToolRegistry:
         self, integration_settings: IntegrationSettings
     ) -> tuple[
         dict[str, ToolDefinition],
-        dict[str, tuple[str, str | None, str | None]],
+        dict[
+            str,
+            tuple[
+                str,
+                str | None,
+                str | None,
+                tuple[tuple[str, str], ...],
+            ],
+        ],
         tuple[str, ...],
     ]:
         contributions = effective_integration_contributions(integration_settings)
         definitions = dict(self._definitions)
-        sources: dict[str, tuple[str, str | None, str | None]] = {
-            name: ("builtin", None, None) for name in definitions
+        sources: dict[
+            str,
+            tuple[str, str | None, str | None, tuple[tuple[str, str], ...]],
+        ] = {
+            name: ("builtin", None, None, ()) for name in definitions
         }
         for contribution in contributions.tools:
             if contribution.name in definitions:
@@ -335,6 +368,9 @@ class ToolRegistry:
                 label=contribution.label,
                 icon=contribution.icon,
                 actions=contribution.actions,
+                instance_argument=contribution.instance_argument,
+                resource_argument=contribution.resource_argument,
+                releases_private_data=contribution.releases_private_data,
                 authorization_factory=contribution.authorization_factory,
             )
             source_instance = next(
@@ -352,6 +388,11 @@ class ToolRegistry:
                     _model_revision(source_instance)
                     if source_instance is not None
                     else None
+                ),
+                tuple(
+                    (str(instance.id), _model_revision(instance))
+                    for instance in integration_settings.instances
+                    if str(instance.id) in contribution.integration_ids
                 ),
             )
         return definitions, sources, contributions.prompt_fragments
@@ -453,7 +494,10 @@ class ToolRegistry:
                 tool_settings is None
                 or all(
                     tool_execution_policy(
-                        tool_settings, action.capability, action.default_policy
+                        tool_settings,
+                        action.capability,
+                        action.default_policy,
+                        allowed_policies=action.allowed_policies,
                     )
                     != ToolExecutionPolicy.DISABLED
                     for action in item.actions
@@ -505,15 +549,23 @@ class ToolRegistry:
         )
         tools_by_group: dict[str, list[dict[str, Any]]] = {}
         for definition in definitions.values():
-            source_type, source_id, _source_revision = sources[definition.name]
+            source_type, source_id, _source_revision, _integration_revisions = sources[
+                definition.name
+            ]
             actions = [
                 {
                     "capability": action.capability,
                     "label": action.label,
                     "policy": tool_execution_policy(
-                        tool_settings, action.capability, action.default_policy
+                        tool_settings,
+                        action.capability,
+                        action.default_policy,
+                        allowed_policies=action.allowed_policies,
                     ).value,
                     "configurable": action.configurable,
+                    "allowedPolicies": [
+                        policy.value for policy in action.allowed_policies
+                    ],
                 }
                 for action in definition.actions
             ]
@@ -570,7 +622,7 @@ class ToolRegistry:
         except ValueError:
             return ()
         executable: dict[str, set[ToolAction]] = {}
-        for contribution in contributions.tools:
+        for contribution in (*contributions.tools, *adapter.shared_tools):
             if contribution.authorization_factory is None:
                 continue
             for action in contribution.actions:
@@ -594,15 +646,15 @@ class ToolRegistry:
         definition = tool.definition
         context.bound_options = dict(tool.selected_options)
 
-        async def integration_is_current() -> bool:
-            if tool.source_id is None:
+        async def integration_is_current(selected_id: str | None) -> bool:
+            if selected_id is None:
                 return True
             current_integrations = await SettingsStore.load(context.db, IntegrationSettings)
             current_instance = next(
                 (
                     instance
                     for instance in current_integrations.instances
-                    if str(instance.id) == tool.source_id
+                    if str(instance.id) == selected_id
                 ),
                 None,
             )
@@ -611,15 +663,61 @@ class ToolRegistry:
                 if current_instance is not None
                 else None
             )
-            return current_revision == tool.source_revision and any(
+            expected_revision = (
+                dict(tool.integration_revisions).get(selected_id)
+                if tool.integration_revisions
+                else tool.source_revision
+            )
+            return current_revision == expected_revision and any(
                 contribution.name == definition.name
-                and contribution.integration_id == tool.source_id
+                and (
+                    contribution.integration_id == selected_id
+                    or selected_id in contribution.integration_ids
+                )
                 for contribution in effective_integration_contributions(
                     current_integrations
                 ).tools
             )
 
-        if not await integration_is_current():
+        async def resolve_resource(
+            selected_id: str, resource_key: str
+        ) -> IntegrationResource | None:
+            current_integrations = await SettingsStore.load(
+                context.db, IntegrationSettings
+            )
+            instance = next(
+                (
+                    item
+                    for item in current_integrations.instances
+                    if str(item.id) == selected_id and item.enabled
+                ),
+                None,
+            )
+            if instance is None:
+                return None
+            adapter = integration_adapter(
+                instance.integration_type, instance.adapter_type
+            )
+            if adapter is None or adapter.resource_loader is None:
+                return None
+            credential = None
+            if instance.credential_id is not None:
+                record = await context.db.get(Credential, instance.credential_id)
+                if record is None:
+                    return None
+                credential = read_credential(record)
+            try:
+                resources = await adapter.resources(instance, credential)
+            except Exception:
+                logger.warning(
+                    "Resource discovery for integration %s failed",
+                    selected_id,
+                    exc_info=True,
+                )
+                return None
+            return next((item for item in resources if item.key == resource_key), None)
+
+        if tool.source_id is not None and not await integration_is_current(tool.source_id):
             return ToolResult.error("tool.unavailable")
         if definition.write and context.session.workspace_access != "read-write":
             return ToolResult.error("tool.writeDisabled")
@@ -640,6 +738,9 @@ class ToolRegistry:
                 available_media_capabilities(
                     ai_settings, active_model_id=context.model_id
                 ),
+                video_available=video_analysis_available(
+                    ai_settings, active_model_id=context.model_id
+                ),
             ):
                 return ToolResult.error("tool.unavailable")
         try:
@@ -655,23 +756,107 @@ class ToolRegistry:
                 None,
             )
             return ToolResult.error("tool.invalidArguments", field=field)
+        selected_integration_id = tool.source_id
+        aggregate_integration_ids: tuple[str, ...] = ()
+        if definition.instance_argument is not None:
+            try:
+                selected_integration_id = str(
+                    UUID(str(getattr(arguments, definition.instance_argument)))
+                )
+            except (AttributeError, TypeError, ValueError):
+                return ToolResult.error("tool.invalidArguments", field=definition.instance_argument)
+            if selected_integration_id not in dict(tool.integration_revisions):
+                return ToolResult.error("tool.unavailable")
+        elif tool.integration_revisions:
+            aggregate_integration_ids = tuple(
+                integration_id for integration_id, _revision in tool.integration_revisions
+            )
+            if not all(
+                [
+                    await integration_is_current(integration_id)
+                    for integration_id in aggregate_integration_ids
+                ]
+            ):
+                return ToolResult.error("tool.unavailable")
+            context.bound_options["integration_ids"] = aggregate_integration_ids
+        if definition.instance_argument is not None and not await integration_is_current(
+            selected_integration_id
+        ):
+            return ToolResult.error("tool.unavailable")
+        if selected_integration_id is not None:
+            context.bound_options["integration_id"] = selected_integration_id
+            context.bound_options["binding_revision"] = (
+                dict(tool.integration_revisions).get(selected_integration_id)
+                if tool.integration_revisions
+                else tool.source_revision
+            )
+        if (
+            definition.releases_private_data
+            and context.model_trust_level == TrustLevel.PUBLIC
+            and not await _allow(
+                context,
+                private_integration_data_release_permission(context.session.id),
+            )
+        ):
+            return ToolResult.error("permission.denied")
         try:
-            if tool.source_id is not None and definition.actions:
+            if definition.actions and (
+                selected_integration_id is not None or aggregate_integration_ids
+            ):
                 if definition.authorization_factory is None:
                     return ToolResult.error("tool.unavailable")
-                requests = tuple(
-                    replace(request, policy_integration_id=UUID(tool.source_id))
-                    for request in definition.authorization_factory(arguments, context)
-                )
+                resource_key = None
+                if definition.resource_argument is not None:
+                    resource_key = getattr(arguments, definition.resource_argument, None)
+                    if not isinstance(resource_key, str) or not resource_key:
+                        return ToolResult.error(
+                            "tool.invalidArguments", field=definition.resource_argument
+                        )
+                requests = definition.authorization_factory(arguments, context)
+                if selected_integration_id is not None:
+                    requests = tuple(
+                        replace(
+                            request,
+                            policy_integration_id=UUID(selected_integration_id),
+                            policy_resource_key=(
+                                resource_key
+                                if definition.resource_argument is not None
+                                else request.policy_resource_key
+                            ),
+                            policy_hard_unavailable_capabilities=frozenset(),
+                        )
+                        for request in requests
+                    )
                 declared = {action.capability for action in definition.actions}
                 if {request.capability for request in requests} != declared:
                     return ToolResult.error("tool.unavailable")
                 for request in requests:
                     if not await _allow(context, request):
                         return ToolResult.error("permission.denied")
-                if not await integration_is_current():
+                if selected_integration_id is not None:
+                    if not await integration_is_current(selected_integration_id):
+                        return ToolResult.error("tool.unavailable")
+                elif not all(
+                    [
+                        await integration_is_current(integration_id)
+                        for integration_id in aggregate_integration_ids
+                    ]
+                ):
                     return ToolResult.error("tool.unavailable")
-            return await definition.handler(arguments, context)
+                if resource_key is not None:
+                    resource = await resolve_resource(
+                        selected_integration_id, resource_key
+                    )
+                    if (
+                        resource is None
+                        or declared & resource.hard_unavailable_capabilities
+                    ):
+                        return ToolResult.error("tool.unavailable")
+                    context.bound_resource = resource
+            result = await definition.handler(arguments, context)
+            if definition.releases_private_data and not result.is_error:
+                result.metadata["privateIntegrationData"] = True
+            return result
         except (
             AttachmentError,
             RootFileError,
@@ -815,6 +1000,14 @@ class GenerateAudioArguments(ToolArguments):
 class TranscribeAudioArguments(ToolArguments):
     attachment_id: UUID
     language: str | None = Field(default=None, min_length=2, max_length=35)
+
+
+class AnalyzeVideoArguments(ToolArguments):
+    root: Literal["session", "workspace"]
+    path: str = Field(min_length=1, max_length=2_000)
+    language: str | None = Field(default=None, min_length=2, max_length=35)
+    detail: Literal["standard", "detailed"] = "standard"
+    focus: str | None = Field(default=None, min_length=1, max_length=2_000)
 
 
 class SessionReadArguments(ToolArguments):
@@ -1415,6 +1608,7 @@ _MEDIA_SETTINGS_FIELDS = {
     "media.generate.speech": "generate_speech",
     "media.generate.audio": "generate_audio",
     "media.transcribe.audio": "transcribe_audio",
+    "media.analyze.video": "analyze_video",
 }
 
 _MEDIA_MODEL_CAPABILITIES = {
@@ -1426,43 +1620,116 @@ _MEDIA_MODEL_CAPABILITIES = {
 }
 
 
+def resolve_tool_execution_policy(
+    settings: ToolSettings,
+    capability: str,
+    default: ToolExecutionPolicy = ToolExecutionPolicy.ASK,
+    *,
+    allowed_policies: tuple[
+        ToolExecutionPolicy, ...
+    ] = ALL_TOOL_EXECUTION_POLICIES,
+    integration_id: UUID | None = None,
+    resource_key: str | None = None,
+    hard_unavailable_capabilities: frozenset[str] = frozenset(),
+) -> ToolPolicyResolution:
+    def resolve_value(value: Any, source: str) -> ToolPolicyResolution:
+        try:
+            policy = ToolExecutionPolicy(value)
+        except (TypeError, ValueError):
+            return ToolPolicyResolution(
+                ToolExecutionPolicy.DISABLED, source, "invalid_policy"
+            )
+        if policy not in allowed_policies:
+            return ToolPolicyResolution(
+                ToolExecutionPolicy.DISABLED, source, "policy_not_allowed"
+            )
+        return ToolPolicyResolution(policy, source, "configured")
+
+    configured = settings.policies.get(capability)
+    if configured is not None:
+        resolution = resolve_value(configured, "global")
+    else:
+        field_name = _MEDIA_SETTINGS_FIELDS.get(capability)
+        if field_name is not None:
+            resolution = resolve_value(getattr(settings, field_name).policy, "global")
+        elif capability == "settings.agent_identity.update":
+            resolution = resolve_value(
+                settings.update_agent_identity.policy, "global"
+            )
+        else:
+            resolution = ToolPolicyResolution(default, "default", "static_default")
+    if resolution.policy == ToolExecutionPolicy.DISABLED:
+        return ToolPolicyResolution(
+            ToolExecutionPolicy.DISABLED,
+            resolution.source,
+            (
+                resolution.reason
+                if resolution.reason != "configured"
+                else "global_disabled"
+            ),
+        )
+    if integration_id is not None:
+        integration_policy = settings.integration_policies.get(
+            str(integration_id), {}
+        ).get(capability)
+        if integration_policy is not None:
+            resolution = resolve_value(integration_policy, "integration")
+            if resolution.reason != "configured":
+                return resolution
+        if resource_key is not None:
+            resource_policy = (
+                settings.resource_policies.get(str(integration_id), {})
+                .get(resource_key, {})
+                .get(capability)
+            )
+            if resource_policy is not None:
+                resolution = resolve_value(resource_policy, "resource")
+    elif resource_key is not None:
+        return ToolPolicyResolution(
+            ToolExecutionPolicy.DISABLED, "resource", "missing_integration"
+        )
+    if capability in hard_unavailable_capabilities:
+        return ToolPolicyResolution(
+            ToolExecutionPolicy.DISABLED,
+            "hard_unavailable",
+            "hard_unavailable",
+        )
+    return resolution
+
+
 def tool_execution_policy(
     settings: ToolSettings,
     capability: str,
     default: ToolExecutionPolicy = ToolExecutionPolicy.ASK,
     *,
+    allowed_policies: tuple[
+        ToolExecutionPolicy, ...
+    ] = ALL_TOOL_EXECUTION_POLICIES,
     integration_id: UUID | None = None,
     resource_key: str | None = None,
+    hard_unavailable_capabilities: frozenset[str] = frozenset(),
 ) -> ToolExecutionPolicy:
-    configured = settings.policies.get(capability)
-    if configured is not None:
-        policy = configured
-    else:
-        field_name = _MEDIA_SETTINGS_FIELDS.get(capability)
-        if field_name is not None:
-            policy = getattr(settings, field_name).policy
-        elif capability == "settings.agent_identity.update":
-            policy = settings.update_agent_identity.policy
-        else:
-            policy = default
-    if policy == ToolExecutionPolicy.DISABLED:
-        return policy
-    if integration_id is not None and resource_key is not None:
-        return (
-            settings.resource_policies.get(str(integration_id), {})
-            .get(resource_key, {})
-            .get(capability, policy)
-        )
-    return policy
+    return resolve_tool_execution_policy(
+        settings,
+        capability,
+        default,
+        allowed_policies=allowed_policies,
+        integration_id=integration_id,
+        resource_key=resource_key,
+        hard_unavailable_capabilities=hard_unavailable_capabilities,
+    ).policy
 
 
 def effective_tool_capabilities(
     settings: ToolSettings,
     media_capabilities: set[ModelCapability] | None = None,
+    *,
+    video_available: bool | None = None,
 ) -> set[str]:
     capabilities = {
         capability
         for capability, field_name in _MEDIA_SETTINGS_FIELDS.items()
+        if capability != "media.analyze.video"
         if tool_execution_policy(
             settings, capability, getattr(settings, field_name).policy
         )
@@ -1472,6 +1739,17 @@ def effective_tool_capabilities(
             or _MEDIA_MODEL_CAPABILITIES[capability] in media_capabilities
         )
     }
+    if (
+        tool_execution_policy(
+            settings, "media.analyze.video", settings.analyze_video.policy
+        )
+        != ToolExecutionPolicy.DISABLED
+        and (
+            video_available is True
+            or (video_available is None and media_capabilities is None)
+        )
+    ):
+        capabilities.add("media.analyze.video")
     if (
         tool_execution_policy(
             settings,
@@ -1487,7 +1765,7 @@ def effective_tool_capabilities(
 async def _authorize_media(
     context: ToolContext,
     capability: str,
-    target: ResolvedMediaModel | None = None,
+    target: ResolvedMediaModel | ResolvedVideoModel | None = None,
     source_attachment_ids: tuple[UUID, ...] = (),
 ) -> ToolResult | None:
     field_name = _MEDIA_SETTINGS_FIELDS[capability]
@@ -1787,6 +2065,7 @@ async def _transcribe_audio(
     attachment = await context.db.scalar(
         select(MessageAttachment)
         .join(Message, Message.id == MessageAttachment.message_id)
+        .options(joinedload(MessageAttachment.message))
         .where(
             MessageAttachment.id == arguments.attachment_id,
             MessageAttachment.kind == "audio",
@@ -1805,7 +2084,105 @@ async def _transcribe_audio(
         language=arguments.language,
         timeout=context.tool_settings.transcribe_audio.timeout_seconds,
     )
-    return ToolResult(result.text, {})
+    return ToolResult(
+        result.text,
+        {},
+        trust_level=TrustLevel(attachment.message.trust_level),
+    )
+
+
+async def _analyze_video(
+    arguments: AnalyzeVideoArguments, context: ToolContext
+) -> ToolResult:
+    if context.video_analysis_handler is None or context.video_analysis_target is None:
+        return ToolResult.error("tool.unavailable")
+    normalized_path = context.root_files.normalize_relative_path(arguments.path)
+    request = _filesystem_permission(
+        context,
+        root=arguments.root,
+        path=normalized_path,
+        capability="filesystem.read",
+        action_kind="analyze_video",
+        action_label="Video lesen",
+    )
+    if not await _allow(context, request):
+        return ToolResult.error("permission.denied")
+
+    attachment = None
+    if arguments.root == FileRoot.SESSION.value:
+        attachment = await context.db.scalar(
+            select(MessageAttachment)
+            .join(Message, Message.id == MessageAttachment.message_id)
+            .options(joinedload(MessageAttachment.message))
+            .where(
+                MessageAttachment.storage_path == normalized_path,
+                Message.session_id == context.session.id,
+            )
+        )
+        if attachment is not None and (
+            attachment.kind != "video" or attachment.processing_status != "ready"
+        ):
+            return ToolResult.error("attachment.invalidVideo")
+
+    def read_video() -> bytes:
+        with context.root_files.open_file(arguments.root, normalized_path) as source:
+            data = source.read(MAX_VIDEO_BYTES + 1)
+        if len(data) > MAX_VIDEO_BYTES:
+            raise VideoAnalysisError("attachment.tooLarge")
+        return data
+
+    data = await asyncio.to_thread(read_video)
+    digest = hashlib.sha256(data).hexdigest()
+    if attachment is not None and (
+        attachment.size_bytes != len(data) or attachment.sha256 != digest
+    ):
+        return ToolResult.error("attachment.storageInvalid")
+    source_trust = (
+        TrustLevel(attachment.message.trust_level)
+        if attachment is not None
+        else context.model_trust_level
+    )
+    target = context.video_analysis_target(len(data))
+    if target is None:
+        return ToolResult.error("video.analysisUnavailable")
+    if error := await _authorize_media(
+        context,
+        "media.analyze.video",
+        target,
+        (attachment.id,) if attachment is not None else (),
+    ):
+        return error
+    try:
+        result = await context.video_analysis_handler(
+            data,
+            source_trust,
+            arguments.language,
+            arguments.detail,
+            arguments.focus,
+        )
+    except TimeoutError:
+        return ToolResult.error("video.analysisTimeout")
+    except VideoAnalysisError as exc:
+        return ToolResult.error(exc.code)
+    return ToolResult.json(
+        {
+            "root": arguments.root,
+            "path": normalized_path,
+            "sha256": digest,
+            **result,
+        },
+        metadata={
+            "sourceRoot": arguments.root,
+            "sourcePath": normalized_path,
+            "sourceSha256": digest,
+            **(
+                {"sourceAttachmentId": str(attachment.id)}
+                if attachment is not None
+                else {}
+            ),
+        },
+        trust_level=source_trust,
+    )
 
 
 def _attachment_items(message: Message) -> list[dict[str, Any]]:
@@ -2209,10 +2586,6 @@ async def _memory_write(
         context, memory_write_permission(context.session.id, arguments.action)
     ):
         return ToolResult.error("permission.denied")
-    await MemoryService.lock_capacity(context.db)
-    settings = await SettingsStore.load(
-        context.db, MemorySettings, user_id=context.session.user_id
-    )
     if arguments.action == "update":
         assert arguments.memory_id is not None
         assert arguments.expected_revision is not None
@@ -2228,7 +2601,6 @@ async def _memory_write(
             evidence_message_id=context.assistant_message_id,
             run_id=context.run_id,
             tool_call_id=context.tool_call.id,
-            max_context_characters=settings.max_context_characters,
         )
         if result.item is None:
             return ToolResult.error("memory.notFound")
@@ -2252,7 +2624,6 @@ async def _memory_write(
         message_id=context.assistant_message_id,
         run_id=context.run_id,
         tool_call_id=context.tool_call.id,
-        max_context_characters=settings.max_context_characters,
     )
     if result.duplicate:
         return ToolResult.json(
@@ -2275,11 +2646,6 @@ async def _memory_retrieve(
         mode=MemoryRetrieveMode(arguments.mode),
         query=arguments.query,
         category=arguments.category,
-        retrieval_level=(
-            None
-            if arguments.mode == MemoryRetrieveMode.BROWSE.value
-            else MemoryRetrievalLevel.RETRIEVE
-        ),
         readable_by=context.memory_trust_level,
         cursor_updated_at=arguments.cursor_updated_at,
         cursor_id=arguments.cursor_id,
@@ -2294,13 +2660,6 @@ async def _memory_retrieve(
         and result.next_cursor_id is not None
         else None
     )
-    if context.memory_write_enabled:
-        await MemoryService.record_exposures(
-            context.db,
-            result.items,
-            run_id=context.run_id,
-            assistant_message_id=context.assistant_message_id,
-        )
     return ToolResult.json(
         {
             "purpose": arguments.purpose,
@@ -2309,9 +2668,6 @@ async def _memory_retrieve(
             "scope": {
                 "readableBy": result.readable_by.value,
                 "includesPrivate": result.readable_by == TrustLevel.PRIVATE,
-                "retrievalLevel": (
-                    "all" if result.mode == MemoryRetrieveMode.BROWSE else "retrieve"
-                ),
             },
             "items": [
                 {
@@ -2319,7 +2675,7 @@ async def _memory_retrieve(
                     "content": item.content,
                     "revision": item.revision,
                     "category": item.category,
-                    "retrievalLevel": item.retrieval_level,
+                    "pinned": item.pinned,
                     "trustLevel": item.trust_level,
                     **memory_reference_timestamps(item),
                     "sourceSession": (
@@ -2589,6 +2945,26 @@ tool_registry = ToolRegistry(
                     "media.transcribe.audio",
                     "Audio transkribieren",
                     ToolExecutionPolicy.DISABLED,
+                ),
+            ),
+        ),
+        ToolDefinition(
+            "analyze_video",
+            "Analyze an MP4 or WebM video from a session or workspace path. The result describes "
+            "visual events in chronological order and includes spoken content when audio exists. "
+            "Set detail to detailed for dense UI changes or short events, and focus to the user's "
+            "specific objective. Use relative POSIX paths without root names.",
+            AnalyzeVideoArguments,
+            _analyze_video,
+            required_capability="media.analyze.video",
+            group="media",
+            label="Video analysieren",
+            icon="video_file",
+            actions=(
+                ToolAction(
+                    "media.analyze.video",
+                    "Videos analysieren",
+                    ToolExecutionPolicy.ASK,
                 ),
             ),
         ),

@@ -23,6 +23,7 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
+    ModelInputModality,
     ModelWebFetchPolicy,
     ToolSettings,
     UserPreferences,
@@ -180,6 +181,36 @@ def test_model_webfetch_fields_accept_snake_and_camel_case() -> None:
     assert camel_model.supports_image_input is True
     assert snake_model.webfetch_policy == ModelWebFetchPolicy.DISABLED
     assert snake_model.supports_image_input is True
+
+
+def test_model_input_modalities_are_canonical_with_legacy_image_compatibility() -> None:
+    provider_id = uuid4()
+
+    legacy = ModelConfig(
+        provider_id=provider_id,
+        model_id="legacy",
+        supports_image_input=True,
+    )
+    canonical = ModelConfig.model_validate(
+        {
+            "provider_id": provider_id,
+            "model_id": "canonical",
+            "inputModalities": ["text", "audio", "video"],
+            "supportsImageInput": True,
+        }
+    )
+
+    assert legacy.input_modalities == {
+        ModelInputModality.TEXT,
+        ModelInputModality.IMAGE,
+    }
+    assert legacy.model_dump()["supports_image_input"] is True
+    assert canonical.input_modalities == {
+        ModelInputModality.TEXT,
+        ModelInputModality.AUDIO,
+        ModelInputModality.VIDEO,
+    }
+    assert canonical.supports_image_input is False
 
 
 def test_effective_webfetch_policy_resolves_inheritance_override_and_hard_gate() -> None:

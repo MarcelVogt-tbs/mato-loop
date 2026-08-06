@@ -21,6 +21,8 @@ describe('tool display', () => {
       .toEqual({ label: 'Tool-Ergebnis lesen', icon: 'history' })
     expect(toolIdentity('session_browse'))
       .toEqual({ label: 'Letzte Sessions anzeigen', icon: 'view_list' })
+    expect(toolIdentity('calendar_query_events'))
+      .toEqual({ label: 'Termine lesen', icon: 'event' })
     expect(toolSummary({ name: 'session_browse', arguments: {} })).toBe('Letzte Sessions')
     expect(toolSummary({
       name: 'copy_path',
@@ -58,11 +60,15 @@ describe('tool display', () => {
 
   it('labels media tools and summarizes their relevant arguments', () => {
     expect(toolIdentity('generate_image')).toEqual({ label: 'Bild erzeugen', icon: 'image' })
+    expect(toolIdentity('edit_image')).toEqual({ label: 'Bild bearbeiten', icon: 'auto_fix_high' })
     expect(toolIdentity('generate_speech')).toEqual({ label: 'Sprache erzeugen', icon: 'record_voice_over' })
     expect(toolIdentity('generate_audio')).toEqual({ label: 'Audio erzeugen', icon: 'graphic_eq' })
     expect(toolIdentity('transcribe_audio')).toEqual({ label: 'Audio transkribieren', icon: 'mic' })
+    expect(toolIdentity('analyze_video')).toEqual({ label: 'Video analysieren', icon: 'video_file' })
     expect(toolSummary({ name: 'generate_image', arguments: { prompt: 'Ein ruhiger See' } }))
       .toBe('Ein ruhiger See')
+    expect(toolSummary({ name: 'edit_image', arguments: { prompt: 'Farben restaurieren' } }))
+      .toBe('Farben restaurieren')
     expect(toolSummary({
       name: 'generate_audio',
       arguments: { prompt: 'Leises Meeresrauschen', duration_seconds: 12 }
@@ -71,6 +77,10 @@ describe('tool display', () => {
       name: 'transcribe_audio',
       arguments: { attachment_id: '550e8400-e29b-41d4-a716-446655440000' }
     })).toBe('Audioanhang 550e8400-e29b-41d4-a716-446655440000')
+    expect(toolSummary({
+      name: 'analyze_video',
+      arguments: { root: 'session', path: 'attachments/example/video.mp4' }
+    })).toBe('session:attachments/example/video.mp4')
   })
 
   it('localizes plain host-controlled tool results', () => {
@@ -97,14 +107,15 @@ describe('tool display', () => {
 
     const parsed = parseToolResult(JSON.stringify({
       mode: 'browse',
-      scope: { readableBy: 'private', retrievalLevel: 'all' },
+      scope: { readableBy: 'private' },
       total: 1,
       nextCursor: { cursor_updated_at: '2026-07-23T12:00:00Z', cursor_id: 'memory-1' },
-      items: [{ id: 'memory-1', content: 'Sichtbarer Inhalt', category: 'fact' }]
+      items: [{ id: 'memory-1', content: 'Sichtbarer Inhalt', category: 'fact', pinned: true }]
     }), 'memory_retrieve')
 
     expect(parsed.text).toContain('Sichtbarer Inhalt')
     expect(parsed.text).toContain('private')
+    expect(parsed.text).toContain('pinned')
     expect(parsed.text).toContain('cursor_updated_at')
   })
 
