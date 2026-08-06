@@ -4,6 +4,7 @@ import asyncio
 import codecs
 import html
 import ipaddress
+import logging
 import re
 import socket
 import subprocess
@@ -26,6 +27,8 @@ from mato_loop_backend.attachment_processing import (
     format_pdf_pages,
 )
 from mato_loop_backend.settings.models import DEFAULT_WEBFETCH_USER_AGENT
+
+logger = logging.getLogger(__name__)
 
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_REDIRECTS = 5
@@ -398,6 +401,9 @@ async def _request_once(
         raise
     except TimeoutError as exc:
         raise _error("timeout") from exc
+    except aiohttp.ClientSSLError as exc:
+        logger.warning("Web fetch TLS verification failed for host %s", target.host)
+        raise _error("tlsFailed") from exc
     except (aiohttp.ClientError, OSError) as exc:
         raise _error("connectionFailed") from exc
 

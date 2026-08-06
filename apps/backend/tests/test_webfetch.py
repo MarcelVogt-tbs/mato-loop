@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import gzip
 import ipaddress
+import logging
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from io import BytesIO
 from unittest.mock import AsyncMock
 
+import aiohttp
 import pytest
 from PIL import Image
 from pypdf import PdfWriter
@@ -220,6 +222,38 @@ async def test_dns_is_pinned_and_request_headers_are_safe(monkeypatch) -> None:
     assert seen_headers["accept-encoding"] == "gzip, deflate"
     assert "application/pdf" in seen_headers["accept"]
     assert {"authorization", "cookie", "referer"}.isdisjoint(seen_headers)
+
+
+async def test_tls_failure_has_a_specific_safe_error(monkeypatch, caplog) -> None:
+    async def resolve(host: str, port: int):
+        return (ipaddress.ip_address("8.8.8.8"),)
+
+    class FailingSession:
+        def __init__(self, *, connector, **kwargs) -> None:
+            del kwargs
+            self.connector = connector
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            del exc_type, exc, traceback
+            await self.connector.close()
+
+        def get(self, *args, **kwargs):
+            del args, kwargs
+            raise aiohttp.ClientSSLError(None, OSError("certificate mismatch"))
+
+    monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
+    monkeypatch.setattr(webfetch.aiohttp, "ClientSession", FailingSession)
+
+    with caplog.at_level(logging.WARNING, logger=webfetch.__name__):
+        code = await _error_code(fetch_web("https://tls.example/private?token=secret"))
+
+    assert code == "webfetch.tlsFailed"
+    assert "tls.example" in caplog.text
+    assert "token" not in caplog.text
+    assert "secret" not in caplog.text
 
 
 async def test_redirects_are_resolved_and_each_origin_is_validated() -> None:
