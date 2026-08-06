@@ -1,6 +1,11 @@
 <template>
-  <q-dialog :model-value="modelValue" @hide="close">
-    <q-card class="integration-dialog app-surface">
+  <q-dialog
+    :model-value="modelValue"
+    :maximized="$q.screen.lt.sm"
+    :persistent="saving"
+    @hide="close"
+  >
+    <q-card class="integration-dialog app-surface column">
       <q-card-section class="row items-start no-wrap q-gutter-md">
         <q-avatar color="primary" text-color="white" icon="extension" />
         <div class="col">
@@ -13,8 +18,8 @@
       </q-card-section>
 
       <q-separator />
-      <q-form ref="formRef">
-        <q-card-section class="q-gutter-md">
+      <q-form ref="formRef" class="col column no-wrap">
+        <q-card-section class="col scroll q-gutter-md">
           <q-select
             v-model="form.integration_type"
             outlined
@@ -23,6 +28,7 @@
             label="Integrationstyp"
             :options="integrationTypes"
             :disable="isEditing"
+            @update:model-value="selectIntegrationType"
           />
           <q-select
             v-model="form.provider_type"
@@ -34,7 +40,7 @@
             :disable="isEditing"
           />
 
-          <template v-if="form.integration_type === 'search' && form.provider_type === 'searxng'">
+          <template v-if="providerTypes.some(({ value }) => value === form.provider_type)">
             <q-input
               v-model="form.name"
               outlined
@@ -45,10 +51,28 @@
             <q-input
               v-model="form.base_url"
               outlined
-              label="SearXNG Base URL"
-              placeholder="https://search.example.com"
+              :label="form.integration_type === 'calendar' ? 'CalDAV Base URL' : 'SearXNG Base URL'"
+              :placeholder="form.integration_type === 'calendar' ? 'https://calendar.example.com' : 'https://search.example.com'"
               lazy-rules
               :rules="[requiredRule, urlRule]"
+            />
+            <q-input
+              v-if="form.integration_type === 'calendar'"
+              v-model="form.username"
+              outlined
+              label="Benutzername"
+              lazy-rules
+              :rules="[requiredRule]"
+            />
+            <q-input
+              v-if="form.integration_type === 'calendar'"
+              v-model="form.password"
+              outlined
+              type="password"
+              :label="integration?.hasCredential ? 'Neues Passwort (optional)' : 'Passwort'"
+              :hint="integration?.hasCredential ? 'Leer lassen, um das gespeicherte Passwort beizubehalten.' : ''"
+              lazy-rules
+              :rules="isEditing ? [] : [requiredRule]"
             />
             <q-toggle v-model="form.enabled" color="primary" label="Integration aktivieren" />
           </template>
@@ -89,10 +113,13 @@ const $q = useQuasar()
 const integrations = useIntegrationStore()
 const formRef = ref(null)
 const saving = ref(false)
-const integrationTypes = [{ label: 'Websuche', value: 'search' }]
-const providerTypes = computed(() => form.integration_type === 'search'
-  ? [{ label: 'SearXNG', value: 'searxng' }]
-  : [])
+const integrationTypes = [
+  { label: 'Websuche', value: 'search' },
+  { label: 'Kalender', value: 'calendar' }
+]
+const providerTypes = computed(() => form.integration_type === 'calendar'
+  ? [{ label: 'CalDAV', value: 'caldav' }]
+  : [{ label: 'SearXNG', value: 'searxng' }])
 const form = reactive(defaultForm())
 const isEditing = computed(() => Boolean(props.integration))
 
@@ -102,8 +129,15 @@ function defaultForm() {
     provider_type: 'searxng',
     name: 'SearXNG',
     base_url: '',
+    username: '',
+    password: '',
     enabled: true
   }
+}
+
+function selectIntegrationType(type) {
+  form.provider_type = type === 'calendar' ? 'caldav' : 'searxng'
+  form.name = type === 'calendar' ? 'CalDAV' : 'SearXNG'
 }
 
 function requiredRule(value) {
@@ -112,9 +146,17 @@ function requiredRule(value) {
 
 function urlRule(value) {
   try {
-    return ['http:', 'https:'].includes(new URL(value).protocol) || 'Bitte gib eine gültige HTTP-URL ein.'
+    const protocol = new URL(value).protocol
+    const allowed = form.integration_type === 'calendar'
+      ? protocol === 'https:'
+      : ['http:', 'https:'].includes(protocol)
+    return allowed || (form.integration_type === 'calendar'
+      ? 'CalDAV erfordert eine HTTPS-URL.'
+      : 'Bitte gib eine gültige HTTP-URL ein.')
   } catch {
-    return 'Bitte gib eine gültige HTTP-URL ein.'
+    return form.integration_type === 'calendar'
+      ? 'CalDAV erfordert eine gültige HTTPS-URL.'
+      : 'Bitte gib eine gültige HTTP-URL ein.'
   }
 }
 
@@ -129,7 +171,12 @@ async function save() {
       base_url: form.base_url.trim(),
       enabled: form.enabled
     }
-    if (props.integration) await integrations.updateSearch(props.integration.id, payload)
+    if (form.integration_type === 'calendar') {
+      payload.username = form.username.trim()
+      payload.password = form.password
+      if (props.integration) await integrations.updateCalendar(props.integration.id, payload)
+      else await integrations.createCalendar(payload)
+    } else if (props.integration) await integrations.updateSearch(props.integration.id, payload)
     else await integrations.createSearch(payload)
     $q.notify({ type: 'positive', message: 'Integration gespeichert' })
     close()
@@ -149,6 +196,8 @@ watch(() => props.modelValue, (open) => {
     provider_type: props.integration.providerType,
     name: props.integration.name,
     base_url: props.integration.config?.baseUrl || '',
+    username: props.integration.config?.username || '',
+    password: '',
     enabled: props.integration.enabled
   } : {})
 })

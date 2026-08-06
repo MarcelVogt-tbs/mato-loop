@@ -27,6 +27,22 @@ const searchResponse = {
   ]
 }
 
+const calendarResponse = {
+  configured: true,
+  accounts: [
+    {
+      id: 'calendar-id',
+      name: 'Arbeit',
+      integrationType: 'calendar',
+      providerType: 'caldav',
+      enabled: true,
+      hasCredential: true,
+      supportsResourcePolicies: true,
+      config: { baseUrl: 'https://calendar.example.com', username: 'mato' }
+    }
+  ]
+}
+
 describe('integration store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -75,16 +91,70 @@ describe('integration store', () => {
     expect(store.search.providers).toHaveLength(1)
   })
 
+  it('loads and dispatches calendar account operations', async () => {
+    api.get.mockResolvedValue({ data: calendarResponse })
+    api.post.mockResolvedValue({ data: { status: 'ok' } })
+    api.delete.mockResolvedValue({})
+    const store = useIntegrationStore()
+    const payload = {
+      integration_type: 'calendar',
+      provider_type: 'caldav',
+      name: 'Arbeit',
+      base_url: 'https://calendar.example.com',
+      username: 'mato',
+      password: 'secret',
+      enabled: true
+    }
+
+    await store.fetchCalendar()
+    await store.createCalendar(payload)
+    await store.testCalendar('calendar-id')
+    await store.removeCalendar('calendar-id')
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/calendar')
+    expect(api.post).toHaveBeenCalledWith('/integrations/calendar/accounts', payload)
+    expect(api.post).toHaveBeenCalledWith('/integrations/calendar/accounts/calendar-id/test')
+    expect(api.delete).toHaveBeenCalledWith('/integrations/calendar/accounts/calendar-id')
+    expect(store.calendar.accounts).toHaveLength(1)
+  })
+
+  it('omits a blank password when updating a calendar account', async () => {
+    api.get.mockResolvedValue({ data: calendarResponse })
+    api.put.mockResolvedValue({ data: calendarResponse })
+    const store = useIntegrationStore()
+
+    await store.updateCalendar('calendar-id', {
+      name: 'Arbeit',
+      password: '',
+      enabled: true
+    })
+
+    expect(api.put).toHaveBeenCalledWith('/integrations/calendar/accounts/calendar-id', {
+      name: 'Arbeit',
+      enabled: true
+    })
+  })
+
   it('loads and saves resource policies for one integration', async () => {
     const access = {
       integrationId: 'integration-id',
-      actions: [{ capability: 'calendar.read', label: 'Lesen', globalPolicy: 'ask' }],
+      actions: [
+        {
+          capability: 'calendar.read',
+          label: 'Lesen',
+          allowedPolicies: ['disabled', 'ask', 'auto'],
+          globalPolicy: 'ask',
+          integrationPolicy: 'auto',
+          effectiveIntegrationPolicy: 'auto'
+        }
+      ],
       resources: [
         {
           key: 'calendar:work',
           label: 'Arbeit',
           policies: { 'calendar.read': 'auto' },
-          effectivePolicies: { 'calendar.read': 'auto' }
+          effectivePolicies: { 'calendar.read': 'auto' },
+          hardUnavailableCapabilities: []
         }
       ]
     }
@@ -93,12 +163,15 @@ describe('integration store', () => {
     const store = useIntegrationStore()
 
     await store.fetchAccess('integration-id')
-    await store.saveAccess('integration-id', {
-      'calendar:work': { 'calendar.read': 'auto' }
-    })
+    await store.saveAccess(
+      'integration-id',
+      { 'calendar.read': 'auto' },
+      { 'calendar:work': { 'calendar.read': 'auto' } }
+    )
 
     expect(api.get).toHaveBeenCalledWith('/integrations/integration-id/access')
     expect(api.put).toHaveBeenCalledWith('/integrations/integration-id/access', {
+      policies: { 'calendar.read': 'auto' },
       resources: { 'calendar:work': { 'calendar.read': 'auto' } }
     })
     expect(store.accessByIntegration['integration-id']).toEqual(access)

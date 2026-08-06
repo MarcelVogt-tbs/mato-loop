@@ -58,6 +58,12 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'network_service') {
     return { label: 'Netzwerkdienst', value: approval?.resourceDisplay || 'Konfigurierte Websuche' }
   }
+  if (approval?.resourceType === 'integration_operation') {
+    return {
+      label: 'Integrationsressource',
+      value: approval?.resourceDisplay || 'Exakt angeforderte Integrationsaktion'
+    }
+  }
   if (approval?.resourceType === 'memory_collection') {
     return { label: 'Memory-Sammlung', value: approval?.resourceDisplay || 'Eigene Memories' }
   }
@@ -110,7 +116,11 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'session.read': { label: 'Session lesen', icon: 'forum' },
     'session.search': { label: 'Sessions durchsuchen', icon: 'manage_search' },
     'memory.read': { label: 'Memories lesen', icon: 'psychology' },
-    'memory.write': { label: 'Memory speichern', icon: 'save' }
+    'memory.write': { label: 'Memory speichern', icon: 'save' },
+    'calendar.read': { label: 'Kalender lesen', icon: 'event' },
+    'calendar.write': { label: 'Kalender ändern', icon: 'edit_calendar' },
+    'calendar.delete': { label: 'Kalendereintrag löschen', icon: 'event_busy' },
+    'integration.private_data.release': { label: 'Private Integrationsdaten freigeben', icon: 'cloud_upload' }
   }[grant?.capability]
   return {
     label: capability?.label || 'Tool-Zugriff',

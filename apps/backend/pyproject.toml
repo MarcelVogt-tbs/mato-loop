@@ -15,6 +15,7 @@ dependencies = [
     "ddgs>=9.14.4,<10.0.0",
     "fastapi>=0.116.0",
     "httpx>=0.28.1",
+    "icalendar>=6.3.0,<7.0.0",
     "markdownify>=1.2.0",
     "openai>=2.8.0",
     "openpyxl>=3.1.5",

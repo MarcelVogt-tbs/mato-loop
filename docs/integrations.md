@@ -20,6 +20,10 @@ An adapter may optionally declare host-controlled resource actions and an asynch
 
 Global action defaults remain under **Settings > Tools**. Per-resource overrides are configured from the integration and use `disabled`, `ask`, or `auto`; an absent value inherits the global default. Overrides are stored in `ToolSettings` by integration UUID and resource key rather than mixed into connection configuration. Deleting an integration removes its overrides, while disabling it preserves them.
 
+An integration may also define sparse instance defaults. Policy resolution is global action, integration instance, then resource. A globally disabled action and a disabled integration are hard limits. Remote ACLs are mapped only to statically declared host capabilities and may make an action unavailable, but can never define or enable actions. The API and runtime use the same resolver and expose the effective policy rather than asking the frontend to reproduce precedence rules.
+
+Tools declare policy actions independently of tool names. Multiple tools may share one action when they have the same security meaning, for example calendar create and update both using `calendar.write`. A concrete permission request keeps its policy target, integration plus resource, separate from its exact session-grant scope.
+
 Resource discovery occurs before the settings transaction. Saving then locks integration settings, verifies that the instance revision is unchanged, locks tool settings, replaces only that integration's overrides, and commits once. Existing adapters without a resource loader expose no access editor and keep their current behavior.
 
 ## Effective Tool Set
@@ -29,6 +33,16 @@ Before every model request, the registry combines built-ins, session mode, model
 A binding also records allowed option values and the associated integration ID. Immediately before external access, the handler reloads the current integration state. Deleted or disabled instances are therefore ineffective even if they were offered in the preceding model request.
 
 The binding also records a canonical revision of the source instance. Configuration, credential, or identity changes invalidate the stale call rather than executing its captured handler. Provider options selected by host settings are normalized before binding and must still resolve to the same values at execution time.
+
+Adapters with multiple active instances may contribute one stable shared tool set. The effective binding contains only the instances offered for that model request. A validated instance argument can select only one of those host-bound instances; aggregate discovery tools receive the complete immutable bound set. The selected binding is checked before authorization and again after approval.
+
+## CalDAV
+
+The CalDAV adapter is the first production user of shared integration tools and resource policies. Each account is an integration instance and each discovered calendar is a resource. The static actions are `calendar.read`, `calendar.write`, and `calendar.delete`; create and update share the write action. Basic or app-password credentials are encrypted separately from settings.
+
+The adapter discovers calendars live and maps DAV privileges to hard unavailable host actions. Models receive only integration UUIDs, opaque calendar keys, and encrypted event tokens, never DAV URLs, ETags, credentials, XML, or iCalendar source. Reads accept bounded aware time ranges. Creates use deterministic UIDs and `If-None-Match`; updates and deletes use ETags with `If-Match`. Recurring or scheduling-bearing events and events with unrepresented properties are not mutated.
+
+CalDAV tools release private integration data. A public model therefore needs an explicit session release in addition to the configured calendar action policy. This release is a data-transport boundary and cannot be replaced by `calendar.read=auto`.
 
 ## Web Search
 

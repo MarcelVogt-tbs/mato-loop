@@ -31,6 +31,8 @@ Das Vertrauenslevel prüft weder Lokalität noch TLS oder Betreiber des Endpunkt
 
 Für öffentliche Modelle kann MatoLoop erkannte Kennungen und Secrets in Text und Tool-Argumenten vor der Übertragung ersetzen. Personen und Orte werden nicht automatisch erkannt. Bilder, Audio und andere Binärdaten werden nicht pseudonymisiert. Die Erkennung reduziert Risiken, ist aber kein Ersatz für eine bewusste Auswahl der gesendeten Daten.
 
+Private Daten aus Integrationen, beispielsweise Kalendertermine, benötigen bei öffentlichen Modellen zusätzlich eine ausdrückliche Freigabe für die aktuelle Session. Diese Datenfreigabe ist von der Aktionsrichtlinie getrennt: Eine automatisch erlaubte Kalenderabfrage darf ohne Session-Freigabe trotzdem keine Daten an ein öffentliches Modell übertragen. Ein Widerruf verhindert weitere Übertragungen, kann bereits übermittelte Daten aber nicht zurückholen.
+
 ## Memory und Persona
 
 Memory-Schreibvorgänge und Persona-Änderungen können abhängig von der Tool-Richtlinie ebenfalls eine Freigabe erfordern. Prüfen Sie den angezeigten Inhalt, weil die Änderung über die aktuelle Antwort hinaus wirken kann.

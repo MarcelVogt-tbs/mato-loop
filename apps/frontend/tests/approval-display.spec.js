@@ -56,6 +56,24 @@ describe('approval display', () => {
     expect(formatted).not.toContain('secret')
   })
 
+  it('describes integration operations and private-data grants', () => {
+    expect(approvalResource({
+      resourceType: 'integration_operation',
+      resourceScope: '{opaque}',
+      resourceDisplay: 'calendar:work'
+    })).toEqual({ label: 'Integrationsressource', value: 'calendar:work' })
+    expect(permissionGrantDisplay({
+      capability: 'integration.private_data.release',
+      resourceType: 'session',
+      resourceScope: 'session-1',
+      sessionId: 'session-1'
+    })).toEqual({
+      label: 'Private Integrationsdaten freigeben',
+      value: 'Aktuelle Session',
+      icon: 'cloud_upload'
+    })
+  })
+
   it('redacts sensitive and bounds large technical details', () => {
     const formatted = formatTechnicalDetails({
       path: 'Notizen/plan.md',

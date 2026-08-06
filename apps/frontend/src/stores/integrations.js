@@ -9,9 +9,15 @@ const emptySearch = () => ({
   providers: []
 })
 
+const emptyCalendar = () => ({
+  configured: false,
+  accounts: []
+})
+
 export const useIntegrationStore = defineStore('integrations', {
   state: () => ({
     search: emptySearch(),
+    calendar: emptyCalendar(),
     accessByIntegration: {},
     loading: false,
     loaded: false,
@@ -47,13 +53,44 @@ export const useIntegrationStore = defineStore('integrations', {
     async testSearch(id) {
       return (await api.post(`/integrations/search/providers/${id}/test`)).data
     },
+    async fetchCalendar() {
+      this.loading = true
+      this.loadFailed = false
+      try {
+        this.calendar = (await api.get('/integrations/calendar')).data
+        this.loaded = true
+      } catch (error) {
+        this.loadFailed = true
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+    async createCalendar(payload) {
+      await api.post('/integrations/calendar/accounts', payload)
+      await this.fetchCalendar()
+    },
+    async updateCalendar(id, payload) {
+      const request = { ...payload }
+      if (request.password === '') delete request.password
+      await api.put(`/integrations/calendar/accounts/${id}`, request)
+      await this.fetchCalendar()
+    },
+    async removeCalendar(id) {
+      await api.delete(`/integrations/calendar/accounts/${id}`)
+      delete this.accessByIntegration[id]
+      await this.fetchCalendar()
+    },
+    async testCalendar(id) {
+      return (await api.post(`/integrations/calendar/accounts/${id}/test`)).data
+    },
     async fetchAccess(id) {
       const { data } = await api.get(`/integrations/${id}/access`)
       this.accessByIntegration[id] = data
       return data
     },
-    async saveAccess(id, resources) {
-      const { data } = await api.put(`/integrations/${id}/access`, { resources })
+    async saveAccess(id, policies, resources) {
+      const { data } = await api.put(`/integrations/${id}/access`, { policies, resources })
       this.accessByIntegration[id] = data
       return data
     }

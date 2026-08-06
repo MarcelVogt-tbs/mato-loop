@@ -16,15 +16,24 @@ from mato_loop_backend.agent.tools import (
     available_tool_schemas,
 )
 from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.api.routes import integrations as integrations_route_module
 from mato_loop_backend.api.routes.integrations import (
+    CalendarIntegrationRequest,
     IntegrationAccessRequest,
     SearchIntegrationRequest,
+    create_calendar_integration,
     create_search_integration,
+    delete_calendar_integration,
     delete_search_integration,
     get_integration_access,
     search_settings_payload,
+    update_calendar_integration,
     update_integration_access,
     update_search_integration,
+)
+from mato_loop_backend.api.routes.tool_settings import (
+    ToolSettingsRequest,
+    update_tool_settings,
 )
 from mato_loop_backend.integrations import (
     SearchIntegrationError,
@@ -32,11 +41,15 @@ from mato_loop_backend.integrations import (
     search_provider_options,
     search_web,
 )
+from mato_loop_backend.integrations import service as integration_service_module
+from mato_loop_backend.integrations.caldav_client import CalDavError
 from mato_loop_backend.integrations.contracts import (
+    IntegrationAdapterDefinition,
     IntegrationContributions,
     IntegrationResource,
     ToolContribution,
 )
+from mato_loop_backend.models import Credential
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
@@ -147,6 +160,54 @@ def _resource_adapter(monkeypatch) -> None:
     )
 
 
+def _restricted_resource_adapter(monkeypatch) -> ToolAction:
+    action = ToolAction(
+        "tasks.delete",
+        "Aufgaben löschen",
+        ToolExecutionPolicy.ASK,
+        allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
+    )
+
+    async def load_resources(_instance, _credential):
+        return (IntegrationResource("project:main", "Hauptprojekt"),)
+
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("search", "searxng"),
+        IntegrationAdapterDefinition(
+            integration_type="search",
+            adapter_type="searxng",
+            config_model=integration_registry.SearxngConfig,
+            contribution_factory=lambda _instance: IntegrationContributions(
+                tools=(
+                    ToolContribution(
+                        name="tasks_delete",
+                        description="Delete tasks from one project.",
+                        arguments_model=_ResourceArguments,
+                        handler=_resource_handler,
+                        actions=(action,),
+                        authorization_factory=lambda arguments, _context: (
+                            PermissionRequest(
+                                capability=action.capability,
+                                resource_type="network_service",
+                                resource_scope=arguments.resource_key,
+                                action_kind="tasks_delete",
+                                risk_level="medium",
+                                title="Aufgaben löschen?",
+                                summary="Der Agent möchte Aufgaben löschen.",
+                                policy_resource_key=arguments.resource_key,
+                            ),
+                        ),
+                    ),
+                )
+            ),
+            resource_actions=(action,),
+            resource_loader=load_resources,
+        ),
+    )
+    return action
+
+
 def test_no_key_provider_makes_search_available_without_configuration() -> None:
     settings = IntegrationSettings()
 
@@ -212,6 +273,92 @@ async def test_integration_access_inherits_and_overrides_global_policy(
     }
 
 
+async def test_integration_access_reports_integration_policy_and_hard_limits(
+    monkeypatch,
+) -> None:
+    _resource_adapter(monkeypatch)
+    current = integration_registry._ADAPTERS[("search", "searxng")]
+
+    async def load_resources(_instance, _credential):
+        return (
+            IntegrationResource(
+                "project:archive",
+                "Archiv",
+                frozenset({"network.search"}),
+            ),
+        )
+
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("search", "searxng"),
+        replace(current, resource_loader=load_resources),
+    )
+    integration = _searxng()
+    integrations = IntegrationSettings(instances=[integration])
+    tools = ToolSettings.model_validate(
+        {
+            "policies": {"network.search": "ask"},
+            "integrationPolicies": {
+                str(integration.id): {"network.search": "auto"}
+            },
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+
+    result = await get_integration_access(
+        integration.id, AsyncMock(spec=AsyncSession)
+    )
+
+    action = result["actions"][0]
+    assert action["allowedPolicies"] == ["disabled", "ask", "auto"]
+    assert action["integrationPolicy"] == "auto"
+    assert action["effectiveIntegrationPolicy"] == "auto"
+    assert result["resources"][0]["hardUnavailableCapabilities"] == [
+        "network.search"
+    ]
+    assert result["resources"][0]["effectivePolicies"] == {
+        "network.search": "disabled"
+    }
+
+
+async def test_resource_discovery_cannot_invent_adapter_capabilities(
+    monkeypatch,
+) -> None:
+    _resource_adapter(monkeypatch)
+    current = integration_registry._ADAPTERS[("search", "searxng")]
+
+    async def load_resources(_instance, _credential):
+        return (
+            IntegrationResource(
+                "project:main",
+                "Hauptprojekt",
+                frozenset({"tasks.invented"}),
+            ),
+        )
+
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("search", "searxng"),
+        replace(current, resource_loader=load_resources),
+    )
+    integration = _searxng()
+    integrations = IntegrationSettings(instances=[integration])
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=integrations)
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await get_integration_access(
+            integration.id, AsyncMock(spec=AsyncSession)
+        )
+
+    assert exc_info.value.code == "integration.resourceDiscoveryFailed"
+
+
 async def test_global_disabled_is_a_hard_resource_policy_limit(monkeypatch) -> None:
     _resource_adapter(monkeypatch)
     integration = _searxng()
@@ -247,6 +394,9 @@ async def test_integration_access_replaces_only_its_resource_overrides(
     integrations = IntegrationSettings(instances=[integration])
     tools = ToolSettings.model_validate(
         {
+            "integrationPolicies": {
+                str(integration.id): {"network.search": "ask"}
+            },
             "resourcePolicies": {
                 str(other_id): {
                     "calendar:other": {"network.search": "disabled"}
@@ -280,6 +430,9 @@ async def test_integration_access_replaces_only_its_resource_overrides(
         "calendar:work": {"network.search": ToolExecutionPolicy.AUTO}
     }
     assert str(other_id) in tools.resource_policies
+    assert tools.integration_policies[str(integration.id)] == {
+        "network.search": ToolExecutionPolicy.ASK
+    }
     assert result["resources"][1]["effectivePolicies"] == {
         "network.search": "auto"
     }
@@ -287,6 +440,76 @@ async def test_integration_access_replaces_only_its_resource_overrides(
     assert load.await_args_list[-1].kwargs == {"for_update": True}
     save.assert_awaited_once_with(db, tools)
     db.commit.assert_awaited_once()
+
+
+async def test_integration_access_replaces_sparse_integration_overrides(
+    monkeypatch,
+) -> None:
+    _resource_adapter(monkeypatch)
+    integration = _searxng()
+    integrations = IntegrationSettings(instances=[integration])
+    tools = ToolSettings.model_validate(
+        {
+            "integrationPolicies": {
+                str(integration.id): {"network.search": "ask"}
+            }
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+
+    result = await update_integration_access(
+        integration.id,
+        IntegrationAccessRequest.model_validate(
+            {"policies": {"network.search": "auto"}, "resources": {}}
+        ),
+        AsyncMock(spec=AsyncSession),
+    )
+
+    assert tools.integration_policies[str(integration.id)] == {
+        "network.search": ToolExecutionPolicy.AUTO
+    }
+    assert result["actions"][0]["effectiveIntegrationPolicy"] == "auto"
+
+
+async def test_disallowed_action_mode_is_rejected_by_both_settings_apis(
+    monkeypatch,
+) -> None:
+    action = _restricted_resource_adapter(monkeypatch)
+    integration = _searxng()
+    integrations = IntegrationSettings(instances=[integration])
+    tools = ToolSettings()
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+
+    with pytest.raises(ApiError) as access_error:
+        await update_integration_access(
+            integration.id,
+            IntegrationAccessRequest.model_validate(
+                {"policies": {action.capability: "auto"}}
+            ),
+            AsyncMock(spec=AsyncSession),
+        )
+    with pytest.raises(ApiError) as settings_error:
+        await update_tool_settings(
+            ToolSettingsRequest.model_validate(
+                {
+                    "policies": {action.capability: "auto"},
+                    "webFetch": {"enabled": True, "defaultPolicy": "ask"},
+                }
+            ),
+            AsyncMock(spec=AsyncSession),
+        )
+
+    assert access_error.value.field == "policies"
+    assert settings_error.value.field == "policies"
 
 
 @pytest.mark.parametrize(
@@ -640,3 +863,153 @@ async def test_search_rejects_identical_fallback() -> None:
         )
 
     assert exc_info.value.code == "tool.invalidArguments"
+
+
+def _calendar_request(
+    *,
+    name: str = "Kalender",
+    base_url: str = "https://calendar.example.com",
+    username: str = "user",
+    password: str | None = "secret",
+    enabled: bool = True,
+) -> CalendarIntegrationRequest:
+    return CalendarIntegrationRequest(
+        integration_type="calendar",
+        provider_type="caldav",
+        name=name,
+        base_url=base_url,
+        username=username,
+        password=password,
+        enabled=enabled,
+    )
+
+
+async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent(
+    monkeypatch,
+) -> None:
+    settings = IntegrationSettings()
+    tools = ToolSettings()
+    db = AsyncMock(spec=AsyncSession)
+    credential_ids = [uuid4(), uuid4(), uuid4()]
+    store_credential = AsyncMock(
+        side_effect=[Mock(id=credential_id) for credential_id in credential_ids]
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return settings if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        integration_service_module, "store_credential", store_credential
+    )
+
+    first_payload = await create_calendar_integration(_calendar_request(), db)
+    first = settings.instances[0]
+    await create_calendar_integration(
+        _calendar_request(
+            name="Arbeit",
+            base_url="https://work.example.com",
+            username="worker",
+            password="work-secret",
+        ),
+        db,
+    )
+    second = settings.instances[1]
+    tools.integration_policies = {
+        str(first.id): {"calendar.read": ToolExecutionPolicy.AUTO},
+        str(second.id): {"calendar.read": ToolExecutionPolicy.ASK},
+    }
+    tools.resource_policies = {
+        str(first.id): {
+            f"calendar:{'a' * 32}": {"calendar.write": ToolExecutionPolicy.ASK}
+        },
+        str(second.id): {
+            f"calendar:{'b' * 32}": {"calendar.read": ToolExecutionPolicy.AUTO}
+        },
+    }
+
+    assert first.credential_id == credential_ids[0]
+    assert first_payload["accounts"][0]["config"] == {
+        "baseUrl": "https://calendar.example.com/",
+        "username": "user",
+    }
+    assert first_payload["accounts"][0]["hasCredential"] is True
+    assert first_payload["accounts"][0]["supportsResourcePolicies"] is True
+    assert "secret" not in json.dumps(first_payload)
+    assert "credentialId" not in json.dumps(first_payload)
+
+    await update_calendar_integration(
+        first.id,
+        _calendar_request(password="new-secret"),
+        db,
+    )
+
+    assert first.credential_id == credential_ids[2]
+    assert str(first.id) in tools.integration_policies
+    assert str(first.id) in tools.resource_policies
+    assert str(second.id) in tools.integration_policies
+    assert str(second.id) in tools.resource_policies
+    assert store_credential.await_args_list[-1].args == (db,)
+    assert store_credential.await_args_list[-1].kwargs == {
+        "kind": "caldav.password",
+        "label": "Kalender",
+        "payload": {"password": "new-secret"},
+    }
+    assert db.execute.await_count == 1
+
+    await update_calendar_integration(
+        first.id,
+        _calendar_request(
+            base_url="https://moved.example.com",
+            password=None,
+        ),
+        db,
+    )
+
+    assert str(first.id) not in tools.integration_policies
+    assert str(first.id) not in tools.resource_policies
+    assert str(second.id) in tools.integration_policies
+    assert str(second.id) in tools.resource_policies
+    assert first.credential_id == credential_ids[2]
+
+    await delete_calendar_integration(first.id, db)
+
+    assert [instance.id for instance in settings.instances] == [second.id]
+    assert db.execute.await_count == 2
+
+
+async def test_caldav_test_endpoint_maps_remote_failure_to_controlled_error(
+    monkeypatch,
+) -> None:
+    account = IntegrationInstance(
+        name="Kalender",
+        integration_type="calendar",
+        adapter_type="caldav",
+        credential_id=uuid4(),
+        config={"base_url": "https://calendar.example.com", "username": "user"},
+    )
+    settings = IntegrationSettings(instances=[account])
+    record = Mock(spec=Credential)
+    record.kind = "caldav.password"
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = record
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(
+        integrations_route_module,
+        "read_credential",
+        Mock(return_value={"password": "secret"}),
+    )
+    monkeypatch.setattr(
+        integrations_route_module,
+        "load_caldav_resources",
+        AsyncMock(side_effect=CalDavError("caldav.authenticationFailed", status_code=401)),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await integrations_route_module.test_calendar_integration(account.id, db)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.code == "integration.authenticationFailed"
+    assert exc_info.value.error.message == "The integration credentials were rejected."
+    assert "caldav" not in exc_info.value.error.message.lower()

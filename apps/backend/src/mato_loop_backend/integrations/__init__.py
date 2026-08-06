@@ -1,3 +1,9 @@
+from mato_loop_backend.integrations.caldav import (
+    CALDAV_CREDENTIAL_KIND,
+    CalDavConfig,
+    caldav_error_code,
+    load_caldav_resources,
+)
 from mato_loop_backend.integrations.evidence import evidence_source_id
 from mato_loop_backend.integrations.search import (
     SearchIntegrationError,
@@ -10,6 +16,7 @@ from mato_loop_backend.integrations.search import (
     search_with_provider,
 )
 from mato_loop_backend.integrations.service import (
+    CalDavIntegrationService,
     IntegrationSettingsError,
     SearchIntegrationService,
 )
@@ -26,12 +33,16 @@ from mato_loop_backend.integrations.webfetch import (
 
 __all__ = [
     "SearchIntegrationError",
+    "CALDAV_CREDENTIAL_KIND",
+    "CalDavConfig",
+    "CalDavIntegrationService",
     "IntegrationSettingsError",
     "PdfVisionHandler",
     "SearchIntegrationService",
     "WebFetchError",
     "WebFetchResult",
     "canonicalize_url",
+    "caldav_error_code",
     "evidence_source_id",
     "effective_search_providers",
     "normalize_search_tool_settings",
@@ -42,6 +53,7 @@ __all__ = [
     "search_with_provider",
     "fetch_web",
     "normalize_source_title",
+    "load_caldav_resources",
     "private_origin_is_allowed",
     "sanitize_url_for_display",
 ]

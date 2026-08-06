@@ -20,6 +20,15 @@
         <div class="text-caption app-muted">Memory-Inhalt</div>
         <pre class="approval-details q-mt-xs">{{ memoryContent }}</pre>
       </div>
+      <q-banner
+        v-if="approval.capability === 'integration.private_data.release'"
+        rounded
+        class="app-surface-tonal q-mt-md"
+      >
+        Private Daten aus Integrationen dürfen an das öffentliche Modell dieser Session
+        übertragen werden. Ein späterer Widerruf kann bereits übermittelte Daten nicht
+        zurückholen.
+      </q-banner>
       <q-expansion-item
         v-if="technicalDetails"
         dense
@@ -85,6 +94,7 @@ const riskColor = computed(() => props.approval.riskLevel === 'high' ? 'negative
 const riskLabel = computed(() => ({ high: 'Hoch', medium: 'Mittel', low: 'Niedrig' })[props.approval.riskLevel] || props.approval.riskLevel)
 const actionIcon = computed(() => {
   if (props.approval.capability?.startsWith('filesystem')) return 'folder_managed'
+  if (props.approval.capability === 'integration.private_data.release') return 'cloud_upload'
   if (props.approval.resourceType === 'url') return 'language'
   if (props.approval.resourceType === 'session_collection') return 'folder_shared'
   if (props.approval.resourceType === 'session') return 'forum'

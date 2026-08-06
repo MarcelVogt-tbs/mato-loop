@@ -31,6 +31,20 @@ Unter **Einstellungen > Integrationen** können Sie zusätzliche SearXNG-Instanz
 
 Die eingebaute Suche ohne API-Schlüssel ist keine Integration und steht unabhängig von SearXNG zur Verfügung.
 
+## CalDAV integrieren
+
+Unter **Einstellungen > Integrationen** können Sie mehrere CalDAV-Konten mit Serveradresse, Benutzername und Passwort oder App-Passwort anlegen. Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. CalDAV erfordert HTTPS.
+
+Über **Zugriff** konfigurieren Sie zunächst den Standard des Kontos und anschließend Abweichungen für einzelne Kalender:
+
+- **Nicht erlaubt** blockiert die Aktion.
+- **Nachfragen** zeigt vor der Aktion eine Freigabe.
+- **Automatisch** führt zulässige Aktionen ohne einzelne Nachfrage aus.
+
+Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**. Serverseitig schreibgeschützte Kalender bleiben unabhängig von der MatoLoop-Richtlinie schreibgeschützt.
+
+Lesefreigaben können für die aktuelle Chat-Session gelten. Schreib- und Löschfreigaben gelten nur für den konkreten Vorgang. Wiederkehrende Termine und Termine mit Einladungs- oder unbekannten Eigenschaften können gelesen, aber in der ersten Version nicht verändert werden.
+
 ## Webfetch konfigurieren
 
 Webfetch besitzt einen eigenen globalen Schalter, eine Freigaberichtlinie, eine Liste erlaubter privater Ursprünge, einen User-Agent und eine maximale Antwortgröße. Modellbezogene Einstellungen können die Richtlinie einschränken oder überschreiben; globale Netzwerkgrenzen bleiben wirksam.

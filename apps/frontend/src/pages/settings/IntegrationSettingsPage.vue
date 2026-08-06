@@ -26,19 +26,23 @@
 
     <q-card flat class="app-surface integration-list-card">
       <q-list separator>
-        <q-item v-if="integrations.loaded && !searchProviders.length && !integrations.loading" class="q-py-lg">
+        <q-item v-if="integrations.loaded && !configuredIntegrations.length && !integrations.loading" class="q-py-lg">
           <q-item-section avatar>
             <q-avatar color="grey-7" text-color="white" icon="extension" />
           </q-item-section>
           <q-item-section>
             <q-item-label>Noch keine Integration konfiguriert</q-item-label>
-            <q-item-label caption>Füge einen externen Dienst wie SearXNG hinzu.</q-item-label>
+            <q-item-label caption>Füge einen externen Dienst wie SearXNG oder CalDAV hinzu.</q-item-label>
           </q-item-section>
         </q-item>
 
-        <q-item v-for="integration in searchProviders" :key="integration.id" class="integration-list-item">
+        <q-item v-for="integration in configuredIntegrations" :key="integration.id" class="integration-list-item">
           <q-item-section avatar top>
-            <q-avatar color="primary" text-color="white" icon="travel_explore" />
+            <q-avatar
+              color="primary"
+              text-color="white"
+              :icon="integration.integrationType === 'calendar' ? 'calendar_month' : 'travel_explore'"
+            />
           </q-item-section>
           <q-item-section>
             <div class="row items-center q-gutter-sm">
@@ -46,10 +50,14 @@
               <q-chip dense :color="integration.enabled ? 'positive' : 'grey-7'" text-color="white">
                 {{ integration.enabled ? 'Aktiv' : 'Deaktiviert' }}
               </q-chip>
-              <q-chip v-if="integration.enabled" dense outline color="primary">Im Tool verfügbar</q-chip>
             </div>
-            <q-item-label caption>Websuche · {{ providerLabel(integration.providerType) }}</q-item-label>
-            <q-item-label caption>{{ integration.config.baseUrl }}</q-item-label>
+            <q-item-label caption>
+              {{ integration.integrationType === 'calendar' ? 'Kalender' : 'Websuche' }} ·
+              {{ providerLabel(integration.providerType) }}
+            </q-item-label>
+            <q-item-label caption>
+              {{ integration.config.baseUrl }}{{ integration.config.username ? ` · ${integration.config.username}` : '' }}
+            </q-item-label>
           </q-item-section>
           <q-item-section side class="integration-list-actions">
             <q-btn
@@ -68,7 +76,7 @@
               icon="network_check"
               label="Testen"
               :loading="testingId === integration.id"
-              @click="testIntegration(integration.id)"
+              @click="testIntegration(integration)"
             />
             <q-btn
               flat
@@ -117,6 +125,8 @@ const accessDialogOpen = ref(false)
 const accessIntegration = ref(null)
 const testingId = ref(null)
 const searchProviders = computed(() => integrations.search.providers)
+const calendarAccounts = computed(() => integrations.calendar.accounts)
+const configuredIntegrations = computed(() => [...searchProviders.value, ...calendarAccounts.value])
 
 function openCreateDialog() {
   selectedIntegration.value = null
@@ -134,13 +144,14 @@ function openAccessDialog(integration) {
 }
 
 function providerLabel(providerType) {
-  return providerType === 'searxng' ? 'SearXNG' : providerType
+  return { searxng: 'SearXNG', caldav: 'CalDAV' }[providerType] || providerType
 }
 
-async function testIntegration(id) {
-  testingId.value = id
+async function testIntegration(integration) {
+  testingId.value = integration.id
   try {
-    await integrations.testSearch(id)
+    if (integration.integrationType === 'calendar') await integrations.testCalendar(integration.id)
+    else await integrations.testSearch(integration.id)
     $q.notify({ type: 'positive', message: 'Verbindung erfolgreich' })
   } catch {
     // The central API interceptor displays the error as a toast.
@@ -156,13 +167,14 @@ async function removeIntegration(integration) {
     { okLabel: 'Löschen' }
   )
   if (!confirmed) return
-  await integrations.removeSearch(integration.id)
+  if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
+  else await integrations.removeSearch(integration.id)
   $q.notify({ type: 'positive', message: 'Integration gelöscht' })
 }
 
 async function reload() {
   try {
-    await integrations.fetchSearch()
+    await Promise.all([integrations.fetchSearch(), integrations.fetchCalendar()])
   } catch {
     // The central API interceptor displays the error as a toast.
   }

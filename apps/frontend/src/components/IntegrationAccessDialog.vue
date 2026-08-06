@@ -11,7 +11,7 @@
         <div class="col">
           <div class="text-h6">Zugriff für {{ integration?.name }}</div>
           <div class="text-body2 app-muted">
-            Lege für jede Ressource fest, ob der Agent nachfragen muss.
+            Lege Standardwerte und Abweichungen für einzelne Ressourcen fest.
           </div>
         </div>
         <q-btn flat round dense icon="close" aria-label="Dialog schließen" @click="close" />
@@ -26,7 +26,31 @@
           </template>
         </q-banner>
 
-        <q-banner v-else-if="access && !access.resources.length" rounded class="app-surface-tonal">
+        <q-card v-if="access" flat class="app-surface-tonal integration-access-resource">
+          <q-card-section>
+            <div class="text-subtitle1 text-weight-bold">Standard für Integration</div>
+            <div class="text-caption app-muted">Gilt für Ressourcen ohne eigene Einstellung.</div>
+          </q-card-section>
+          <q-separator />
+          <q-card-section class="integration-access-actions">
+            <q-select
+              v-for="action in access.actions"
+              :key="action.capability"
+              v-model="integrationForm[action.capability]"
+              outlined
+              dense
+              emit-value
+              map-options
+              :label="action.label"
+              :options="policyOptions(action, action.globalPolicy)"
+              :hint="`Wirksam: ${policyLabel(action.effectiveIntegrationPolicy)}`"
+              :disable="action.globalPolicy === 'disabled'"
+              persistent-hint
+            />
+          </q-card-section>
+        </q-card>
+
+        <q-banner v-if="access && !access.resources.length" rounded class="app-surface-tonal">
           Diese Integration stellt derzeit keine konfigurierbaren Ressourcen bereit.
         </q-banner>
 
@@ -44,14 +68,15 @@
             <q-select
               v-for="action in access.actions"
               :key="action.capability"
-              v-model="form[resource.key][action.capability]"
+              v-model="resourceForm[resource.key][action.capability]"
               outlined
               dense
               emit-value
               map-options
               :label="action.label"
-              :options="policyOptions(action)"
+              :options="policyOptions(action, action.effectiveIntegrationPolicy)"
               :hint="effectiveHint(resource, action)"
+              :disable="action.globalPolicy === 'disabled' || resource.hardUnavailableCapabilities.includes(action.capability)"
               persistent-hint
             />
           </q-card-section>
@@ -94,7 +119,8 @@ const emit = defineEmits(['update:modelValue'])
 const $q = useQuasar()
 const integrations = useIntegrationStore()
 const access = ref(null)
-const form = reactive({})
+const integrationForm = reactive({})
+const resourceForm = reactive({})
 const loading = ref(false)
 const loadFailed = ref(false)
 const saving = ref(false)
@@ -102,38 +128,39 @@ let loadToken = 0
 
 function policyLabel(policy) {
   return {
-    disabled: 'Deaktiviert',
+    disabled: 'Nicht erlaubt',
     ask: 'Nachfragen',
     auto: 'Automatisch'
   }[policy] || policy
 }
 
-function policyOptions(action) {
+function policyOptions(action, inheritedPolicy) {
   return [
-    { label: `Erben: ${policyLabel(action.globalPolicy)}`, value: 'inherit' },
-    { label: 'Deaktiviert', value: 'disabled' },
-    { label: 'Nachfragen', value: 'ask' },
-    { label: 'Automatisch', value: 'auto' }
+    { label: `Erben: ${policyLabel(inheritedPolicy)}`, value: 'inherit' },
+    ...action.allowedPolicies
+      .filter((policy) => policy !== 'inherit')
+      .map((policy) => ({ label: policyLabel(policy), value: policy }))
   ]
 }
 
 function effectiveHint(resource, action) {
-  const selected = form[resource.key]?.[action.capability] || 'inherit'
-  const effective = action.globalPolicy === 'disabled'
-    ? 'disabled'
-    : selected === 'inherit'
-      ? action.globalPolicy
-      : selected
-  return `Wirksam: ${policyLabel(effective)}`
+  const unavailable = resource.hardUnavailableCapabilities.includes(action.capability)
+  if (unavailable) return 'Vom Dienst nicht erlaubt'
+  if (action.globalPolicy === 'disabled') return 'Global nicht erlaubt'
+  return `Wirksam: ${policyLabel(resource.effectivePolicies[action.capability])}`
 }
 
 function assignAccess(value) {
   access.value = value
-  for (const key of Object.keys(form)) delete form[key]
+  for (const key of Object.keys(integrationForm)) delete integrationForm[key]
+  for (const key of Object.keys(resourceForm)) delete resourceForm[key]
+  for (const action of value.actions) {
+    integrationForm[action.capability] = action.integrationPolicy || 'inherit'
+  }
   for (const resource of value.resources) {
-    form[resource.key] = {}
+    resourceForm[resource.key] = {}
     for (const action of value.actions) {
-      form[resource.key][action.capability] = resource.policies[action.capability] || 'inherit'
+      resourceForm[resource.key][action.capability] = resource.policies[action.capability] || 'inherit'
     }
   }
 }
@@ -163,16 +190,19 @@ async function load() {
 async function save() {
   if (!props.integration || !access.value) return
   const integrationId = props.integration.id
+  const policies = Object.fromEntries(
+    Object.entries(integrationForm).filter(([, policy]) => policy !== 'inherit')
+  )
   const resources = {}
   for (const resource of access.value.resources) {
-    const policies = Object.fromEntries(
-      Object.entries(form[resource.key]).filter(([, policy]) => policy !== 'inherit')
+    const resourcePolicies = Object.fromEntries(
+      Object.entries(resourceForm[resource.key]).filter(([, policy]) => policy !== 'inherit')
     )
-    if (Object.keys(policies).length) resources[resource.key] = policies
+    if (Object.keys(resourcePolicies).length) resources[resource.key] = resourcePolicies
   }
   saving.value = true
   try {
-    const value = await integrations.saveAccess(integrationId, resources)
+    const value = await integrations.saveAccess(integrationId, policies, resources)
     if (props.integration?.id !== integrationId) return
     assignAccess(value)
     $q.notify({ type: 'positive', message: 'Zugriffsrichtlinien gespeichert' })

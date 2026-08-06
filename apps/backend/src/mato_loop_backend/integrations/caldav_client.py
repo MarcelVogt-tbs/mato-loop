@@ -1,0 +1,591 @@
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from typing import Literal
+from urllib.parse import urljoin
+from uuid import UUID
+from xml.etree import ElementTree
+
+import httpx
+from defusedxml import ElementTree as DefusedElementTree
+from defusedxml.common import DefusedXmlException
+from icalendar import Calendar as ICalendar
+from icalendar import Event as ICalendarEvent
+
+DAV = "DAV:"
+CALDAV = "urn:ietf:params:xml:ns:caldav"
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_XML_ELEMENTS = 10_000
+MAX_EVENTS = 1_000
+MAX_QUERY_SPAN = timedelta(days=366)
+
+CalDavPrivilege = Literal["read", "write", "delete"]
+
+
+class CalDavError(RuntimeError):
+    def __init__(self, code: str, *, status_code: int | None = None) -> None:
+        super().__init__(code)
+        self.code = code
+        self.status_code = status_code
+
+
+@dataclass(frozen=True, slots=True)
+class CalDavCalendar:
+    key: str
+    href: str
+    name: str
+    privileges: frozenset[CalDavPrivilege]
+
+
+@dataclass(frozen=True, slots=True)
+class CalDavDiscovery:
+    principal_href: str
+    calendar_home_href: str
+    calendars: tuple[CalDavCalendar, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CalDavEventDraft:
+    summary: str
+    start: date | datetime
+    end: date | datetime
+    description: str | None = None
+    location: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CalDavEvent:
+    uid: str
+    href: str
+    etag: str | None
+    summary: str
+    start: date | datetime
+    end: date | datetime | None
+    all_day: bool
+    description: str | None = None
+    location: str | None = None
+    recurring: bool = False
+    scheduled: bool = False
+    mutation_safe: bool = True
+
+
+def _error(code: str, *, status_code: int | None = None) -> CalDavError:
+    return CalDavError(f"caldav.{code}", status_code=status_code)
+
+
+def _origin(url: httpx.URL) -> tuple[str, str, int]:
+    default_port = 443 if url.scheme == "https" else 80
+    return url.scheme, url.host.lower(), url.port or default_port
+
+
+def _parse_url(value: str) -> httpx.URL:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "?" in value
+        or "#" in value
+        or "\\" in value
+        or any(character.isspace() or ord(character) < 32 for character in value)
+    ):
+        raise _error("invalidUrl")
+    try:
+        url = httpx.URL(value)
+    except (httpx.InvalidURL, ValueError) as exc:
+        raise _error("invalidUrl") from exc
+    if url.scheme != "https" or not url.host or url.userinfo:
+        raise _error("invalidUrl")
+    return url
+
+
+def _status_code(response: ElementTree.Element) -> int | None:
+    text = response.findtext(f"{{{DAV}}}status")
+    if not text:
+        return None
+    parts = text.split()
+    try:
+        return int(parts[1])
+    except (IndexError, ValueError):
+        return None
+
+
+def _properties(response: ElementTree.Element) -> tuple[ElementTree.Element, ...]:
+    properties: list[ElementTree.Element] = []
+    for propstat in response.findall(f"{{{DAV}}}propstat"):
+        status = _status_code(propstat)
+        prop = propstat.find(f"{{{DAV}}}prop")
+        if prop is not None and status is not None and 200 <= status < 300:
+            properties.append(prop)
+    return tuple(properties)
+
+
+def _property(response: ElementTree.Element, name: str) -> ElementTree.Element | None:
+    return next(
+        (value for prop in _properties(response) if (value := prop.find(name)) is not None),
+        None,
+    )
+
+
+def _privileges(value: ElementTree.Element | None) -> frozenset[CalDavPrivilege]:
+    if value is None:
+        return frozenset()
+    mapped: set[CalDavPrivilege] = set()
+    for privilege in value.findall(f"{{{DAV}}}privilege"):
+        child = next(iter(privilege), None)
+        if child is None:
+            continue
+        name = child.tag.removeprefix(f"{{{DAV}}}")
+        if name == "all":
+            mapped.update(("read", "write", "delete"))
+        elif name == "read":
+            mapped.add("read")
+        elif name in {"bind", "write", "write-content", "write-properties"}:
+            mapped.add("write")
+        elif name == "unbind":
+            mapped.add("delete")
+    return frozenset(mapped)
+
+
+class CalDavClient:
+    def __init__(
+        self,
+        base_url: str,
+        username: str,
+        password: str,
+        *,
+        client: httpx.AsyncClient | None = None,
+        max_response_bytes: int = MAX_RESPONSE_BYTES,
+    ) -> None:
+        self._base_url = _parse_url(base_url)
+        self._origin = _origin(self._base_url)
+        self._auth = httpx.BasicAuth(username, password)
+        self._client = client or httpx.AsyncClient(timeout=30, trust_env=False)
+        self._owns_client = client is None
+        if max_response_bytes < 1 or max_response_bytes > MAX_RESPONSE_BYTES:
+            raise _error("invalidLimit")
+        self._max_response_bytes = max_response_bytes
+
+    async def __aenter__(self) -> CalDavClient:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
+    def _url(self, href: str, *, relative_to: httpx.URL | None = None) -> httpx.URL:
+        if (
+            not isinstance(href, str)
+            or not href
+            or "?" in href
+            or "#" in href
+            or "\\" in href
+            or any(character.isspace() or ord(character) < 32 for character in href)
+        ):
+            raise _error("invalidHref")
+        try:
+            url = httpx.URL(urljoin(str(relative_to or self._base_url), href))
+        except (httpx.InvalidURL, ValueError) as exc:
+            raise _error("invalidHref") from exc
+        if url.scheme not in {"http", "https"} or not url.host or url.userinfo:
+            raise _error("invalidHref")
+        if _origin(url) != self._origin:
+            raise _error("crossOrigin")
+        return url
+
+    def _collection_url(self, href: str, *, relative_to: httpx.URL | None = None) -> httpx.URL:
+        url = self._url(href, relative_to=relative_to)
+        return url if url.path.endswith("/") else url.copy_with(path=f"{url.path}/")
+
+    async def _request(
+        self,
+        method: str,
+        url: httpx.URL,
+        *,
+        headers: dict[str, str] | None = None,
+        content: bytes | None = None,
+        expected: set[int],
+    ) -> tuple[bytes, httpx.Headers]:
+        if _origin(url) != self._origin or url.userinfo or url.query or url.fragment:
+            raise _error("crossOrigin")
+        request = self._client.build_request(
+            method,
+            url,
+            headers=headers,
+            content=content,
+        )
+        try:
+            response = await self._client.send(
+                request,
+                auth=self._auth,
+                stream=True,
+                follow_redirects=False,
+            )
+        except httpx.HTTPError as exc:
+            raise _error(
+                "outcomeUnknown" if method in {"PUT", "DELETE"} else "unavailable"
+            ) from exc
+        try:
+            if 300 <= response.status_code < 400:
+                raise _error("redirectRejected", status_code=response.status_code)
+            if response.status_code not in expected:
+                if response.status_code in {401, 403}:
+                    code = "authenticationFailed"
+                elif response.status_code == 404:
+                    code = "notFound"
+                elif response.status_code == 409:
+                    code = "conflict"
+                elif response.status_code == 412:
+                    code = "preconditionFailed"
+                else:
+                    code = "unexpectedStatus"
+                raise _error(code, status_code=response.status_code)
+            length = response.headers.get("content-length")
+            if length is not None:
+                try:
+                    if int(length) > self._max_response_bytes:
+                        raise _error("responseTooLarge")
+                except ValueError as exc:
+                    raise _error("malformedResponse") from exc
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > self._max_response_bytes:
+                    raise _error("responseTooLarge")
+                chunks.append(chunk)
+            return b"".join(chunks), response.headers
+        finally:
+            await response.aclose()
+
+    def _xml(self, body: bytes) -> ElementTree.Element:
+        if not body:
+            raise _error("malformedXml")
+        try:
+            root = DefusedElementTree.fromstring(body)
+        except (DefusedXmlException, ElementTree.ParseError, ValueError) as exc:
+            raise _error("malformedXml") from exc
+        if sum(1 for _element in root.iter()) > MAX_XML_ELEMENTS:
+            raise _error("malformedXml")
+        return root
+
+    async def _propfind(self, url: httpx.URL, body: bytes, depth: int) -> ElementTree.Element:
+        response, _headers = await self._request(
+            "PROPFIND",
+            url,
+            headers={"Content-Type": "application/xml; charset=utf-8", "Depth": str(depth)},
+            content=body,
+            expected={207},
+        )
+        root = self._xml(response)
+        if root.tag != f"{{{DAV}}}multistatus":
+            raise _error("malformedResponse")
+        return root
+
+    async def discover(self) -> CalDavDiscovery:
+        principal_request = ElementTree.tostring(
+            ElementTree.fromstring(
+                f'<propfind xmlns="{DAV}"><prop><current-user-principal/>'
+                "<principal-URL/></prop></propfind>"
+            ),
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        principal_root = await self._propfind(self._base_url, principal_request, 0)
+        principal_href: str | None = None
+        for response in principal_root.findall(f"{{{DAV}}}response"):
+            principal = _property(response, f"{{{DAV}}}current-user-principal")
+            if principal is None:
+                principal = _property(response, f"{{{DAV}}}principal-URL")
+            if principal is not None:
+                principal_href = principal.findtext(f"{{{DAV}}}href")
+                if principal_href:
+                    break
+        if not principal_href:
+            raise _error("malformedResponse")
+        principal_url = self._url(principal_href, relative_to=self._base_url)
+
+        home_request = ElementTree.tostring(
+            ElementTree.fromstring(
+                f'<propfind xmlns="{DAV}" xmlns:c="{CALDAV}">'
+                "<prop><c:calendar-home-set/></prop></propfind>"
+            ),
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        home_root = await self._propfind(principal_url, home_request, 0)
+        home_href: str | None = None
+        for response in home_root.findall(f"{{{DAV}}}response"):
+            home = _property(response, f"{{{CALDAV}}}calendar-home-set")
+            if home is not None:
+                home_href = home.findtext(f"{{{DAV}}}href")
+                if home_href:
+                    break
+        if not home_href:
+            raise _error("malformedResponse")
+        home_url = self._collection_url(home_href, relative_to=principal_url)
+
+        calendars_request = ElementTree.tostring(
+            ElementTree.fromstring(
+                f'<propfind xmlns="{DAV}" xmlns:c="{CALDAV}"><prop><resourcetype/>'
+                "<displayname/><current-user-privilege-set/>"
+                "<c:supported-calendar-component-set/></prop></propfind>"
+            ),
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        calendars_root = await self._propfind(home_url, calendars_request, 1)
+        calendars: list[CalDavCalendar] = []
+        for response in calendars_root.findall(f"{{{DAV}}}response"):
+            resource_type = _property(response, f"{{{DAV}}}resourcetype")
+            if resource_type is None or resource_type.find(f"{{{CALDAV}}}calendar") is None:
+                continue
+            components = _property(response, f"{{{CALDAV}}}supported-calendar-component-set")
+            if components is not None and not any(
+                component.get("name", "").upper() == "VEVENT"
+                for component in components.findall(f"{{{CALDAV}}}comp")
+            ):
+                continue
+            href = response.findtext(f"{{{DAV}}}href")
+            if not href:
+                raise _error("malformedResponse")
+            calendar_url = self._collection_url(href, relative_to=home_url)
+            canonical_href = str(calendar_url)
+            display_name = _property(response, f"{{{DAV}}}displayname")
+            name = (display_name.text or "").strip() if display_name is not None else ""
+            calendars.append(
+                CalDavCalendar(
+                    key=hashlib.sha256(canonical_href.encode()).hexdigest()[:32],
+                    href=canonical_href,
+                    name=name,
+                    privileges=_privileges(
+                        _property(response, f"{{{DAV}}}current-user-privilege-set")
+                    ),
+                )
+            )
+        calendars.sort(key=lambda calendar: calendar.key)
+        return CalDavDiscovery(str(principal_url), str(home_url), tuple(calendars))
+
+    async def query_events(
+        self,
+        calendar: CalDavCalendar,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[CalDavEvent, ...]:
+        if (
+            start.tzinfo is None
+            or start.utcoffset() is None
+            or end.tzinfo is None
+            or end.utcoffset() is None
+            or end <= start
+            or end - start > MAX_QUERY_SPAN
+        ):
+            raise _error("invalidTimeRange")
+        start_value = start.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+        end_value = end.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+        query = ElementTree.tostring(
+            ElementTree.fromstring(
+                f'<c:calendar-query xmlns="{DAV}" xmlns:c="{CALDAV}"><prop><getetag/>'
+                f'<c:calendar-data><c:expand start="{start_value}" end="{end_value}"/>'
+                "</c:calendar-data></prop><c:filter><c:comp-filter name=\"VCALENDAR\">"
+                f'<c:comp-filter name="VEVENT"><c:time-range start="{start_value}" '
+                f'end="{end_value}"/></c:comp-filter></c:comp-filter></c:filter>'
+                "</c:calendar-query>"
+            ),
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        calendar_url = self._collection_url(calendar.href)
+        body, _headers = await self._request(
+            "REPORT",
+            calendar_url,
+            headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
+            content=query,
+            expected={207},
+        )
+        root = self._xml(body)
+        if root.tag != f"{{{DAV}}}multistatus":
+            raise _error("malformedResponse")
+        events: list[CalDavEvent] = []
+        for response in root.findall(f"{{{DAV}}}response"):
+            if len(events) >= MAX_EVENTS:
+                raise _error("tooManyEvents")
+            href = response.findtext(f"{{{DAV}}}href")
+            calendar_data = _property(response, f"{{{CALDAV}}}calendar-data")
+            if not href or calendar_data is None or not calendar_data.text:
+                continue
+            event_url = self._url(href, relative_to=calendar_url)
+            etag_value = _property(response, f"{{{DAV}}}getetag")
+            etag = etag_value.text.strip() if etag_value is not None and etag_value.text else None
+            try:
+                parsed = ICalendar.from_ical(calendar_data.text)
+                components = [component for component in parsed.walk() if component.name == "VEVENT"]
+                multiple = len(components) > 1
+                for component in components:
+                    if len(events) >= MAX_EVENTS:
+                        raise _error("tooManyEvents")
+                    uid = str(component.get("uid", "")).strip()
+                    start_value = component.decoded("dtstart")
+                    end_property = component.get("dtend")
+                    end_value = end_property.dt if end_property is not None else None
+                    if end_value is None and component.get("duration") is not None:
+                        end_value = start_value + component.decoded("duration")
+                    if not uid or not isinstance(start_value, (date, datetime)) or (
+                        end_value is not None and not isinstance(end_value, (date, datetime))
+                    ):
+                        raise ValueError
+                    all_day = isinstance(start_value, date) and not isinstance(start_value, datetime)
+                    events.append(
+                        CalDavEvent(
+                            uid=uid,
+                            href=str(event_url),
+                            etag=etag,
+                            summary=str(component.get("summary", "")),
+                            start=start_value,
+                            end=end_value,
+                            all_day=all_day,
+                            description=(
+                                str(component.get("description"))
+                                if component.get("description") is not None
+                                else None
+                            ),
+                            location=(
+                                str(component.get("location"))
+                                if component.get("location") is not None
+                                else None
+                            ),
+                            recurring=multiple
+                            or component.get("rrule") is not None
+                            or component.get("recurrence-id") is not None,
+                            scheduled=component.get("organizer") is not None
+                            or component.get("attendee") is not None,
+                            mutation_safe=(
+                                not component.subcomponents
+                                and {str(key).upper() for key in component.keys()}
+                                <= {
+                                    "UID",
+                                    "DTSTAMP",
+                                    "DTSTART",
+                                    "DTEND",
+                                    "DURATION",
+                                    "SUMMARY",
+                                    "DESCRIPTION",
+                                    "LOCATION",
+                                    "CREATED",
+                                    "LAST-MODIFIED",
+                                    "SEQUENCE",
+                                    "STATUS",
+                                    "TRANSP",
+                                }
+                            ),
+                        )
+                    )
+            except CalDavError:
+                raise
+            except Exception as exc:
+                raise _error("malformedCalendarData") from exc
+        return tuple(events)
+
+    def _calendar_data(self, uid: str, draft: CalDavEventDraft) -> bytes:
+        all_day = isinstance(draft.start, date) and not isinstance(draft.start, datetime)
+        end_all_day = isinstance(draft.end, date) and not isinstance(draft.end, datetime)
+        if all_day != end_all_day or draft.end <= draft.start:
+            raise _error("invalidEvent")
+        if not all_day and (
+            draft.start.tzinfo is None
+            or draft.start.utcoffset() is None
+            or draft.end.tzinfo is None
+            or draft.end.utcoffset() is None
+        ):
+            raise _error("invalidEvent")
+        calendar = ICalendar()
+        calendar.add("prodid", "-//MatoLoop//CalDAV Client//EN")
+        calendar.add("version", "2.0")
+        event = ICalendarEvent()
+        event.add("uid", uid)
+        event.add("dtstamp", datetime.now(UTC))
+        event.add("dtstart", draft.start)
+        event.add("dtend", draft.end)
+        event.add("summary", draft.summary)
+        if draft.description is not None:
+            event.add("description", draft.description)
+        if draft.location is not None:
+            event.add("location", draft.location)
+        calendar.add_component(event)
+        return calendar.to_ical()
+
+    async def create_event(
+        self,
+        calendar: CalDavCalendar,
+        draft: CalDavEventDraft,
+        idempotency_key: UUID,
+    ) -> CalDavEvent:
+        uid = f"{idempotency_key}@mato-loop"
+        collection_url = self._collection_url(calendar.href)
+        event_url = self._url(f"{idempotency_key}.ics", relative_to=collection_url)
+        _body, headers = await self._request(
+            "PUT",
+            event_url,
+            headers={"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"},
+            content=self._calendar_data(uid, draft),
+            expected={201, 204},
+        )
+        return self._event_from_draft(uid, str(event_url), headers.get("etag"), draft)
+
+    async def update_event(
+        self,
+        existing: CalDavEvent,
+        draft: CalDavEventDraft,
+    ) -> CalDavEvent:
+        if not existing.etag:
+            raise _error("etagRequired")
+        if existing.recurring or existing.scheduled or not existing.mutation_safe:
+            raise _error("unsupportedMutation")
+        event_url = self._url(existing.href)
+        _body, headers = await self._request(
+            "PUT",
+            event_url,
+            headers={
+                "Content-Type": "text/calendar; charset=utf-8",
+                "If-Match": existing.etag,
+            },
+            content=self._calendar_data(existing.uid, draft),
+            expected={200, 201, 204},
+        )
+        return self._event_from_draft(
+            existing.uid, str(event_url), headers.get("etag", existing.etag), draft
+        )
+
+    async def delete_event(self, existing: CalDavEvent) -> None:
+        if not existing.etag:
+            raise _error("etagRequired")
+        if existing.recurring or existing.scheduled:
+            raise _error("unsupportedMutation")
+        await self._request(
+            "DELETE",
+            self._url(existing.href),
+            headers={"If-Match": existing.etag},
+            expected={200, 204, 404},
+        )
+
+    @staticmethod
+    def _event_from_draft(
+        uid: str,
+        href: str,
+        etag: str | None,
+        draft: CalDavEventDraft,
+    ) -> CalDavEvent:
+        return CalDavEvent(
+            uid=uid,
+            href=href,
+            etag=etag,
+            summary=draft.summary,
+            start=draft.start,
+            end=draft.end,
+            all_day=isinstance(draft.start, date) and not isinstance(draft.start, datetime),
+            description=draft.description,
+            location=draft.location,
+        )
