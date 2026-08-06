@@ -172,6 +172,26 @@ async def test_disabled_media_tool_is_rejected_before_provider(
     generate.assert_not_awaited()
 
 
+async def test_video_tool_revalidation_keeps_frame_analysis_available(
+    tmp_path, monkeypatch
+) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="vision",
+        supports_image_input=True,
+    )
+    ai = AiSettings(providers=[provider], models=[model], video_model_id=model.id)
+    call = ToolCall(id="video", name="analyze_video", arguments={})
+    tool_context = context(tmp_path, call)
+    tool_context.model_id = model.id
+    mock_settings_load(monkeypatch, ToolSettings(), ai)
+
+    result = await tool_registry.execute(call, tool_context)
+
+    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+
+
 async def test_ask_denial_stops_before_media_service(tmp_path, monkeypatch) -> None:
     settings = ToolSettings.model_validate({"generateImage": {"policy": "ask"}})
     call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})

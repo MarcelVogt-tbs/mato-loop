@@ -2,6 +2,7 @@ import { normalizeModelCapabilities } from 'src/utils/provider-models'
 
 export const DEFAULT_MODEL_RUNTIME = Object.freeze({
   capabilities: Object.freeze(['chat']),
+  inputModalities: Object.freeze(['text']),
   contextWindowTokens: 128000,
   discoveredContextWindowTokens: null,
   useDiscoveredContextWindow: false,
@@ -27,9 +28,25 @@ function modelValue(model, camelKey, snakeKey) {
   return DEFAULT_MODEL_RUNTIME[camelKey]
 }
 
+const INPUT_MODALITIES = new Set(['text', 'image', 'audio', 'video'])
+
+function modelInputModalities(model) {
+  const value = model?.inputModalities
+    ?? model?.config?.inputModalities
+    ?? model?.config?.input_modalities
+  if (Array.isArray(value)) {
+    return [...new Set(value.filter((modality) => INPUT_MODALITIES.has(modality)))]
+  }
+  return modelValue(model, 'supportsImageInput', 'supports_image_input')
+    ? ['text', 'image']
+    : ['text']
+}
+
 export function modelRuntimeForm(model) {
+  const inputModalities = modelInputModalities(model)
   return {
     capabilities: normalizeModelCapabilities(model?.capabilities),
+    inputModalities,
     contextWindowTokens: modelValue(model, 'contextWindowTokens', 'context_window_tokens'),
     discoveredContextWindowTokens: modelValue(
       model,
@@ -47,7 +64,7 @@ export function modelRuntimeForm(model) {
     supportsTools: modelValue(model, 'supportsTools', 'supports_tools'),
     supportsParallelToolCalls: modelValue(model, 'supportsParallelToolCalls', 'supports_parallel_tool_calls'),
     supportsStreaming: modelValue(model, 'supportsStreaming', 'supports_streaming'),
-    supportsImageInput: modelValue(model, 'supportsImageInput', 'supports_image_input'),
+    supportsImageInput: inputModalities.includes('image'),
     trustLevel: modelValue(model, 'trustLevel', 'trust_level'),
     pseudonymizationEnabled: modelValue(model, 'pseudonymizationEnabled', 'pseudonymization_enabled'),
     memoryPolicy: modelValue(model, 'memoryPolicy', 'memory_policy'),
@@ -58,8 +75,14 @@ export function modelRuntimeForm(model) {
 }
 
 export function modelRuntimePayload(form) {
+  const supportsImageInput = Array.isArray(form.inputModalities)
+    ? form.inputModalities.includes('image')
+    : Boolean(form.supportsImageInput)
   return {
     capabilities: normalizeModelCapabilities(form.capabilities),
+    input_modalities: Array.isArray(form.inputModalities)
+      ? [...new Set(form.inputModalities.filter((modality) => INPUT_MODALITIES.has(modality)))]
+      : supportsImageInput ? ['text', 'image'] : ['text'],
     context_window_tokens: Number(form.contextWindowTokens),
     use_discovered_context_window: Boolean(form.useDiscoveredContextWindow),
     max_output_tokens: Number(form.maxOutputTokens),
@@ -67,7 +90,7 @@ export function modelRuntimePayload(form) {
     supports_tools: Boolean(form.supportsTools),
     supports_parallel_tool_calls: Boolean(form.supportsTools && form.supportsParallelToolCalls),
     supports_streaming: Boolean(form.supportsStreaming),
-    supports_image_input: Boolean(form.supportsImageInput),
+    supports_image_input: supportsImageInput,
     trust_level: form.trustLevel || null,
     pseudonymization_enabled: form.pseudonymizationEnabled ?? null,
     memory_policy: form.memoryPolicy || 'inherit',

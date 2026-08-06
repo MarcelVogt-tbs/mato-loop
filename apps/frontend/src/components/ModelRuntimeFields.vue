@@ -102,10 +102,19 @@
           color="primary"
           label="Streaming unterstützt"
         />
-        <q-toggle
-          v-model="form.supportsImageInput"
-          color="primary"
-          label="Bildeingaben unterstützt"
+        <q-select
+          v-model="form.inputModalities"
+          class="model-runtime-wide"
+          outlined
+          hide-bottom-space
+          multiple
+          use-chips
+          emit-value
+          map-options
+          label="Eingabemodalitäten"
+          :options="inputModalityOptions"
+          hint="Eingabearten, die das Modell nativ verarbeiten kann."
+          @update:model-value="form.supportsImageInput = $event.includes('image')"
         />
         <div class="model-runtime-wide">
           <q-select
@@ -168,6 +177,12 @@ const memoryPolicyOptions = [
   { label: 'Provider-Einstellung übernehmen', value: 'inherit' },
   { label: 'Erlauben', value: 'allow' },
   { label: 'Sperren', value: 'deny' }
+]
+const inputModalityOptions = [
+  { label: 'Text', value: 'text' },
+  { label: 'Bild', value: 'image' },
+  { label: 'Audio', value: 'audio' },
+  { label: 'Video', value: 'video' }
 ]
 const props = defineProps({
   reasoningSummaryAvailable: Boolean,

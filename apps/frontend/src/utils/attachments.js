@@ -1,4 +1,4 @@
-const ATTACHMENT_KINDS = new Set(['image', 'audio', 'text', 'document', 'file'])
+const ATTACHMENT_KINDS = new Set(['image', 'audio', 'video', 'text', 'document', 'file'])
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 const INTERNAL_ATTACHMENT_URL = new RegExp(
   `^/api/sessions/${UUID}/messages/${UUID}/attachments/${UUID}$`,
@@ -130,6 +130,10 @@ export function audioAttachments(attachments) {
   return supportedAttachments(attachments).filter((attachment) => attachment.kind === 'audio')
 }
 
+export function videoAttachments(attachments) {
+  return supportedAttachments(attachments).filter((attachment) => attachment.kind === 'video')
+}
+
 export function supportedAttachments(attachments) {
   if (!Array.isArray(attachments)) return []
   return attachments.flatMap((attachment) => {
@@ -161,9 +165,19 @@ export function audioMimeTypeSupported(value) {
   return typeof audio?.canPlayType === 'function' && audio.canPlayType(mimeType) !== ''
 }
 
+export function videoMimeTypeSupported(value) {
+  const mimeType = typeof value === 'string'
+    ? value.split(';', 1)[0].trim().toLowerCase()
+    : ''
+  if (!mimeType.startsWith('video/')) return false
+  const video = globalThis.document?.createElement?.('video')
+  return typeof video?.canPlayType === 'function' && video.canPlayType(mimeType) !== ''
+}
+
 export function attachmentIcon(attachment) {
   if (attachment?.kind === 'image') return 'image'
   if (attachment?.kind === 'audio') return 'audio_file'
+  if (attachment?.kind === 'video') return 'video_file'
   const mimeType = String(attachment?.mimeType || '')
   if (mimeType === 'application/pdf') return 'picture_as_pdf'
   if (attachment?.kind === 'text' || mimeType.startsWith('text/')) return 'description'
@@ -196,7 +210,7 @@ export function attachmentMetadata(attachment) {
   const dimensions = Number(attachment?.width) > 0 && Number(attachment?.height) > 0
     ? `${attachment.width} × ${attachment.height} px`
     : null
-  const duration = attachment?.kind === 'audio'
+  const duration = ['audio', 'video'].includes(attachment?.kind)
     ? formatAttachmentDuration(attachment.durationMs ?? attachment.metadata?.durationMs)
     : null
   return [dimensions, duration, formatAttachmentSize(attachment?.sizeBytes), attachment?.mimeType]

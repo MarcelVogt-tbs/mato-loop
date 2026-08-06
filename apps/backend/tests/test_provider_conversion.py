@@ -123,6 +123,43 @@ def test_unavailable_media_becomes_text_marker_without_image_payload() -> None:
     assert "data:" not in json.dumps({"chat": chat, "responses": responses})
 
 
+def test_chat_messages_serialize_vllm_audio_and_video_parts() -> None:
+    request = ProviderRequest(
+        model="multimodal",
+        messages=[{"role": "user", "content": "Beschreibe die Medien"}],
+        media=[
+            ProviderMedia(
+                message_index=0,
+                mime_type="video/mp4",
+                data_url="data:video/mp4;base64,dmlkZW8=",
+                status="ready",
+                modality="video",
+            ),
+            ProviderMedia(
+                message_index=0,
+                mime_type="audio/wav",
+                data_base64="YXVkaW8=",
+                format="wav",
+                status="ready",
+                modality="audio",
+            ),
+        ],
+    )
+
+    content = _chat_body(request)["messages"][-1]["content"]
+
+    assert content[1] == {
+        "type": "video_url",
+        "video_url": {"url": "data:video/mp4;base64,dmlkZW8="},
+    }
+    assert content[2] == {
+        "type": "input_audio",
+        "input_audio": {"data": "YXVkaW8=", "format": "wav"},
+    }
+    with pytest.raises(ProviderError, match="Responses API"):
+        _responses_body(request)
+
+
 def test_responses_input_replays_reasoning_before_assistant_output() -> None:
     scope = {
         "adapterType": "openai-compatible",

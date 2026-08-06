@@ -11,7 +11,9 @@ import {
   safeFileDownloadUrl,
   supportedAttachments,
   toolFileActions,
-  toolFileAttachment
+  toolFileAttachment,
+  videoAttachments,
+  videoMimeTypeSupported
 } from '../src/utils/attachments'
 
 const url = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
@@ -116,18 +118,20 @@ describe('persisted attachments', () => {
     const attachments = supportedAttachments([
       { kind: 'image', mimeType: 'image/png', url },
       { kind: 'audio', mimeType: 'audio/mpeg', url },
+      { kind: 'video', mimeType: 'video/mp4', url },
       { kind: 'text', mimeType: 'text/plain', url },
       { kind: 'document', mimeType: 'application/pdf', url },
       { kind: 'file', mimeType: 'application/zip', url },
       { kind: 'archive', mimeType: 'application/zip', url }
     ])
 
-    expect(attachments).toHaveLength(5)
+    expect(attachments).toHaveLength(6)
     expect(attachments.map((attachment) => attachment.kind))
-      .toEqual(['image', 'audio', 'text', 'document', 'file'])
-    expect(attachmentIcon(attachments[2])).toBe('description')
-    expect(attachmentIcon(attachments[3])).toBe('picture_as_pdf')
-    expect(attachmentIcon(attachments[4])).toBe('folder_zip')
+      .toEqual(['image', 'audio', 'video', 'text', 'document', 'file'])
+    expect(attachmentIcon(attachments[2])).toBe('video_file')
+    expect(attachmentIcon(attachments[3])).toBe('description')
+    expect(attachmentIcon(attachments[4])).toBe('picture_as_pdf')
+    expect(attachmentIcon(attachments[5])).toBe('folder_zip')
   })
 
   it('only enables the audio player when the browser accepts the MIME type', () => {
@@ -141,6 +145,34 @@ describe('persisted attachments', () => {
       expect(audioMimeTypeSupported('audio/ogg; codecs=opus')).toBe(true)
       expect(audioMimeTypeSupported('audio/unknown')).toBe(false)
       expect(audioMimeTypeSupported('application/ogg')).toBe(false)
+    } finally {
+      if (originalDocument === undefined) delete globalThis.document
+      else globalThis.document = originalDocument
+    }
+  })
+
+  it('keeps playable video metadata and rejects unsupported video MIME types', () => {
+    const originalDocument = globalThis.document
+    globalThis.document = {
+      createElement: () => ({
+        canPlayType: (mimeType) => mimeType === 'video/mp4' ? 'maybe' : ''
+      })
+    }
+    try {
+      const attachments = videoAttachments([{
+        kind: 'video',
+        mimeType: 'video/mp4; codecs=avc1',
+        url,
+        durationMs: 65_000,
+        width: 1920,
+        height: 1080,
+        sizeBytes: 4096
+      }])
+      expect(attachments[0].safeUrl).toBe(url)
+      expect(attachmentMetadata(attachments[0])).toBe('1920 × 1080 px · 1:05 · 4 KB · video/mp4')
+      expect(videoMimeTypeSupported('video/mp4; codecs=avc1')).toBe(true)
+      expect(videoMimeTypeSupported('video/unknown')).toBe(false)
+      expect(videoMimeTypeSupported('text/html')).toBe(false)
     } finally {
       if (originalDocument === undefined) delete globalThis.document
       else globalThis.document = originalDocument

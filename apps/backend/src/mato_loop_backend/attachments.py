@@ -33,6 +33,11 @@ from mato_loop_backend.attachment_processing import (
 )
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
+from mato_loop_backend.video_processing import (
+    VideoProcessingError,
+    probe_media,
+    video_container_candidate,
+)
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
 MAX_FILE_ATTACHMENT_BYTES = 64 * 1024 * 1024
@@ -277,8 +282,18 @@ def classify_attachment(data: bytes, browser_mime_type: str, filename: str | Non
         return AttachmentInput(data, image_mime, cleaned_name, "image")
     claimed = browser_mime_type.split(";", 1)[0].strip().lower()
     suffix = Path(cleaned_name).suffix.lower()
+    video_candidate = video_container_candidate(data, claimed, suffix)
+    if video_candidate:
+        try:
+            media_info = probe_media(data)
+        except VideoProcessingError as exc:
+            raise AttachmentError(exc.code) from exc
+        if media_info.has_video:
+            return AttachmentInput(data, media_info.mime_type, cleaned_name, "video")
     signed_audio = signed_audio_format(data)
     audio_format = signed_audio or claimed_audio_format(claimed, suffix)
+    if video_candidate and media_info.has_audio and audio_format is None:
+        audio_format = "m4a" if media_info.format == "mp4" else "webm"
     if audio_format is not None:
         return AttachmentInput(
             data, audio_mime_type(audio_format), cleaned_name, "audio"
@@ -543,7 +558,7 @@ class AttachmentService:
             validated_image = validate_image(data, mime_type)
             mime_type = validated_image.mime_type
             width, height = validated_image.width, validated_image.height
-        elif kind in {"audio", "text", "document"}:
+        elif kind in {"audio", "video", "text", "document"}:
             try:
                 processed = process_attachment(
                     data,
@@ -557,6 +572,7 @@ class AttachmentService:
                 raise AttachmentError("attachment.unsupportedType")
             mime_type = processed.mime_type
             duration_ms = processed.duration_ms
+            width, height = processed.width, processed.height
             derived_files = processed.derived_files
             safe_metadata.update(processed.metadata)
             safe_metadata["format"] = processed.format
@@ -573,6 +589,10 @@ class AttachmentService:
             raise AttachmentError("attachment.unsupportedType")
         if kind == "audio" and duration_ms is None:
             raise AttachmentError("attachment.invalidAudio")
+        if kind == "video" and (
+            duration_ms is None or width is None or height is None or derived_files
+        ):
+            raise AttachmentError("attachment.invalidVideo")
         if kind == "audio":
             safe_metadata.update(
                 channels=safe_metadata.get("channels"),

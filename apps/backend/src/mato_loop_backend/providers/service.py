@@ -29,11 +29,15 @@ from mato_loop_backend.privacy import (
 )
 from mato_loop_backend.providers import codex_oauth, lemonade, openai_compatible
 from mato_loop_backend.providers.base import (
+    MAX_PROVIDER_AUDIO_BYTES,
     MAX_PROVIDER_IMAGE_BYTES,
     MAX_PROVIDER_IMAGES,
+    MAX_PROVIDER_MEDIA_INPUTS,
+    MAX_PROVIDER_VIDEO_BYTES,
     ProviderError,
     ProviderImageInput,
     ProviderMedia,
+    ProviderMediaInput,
     ProviderRequest,
     ProviderResult,
     ReasoningDeltaCallback,
@@ -50,6 +54,7 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
+    ModelInputModality,
     TrustLevel,
     effective_model_pseudonymization,
     effective_model_trust,
@@ -60,6 +65,13 @@ logger = logging.getLogger(__name__)
 _IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 _MODEL_IMAGE_MAX_EDGE = 2048
 _MODEL_IMAGE_MAX_BYTES = MAX_PROVIDER_IMAGE_BYTES // MAX_PROVIDER_IMAGES
+_AUDIO_FORMATS = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+}
+_VIDEO_MIME_TYPES = {"video/mp4", "video/mpeg", "video/quicktime", "video/webm"}
 
 
 def _pseudonymization_provider_error(exc: PseudonymizationError) -> ProviderError:
@@ -199,21 +211,15 @@ async def _provider_projection(
             )
         if len(direct_inputs) > MAX_PROVIDER_IMAGES:
             raise ProviderError(
-                "Too many direct image inputs", code="provider.modelCapabilityUnavailable"
+                "Too many direct image inputs",
+                code="provider.imageLimitExceeded",
+                params={"maxImages": MAX_PROVIDER_IMAGES},
             )
         total_bytes = 0
         for image in direct_inputs:
             if image.trust_level not in {"public", "private"}:
                 raise ProviderError(
                     "Invalid direct image trust level", code="provider.configurationInvalid"
-                )
-            if (
-                target_trust_level == TrustLevel.PUBLIC
-                and image.trust_level == TrustLevel.PRIVATE.value
-            ):
-                raise ProviderError(
-                    "Private images cannot be sent to a public model",
-                    code="provider.modelCapabilityUnavailable",
                 )
             if not 0 <= image.message_index < len(projected_messages):
                 raise ProviderError(
@@ -241,6 +247,83 @@ async def _provider_projection(
                 )
             )
     return projected_messages, media
+
+
+def _direct_provider_media(
+    inputs: list[ProviderMediaInput],
+    *,
+    message_count: int,
+    input_modalities: set[ModelInputModality],
+) -> list[ProviderMedia]:
+    if len(inputs) > MAX_PROVIDER_MEDIA_INPUTS:
+        raise ProviderError(
+            "Too many direct media inputs", code="provider.modelCapabilityUnavailable"
+        )
+    media: list[ProviderMedia] = []
+    for item in inputs:
+        if item.modality not in {"audio", "video"}:
+            raise ProviderError(
+                "Invalid direct media modality", code="provider.configurationInvalid"
+            )
+        if ModelInputModality(item.modality) not in input_modalities:
+            raise ProviderError(
+                "Model does not support the direct media modality",
+                code="provider.modelCapabilityUnavailable",
+            )
+        if item.trust_level not in {"public", "private"}:
+            raise ProviderError(
+                "Invalid direct media trust level", code="provider.configurationInvalid"
+            )
+        if not 0 <= item.message_index < message_count:
+            raise ProviderError(
+                "Invalid direct media message index", code="provider.configurationInvalid"
+            )
+        if not isinstance(item.data, bytes) or not item.data:
+            raise ProviderError(
+                "Invalid direct media data", code="provider.configurationInvalid"
+            )
+        if item.modality == "audio":
+            format_ = _AUDIO_FORMATS.get(item.mime_type)
+            if format_ is None:
+                raise ProviderError(
+                    "Unsupported direct audio MIME type",
+                    code="provider.configurationInvalid",
+                )
+            if len(item.data) > MAX_PROVIDER_AUDIO_BYTES:
+                raise ProviderError(
+                    "Direct audio input is too large", code="provider.responseTooLarge"
+                )
+            media.append(
+                ProviderMedia(
+                    message_index=item.message_index,
+                    mime_type=item.mime_type,
+                    status="ready",
+                    modality="audio",
+                    data_base64=base64.b64encode(item.data).decode("ascii"),
+                    format=format_,
+                )
+            )
+        else:
+            if item.mime_type not in _VIDEO_MIME_TYPES:
+                raise ProviderError(
+                    "Unsupported direct video MIME type",
+                    code="provider.configurationInvalid",
+                )
+            if len(item.data) > MAX_PROVIDER_VIDEO_BYTES:
+                raise ProviderError(
+                    "Direct video input is too large", code="provider.responseTooLarge"
+                )
+            encoded = base64.b64encode(item.data).decode("ascii")
+            media.append(
+                ProviderMedia(
+                    message_index=item.message_index,
+                    mime_type=item.mime_type,
+                    data_url=f"data:{item.mime_type};base64,{encoded}",
+                    status="ready",
+                    modality="video",
+                )
+            )
+    return media
 
 
 async def _with_retries(
@@ -337,6 +420,7 @@ class ProviderService:
         target_trust_level: TrustLevel | None = None,
         pseudonymization_enabled: bool | None = None,
         image_inputs: list[ProviderImageInput] | None = None,
+        media_inputs: list[ProviderMediaInput] | None = None,
     ) -> ProviderResult:
         if model.provider_id != provider.id:
             raise ProviderError(
@@ -353,6 +437,23 @@ class ProviderService:
                 "Unsupported provider adapter", code="provider.configurationInvalid"
             )
         model_trust_level = target_trust_level or effective_model_trust(provider, model)
+        api_type = (
+            "chat_completions"
+            if provider.adapter_type == "lemonade"
+            else str(provider.config.get("api_type") or "chat_completions")
+        )
+        if media_inputs and (
+            provider.adapter_type != "openai-compatible" or api_type != "chat_completions"
+        ):
+            raise ProviderError(
+                "Native audio and video require OpenAI-compatible Chat Completions",
+                code="provider.modelCapabilityUnavailable",
+            )
+        direct_media = _direct_provider_media(
+            media_inputs or [],
+            message_count=len(messages),
+            input_modalities=model.input_modalities,
+        )
         use_pseudonymization = (
             model_trust_level == TrustLevel.PUBLIC
             and (
@@ -388,6 +489,7 @@ class ProviderService:
             target_trust_level=model_trust_level,
             image_inputs=image_inputs,
         )
+        media.extend(direct_media)
         pseudonymizer = RequestPseudonymizer() if use_pseudonymization else None
         if pseudonymizer is not None:
             try:
@@ -521,11 +623,6 @@ class ProviderService:
                 "Provider base URL is missing", code="provider.configurationInvalid"
             )
         api_key = payload.get("api_key")
-        api_type = (
-            "chat_completions"
-            if provider.adapter_type == "lemonade"
-            else str(provider.config.get("api_type") or "chat_completions")
-        )
         if api_type == "responses":
             headers = {"Content-Type": "application/json"}
             if api_key:

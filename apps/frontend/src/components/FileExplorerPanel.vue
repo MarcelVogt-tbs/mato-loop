@@ -1,11 +1,13 @@
 <template>
   <div ref="explorerRoot" class="column full-height no-wrap file-explorer">
     <FileViewerPanel
-      v-if="workspace.viewedEntry"
+      v-if="workspace.viewedEntry && !viewerFullscreen"
       :entry="workspace.viewedEntry"
+      :fullscreen-toggle="$q.screen.gt.sm"
       @back="backToFiles"
       @close="closeExplorer"
       @navigate="navigateFromViewer"
+      @toggle-fullscreen="viewerFullscreen = true"
     />
     <div v-show="!workspace.viewedEntry" class="column full-height no-wrap">
     <q-toolbar class="file-explorer__toolbar q-px-md">
@@ -330,6 +332,21 @@
         </q-card-section>
       </q-card>
     </q-dialog>
+
+    <q-dialog v-model="viewerFullscreen" maximized transition-show="fade" transition-hide="fade">
+      <q-card class="app-file-dialog">
+        <FileViewerPanel
+          v-if="workspace.viewedEntry"
+          :entry="workspace.viewedEntry"
+          fullscreen
+          fullscreen-toggle
+          @back="backToFiles"
+          @close="closeExplorer"
+          @navigate="navigateFromViewer"
+          @toggle-fullscreen="viewerFullscreen = false"
+        />
+      </q-card>
+    </q-dialog>
   </div>
 </template>
 
@@ -374,6 +391,7 @@ const createKind = ref('file')
 const createName = ref('')
 const createSuffix = ref('.txt')
 const creating = ref(false)
+const viewerFullscreen = ref(false)
 let typeahead = ''
 let typeaheadTimer = null
 const fileTypeOptions = [
@@ -415,8 +433,8 @@ const rootLabel = computed(() => {
   return workspace.workingDirectory ? 'Workspace' : 'Agent-Home'
 })
 const scopeOptions = computed(() => [
-  { label: workspace.workingDirectory ? 'Workspace' : 'Agent-Home', value: 'filesystem' },
-  { label: 'Session-Dateien', value: 'session', disable: !chat.current }
+  { label: 'Session', value: 'session', disable: !chat.current },
+  { label: 'Dateisystem', value: 'filesystem' }
 ])
 const scopeDescription = computed(() => {
   if (workspace.rootIdentity) {
@@ -593,12 +611,14 @@ function navigateSelection(path) {
 
 async function navigateFromViewer(path) {
   if (!await confirmDiscard()) return
+  viewerFullscreen.value = false
   workspace.closeViewer()
   navigateSelection(path)
 }
 
 async function backToFiles() {
   if (!await confirmDiscard()) return
+  viewerFullscreen.value = false
   const path = workspace.viewedEntry?.path
   workspace.closeViewer()
   await nextTick()
@@ -619,6 +639,7 @@ async function focusPath(path, fallback = '.') {
 
 async function closeExplorer() {
   if (!await confirmDiscard()) return
+  viewerFullscreen.value = false
   workspace.open = false
   await nextTick()
   document.getElementById('workspace-explorer-toggle')?.focus()
@@ -720,6 +741,9 @@ watch(
 )
 
 watch(() => workspace.contextVersion, () => { treeFocusPath.value = '.' })
+watch(() => workspace.viewedEntry, (entry) => {
+  if (!entry) viewerFullscreen.value = false
+})
 watch(() => workspace.filter, async () => {
   await nextTick()
   if (!visibleTreeItems().some((item) => item.dataset.filePath === treeFocusPath.value)) {

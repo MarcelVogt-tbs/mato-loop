@@ -18,8 +18,14 @@ from openpyxl import load_workbook
 from pptx import Presentation
 from pypdf import PdfReader
 
+from mato_loop_backend.video_processing import (
+    VideoProcessingError,
+    claimed_video_format,
+    probe_video,
+)
+
 MAX_EXTRACTED_CHARACTERS = 1_000_000
-MAX_PDF_PAGES = 500
+MAX_PDF_PAGES = 1_000
 MAX_WORKBOOK_SHEETS = 100
 MAX_WORKBOOK_CELLS = 1_000_000
 MAX_PRESENTATION_SLIDES = 500
@@ -106,6 +112,8 @@ class ProcessingResult:
     channels: int | None = None
     sample_rate: int | None = None
     sample_width: int | None = None
+    width: int | None = None
+    height: int | None = None
 
 
 def claimed_audio_format(mime_type: str, suffix: str) -> str | None:
@@ -392,7 +400,9 @@ def _pdf_page_has_image(page: Any) -> bool:
 def extract_pdf_pages(data: bytes) -> tuple[list[str], dict[str, Any]]:
     try:
         reader = PdfReader(BytesIO(data), strict=False)
-        if reader.is_encrypted or not 1 <= len(reader.pages) <= MAX_PDF_PAGES:
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise AttachmentProcessingError("attachment.invalidDocument")
+        if not 1 <= len(reader.pages) <= MAX_PDF_PAGES:
             raise AttachmentProcessingError("attachment.invalidDocument")
         pages = []
         image_pages = []
@@ -531,6 +541,21 @@ def process_attachment(
                 sample_width=info.sample_width,
             )
         return _compressed_audio(data, audio_format)
+    if kind == "video":
+        try:
+            info = probe_video(data)
+        except VideoProcessingError as exc:
+            raise AttachmentProcessingError(exc.code) from exc
+        claimed = claimed_video_format(mime_type, suffix)
+        if claimed is not None and claimed != info.format:
+            raise AttachmentProcessingError("attachment.invalidVideo")
+        return ProcessingResult(
+            info.mime_type,
+            info.format,
+            duration_ms=info.duration_ms,
+            width=info.width,
+            height=info.height,
+        )
     if kind == "document":
         signed = signed_document_format(data)
         claimed = claimed_document_format(mime_type, suffix)

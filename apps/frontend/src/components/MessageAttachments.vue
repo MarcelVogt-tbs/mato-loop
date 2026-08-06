@@ -3,32 +3,60 @@
     <div v-if="label" class="tool-call__section-label">{{ label }}</div>
 
     <div v-if="images.length" class="attachment-grid">
-      <button
+      <article
         v-for="attachment in images"
         :key="attachment.id"
-        type="button"
         class="attachment-preview app-surface"
-        :disabled="!attachment.safeUrl || loadErrors[attachment.id]"
-        :aria-label="`${attachment.filename || 'Bild'} vergrößern`"
-        @click="openAttachment(attachment)"
       >
-        <img
-          v-if="attachment.safeUrl && !loadErrors[attachment.id]"
-          :src="attachment.safeUrl"
-          :alt="attachment.filename || 'Bildanhang'"
-          loading="lazy"
-          decoding="async"
-          @error="loadErrors[attachment.id] = true"
+        <button
+          type="button"
+          class="attachment-preview__image"
+          :disabled="!attachment.safeUrl || loadErrors[attachment.id]"
+          :aria-label="`${attachment.filename || 'Bild'} im Vollbild öffnen`"
+          @click="openAttachment(attachment)"
         >
-        <div v-else class="attachment-preview__error">
-          <q-icon name="broken_image" size="28px" />
-          <span>Bild konnte nicht geladen werden.</span>
+          <img
+            v-if="attachment.safeUrl && !loadErrors[attachment.id]"
+            :src="attachment.safeUrl"
+            :alt="attachment.filename || 'Bildanhang'"
+            loading="lazy"
+            decoding="async"
+            @error="loadErrors[attachment.id] = true"
+          >
+          <div v-else class="attachment-preview__error">
+            <q-icon name="broken_image" size="28px" />
+            <span>Bild konnte nicht geladen werden.</span>
+          </div>
+        </button>
+        <div class="attachment-preview__meta">
+          <strong class="ellipsis" :title="attachment.filename || 'Bild'">{{ attachment.filename || 'Bild' }}</strong>
+          <div v-if="attachment.safeUrl" class="attachment-preview__actions row items-center no-wrap">
+            <q-btn
+              flat
+              round
+              dense
+              icon="open_in_new"
+              :href="attachment.safeUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              :aria-label="`${attachment.filename || 'Bild'} in neuem Tab öffnen`"
+            >
+              <q-tooltip>In neuem Tab öffnen</q-tooltip>
+            </q-btn>
+            <q-btn
+              flat
+              round
+              dense
+              icon="download"
+              :href="attachment.safeUrl"
+              :download="attachment.filename || 'bild'"
+              :aria-label="`${attachment.filename || 'Bild'} herunterladen`"
+            >
+              <q-tooltip>Herunterladen</q-tooltip>
+            </q-btn>
+          </div>
         </div>
-        <span class="attachment-preview__meta">
-          <strong>{{ attachment.filename || 'Bild' }}</strong>
-          <small>{{ attachmentMetadata(attachment) }}</small>
-        </span>
-      </button>
+      </article>
     </div>
 
     <div v-if="audio.length" class="audio-attachment-list">
@@ -65,6 +93,40 @@
       </div>
     </div>
 
+    <div v-if="videos.length" class="video-attachment-list">
+      <div v-for="attachment in videos" :key="attachment.id" class="video-attachment app-surface">
+        <div class="row items-start no-wrap q-gutter-sm">
+          <q-icon name="video_file" color="primary" size="24px" />
+          <div class="col ellipsis">
+            <div class="text-weight-medium ellipsis">{{ attachment.filename || 'Video' }}</div>
+            <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
+          </div>
+          <q-btn
+            v-if="attachment.safeUrl"
+            flat
+            round
+            dense
+            icon="download"
+            :href="attachment.safeUrl"
+            :download="attachment.filename || 'video'"
+            aria-label="Video herunterladen"
+          >
+            <q-tooltip>Herunterladen</q-tooltip>
+          </q-btn>
+        </div>
+        <video v-if="attachment.safeUrl && videoMimeTypeSupported(attachment.mimeType)" controls preload="metadata" playsinline>
+          <source :src="attachment.safeUrl" :type="attachment.mimeType">
+          Dein Browser kann diese Videodatei nicht wiedergeben.
+        </video>
+        <q-banner v-else-if="!attachment.safeUrl" dense rounded class="app-surface-tonal text-caption q-mt-sm">
+          Die Videodatei ist nicht über eine sichere interne Adresse verfügbar.
+        </q-banner>
+        <div v-else class="text-caption app-muted q-mt-sm">
+          Dein Browser unterstützt die Wiedergabe dieses Videoformats nicht. Du kannst die Datei herunterladen.
+        </div>
+      </div>
+    </div>
+
     <div v-if="files.length" class="file-attachment-list">
       <component
         v-for="attachment in files"
@@ -90,23 +152,14 @@
       </component>
     </div>
 
-    <q-dialog v-model="attachmentDialog" :maximized="$q.screen.lt.sm">
-      <q-card v-if="selectedAttachment" class="attachment-dialog app-surface">
-        <q-card-section class="row items-start no-wrap q-gutter-md">
-          <div class="col">
-            <div class="text-h6 ellipsis">{{ selectedAttachment.filename || 'Bildvorschau' }}</div>
-            <div class="text-caption app-muted">{{ attachmentMetadata(selectedAttachment) }}</div>
-          </div>
-          <q-btn flat round dense icon="close" aria-label="Bildvorschau schließen" v-close-popup />
-        </q-card-section>
-        <q-separator />
-        <q-card-section class="attachment-dialog__body">
-          <img
-            :src="selectedAttachment.safeUrl"
-            :alt="selectedAttachment.filename || 'Bildanhang in Großansicht'"
-            @error="closeFailedAttachment"
-          >
-        </q-card-section>
+    <q-dialog v-model="attachmentDialog" maximized transition-show="fade" transition-hide="fade" @hide="selectedAttachment = null">
+      <q-card v-if="selectedAttachment" class="app-file-dialog">
+        <FileViewerPanel
+          :image="{ url: selectedAttachment.safeUrl, name: selectedAttachment.filename || 'Bild' }"
+          fullscreen
+          @close="attachmentDialog = false"
+          @toggle-fullscreen="attachmentDialog = false"
+        />
       </q-card>
     </q-dialog>
   </div>
@@ -118,8 +171,10 @@ import {
   attachmentIcon,
   attachmentMetadata,
   audioMimeTypeSupported,
-  supportedAttachments
+  supportedAttachments,
+  videoMimeTypeSupported
 } from 'src/utils/attachments'
+import FileViewerPanel from 'components/FileViewerPanel.vue'
 
 defineOptions({ name: 'MessageAttachments' })
 
@@ -131,6 +186,7 @@ const props = defineProps({
 const items = computed(() => supportedAttachments(props.attachments))
 const images = computed(() => items.value.filter((attachment) => attachment.kind === 'image'))
 const audio = computed(() => items.value.filter((attachment) => attachment.kind === 'audio'))
+const videos = computed(() => items.value.filter((attachment) => attachment.kind === 'video'))
 const files = computed(() => items.value.filter((attachment) => (
   ['text', 'document', 'file'].includes(attachment.kind)
 )))
@@ -144,8 +200,4 @@ function openAttachment(attachment) {
   attachmentDialog.value = true
 }
 
-function closeFailedAttachment() {
-  if (selectedAttachment.value) loadErrors[selectedAttachment.value.id] = true
-  attachmentDialog.value = false
-}
 </script>

@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.agent.video_analysis as video_analysis
 from mato_loop_backend.agent.context import ContextManager, ContextProjection
 from mato_loop_backend.agent.runtime import (
     AgentRunError,
@@ -27,6 +28,7 @@ from mato_loop_backend.settings import (
     ToolSettings,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig, TrustLevel
+from mato_loop_backend.video_processing import MediaInfo, VideoFrame
 
 SOURCE_ID = "src-test"
 SOURCE_URL = "https://example.test/source"
@@ -576,7 +578,7 @@ async def test_pdf_vision_prefers_active_model_then_configured_fallback(
     assert requests[1]["image_inputs"][0].data == b"jpeg"
 
 
-async def test_private_pdf_pages_skip_public_active_vision_model(monkeypatch) -> None:
+async def test_private_pdf_pages_use_public_active_vision_model(monkeypatch) -> None:
     db, run, requests, _, _ = await _runtime_setup(
         monkeypatch,
         [
@@ -608,9 +610,71 @@ async def test_private_pdf_pages_skip_public_active_vision_model(monkeypatch) ->
 
     await AgentRuntime._execute_loop(db, run)
 
-    assert requests[1]["model"].model_id == "vision-model"
-    assert requests[1]["target_trust_level"] == TrustLevel.PRIVATE
+    assert requests[1]["model"].model_id == "local-model"
+    assert requests[1]["target_trust_level"] == TrustLevel.PUBLIC
     assert requests[1]["image_inputs"][0].trust_level == TrustLevel.PRIVATE.value
+
+
+async def test_video_frames_are_analyzed_in_provider_sized_batches(monkeypatch) -> None:
+    frames = [VideoFrame(index * 1_000, f"frame-{index}".encode()) for index in range(8)]
+    monkeypatch.setattr(
+        video_analysis,
+        "probe_video",
+        lambda _data: MediaInfo("mp4", "video/mp4", 8_000, 640, 360, 0, None),
+    )
+    monkeypatch.setattr(
+        video_analysis, "extract_video_frames", lambda _data, **_kwargs: frames
+    )
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="analyze-video",
+                        name="analyze_video",
+                        arguments={"root": "session", "path": "attachments/video.mp4"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Frames 0 bis 3"),
+            ProviderResult(content="Frames 4 bis 7"),
+            ProviderResult(content="Fertige Anleitung", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        active_supports_image_input=True,
+    )
+
+    async def execute(_call, context, _tool):
+        assert context.video_analysis_handler is not None
+        result = await context.video_analysis_handler(
+            b"video", TrustLevel.PUBLIC, None, "standard", None
+        )
+        assert [
+            (segment["startMs"], segment["endMs"])
+            for segment in result["visualSegments"]
+        ] == [(0, 3_500), (3_500, 8_000)]
+        return ToolResult.json(result)
+
+    tool_registry._execute_definition.side_effect = execute
+
+    await AgentRuntime._execute_loop(db, run)
+
+    image_requests = [request for request in requests if request.get("image_inputs")]
+    assert [len(request["image_inputs"]) for request in image_requests] == [4, 4]
+    assert all(
+        {image.message_index for image in request["image_inputs"]} == {1}
+        for request in image_requests
+    )
+    assert all(
+        len([message for message in request["messages"] if message["role"] == "user"])
+        == 1
+        for request in image_requests
+    )
+    assert [
+        image.data for request in image_requests for image in request["image_inputs"]
+    ] == [frame.data for frame in frames]
 
 
 async def test_cancel_does_not_capture_required_gate_text(monkeypatch) -> None:

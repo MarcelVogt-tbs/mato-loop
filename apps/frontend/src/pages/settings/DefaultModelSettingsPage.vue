@@ -61,6 +61,33 @@
       <q-separator />
 
       <q-card-section class="default-model-setting">
+        <q-avatar rounded color="purple" text-color="white" icon="video_file" />
+        <div class="default-model-setting__description">
+          <div class="text-subtitle1 text-weight-bold">Videoanalyse</div>
+          <div class="text-body2 app-muted">
+            Wird verwendet, wenn es gegenüber dem aktiven Modell zusätzliche Video- oder Bildfähigkeiten bietet.
+          </div>
+        </div>
+        <div>
+          <q-select
+            v-model="form.videoModelId"
+            outlined
+            clearable
+            emit-value
+            map-options
+            options-dense
+            label="Videomodell"
+            :display-value="form.videoModelId ? undefined : 'Kein Standardmodell'"
+            :options="providers.videoModelOptions"
+            hint="Das aktive Modell bleibt bevorzugt, wenn es dieselbe oder eine bessere Eingabefähigkeit besitzt."
+            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+          />
+        </div>
+      </q-card-section>
+
+      <q-separator />
+
+      <q-card-section class="default-model-setting">
         <q-avatar rounded color="blue-grey" text-color="white" icon="document_scanner" />
         <div class="default-model-setting__description">
           <div class="text-subtitle1 text-weight-bold">Bildanalyse</div>
@@ -158,7 +185,7 @@
             label="Dreaming-Modell"
             :display-value="form.dreamingModelId ? undefined : 'Agentmodell verwenden'"
             :options="providers.selectionOptions(form.dreamingModelId, true)"
-            hint="Dreaming benötigt ein Modell mit Tool-Unterstützung."
+            hint="Das optionale Dreaming benötigt ein Modell mit Tool-Unterstützung."
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           />
         </div>
@@ -251,6 +278,7 @@ const form = reactive({
   titleGenerationModelId: null,
   dreamingModelId: null,
   visionModelId: null,
+  videoModelId: null,
   imageGenerationModelId: null,
   speechGenerationModelId: null,
   audioGenerationModelId: null,
@@ -262,6 +290,7 @@ const changed = computed(() => (
   || form.titleGenerationModelId !== providers.titleGenerationModelId
   || form.dreamingModelId !== providers.dreamingModelId
   || form.visionModelId !== providers.visionModelId
+  || form.videoModelId !== providers.videoModelId
   || mediaSettings.some((setting) => form[setting.field] !== providers[setting.field])
 ))
 
@@ -271,6 +300,7 @@ function assignForm() {
   form.titleGenerationModelId = providers.titleGenerationModelId
   form.dreamingModelId = providers.dreamingModelId
   form.visionModelId = providers.visionModelId
+  form.videoModelId = providers.videoModelId
   for (const setting of mediaSettings) form[setting.field] = providers[setting.field]
 }
 

@@ -10,6 +10,7 @@ describe('model runtime configuration', () => {
   it('reads camelCase API fields and preserves false capabilities', () => {
     expect(modelRuntimeForm({
       capabilities: ['chat'],
+      inputModalities: ['text', 'image'],
       contextWindowTokens: 64000,
       discoveredContextWindowTokens: 32000,
       useDiscoveredContextWindow: false,
@@ -28,6 +29,7 @@ describe('model runtime configuration', () => {
       reasoningSummary: false
     })).toEqual({
       capabilities: ['chat'],
+      inputModalities: ['text', 'image'],
       contextWindowTokens: 64000,
       discoveredContextWindowTokens: 32000,
       useDiscoveredContextWindow: false,
@@ -50,6 +52,7 @@ describe('model runtime configuration', () => {
   it('maps form values to additive provider request fields', () => {
     expect(modelRuntimePayload({
       capabilities: ['chat', 'image_generation'],
+      inputModalities: ['text', 'image', 'audio', 'video'],
       contextWindowTokens: '32000',
       useDiscoveredContextWindow: true,
       maxOutputTokens: '4096',
@@ -65,6 +68,7 @@ describe('model runtime configuration', () => {
       reasoningSummary: false
     })).toEqual({
       capabilities: ['chat', 'image_generation'],
+      input_modalities: ['text', 'image', 'audio', 'video'],
       context_window_tokens: 32000,
       use_discovered_context_window: true,
       max_output_tokens: 4096,
@@ -97,6 +101,7 @@ describe('model runtime configuration', () => {
       supportsImageInput: true
     })).toMatchObject({
       capabilities: ['audio_transcription'],
+      inputModalities: ['text', 'image'],
       supportsImageInput: true
     })
 
@@ -114,5 +119,25 @@ describe('model runtime configuration', () => {
       ...modelRuntimeForm(),
       capabilities: []
     }).capabilities).toEqual([])
+  })
+
+  it('uses canonical input modalities while keeping the legacy image API field', () => {
+    expect(modelRuntimeForm({
+      inputModalities: ['video', 'image', 'invalid', 'video'],
+      supportsImageInput: false
+    })).toMatchObject({
+      inputModalities: ['video', 'image'],
+      supportsImageInput: true
+    })
+    expect(modelRuntimePayload({
+      ...modelRuntimeForm(),
+      inputModalities: ['text', 'audio', 'video'],
+      supportsImageInput: true
+    }).supports_image_input).toBe(false)
+    expect(modelRuntimePayload({
+      ...modelRuntimeForm(),
+      inputModalities: undefined,
+      supportsImageInput: true
+    }).supports_image_input).toBe(true)
   })
 })

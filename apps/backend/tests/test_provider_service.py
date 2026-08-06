@@ -17,6 +17,7 @@ from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import (
     ProviderError,
     ProviderImageInput,
+    ProviderMediaInput,
     ProviderResult,
     PublicReasoning,
     ToolCall,
@@ -32,6 +33,7 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
+    ModelInputModality,
     TrustLevel,
 )
 
@@ -114,6 +116,126 @@ async def test_complete_passes_model_capabilities_and_explicit_timeout(monkeypat
     assert request.timeout == 12
     assert request.tool_choice == "required"
     assert result.provider_data["continuation_scope"]["providerId"] == str(provider.id)
+
+
+async def test_complete_validates_and_transports_direct_audio_and_video(monkeypatch) -> None:
+    provider = LlmProviderConfig(
+        name="vLLM",
+        adapter_type="openai-compatible",
+        pseudonymization_enabled=False,
+        config={"base_url": "http://vllm.test/v1", "api_type": "chat_completions"},
+    )
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="multimodal",
+        input_modalities={
+            ModelInputModality.TEXT,
+            ModelInputModality.AUDIO,
+            ModelInputModality.VIDEO,
+        },
+    )
+    captured = {}
+
+    async def fake_chat_completions(**kwargs):
+        captured.update(kwargs)
+        return ProviderResult(content="OK")
+
+    monkeypatch.setattr(service_module, "chat_completions", fake_chat_completions)
+    inputs = [
+        ProviderMediaInput(0, b"RIFFaudio", "audio/wav", "private", "audio"),
+        ProviderMediaInput(0, b"video", "video/mp4", "private", "video"),
+    ]
+
+    await ProviderService.complete(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        messages=[{"role": "user", "content": "Test"}],
+        tools=[],
+        media_inputs=inputs,
+    )
+
+    media = captured["request"].media
+    assert base64.b64decode(media[0].data_base64) == b"RIFFaudio"
+    assert base64.b64decode(media[1].data_url.split(",", 1)[1]) == b"video"
+    assert "RIFFaudio" not in repr(inputs)
+    assert "UklGRmF1ZGlv" not in repr(media)
+
+
+@pytest.mark.parametrize(
+    ("adapter_type", "api_type"),
+    [
+        ("openai-compatible", "responses"),
+        ("openai-codex", "chat_completions"),
+        ("lemonade", "chat_completions"),
+    ],
+)
+async def test_complete_rejects_native_media_outside_openai_chat_completions(
+    adapter_type: str, api_type: str
+) -> None:
+    provider = LlmProviderConfig(
+        name="Unsupported",
+        adapter_type=adapter_type,
+        config={"base_url": "http://provider.test/v1", "api_type": api_type},
+    )
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="audio",
+        input_modalities={"text", "audio"},
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession),
+            provider=provider,
+            model=model,
+            messages=[{"role": "user", "content": "Test"}],
+            tools=[],
+            media_inputs=[
+                ProviderMediaInput(0, b"audio", "audio/wav", "public", "audio")
+            ],
+        )
+
+    assert exc_info.value.public_code == "provider.modelCapabilityUnavailable"
+
+
+async def test_complete_rejects_unconfigured_or_oversized_native_media(
+    monkeypatch,
+) -> None:
+    provider = LlmProviderConfig(
+        name="Public",
+        adapter_type="openai-compatible",
+        config={"base_url": "http://provider.test/v1"},
+    )
+    text_model = ModelConfig(provider_id=provider.id, model_id="text")
+    audio_model = ModelConfig(
+        provider_id=provider.id,
+        model_id="audio",
+        input_modalities={"text", "audio"},
+    )
+    media = ProviderMediaInput(0, b"audio", "audio/wav", "public", "audio")
+
+    with pytest.raises(ProviderError, match="does not support"):
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession),
+            provider=provider,
+            model=text_model,
+            messages=[{"role": "user", "content": "Test"}],
+            tools=[],
+            media_inputs=[media],
+        )
+    monkeypatch.setattr(service_module, "MAX_PROVIDER_AUDIO_BYTES", 4)
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession),
+            provider=provider,
+            model=audio_model,
+            messages=[{"role": "user", "content": "Test"}],
+            tools=[],
+            media_inputs=[media],
+        )
+
+    assert exc_info.value.public_code == "provider.responseTooLarge"
 
 
 async def test_public_complete_pseudonymizes_and_restores_request_scope(
@@ -499,17 +621,30 @@ async def test_projection_accepts_bounded_transient_images() -> None:
     assert media[0].message_index == 0
     assert base64.b64decode(media[0].data_url.split(",", 1)[1]) == data
 
-    with pytest.raises(ProviderError, match="Private images"):
+    _projected, private_media = await service_module._provider_projection(
+        [{"role": "user", "content": "PDF page 1"}],
+        supports_image_input=True,
+        target_trust_level=TrustLevel.PUBLIC,
+        image_inputs=[
+            ProviderImageInput(
+                0, data, trust_level=TrustLevel.PRIVATE.value, mime_type="image/png"
+            )
+        ],
+    )
+    assert len(private_media) == 1
+
+    with pytest.raises(ProviderError) as exc_info:
         await service_module._provider_projection(
-            [{"role": "user", "content": "PDF page 1"}],
+            [{"role": "user", "content": "Frames"}],
             supports_image_input=True,
             target_trust_level=TrustLevel.PUBLIC,
             image_inputs=[
-                ProviderImageInput(
-                    0, data, trust_level=TrustLevel.PRIVATE.value, mime_type="image/png"
-                )
+                ProviderImageInput(0, data, TrustLevel.PUBLIC.value)
+                for _ in range(service_module.MAX_PROVIDER_IMAGES + 1)
             ],
         )
+    assert exc_info.value.public_code == "provider.imageLimitExceeded"
+    assert exc_info.value.params == {"maxImages": service_module.MAX_PROVIDER_IMAGES}
 
 
 async def test_projection_accepts_and_downsizes_mpo_images_for_provider() -> None:

@@ -9,7 +9,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from mato_loop_backend.providers.base import (
     DeltaCallback,
@@ -25,7 +25,7 @@ from mato_loop_backend.providers.reasoning import (
     TaggedReasoningStream,
     split_tagged_reasoning,
 )
-from mato_loop_backend.settings.models import ModelCapability
+from mato_loop_backend.settings.models import ModelCapability, ModelInputModality
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,16 @@ class DiscoveredModel(BaseModel):
     capabilities: set[ModelCapability] = Field(
         default_factory=lambda: {ModelCapability.CHAT}
     )
+    input_modalities: set[ModelInputModality] | None = None
+
+    @model_validator(mode="after")
+    def derive_legacy_image_capability(self) -> DiscoveredModel:
+        if self.input_modalities is not None:
+            self.__pydantic_extra__ = self.__pydantic_extra__ or {}
+            self.__pydantic_extra__["supports_image_input"] = (
+                ModelInputModality.IMAGE in self.input_modalities
+            )
+        return self
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -51,13 +61,19 @@ class DiscoveredModel(BaseModel):
             "max_context_window",
             "recipe",
             "supports_image_input",
+            "input_modalities",
             "supports_tools",
             "supports_parallel_tool_calls",
             "capabilities_authoritative",
             "native_for_chat_provider",
         }
         metadata: dict[str, Any] = {}
-        for key, value in self.model_dump(exclude={"id", "capabilities"}).items():
+        for key, value in self.model_dump(
+            exclude={"id", "capabilities"}, exclude_none=True
+        ).items():
+            if key == "input_modalities" and isinstance(value, set):
+                metadata[key] = sorted(str(item) for item in value)
+                continue
             if key not in allowed or not isinstance(value, (str, int, float, bool, type(None))):
                 continue
             metadata[key] = value[:500] if isinstance(value, str) else value
@@ -122,7 +138,16 @@ def _chat_media_message(media: list[ProviderMedia]) -> dict[str, Any]:
         {"type": "text", "text": "[Session image]"}
     ]
     for item in media:
-        if item.data_url:
+        if item.modality == "video" and item.data_url:
+            content.append({"type": "video_url", "video_url": {"url": item.data_url}})
+        elif item.modality == "audio" and item.data_base64 and item.format:
+            content.append(
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": item.data_base64, "format": item.format},
+                }
+            )
+        elif item.data_url:
             content.append({"type": "image_url", "image_url": {"url": item.data_url}})
         else:
             content.append({"type": "text", "text": _media_marker(item)})
@@ -198,6 +223,11 @@ def _responses_input(
     continuation_scope: dict[str, str | None] | None = None,
     media: list[ProviderMedia] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
+    if any(item.modality != "image" for item in media or []):
+        raise ProviderError(
+            "Responses API does not support native audio or video input",
+            code="provider.modelCapabilityUnavailable",
+        )
     instructions: list[str] = []
     items: list[dict[str, Any]] = []
     grouped_media = _media_by_message(media or [])

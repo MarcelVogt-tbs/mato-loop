@@ -43,6 +43,7 @@ from mato_loop_backend.settings.models import (
     ModelAvailability,
     ModelCapability,
     ModelConfig,
+    ModelInputModality,
     ModelOrigin,
     WebFetchSettings,
 )
@@ -255,6 +256,38 @@ async def test_sync_adds_updates_and_marks_discovered_models_missing(monkeypatch
     assert settings.default_model_id is None
     assert provider.models_last_synced_at is not None
     assert result["models"][-1]["modelId"] == "opaque/vendor:model@1"
+
+
+async def test_sync_retains_discovered_input_modalities_without_name_inference(
+    monkeypatch,
+) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    settings = AiSettings(providers=[provider])
+    _mock_settings(monkeypatch, settings)
+    monkeypatch.setattr(
+        ProviderService,
+        "discover_models",
+        AsyncMock(
+            return_value=[
+                DiscoveredModel(
+                    id="plain-model",
+                    input_modalities={"text", "audio", "video"},
+                ),
+                DiscoveredModel(id="video-in-name-only"),
+            ]
+        ),
+    )
+
+    result = await sync_provider_models(provider.id, _db())
+
+    assert settings.models[0].input_modalities == {
+        ModelInputModality.TEXT,
+        ModelInputModality.AUDIO,
+        ModelInputModality.VIDEO,
+    }
+    assert settings.models[1].input_modalities == {ModelInputModality.TEXT}
+    assert result["models"][0]["inputModalities"] == ["audio", "text", "video"]
+    assert result["models"][0]["supportsImageInput"] is False
 
 
 async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
@@ -610,6 +643,62 @@ async def test_vision_default_requires_image_input(monkeypatch) -> None:
         )
     assert exc_info.value.code == "provider.modelCapabilityUnavailable"
     assert exc_info.value.field == "visionModelId"
+
+
+async def test_video_default_supports_native_video_or_frame_analysis(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="vLLM", adapter_type="openai-compatible")
+    video = ModelConfig(
+        provider_id=provider.id,
+        model_id="video",
+        input_modalities={ModelInputModality.TEXT, ModelInputModality.VIDEO},
+    )
+    settings = AiSettings(providers=[provider], models=[video])
+    _mock_settings(monkeypatch, settings)
+
+    result = await set_default_models(
+        DefaultModelsRequest(
+            default_model_id=None,
+            compaction_model_id=None,
+            title_generation_model_id=None,
+            video_model_id=video.id,
+        ),
+        _db(),
+    )
+
+    assert settings.video_model_id == video.id
+    assert result["videoModelId"] == str(video.id)
+
+    provider.config["api_type"] = "responses"
+    with pytest.raises(ApiError) as exc_info:
+        await set_default_models(
+            DefaultModelsRequest(
+                default_model_id=None,
+                compaction_model_id=None,
+                title_generation_model_id=None,
+                video_model_id=video.id,
+            ),
+            _db(),
+        )
+    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
+    assert exc_info.value.field == "videoModelId"
+
+    frame_model = ModelConfig(
+        provider_id=provider.id,
+        model_id="frames",
+        supports_image_input=True,
+    )
+    settings.models.append(frame_model)
+    result = await set_default_models(
+        DefaultModelsRequest(
+            default_model_id=None,
+            compaction_model_id=None,
+            title_generation_model_id=None,
+            video_model_id=frame_model.id,
+        ),
+        _db(),
+    )
+    assert settings.video_model_id == frame_model.id
+    assert result["videoModelId"] == str(frame_model.id)
 
 
 async def test_media_default_rejects_unsupported_provider_adapter(monkeypatch) -> None:

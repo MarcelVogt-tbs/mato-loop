@@ -19,7 +19,7 @@ from pydantic import (
 
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
-from mato_loop_backend.settings.models import ModelCapability
+from mato_loop_backend.settings.models import ModelCapability, ModelInputModality
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +128,14 @@ def _metadata(model: _LemonadeModel) -> dict[str, Any]:
         "max_context_window": model.max_context_window,
         "image_defaults": _safe_image_defaults(model.image_defaults),
         "supports_image_input": "vision" in normalized_labels,
+        "input_modalities": [
+            ModelInputModality.TEXT,
+            *(
+                [ModelInputModality.IMAGE]
+                if "vision" in normalized_labels
+                else []
+            ),
+        ],
         "supports_tools": (
             model.supports_tools
             if model.supports_tools is not None

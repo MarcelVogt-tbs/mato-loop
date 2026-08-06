@@ -12,6 +12,9 @@ ReasoningDeltaCallback = Callable[[str, str], Awaitable[None]]
 
 MAX_PROVIDER_IMAGES = 4
 MAX_PROVIDER_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_PROVIDER_AUDIO_BYTES = 25 * 1024 * 1024
+MAX_PROVIDER_VIDEO_BYTES = 50 * 1024 * 1024
+MAX_PROVIDER_MEDIA_INPUTS = 4
 
 
 @dataclass(slots=True)
@@ -36,6 +39,9 @@ class ProviderMedia:
     mime_type: str
     data_url: str | None = field(default=None, repr=False)
     status: str = "unavailable"
+    modality: Literal["image", "audio", "video"] = "image"
+    data_base64: str | None = field(default=None, repr=False)
+    format: str | None = None
 
 
 @dataclass(slots=True)
@@ -44,6 +50,15 @@ class ProviderImageInput:
     data: bytes = field(repr=False)
     trust_level: Literal["public", "private"]
     mime_type: str = "image/jpeg"
+
+
+@dataclass(slots=True)
+class ProviderMediaInput:
+    message_index: int
+    data: bytes = field(repr=False)
+    mime_type: str
+    trust_level: Literal["public", "private"]
+    modality: Literal["audio", "video"]
 
 
 @dataclass(slots=True)

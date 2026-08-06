@@ -63,6 +63,40 @@ describe('provider store', () => {
     })
   })
 
+  it('uses canonical input modalities for vision models with legacy fallback', () => {
+    const store = useProviderStore()
+    store.providers = [{ id: 'p1', name: 'Lokal', enabled: true }]
+    store.models = [
+      { id: 'canonical', providerId: 'p1', name: 'Canonical', enabled: true, inputModalities: ['text', 'image'], supportsImageInput: false },
+      { id: 'text', providerId: 'p1', name: 'Text', enabled: true, inputModalities: ['text'], supportsImageInput: true },
+      { id: 'legacy', providerId: 'p1', name: 'Legacy', enabled: true, supportsImageInput: true }
+    ]
+
+    expect(store.visionModelOptions.map((option) => option.value)).toEqual(['canonical', 'legacy'])
+  })
+
+  it('offers native video and frame-analysis models', () => {
+    const store = useProviderStore()
+    store.codex = { authenticated: true }
+    store.providers = [
+      { id: 'chat', name: 'vLLM', enabled: true, adapterType: 'openai-compatible' },
+      { id: 'responses', name: 'Responses', enabled: true, adapterType: 'openai-compatible', config: { apiType: 'responses' } },
+      { id: 'lemonade', name: 'Lemonade', enabled: true, adapterType: 'lemonade' },
+      { id: 'codex', name: 'GPT-5.6', enabled: true, adapterType: 'openai-codex' }
+    ]
+    store.models = store.providers.map((provider) => ({
+      id: provider.id,
+      providerId: provider.id,
+      name: provider.name,
+      enabled: true,
+      capabilities: ['chat'],
+      inputModalities: ['text', 'video']
+    }))
+    store.models.find((model) => model.id === 'codex').inputModalities = ['text', 'image']
+
+    expect(store.videoModelOptions.map((option) => option.value)).toEqual(['chat', 'codex'])
+  })
+
   it('keeps existing models visible while sync is pending and reloads afterward', async () => {
     const store = useProviderStore()
     store.providers = [{ id: 'p1', name: 'Lokal', enabled: true, adapterType: 'openai-compatible' }]
@@ -216,6 +250,7 @@ describe('provider store', () => {
         titleGenerationModelId: null,
         dreamingModelId: 'compact',
         visionModelId: 'vision',
+        videoModelId: 'video',
         imageGenerationModelId: 'image',
         speechGenerationModelId: null,
         audioGenerationModelId: 'audio',
@@ -229,6 +264,7 @@ describe('provider store', () => {
       titleGenerationModelId: null,
       dreamingModelId: 'compact',
       visionModelId: 'vision',
+      videoModelId: 'video',
       imageGenerationModelId: 'image',
       speechGenerationModelId: null,
       audioGenerationModelId: 'audio',
@@ -242,6 +278,7 @@ describe('provider store', () => {
       title_generation_model_id: null,
       dreaming_model_id: 'compact',
       vision_model_id: 'vision',
+      video_model_id: 'video',
       image_generation_model_id: 'image',
       speech_generation_model_id: null,
       audio_generation_model_id: 'audio',
@@ -252,6 +289,7 @@ describe('provider store', () => {
     expect(store.titleGenerationModelId).toBeNull()
     expect(store.dreamingModelId).toBe('compact')
     expect(store.visionModelId).toBe('vision')
+    expect(store.videoModelId).toBe('video')
     expect(store.imageGenerationModelId).toBe('image')
     expect(store.speechGenerationModelId).toBeNull()
     expect(store.audioGenerationModelId).toBe('audio')

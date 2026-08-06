@@ -39,6 +39,7 @@ export function clipboardAttachmentFiles(event, now = new Date()) {
 export function attachmentDraftLabel(attachment) {
   if (attachment?.kind === 'image') return 'Bild'
   if (attachment?.kind === 'audio') return 'Audio'
+  if (attachment?.kind === 'video') return 'Video'
   const filename = String(attachment?.file?.name || '')
   const extension = filename.includes('.') ? filename.split('.').pop().toUpperCase() : ''
   return extension && extension.length <= 8 ? `${extension}-Datei` : 'Datei'
@@ -47,6 +48,7 @@ export function attachmentDraftLabel(attachment) {
 export function attachmentDraftIcon(attachment) {
   if (attachment?.kind === 'image') return 'image'
   if (attachment?.kind === 'audio') return 'audio_file'
+  if (attachment?.kind === 'video') return 'video_file'
   const mimeType = String(attachment?.mimeType || '')
   if (mimeType === 'application/pdf') return 'picture_as_pdf'
   if (mimeType.startsWith('text/')) return 'description'

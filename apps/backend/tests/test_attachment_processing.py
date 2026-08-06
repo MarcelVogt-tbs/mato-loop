@@ -64,6 +64,17 @@ def document_bytes(document_format: str) -> bytes:
     return buffer.getvalue()
 
 
+def pdf_bytes(*, pages: int = 1, password: str | None = None) -> bytes:
+    buffer = BytesIO()
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=100, height=100)
+    if password is not None:
+        writer.encrypt(password)
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 @pytest.mark.parametrize(
     ("signature", "mime_type", "filename", "expected_mime"),
     [
@@ -71,8 +82,6 @@ def document_bytes(document_format: str) -> bytes:
         (b"\xff\xf1data", "audio/aac", "audio.aac", "audio/aac"),
         (b"OggSdata", "audio/ogg", "audio.ogg", "audio/ogg"),
         (b"fLaCdata", "audio/flac", "audio.flac", "audio/flac"),
-        (b"\x1aE\xdf\xa3data", "audio/webm", "audio.webm", "audio/webm"),
-        (b"\x00\x00\x00\x18ftypM4A data", "audio/mp4", "audio.m4a", "audio/mp4"),
     ],
 )
 def test_common_compressed_audio_is_classified(
@@ -82,6 +91,48 @@ def test_common_compressed_audio_is_classified(
 
     assert attachment.kind == "audio"
     assert attachment.mime_type == expected_mime
+
+
+@pytest.mark.parametrize(
+    ("data", "mime_type", "filename", "media_format", "expected_mime"),
+    [
+        (b"\x1aE\xdf\xa3data", "audio/webm", "audio.webm", "webm", "audio/webm"),
+        (b"\x00\x00\x00\x18ftypM4A data", "audio/mp4", "audio.m4a", "mp4", "audio/mp4"),
+    ],
+)
+def test_audio_only_mp4_and_webm_are_classified_by_streams(
+    monkeypatch,
+    data: bytes,
+    mime_type: str,
+    filename: str,
+    media_format: str,
+    expected_mime: str,
+) -> None:
+    from mato_loop_backend.video_processing import MediaInfo
+
+    monkeypatch.setattr(
+        attachment_module,
+        "probe_media",
+        lambda _data: MediaInfo(media_format, f"video/{media_format}", 1_000, None, None, None, 0),
+    )
+
+    attachment = classify_attachment(data, mime_type, filename)
+
+    assert (attachment.kind, attachment.mime_type) == ("audio", expected_mime)
+
+
+def test_video_stream_wins_over_audio_mime_and_webm_signature(monkeypatch) -> None:
+    from mato_loop_backend.video_processing import MediaInfo
+
+    monkeypatch.setattr(
+        attachment_module,
+        "probe_media",
+        lambda _data: MediaInfo("webm", "video/webm", 1_000, 640, 360, 0, 1),
+    )
+
+    attachment = classify_attachment(b"\x1aE\xdf\xa3data", "audio/webm", "clip.webm")
+
+    assert (attachment.kind, attachment.mime_type) == ("video", "video/webm")
 
 
 @pytest.mark.parametrize("document_format", ["pdf", "docx", "xlsx", "pptx"])
@@ -162,6 +213,25 @@ def test_pdf_page_limit_is_enforced(monkeypatch) -> None:
             mime_type="application/pdf",
             filename="lang.pdf",
         )
+
+
+def test_empty_password_pdf_is_extracted() -> None:
+    pages, metadata = processing.extract_pdf_pages(pdf_bytes(password=""))
+
+    assert pages == [""]
+    assert metadata["pageCount"] == 1
+
+
+def test_password_protected_pdf_is_rejected() -> None:
+    with pytest.raises(processing.AttachmentProcessingError, match="attachment.invalidDocument"):
+        processing.extract_pdf_pages(pdf_bytes(password="secret"))
+
+
+def test_large_pdf_manual_is_within_page_limit() -> None:
+    pages, metadata = processing.extract_pdf_pages(pdf_bytes(pages=627))
+
+    assert len(pages) == 627
+    assert metadata["pageCount"] == 627
 
 
 def test_compressed_audio_duration_limit_is_checked_before_conversion(monkeypatch) -> None:

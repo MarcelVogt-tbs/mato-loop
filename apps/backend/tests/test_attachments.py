@@ -25,6 +25,7 @@ from mato_loop_backend.attachments import (
 )
 from mato_loop_backend.models import Message
 from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.video_processing import MediaInfo
 
 
 def image_bytes(image_format: str) -> bytes:
@@ -220,6 +221,34 @@ async def test_service_persists_audio_duration_and_safe_metadata(tmp_path: Path)
         "created": 123,
         "format": "wav",
     }
+
+
+async def test_service_persists_video_metadata_without_derivatives(
+    tmp_path: Path, monkeypatch
+) -> None:
+    session_id = uuid4()
+    sessions, storage = provisioned_storage(tmp_path, session_id)
+    message = Message(id=uuid4(), session_id=session_id, role="user", content="Video")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session_id, None]
+    monkeypatch.setattr(
+        "mato_loop_backend.attachment_processing.probe_video",
+        lambda _data: MediaInfo("mp4", "video/mp4", 2_500, 640, 360, 0, 1),
+    )
+
+    attachment = await AttachmentService(storage).create_attachment(
+        db,
+        message,
+        b"\x00\x00\x00\x18ftypisomvideo",
+        "video/mp4",
+        kind="video",
+        filename="clip.mp4",
+    )
+
+    assert (attachment.kind, attachment.duration_ms) == ("video", 2_500)
+    assert (attachment.width, attachment.height) == (640, 360)
+    assert attachment.metadata_json == {"format": "mp4"}
+    assert list((sessions.session_path(session_id) / "derived").iterdir()) == []
 
 
 async def test_audio_read_rejects_integrity_mismatch(tmp_path: Path) -> None:

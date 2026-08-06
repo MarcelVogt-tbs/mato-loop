@@ -600,11 +600,16 @@ class MediaService:
         audio: bytes,
         language: str | None = None,
         timeout: float = 300,
+        active_model_id: UUID | None = None,
     ) -> TranscriptionResult:
         if not isinstance(audio, bytes) or not audio or len(audio) > lemonade.MAX_AUDIO_BYTES:
             raise ProviderError("Invalid audio input", code="provider.configurationInvalid")
         language = _optional_language(language)
-        resolved = await cls.resolve_model(db, ModelCapability.AUDIO_TRANSCRIPTION)
+        resolved = await cls.resolve_model(
+            db,
+            ModelCapability.AUDIO_TRANSCRIPTION,
+            active_model_id=active_model_id,
+        )
         text = await lemonade.transcribe_audio(
             base_url=resolved.base_url,
             api_key=resolved.api_key,

@@ -47,6 +47,7 @@ from mato_loop_backend.settings.models import (
     ModelAvailability,
     ModelCapability,
     ModelConfig,
+    ModelInputModality,
     ModelOrigin,
     TrustLevel,
 )
@@ -98,6 +99,9 @@ class ModelRuntimeRequest(ApiRequest):
     supports_tools: bool = True
     supports_parallel_tool_calls: bool = True
     supports_streaming: bool = True
+    input_modalities: set[ModelInputModality] = Field(
+        default_factory=lambda: {ModelInputModality.TEXT}
+    )
     supports_image_input: bool = False
     webfetch_policy: ModelWebFetchPolicy = ModelWebFetchPolicy.INHERIT
     reasoning_summary: bool = False
@@ -105,12 +109,39 @@ class ModelRuntimeRequest(ApiRequest):
     pseudonymization_enabled: bool | None = None
     memory_policy: MemoryPolicy = MemoryPolicy.INHERIT
 
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_image_capability(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        values = dict(value)
+        has_legacy_image = (
+            "supports_image_input" in values or "supportsImageInput" in values
+        )
+        if (
+            "input_modalities" not in values
+            and "inputModalities" not in values
+            and has_legacy_image
+        ):
+            supports_image = values.get(
+                "supports_image_input", values.get("supportsImageInput", False)
+            )
+            values["input_modalities"] = (
+                [ModelInputModality.TEXT, ModelInputModality.IMAGE]
+                if supports_image is True
+                else [ModelInputModality.TEXT]
+            )
+        return values
+
     @model_validator(mode="after")
     def validate_limits(self) -> Self:
         if self.max_output_tokens >= self.context_window_tokens:
             raise ValueError("max_output_tokens must be less than context_window_tokens")
         if not self.supports_tools:
             self.supports_parallel_tool_calls = False
+        self.supports_image_input = (
+            ModelInputModality.IMAGE in self.input_modalities
+        )
         return self
 
 
@@ -194,6 +225,7 @@ class DefaultModelsRequest(ApiRequest):
     title_generation_model_id: UUID | None
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
+    video_model_id: UUID | None = None
     image_generation_model_id: UUID | None = None
     speech_generation_model_id: UUID | None = None
     audio_generation_model_id: UUID | None = None
@@ -254,6 +286,20 @@ def _available_model(
     return model
 
 
+def _video_analysis_model_available(settings: AiSettings, model_id: UUID) -> bool:
+    model = _available_model(settings, model_id, ModelCapability.CHAT)
+    if model is None:
+        return False
+    if model.supports_image_input:
+        return True
+    provider = _provider(settings, model.provider_id)
+    return (
+        ModelInputModality.VIDEO in model.input_modalities
+        and provider.adapter_type == "openai-compatible"
+        and provider.config.get("api_type", "chat_completions") == "chat_completions"
+    )
+
+
 def _clear_invalid_defaults(settings: AiSettings) -> None:
     fields = {
         "default_model_id": ModelCapability.CHAT,
@@ -261,6 +307,7 @@ def _clear_invalid_defaults(settings: AiSettings) -> None:
         "title_generation_model_id": ModelCapability.CHAT,
         "dreaming_model_id": ModelCapability.CHAT,
         "vision_model_id": ModelCapability.CHAT,
+        "video_model_id": ModelCapability.CHAT,
         "image_generation_model_id": ModelCapability.IMAGE_GENERATION,
         "speech_generation_model_id": ModelCapability.SPEECH_GENERATION,
         "audio_generation_model_id": ModelCapability.AUDIO_GENERATION,
@@ -273,6 +320,10 @@ def _clear_invalid_defaults(settings: AiSettings) -> None:
             _available_model(settings, model_id, capability) is None
             or (field == "default_model_id" and not _model(settings, model_id).supports_tools)
             or (field == "vision_model_id" and not _model(settings, model_id).supports_image_input)
+            or (
+                field == "video_model_id"
+                and not _video_analysis_model_available(settings, model_id)
+            )
             or (
                 media_capability
                 and not media_model_available(settings, capability, model_id)
@@ -331,6 +382,9 @@ def _settings_payload(
         ),
         "visionModelId": (
             str(settings.vision_model_id) if settings.vision_model_id else None
+        ),
+        "videoModelId": (
+            str(settings.video_model_id) if settings.video_model_id else None
         ),
         "imageGenerationModelId": (
             str(settings.image_generation_model_id)
@@ -413,6 +467,7 @@ def _settings_payload(
                 "supportsTools": model.supports_tools,
                 "supportsParallelToolCalls": model.supports_parallel_tool_calls,
                 "supportsStreaming": model.supports_streaming,
+                "inputModalities": sorted(item.value for item in model.input_modalities),
                 "supportsImageInput": model.supports_image_input,
                 "webfetchPolicy": model.webfetch_policy.value,
                 "effectiveWebfetchPolicy": resolve_web_fetch_policy(
@@ -690,6 +745,7 @@ async def sync_provider_models(
             max_output = min(16_384, max(1, context_window // 4))
             supports_tools = discovered_model.metadata.get("supports_tools")
             supports_parallel = discovered_model.metadata.get("supports_parallel_tool_calls")
+            input_modalities = discovered_model.metadata.get("input_modalities")
             supports_image = discovered_model.metadata.get("supports_image_input")
             is_lemonade = provider.adapter_type == "lemonade"
             settings.models.append(
@@ -721,8 +777,14 @@ async def sync_provider_models(
                     ),
                     supports_streaming=ModelCapability.CHAT
                     in discovered_model.capabilities,
-                    supports_image_input=(
-                        supports_image if isinstance(supports_image, bool) else False
+                    input_modalities=(
+                        input_modalities
+                        if isinstance(input_modalities, list)
+                        else (
+                            [ModelInputModality.TEXT, ModelInputModality.IMAGE]
+                            if supports_image is True
+                            else [ModelInputModality.TEXT]
+                        )
                     ),
                 )
             )
@@ -733,6 +795,16 @@ async def sync_provider_models(
             _apply_discovered_context_window(
                 model, _discovered_context_window(discovered_model.metadata)
             )
+            input_modalities = discovered_model.metadata.get("input_modalities")
+            supports_image = discovered_model.metadata.get("supports_image_input")
+            if isinstance(input_modalities, list):
+                model.input_modalities = {
+                    ModelInputModality(item) for item in input_modalities
+                }
+            elif isinstance(supports_image, bool):
+                model.input_modalities = {ModelInputModality.TEXT}
+                if supports_image:
+                    model.input_modalities.add(ModelInputModality.IMAGE)
             if (
                 provider.adapter_type == "lemonade"
                 or discovered_model.metadata.get("capabilities_authoritative") is True
@@ -742,7 +814,6 @@ async def sync_provider_models(
                     "supports_parallel_tool_calls"
                 )
                 supports_tools = discovered_model.metadata.get("supports_tools")
-                supports_image = discovered_model.metadata.get("supports_image_input")
                 model.supports_tools = (
                     supports_tools if isinstance(supports_tools, bool) else False
                 )
@@ -750,9 +821,6 @@ async def sync_provider_models(
                     supports_parallel
                     if model.supports_tools and isinstance(supports_parallel, bool)
                     else False
-                )
-                model.supports_image_input = (
-                    supports_image if isinstance(supports_image, bool) else False
                 )
                 model.supports_streaming = (
                     ModelCapability.CHAT in discovered_model.capabilities
@@ -929,6 +997,7 @@ async def set_default_models(
         "title_generation_model_id": ("titleGenerationModelId", ModelCapability.CHAT),
         "dreaming_model_id": ("dreamingModelId", ModelCapability.CHAT),
         "vision_model_id": ("visionModelId", ModelCapability.CHAT),
+        "video_model_id": ("videoModelId", ModelCapability.CHAT),
         "image_generation_model_id": (
             "imageGenerationModelId",
             ModelCapability.IMAGE_GENERATION,
@@ -963,6 +1032,13 @@ async def set_default_models(
             raise ApiError(
                 409, "provider.modelCapabilityUnavailable", field=api_field
             )
+        if (
+            field == "video_model_id"
+            and not _video_analysis_model_available(settings, model_id)
+        ):
+            raise ApiError(
+                409, "provider.modelCapabilityUnavailable", field=api_field
+            )
         if capability != ModelCapability.CHAT and not media_model_available(
             settings, capability, model_id
         ):
@@ -973,6 +1049,7 @@ async def set_default_models(
             raise ApiError(409, "memory.dreamingModelToolsUnavailable", field=api_field)
     additive_fields = {
         "vision_model_id",
+        "video_model_id",
         "image_generation_model_id",
         "speech_generation_model_id",
         "audio_generation_model_id",

@@ -4,15 +4,15 @@
     class="file-viewer column no-wrap full-height"
     tabindex="-1"
     aria-labelledby="file-viewer-title"
-    @keydown.esc="emit('back')"
+    @keydown.esc="handleEscape"
   >
     <q-toolbar class="file-viewer__toolbar q-px-md">
-      <q-btn class="file-icon-action" flat round dense icon="arrow_back" aria-label="Zur Dateiliste" @click="emit('back')">
+      <q-btn v-if="!directImage" class="file-icon-action" flat round dense icon="arrow_back" aria-label="Zur Dateiliste" @click="emit('back')">
         <q-tooltip>Zur Dateiliste</q-tooltip>
       </q-btn>
-      <q-toolbar-title id="file-viewer-title" class="text-subtitle1 text-weight-bold ellipsis">{{ entry?.name }}</q-toolbar-title>
+      <q-toolbar-title id="file-viewer-title" class="text-subtitle1 text-weight-bold ellipsis">{{ viewerName }}</q-toolbar-title>
       <q-btn
-        v-if="editable && !workspace.editorActive"
+        v-if="!directImage && editable && !workspace.editorActive"
         ref="editButton"
         class="file-viewer__edit"
         unelevated
@@ -25,14 +25,40 @@
       >
         <q-tooltip>Datei bearbeiten</q-tooltip>
       </q-btn>
-      <q-btn v-if="!workspace.editorActive" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
+      <q-btn
+        v-if="preview.kind === 'image' && imageUrl"
+        class="file-icon-action"
+        flat
+        round
+        dense
+        icon="open_in_new"
+        :href="imageUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Bild in neuem Tab öffnen"
+      >
+        <q-tooltip>In neuem Tab öffnen</q-tooltip>
+      </q-btn>
+      <q-btn v-if="directImage || !workspace.editorActive" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
         <q-tooltip>Datei herunterladen</q-tooltip>
       </q-btn>
-      <q-btn class="file-icon-action" flat round dense icon="close" aria-label="Explorer schließen" @click="emit('close')">
-        <q-tooltip>Explorer schließen</q-tooltip>
+      <q-btn
+        v-if="fullscreenToggle"
+        class="file-icon-action"
+        flat
+        round
+        dense
+        :icon="fullscreen ? 'fullscreen_exit' : 'fullscreen'"
+        :aria-label="fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen'"
+        @click="emit('toggle-fullscreen')"
+      >
+        <q-tooltip>{{ fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen' }}</q-tooltip>
+      </q-btn>
+      <q-btn class="file-icon-action" flat round dense icon="close" :aria-label="directImage ? 'Bildansicht schließen' : 'Explorer schließen'" @click="emit('close')">
+        <q-tooltip>{{ directImage ? 'Bildansicht schließen' : 'Explorer schließen' }}</q-tooltip>
       </q-btn>
     </q-toolbar>
-    <div class="file-viewer__path q-px-md q-pb-sm">
+    <div v-if="!directImage" class="file-viewer__path q-px-md q-pb-sm">
       <div class="row items-center no-wrap">
         <q-btn class="file-icon-action q-mr-xs" flat round dense icon="arrow_upward" aria-label="Zum übergeordneten Ordner" @click="emit('navigate', parentPath)">
           <q-tooltip>Zum übergeordneten Ordner</q-tooltip>
@@ -94,9 +120,9 @@
         <img
           v-show="!imageLoading"
           :src="imageUrl"
-          :alt="entry?.name || 'Bildvorschau'"
+          :alt="viewerName || 'Bildvorschau'"
           class="file-viewer__image"
-          @load="imageLoading = false"
+          @load="imageLoaded"
           @error="imageFailed"
         />
       </div>
@@ -126,9 +152,12 @@ import { useWorkspaceStore } from 'stores/workspace'
 defineOptions({ name: 'FileViewerPanel' })
 
 const props = defineProps({
-  entry: { type: Object, required: true }
+  entry: { type: Object, default: null },
+  image: { type: Object, default: null },
+  fullscreen: Boolean,
+  fullscreenToggle: Boolean
 })
-const emit = defineEmits(['back', 'close', 'navigate'])
+const emit = defineEmits(['back', 'close', 'navigate', 'toggle-fullscreen'])
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const workspace = useWorkspaceStore()
@@ -142,14 +171,21 @@ const loadError = ref(null)
 const saveError = ref(null)
 const conflictLoadError = ref(null)
 const preview = ref({ kind: 'none', reason: 'unsupported' })
+const loadedImageUrl = ref('')
 let previewVersion = 0
+const directImage = computed(() => props.image?.url ? props.image : null)
+const viewerName = computed(() => directImage.value?.name || props.entry?.name || '')
 const draft = computed({
   get: () => workspace.editorDraft ?? '',
   set: (value) => workspace.updateEditorDraft(value, preview.value.content)
 })
-const imageUrl = computed(() => workspace.fileUrl('content', props.entry.path))
+const imageUrl = computed(() => directImage.value?.url || (
+  props.entry?.path ? workspace.fileUrl('content', props.entry.path) : ''
+))
 const editable = computed(() => (
-  !workspace.rootIdentity
+  !directImage.value
+  && props.entry?.path
+  && !workspace.rootIdentity
   && ['text', 'markdown'].includes(preview.value.kind)
   && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
 ))
@@ -167,11 +203,11 @@ const rootLabel = computed(() => {
   return workspace.workingDirectory ? 'Workspace' : 'Agent-Home'
 })
 const parentPath = computed(() => (
-  props.entry.path.includes('/') ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) : '.'
+  props.entry?.path?.includes('/') ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) : '.'
 ))
 const breadcrumbs = computed(() => [
   { label: rootLabel.value, path: '.' },
-  ...props.entry.path.split('/').filter((part) => part && part !== '.').map((label, index, parts) => ({
+  ...(props.entry?.path || '').split('/').filter((part) => part && part !== '.').map((label, index, parts) => ({
     label,
     path: parts.slice(0, index + 1).join('/')
   }))
@@ -191,6 +227,15 @@ async function loadPreview() {
   const version = ++previewVersion
   preview.value = { kind: 'none', reason: 'unsupported' }
   loadError.value = null
+  if (directImage.value) {
+    imageLoading.value = loadedImageUrl.value !== imageUrl.value
+    preview.value = { kind: 'image' }
+    loading.value = false
+    await nextTick()
+    viewerRoot.value?.focus()
+    return
+  }
+  if (!props.entry?.path) return
   loading.value = true
   await nextTick()
   viewerRoot.value?.focus()
@@ -198,7 +243,7 @@ async function loadPreview() {
     const result = await workspace.preview(props.entry.path)
     if (version === previewVersion && result) {
       preview.value = result
-      imageLoading.value = result.kind === 'image'
+      imageLoading.value = result.kind === 'image' && loadedImageUrl.value !== imageUrl.value
       if (workspace.editorDraft === null) workspace.editorDraft = result.content || ''
     }
   } catch (error) {
@@ -275,7 +320,21 @@ function warnBeforeUnload(event) {
 }
 
 function download() {
-  workspace.download(props.entry.path)
+  if (!directImage.value) {
+    workspace.download(props.entry.path)
+    return
+  }
+  const anchor = document.createElement('a')
+  anchor.href = directImage.value.url
+  anchor.download = directImage.value.name || 'bild'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
+function handleEscape() {
+  if (props.fullscreen) emit('toggle-fullscreen')
+  else if (!directImage.value) emit('back')
 }
 
 function imageFailed() {
@@ -283,13 +342,19 @@ function imageFailed() {
   preview.value = { kind: 'none', reason: 'invalidImage' }
 }
 
+function imageLoaded() {
+  loadedImageUrl.value = imageUrl.value
+  imageLoading.value = false
+}
+
 watch(
-  () => [
-    props.entry.path,
-    workspace.scope,
-    workspace.sessionId,
-    workspace.workingDirectory,
-    workspace.rootIdentity
+  [
+    () => props.entry?.path,
+    () => props.image?.url,
+    () => workspace.scope,
+    () => workspace.sessionId,
+    () => workspace.workingDirectory,
+    () => workspace.rootIdentity
   ],
   loadPreview,
   { immediate: true }

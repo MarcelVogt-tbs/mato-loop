@@ -236,6 +236,10 @@ describe('chat drafts', () => {
       .toMatchObject({ added: 1, error: null })
     expect(chat.activeAttachmentDraft[0]).toMatchObject({ kind: 'file', mimeType: 'text/plain' })
     expect(chat.activeAttachmentDraft[0]).not.toHaveProperty('uploadReady')
+
+    expect(chat.addAttachmentFiles([{ name: 'clip.mp4', type: 'video/mp4', size: 10 }]))
+      .toMatchObject({ added: 1, error: null })
+    expect(chat.activeAttachmentDraft[1]).toMatchObject({ kind: 'video', mimeType: 'video/mp4' })
   })
 
   it('sends generic drafts without a temporary upload block', async () => {

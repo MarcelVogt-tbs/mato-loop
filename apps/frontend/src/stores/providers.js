@@ -16,6 +16,7 @@ function assignProviderPayload(store, payload) {
   store.titleGenerationModelId = payload.titleGenerationModelId ?? null
   store.dreamingModelId = payload.dreamingModelId ?? null
   store.visionModelId = payload.visionModelId ?? null
+  store.videoModelId = payload.videoModelId ?? null
   store.imageGenerationModelId = payload.imageGenerationModelId ?? null
   store.speechGenerationModelId = payload.speechGenerationModelId ?? null
   store.audioGenerationModelId = payload.audioGenerationModelId ?? null
@@ -43,7 +44,25 @@ function effectiveVisionModelOptions(state) {
     const provider = state.providers.find((item) => item.id === model.providerId)
     return isModelEffective(model, provider, state.codex, state.enabled)
       && modelSupportsCapability(model, 'chat')
-      && model.supportsImageInput === true
+      && (Array.isArray(model.inputModalities)
+        ? model.inputModalities.includes('image')
+        : model.supportsImageInput === true)
+      ? [modelOption(model, provider)]
+      : []
+  })
+}
+
+function effectiveVideoModelOptions(state) {
+  return state.models.flatMap((model) => {
+    const provider = state.providers.find((item) => item.id === model.providerId)
+    const inputModalities = Array.isArray(model.inputModalities) ? model.inputModalities : []
+    const supportsFrames = inputModalities.includes('image') || model.supportsImageInput === true
+    const supportsNativeVideo = inputModalities.includes('video')
+      && provider?.adapterType === 'openai-compatible'
+      && (provider.config?.apiType || provider.config?.api_type || 'chat_completions') === 'chat_completions'
+    return isModelEffective(model, provider, state.codex, state.enabled)
+      && modelSupportsCapability(model, 'chat')
+      && (supportsNativeVideo || supportsFrames)
       ? [modelOption(model, provider)]
       : []
   })
@@ -71,6 +90,7 @@ export const useProviderStore = defineStore('providers', {
     titleGenerationModelId: null,
     dreamingModelId: null,
     visionModelId: null,
+    videoModelId: null,
     imageGenerationModelId: null,
     speechGenerationModelId: null,
     audioGenerationModelId: null,
@@ -85,6 +105,7 @@ export const useProviderStore = defineStore('providers', {
     modelOptions: (state) => effectiveModelOptions(state),
     capabilityOptions: (state) => (capability) => effectiveModelOptions(state, capability),
     visionModelOptions: (state) => effectiveVisionModelOptions(state),
+    videoModelOptions: (state) => effectiveVideoModelOptions(state),
     selectionOptions: (state) => (modelId, requiresTools = false, capability = 'chat') => {
       const options = effectiveModelOptions(state, capability, requiresTools)
       if (!modelId || options.some((option) => option.value === modelId)) return options
@@ -211,6 +232,7 @@ export const useProviderStore = defineStore('providers', {
       titleGenerationModelId,
       dreamingModelId,
       visionModelId,
+      videoModelId,
       imageGenerationModelId,
       speechGenerationModelId,
       audioGenerationModelId,
@@ -222,6 +244,7 @@ export const useProviderStore = defineStore('providers', {
         title_generation_model_id: titleGenerationModelId || null,
         dreaming_model_id: dreamingModelId || null,
         vision_model_id: visionModelId || null,
+        video_model_id: videoModelId || null,
         image_generation_model_id: imageGenerationModelId || null,
         speech_generation_model_id: speechGenerationModelId || null,
         audio_generation_model_id: audioGenerationModelId || null,
