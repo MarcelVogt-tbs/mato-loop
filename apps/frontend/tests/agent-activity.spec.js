@@ -48,13 +48,16 @@ describe('agent activity', () => {
     expect(agentRunPresentation({
       running: true,
       activity: { phase: 'processing_tool', tool: 'read_file' },
-      transcript: { messages: [{ toolCalls: [{ active: true }] }], unmatchedApprovals: [] }
+      transcript: {
+        messages: [{ toolHistory: { items: [{ active: true }] } }],
+        unmatchedApprovals: []
+      }
     })).toEqual({ showActivity: false, announcement: 'Tool wird ausgeführt: Datei lesen' })
     expect(agentRunPresentation({
       running: true,
       activity: { phase: 'preparing_tools' },
       transcript: {
-        messages: [{ toolCalls: [{ current: true, result: null }] }],
+        messages: [{ toolHistory: { items: [{ current: true, result: null }] } }],
         unmatchedApprovals: []
       }
     })).toEqual({ showActivity: false, announcement: 'Tool-Aufrufe werden vorbereitet' })
@@ -62,7 +65,7 @@ describe('agent activity', () => {
       running: true,
       activity,
       transcript: {
-        messages: [{ toolCalls: [{ approval: { title: 'Datei schreiben?' } }] }],
+        messages: [{ toolHistory: { items: [{ approval: { title: 'Datei schreiben?' } }] } }],
         unmatchedApprovals: []
       }
     })).toEqual({ showActivity: false, announcement: 'Freigabe erforderlich: Datei schreiben?' })

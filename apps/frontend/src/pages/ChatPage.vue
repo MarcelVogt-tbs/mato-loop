@@ -58,10 +58,16 @@
           <div
             v-for="message in transcript.messages"
             :key="message.id"
-            :class="['chat-message', `chat-message--${message.role}`]"
+            :class="[
+              'chat-message',
+              `chat-message--${message.role}`,
+              { 'chat-message--turn-continues': message.continuesAssistantTurn }
+            ]"
           >
+            <div v-if="message.role === 'user' || message.showAgentLabel" class="chat-message__label">
+              <span>{{ message.role === 'user' ? 'Du' : identity.displayName }}</span>
+            </div>
             <template v-if="message.kind === 'runtime_error' && message.error">
-              <div class="chat-message__label">{{ identity.displayName }}</div>
               <q-banner rounded class="chat-runtime-error app-surface-tonal" role="alert">
                 <template #avatar>
                   <q-icon name="error_outline" color="negative" />
@@ -70,14 +76,14 @@
               </q-banner>
             </template>
             <template
-              v-else-if="message.content || message.reasoning || message.generationStatus === 'interrupted'"
+              v-else-if="message.content
+                || message.reasoningHistory
+                || message.reasoning
+                || message.generationStatus === 'interrupted'"
             >
-              <div class="chat-message__label">
-                <span>{{ message.role === 'user' ? 'Du' : identity.displayName }}</span>
-              </div>
               <ReasoningPanel
-                v-if="message.reasoning"
-                :reasoning="message.reasoning"
+                v-if="message.reasoningHistory || message.reasoning"
+                :reasoning="message.reasoningHistory || message.reasoning"
                 :expanded="auth.preferences.thinkingExpanded"
                 class="q-mb-md"
                 @update:expanded="updateThinkingExpanded"
@@ -97,19 +103,12 @@
               class="q-mt-sm"
               :attachments="message.attachments"
             />
-            <div
-              v-if="message.toolCalls.length"
-              class="tool-timeline"
+            <ToolHistoryPanel
+              v-if="message.toolHistory"
               :class="{ 'q-mt-md': message.content }"
-              aria-label="Tool-Aktivitäten"
-            >
-              <ToolCallItem
-                v-for="item in message.toolCalls"
-                :key="item.tool.id"
-                v-bind="item"
-                @open-file="openToolFile"
-              />
-            </div>
+              :history="message.toolHistory"
+              @open-file="openToolFile"
+            />
             <div
               v-if="message.generationStatus === 'interrupted'"
               class="app-muted text-caption row items-center q-gutter-x-xs q-mt-sm"
@@ -120,47 +119,10 @@
             </div>
             <div
               v-if="message.createdAt
-                || (message.role === 'assistant' && message.modelName)
+                || showMessageModel(message)
                 || isMessageTrustLevel(message.trustLevel)"
               class="chat-message__meta items-center"
             >
-              <span
-                v-if="isMessageTrustLevel(message.trustLevel)"
-                class="row inline items-center"
-                role="img"
-                :aria-label="`Datenfreigabe: ${messageTrustLabel(message.trustLevel)}`"
-              >
-                <q-icon
-                  :name="message.trustLevel === 'private' ? 'lock' : 'public'"
-                  size="1em"
-                  aria-hidden="true"
-                />
-                <q-tooltip>{{ messageTrustLabel(message.trustLevel) }}</q-tooltip>
-              </span>
-              <span
-                v-if="isMessageTrustLevel(message.trustLevel)
-                  && ((message.role === 'assistant' && message.modelName) || message.createdAt)"
-                aria-hidden="true"
-              >·</span>
-              <span
-                v-if="message.role === 'assistant' && message.modelName"
-                class="chat-message__meta-model"
-                :title="message.modelName"
-              >
-                {{ message.modelName }}
-              </span>
-              <span
-                v-if="message.createdAt && message.role === 'assistant' && message.modelName"
-                aria-hidden="true"
-              >·</span>
-              <time
-                v-if="message.createdAt"
-                :datetime="message.createdAt"
-                :title="formatAbsoluteDateTime(message.createdAt)"
-                :aria-label="`Gesendet am ${formatAbsoluteDateTime(message.createdAt)}`"
-              >
-                {{ formatRelativeDateTime(message.createdAt, messageTimestampNow) }}
-              </time>
               <q-btn
                 v-if="message.role === 'user' && !String(message.id).startsWith('local-')"
                 flat
@@ -176,6 +138,43 @@
               >
                 <q-tooltip>Nachricht rückgängig machen</q-tooltip>
               </q-btn>
+              <span
+                v-if="isMessageTrustLevel(message.trustLevel)"
+                class="row inline items-center"
+                role="img"
+                :aria-label="`Datenfreigabe: ${messageTrustLabel(message.trustLevel)}`"
+              >
+                <q-icon
+                  :name="message.trustLevel === 'private' ? 'lock' : 'public'"
+                  size="1em"
+                  aria-hidden="true"
+                />
+                <q-tooltip>{{ messageTrustLabel(message.trustLevel) }}</q-tooltip>
+              </span>
+              <span
+                v-if="isMessageTrustLevel(message.trustLevel)
+                  && (showMessageModel(message) || message.createdAt)"
+                aria-hidden="true"
+              >·</span>
+              <span
+                v-if="showMessageModel(message)"
+                class="chat-message__meta-model"
+                :title="message.modelName"
+              >
+                {{ message.modelName }}
+              </span>
+              <span
+                v-if="message.createdAt && showMessageModel(message)"
+                aria-hidden="true"
+              >·</span>
+              <time
+                v-if="message.createdAt"
+                :datetime="message.createdAt"
+                :title="formatAbsoluteDateTime(message.createdAt)"
+                :aria-label="`Gesendet am ${formatAbsoluteDateTime(message.createdAt)}`"
+              >
+                {{ formatRelativeDateTime(message.createdAt, messageTimestampNow) }}
+              </time>
               <q-btn
                 v-if="canRetryMessage(message)"
                 flat
@@ -198,7 +197,7 @@
             v-if="chat.streamContent || chat.streamReasoning"
             class="chat-message chat-message--assistant"
           >
-            <div class="chat-message__label">
+            <div v-if="!hasCurrentAssistantTurn" class="chat-message__label">
               <span>{{ identity.displayName }}</span>
             </div>
             <ReasoningPanel
@@ -218,7 +217,7 @@
               streaming
               @trust-image-origin="trustImageOrigin"
             />
-            <div v-if="chat.streamModelName" class="chat-message__meta items-center">
+            <div v-if="chat.streamContent && chat.streamModelName" class="chat-message__meta items-center">
               <span class="chat-message__meta-model" :title="chat.streamModelName">
                 {{ chat.streamModelName }}
               </span>
@@ -330,7 +329,7 @@ import FileExplorerPanel from 'components/FileExplorerPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ReasoningPanel from 'components/ReasoningPanel.vue'
-import ToolCallItem from 'components/ToolCallItem.vue'
+import ToolHistoryPanel from 'components/ToolHistoryPanel.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
@@ -393,6 +392,9 @@ const transcript = computed(() => buildChatTranscript(
     toolExecutionActive: chat.activity.phase === 'processing_tool',
     activeToolCallId: chat.activity.toolCallId
   }
+))
+const hasCurrentAssistantTurn = computed(() => (
+  transcript.value.messages.some((message) => message.currentTurn)
 ))
 const runPresentation = computed(() => agentRunPresentation({
   running: chat.running,
@@ -464,6 +466,12 @@ function trustImageOrigin(origin) {
 
 function isMessageTrustLevel(value) {
   return value === 'public' || value === 'private'
+}
+
+function showMessageModel(message) {
+  return message.role === 'assistant'
+    && Boolean(message.hasAssistantContent || message.content)
+    && Boolean(message.modelName)
 }
 
 function messageTrustLabel(value) {

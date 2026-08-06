@@ -1,8 +1,8 @@
 export function reasoningTitle(reasoning, running = false, activityLabel = '') {
   if (running && activityLabel) return activityLabel
   return reasoning?.kind === 'summary'
-    ? 'Begründungszusammenfassung anzeigen'
-    : 'Denkprozess anzeigen'
+    ? 'Begründungszusammenfassung'
+    : 'Denkprozess'
 }
 
 export function formatReasoningDuration(milliseconds) {

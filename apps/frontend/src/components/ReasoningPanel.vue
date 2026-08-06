@@ -11,16 +11,16 @@
     >
       <template #header>
         <q-item-section avatar class="reasoning-panel__avatar-section">
-          <q-avatar rounded size="30px" class="reasoning-panel__avatar">
-            <q-spinner-dots v-if="running" color="primary" size="20px" class="reasoning-panel__spinner" />
+          <q-avatar rounded size="24px" class="reasoning-panel__avatar">
+            <q-spinner-dots v-if="running" color="primary" size="17px" class="reasoning-panel__spinner" />
             <q-icon
               v-if="running"
               name="auto_awesome"
               color="primary"
-              size="17px"
+              size="15px"
               class="reasoning-panel__static-icon"
             />
-            <q-icon v-else name="psychology_alt" color="primary" size="18px" />
+            <q-icon v-else name="psychology_alt" color="primary" size="16px" />
           </q-avatar>
         </q-item-section>
         <q-item-section class="reasoning-panel__identity">
@@ -30,12 +30,15 @@
           <div class="reasoning-panel__meta row items-center no-wrap q-gutter-xs">
             <span v-if="duration">{{ duration }}</span>
             <span v-if="reasoning.reasoningTokens">{{ reasoning.reasoningTokens }} Tok.</span>
-            <q-icon :name="expanded ? 'expand_less' : 'expand_more'" size="20px" />
           </div>
         </q-item-section>
       </template>
       <div class="reasoning-panel__body">
-        <pre class="reasoning-panel__content">{{ reasoning.text }}</pre>
+        <pre
+          v-for="(entry, index) in entries"
+          :key="index"
+          class="reasoning-panel__content"
+        >{{ entry.text }}</pre>
       </div>
     </q-expansion-item>
   </div>
@@ -63,6 +66,10 @@ const title = computed(() => reasoningTitle(props.reasoning, props.running, 'Den
 const duration = computed(() => props.running && liveStartedAt.value
   ? formatActivityDuration(liveStartedAt.value, now.value)
   : formatReasoningDuration(props.reasoning.observedDurationMs))
+const entries = computed(() => props.reasoning.entries?.length
+  ? props.reasoning.entries
+  : [props.reasoning]
+)
 
 onMounted(() => {
   if (props.running) timer = setInterval(() => { now.value = Date.now() }, 1000)

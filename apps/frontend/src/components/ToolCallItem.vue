@@ -8,19 +8,18 @@
     >
       <template #header>
         <q-item-section avatar class="tool-call__avatar-section">
-          <q-avatar rounded size="32px" class="tool-call__avatar">
-            <q-icon :name="identity.icon" size="19px" />
+          <q-avatar rounded :size="status.name === 'completed' ? '24px' : '32px'" class="tool-call__avatar">
+            <q-icon :name="identity.icon" :size="status.name === 'completed' ? '16px' : '19px'" />
           </q-avatar>
         </q-item-section>
 
         <q-item-section class="tool-call__identity">
-          <q-item-label class="text-weight-medium">{{ identity.label }}</q-item-label>
-          <q-item-label caption lines="1" class="tool-call__summary">{{ summary }}</q-item-label>
+          <q-item-label lines="1" class="text-weight-medium">{{ identity.label }}</q-item-label>
         </q-item-section>
 
         <q-item-section side class="tool-call__state">
           <div class="row items-center no-wrap q-gutter-xs">
-            <div v-if="fileActions.length" class="tool-call__file-actions row items-center no-wrap">
+            <div v-if="!technicalOnly && fileActions.length" class="tool-call__file-actions row items-center no-wrap">
               <div v-for="action in fileActions" :key="`${action.rootIdentity}:${action.path}`" class="row no-wrap">
                 <q-btn
                   flat
@@ -59,7 +58,6 @@
               <q-spinner v-if="status.name === 'running'" size="16px" />
               <q-icon v-else :name="status.icon" size="17px" />
               <span class="tool-call__status-label">{{ status.label }}</span>
-              <q-icon :name="expanded ? 'expand_less' : 'expand_more'" size="20px" class="app-muted" />
             </div>
           </div>
         </q-item-section>
@@ -93,12 +91,12 @@
           <pre class="tool-call__details tool-call__result">{{ resultData.text }}</pre>
         </q-expansion-item>
 
-        <ApprovalCard v-if="approval" :approval="approval" class="tool-call__approval" />
+        <ApprovalCard v-if="!technicalOnly && approval" :approval="approval" class="tool-call__approval" />
       </div>
     </q-expansion-item>
 
     <MessageAttachments
-      v-if="attachments.length"
+      v-if="!technicalOnly && attachments.length"
       class="tool-call__outputs"
       :attachments="attachments"
       label="Ausgabe"
@@ -116,8 +114,7 @@ import {
   memoryWriteContent,
   parseToolResult,
   toolIdentity,
-  toolStatus,
-  toolSummary
+  toolStatus
 } from 'src/utils/tool-display'
 
 defineOptions({ name: 'ToolCallItem' })
@@ -126,12 +123,12 @@ const props = defineProps({
   tool: { type: Object, required: true },
   result: { type: Object, default: null },
   approval: { type: Object, default: null },
-  active: Boolean
+  active: Boolean,
+  technicalOnly: Boolean
 })
 const emit = defineEmits(['open-file'])
 
 const identity = computed(() => toolIdentity(props.tool.name))
-const summary = computed(() => toolSummary(props.tool))
 const memoryContent = computed(() => memoryWriteContent(props.tool))
 const argumentsText = computed(() => formatToolArguments(props.tool.arguments, props.tool.name))
 const resultData = computed(() => parseToolResult(props.result?.content, props.tool.name))

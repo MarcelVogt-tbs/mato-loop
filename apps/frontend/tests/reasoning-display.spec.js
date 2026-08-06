@@ -4,8 +4,8 @@ import { formatReasoningDuration, reasoningTitle } from '../src/utils/reasoning-
 
 describe('reasoning display', () => {
   it('distinguishes provider summaries from public reasoning content', () => {
-    expect(reasoningTitle({ kind: 'summary' })).toBe('Begründungszusammenfassung anzeigen')
-    expect(reasoningTitle({ kind: 'content' })).toBe('Denkprozess anzeigen')
+    expect(reasoningTitle({ kind: 'summary' })).toBe('Begründungszusammenfassung')
+    expect(reasoningTitle({ kind: 'content' })).toBe('Denkprozess')
     expect(reasoningTitle({}, true, 'Denkprozess')).toBe('Denkprozess')
   })
 

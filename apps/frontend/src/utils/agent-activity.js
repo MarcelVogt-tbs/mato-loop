@@ -52,7 +52,9 @@ export function agentRunPresentation({
 } = {}) {
   if (!running) return { showActivity: false, announcement: '' }
 
-  const toolItems = (transcript?.messages || []).flatMap((message) => message.toolCalls || [])
+  const toolItems = (transcript?.messages || []).flatMap((message) => (
+    message.toolHistory?.items || message.toolCalls || []
+  ))
   const approval = toolItems.find((item) => item.approval)?.approval
     || transcript?.unmatchedApprovals?.[0]
   if (approval) {
