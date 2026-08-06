@@ -21,7 +21,6 @@ from mato_loop_backend.models import (
     MemoryCategory,
     MemoryEmbedding,
     MemoryEmbeddingStatus,
-    MemoryRetrievalLevel,
     MemorySourceType,
 )
 from mato_loop_backend.settings import TrustLevel
@@ -111,7 +110,7 @@ async def test_transient_index_failure_is_requeued_with_backoff() -> None:
     db.commit.assert_awaited_once()
 
 
-async def test_instant_memory_creation_removes_embedding_in_same_service_transaction(
+async def test_memory_creation_enqueues_embedding_in_same_service_transaction(
     monkeypatch,
 ) -> None:
     db = AsyncMock(spec=AsyncSession)
@@ -127,7 +126,7 @@ async def test_instant_memory_creation_removes_embedding_in_same_service_transac
     )
 
     enqueue.assert_awaited_once_with(db, memory)
-    assert memory.retrieval_level == MemoryRetrievalLevel.INSTANT.value
+    assert memory.pinned is False
     assert memory.seen_at is not None
     db.commit.assert_not_awaited()
 

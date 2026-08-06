@@ -130,8 +130,6 @@ def test_dreaming_batch_requires_user_and_assistant_capacity() -> None:
     with pytest.raises(ValidationError):
         MemorySettingsRequest(
             enabled=True,
-            max_context_items=10,
-            max_context_characters=10_000,
             automatic_dreaming_enabled=True,
             dreaming_interval_minutes=60,
             dreaming_idle_minutes=10,
@@ -236,31 +234,6 @@ def test_memory_reference_timestamps_distinguish_source_and_record_lifecycle() -
     }
 
 
-async def test_instant_context_uses_only_whole_items_within_budget() -> None:
-    records = [
-        MemoryRecord(content="viel-zu-lang", retrieval_level="instant"),
-        MemoryRecord(content="abc", retrieval_level="instant"),
-        MemoryRecord(content="de", retrieval_level="instant"),
-        MemoryRecord(content="f", retrieval_level="instant"),
-    ]
-    result = Mock()
-    result.all.return_value = records
-    db = AsyncMock(spec=AsyncSession)
-    db.scalars.return_value = result
-
-    selected = await MemoryService.instant_context(
-        db,
-        input_trust_level=TrustLevel.PUBLIC,
-        max_characters=7,
-    )
-
-    assert [item.content for item in selected] == ["abc", "de", "f"]
-    statement = db.scalars.await_args.args[0]
-    assert "memories.trust_level" in str(statement)
-    assert "source_session_id =" not in str(statement)
-    assert any("source_message" in str(option.path) for option in statement._with_options)
-
-
 async def test_dreaming_create_uses_first_evidence_as_current_source(monkeypatch) -> None:
     evidence_id = uuid4()
     item = MemoryRecord(id=uuid4(), content="Dauerhafter Fakt")
@@ -274,7 +247,6 @@ async def test_dreaming_create_uses_first_evidence_as_current_source(monkeypatch
     db.begin_nested = Mock(return_value=nested())
     create = AsyncMock(return_value=item)
     monkeypatch.setattr(MemoryService, "_create", create)
-    monkeypatch.setattr(MemoryService, "enforce_capacity", AsyncMock())
 
     result = await MemoryService.create_dreaming(
         db,
@@ -284,7 +256,6 @@ async def test_dreaming_create_uses_first_evidence_as_current_source(monkeypatch
         session_id=uuid4(),
         run_id=uuid4(),
         evidence_message_ids=[evidence_id],
-        max_context_characters=20_000,
     )
 
     assert result.created is True
@@ -295,7 +266,7 @@ async def test_private_dreaming_candidate_upgrades_public_duplicate() -> None:
     existing = MemoryRecord(
         id=uuid4(),
         source_type="dreaming",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="public",
         category="fact",
         content="Dauerhafter Fakt",
@@ -315,7 +286,6 @@ async def test_private_dreaming_candidate_upgrades_public_duplicate() -> None:
         session_id=uuid4(),
         run_id=uuid4(),
         evidence_message_ids=[evidence_id],
-        max_context_characters=20_000,
     )
 
     assert created.duplicate is True
@@ -333,7 +303,7 @@ async def test_manual_memory_rejects_normalized_duplicate() -> None:
     existing = MemoryRecord(
         id=uuid4(),
         source_type="manual",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="public",
         category="fact",
         content="Ein Fakt",
@@ -347,7 +317,6 @@ async def test_manual_memory_rejects_normalized_duplicate() -> None:
             content="  EIN\nFAKT ",
             category=MemoryCategory.FACT,
             trust_level=TrustLevel.PUBLIC,
-            max_context_characters=20_000,
         )
 
     db.add.assert_not_called()
@@ -402,7 +371,7 @@ async def test_private_tool_update_upgrades_trust_and_adds_evidence(monkeypatch)
     item = MemoryRecord(
         id=uuid4(),
         source_type="manual",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="public",
         category="fact",
         content="Alter Fakt",
@@ -426,7 +395,6 @@ async def test_private_tool_update_upgrades_trust_and_adds_evidence(monkeypatch)
         evidence_message_id=evidence_id,
         run_id=uuid4(),
         tool_call_id="memory",
-        max_context_characters=20_000,
     )
 
     assert result.updated is True
@@ -438,7 +406,7 @@ async def test_tool_update_rejects_stale_memory_snapshot(monkeypatch) -> None:
     item = MemoryRecord(
         id=uuid4(),
         source_type="manual",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="public",
         category="fact",
         content="Inzwischen geändert",
@@ -461,7 +429,6 @@ async def test_tool_update_rejects_stale_memory_snapshot(monkeypatch) -> None:
         evidence_message_id=uuid4(),
         run_id=uuid4(),
         tool_call_id="memory",
-        max_context_characters=20_000,
     )
 
     assert result.conflict is True
@@ -478,7 +445,7 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
         id=uuid4(),
         source_message_id=source_message_id,
         source_type="dreaming",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="private",
         category="fact",
         content="Der Benutzer kommt aus Aschodling.",
@@ -487,7 +454,7 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     canonical = MemoryRecord(
         id=uuid4(),
         source_type="tool_call",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="public",
         category="context",
         content="Der Benutzer kommt aus Wolfratshausen.",
@@ -500,9 +467,6 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     db.scalars.return_value = linked
     update_memory = AsyncMock(side_effect=MemoryDuplicateError)
     monkeypatch.setattr(MemoryService, "update", update_memory)
-    monkeypatch.setattr(MemoryService, "enforce_capacity", AsyncMock())
-    change_level = AsyncMock()
-    monkeypatch.setattr(MemoryService, "_change_retrieval_level", change_level)
 
     result = await MemoryService.update_tool(
         db,
@@ -516,7 +480,6 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
         evidence_message_id=current_evidence_id,
         run_id=uuid4(),
         tool_call_id="memory",
-        max_context_characters=20_000,
     )
 
     assert result.item is canonical
@@ -526,7 +489,6 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     assert canonical.revision == 3
     assert canonical.source_type == "tool_call"
     assert canonical.source_message_id == current_evidence_id
-    change_level.assert_awaited_once()
     evidence_insert = next(
         call.args[0]
         for call in db.execute.await_args_list
@@ -550,7 +512,7 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
     duplicate = MemoryRecord(
         id=uuid4(),
         source_type="manual",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="public",
         category="preference",
         content="Kurze Antworten",
@@ -660,7 +622,7 @@ def test_memory_payload_contains_camel_case_provenance() -> None:
     item = MemoryRecord(
         id=uuid4(),
         source_type="dreaming",
-        retrieval_level="retrieve",
+        pinned=True,
         trust_level="private",
         category="fact",
         content="Fakt",
@@ -674,7 +636,7 @@ def test_memory_payload_contains_camel_case_provenance() -> None:
     payload = memory_payload(item)
 
     assert payload["sourceType"] == "dreaming"
-    assert payload["retrievalLevel"] == "retrieve"
+    assert payload["pinned"] is True
     assert payload["trustLevel"] == "private"
     assert payload["category"] == "fact"
     assert payload["seenAt"] == seen_at.isoformat()
@@ -687,7 +649,7 @@ def test_memory_payload_uses_dream_run_provenance() -> None:
     item = MemoryRecord(
         id=uuid4(),
         source_type="dreaming",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="public",
         category="fact",
         content="Fakt",
@@ -742,12 +704,9 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(SettingsStore, "save", save)
-    monkeypatch.setattr(MemoryService, "enforce_capacity", AsyncMock())
     db = AsyncMock(spec=AsyncSession)
     payload = MemorySettingsRequest(
         enabled=True,
-        max_context_items=12,
-        max_context_characters=12_000,
         automatic_dreaming_enabled=True,
         dreaming_instructions="Nur bestätigte Präferenzen",
         dreaming_interval_minutes=30,
@@ -970,7 +929,7 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
         model=model,
         system_prompt=DREAMING_SYSTEM_PROMPT,
         source=f"MESSAGE {evidence_id} [USER]\nmeine Frau und unser Kind",
-        instant_memories=[],
+        pinned_memories=[],
         max_candidates=10,
         evidence_ids={evidence_id},
         user_evidence_ids={evidence_id},
@@ -1040,7 +999,7 @@ async def test_dreaming_repairs_assistant_only_evidence(monkeypatch) -> None:
             f"MESSAGE {user_id} [USER]\nBitte antworte kurz.\n\n"
             f"MESSAGE {assistant_id} [ASSISTANT]\nVerstanden."
         ),
-        instant_memories=[],
+        pinned_memories=[],
         max_candidates=10,
         evidence_ids={user_id, assistant_id},
         user_evidence_ids={user_id},
@@ -1053,81 +1012,7 @@ async def test_dreaming_repairs_assistant_only_evidence(monkeypatch) -> None:
     ][-1]["content"]
 
 
-async def test_dreaming_repairs_missing_usage_attribution(monkeypatch) -> None:
-    user_id = uuid4()
-    assistant_id = uuid4()
-    run_id = uuid4()
-    memory = MemoryRecord(
-        id=uuid4(),
-        source_type="manual",
-        retrieval_level="instant",
-        trust_level="private",
-        category="fact",
-        revision=1,
-        content="Der Nutzer verwendet OpenCode.",
-    )
-    provider = LlmProviderConfig(
-        name="Lokal", adapter_type="openai-compatible", trust_level="private"
-    )
-    model = ModelConfig(provider_id=provider.id, model_id="model")
-    complete = AsyncMock(
-        side_effect=[
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="missing-attribution",
-                        name="record_memory_candidates",
-                        arguments={"candidates": []},
-                    )
-                ]
-            ),
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="valid-attribution",
-                        name="record_memory_candidates",
-                        arguments={
-                            "candidates": [],
-                            "usageAttributions": [
-                                {
-                                    "runId": str(run_id),
-                                    "usedMemoryIds": [str(memory.id)],
-                                }
-                            ],
-                        },
-                    )
-                ]
-            ),
-        ]
-    )
-    monkeypatch.setattr(ProviderService, "complete", complete)
-
-    output = await _extract_candidates(
-        AsyncMock(spec=AsyncSession),
-        provider=provider,
-        model=model,
-        system_prompt=DREAMING_SYSTEM_PROMPT,
-        source=(
-            f"MESSAGE {user_id} [USER]\nHilf mir mit meiner Coding-Lösung.\n\n"
-            f"MESSAGE {assistant_id} [ASSISTANT]\nDu verwendest OpenCode."
-        ),
-        instant_memories=[memory],
-        max_candidates=10,
-        evidence_ids={user_id, assistant_id},
-        user_evidence_ids={user_id},
-        exposed_by_run={run_id: {memory.id}},
-        exposure_anchors={run_id: assistant_id},
-        exposure_responses={run_id: "Du verwendest OpenCode."},
-        exposed_memories={memory.id: memory},
-    )
-
-    assert output.usage_attributions[0].used_memory_ids == [memory.id]
-    assert complete.await_count == 2
-    retry = complete.await_args_list[1].kwargs["messages"][-1]["content"]
-    assert "exactly one attribution" in retry
-
-
-async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
+async def test_dreaming_uses_pinned_context_and_merges_candidate_calls(
     monkeypatch,
 ) -> None:
     first_evidence_id = uuid4()
@@ -1136,10 +1021,10 @@ async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
         name="Lokal", adapter_type="openai-compatible", trust_level="private"
     )
     model = ModelConfig(provider_id=provider.id, model_id="model")
-    instant = MemoryRecord(
+    pinned = MemoryRecord(
         id=uuid4(),
         source_type="manual",
-        retrieval_level="instant",
+        pinned=True,
         trust_level="private",
         category="identity",
         revision=1,
@@ -1189,7 +1074,7 @@ async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
             f"MESSAGE {first_evidence_id} [USER]\nMeine Familie ist wichtig.\n\n"
             f"MESSAGE {second_evidence_id} [ASSISTANT]\nVerstanden."
         ),
-        instant_memories=[instant],
+        pinned_memories=[pinned],
         max_candidates=10,
         evidence_ids={first_evidence_id, second_evidence_id},
         user_evidence_ids={first_evidence_id},
@@ -1202,7 +1087,7 @@ async def test_dreaming_uses_instant_context_and_merges_candidate_calls(
         second_evidence_id,
     ]
     request = complete.await_args.kwargs
-    assert instant.content in request["messages"][1]["content"]
+    assert pinned.content in request["messages"][1]["content"]
     assert [tool["name"] for tool in request["tools"]] == [
         "record_memory_candidates"
     ]

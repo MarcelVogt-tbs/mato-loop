@@ -403,9 +403,9 @@ const micUnavailableReason = computed(() => {
 })
 const micAvailable = computed(() => !micUnavailableReason.value)
 const memoryModeOptions = [
-  { label: 'Voll', value: 'full', icon: 'memory', description: 'Lesen, Schreiben und Dreaming' },
-  { label: 'Nur lesen', value: 'read_only', icon: 'visibility', description: 'Lesen ohne Schreiben und Dreaming' },
-  { label: 'Deaktiviert', value: 'disabled', icon: 'memory_alt', description: 'Kein Memory-Zugriff und kein Dreaming' }
+  { label: 'Nutzen und speichern', value: 'full', icon: 'memory', description: 'Vorherige Chats und Erinnerungen nutzen; neue Erinnerungen speichern' },
+  { label: 'Nur nutzen', value: 'read_only', icon: 'visibility', description: 'Vorherige Chats und Erinnerungen nutzen; nichts speichern' },
+  { label: 'Sitzungsübergreifend aus', value: 'disabled', icon: 'memory_alt', description: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen' }
 ]
 const effectiveMemoryMode = computed(() => props.session?.effectiveMemoryMode || props.session?.memoryMode || 'disabled')
 const memoryMessage = computed(() => {
@@ -413,9 +413,9 @@ const memoryMessage = computed(() => {
     return apiErrorMessage({ error: { code: props.session.memoryUnavailableReason } })
   }
   return {
-    full: 'Memory lesen und schreiben; Dreaming ist für diese Session erlaubt.',
-    read_only: 'Memory nur lesen; Schreiben und Dreaming sind deaktiviert.',
-    disabled: 'Memory und Dreaming sind für diese Session deaktiviert.'
+    full: 'Vorherige Chats und Erinnerungen nutzen; neue Erinnerungen speichern.',
+    read_only: 'Vorherige Chats und Erinnerungen nutzen; keine neuen Erinnerungen speichern.',
+    disabled: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen.'
   }[effectiveMemoryMode.value]
 })
 const memoryModeIcon = computed(() => ({ full: 'memory', read_only: 'visibility', disabled: 'memory_alt' })[props.session?.memoryMode] || 'memory')

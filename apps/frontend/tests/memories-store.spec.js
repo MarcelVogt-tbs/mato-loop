@@ -37,7 +37,7 @@ describe('memory store', () => {
       category: 'preference',
       sourceType: 'manual',
       trustLevel: 'private',
-      retrievalLevel: 'instant',
+      pinned: false,
       offset: 20,
       limit: 10
     })
@@ -50,7 +50,7 @@ describe('memory store', () => {
         category: 'preference',
         sourceType: 'manual',
         trustLevel: 'private',
-        retrievalLevel: 'instant'
+        pinned: false
       }
     })
     expect(store.items).toHaveLength(1)
@@ -58,13 +58,13 @@ describe('memory store', () => {
     expect(store.offset).toBe(20)
   })
 
-  it('keeps create host-controlled and includes tierPolicy in an update', async () => {
+  it('keeps create host-controlled and includes pinned in an update', async () => {
     const memory = {
       id: 'memory-1',
       content: 'Nur lokal ausführen',
       category: 'preference',
       trustLevel: 'private',
-      retrievalLevel: 'retrieve'
+      pinned: true
     }
     api.post.mockResolvedValue({ data: memory })
     api.patch.mockResolvedValue({ data: memory })
@@ -78,8 +78,7 @@ describe('memory store', () => {
     const suppliedPayload = {
       ...contentPayload,
       sourceType: 'manual',
-      retrievalLevel: memory.retrievalLevel,
-      tierPolicy: 'fixed_retrieve'
+      pinned: memory.pinned
     }
 
     await store.createMemory(suppliedPayload)
@@ -88,7 +87,7 @@ describe('memory store', () => {
     expect(api.post).toHaveBeenCalledWith('/memories', contentPayload)
     expect(api.patch).toHaveBeenCalledWith('/memories/memory-1', {
       ...contentPayload,
-      tierPolicy: 'fixed_retrieve'
+      pinned: true
     })
     expect(store.items[0]).toEqual(memory)
   })
@@ -114,11 +113,6 @@ describe('memory store', () => {
   it('loads and saves dreaming settings with camelCase fields', async () => {
     const settings = {
       enabled: true,
-      maxContextItems: 12,
-      maxContextCharacters: 24000,
-      shortTermGraceDays: 7,
-      usageWindowDays: 30,
-      requiredUsageCount: 3,
       automaticDreamingEnabled: true,
       dreamingInstructions: 'Nur bestätigte Präferenzen',
       dreamingIntervalMinutes: 30,
@@ -134,25 +128,18 @@ describe('memory store', () => {
     api.patch.mockResolvedValue({ data: settings })
     const store = useMemoryStore()
     const savePayload = {
-      maxContextCharacters: settings.maxContextCharacters,
-      shortTermGraceDays: settings.shortTermGraceDays,
-      usageWindowDays: settings.usageWindowDays,
-      requiredUsageCount: settings.requiredUsageCount,
       dreamingInstructions: settings.dreamingInstructions,
       dreamingIntervalMinutes: settings.dreamingIntervalMinutes,
       dreamingIdleMinutes: settings.dreamingIdleMinutes,
       dreamingMaxBatchMessages: settings.dreamingMaxBatchMessages,
-      dreamingMaxCandidates: settings.dreamingMaxCandidates,
-      maxContextItems: 99
+      dreamingMaxCandidates: settings.dreamingMaxCandidates
     }
-    const expectedSavePayload = { ...savePayload }
-    delete expectedSavePayload.maxContextItems
 
     await store.fetchSettings()
     await store.saveSettings(savePayload)
 
     expect(api.get).toHaveBeenCalledWith('/memories/settings')
-    expect(api.patch).toHaveBeenCalledWith('/memories/settings', expectedSavePayload)
+    expect(api.patch).toHaveBeenCalledWith('/memories/settings', savePayload)
     expect(store.settings).toEqual(settings)
   })
 

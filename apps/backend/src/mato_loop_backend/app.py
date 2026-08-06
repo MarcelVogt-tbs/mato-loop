@@ -20,6 +20,10 @@ from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.memory.dreaming import DreamingScheduler, DreamingService
 from mato_loop_backend.memory.embeddings import embedding_client
+from mato_loop_backend.memory.episode_indexing import (
+    EpisodeIndexScheduler,
+    EpisodeIndexService,
+)
 from mato_loop_backend.memory.indexing import MemoryIndexScheduler, MemoryIndexService
 from mato_loop_backend.models import (
     ApprovalRequest,
@@ -90,15 +94,18 @@ async def lifespan(_app: FastAPI):
             if runtime_config.embedding_enabled:
                 await MemoryIndexService.recover(db)
                 await MemoryIndexService.reconcile(db)
+                await EpisodeIndexService.recover(db)
     except Exception:
         logger.exception("Failed to clean up stale runs and approvals during startup")
     DreamingScheduler.start()
     MemoryIndexScheduler.start()
+    EpisodeIndexScheduler.start()
     try:
         yield
     finally:
         await DreamingScheduler.stop()
         await MemoryIndexScheduler.stop()
+        await EpisodeIndexScheduler.stop()
         await AgentRuntime.shutdown()
         await embedding_client.close()
         await engine.dispose()

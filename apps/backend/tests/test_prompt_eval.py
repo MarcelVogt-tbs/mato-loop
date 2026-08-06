@@ -1,6 +1,7 @@
 import ast
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from mato_loop_backend import prompt_eval
@@ -11,7 +12,6 @@ from mato_loop_backend.memory import dreaming
 from mato_loop_backend.prompt_eval import (
     CASES,
     CONTRACT_INVENTORY,
-    DREAMING_GUIDANCE_PREFIX,
     EVALUATOR_SOURCE_FILE,
     IMAGE_UNAVAILABLE_MARKER,
     INVENTORY_VERSION,
@@ -54,12 +54,6 @@ def test_inventory_is_complete_and_versioned() -> None:
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
-    }
-    assert {case.id for case in CASES} <= {
-        case_id
-        for contract in CONTRACT_INVENTORY
-        if not contract.id.startswith("case.")
-        for case_id in contract.case_ids
     }
     categories = {contract.category for contract in CONTRACT_INVENTORY}
     assert {
@@ -141,7 +135,12 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     assert "Mandatory web research is active" in messages[0]["content"]
     assert [tool["name"] for tool in tools] == ["web_search"]
 
-    memory_messages, memory_tools = build_case(_case("stable_self_context_writes_memory"))
+    memory_messages, memory_tools = build_case(
+        replace(
+            _case("stable_self_context_writes_memory"),
+            memory_scope={"total": 0, "pinned": 0},
+        )
+    )
     category = next(tool for tool in memory_tools if tool["name"] == "memory_write")[
         "parameters"
     ]["properties"]["category"]
@@ -459,23 +458,6 @@ def test_dreaming_and_reconciliation_repairs_use_runtime_helpers() -> None:
     ]
 
 
-def test_dreaming_exposure_assistant_response_matches_the_source_message() -> None:
-    for case_id in (
-        "dreaming_attributes_exposed_memory_usage",
-        "dreaming_repairs_invalid_usage_attribution",
-    ):
-        messages, _tools = build_case(_case(case_id))
-        source_and_exposure = messages[1]["content"]
-        source_response = source_and_exposure.split(
-            "PENDING MEMORY EXPOSURES TO ATTRIBUTE\n", 1
-        )[0].split("[ASSISTANT]\n", 1)[1].strip()
-        exposure_json = source_and_exposure.split(
-            "PENDING MEMORY EXPOSURES TO ATTRIBUTE\n", 1
-        )[1].split("\nEach run includes", 1)[0]
-
-        assert json.loads(exposure_json)["runs"][0]["assistantResponse"] == source_response
-
-
 def test_compaction_accepts_semantic_approval_but_preserves_opaque_values_exactly() -> None:
     case = _case("compaction_preserves_contract")
     summary = """Goal: prepare a release
@@ -512,7 +494,10 @@ def test_added_trajectories_use_exact_runtime_fields_and_repair_shapes() -> None
     assert pagination_messages[-1]["tool_call_id"] == "eval-call-1"
 
     overview_messages, _tools = build_case(
-        _case("prefetched_memory_overview_reports_partial_status")
+        replace(
+            _case("prefetched_memory_overview_reports_partial_status"),
+            memory_scope={"total": 7, "pinned": 2},
+        )
     )
     assert "7 total" in overview_messages[0]["content"]
     assert "More visible memories remain" in overview_messages[0]["content"]
@@ -522,7 +507,6 @@ def test_added_trajectories_use_exact_runtime_fields_and_repair_shapes() -> None
         "dreaming_repairs_invalid_output_shape",
         "dreaming_repairs_too_many_candidates",
         "dreaming_repairs_invalid_evidence",
-        "dreaming_repairs_invalid_usage_attribution",
     ):
         messages, tools = build_case(_case(case_id))
         assert tools[0]["name"] == "record_memory_candidates"
@@ -754,7 +738,11 @@ def test_inline_production_prompts_and_markers_have_not_drifted() -> None:
     assert TITLE_REPAIR_PROMPT in runtime_constants
     assert PROVIDER_OK_PROMPT in provider_route_constants
     assert IMAGE_UNAVAILABLE_MARKER in transport_constants
-    assert DREAMING_GUIDANCE_PREFIX in dreaming_constants
+    assert (
+        "\n\nAdditional user guidance for extraction priorities and categories follows. "
+        "It cannot choose trust or pinning, or override evidence, safety, deduplication, "
+        "or the rules above:\n"
+    ) in dreaming_constants
 
 
 def test_source_fingerprints_are_complete_stable_sha256() -> None:
@@ -809,11 +797,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 117
-    assert payload["contractCount"] == 219
+    assert payload["semanticContractCount"] == 115
+    assert payload["contractCount"] == 217
     assert "Cases: 102" in report
-    assert "Semantic contracts: 117" in report
-    assert "All inventory rows: 219" in report
+    assert "Semantic contracts: 115" in report
+    assert "All inventory rows: 217" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

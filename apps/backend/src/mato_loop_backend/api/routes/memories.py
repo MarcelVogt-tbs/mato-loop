@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
@@ -19,7 +19,6 @@ from mato_loop_backend.memory.dreaming import (
 from mato_loop_backend.memory.service import (
     MemoryDuplicateError,
     MemoryService,
-    MemoryTierBudgetError,
 )
 from mato_loop_backend.models import (
     ChatSession,
@@ -27,7 +26,6 @@ from mato_loop_backend.models import (
     MemoryDreamRun,
     MemoryDreamTrigger,
     MemoryRecord,
-    MemoryRetrievalLevel,
     MemorySourceType,
     UserAccount,
 )
@@ -53,16 +51,11 @@ class MemoryRequest(ApiRequest):
 
 
 class MemoryUpdateRequest(MemoryRequest):
-    tier_policy: Literal["automatic", "fixed_instant", "fixed_retrieve"]
+    pinned: bool
 
 
 class MemorySettingsRequest(ApiRequest):
     enabled: bool | None = None
-    max_context_items: int | None = Field(default=None, ge=0, le=100)
-    max_context_characters: int | None = Field(default=None, ge=0, le=200_000)
-    short_term_grace_days: int | None = Field(default=None, ge=1, le=3_650)
-    usage_window_days: int | None = Field(default=None, ge=1, le=3_650)
-    required_usage_count: int | None = Field(default=None, ge=1, le=10_000)
     automatic_dreaming_enabled: bool | None = None
     dreaming_instructions: str | None = Field(default=None, max_length=8_000)
     dreaming_interval_minutes: int | None = Field(default=None, ge=1, le=10_080)
@@ -87,7 +80,7 @@ class MemoryAcknowledgementRequest(ApiRequest):
     memory_ids: list[UUID] = Field(min_length=1, max_length=100)
 
 
-def memory_payload(item: MemoryRecord, *, usage_count: int = 0) -> dict[str, Any]:
+def memory_payload(item: MemoryRecord) -> dict[str, Any]:
     message_ids = list(
         dict.fromkeys(
             [
@@ -102,15 +95,7 @@ def memory_payload(item: MemoryRecord, *, usage_count: int = 0) -> dict[str, Any
         "category": item.category,
         "revision": item.revision,
         "sourceType": item.source_type,
-        "retrievalLevel": item.retrieval_level,
-        "tierLocked": bool(item.tier_locked),
-        "tierChangedAt": (
-            item.retrieval_level_changed_at.isoformat()
-            if item.retrieval_level_changed_at
-            else None
-        ),
-        "lastUsedAt": item.last_used_at.isoformat() if item.last_used_at else None,
-        "usageCount": usage_count,
+        "pinned": item.pinned,
         "trustLevel": item.trust_level,
         "sourceSession": (
             {"id": str(item.source_session.id), "title": item.source_session.title}
@@ -165,11 +150,6 @@ async def settings_payload(
     )
     return {
         "enabled": settings.enabled,
-        "maxContextItems": settings.max_context_items,
-        "maxContextCharacters": settings.max_context_characters,
-        "shortTermGraceDays": settings.short_term_grace_days,
-        "usageWindowDays": settings.usage_window_days,
-        "requiredUsageCount": settings.required_usage_count,
         "automaticDreamingEnabled": settings.automatic_dreaming_enabled,
         "dreamingInstructions": settings.dreaming_instructions,
         "dreamingIntervalMinutes": settings.dreaming_interval_minutes,
@@ -198,16 +178,11 @@ async def put_memory_settings(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
-    await MemoryService.lock_capacity(db)
     settings = await SettingsStore.load(
         db, MemorySettings, user_id=user.id, for_update=True
     )
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(settings, field, value)
-    try:
-        await MemoryService.enforce_capacity(db, settings.max_context_characters)
-    except MemoryTierBudgetError as exc:
-        raise ApiError(409, "memory.tierBudgetExceeded") from exc
     await SettingsStore.save(db, settings, user_id=user.id)
     await db.commit()
     return await settings_payload(db, settings)
@@ -311,9 +286,7 @@ async def list_memories(
     ] = None,
     category: MemoryCategory | None = None,
     trust_level: Annotated[TrustLevel | None, Query(alias="trustLevel")] = None,
-    retrieval_level: Annotated[
-        MemoryRetrievalLevel | None, Query(alias="retrievalLevel")
-    ] = None,
+    pinned: bool | None = None,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> dict[str, Any]:
@@ -323,21 +296,12 @@ async def list_memories(
         source_type=source_type,
         category=category,
         trust_level=trust_level,
-        retrieval_level=retrieval_level,
+        pinned=pinned,
         offset=offset,
         limit=limit,
     )
-    settings = await SettingsStore.load(db, MemorySettings, user_id=user.id)
-    usage_counts = await MemoryService.usage_counts(
-        db,
-        [item.id for item in result.items],
-        window_days=settings.usage_window_days,
-    )
     return {
-        "items": [
-            memory_payload(item, usage_count=usage_counts.get(item.id, 0))
-            for item in result.items
-        ],
+        "items": [memory_payload(item) for item in result.items],
         "total": result.total,
         "offset": result.offset,
         "limit": result.limit,
@@ -353,25 +317,20 @@ async def create_memory(
     content = payload.content.strip()
     if not content:
         raise ApiError(422, "validation.required", field="content")
-    await MemoryService.lock_capacity(db)
-    settings = await SettingsStore.load(db, MemorySettings, user_id=user.id)
     try:
         item = await MemoryService.create_manual(
             db,
             content=content,
             category=payload.category,
             trust_level=payload.trust_level,
-            max_context_characters=settings.max_context_characters,
         )
     except MemoryDuplicateError as exc:
         raise ApiError(409, "memory.duplicate") from exc
-    except MemoryTierBudgetError as exc:
-        raise ApiError(409, "memory.tierBudgetExceeded") from exc
     await db.commit()
     item = await MemoryService.get(db, item.id)
     if item is None:
         raise ApiError(500, "memory.persistFailed")
-    return memory_payload(item, usage_count=0)
+    return memory_payload(item)
 
 
 @router.post("/acknowledgements")
@@ -393,11 +352,7 @@ async def get_memory(
     item = await MemoryService.get(db, memory_id)
     if item is None:
         raise ApiError(404, "memory.notFound")
-    settings = await SettingsStore.load(db, MemorySettings, user_id=user.id)
-    counts = await MemoryService.usage_counts(
-        db, [item.id], window_days=settings.usage_window_days
-    )
-    return memory_payload(item, usage_count=counts.get(item.id, 0))
+    return memory_payload(item)
 
 
 @router.patch("/{memory_id}")
@@ -407,38 +362,13 @@ async def update_memory(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
-    await MemoryService.lock_capacity(db)
     item = await MemoryService.get(db, memory_id, for_update=True)
     if item is None:
         raise ApiError(404, "memory.notFound")
     content = payload.content.strip()
     if not content:
         raise ApiError(422, "validation.required", field="content")
-    settings = await SettingsStore.load(db, MemorySettings, user_id=user.id)
     try:
-        if payload.tier_policy == "automatic":
-            if item.tier_locked:
-                await MemoryService.set_tier(
-                    db,
-                    item,
-                    retrieval_level=MemoryRetrievalLevel(item.retrieval_level),
-                    locked=False,
-                    max_context_characters=settings.max_context_characters,
-                )
-        else:
-            retrieval_level = (
-                MemoryRetrievalLevel.INSTANT
-                if payload.tier_policy == "fixed_instant"
-                else MemoryRetrievalLevel.RETRIEVE
-            )
-            if not item.tier_locked or item.retrieval_level != retrieval_level.value:
-                await MemoryService.set_tier(
-                    db,
-                    item,
-                    retrieval_level=retrieval_level,
-                    locked=True,
-                    max_context_characters=settings.max_context_characters,
-                )
         await MemoryService.update(
             db,
             item,
@@ -446,20 +376,15 @@ async def update_memory(
             category=payload.category,
             trust_level=payload.trust_level,
             source_type=MemorySourceType.MANUAL,
-            max_context_characters=settings.max_context_characters,
+            pinned=payload.pinned,
         )
     except MemoryDuplicateError as exc:
         raise ApiError(409, "memory.duplicate") from exc
-    except MemoryTierBudgetError as exc:
-        raise ApiError(409, "memory.tierBudgetExceeded") from exc
     await db.commit()
     refreshed = await MemoryService.get(db, item.id)
     if refreshed is None:
         raise ApiError(404, "memory.notFound")
-    counts = await MemoryService.usage_counts(
-        db, [refreshed.id], window_days=settings.usage_window_days
-    )
-    return memory_payload(refreshed, usage_count=counts.get(refreshed.id, 0))
+    return memory_payload(refreshed)
 
 
 @router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)

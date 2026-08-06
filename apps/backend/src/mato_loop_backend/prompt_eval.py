@@ -51,8 +51,6 @@ SESSION_ID = UUID("20000000-0000-4000-8000-000000000001")
 DREAM_USER_MESSAGE_ID = UUID("30000000-0000-4000-8000-000000000001")
 DREAM_ASSISTANT_MESSAGE_ID = UUID("30000000-0000-4000-8000-000000000002")
 EXISTING_MEMORY_ID = UUID("40000000-0000-4000-8000-000000000001")
-EXPOSURE_RUN_ID = UUID("50000000-0000-4000-8000-000000000001")
-EXPOSED_MEMORY_ID = UUID("60000000-0000-4000-8000-000000000001")
 TOOL_RESULT_MESSAGE_ID = UUID("70000000-0000-4000-8000-000000000001")
 ATTACHMENT_ID = UUID("80000000-0000-4000-8000-000000000001")
 
@@ -189,7 +187,6 @@ class PromptCase:
     requires_negative_outcome: bool = False
     requires_uncertainty: bool = False
     json_pages: tuple[int, ...] = ()
-    expected_usage_attribution: bool = False
     identity_name: str | None = None
     identity_instructions: str | None = None
     memory_scope: dict[str, int] | None = None
@@ -202,7 +199,6 @@ class PromptCase:
             "invalid_shape",
             "too_many",
             "bad_evidence",
-            "bad_attribution",
         ]
         | None
     ) = None
@@ -585,6 +581,18 @@ CASES = (
         argument_options={"language": ("de", "de-DE", "German", "Deutsch")},
     ),
     PromptCase(
+        id="analyze_video_uses_root_and_path",
+        kind="general",
+        user="Analysiere das Video attachments/demo/video.mp4 aus der Session auf Deutsch.",
+        tools=("analyze_video",),
+        expected_tool="analyze_video",
+        expected_arguments={
+            "root": "session",
+            "path": "attachments/demo/video.mp4",
+        },
+        argument_options={"language": ("de", "de-DE", "German", "Deutsch")},
+    ),
+    PromptCase(
         id="session_read_uses_session_uuid",
         kind="general",
         user=f"Lies die Nachrichten der Session {SESSION_ID}.",
@@ -933,16 +941,15 @@ CASES = (
         content_contains=("gespeichert",),
         content_excludes=("ich sehe",),
     ),
-    # Exact dreaming/reconciliation calls, usage attribution, updates, and repairs.
+    # Exact dreaming/reconciliation calls, updates, and repairs.
     PromptCase(
-        id="dreaming_attributes_exposed_memory_usage",
+        id="dreaming_extracts_durable_memory",
         kind="dreaming",
         user="Ich möchte weiterhin jeden Sonntag Klavier üben.",
         dreaming_assistant="Ein sonntäglicher Übungsplan passt dazu.",
         tool_choice="required",
         expected_tool="record_memory_candidates",
         expected_candidate_count=1,
-        expected_usage_attribution=True,
     ),
     PromptCase(
         id="dreaming_repairs_invalid_evidence",
@@ -1611,17 +1618,6 @@ CASES = (
         expected_candidate_count=1,
     ),
     PromptCase(
-        id="dreaming_repairs_invalid_usage_attribution",
-        kind="dreaming",
-        user="Ich möchte weiterhin jeden Sonntag Klavier üben.",
-        dreaming_assistant="Ein sonntäglicher Übungsplan passt dazu.",
-        dreaming_repair="bad_attribution",
-        tool_choice="required",
-        expected_tool="record_memory_candidates",
-        expected_candidate_count=1,
-        expected_usage_attribution=True,
-    ),
-    PromptCase(
         id="reconciliation_repairs_duplicate_conflicting_index",
         kind="reconciliation",
         user="duplicate_conflict",
@@ -2080,11 +2076,6 @@ _SEMANTIC_CONTRACTS = (
         ("dreaming_custom_guidance_cannot_override_evidence_rules",),
     ),
     ContractCoverage(
-        "dreaming.usage_attribution",
-        "dreaming",
-        ("dreaming_attributes_exposed_memory_usage",),
-    ),
-    ContractCoverage(
         "dreaming.repair_missing_tool",
         "dreaming",
         ("dreaming_repairs_missing_tool_call",),
@@ -2103,11 +2094,6 @@ _SEMANTIC_CONTRACTS = (
         "dreaming.repair_bad_evidence",
         "dreaming",
         ("dreaming_repairs_invalid_evidence",),
-    ),
-    ContractCoverage(
-        "dreaming.repair_bad_attribution",
-        "dreaming",
-        ("dreaming_repairs_invalid_usage_attribution",),
     ),
     ContractCoverage(
         "reconciliation.create",
@@ -2384,36 +2370,12 @@ def _dreaming_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[st
         f"MESSAGE {DREAM_ASSISTANT_MESSAGE_ID} [ASSISTANT]\n{case.dreaming_assistant}"
     )
     user_prompt = (
-        "EXISTING INSTANT MEMORIES (UNTRUSTED REFERENCE, NOT EVIDENCE)\n"
+        "EXISTING PINNED MEMORIES (UNTRUSTED REFERENCE, NOT EVIDENCE)\n"
         + json.dumps(case.dreaming_existing_memories, ensure_ascii=False)
         + "\n\n"
         "SOURCE MESSAGE BATCH (UNTRUSTED DATA)\n"
         + source
     )
-    exposed = (
-        {EXPOSURE_RUN_ID: {EXPOSED_MEMORY_ID}} if case.expected_usage_attribution else None
-    )
-    if exposed:
-        user_prompt += (
-            "\n\nPENDING MEMORY EXPOSURES TO ATTRIBUTE\n"
-            + json.dumps(
-                {
-                    "memories": [{"id": str(EXPOSED_MEMORY_ID), "content": "Lara übt Klavier."}],
-                    "runs": [
-                        {
-                            "runId": str(EXPOSURE_RUN_ID),
-                            "assistantMessageId": str(DREAM_ASSISTANT_MESSAGE_ID),
-                            "assistantResponse": case.dreaming_assistant,
-                            "exposedMemoryIds": [str(EXPOSED_MEMORY_ID)],
-                        }
-                    ],
-                },
-                ensure_ascii=False,
-            )
-            + "\nEach run includes its final assistant response. Return exactly one "
-            "usageAttributions entry per run. Mark as used only memories that materially "
-            "contributed to that response; all other exposed IDs are treated as unused."
-        )
     system_prompt = DREAMING_SYSTEM_PROMPT
     if case.dreaming_guidance:
         system_prompt += DREAMING_GUIDANCE_PREFIX + case.dreaming_guidance
@@ -2453,26 +2415,6 @@ def _dreaming_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[st
             ]
             result = ProviderResult(tool_calls=calls)
             instruction = "Return at most 1 candidates."
-        elif case.dreaming_repair == "bad_attribution":
-            calls = [
-                ToolCall(
-                    "dream-bad-attribution",
-                    "record_memory_candidates",
-                    {
-                        "candidates": [valid_candidate],
-                        "usageAttributions": [
-                            {
-                                "runId": "99999999-0000-4000-8000-000000000001",
-                                "usedMemoryIds": [str(EXPOSED_MEMORY_ID)],
-                            }
-                        ],
-                    },
-                )
-            ]
-            result = ProviderResult(tool_calls=calls)
-            instruction = (
-                "Return exactly one attribution per supplied run and only its exposed memory IDs."
-            )
         else:
             calls = [
                 ToolCall(
@@ -2492,7 +2434,7 @@ def _dreaming_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[st
             calls,
             instruction,
         )
-    return messages, [_record_candidates_tool(exposed)]
+    return messages, [_record_candidates_tool()]
 
 
 def _reconciliation_case(
@@ -2513,7 +2455,7 @@ def _reconciliation_case(
                     "id": str(EXISTING_MEMORY_ID),
                     "content": "Mein Name ist Lara.",
                     "category": "identity",
-                    "retrievalLevel": "instant",
+                    "pinned": True,
                     "sourceMessageAt": FIXED_NOW.isoformat(),
                     "memoryCreatedAt": FIXED_NOW.isoformat(),
                     "memoryUpdatedAt": FIXED_NOW.isoformat(),
@@ -2821,17 +2763,6 @@ def evaluate(case: PromptCase, result: ProviderResult) -> list[str]:
             for item in candidates
         ):
             failures.append("dreaming candidate lacks the supplied user evidence ID")
-        if case.expected_usage_attribution:
-            attributions = call.arguments.get("usageAttributions")
-            if (
-                not isinstance(attributions, list)
-                or len(attributions) != 1
-                or attributions[0].get("runId") != str(EXPOSURE_RUN_ID)
-                or not set(attributions[0].get("usedMemoryIds", [])).issubset(
-                    {str(EXPOSED_MEMORY_ID)}
-                )
-            ):
-                failures.append("dreaming usage attribution is invalid")
     if case.expected_action is not None and case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
         decisions = call.arguments.get("decisions")

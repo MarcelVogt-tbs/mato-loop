@@ -26,7 +26,6 @@ from mato_loop_backend.models import (
     MemoryEmbedding,
     MemoryEmbeddingStatus,
     MemoryRecord,
-    MemoryRetrievalLevel,
 )
 from mato_loop_backend.settings import TrustLevel
 
@@ -63,14 +62,14 @@ class MemoryRetrieval:
 def _filters(
     *,
     readable_by: TrustLevel,
-    retrieval_level: MemoryRetrievalLevel | None,
     category: MemoryCategory | None,
+    pinned: bool | None,
 ) -> list[object]:
     filters: list[object] = []
-    if retrieval_level is not None:
-        filters.append(MemoryRecord.retrieval_level == retrieval_level.value)
     if category is not None:
         filters.append(MemoryRecord.category == category.value)
+    if pinned is not None:
+        filters.append(MemoryRecord.pinned.is_(pinned))
     if readable_by == TrustLevel.PUBLIC:
         filters.append(MemoryRecord.trust_level == TrustLevel.PUBLIC.value)
     return filters
@@ -85,10 +84,11 @@ class MemoryRetrievalService:
         readable_by: TrustLevel,
         query: str | None = None,
         category: MemoryCategory | None = None,
+        pinned: bool | None = None,
         offset: int = 0,
         limit: int = 10,
-        retrieval_level: MemoryRetrievalLevel | None = MemoryRetrievalLevel.RETRIEVE,
         query_embedding: list[float] | None = None,
+        semantic_enabled: bool = True,
         max_semantic_distance: float | None = None,
         cursor_updated_at: datetime | None = None,
         cursor_id: UUID | None = None,
@@ -101,7 +101,7 @@ class MemoryRetrievalService:
             result = await MemoryService.list(
                 db,
                 category=category,
-                retrieval_level=retrieval_level,
+                pinned=pinned,
                 readable_by=readable_by,
                 cursor_updated_at=cursor_updated_at,
                 cursor_id=cursor_id,
@@ -126,7 +126,6 @@ class MemoryRetrievalService:
                 next_cursor_id=(cursor_item.id if cursor_item is not None else None),
             )
 
-        retrieval_level = MemoryRetrievalLevel.RETRIEVE
         cleaned_query = (query or "").strip()
         if cursor_updated_at is not None:
             raise ValueError("search mode does not accept a cursor")
@@ -135,8 +134,8 @@ class MemoryRetrievalService:
         candidate_limit = min(MAX_CANDIDATES, max(20, limit * 3))
         filters = _filters(
             readable_by=readable_by,
-            retrieval_level=retrieval_level,
             category=category,
+            pinned=pinned,
         )
         tsquery = func.plainto_tsquery(
             "simple", " ".join(memory_lexical_terms(cleaned_query))
@@ -159,9 +158,13 @@ class MemoryRetrievalService:
 
         semantic: list[MemoryRecord] = []
         semantic_used = False
-        if get_runtime_config().embedding_enabled:
+        if semantic_enabled and get_runtime_config().embedding_enabled:
             try:
-                vector = query_embedding or await embedding_client.embed_query(cleaned_query)
+                vector = (
+                    query_embedding
+                    if query_embedding is not None
+                    else await embedding_client.embed_query(cleaned_query)
+                )
                 distance = MemoryEmbedding.vector.cosine_distance(vector)
                 semantic_filters = [
                     *filters,

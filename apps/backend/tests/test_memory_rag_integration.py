@@ -11,6 +11,8 @@ from mato_loop_backend.memory.embeddings import (
     EmbeddingError,
     embedding_client,
 )
+from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
+from mato_loop_backend.memory.episode_retrieval import EpisodeRetrievalService
 from mato_loop_backend.memory.retrieval import (
     MemoryRetrievalService,
     MemoryRetrievalStrategy,
@@ -26,6 +28,7 @@ from mato_loop_backend.models import (
     MemoryRecord,
     MemorySourceMessage,
     Message,
+    MessageSearchChunk,
     UserAccount,
 )
 from mato_loop_backend.settings import TrustLevel
@@ -61,7 +64,7 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
             memory = MemoryRecord(
                 id=uuid4(),
                 source_type="manual",
-                retrieval_level="retrieve",
+                pinned=False,
                 trust_level=trust_level,
                 category="preference",
                 content=content,
@@ -93,6 +96,74 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
         await db.rollback()
 
 
+async def test_local_episode_rag_finds_prior_session_without_leaking_private() -> None:
+    async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"episode-{uuid4().hex}", password_hash="test")
+        db.add(user)
+        await db.flush()
+        public_session = ChatSession(user_id=user.id, title="Architektur")
+        private_session = ChatSession(user_id=user.id, title="Vertraulich")
+        current_session = ChatSession(user_id=user.id, title="Aktuell")
+        db.add_all([public_session, private_session, current_session])
+        await db.flush()
+        public_message = Message(
+            session_id=public_session.id,
+            role="assistant",
+            content="Wir entschieden uns für PostgreSQL als zentrale Datenbank.",
+            trust_level=TrustLevel.PUBLIC.value,
+        )
+        private_message = Message(
+            session_id=private_session.id,
+            role="assistant",
+            content="Die geheime Alternative wäre eine private Oracle-Instanz.",
+            trust_level=TrustLevel.PRIVATE.value,
+        )
+        db.add_all([public_message, private_message])
+        await db.flush()
+        await EpisodeIndexService.enqueue(db, public_message)
+        await EpisodeIndexService.enqueue(db, private_message)
+        chunks = list(
+            (
+                await db.scalars(
+                    select(MessageSearchChunk).where(
+                        MessageSearchChunk.message_id.in_(
+                            [public_message.id, private_message.id]
+                        )
+                    )
+                )
+            ).all()
+        )
+        vectors = await embedding_client.embed_documents(
+            [chunk.content for chunk in chunks]
+        )
+        for chunk, vector in zip(chunks, vectors, strict=True):
+            chunk.status = MemoryEmbeddingStatus.READY.value
+            chunk.vector = vector
+        await db.flush()
+
+        result = await EpisodeRetrievalService.retrieve(
+            db,
+            owner_id=user.id,
+            current_session_id=current_session.id,
+            readable_by=TrustLevel.PUBLIC,
+            query="Which database did we choose for the architecture?",
+            limit=2,
+            max_semantic_distance=0.25,
+        )
+
+        assert result.references
+        assert result.references[0].session_id == public_session.id
+        assert all(
+            reference.session_id != private_session.id
+            for reference in result.references
+        )
+        assert "PostgreSQL" in " ".join(
+            message.content
+            for message in result.references[0].excerpt
+        )
+        await db.rollback()
+
+
 async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
     content = f"Fallbackkennung {uuid4().hex}"
     query = content.split()[-1]
@@ -106,7 +177,7 @@ async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
         memory = MemoryRecord(
             id=uuid4(),
             source_type="manual",
-            retrieval_level="retrieve",
+            pinned=False,
             trust_level="public",
             category="fact",
             content=content,
@@ -144,7 +215,7 @@ async def test_automatic_rag_distance_excludes_unrelated_memory() -> None:
             memory = MemoryRecord(
                 id=uuid4(),
                 source_type="manual",
-                retrieval_level="retrieve",
+                pinned=False,
                 trust_level="public",
                 category="fact",
                 content=content,
@@ -168,7 +239,6 @@ async def test_automatic_rag_distance_excludes_unrelated_memory() -> None:
             db,
             mode=MemoryRetrieveMode.SEARCH,
             query="Wie alt ist mein Sohn?",
-            retrieval_level=None,
             readable_by=TrustLevel.PUBLIC,
             limit=5,
             max_semantic_distance=0.21,
@@ -180,16 +250,16 @@ async def test_automatic_rag_distance_excludes_unrelated_memory() -> None:
         await db.rollback()
 
 
-async def test_browse_lists_instant_and_retrieve_memories() -> None:
+async def test_browse_lists_pinned_and_unpinned_memories() -> None:
     async with AsyncSessionFactory() as db:
         created = []
-        for level in ["instant", "retrieve", "retrieve"]:
-            content = f"Browse-{level}-{uuid4().hex}"
+        for pinned in [True, False, False]:
+            content = f"Browse-{pinned}-{uuid4().hex}"
             _, content_hash = normalize_content(content)
             memory = MemoryRecord(
                 id=uuid4(),
                 source_type="manual",
-                retrieval_level=level,
+                pinned=pinned,
                 trust_level="public",
                 category="fact",
                 content=content,
@@ -203,7 +273,6 @@ async def test_browse_lists_instant_and_retrieve_memories() -> None:
         result = await MemoryRetrievalService.retrieve(
             db,
             mode=MemoryRetrieveMode.BROWSE,
-            retrieval_level=None,
             readable_by=TrustLevel.PUBLIC,
             limit=2,
         )
@@ -214,7 +283,6 @@ async def test_browse_lists_instant_and_retrieve_memories() -> None:
         continued = await MemoryRetrievalService.retrieve(
             db,
             mode=MemoryRetrieveMode.BROWSE,
-            retrieval_level=None,
             readable_by=TrustLevel.PUBLIC,
             cursor_updated_at=result.next_cursor_updated_at,
             cursor_id=result.next_cursor_id,
@@ -268,7 +336,7 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
             source_session_id=session.id,
             source_message_id=source_message.id,
             source_type="dreaming",
-            retrieval_level="retrieve",
+            pinned=False,
             trust_level="private",
             category="fact",
             revision=1,
@@ -279,7 +347,7 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
             source_session_id=session.id,
             source_message_id=correction_message.id,
             source_type="tool_call",
-            retrieval_level="retrieve",
+            pinned=False,
             trust_level="public",
             category="context",
             revision=2,
@@ -314,7 +382,6 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
             evidence_message_id=correction_message.id,
             run_id=agent_run.id,
             tool_call_id="correction",
-            max_context_characters=20_000,
         )
 
         assert result.item is canonical

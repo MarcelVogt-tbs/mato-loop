@@ -48,11 +48,6 @@ class MemorySourceType(StrEnum):
     MANUAL = "manual"
 
 
-class MemoryRetrievalLevel(StrEnum):
-    INSTANT = "instant"
-    RETRIEVE = "retrieve"
-
-
 class MemoryCategory(StrEnum):
     CONTEXT = "context"
     FACT = "fact"
@@ -81,12 +76,6 @@ class MemoryEmbeddingStatus(StrEnum):
     RUNNING = "running"
     READY = "ready"
     FAILED = "failed"
-
-
-class MemoryExposureStatus(StrEnum):
-    PENDING = "pending"
-    USED = "used"
-    UNUSED = "unused"
 
 
 class MemoryDreamTrigger(StrEnum):
@@ -173,6 +162,9 @@ class ChatSession(Base):
     )
     working_directory: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     workspace_access: Mapped[str] = mapped_column(String(20), nullable=False, default="read-only")
+    private_integration_data_used: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -239,6 +231,12 @@ class Message(Base):
         passive_deletes=True,
         order_by="MessageAttachment.position",
     )
+    search_chunks: Mapped[list[MessageSearchChunk]] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="MessageSearchChunk.chunk_index",
+    )
 
 
 class MessageAttachment(Base):
@@ -246,7 +244,7 @@ class MessageAttachment(Base):
     __table_args__ = (
         CheckConstraint("position >= 0", name="position_nonnegative"),
         CheckConstraint(
-            "kind IN ('image', 'audio', 'text', 'document', 'file')",
+            "kind IN ('image', 'audio', 'video', 'text', 'document', 'file')",
             name="kind_valid",
         ),
         CheckConstraint(
@@ -292,6 +290,58 @@ class MessageAttachment(Base):
     )
 
     message: Mapped[Message] = relationship(back_populates="attachments")
+
+
+class MessageSearchChunk(Base):
+    __tablename__ = "message_search_chunks"
+    __table_args__ = (
+        CheckConstraint("chunk_index >= 0", name="chunk_index_nonnegative"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'ready', 'failed')",
+            name="status_valid",
+        ),
+        CheckConstraint("attempts >= 0", name="attempts_nonnegative"),
+        CheckConstraint(
+            "(status = 'ready' AND embedding IS NOT NULL) OR "
+            "(status <> 'ready' AND embedding IS NULL)",
+            name="ready_vector_valid",
+        ),
+        UniqueConstraint("message_id", "chunk_index"),
+        Index("ix_message_search_chunks_search_vector", "search_vector", postgresql_using="gin"),
+        Index("ix_message_search_chunks_queue", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    search_vector: Mapped[Any] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('simple'::regconfig, coalesce(content, ''))", persisted=True),
+        nullable=False,
+    )
+    profile_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=MemoryEmbeddingStatus.QUEUED.value
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    vector: Mapped[Any | None] = mapped_column("embedding", Vector(384), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    message: Mapped[Message] = relationship(back_populates="search_chunks")
 
 
 class ContextSummary(Base):
@@ -403,10 +453,6 @@ class MemoryRecord(Base):
             name="source_type_valid",
         ),
         CheckConstraint(
-            "retrieval_level IN ('instant', 'retrieve')",
-            name="retrieval_level_valid",
-        ),
-        CheckConstraint(
             "trust_level IN ('public', 'private')",
             name="trust_level_valid",
         ),
@@ -444,20 +490,8 @@ class MemoryRecord(Base):
     source_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default=MemorySourceType.MANUAL.value
     )
-    retrieval_level: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=MemoryRetrievalLevel.INSTANT.value
-    )
-    tier_locked: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false")
-    )
-    tier_locked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    retrieval_level_changed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    last_used_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    pinned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false"), index=True
     )
     trust_level: Mapped[str] = mapped_column(
         String(20), nullable=False, default=TrustLevel.PUBLIC.value
@@ -487,43 +521,6 @@ class MemoryRecord(Base):
     embedding: Mapped[MemoryEmbedding | None] = relationship(
         back_populates="memory", cascade="all, delete-orphan", passive_deletes=True
     )
-    exposures: Mapped[list[MemoryExposure]] = relationship(
-        back_populates="memory", cascade="all, delete-orphan", passive_deletes=True
-    )
-
-
-class MemoryExposure(Base):
-    __tablename__ = "memory_exposures"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('pending', 'used', 'unused')", name="status_valid"
-        ),
-        UniqueConstraint("memory_id", "agent_run_id"),
-        Index("ix_memory_exposures_status_exposed", "status", "exposed_at"),
-    )
-
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    memory_id: Mapped[UUID] = mapped_column(
-        ForeignKey("memories.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    memory_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    agent_run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    assistant_message_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
-    )
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=MemoryExposureStatus.PENDING.value
-    )
-    exposed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    evaluated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    memory: Mapped[MemoryRecord] = relationship(back_populates="exposures")
 
 
 class MemoryEmbedding(Base):

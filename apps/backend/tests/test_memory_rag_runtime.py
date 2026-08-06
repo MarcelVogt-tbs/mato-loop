@@ -5,17 +5,26 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.context import ContextManager, ContextProjection
+from mato_loop_backend.agent.context import ContextError, ContextManager, ContextProjection
 from mato_loop_backend.agent.runtime import (
     AUTOMATIC_MEMORY_MAX_DISTANCE,
     AUTOMATIC_MEMORY_MAX_ITEMS,
     MEMORY_OVERVIEW_MAX_CHARACTERS,
     AgentRuntime,
+    _bounded_episode_payload,
     _bounded_memory_overview,
     _memory_overview_requested,
+    _recent_episode_overview_requested,
 )
 from mato_loop_backend.agent.tools import EffectiveToolSet, ToolResult
 from mato_loop_backend.events import run_events
+from mato_loop_backend.memory.embeddings import embedding_client
+from mato_loop_backend.memory.episode_retrieval import (
+    EpisodeExcerptMessage,
+    EpisodeReference,
+    EpisodeRetrieval,
+    EpisodeRetrievalService,
+)
 from mato_loop_backend.memory.retrieval import (
     MemoryRetrieval,
     MemoryRetrievalService,
@@ -37,6 +46,54 @@ from mato_loop_backend.settings import (
     TrustLevel,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+
+
+def test_recent_episode_overview_intent_is_host_detected() -> None:
+    session_id = uuid4()
+    assert _recent_episode_overview_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="Was haben wir in der letzten Session besprochen?",
+            )
+        ]
+    )
+    assert not _recent_episode_overview_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="Erkläre mir PostgreSQL-Indizes.",
+            )
+        ]
+    )
+
+
+def test_episode_budget_keeps_the_matched_text_from_each_session() -> None:
+    now = datetime.now(UTC)
+    references = [
+        EpisodeReference(
+            session_id=uuid4(),
+            session_title=f"Session {index}",
+            anchor_message_id=uuid4(),
+            anchor_created_at=now,
+            anchor_role="assistant",
+            anchor_content=character * 100,
+            excerpt=(
+                EpisodeExcerptMessage(
+                    id=uuid4(), role="user", content="context", created_at=now
+                ),
+            ),
+        )
+        for index, character in enumerate(("a", "b"))
+    ]
+
+    payload = _bounded_episode_payload(references, max_characters=40)
+
+    assert len(payload) == 2
+    assert payload[0]["matchedText"] == "a" * 20
+    assert payload[1]["matchedText"] == "b" * 20
 
 
 async def _runtime_setup(
@@ -81,9 +138,7 @@ async def _runtime_setup(
             AiSettings: ai_settings,
             AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
-            MemorySettings: MemorySettings(
-                enabled=True, max_context_items=10, max_context_characters=20_000
-            ),
+            MemorySettings: MemorySettings(enabled=True),
             IntegrationSettings: IntegrationSettings(),
             ToolSettings: ToolSettings(),
         }[settings_type]
@@ -137,15 +192,23 @@ async def _runtime_setup(
     monkeypatch.setattr(AgentRuntime, "_records", AsyncMock(return_value=records))
     monkeypatch.setattr(ContextManager, "build", build_context)
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
-    monkeypatch.setattr(MemoryService, "instant_context", AsyncMock(return_value=[]))
-    monkeypatch.setattr(MemoryService, "enforce_capacity", AsyncMock())
-    monkeypatch.setattr(MemoryService, "record_exposures", AsyncMock())
+    monkeypatch.setattr(MemoryService, "pinned_context", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         MemoryService,
         "scope",
-        AsyncMock(return_value=MemoryScope(total=15, instant=2, retrieve=13)),
+        AsyncMock(return_value=MemoryScope(total=15, pinned=2)),
     )
     monkeypatch.setattr(MemoryRetrievalService, "retrieve", retrieve)
+    monkeypatch.setattr(
+        EpisodeRetrievalService,
+        "retrieve",
+        AsyncMock(
+            return_value=EpisodeRetrieval(
+                references=[], strategy=MemoryRetrievalStrategy.HYBRID
+            )
+        ),
+    )
+    monkeypatch.setattr(embedding_client, "embed_query", AsyncMock(return_value=[0.0]))
     monkeypatch.setattr(EffectiveToolSet, "execute", execute_tool)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
     return db, run, requests, projections, retrieve, execute_tool
@@ -163,7 +226,7 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
         id=uuid4(),
         content="Der Sohn des Nutzers ist neun Monate alt.",
         category="fact",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="private",
         revision=1,
         created_at=created_at,
@@ -182,13 +245,12 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
     retrieve.assert_awaited_once()
     kwargs = retrieve.await_args.kwargs
     assert kwargs["query"] == "Wie alt ist mein Sohn?"
-    assert kwargs["retrieval_level"].value == "retrieve"
+    assert "retrieval_level" not in kwargs
+    assert kwargs["pinned"] is False
     assert kwargs["limit"] == AUTOMATIC_MEMORY_MAX_ITEMS
     assert kwargs["max_semantic_distance"] == AUTOMATIC_MEMORY_MAX_DISTANCE
-    instant_kwargs = MemoryService.instant_context.await_args.kwargs
-    assert "max_items" not in instant_kwargs
-    assert instant_kwargs["max_characters"] == 20_000
-    assert '"source": "relevant"' in projections[0]["system_prompt"]
+    MemoryService.pinned_context.assert_awaited_once()
+    assert '"source": "retrieved"' in projections[0]["system_prompt"]
     assert relevant.content in projections[0]["system_prompt"]
     assert f'"sourceMessageAt": "{source_at.isoformat()}"' in projections[0][
         "system_prompt"
@@ -199,8 +261,53 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
     assert f'"memoryUpdatedAt": "{updated_at.isoformat()}"' in projections[0][
         "system_prompt"
     ]
-    assert "15 total, 2 active, 13 long-term" in projections[0]["system_prompt"]
+    assert "15 total, 2 pinned" in projections[0]["system_prompt"]
+    assert "0 prior-session episodes" in projections[0]["system_prompt"]
     assert requests[0]["tool_choice"] == "auto"
+
+
+async def test_context_overflow_drops_automatic_memory_before_failing(
+    monkeypatch,
+) -> None:
+    session_id = uuid4()
+    user = Message(
+        id=uuid4(), session_id=session_id, role="user", content="Was ist relevant?"
+    )
+    relevant = MemoryRecord(
+        id=uuid4(),
+        content="Automatisch geladener Kontext",
+        category="fact",
+        pinned=False,
+        trust_level="private",
+        revision=1,
+    )
+    db, run, _requests, _projections, _retrieve, _execute = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="Antwort", finish_reason="stop")],
+        records=[user],
+        automatic_items=[relevant],
+    )
+    fallback_projection = ContextProjection(
+        messages=[
+            {"role": "system", "content": "fallback"},
+            {"role": "user", "content": user.content},
+        ],
+        estimated_input_tokens=100,
+        input_budget_tokens=1_000,
+    )
+    build = AsyncMock(
+        side_effect=[
+            ContextError("agent.contextWindowExceeded"),
+            fallback_projection,
+        ]
+    )
+    monkeypatch.setattr(ContextManager, "build", build)
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert build.await_count == 2
+    assert relevant.content in build.await_args_list[0].kwargs["system_prompt"]
+    assert relevant.content not in build.await_args_list[1].kwargs["system_prompt"]
 
 
 async def test_memory_write_workflow_discards_drafts_until_write_resolves(
@@ -321,7 +428,7 @@ def test_memory_overview_stops_before_exceeding_its_character_budget() -> None:
             id=uuid4(),
             content=character * 7_000,
             category="fact",
-            retrieval_level="retrieve",
+            pinned=False,
             trust_level="private",
             revision=1,
         )
@@ -353,18 +460,29 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         id=uuid4(),
         content="Der Nutzer bevorzugt lokale Modelle.",
         category="preference",
-        retrieval_level="retrieve",
+        pinned=False,
         trust_level="private",
         revision=1,
         created_at=created_at,
         updated_at=updated_at,
     )
     memory.source_message = Message(created_at=source_at)
+    pinned = MemoryRecord(
+        id=uuid4(),
+        content="Diese angeheftete Erinnerung bleibt vollständig enthalten.",
+        category="context",
+        pinned=True,
+        trust_level="private",
+        revision=1,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
     db, run, requests, projections, retrieve, execute_tool = await _runtime_setup(
         monkeypatch,
         [ProviderResult(content="Übersicht", finish_reason="stop")],
         records=[user],
     )
+    MemoryService.pinned_context.return_value = [pinned]
     retrieve.return_value = MemoryRetrieval(
         items=[memory],
         mode=MemoryRetrieveMode.BROWSE,
@@ -383,6 +501,7 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         "system_prompt"
     ]
     assert memory.content in projections[0]["system_prompt"]
+    assert pinned.content in projections[0]["system_prompt"]
     assert f'"sourceMessageAt": "{source_at.isoformat()}"' in projections[0][
         "system_prompt"
     ]

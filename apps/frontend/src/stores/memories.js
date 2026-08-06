@@ -25,9 +25,10 @@ export const useMemoryStore = defineStore('memories', {
           offset: filters.offset ?? this.offset,
           limit: filters.limit ?? this.limit
         }
-        for (const key of ['query', 'category', 'sourceType', 'trustLevel', 'retrievalLevel']) {
+        for (const key of ['query', 'category', 'sourceType', 'trustLevel']) {
           if (filters[key]) params[key] = filters[key]
         }
+        if (filters.pinned != null) params.pinned = filters.pinned
         const { data } = await api.get('/memories', { params })
         if (requestId !== this.listRequestId) return null
         this.items = data.items
@@ -42,8 +43,8 @@ export const useMemoryStore = defineStore('memories', {
     async createMemory({ content, category, trustLevel }) {
       return (await api.post('/memories', { content, category, trustLevel })).data
     },
-    async updateMemory(id, { content, category, trustLevel, tierPolicy }) {
-      const { data } = await api.patch(`/memories/${id}`, { content, category, trustLevel, tierPolicy })
+    async updateMemory(id, { content, category, trustLevel, pinned }) {
+      const { data } = await api.patch(`/memories/${id}`, { content, category, trustLevel, pinned })
       const index = this.items.findIndex((item) => item.id === id)
       if (index >= 0) this.items[index] = data
       return data
@@ -75,9 +76,7 @@ export const useMemoryStore = defineStore('memories', {
     async saveSettings(settings) {
       this.settingsLoading = true
       try {
-        const payload = { ...settings }
-        delete payload.maxContextItems
-        this.settings = (await api.patch('/memories/settings', payload)).data
+        this.settings = (await api.patch('/memories/settings', settings)).data
         return this.settings
       } finally {
         this.settingsLoading = false
