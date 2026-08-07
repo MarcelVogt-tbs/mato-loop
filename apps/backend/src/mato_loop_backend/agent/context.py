@@ -189,11 +189,15 @@ def message_dict(
     provider_data.pop("_matoloop", None)
     attachment_markers = []
     for attachment in message.attachments:
-        duration = (
-            f", duration {attachment.duration_ms} ms"
-            if attachment.duration_ms is not None
-            else ""
-        )
+        if attachment.duration_ms is not None:
+            hours, remainder = divmod(attachment.duration_ms, 3_600_000)
+            minutes, remainder = divmod(remainder, 60_000)
+            seconds, milliseconds = divmod(remainder, 1_000)
+            duration = (
+                f", duration {hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+            )
+        else:
+            duration = ""
         metadata = attachment.metadata_json or {}
         derived_path = metadata.get("derivedPath")
         derived = f", derivative {derived_path}" if isinstance(derived_path, str) else ""
@@ -308,6 +312,15 @@ def general_system_prompt(
                 "Never claim that an action succeeded before receiving its tool result.",
                 "A denied or failed tool call must not be repeated unchanged.",
             ]
+        )
+    if "question" in offered_tool_names:
+        parts.append(
+            "Missing-information contract: When the user's requested action lacks required "
+            "user-specific details, call question now instead of asking for those details in "
+            "assistant text. Ask for all required details in one call, but do not ask for optional "
+            "target fields unless the user mentioned them or they are needed to disambiguate the "
+            "action. Do not call question for informational requests or actions that can be "
+            "completed as stated."
         )
     research_instructions: list[str] = []
     if "web_search" in offered_tool_names:

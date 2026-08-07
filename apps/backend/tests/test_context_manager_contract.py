@@ -93,7 +93,7 @@ def test_audio_projection_uses_reference_marker_without_file_data() -> None:
     assert "aufnahme.wav" in projected["content"]
     assert "audio/wav" in projected["content"]
     assert attachment.storage_path in projected["content"]
-    assert "1250 ms" in projected["content"]
+    assert "00:00:01.250" in projected["content"]
     assert projected["attachments"] == []
     assert "secret-storage-key" not in str(projected)
     assert "base64" not in str(projected)

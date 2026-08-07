@@ -269,6 +269,70 @@ async def test_runtime_uses_bound_integration_resource_policy(
     request_approval.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("global_policy", "expected", "approval_count"),
+    (
+        (None, PermissionDecision.ALLOW, 1),
+        ("disabled", PermissionDecision.DENY, 0),
+    ),
+)
+async def test_runtime_discovery_uses_global_not_integration_policy(
+    tmp_path, monkeypatch, global_policy, expected, approval_count
+) -> None:
+    session = _session()
+    integration = IntegrationInstance(
+        name="Kalender",
+        integration_type="calendar",
+        adapter_type="caldav",
+        config={
+            "base_url": "https://calendar.example.com",
+            "username": "user",
+        },
+    )
+    request = integration_operation_permission(
+        capability="calendar.read",
+        integration_id=integration.id,
+        binding_revision="{}",
+        operation_key="list-calendars",
+        title="Kalender auflisten?",
+        summary="Der Agent möchte Kalender auflisten.",
+        use_integration_policy=False,
+    )
+    settings_data = {
+        "integrationPolicies": {
+            str(integration.id): {"calendar.read": "disabled"}
+        }
+    }
+    if global_policy is not None:
+        settings_data["policies"] = {"calendar.read": global_policy}
+    tools = ToolSettings.model_validate(settings_data)
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return (
+            IntegrationSettings(instances=[integration])
+            if settings_type is IntegrationSettings
+            else tools
+        )
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    request_approval = AsyncMock(return_value="allow_once")
+    monkeypatch.setattr(AgentRuntime, "_request_approval", request_approval)
+
+    decision = await AgentRuntime._authorize(
+        _db_with_grants(),
+        AgentRun(id=uuid4(), session_id=session.id),
+        session,
+        ToolCall(id="list", name="calendar_list_calendars", arguments={}),
+        request,
+        _root_files(tmp_path, session),
+        AgentRuntimeSettings(),
+    )
+
+    assert request.policy_integration_id is None
+    assert decision == expected
+    assert request_approval.await_count == approval_count
+
+
 async def test_runtime_ignores_override_after_resource_contract_removal(
     tmp_path, monkeypatch
 ) -> None:

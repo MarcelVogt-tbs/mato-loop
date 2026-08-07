@@ -32,6 +32,25 @@ describe('chat transcript', () => {
     expect(buildChatTranscript([], [approval]).unmatchedApprovals).toEqual([approval])
   })
 
+  it('attaches pending questions to their tool call', () => {
+    const messages = [
+      { id: 'user-1', role: 'user', content: 'Plane den Ausflug' },
+      {
+        id: 'assistant-1', role: 'assistant', content: '',
+        toolCalls: [{ id: 'call-1', name: 'question', arguments: {} }]
+      }
+    ]
+    const question = { id: 'question-1', toolCallId: 'call-1', questions: [] }
+
+    const transcript = buildChatTranscript(messages, [], { running: true, questions: [question] })
+
+    expect(transcript.messages[1].toolHistory.items[0]).toMatchObject({
+      question,
+      active: false
+    })
+    expect(transcript.unmatchedQuestions).toEqual([])
+  })
+
   it('marks only the next unresolved sequential call as running', () => {
     const messages = [
       { id: 'user-1', role: 'user', content: 'Arbeite die Schritte ab' },

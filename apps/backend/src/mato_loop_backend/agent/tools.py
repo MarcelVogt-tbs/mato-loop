@@ -8,11 +8,12 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 from uuid import UUID
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -109,13 +110,16 @@ from mato_loop_backend.settings import (
     resolve_web_fetch_policy,
 )
 from mato_loop_backend.settings.models import normalize_agent_display_name
-from mato_loop_backend.video_processing import MAX_VIDEO_BYTES
+from mato_loop_backend.video_processing import MAX_VIDEO_BYTES, VideoAnalysisMode
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService, WorkspaceError
 
 logger = logging.getLogger(__name__)
 AskHandler = Callable[[PermissionRequest], Awaitable[PermissionDecision]]
+QuestionHandler = Callable[
+    ["QuestionArguments"], Awaitable[dict[str, list[str]] | Literal["rejected"] | None]
+]
 VideoAnalysisHandler = Callable[
-    [bytes, TrustLevel, str | None, Literal["standard", "detailed"], str | None],
+    [bytes, TrustLevel, str | None, VideoAnalysisMode, str | None],
     Awaitable[dict[str, Any]],
 ]
 VideoAnalysisTargetResolver = Callable[[int], ResolvedVideoModel | None]
@@ -211,6 +215,7 @@ class ToolContext:
     root_files: RootFileService
     integration_settings: IntegrationSettings
     ask_handler: AskHandler
+    question_handler: QuestionHandler | None = None
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     web_fetch_policy: WebFetchPolicy = WebFetchPolicy.DISABLED
     allowed_private_origins: tuple[str, ...] = ()
@@ -229,6 +234,13 @@ class ToolContext:
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
         return await self.ask_handler(request)
+
+    async def ask_user(
+        self, questions: QuestionArguments
+    ) -> dict[str, list[str]] | Literal["rejected"] | None:
+        if self.question_handler is None:
+            return None
+        return await self.question_handler(questions)
 
 
 TOOL_GROUPS = (
@@ -289,9 +301,28 @@ class BoundTool:
     source_revision: str | None = None
     integration_revisions: tuple[tuple[str, str], ...] = ()
     selected_options: dict[str, str | None] = field(default_factory=dict)
+    default_arguments: dict[str, str] = field(default_factory=dict)
 
     def schema(self) -> dict[str, Any]:
-        return self.definition.schema()
+        schema = self.definition.schema()
+        parameters = schema["parameters"]
+        instance_argument = self.definition.instance_argument
+        if instance_argument is not None and self.integration_revisions:
+            parameters["properties"][instance_argument]["enum"] = [
+                integration_id for integration_id, _revision in self.integration_revisions
+            ]
+        if not self.default_arguments:
+            return schema
+        parameters["required"] = [
+            name
+            for name in parameters.get("required", [])
+            if name not in self.default_arguments
+        ]
+        names = " and ".join(self.default_arguments)
+        schema["description"] += (
+            f" Omit {names} together to use the configured default."
+        )
+        return schema
 
 
 @dataclass(frozen=True, slots=True)
@@ -509,6 +540,23 @@ class ToolRegistry:
             if tool_settings is not None
             else None
         )
+
+        def default_arguments(name: str) -> dict[str, str]:
+            default_calendar = tool_settings.default_calendar if tool_settings else None
+            integration_revisions = sources[name][3]
+            if (
+                name
+                not in {"calendar_query_events", "calendar_create_event"}
+                or default_calendar is None
+                or str(default_calendar.integration_id)
+                not in dict(integration_revisions)
+            ):
+                return {}
+            return {
+                "integration_id": str(default_calendar.integration_id),
+                "calendar_key": default_calendar.calendar_key,
+            }
+
         tools = {
             name: BoundTool(
                 definition,
@@ -535,10 +583,47 @@ class ToolRegistry:
                         else {}
                     )
                 ),
+                default_arguments=default_arguments(name),
             )
             for name, definition in definitions.items()
             if name in available_names
         }
+        if any(
+            tools[name].default_arguments
+            for name in ("calendar_query_events", "calendar_create_event")
+            if name in tools
+        ):
+            prompt_fragments = (
+                *prompt_fragments,
+                "A default calendar is configured. When the user did not explicitly select "
+                "another calendar, call calendar_query_events or calendar_create_event directly "
+                "and omit both integration_id and calendar_key. Never call calendar_list_accounts "
+                "or calendar_list_calendars first. Use discovery only when the user asks to list "
+                "accounts or calendars, or explicitly selects a non-default calendar; then copy "
+                "integrationId and calendarKey exactly and pass both together.",
+            )
+        if {
+            "calendar_create_event",
+            "calendar_update_event",
+            "calendar_delete_event",
+        } & tools.keys():
+            prompt_fragments = (
+                *prompt_fragments,
+                "For calendar_update_event and calendar_delete_event, copy eventToken to "
+                "event_token, integrationId to integration_id, and calendarKey to calendar_key "
+                "from the same returned event. Do not use calendar discovery to recover this "
+                "routing. A calendar create, update, or delete succeeded only when that mutation "
+                "tool result confirms an event or deleted=true. After any error, report that no "
+                "change was confirmed; never claim another calendar succeeded without a successful "
+                "mutation result. For user-facing calendar dates, times, and weekdays, copy "
+                "localTiming exactly when present; do not convert it or calculate its weekday. "
+                "Calendar event timestamps are canonical instants. Convert a "
+                "timestamp ending in Z exactly once to the local timezone stated in the system "
+                "prompt, using the offset on the event date. Do not convert a timestamp that "
+                "already has the intended local offset. Use the timezone name or numeric offset, "
+                "not an ambiguous abbreviation. Do not state a resolved date, weekday, or success "
+                "alongside a mutation call; wait for its tool result.",
+            )
         return EffectiveToolSet(self, tools, prompt_fragments)
 
     def catalog(
@@ -743,8 +828,13 @@ class ToolRegistry:
                 ),
             ):
                 return ToolResult.error("tool.unavailable")
+        raw_arguments = call.arguments
+        if tool.default_arguments and tool.default_arguments.keys().isdisjoint(
+            raw_arguments
+        ):
+            raw_arguments = {**tool.default_arguments, **raw_arguments}
         try:
-            arguments = definition.arguments_model.model_validate(call.arguments)
+            arguments = definition.arguments_model.model_validate(raw_arguments)
         except ValidationError as exc:
             field = next(
                 (
@@ -817,10 +907,15 @@ class ToolRegistry:
                     requests = tuple(
                         replace(
                             request,
-                            policy_integration_id=UUID(selected_integration_id),
+                            policy_integration_id=(
+                                UUID(selected_integration_id)
+                                if request.use_integration_policy
+                                else None
+                            ),
                             policy_resource_key=(
                                 resource_key
-                                if definition.resource_argument is not None
+                                if request.use_integration_policy
+                                and definition.resource_argument is not None
                                 else request.policy_resource_key
                             ),
                             policy_hard_unavailable_capabilities=frozenset(),
@@ -877,6 +972,116 @@ class ToolRegistry:
 
 class ToolArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class QuestionOption(ToolArguments):
+    label: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("label")
+    @classmethod
+    def label_must_not_be_blank(cls, value: str) -> str:
+        if not (cleaned := value.strip()):
+            raise ValueError("label must not be blank")
+        return cleaned
+
+
+class QuestionBase(ToolArguments):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")
+    header: str = Field(min_length=1, max_length=30)
+    question: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("header", "question")
+    @classmethod
+    def text_must_not_be_blank(cls, value: str) -> str:
+        if not (cleaned := value.strip()):
+            raise ValueError("question text must not be blank")
+        return cleaned
+
+
+class ChoiceQuestion(QuestionBase):
+    options: list[QuestionOption] = Field(min_length=2, max_length=12)
+    allow_custom: bool = Field(
+        default=True,
+        description=(
+            "Allow one custom free-text answer in addition to the listed options. "
+            "Do not add an Other option when this is true."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def options_are_unique(self) -> ChoiceQuestion:
+        labels = [option.label for option in self.options]
+        if len(labels) != len(set(labels)):
+            raise ValueError("option labels must be unique")
+        return self
+
+
+class SingleChoiceQuestion(ChoiceQuestion):
+    type: Literal["single_choice"]
+
+
+class MultipleChoiceQuestion(ChoiceQuestion):
+    type: Literal["multiple_choice"]
+
+
+class FreeTextQuestion(QuestionBase):
+    type: Literal["free_text"]
+    placeholder: str | None = Field(default=None, max_length=200)
+
+
+QuestionItem = Annotated[
+    SingleChoiceQuestion | MultipleChoiceQuestion | FreeTextQuestion,
+    Field(discriminator="type"),
+]
+
+
+class QuestionArguments(ToolArguments):
+    questions: list[QuestionItem] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def ids_are_unique(self) -> QuestionArguments:
+        ids = [question.id for question in self.questions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("question IDs must be unique")
+        return self
+
+
+def validate_question_answers(
+    questions: QuestionArguments, answers: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    if set(answers) != {question.id for question in questions.questions}:
+        raise ValueError("every question requires exactly one answer")
+    validated: dict[str, list[str]] = {}
+    for question in questions.questions:
+        answer = answers[question.id]
+        if not isinstance(answer, list) or len(answer) != len(set(answer)):
+            raise ValueError("answer must be a list of unique strings")
+        cleaned = []
+        for item in answer:
+            if not isinstance(item, str) or len(item) > 20_000:
+                raise ValueError("answer item is invalid")
+            value = item.strip()
+            if value:
+                cleaned.append(value)
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("answer items must be unique")
+        if question.type == "free_text":
+            if len(cleaned) > 1:
+                raise ValueError("free-text answer is invalid")
+        elif question.type == "single_choice":
+            options = {option.label for option in question.options}
+            if len(cleaned) > 1 or (
+                cleaned and cleaned[0] not in options and not question.allow_custom
+            ):
+                raise ValueError("single-choice answer is invalid")
+        else:
+            options = {option.label for option in question.options}
+            custom = [item for item in cleaned if item not in options]
+            if custom and (not question.allow_custom or len(custom) > 1):
+                raise ValueError("multiple-choice answer is invalid")
+        validated[question.id] = cleaned
+    return validated
 
 
 class ListDirectoryArguments(ToolArguments):
@@ -972,8 +1177,6 @@ class EditImageArguments(ToolArguments):
             "Image 2, and so on."
         ),
     )
-    width: int | None = Field(default=None, ge=64, le=4_096)
-    height: int | None = Field(default=None, ge=64, le=4_096)
 
     @field_validator("attachment_ids")
     @classmethod
@@ -1006,8 +1209,31 @@ class AnalyzeVideoArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=2_000)
     language: str | None = Field(default=None, min_length=2, max_length=35)
-    detail: Literal["standard", "detailed"] = "standard"
-    focus: str | None = Field(default=None, min_length=1, max_length=2_000)
+    analysis_mode: Literal["overview", "fine_grained"] = Field(
+        default="overview",
+        validation_alias=AliasChoices("analysis_mode", "detail"),
+        description=(
+            "This controls temporal sampling cost, not output quality. Use overview by default "
+            "and for summaries, product presentations, pitches, speaker scripts, content "
+            "repurposing, and broad chronology. Use fine_grained only when the requested result "
+            "must reconstruct exact short actions, such as step-by-step instructions, precise UI "
+            "sequences, or troubleshooting. A polished or detailed output alone does not require "
+            "fine_grained."
+        ),
+    )
+    focus: str = Field(
+        min_length=1,
+        max_length=2_000,
+        description=(
+            "Required analysis objective. State the user's requested deliverable or question "
+            "precisely so the analysis gathers the evidence needed for the task after the tool returns."
+        ),
+    )
+
+    @field_validator("analysis_mode", mode="before")
+    @classmethod
+    def migrate_detail_names(cls, value: Any) -> Any:
+        return {"standard": "overview", "detailed": "fine_grained"}.get(value, value)
 
 
 class SessionReadArguments(ToolArguments):
@@ -1807,6 +2033,20 @@ async def _authorize_media(
     return None
 
 
+def _media_target_matches_binding(
+    context: ToolContext, target: ResolvedMediaModel
+) -> bool:
+    expected_model_id = context.bound_options.get("media_model_id")
+    return expected_model_id is None or (
+        expected_model_id == str(target.model.id)
+        and context.bound_options.get("media_provider_id") == str(target.provider.id)
+        and context.bound_options.get("media_adapter_type")
+        == target.provider.adapter_type
+        and context.bound_options.get("media_provider_model_id")
+        == target.model.model_id
+    )
+
+
 async def _update_agent_identity(
     arguments: UpdateAgentIdentityArguments, context: ToolContext
 ) -> ToolResult:
@@ -1880,6 +2120,8 @@ async def _generate_image(
         ModelCapability.IMAGE_GENERATION,
         active_model_id=context.model_id,
     )
+    if not _media_target_matches_binding(context, target):
+        return ToolResult.error("tool.unavailable")
     target_trust_level = target.model.trust_level or target.provider.trust_level
     if error := await _authorize_media(
         context, "media.generate.image", target
@@ -1923,6 +2165,8 @@ async def _edit_image(
         ModelCapability.IMAGE_EDITING,
         active_model_id=context.model_id,
     )
+    if not _media_target_matches_binding(context, target):
+        return ToolResult.error("tool.unavailable")
     target_trust_level = target.model.trust_level or target.provider.trust_level
     attachments = list(
         (
@@ -1975,11 +2219,6 @@ async def _edit_image(
         prompt=arguments.prompt,
         images=tuple(images),
         source_attachment_ids=source_attachment_ids,
-        size=(
-            f"{arguments.width or 512}x{arguments.height or 512}"
-            if arguments.width is not None or arguments.height is not None
-            else None
-        ),
         timeout=context.tool_settings.edit_image.timeout_seconds,
         active_model_id=context.model_id,
         expected_model_id=target.model.id,
@@ -2157,7 +2396,7 @@ async def _analyze_video(
             data,
             source_trust,
             arguments.language,
-            arguments.detail,
+            arguments.analysis_mode,
             arguments.focus,
         )
     except TimeoutError:
@@ -2699,14 +2938,35 @@ async def _memory_retrieve(
     )
 
 
+async def _question(arguments: QuestionArguments, context: ToolContext) -> ToolResult:
+    answers = await context.ask_user(arguments)
+    if answers is None:
+        return ToolResult.error("question.expired")
+    if answers == "rejected":
+        return ToolResult.error("question.rejected")
+    return ToolResult.json(
+        {
+            "answers": [
+                {
+                    "questionId": question.id,
+                    "question": question.question,
+                    "answers": answers[question.id],
+                    "answered": bool(answers[question.id]),
+                }
+                for question in arguments.questions
+            ]
+        }
+    )
+
+
 _FILESYSTEM_READ = ToolAction(
     "filesystem.read", "Lesen", ToolExecutionPolicy.AUTO
 )
 _FILESYSTEM_WRITE = ToolAction(
-    "filesystem.write", "Schreiben", ToolExecutionPolicy.AUTO
+    "filesystem.write", "Schreiben", ToolExecutionPolicy.AUTO, mutates=True
 )
 _FILESYSTEM_DELETE = ToolAction(
-    "filesystem.delete", "Löschen", ToolExecutionPolicy.AUTO
+    "filesystem.delete", "Löschen", ToolExecutionPolicy.AUTO, mutates=True
 )
 _WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO)
 _WEB_FETCH = ToolAction(
@@ -2723,11 +2983,37 @@ _SESSION_TOOL_RESULT_READ = ToolAction(
     configurable=False,
 )
 _MEMORY_READ = ToolAction("memory.read", "Memories lesen", ToolExecutionPolicy.AUTO)
-_MEMORY_WRITE = ToolAction("memory.write", "Memories speichern", ToolExecutionPolicy.ASK)
+_MEMORY_WRITE = ToolAction(
+    "memory.write", "Memories speichern", ToolExecutionPolicy.ASK, mutates=True
+)
 
 
 tool_registry = ToolRegistry(
     [
+        ToolDefinition(
+            "question",
+            "Use this tool instead of asking in assistant text when the user's requested action "
+            "cannot continue without missing user-specific information. Do not use it when the "
+            "request can be completed as stated. Ask all details required by the target action but "
+            "omit optional fields unless the user mentioned them or they disambiguate the action. "
+            "Put all related questions in one call and wait for all answers. Every question object "
+            "requires id, type, header, and question. Example free-text item: "
+            '{"id":"date","type":"free_text","header":"Date","question":"When?"}. '
+            "Example choice item: "
+            '{"id":"format","type":"single_choice","header":"Format",'
+            '"question":"Which format?","options":[{"label":"PDF"},{"label":"Markdown"}]}. '
+            "Use single_choice for exactly one option, "
+            "multiple_choice for one or more options, and free_text for an open answer. Only choice "
+            "questions use options; each option is an object with label and optional description. "
+            "Users may leave questions unanswered. Choice questions allow one custom answer by "
+            "default, so never add an Other option. Call this tool alone, never together with "
+            "another tool call.",
+            QuestionArguments,
+            _question,
+            group="agent",
+            label="Rückfrage stellen",
+            icon="help_outline",
+        ),
         ToolDefinition(
             "list_directory",
             "List one directory in an explicit file root. Set root to session or workspace. "
@@ -2877,7 +3163,10 @@ tool_registry = ToolRegistry(
             icon="image",
             actions=(
                 ToolAction(
-                    "media.generate.image", "Bilder erzeugen", ToolExecutionPolicy.DISABLED
+                    "media.generate.image",
+                    "Bilder erzeugen",
+                    ToolExecutionPolicy.DISABLED,
+                    mutates=True,
                 ),
             ),
         ),
@@ -2895,7 +3184,10 @@ tool_registry = ToolRegistry(
             icon="edit",
             actions=(
                 ToolAction(
-                    "media.edit.image", "Bilder bearbeiten", ToolExecutionPolicy.ASK
+                    "media.edit.image",
+                    "Bilder bearbeiten",
+                    ToolExecutionPolicy.ASK,
+                    mutates=True,
                 ),
             ),
         ),
@@ -2913,6 +3205,7 @@ tool_registry = ToolRegistry(
                     "media.generate.speech",
                     "Sprache erzeugen",
                     ToolExecutionPolicy.DISABLED,
+                    mutates=True,
                 ),
             ),
         ),
@@ -2927,7 +3220,10 @@ tool_registry = ToolRegistry(
             icon="graphic_eq",
             actions=(
                 ToolAction(
-                    "media.generate.audio", "Audio erzeugen", ToolExecutionPolicy.DISABLED
+                    "media.generate.audio",
+                    "Audio erzeugen",
+                    ToolExecutionPolicy.DISABLED,
+                    mutates=True,
                 ),
             ),
         ),
@@ -2952,8 +3248,14 @@ tool_registry = ToolRegistry(
             "analyze_video",
             "Analyze an MP4 or WebM video from a session or workspace path. The result describes "
             "visual events in chronological order and includes spoken content when audio exists. "
-            "Set detail to detailed for dense UI changes or short events, and focus to the user's "
-            "specific objective. Use relative POSIX paths without root names.",
+            "Analysis mode controls sampling cost, not answer quality. Default to overview, including "
+            "for presentations, pitches, and speaker scripts. Use fine_grained only when exact short "
+            "actions must be reconstructed for instructions or troubleshooting. Set focus to the "
+            "user's requested deliverable. "
+            "After a successful result, complete the user's original requested deliverable from that "
+            "result. Do not analyze or read the same video again unless the result contains an error. "
+            "A timeout does not indicate video length; report only host-provided duration metadata. "
+            "Use relative POSIX paths without root names.",
             AnalyzeVideoArguments,
             _analyze_video,
             required_capability="media.analyze.video",
@@ -3068,6 +3370,7 @@ tool_registry = ToolRegistry(
                     "settings.agent_identity.update",
                     "Persona ändern",
                     ToolExecutionPolicy.ASK,
+                    mutates=True,
                 ),
             ),
         ),

@@ -50,7 +50,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 4
+    assert INVENTORY_VERSION == 8
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -82,7 +82,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 110
+    assert 80 <= len(CASES) <= 120
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -105,7 +105,6 @@ def test_inventory_names_all_host_only_contracts_with_precise_reasons() -> None:
     }
 
     assert {
-        "integration.prompt_fragments",
         "compaction.deterministic_fallback",
         "title.tag_quote_parsing",
         "privacy.unknown_or_altered_marker_rejection",
@@ -150,6 +149,183 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     media_messages, media_tools = build_case(_case("transcribe_audio_uses_attachment_uuid"))
     assert "verified PCM audio derivative" in media_messages[0]["content"]
     assert [tool["name"] for tool in media_tools] == ["transcribe_audio"]
+
+    gpt_image_messages, _tools = build_case(_case("generate_image_uses_prompt"))
+    z_image_messages, _tools = build_case(
+        _case("z_image_turbo_uses_natural_language_prompt")
+    )
+    assert "GPT Image 2 generation prompt contract" in gpt_image_messages[0]["content"]
+    assert "Z-Image Turbo generation prompt contract" in z_image_messages[0]["content"]
+
+    video_case = _case("analyze_video_product_presentation_uses_overview")
+    video_messages, video_tools = build_case(video_case)
+    video_names = {tool["name"] for tool in video_tools}
+    assert video_case.tool_choice == "auto"
+    assert {"analyze_video", "web_search", "session_search"} <= video_names
+    assert "duration 00:04:00.000" in video_messages[-1]["content"]
+    mode = next(tool for tool in video_tools if tool["name"] == "analyze_video")[
+        "parameters"
+    ]["properties"]["analysis_mode"]
+    assert mode["enum"] == ["overview", "fine_grained"]
+
+    completion_messages, _tools = build_case(
+        _case("analyze_video_result_becomes_product_presentation")
+    )
+    assert [message["role"] for message in completion_messages[-3:]] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert '"durationMs": 240000' in completion_messages[-1]["content"]
+
+    calendar_messages, calendar_tools = build_case(
+        _case("calendar_missing_details_uses_question")
+    )
+    assert [tool["name"] for tool in calendar_tools] == [
+        "question",
+        "calendar_create_event",
+    ]
+    assert "instead of asking in assistant text" in calendar_tools[0]["description"]
+    assert "requires id, type, header, and question" in calendar_tools[0]["description"]
+    assert '"options":[{"label":"PDF"}' in calendar_tools[0]["description"]
+    assert "Timed events require both start and end" in calendar_tools[1]["description"]
+    assert "A default calendar is configured" in calendar_messages[0]["content"]
+    assert "Missing-information contract" in calendar_messages[0]["content"]
+    create_required = calendar_tools[1]["parameters"]["required"]
+    assert "integration_id" not in create_required
+    assert "calendar_key" not in create_required
+
+    continuation_messages, _tools = build_case(
+        _case("answered_calendar_questions_continue_action")
+    )
+    assert [message["role"] for message in continuation_messages[-3:]] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+
+
+def test_evaluator_applies_tool_argument_defaults() -> None:
+    case = _case("analyze_video_uses_root_and_path")
+    result = ProviderResult(
+        tool_calls=[
+            ToolCall(
+                "video",
+                "analyze_video",
+                {
+                    "root": "session",
+                    "path": f"attachments/{prompt_eval.ATTACHMENT_ID}/video.mp4",
+                    "focus": "Analyze the video",
+                },
+            )
+        ]
+    )
+
+    assert evaluate(case, result) == []
+
+
+def test_question_evaluator_checks_selection_payload_and_continuation() -> None:
+    question_case = _case("calendar_missing_details_uses_question")
+    valid_question = ProviderResult(
+        tool_calls=[
+            ToolCall(
+                "question",
+                "question",
+                {
+                    "questions": [
+                        {
+                            "id": "summary",
+                            "type": "free_text",
+                            "header": "Termin",
+                            "question": "Was soll der Termin sein?",
+                        },
+                        {
+                            "id": "start",
+                            "type": "free_text",
+                            "header": "Beginn",
+                            "question": "Wann beginnt der Termin?",
+                        },
+                        {
+                            "id": "duration",
+                            "type": "free_text",
+                            "header": "Dauer",
+                            "question": "Wie lange dauert der Termin?",
+                        },
+                    ]
+                },
+            )
+        ]
+    )
+
+    assert evaluate(question_case, valid_question) == []
+
+    invalid_question = replace(
+        valid_question,
+        tool_calls=[
+            ToolCall(
+                "question",
+                "question",
+                {
+                    "questions": [
+                        {
+                            "id": "summary",
+                            "type": "free_text",
+                            "header": "Ort / Ort",
+                            "question": "Was soll der Termin sein?",
+                        },
+                        {
+                            "id": "start",
+                            "type": "free_text",
+                            "header": "Beginn",
+                            "question": "Wann beginnt der Termin?",
+                        },
+                    ]
+                },
+            )
+        ],
+    )
+    failures = evaluate(question_case, invalid_question)
+    assert "question header repeats a word: 'ort / ort'" in failures
+    assert any("Dauer" in failure for failure in failures)
+
+    complete_case = _case("complete_calendar_event_skips_question")
+    valid_create = ProviderResult(
+        tool_calls=[
+            ToolCall(
+                "calendar",
+                "calendar_create_event",
+                {
+                    "summary": "Zahnarzt",
+                    "timing": {
+                        "type": "timed",
+                        "start": "2026-07-28T10:00:00+02:00",
+                        "end": "2026-07-28T11:00:00+02:00",
+                    },
+                },
+            )
+        ]
+    )
+
+    assert evaluate(complete_case, valid_create) == []
+    invalid_create = replace(
+        valid_create,
+        tool_calls=[
+            ToolCall(
+                "calendar",
+                "calendar_create_event",
+                {
+                    "summary": "Zahnarzt",
+                    "timing": {
+                        "start": "2026-07-28T10:00:00+02:00",
+                        "end": "2026-07-28T11:00:00+02:00",
+                    },
+                },
+            )
+        ],
+    )
+    assert "calendar_create_event returned invalid arguments" in evaluate(
+        complete_case, invalid_create
+    )
 
 
 def test_per_case_output_limits_include_exact_title_runtime_limit() -> None:
@@ -797,11 +973,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 115
-    assert payload["contractCount"] == 217
-    assert "Cases: 102" in report
-    assert "Semantic contracts: 115" in report
-    assert "All inventory rows: 217" in report
+    assert payload["semanticContractCount"] == 119
+    assert payload["contractCount"] == 237
+    assert "Cases: 118" in report
+    assert "Semantic contracts: 119" in report
+    assert "All inventory rows: 237" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

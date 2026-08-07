@@ -43,6 +43,8 @@ Unter **Einstellungen > Integrationen** können Sie mehrere CalDAV-Konten mit Se
 
 Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**. Serverseitig schreibgeschützte Kalender bleiben unabhängig von der MatoLoop-Richtlinie schreibgeschützt.
 
+Auf derselben Seite können Sie einen Kalender dieses Kontos als installationsweiten **Standardkalender** auswählen. Unspezifische Kalenderabfragen und neue Termine verwenden ihn automatisch. Wenn Sie ausdrücklich einen anderen Kalender angeben, hat diese Auswahl Vorrang. Pro Installation kann nur ein Standardkalender aktiv sein.
+
 Lesefreigaben können für die aktuelle Chat-Session gelten. Schreib- und Löschfreigaben gelten nur für den konkreten Vorgang. Wiederkehrende Termine und Termine mit Einladungs- oder unbekannten Eigenschaften können gelesen, aber in der ersten Version nicht verändert werden.
 
 ## Webfetch konfigurieren

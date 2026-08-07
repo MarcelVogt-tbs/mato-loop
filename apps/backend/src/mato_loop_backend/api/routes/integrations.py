@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.tools import (
@@ -31,6 +31,7 @@ from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import read_credential, require_user
 from mato_loop_backend.settings import (
+    DefaultCalendarSettings,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -84,6 +85,11 @@ class IntegrationAccessRequest(BaseModel):
 
     policies: dict[str, ToolExecutionPolicy] | None = None
     resources: dict[str, dict[str, ToolExecutionPolicy]] = Field(default_factory=dict)
+    default_resource_key: str | None = Field(
+        default=None,
+        max_length=500,
+        validation_alias=AliasChoices("defaultResourceKey", "default_resource_key"),
+    )
 
 
 def _provider_payload(provider: IntegrationInstance) -> dict:
@@ -205,7 +211,7 @@ def _access_payload(
         }
         for action in resource_actions
     ]
-    return {
+    payload = {
         "integrationId": str(instance.id),
         "actions": actions,
         "resources": [
@@ -240,6 +246,16 @@ def _access_payload(
             for resource in resources
         ],
     }
+    if instance.integration_type == "calendar" and instance.adapter_type == "caldav":
+        default_calendar = tools.default_calendar
+        payload["defaultResourceKey"] = (
+            default_calendar.calendar_key
+            if default_calendar is not None
+            and default_calendar.integration_id == instance.id
+            and any(resource.key == default_calendar.calendar_key for resource in resources)
+            else None
+        )
+    return payload
 
 
 def search_settings_payload(settings: IntegrationSettings) -> dict:
@@ -417,6 +433,17 @@ async def update_integration_access(
         raise ApiError(422, "validation.invalidChoice", field="resources")
     if payload.policies is not None and set(payload.policies) - capabilities:
         raise ApiError(422, "validation.invalidChoice", field="policies")
+    default_resource_changed = "default_resource_key" in payload.model_fields_set
+    if default_resource_changed and (
+        instance.integration_type != "calendar" or instance.adapter_type != "caldav"
+    ):
+        raise ApiError(422, "validation.invalidChoice", field="default_resource_key")
+    if (
+        default_resource_changed
+        and payload.default_resource_key is not None
+        and payload.default_resource_key not in resource_keys
+    ):
+        raise ApiError(422, "validation.invalidChoice", field="default_resource_key")
     if payload.policies is not None and any(
         policy not in actions[capability].allowed_policies
         for capability, policy in payload.policies.items()
@@ -453,6 +480,22 @@ async def update_integration_access(
         tools.resource_policies[str(integration_id)] = normalized
     else:
         tools.resource_policies.pop(str(integration_id), None)
+    labels = {resource.key: resource.label for resource in resources}
+    if labels:
+        tools.resource_labels[str(integration_id)] = labels
+    else:
+        tools.resource_labels.pop(str(integration_id), None)
+    if default_resource_changed:
+        if payload.default_resource_key is not None:
+            tools.default_calendar = DefaultCalendarSettings(
+                integration_id=integration_id,
+                calendar_key=payload.default_resource_key,
+            )
+        elif (
+            tools.default_calendar is not None
+            and tools.default_calendar.integration_id == integration_id
+        ):
+            tools.default_calendar = None
     await SettingsStore.save(db, tools)
     await db.commit()
     return _access_payload(current, resources, tools)

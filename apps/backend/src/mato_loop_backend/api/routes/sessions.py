@@ -459,7 +459,7 @@ async def _session_detail_payload(db: AsyncSession, item: ChatSession) -> dict[s
         select(AgentRun)
         .where(
             AgentRun.session_id == item.id,
-            AgentRun.status.in_(["queued", "running", "waiting_approval"]),
+            AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]),
         )
         .order_by(AgentRun.created_at.desc())
     )
@@ -522,7 +522,7 @@ async def list_sessions(
         select(AgentRun.status)
         .where(
             AgentRun.session_id == ChatSession.id,
-            AgentRun.status.in_(["queued", "running", "waiting_approval"]),
+            AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]),
         )
         .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
         .limit(1)
@@ -771,7 +771,7 @@ async def update_session(
         active = await db.scalar(
             select(AgentRun.id).where(
                 AgentRun.session_id == session_id,
-                AgentRun.status.in_(["queued", "running", "waiting_approval"]),
+                AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]),
             )
         )
         if active is not None:
@@ -834,7 +834,7 @@ async def delete_session(
             await db.scalars(
                 select(AgentRun).where(
                     AgentRun.session_id == session_id,
-                    AgentRun.status.in_(["queued", "running", "waiting_approval"]),
+                    AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]),
                 )
             )
         ).all()
@@ -996,7 +996,7 @@ async def _send_message(
     active = await db.scalar(
         select(AgentRun).where(
             AgentRun.session_id == session_id,
-            AgentRun.status.in_(["queued", "running", "waiting_approval"]),
+            AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]),
         )
     )
     if active:

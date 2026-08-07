@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from uuid import UUID
 
 import httpx
@@ -115,8 +115,8 @@ async def test_report_query_parses_timed_and_all_day_events_with_etags() -> None
 VERSION:2.0
 BEGIN:VEVENT
 UID:timed-1
-DTSTART:20260806T090000Z
-DTEND:20260806T100000Z
+DTSTART;TZID=Europe/Berlin:20260806T090000
+DTEND;TZID=Europe/Berlin:20260806T100000
 SUMMARY:Standup
 LOCATION:Room 1
 END:VEVENT
@@ -167,7 +167,7 @@ END:VCALENDAR
     assert b'start="20260801T000000Z"' in captured.content
     assert b'end="20260901T000000Z"' in captured.content
     assert b"expand" in captured.content
-    assert events[0].start == datetime(2026, 8, 6, 9, tzinfo=UTC)
+    assert events[0].start == datetime(2026, 8, 6, 7, tzinfo=UTC)
     assert events[0].etag == '"timed-etag"'
     assert events[0].all_day is False
     assert events[1].start == date(2026, 8, 7)
@@ -186,8 +186,8 @@ async def test_conditional_writes_use_deterministic_uid_and_href() -> None:
     key = UUID("12345678-1234-5678-1234-567812345678")
     draft = CalDavEventDraft(
         summary="Planning",
-        start=datetime(2026, 8, 6, 9, tzinfo=UTC),
-        end=datetime(2026, 8, 6, 10, tzinfo=UTC),
+        start=datetime(2026, 8, 6, 9, tzinfo=timezone(timedelta(hours=2))),
+        end=datetime(2026, 8, 6, 10, tzinfo=timezone(timedelta(hours=2))),
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = CalDavClient(
@@ -200,11 +200,69 @@ async def test_conditional_writes_use_deterministic_uid_and_href() -> None:
     assert requests[0].url.path.endswith("/12345678-1234-5678-1234-567812345678.ics")
     assert requests[0].headers["if-none-match"] == "*"
     assert b"UID:12345678-1234-5678-1234-567812345678@mato-loop" in requests[0].content
+    assert b"DTSTART:20260806T070000Z" in requests[0].content
+    assert b"DTEND:20260806T080000Z" in requests[0].content
+    assert b"TZID" not in requests[0].content
+    assert b"DTSTART:20260806T070000Z" in requests[1].content
+    assert created.start == datetime(2026, 8, 6, 7, tzinfo=UTC)
+    assert updated.end == datetime(2026, 8, 6, 8, tzinfo=UTC)
     assert requests[1].headers["if-match"] == '"created"'
     assert requests[2].headers["if-match"] == '"updated"'
     assert [request.method for request in requests] == ["PUT", "PUT", "DELETE"]
 
 
+def test_all_day_writes_remain_date_values() -> None:
+    draft = CalDavEventDraft(
+        summary="Holiday",
+        start=date(2026, 8, 6),
+        end=date(2026, 8, 7),
+    )
+
+    payload = CalDavClient._calendar_data(object(), "uid", draft)
+
+    assert b"DTSTART;VALUE=DATE:20260806" in payload
+    assert b"DTEND;VALUE=DATE:20260807" in payload
+
+
+@pytest.mark.parametrize(
+    "start",
+    [
+        "DTSTART:20260806T090000",
+        'DTSTART;TZID="Unknown/Zone":20260806T090000',
+    ],
+)
+async def test_query_rejects_timed_events_without_a_resolvable_timezone(start) -> None:
+    calendar_data = f"""BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:ambiguous
+{start}
+DTEND:20260806T100000
+SUMMARY:Ambiguous
+END:VEVENT
+END:VCALENDAR
+"""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            207,
+            text=_multistatus(
+                _response(
+                    f"<c:calendar-data><![CDATA[{calendar_data}]]></c:calendar-data>",
+                    "/home/work/ambiguous.ics",
+                )
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(CalDavError, match="caldav.malformedCalendarData"):
+            await CalDavClient(
+                "https://calendar.example.test/", "alice", "secret", client=http
+            ).query_events(
+                _calendar(),
+                datetime(2026, 8, 1, tzinfo=UTC),
+                datetime(2026, 9, 1, tzinfo=UTC),
+            )
 async def test_cross_origin_discovery_href_is_rejected_without_following_it() -> None:
     requests = 0
 

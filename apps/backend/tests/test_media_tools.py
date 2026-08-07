@@ -6,6 +6,12 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.media_prompt_profiles import (
+    GPT_IMAGE_2_EDIT_INSTRUCTIONS,
+    GPT_IMAGE_2_GENERATE_INSTRUCTIONS,
+    Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,
+    with_media_prompt_profiles,
+)
 from mato_loop_backend.agent.permissions import PermissionDecision, media_permission
 from mato_loop_backend.agent.tools import (
     ToolContext,
@@ -237,7 +243,7 @@ def test_image_target_prefers_native_provider_model_over_global_default() -> Non
     )
     fallback = ModelConfig(
         provider_id=lemonade.id,
-        model_id="image-fallback",
+        model_id="Z-Image-Turbo",
         capabilities={ModelCapability.IMAGE_GENERATION},
     )
     settings = AiSettings(
@@ -273,6 +279,136 @@ def test_image_target_prefers_native_provider_model_over_global_default() -> Non
         ModelCapability.IMAGE_GENERATION,
         active_model_id=chat.id,
     ) == (lemonade, fallback)
+
+
+def test_media_prompt_profiles_follow_offered_resolved_target() -> None:
+    codex = LlmProviderConfig(
+        name="Codex",
+        adapter_type="openai-codex",
+        credential_id=uuid4(),
+    )
+    lemonade = LlmProviderConfig(name="Lemonade", adapter_type="lemonade")
+    chat = ModelConfig(provider_id=codex.id, model_id="openai-codex/gpt-test")
+    native = ModelConfig(
+        provider_id=codex.id,
+        model_id="openai-codex/gpt-image-2",
+        capabilities={
+            ModelCapability.IMAGE_GENERATION,
+            ModelCapability.IMAGE_EDITING,
+        },
+        discovery_metadata={"native_for_chat_provider": True},
+    )
+    z_image = ModelConfig(
+        provider_id=lemonade.id,
+        model_id="Z-Image-Turbo",
+        capabilities={ModelCapability.IMAGE_GENERATION},
+    )
+    settings = AiSettings(
+        providers=[codex, lemonade],
+        models=[chat, native, z_image],
+        image_generation_model_id=z_image.id,
+    )
+    offered = tool_registry.effective(
+        IntegrationSettings(),
+        "read-only",
+        tool_capabilities={"media.generate.image", "media.edit.image"},
+    ).only("generate_image", "edit_image")
+
+    profiled = with_media_prompt_profiles(
+        offered, settings, active_model_id=chat.id
+    )
+
+    assert profiled.prompt_fragments == (
+        GPT_IMAGE_2_GENERATE_INSTRUCTIONS,
+        GPT_IMAGE_2_EDIT_INSTRUCTIONS,
+    )
+    assert profiled.tools["generate_image"].selected_options["media_model_id"] == str(
+        native.id
+    )
+
+    native.enabled = False
+    generation_only = offered.only("generate_image")
+    profiled = with_media_prompt_profiles(
+        generation_only, settings, active_model_id=chat.id
+    )
+
+    assert profiled.prompt_fragments == (Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,)
+    assert profiled.tools["generate_image"].selected_options == {
+        "media_provider_id": str(lemonade.id),
+        "media_model_id": str(z_image.id),
+        "media_adapter_type": "lemonade",
+        "media_provider_model_id": "Z-Image-Turbo",
+    }
+
+
+def test_lemonade_does_not_advertise_unimplemented_image_editing() -> None:
+    provider = LlmProviderConfig(name="Lemonade", adapter_type="lemonade")
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="manual-edit-model",
+        capabilities={ModelCapability.IMAGE_EDITING},
+    )
+    settings = AiSettings(
+        providers=[provider],
+        models=[model],
+        image_generation_model_id=model.id,
+    )
+
+    assert ModelCapability.IMAGE_EDITING not in available_media_capabilities(settings)
+
+
+async def test_media_tool_rejects_target_changed_after_prompt_binding(
+    tmp_path, monkeypatch
+) -> None:
+    codex = LlmProviderConfig(
+        name="Codex",
+        adapter_type="openai-codex",
+        credential_id=uuid4(),
+    )
+    lemonade = LlmProviderConfig(
+        name="Lemonade",
+        adapter_type="lemonade",
+        config={"base_url": "https://lemonade.test/v1"},
+    )
+    chat = ModelConfig(provider_id=codex.id, model_id="openai-codex/gpt-test")
+    native = ModelConfig(
+        provider_id=codex.id,
+        model_id="openai-codex/gpt-image-2",
+        capabilities={ModelCapability.IMAGE_GENERATION},
+        discovery_metadata={"native_for_chat_provider": True},
+    )
+    z_image = ModelConfig(
+        provider_id=lemonade.id,
+        model_id="Z-Image-Turbo",
+        capabilities={ModelCapability.IMAGE_GENERATION},
+    )
+    initial = AiSettings(
+        providers=[codex, lemonade],
+        models=[chat, native, z_image],
+        image_generation_model_id=z_image.id,
+    )
+    changed = initial.model_copy(deep=True)
+    changed.models[1].enabled = False
+    tools = ToolSettings.model_validate({"generateImage": {"policy": "auto"}})
+    offered = tool_registry.effective(
+        IntegrationSettings(),
+        "read-only",
+        tool_capabilities={"media.generate.image"},
+        tool_settings=tools,
+    ).only("generate_image")
+    bound = with_media_prompt_profiles(offered, initial, active_model_id=chat.id)
+    call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
+    tool_context = context(tmp_path, call)
+    tool_context.model_id = chat.id
+    mock_settings_load(monkeypatch, tools, changed)
+    generate = AsyncMock(side_effect=AssertionError("Provider must not be called"))
+    monkeypatch.setattr(MediaService, "generate_image", generate)
+
+    result = await bound.execute(call, tool_context)
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+    generate.assert_not_awaited()
+    tool_context.ask_handler.assert_not_awaited()
 
 
 async def test_edit_image_sends_ordered_session_images_and_scopes_approval(

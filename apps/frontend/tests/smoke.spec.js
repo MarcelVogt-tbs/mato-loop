@@ -17,5 +17,9 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-tools',
       'settings-memory'
     ])
+    expect(
+      settingsRoute.children.find((route) => route.name === 'settings-integrations').children
+        .map((route) => route.name)
+    ).toEqual(['settings-integration-access'])
   })
 })

@@ -14,6 +14,7 @@ vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
 import { MAX_ATTACHMENT_DRAFT_BYTES, useChatStore } from '../src/stores/chat'
+import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
 
 const originalURL = globalThis.URL
@@ -614,7 +615,7 @@ describe('chat drafts', () => {
     })
   })
 
-  it('tracks model, streaming and approval phases from SSE', () => {
+  it('tracks model, streaming and interaction phases from SSE', () => {
     global.EventSource = EventSourceMock
     api.get.mockResolvedValue(sessionPage())
     const chat = useChatStore()
@@ -668,6 +669,20 @@ describe('chat drafts', () => {
     expect(chat.sessions[0].activeRunStatus).toBe('waiting_approval')
 
     source.emit('approval.resolved', {})
+    expect(chat.sessions[0].activeRunStatus).toBe('running')
+
+    source.emit('question.created', {
+      question: { id: 'question-1', toolCallId: 'call-2', questions: [] }
+    })
+    expect(chat.activity).toMatchObject({
+      phase: 'waiting_input',
+      tool: 'question',
+      toolCallId: 'call-2'
+    })
+    expect(chat.sessions[0].activeRunStatus).toBe('waiting_input')
+    expect(useQuestionStore().pending).toHaveLength(1)
+
+    source.emit('question.rejected', {})
     expect(chat.sessions[0].activeRunStatus).toBe('running')
   })
 

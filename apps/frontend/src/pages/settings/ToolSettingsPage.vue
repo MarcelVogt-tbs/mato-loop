@@ -372,7 +372,7 @@ const form = reactive({
   generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
   generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
   transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
-  analyzeVideo: { policy: 'ask', timeoutSeconds: 900 }
+  analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 }
 })
 
 function assignForm(settings) {

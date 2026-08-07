@@ -1,7 +1,7 @@
 export function buildChatTranscript(
   messages = [],
   approvals = [],
-  { running = false, toolExecutionActive = running, activeToolCallId = null } = {}
+  { running = false, toolExecutionActive = running, activeToolCallId = null, questions = [] } = {}
 ) {
   const results = new Map()
   for (const message of messages) {
@@ -17,12 +17,15 @@ export function buildChatTranscript(
     if (toolCallId) approvalsByToolCall.set(toolCallId, approval)
   }
 
+  const questionsByToolCall = new Map(questions.map((question) => [question.toolCallId, question]))
+
   let lastUserIndex = -1
   messages.forEach((message, index) => {
     if (message.role === 'user') lastUserIndex = index
   })
 
   const matchedApprovalIds = new Set()
+  const matchedQuestionIds = new Set()
   let activeAssigned = false
   let executionBlocked = false
   const transcriptMessages = messages
@@ -34,9 +37,11 @@ export function buildChatTranscript(
       toolCalls: (message.toolCalls || []).map((tool, toolIndex) => {
         const currentRound = running && index > lastUserIndex
         const approval = currentRound ? approvalsByToolCall.get(tool.id) || null : null
+        const question = currentRound ? questionsByToolCall.get(tool.id) || null : null
         const result = results.get(tool.id)?.shift() || null
         if (approval) matchedApprovalIds.add(approval.id)
-        const active = currentRound && toolExecutionActive && !result && !approval && (activeToolCallId
+        if (question) matchedQuestionIds.add(question.id)
+        const active = currentRound && toolExecutionActive && !result && !approval && !question && (activeToolCallId
           ? tool.id === activeToolCallId
           : !activeAssigned && !executionBlocked)
         if (active) activeAssigned = true
@@ -46,6 +51,7 @@ export function buildChatTranscript(
           tool,
           result,
           approval,
+          question,
           current: currentRound,
           active
         }
@@ -135,6 +141,7 @@ export function buildChatTranscript(
 
   return {
     messages: groupedMessages,
-    unmatchedApprovals: approvals.filter((approval) => !matchedApprovalIds.has(approval.id))
+    unmatchedApprovals: approvals.filter((approval) => !matchedApprovalIds.has(approval.id)),
+    unmatchedQuestions: questions.filter((question) => !matchedQuestionIds.has(question.id))
   }
 }

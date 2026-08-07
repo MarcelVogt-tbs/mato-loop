@@ -3,6 +3,7 @@ import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
 import { cleanUrlForDisplay } from 'src/utils/webfetch'
 
 const TOOL_DISPLAY = {
+  question: { label: 'Rückfrage stellen', icon: 'help_outline' },
   list_directory: { label: 'Ordner auflisten', icon: 'folder_open' },
   read_file: { label: 'Datei lesen', icon: 'description' },
   provide_file: { label: 'Datei bereitstellen', icon: 'download' },
@@ -167,9 +168,12 @@ export function parseToolResult(content, toolName = null) {
   }
 }
 
-export function toolStatus({ result, approval, active }) {
+export function toolStatus({ result, approval, question, active }) {
   if (approval) {
     return { name: 'approval', label: 'Freigabe erforderlich', icon: 'pending_actions', color: 'warning' }
+  }
+  if (question) {
+    return { name: 'question', label: 'Antwort erforderlich', icon: 'help_outline', color: 'primary' }
   }
   if (result) {
     const { error } = parseToolResult(result.content)

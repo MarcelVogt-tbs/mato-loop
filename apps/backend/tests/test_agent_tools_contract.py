@@ -12,6 +12,8 @@ import mato_loop_backend.agent.tools as tools_module
 import mato_loop_backend.integrations.registry as integration_registry
 from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
 from mato_loop_backend.agent.tools import (
+    BoundTool,
+    EffectiveToolSet,
     ToolAction,
     ToolAttachment,
     ToolContext,
@@ -73,6 +75,59 @@ class _SharedConfig(BaseModel):
 
 async def _successful_handler(_arguments, _context) -> ToolResult:
     return ToolResult.json({"ok": True})
+
+
+async def test_bound_tool_defaults_fill_only_fully_omitted_arguments(tmp_path) -> None:
+    received = []
+
+    async def handler(arguments, _context):
+        received.append(arguments)
+        return ToolResult.json({"ok": True})
+
+    definition = ToolDefinition("example", "Example tool", _SharedArguments, handler)
+    registry = ToolRegistry([])
+    effective = EffectiveToolSet(
+        registry,
+        {
+            "example": BoundTool(
+                definition,
+                default_arguments={
+                    "integration_id": str(uuid4()),
+                    "resource_key": "default",
+                },
+            )
+        },
+    )
+    schema = effective.schemas()[0]
+    assert schema["parameters"]["required"] == ["value"]
+    assert "configured default" in schema["description"]
+
+    omitted = ToolCall("omitted", "example", {"value": "first"})
+    result = await effective.execute(omitted, _context(tmp_path, omitted))
+    assert result.is_error is False
+    assert received[-1].resource_key == "default"
+
+    explicit_id = uuid4()
+    explicit = ToolCall(
+        "explicit",
+        "example",
+        {
+            "integration_id": str(explicit_id),
+            "resource_key": "explicit",
+            "value": "second",
+        },
+    )
+    result = await effective.execute(explicit, _context(tmp_path, explicit))
+    assert result.is_error is False
+    assert received[-1].integration_id == explicit_id
+    assert received[-1].resource_key == "explicit"
+
+    partial = ToolCall(
+        "partial", "example", {"resource_key": "explicit", "value": "third"}
+    )
+    result = await effective.execute(partial, _context(tmp_path, partial))
+    assert result.is_error is True
+    assert result.metadata["errorCode"] == "tool.invalidArguments"
 
 
 def _definition(name: str = "example") -> ToolDefinition:
@@ -1937,6 +1992,28 @@ def test_memory_write_schema_describes_stable_self_context() -> None:
     assert "never enrich it with inferred geography" in schema["description"]
     assert "translation, rewriting, analysis, or extraction" in schema["description"]
     assert "action" in schema["parameters"]["required"]
+
+
+def test_video_analysis_schema_uses_semantic_modes() -> None:
+    definition = tool_registry._definitions["analyze_video"]
+    schema = definition.schema()
+    mode = schema["parameters"]["properties"]["analysis_mode"]
+
+    assert mode["enum"] == ["overview", "fine_grained"]
+    assert mode["default"] == "overview"
+    assert "product presentations" in mode["description"]
+    assert "focus" in schema["parameters"]["required"]
+    assert "Do not analyze or read the same video again" in schema["description"]
+    assert "timeout does not indicate video length" in schema["description"].lower()
+    legacy = definition.arguments_model.model_validate(
+        {
+            "root": "session",
+            "path": "attachments/video.mp4",
+            "detail": "detailed",
+            "focus": "Reconstruct the setup steps",
+        }
+    )
+    assert legacy.analysis_mode == "fine_grained"
 
 
 def test_model_facing_fields_preserve_search_scope_and_persona_text() -> None:

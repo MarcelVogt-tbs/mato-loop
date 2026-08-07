@@ -20,7 +20,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 
 logger = logging.getLogger(__name__)
-_ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval")
+_ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
 
 
 class ChatHistoryError(RuntimeError):

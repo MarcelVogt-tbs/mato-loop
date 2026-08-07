@@ -95,7 +95,7 @@ def _temperature_option(config: dict[str, Any]) -> float | None:
     return None
 
 
-def _model_image_data(data: bytes, validated: ValidatedImage) -> tuple[bytes, str]:
+def normalize_provider_image(data: bytes, validated: ValidatedImage) -> tuple[bytes, str]:
     if (
         validated.size_bytes <= _MODEL_IMAGE_MAX_BYTES
         and validated.width <= _MODEL_IMAGE_MAX_EDGE
@@ -134,7 +134,7 @@ def _read_image_data_url(storage: AttachmentStorage, attachment: dict[str, Any])
     validated = validate_image(data, attachment["mime_type"])
     if validated.sha256 != attachment["sha256"]:
         raise AttachmentStorageError("Invalid attachment file content")
-    normalized, mime_type = _model_image_data(data, validated)
+    normalized, mime_type = normalize_provider_image(data, validated)
     encoded = base64.b64encode(normalized).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
 
@@ -227,7 +227,7 @@ async def _provider_projection(
                 )
             try:
                 validated = validate_image(image.data, image.mime_type)
-                normalized, mime_type = _model_image_data(image.data, validated)
+                normalized, mime_type = normalize_provider_image(image.data, validated)
             except AttachmentError as exc:
                 raise ProviderError(
                     "Invalid direct image input", code="provider.invalidResponse"

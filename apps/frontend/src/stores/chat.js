@@ -3,6 +3,7 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
+import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { agentActivityDisplayKey } from 'src/utils/agent-activity'
 import { safeAttachmentUrl } from 'src/utils/attachments'
@@ -844,6 +845,7 @@ export const useChatStore = defineStore('chat', {
         }
         this.persistDrafts()
         void useApprovalStore().fetchPending()
+        void useQuestionStore().fetchPending().catch(() => {})
         return data
       } finally {
         this.historyActionPending = false
@@ -904,6 +906,7 @@ export const useChatStore = defineStore('chat', {
           this.updateSessionSummary(updatedSession)
         }
         void useApprovalStore().fetchPending()
+        void useQuestionStore().fetchPending().catch(() => {})
         return data
       } finally {
         this.historyActionPending = false
@@ -1064,8 +1067,8 @@ export const useChatStore = defineStore('chat', {
         if (this.eventSource !== source) return
         this.reconnectAttempts = 0
         if (this.activity.phase === 'reconnecting') {
-          const connectedPhase = run.status === 'waiting_approval'
-            ? 'waiting_approval'
+          const connectedPhase = run.status === 'waiting_approval' || run.status === 'waiting_input'
+            ? run.status
             : run.status === 'queued' ? 'queued' : 'preparing_context'
           this.setActivity(connectedPhase, { startedAt: run.createdAt })
         }
@@ -1073,8 +1076,8 @@ export const useChatStore = defineStore('chat', {
       if (run.reconnecting) {
         this.setActivity('reconnecting', { startedAt: run.createdAt })
       } else {
-        const resumedPhase = run.status === 'waiting_approval'
-          ? 'waiting_approval'
+        const resumedPhase = run.status === 'waiting_approval' || run.status === 'waiting_input'
+          ? run.status
           : run.status === 'queued' ? 'queued' : 'preparing_context'
         this.setActivity(resumedPhase, { startedAt: run.createdAt })
       }
@@ -1189,6 +1192,24 @@ export const useChatStore = defineStore('chat', {
         this.setSessionRunStatus(sessionId, 'running')
         useApprovalStore().fetchPending()
       })
+      source.addEventListener('question.created', (event) => {
+        if (this.eventSource !== source) return
+        const question = JSON.parse(event.data).question
+        this.setActivity('waiting_input', {
+          tool: 'question',
+          toolCallId: question.toolCallId
+        })
+        this.setSessionRunStatus(sessionId, 'waiting_input')
+        useQuestionStore().add(question)
+      })
+      for (const name of ['question.answered', 'question.rejected', 'question.expired']) {
+        source.addEventListener(name, () => {
+          if (this.eventSource !== source) return
+          this.setActivity('processing_tool', { tool: 'question', toolCallId: this.activity.toolCallId })
+          this.setSessionRunStatus(sessionId, 'running')
+          void useQuestionStore().fetchPending().catch(() => {})
+        })
+      }
       const finish = () => {
         if (this.eventSource !== source) return
         const current = this.current?.id === sessionId ? this.current : null
@@ -1214,6 +1235,7 @@ export const useChatStore = defineStore('chat', {
         this.refreshSession(sessionId)
         this.refreshSessions()
         useApprovalStore().fetchPending()
+        void useQuestionStore().fetchPending().catch(() => {})
         void useAgentIdentityStore().fetchIdentity({ suppressErrorToast: true }).catch(() => {})
         if (titleGenerationActive) void this.refreshGeneratedTitle(sessionId)
       }
@@ -1252,6 +1274,7 @@ export const useChatStore = defineStore('chat', {
           this.refreshSession(sessionId)
           this.refreshSessions()
           useApprovalStore().fetchPending()
+          void useQuestionStore().fetchPending().catch(() => {})
         }
         const scheduleReconnect = (runState = {}) => {
           if (this.reconnectAttempts > 3) {
@@ -1270,7 +1293,7 @@ export const useChatStore = defineStore('chat', {
             suppressErrorToast: true
           })
           if (this.selectedSessionId !== sessionId || this.runId !== runId) return
-          if (['queued', 'running', 'waiting_approval'].includes(data.status)) {
+          if (['queued', 'running', 'waiting_approval', 'waiting_input'].includes(data.status)) {
             scheduleReconnect(data)
           } else {
             stopDisconnectedRun()

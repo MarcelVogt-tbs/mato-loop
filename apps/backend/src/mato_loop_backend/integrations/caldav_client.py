@@ -438,6 +438,28 @@ class CalDavClient:
                     ):
                         raise ValueError
                     all_day = isinstance(start_value, date) and not isinstance(start_value, datetime)
+                    if all_day:
+                        if end_value is not None and isinstance(end_value, datetime):
+                            raise ValueError
+                    else:
+                        if (
+                            not isinstance(start_value, datetime)
+                            or start_value.tzinfo is None
+                            or start_value.utcoffset() is None
+                            or (
+                                end_value is not None
+                                and (
+                                    not isinstance(end_value, datetime)
+                                    or end_value.tzinfo is None
+                                    or end_value.utcoffset() is None
+                                )
+                            )
+                        ):
+                            raise ValueError
+                        start_value = start_value.astimezone(UTC)
+                        end_value = (
+                            end_value.astimezone(UTC) if end_value is not None else None
+                        )
                     events.append(
                         CalDavEvent(
                             uid=uid,
@@ -507,8 +529,18 @@ class CalDavClient:
         event = ICalendarEvent()
         event.add("uid", uid)
         event.add("dtstamp", datetime.now(UTC))
-        event.add("dtstart", draft.start)
-        event.add("dtend", draft.end)
+        event.add(
+            "dtstart",
+            draft.start.astimezone(UTC)
+            if isinstance(draft.start, datetime)
+            else draft.start,
+        )
+        event.add(
+            "dtend",
+            draft.end.astimezone(UTC)
+            if isinstance(draft.end, datetime)
+            else draft.end,
+        )
         event.add("summary", draft.summary)
         if draft.description is not None:
             event.add("description", draft.description)
@@ -578,13 +610,23 @@ class CalDavClient:
         etag: str | None,
         draft: CalDavEventDraft,
     ) -> CalDavEvent:
+        start = (
+            draft.start.astimezone(UTC)
+            if isinstance(draft.start, datetime)
+            else draft.start
+        )
+        end = (
+            draft.end.astimezone(UTC)
+            if isinstance(draft.end, datetime)
+            else draft.end
+        )
         return CalDavEvent(
             uid=uid,
             href=href,
             etag=etag,
             summary=draft.summary,
-            start=draft.start,
-            end=draft.end,
+            start=start,
+            end=end,
             all_day=isinstance(draft.start, date) and not isinstance(draft.start, datetime),
             description=draft.description,
             location=draft.location,

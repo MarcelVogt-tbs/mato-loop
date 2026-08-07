@@ -61,6 +61,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'attachment.tooLarge' } })).toBe(
       'Der Dateianhang ist zu groß.'
     )
+    expect(apiErrorMessage({ error: { code: 'question.answerTooLarge' } })).toBe(
+      'Die Antworten überschreiten das zulässige Größenlimit.'
+    )
     expect(apiErrorMessage({ error: { code: 'attachment.invalidDocument' } })).toBe(
       'Das Dokument ist beschädigt, geschützt oder überschreitet die Verarbeitungsgrenzen.'
     )

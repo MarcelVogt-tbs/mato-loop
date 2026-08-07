@@ -33,6 +33,7 @@ class PermissionRequest:
     title: str
     summary: str
     resource_display: str | None = None
+    use_integration_policy: bool = True
     policy_integration_id: UUID | None = None
     policy_resource_key: str | None = None
     policy_hard_unavailable_capabilities: frozenset[str] = frozenset()
@@ -99,6 +100,7 @@ def integration_operation_permission(
     summary: str,
     resource_key: str | None = None,
     resource_display: str | None = None,
+    use_integration_policy: bool = True,
     action_kind: str = "integration_operation",
     risk_level: str = "medium",
     available_decisions: tuple[str, ...] = (
@@ -121,7 +123,8 @@ def integration_operation_permission(
         title=title,
         summary=summary,
         resource_display=resource_display,
-        policy_integration_id=integration_id,
+        use_integration_policy=use_integration_policy,
+        policy_integration_id=integration_id if use_integration_policy else None,
         policy_resource_key=resource_key,
         available_decisions=available_decisions,
     )

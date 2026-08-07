@@ -20,7 +20,7 @@ describe('tool settings store', () => {
 
     expect(store.webFetch.defaultPolicy).toBe('auto_public')
     expect(store.editImage.policy).toBe('ask')
-    expect(store.analyzeVideo).toEqual({ policy: 'ask', timeoutSeconds: 900 })
+    expect(store.analyzeVideo).toEqual({ policy: 'ask', timeoutSeconds: 1800 })
   })
 
   it('loads and saves the complete tool settings contract without changing field names', async () => {
@@ -105,7 +105,7 @@ describe('tool settings store', () => {
         generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
         generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
         transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
-        analyzeVideo: { policy: 'ask', timeoutSeconds: 900 },
+        analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 },
         updateAgentIdentity: { policy: 'ask' }
       }
     })
@@ -127,7 +127,7 @@ describe('tool settings store', () => {
       generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
       generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
       transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
-      analyzeVideo: { policy: 'ask', timeoutSeconds: 900 },
+      analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 },
       updateAgentIdentity: { policy: 'ask' }
     })
   })

@@ -71,7 +71,6 @@ class ImageGenerationRequest:
 class ImageEditRequest:
     prompt: str
     images: tuple[tuple[bytes, str], ...]
-    size: str | None
     timeout: float
 
 
@@ -84,7 +83,14 @@ _DEFAULT_FIELDS = {
 }
 
 _ADAPTER_CAPABILITIES = {
-    "lemonade": frozenset(_DEFAULT_FIELDS),
+    "lemonade": frozenset(
+        {
+            ModelCapability.IMAGE_GENERATION,
+            ModelCapability.SPEECH_GENERATION,
+            ModelCapability.AUDIO_GENERATION,
+            ModelCapability.AUDIO_TRANSCRIPTION,
+        }
+    ),
     "openai-codex": frozenset(
         {ModelCapability.IMAGE_GENERATION, ModelCapability.IMAGE_EDITING}
     ),
@@ -234,7 +240,7 @@ async def _generate_image_with_lemonade(
         api_key=resolved.api_key,
         model=resolved.model.model_id,
         prompt=request.prompt,
-        size=request.size or "512x512",
+        size=request.size,
         steps=request.steps,
         cfg_scale=request.cfg_scale,
         seed=request.seed,
@@ -281,7 +287,6 @@ async def _edit_image_with_codex(
         credential=credential,
         images=request.images,
         prompt=request.prompt,
-        size=request.size,
         turn_id=str(uuid4()),
         timeout=request.timeout,
     )
@@ -464,28 +469,34 @@ class MediaService:
         prompt: str,
         images: tuple[tuple[bytes, str], ...],
         source_attachment_ids: tuple[UUID, ...],
-        size: str | None = None,
         timeout: float = 300,
         active_model_id: UUID | None = None,
         expected_model_id: UUID | None = None,
         expected_trust_level: TrustLevel | None = None,
     ) -> MediaResult:
         prompt = _require_text(prompt, max_length=20_000)
-        _validate_image_size(size)
         if not 1 <= len(images) <= 5 or len(images) != len(source_attachment_ids):
             raise ProviderError(
                 "Invalid image edit inputs", code="provider.configurationInvalid"
             )
-        total_bytes = 0
+        from mato_loop_backend.providers.service import normalize_provider_image
+
+        total_bytes = normalized_bytes = 0
+        normalized_images = []
         for data, mime_type in images:
             try:
                 validated = validate_image(data, mime_type)
+                normalized_data, normalized_mime_type = normalize_provider_image(
+                    data, validated
+                )
             except AttachmentError as exc:
                 raise ProviderError(
                     "Invalid image edit input", code="provider.invalidResponse"
                 ) from exc
             total_bytes += validated.size_bytes
-        if total_bytes > MAX_PROVIDER_IMAGE_BYTES:
+            normalized_bytes += len(normalized_data)
+            normalized_images.append((normalized_data, normalized_mime_type))
+        if max(total_bytes, normalized_bytes) > MAX_PROVIDER_IMAGE_BYTES:
             raise ProviderError(
                 "Image edit inputs are too large", code="provider.responseTooLarge"
             )
@@ -514,7 +525,7 @@ class MediaService:
         data, metadata = await _edit_image_with_codex(
             db,
             resolved,
-            ImageEditRequest(protected, images, size, timeout),
+            ImageEditRequest(protected, tuple(normalized_images), timeout),
         )
         metadata["sourceAttachmentIds"] = [
             str(attachment_id) for attachment_id in source_attachment_ids

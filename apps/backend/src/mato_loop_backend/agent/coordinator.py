@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from uuid import UUID
 
 
@@ -8,10 +9,10 @@ class ApprovalCoordinator:
     """Coordinates approvals inside the single supported backend process."""
 
     def __init__(self) -> None:
-        self._waiters: dict[UUID, asyncio.Future[str]] = {}
+        self._waiters: dict[UUID, asyncio.Future[Any]] = {}
         self._states: dict[UUID, str] = {}
 
-    def register(self, approval_id: UUID) -> asyncio.Future[str]:
+    def register(self, approval_id: UUID) -> asyncio.Future[Any]:
         existing = self._waiters.get(approval_id)
         if existing is not None and not existing.done():
             raise RuntimeError("approval waiter already exists")
@@ -45,7 +46,7 @@ class ApprovalCoordinator:
         self._states[approval_id] = "expiring"
         return True
 
-    def complete_resolution(self, approval_id: UUID, decision: str) -> bool:
+    def complete_resolution(self, approval_id: UUID, decision: Any) -> bool:
         waiter = self._waiters.get(approval_id)
         if (
             waiter is None
@@ -56,7 +57,7 @@ class ApprovalCoordinator:
         waiter.set_result(decision)
         return True
 
-    def resolve(self, approval_id: UUID, decision: str) -> bool:
+    def resolve(self, approval_id: UUID, decision: Any) -> bool:
         if not self.claim_resolution(approval_id):
             return False
         return self.complete_resolution(approval_id, decision)
@@ -67,3 +68,4 @@ class ApprovalCoordinator:
 
 
 approval_coordinator = ApprovalCoordinator()
+question_coordinator = ApprovalCoordinator()

@@ -48,6 +48,31 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert settings.max_compaction_requests == 3
     assert settings.historical_tool_output_tokens == 2_000
     assert ToolSettings().web_fetch.default_policy == WebFetchPolicy.AUTO_PUBLIC
+    assert ToolSettings().default_calendar is None
+    assert ToolSettings().resource_labels == {}
+
+
+def test_default_calendar_requires_a_stable_calendar_target() -> None:
+    integration_id = uuid4()
+    settings = ToolSettings.model_validate(
+        {
+            "defaultCalendar": {
+                "integrationId": str(integration_id),
+                "calendarKey": f"calendar:{'a' * 32}",
+            }
+        }
+    )
+
+    assert settings.default_calendar.integration_id == integration_id
+    with pytest.raises(ValidationError):
+        ToolSettings.model_validate(
+            {
+                "defaultCalendar": {
+                    "integrationId": str(integration_id),
+                    "calendarKey": "calendar:unstable",
+                }
+            }
+        )
 
 
 def test_ai_settings_collections_are_independent() -> None:

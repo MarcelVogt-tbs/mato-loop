@@ -152,7 +152,8 @@ const activityDisplay = computed(() => {
   }
   const icons = {
     preparing_tools: 'pending_actions',
-    waiting_approval: 'pending_actions'
+    waiting_approval: 'pending_actions',
+    waiting_input: 'help_outline'
   }
   return icons[phase] ? { icon: icons[phase], label: agentActivityLabel(props.activity) } : null
 })

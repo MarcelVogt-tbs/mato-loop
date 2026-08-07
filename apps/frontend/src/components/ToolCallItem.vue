@@ -123,6 +123,7 @@ const props = defineProps({
   tool: { type: Object, required: true },
   result: { type: Object, default: null },
   approval: { type: Object, default: null },
+  question: { type: Object, default: null },
   active: Boolean,
   technicalOnly: Boolean
 })
@@ -141,9 +142,9 @@ const attachments = computed(() => {
 })
 const fileActions = computed(() => toolFileActions(props.result))
 const status = computed(() => toolStatus(props))
-const expanded = ref(['approval', 'failed', 'denied', 'interrupted'].includes(status.value.name))
+const expanded = ref(['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name))
 const resultExpanded = ref(Boolean(resultData.value.error))
 watch(() => status.value.name, (name) => {
-  if (['approval', 'failed', 'denied', 'interrupted'].includes(name)) expanded.value = true
+  if (['approval', 'question', 'failed', 'denied', 'interrupted'].includes(name)) expanded.value = true
 })
 </script>
