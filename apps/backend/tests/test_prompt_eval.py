@@ -50,7 +50,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 8
+    assert INVENTORY_VERSION == 9
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -156,6 +156,9 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     )
     assert "GPT Image 2 generation prompt contract" in gpt_image_messages[0]["content"]
     assert "Z-Image Turbo generation prompt contract" in z_image_messages[0]["content"]
+    edit_messages, _tools = build_case(_case("edit_image_confines_precise_object_change"))
+    assert "base canvas and must remain the same scene" in edit_messages[0]["content"]
+    assert "Do not zoom, pan, rotate, reframe, extend, recrop" in edit_messages[0]["content"]
 
     video_case = _case("analyze_video_product_presentation_uses_overview")
     video_messages, video_tools = build_case(video_case)
@@ -976,10 +979,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 119
-    assert payload["contractCount"] == 237
-    assert "Cases: 118" in report
+    assert payload["contractCount"] == 239
+    assert "Cases: 120" in report
     assert "Semantic contracts: 119" in report
-    assert "All inventory rows: 237" in report
+    assert "All inventory rows: 239" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

@@ -1251,9 +1251,11 @@ class EditImageArguments(ToolArguments):
         min_length=1,
         max_length=20_000,
         description=(
-            "Complete standalone edit brief. Refer to input images by their array order. State "
-            "exactly what must change and what must remain unchanged. Quote text that must appear "
-            "verbatim. Do not add unrelated subjects, objects, or style changes."
+            "Standalone edit contract. Put the base edit target first as Image 1, identify every "
+            "other input only by its reference role, and state the requested delta before the "
+            "invariants. For localized edits, keep Image 1 as the same scene and preserve its canvas, "
+            "crop, framing, camera, perspective, geometry, identity, and unrelated content. Quote "
+            "visible text that must remain verbatim."
         ),
     )
     attachment_ids: list[UUID] = Field(
@@ -3221,9 +3223,10 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "edit_image",
             "Edit one to five image attachments from the current session and attach a new validated "
-            "result without changing the originals. Use a standalone edit brief that identifies "
-            "each input by order, states only the requested changes, and repeats everything that "
-            "must remain unchanged.",
+            "result without changing the originals. Put the base edit target first as Image 1. Use "
+            "a delta-first edit contract that names each reference role and locks the original scene, "
+            "canvas, crop, framing, camera, geometry, identity, and unrelated content unless the user "
+            "explicitly changes them.",
             EditImageArguments,
             _edit_image,
             required_capability="media.edit.image",

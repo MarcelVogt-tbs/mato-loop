@@ -62,7 +62,7 @@ ATTACHMENT_ID_2 = UUID("80000000-0000-4000-8000-000000000002")
 CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
 
-INVENTORY_VERSION = 8
+INVENTORY_VERSION = 9
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -888,10 +888,72 @@ CASES = (
             "attachment_ids": [str(ATTACHMENT_ID), str(ATTACHMENT_ID_2)]
         },
         argument_contains={
-            "prompt": ("Image 1", "Image 2", "background", "blue")
+            "prompt": (
+                "EDIT Image 1",
+                "base canvas",
+                "same scene",
+                "Image 2",
+                "background",
+                "blue",
+                "camera",
+                "crop",
+            )
         },
         argument_contains_any={"prompt": ("unchanged", "preserve", "keep")},
         argument_excludes={"prompt": ("Hintergrund", "Blau")},
+    ),
+    PromptCase(
+        id="edit_image_confines_precise_object_change",
+        kind="general",
+        user=(
+            f"Bearbeite Bild {ATTACHMENT_ID}. Ändere ausschließlich die vordere weiße Tasse zu "
+            "Grün. Szene, Positionen, Licht und Bildausschnitt müssen gleich bleiben."
+        ),
+        tools=("edit_image",),
+        system_options={"tool_instructions": (GPT_IMAGE_2_EDIT_INSTRUCTIONS,)},
+        expected_tool="edit_image",
+        expected_arguments={"attachment_ids": [str(ATTACHMENT_ID)]},
+        argument_contains={
+            "prompt": (
+                "EDIT Image 1",
+                "base canvas",
+                "same scene",
+                "green",
+                "crop",
+            )
+        },
+        argument_contains_any={"prompt": ("cup", "mug")},
+        argument_excludes={"prompt": ("Tasse", "Grün")},
+    ),
+    PromptCase(
+        id="edit_image_preserves_person_identity",
+        kind="general",
+        user=(
+            f"Bearbeite Bild {ATTACHMENT_ID}. Ersetze nur die rote Jacke der Person durch eine "
+            "blaue Jacke. Gesicht, Körper, Pose, Ausdruck, Haare, Hintergrund und Kamera bleiben "
+            "unverändert."
+        ),
+        tools=("edit_image",),
+        system_options={"tool_instructions": (GPT_IMAGE_2_EDIT_INSTRUCTIONS,)},
+        expected_tool="edit_image",
+        expected_arguments={"attachment_ids": [str(ATTACHMENT_ID)]},
+        argument_contains={
+            "prompt": (
+                "EDIT Image 1",
+                "base canvas",
+                "same scene",
+                "blue jacket",
+                "identity",
+                "face",
+                "pose",
+                "expression",
+                "hair",
+                "background",
+                "camera",
+            )
+        },
+        argument_contains_any={"prompt": ("unchanged", "preserve", "keep")},
+        argument_excludes={"prompt": ("blaue Jacke", "Gesicht", "Körper")},
     ),
     PromptCase(
         id="generate_speech_uses_text",
@@ -2705,6 +2767,8 @@ _SEMANTIC_CONTRACTS = (
             "z_image_turbo_uses_natural_language_prompt",
             "z_image_turbo_preserves_exact_prompt",
             "edit_image_preserves_unspecified_content",
+            "edit_image_confines_precise_object_change",
+            "edit_image_preserves_person_identity",
         ),
     ),
     ContractCoverage(
@@ -2713,6 +2777,8 @@ _SEMANTIC_CONTRACTS = (
         (
             "generate_image_uses_prompt",
             "edit_image_preserves_unspecified_content",
+            "edit_image_confines_precise_object_change",
+            "edit_image_preserves_person_identity",
             "generate_speech_uses_text",
             "generate_audio_uses_duration",
             "transcribe_audio_uses_attachment_uuid",
