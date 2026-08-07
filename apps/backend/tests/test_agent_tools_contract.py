@@ -785,6 +785,40 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     assert "parameters" not in catalog
 
 
+def test_policy_disabled_integration_tool_points_to_tool_settings(monkeypatch) -> None:
+    _shared_adapter(monkeypatch, AsyncMock())
+    integrations = IntegrationSettings(instances=[_shared_integration("Tasks")])
+    settings = ToolSettings.model_validate(
+        {"policies": {"tasks.read": "disabled"}}
+    )
+    effective = tool_registry.effective(
+        integrations,
+        "read-only",
+        tool_settings=settings,
+    )
+
+    groups = tool_registry.inactive_capability_groups(
+        integrations,
+        frozenset(effective.tools),
+        workspace_access="read-only",
+        webfetch_enabled=False,
+        web_search_enabled=True,
+        memory_enabled=False,
+        memory_write_enabled=False,
+        tool_capabilities=frozenset(),
+        tool_settings=settings,
+    )
+    optional = next(group for group in groups if group.startswith("Optional tools"))
+
+    assert "tasks_read" in optional
+    assert 'enable them under "Einstellungen > Tools"' in optional
+    assert all(
+        "tasks_read" not in group
+        for group in groups
+        if group.startswith("Integration tools")
+    )
+
+
 def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:
     settings = ToolSettings.model_validate(
         {"policies": {"filesystem.delete": "disabled"}}

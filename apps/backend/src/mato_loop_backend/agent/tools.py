@@ -497,11 +497,7 @@ class ToolRegistry:
                 == ToolExecutionPolicy.DISABLED
                 for action in definition.actions
             ):
-                reason = (
-                    "integrations"
-                    if definition.group == "integrations"
-                    else "settings"
-                )
+                reason = "settings"
             else:
                 reason = "temporary"
             grouped[reason].append(name)
