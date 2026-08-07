@@ -110,6 +110,7 @@
                     dense
                     v-ripple
                     class="session-list-item items-center rounded-borders q-px-sm q-py-xs q-my-xs"
+                    :class="{ 'session-list-item--menu-open': openActionMenuSessionId === session.id }"
                     :active="route.query.session === session.id"
                     :active-class="$q.dark.isActive ? 'bg-grey-9 text-white' : 'bg-grey-3 text-dark'"
                     @click="openSession(session.id)"
@@ -194,6 +195,8 @@
                           self="top right"
                           :offset="[0, 8]"
                           class="app-action-menu"
+                          @before-show="openActionMenuSessionId = session.id"
+                          @hide="closeActionMenu(session.id)"
                         >
                           <q-list padding class="session-actions-menu">
                             <q-item clickable v-ripple v-close-popup @click="openRenameDialog(session)">
@@ -428,6 +431,7 @@ const renameSessionId = ref(null)
 const renameTitle = ref('')
 const renaming = ref(false)
 const pinningSessionId = ref(null)
+const openActionMenuSessionId = ref(null)
 let sessionActivityTimer = null
 let sessionActivityRefreshPending = false
 const visualViewportHeight = ref(null)
@@ -554,6 +558,10 @@ async function retrySessionPagination() {
   chat.retrySessionPagination()
   await nextTick()
   sessionInfiniteScroll.value?.resume()
+}
+
+function closeActionMenu(id) {
+  if (openActionMenuSessionId.value === id) openActionMenuSessionId.value = null
 }
 
 async function removeSession(id) {
