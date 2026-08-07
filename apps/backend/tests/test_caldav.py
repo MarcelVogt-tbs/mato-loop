@@ -196,8 +196,8 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
     assert "call calendar_query_events or calendar_create_event directly" in (
         effective.prompt_fragments[0]
     )
-    assert "copy eventToken to event_token" in effective.prompt_fragments[1]
-    assert "never claim another calendar succeeded" in effective.prompt_fragments[1]
+    assert "copy eventToken, integrationId, and calendarKey" in effective.prompt_fragments[1]
+    assert "mutation succeeds only" in effective.prompt_fragments[1]
     for name in ("calendar_query_events", "calendar_create_event"):
         tool = effective.tools[name]
         assert tool.default_arguments == {
@@ -227,7 +227,9 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
     assert "integration_id" in required
     assert "calendar_key" in required
     assert len(without_active_default.prompt_fragments) == 1
-    assert "copy eventToken to event_token" in without_active_default.prompt_fragments[0]
+    assert "copy eventToken, integrationId, and calendarKey" in (
+        without_active_default.prompt_fragments[0]
+    )
 
 
 def test_calendar_permissions_describe_the_requested_action() -> None:

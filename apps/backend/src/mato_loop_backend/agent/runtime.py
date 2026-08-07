@@ -1515,6 +1515,15 @@ class AgentRuntime:
                         )
             if not memory_prompt_candidates:
                 memory_prompt_candidates.append((memory_text, 0, 0))
+            tool_capabilities = effective_tool_capabilities(
+                tool_settings,
+                available_media_capabilities(
+                    ai_settings, active_model_id=model.id
+                ),
+                video_available=video_analysis_available(
+                    ai_settings, active_model_id=model.id
+                ),
+            )
             effective_toolset = (
                 tool_registry.effective(
                     integration_settings,
@@ -1525,15 +1534,7 @@ class AgentRuntime:
                     ),
                     memory_enabled=memory_state.read_enabled,
                     memory_write_enabled=memory_state.write_enabled,
-                    tool_capabilities=effective_tool_capabilities(
-                        tool_settings,
-                        available_media_capabilities(
-                            ai_settings, active_model_id=model.id
-                        ),
-                        video_available=video_analysis_available(
-                            ai_settings, active_model_id=model.id
-                        ),
-                    ),
+                    tool_capabilities=tool_capabilities,
                     tool_settings=tool_settings,
                 )
                 if model.supports_tools
@@ -1554,6 +1555,19 @@ class AgentRuntime:
                     ai_settings,
                     active_model_id=model.id,
                 )
+            inactive_capability_groups = tool_registry.inactive_capability_groups(
+                integration_settings,
+                frozenset(effective_toolset.tools if effective_toolset else ()),
+                workspace_access=chat_session.workspace_access,
+                webfetch_enabled=web_fetch_policy != WebFetchPolicy.DISABLED,
+                web_search_enabled=(
+                    chat_session.web_search_policy != WebSearchPolicy.DISABLED
+                ),
+                memory_enabled=memory_state.read_enabled,
+                memory_write_enabled=memory_state.write_enabled,
+                tool_capabilities=tool_capabilities,
+                tool_settings=tool_settings,
+            )
             mutating_tool_names = {
                 name
                 for name, tool in (effective_toolset.tools.items() if effective_toolset else ())
@@ -1594,6 +1608,7 @@ class AgentRuntime:
                 tool_instructions=(
                     effective_toolset.prompt_fragments if effective_toolset else ()
                 ),
+                inactive_capability_groups=inactive_capability_groups,
             )
             if model_requests >= runtime_settings.max_model_requests:
                 raise AgentRunError("agent.modelRequestLimitReached")

@@ -185,9 +185,11 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
         "question",
         "calendar_create_event",
     ]
-    assert "instead of asking in assistant text" in calendar_tools[0]["description"]
-    assert "requires id, type, header, and question" in calendar_tools[0]["description"]
-    assert '"options":[{"label":"PDF"}' in calendar_tools[0]["description"]
+    assert "instead of asking" in calendar_messages[0]["content"]
+    assert "Call this tool alone" in calendar_tools[0]["description"]
+    question_parameters = json.dumps(calendar_tools[0]["parameters"])
+    assert "free_text" in question_parameters
+    assert "QuestionOption" in question_parameters
     assert "Timed events require both start and end" in calendar_tools[1]["description"]
     assert "A default calendar is configured" in calendar_messages[0]["content"]
     assert "Missing-information contract" in calendar_messages[0]["content"]

@@ -4,11 +4,13 @@
 
 Unter **Einstellungen > Tools** legen Sie fest, welche Werkzeuge verfügbar sind und wann eine Freigabe erforderlich ist. Die üblichen Richtlinien sind:
 
-- **Deaktiviert**: Das Tool wird dem Agenten nicht angeboten.
+- **Deaktiviert**: Das Tool kann nicht aufgerufen werden. Der Agent kennt die installierte Fähigkeit weiterhin und kann bei einer passenden Anfrage erklären, wie sie aktiviert wird.
 - **Nachfragen**: Vor Agent-Tool-Aufrufen ist eine Freigabe erforderlich.
 - **Automatisch**: Zulässige Aktionen werden ohne einzelne Nachfrage ausgeführt.
 
 Hostseitige Sicherheitsgrenzen gelten auch bei **Automatisch** weiterhin.
+
+Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Agent-Modus, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
 
 Direkte Aktionen, die Sie selbst in der Oberfläche auslösen, verwenden keine Agent-Freigabekarte. Dazu gehören insbesondere Dateiaktionen im Explorer und das Diktat über die Mikrofonschaltfläche.
 
@@ -22,6 +24,7 @@ MatoLoop bündelt Werkzeuge für:
 - Lesen und Durchsuchen früherer Sessions
 - Memory
 - Persona
+- Kalender
 
 Welche Tools tatsächlich erscheinen, hängt zusätzlich von Agent-Modus, Session-Einstellungen, Modellfähigkeiten und konfigurierten Standardmodellen ab.
 

@@ -216,15 +216,13 @@ def test_no_key_provider_makes_search_available_without_configuration() -> None:
     schemas = available_tool_schemas(settings, "read-only")
     search_schema = next(item for item in schemas if item["name"] == "web_search")
     properties = search_schema["parameters"]["properties"]
-    assert set(properties) == {"query"}
+    assert set(properties) == {"query", "search_type"}
     assert properties["query"]["description"] == (
-        "Compact search-engine query for exactly one information need. If the user supplies a "
-        "year, copy it exactly. If the user asks for current, latest, or today without a year, "
-        "the query must contain no year or date. Copy versions, model numbers, and exact names "
-        "needed by the requested scope. Examples: 'latest Python version' becomes 'latest stable "
-        "Python version'; 'Python 3.12 release notes from 2023' becomes 'Python 3.12 release notes "
-        "2023'."
+        "One compact search-engine query for one information need. Preserve user-supplied dates, "
+        "versions, model numbers, and exact names; never add a date."
     )
+    assert properties["search_type"]["enum"] == ["web", "images"]
+    assert properties["search_type"]["default"] == "web"
 
 
 def test_active_integrations_extend_the_host_search_provider_catalog() -> None:
@@ -679,6 +677,39 @@ async def test_no_key_provider_uses_ddgs_auto_search_and_normalizes_results(
     ]
 
 
+async def test_no_key_provider_supports_image_search(monkeypatch) -> None:
+    images = Mock(
+        return_value=[
+            {
+                "title": "Official product image",
+                "url": "https://example.com/product",
+                "image": "https://cdn.example.com/product.jpg",
+                "body": "Rear view",
+            }
+        ]
+    )
+    client = Mock(images=images)
+    monkeypatch.setattr(search_module, "DDGS", Mock(return_value=client))
+
+    result = await search_module.search_without_api_key(
+        "product rear view", search_type="images"
+    )
+
+    images.assert_called_once_with(query="product rear view", max_results=8)
+    assert json.loads(result) == [
+        {
+            "sourceId": search_module.evidence_source_id(
+                "https://example.com/product"
+            ),
+            "title": "Official product image",
+            "url": "https://example.com/product",
+            "snippet": "Rear view",
+            "publishedDate": None,
+            "imageUrl": "https://cdn.example.com/product.jpg",
+        }
+    ]
+
+
 async def test_searxng_reports_unresponsive_engines_as_transient_failure(
     monkeypatch,
 ) -> None:
@@ -738,6 +769,42 @@ async def test_searxng_retries_unresponsive_default_engines(monkeypatch) -> None
     )
 
 
+async def test_searxng_supports_image_search(monkeypatch) -> None:
+    response = _StreamResponse(
+        {
+            "results": [
+                {
+                    "title": "Official product image",
+                    "url": "https://example.com/product",
+                    "img_src": "https://cdn.example.com/product.webp",
+                    "content": "Rear view",
+                }
+            ],
+            "unresponsive_engines": [],
+        }
+    )
+    client = AsyncMock()
+    client.stream = Mock(return_value=response)
+    context = AsyncMock()
+    context.__aenter__.return_value = client
+    monkeypatch.setattr(
+        search_module.httpx, "AsyncClient", Mock(return_value=context)
+    )
+
+    result = await search_module.search_with_provider(
+        _searxng(), "product rear view", search_type="images"
+    )
+
+    assert client.stream.call_args.kwargs["params"] == {
+        "q": "product rear view",
+        "format": "json",
+        "categories": "images",
+    }
+    assert json.loads(result)[0]["imageUrl"] == (
+        "https://cdn.example.com/product.webp"
+    )
+
+
 async def test_searxng_rejects_oversized_streamed_responses(monkeypatch) -> None:
     response = _StreamResponse(
         None,
@@ -778,7 +845,7 @@ async def test_searxng_rejects_compressed_responses(monkeypatch) -> None:
 
 
 async def test_search_deadline_includes_fallback(monkeypatch) -> None:
-    async def execute(_settings, provider, _query):
+    async def execute(_settings, provider, _query, **_kwargs):
         if provider == "no_key":
             raise SearchIntegrationError("integration.unavailable", transient=True)
         await search_module.asyncio.sleep(1)
@@ -908,6 +975,7 @@ async def test_search_uses_fallback_only_for_temporary_errors(monkeypatch) -> No
     result = await search_web(
         settings,
         "query",
+        search_type="images",
         provider="no_key",
         fallback_provider=f"searxng:{fallback.id}",
     )
@@ -916,6 +984,10 @@ async def test_search_uses_fallback_only_for_temporary_errors(monkeypatch) -> No
     assert [call.args[1] for call in execute.await_args_list] == [
         "no_key",
         f"searxng:{fallback.id}",
+    ]
+    assert [call.kwargs["search_type"] for call in execute.await_args_list] == [
+        "images",
+        "images",
     ]
 
 

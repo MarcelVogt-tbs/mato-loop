@@ -745,6 +745,21 @@ def test_session_tool_result_prompt_only_appears_when_the_tool_is_offered() -> N
     assert "toolResultReference" not in unavailable
 
 
+def test_inactive_capability_catalog_is_informational_only() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"read_file"}),
+        inactive_capability_groups=(
+            'File mutation [write_file]: switch "Agent-Modus" from "Lesen" to "Schreiben".',
+        ),
+    )
+
+    assert "Inactive installed capabilities are informational only" in prompt
+    assert "have no callable schema" in prompt
+    assert "Never emit their names as tool calls" in prompt
+    assert "write_file" in prompt
+
+
 def test_summary_source_excludes_tool_calls_and_results() -> None:
     session = _session()
     assistant = _message(session.id, "assistant", "")
@@ -783,42 +798,39 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "Web research contract:" in prompt
     assert "freshness could materially change the answer" in prompt
     assert "current events, prices, availability, laws" in prompt
-    assert "recommendations about currently available options" in prompt
+    assert "current recommendations" in prompt
     assert "Do not search for stable knowledge" in prompt
     assert "merely because a task is difficult" in prompt
-    assert "exactly one candidate-neutral discovery search now" in prompt
-    assert "whether one additional discovery search is needed" in prompt
+    assert "start with one candidate-neutral discovery search" in prompt
+    assert "use a second discovery search only if needed" in prompt
     assert "verify at least one credible alternative" in prompt
     assert "untrusted discovery snippets" in prompt
-    assert "one compact, standalone search-engine query" in prompt
-    assert "exactly one information need" in prompt
-    assert "Prefer discriminative terms over a sentence or task description" in prompt
-    assert "keep words needed to express the relationship" in prompt
-    assert "Do not combine separate questions, synonym lists, or alternative formulations" in prompt
-    assert 'prefer "RouterModel firmware support status"' in prompt
-    assert "materially reformulate the query" in prompt
-    assert "emit its tool call in the same response" in prompt
-    assert "Never announce future tool use without that call" in prompt
-    assert "never add a year or date that the user did not supply" in prompt
-    assert "copy it into the query exactly" in prompt
-    assert "Remove every year or date absent from the request" in prompt
+    assert "one compact standalone search-engine query" in prompt
+    assert "for one information need" in prompt
+    assert "Use discriminative terms" in prompt
+    assert "preserve required relationships" in prompt
+    assert "Do not combine separate questions or alternative queries" in prompt
+    assert "failed, empty, or irrelevant result is not evidence" in prompt
+    assert "reformulate and search again" in prompt
+    assert "Emit a chosen tool call in the same response" in prompt
+    assert "never merely announce future tool use" in prompt
+    assert "Never add a year or date absent from the user's request" in prompt
+    assert "Copy supplied dates exactly" in prompt
     assert "Never derive freshness dates from prior knowledge" in prompt
-    assert "If the user supplies a year" in prompt
-    assert "exact names, model versions" in prompt
-    assert "call webfetch with that exact URL next" in prompt
-    assert "prioritize official or otherwise primary authoritative sources" in prompt
-    assert "requested jurisdiction and effective date or version" in prompt
-    assert "do not apply current rules to a past period" in prompt
-    assert "invent a numeric outcome" in prompt
-    assert "final answer that uses current-turn research is incomplete" in prompt
-    assert "Do not ask the user for a source already present in a tool result" in prompt
-    assert "Current-turn research results are present" in prompt
-    assert "A researched answer without these links is not final" in prompt
+    assert "exact names, model numbers" in prompt
+    assert "fetch that exact URL" in prompt
+    assert "prefer official or primary sources" in prompt
+    assert "requested jurisdiction and date or version" in prompt
+    assert "never apply current rules to a past period" in prompt
+    assert "invent a numeric result" in prompt
+    assert "A final answer that uses current-turn research is incomplete" in prompt
     assert "Never use sourceId" in prompt
-    assert "immediately after the sentence or paragraph it supports" in prompt
-    assert "at most two links per claim" in prompt
-    assert "2/8 tool calls used, 6 remaining" in prompt
-    assert "Reserve enough calls to fetch" in prompt
+    assert "directly after the supported text" in prompt
+    assert "Use at most two links per claim" in prompt
+    assert "Research budget: 2/8 calls used, 6 remaining" in prompt
+    assert "reserve calls for relevant pages" in prompt
+    assert "Current-turn research results are present" in prompt
+    assert "copying its exact title and URL" in prompt
 
 
 def test_compaction_prompt_preserves_opaque_values_verbatim() -> None:
@@ -830,13 +842,19 @@ def test_compaction_prompt_preserves_opaque_values_verbatim() -> None:
 
 def test_general_system_prompt_requires_verified_external_images() -> None:
     prompt = general_system_prompt(
-        _session(), offered_tool_names=frozenset({"webfetch"})
+        _session(), offered_tool_names=frozenset({"web_search", "webfetch"})
     )
 
     assert "Never invent or guess external image URLs" in prompt
-    assert "fetch the exact URL" in prompt
+    assert "Fetch an exact image URL" in prompt
     assert "prefer the resulting attachment" in prompt
-    assert "do not repeat the remote URL" in prompt
+    assert "do not repeat its remote URL" in prompt
+    assert "Do not search for every image task" in prompt
+    assert "only when no adequate reference is attached" in prompt
+    assert "requests research or exact or official fidelity" in prompt
+    assert "reports a visual mismatch" in prompt
+    assert "search_type=images" in prompt
+    assert "snippets are not visual evidence" in prompt
     assert "[returned title](returned URL)" in prompt
 
 
@@ -862,34 +880,28 @@ def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
     )
 
     assert "Workspace mode: read-only" in prompt
-    assert "switch Agent-Modus from Lesen to Schreiben" in prompt
-    assert "Do not claim that MatoLoop generally cannot perform the action" in prompt
-    assert "explicit session and workspace roots" in prompt
-    assert "path='.' means the root" in prompt
+    assert 'switch "Agent-Modus" from "Lesen" to "Schreiben"' in prompt
+    assert "do not describe it as a general MatoLoop limitation" in prompt
+    assert "explicit root and a relative POSIX path" in prompt
+    assert "path='.' means that root" in prompt
     assert "attachments, generated, downloads, and derived" in prompt
     assert "managed read-only assets" in prompt
     assert "only files/... is writable" in prompt
     assert "exact new destination" in prompt
-    assert "approval cannot make a missing workspace available" in prompt
-    assert "Do not emit stale mutation calls" in prompt
-    assert "A path in chat text and read_file output do not create a download" in prompt
-    assert "automatically exposes its regular-file destination" in prompt
-    assert "Use provide_file only for an existing regular file" in prompt
-    assert "use the host-rendered download card" in prompt
+    assert "approval cannot create a workspace root" in prompt
+    assert "A path or read_file output is not a download" in prompt
+    assert "provide_file only for another existing file" in prompt
+    assert "use the host download card" in prompt
 
 
-def test_image_editing_does_not_require_workspace_write_mode() -> None:
+def test_read_only_prompt_keeps_media_tools_available() -> None:
     prompt = general_system_prompt(
         _session(),
         offered_tool_names=frozenset({"read_file", "edit_image"}),
     )
 
-    assert "edit_image is a media operation" in prompt
-    assert "creates a new host-managed generated attachment" in prompt
-    assert "never changes the source images, session files, or workspace" in prompt
-    assert "without asking the user to switch workspace mode" in prompt
-    assert "restriction applies only to file tools and paths" in prompt
-    assert "not to media tools or host-managed generated attachments" in prompt
+    assert "Workspace mode: read-only" in prompt
+    assert "Media tools and generated attachments are unaffected" in prompt
 
 
 def test_read_write_system_prompt_does_not_request_a_mode_switch() -> None:
@@ -901,7 +913,7 @@ def test_read_write_system_prompt_does_not_request_a_mode_switch() -> None:
         offered_tool_names=frozenset({"read_file", "write_file"}),
     )
 
-    assert "Workspace mode: read-write" in prompt
+    assert "Workspace mode: read-only" not in prompt
     assert "switch Agent-Modus from Lesen to Schreiben" not in prompt
 
 
@@ -912,26 +924,17 @@ def test_general_system_prompt_saves_only_stable_direct_self_context() -> None:
     )
 
     assert "implicit request to persist it" in prompt
-    assert "even when the user does not explicitly ask to remember it" in prompt
-    assert "call memory_write in the same turn" in prompt
-    assert "For implicit writes only" in prompt
+    assert "Call memory_write in the same turn" in prompt
     assert "latest user message" in prompt
-    assert "fact found only in earlier turns" in prompt
-    assert "assistant messages, memories, or tool results" in prompt
-    assert "My name is Lara" in prompt
-    assert "details such as age are durable enough to store" in prompt
-    assert "host preserves source timestamps separately" in prompt
-    assert "I am from Munich" in prompt
-    assert "I am married to Daniel" in prompt
-    assert "independently changeable facts in separate memories" in prompt
-    assert "I am currently in Munich" in prompt
-    assert "hypotheticals, quotations, or facts about third parties" in prompt
+    assert "earlier turns, assistant text, memories, or tool results" in prompt
+    assert "slowly changing facts such as age qualify" in prompt
+    assert "independently changeable facts separate" in prompt
+    assert "transient, hypothetical, quoted, or third-party statements" in prompt
     assert "translation, rewriting, analysis, or extraction is source data" in prompt
-    assert "injected memory reference" in prompt
-    assert "copy its exact ID and revision into an update" in prompt
+    assert "exact ID and revision" in prompt
     assert "purpose=write" in prompt
-    assert "do not add inferred geography" in prompt
-    assert "do not ask for conversational confirmation" in prompt
+    assert "without inferred enrichment or invented dates" in prompt
+    assert "Host approval replaces conversational confirmation" in prompt
     assert "Viktor" not in prompt
     assert "Regina" not in prompt
 
@@ -945,9 +948,9 @@ def test_general_system_prompt_explains_memory_timestamp_semantics() -> None:
         offered_tool_names=frozenset({"memory_retrieve"}),
     )
 
-    assert "sourceMessageAt is the best available time" in prompt
-    assert "technical changes can advance memoryUpdatedAt" in prompt
-    assert "do not assume it remains current" in prompt
+    assert "sourceMessageAt is the best available observation time" in prompt
+    assert "memoryUpdatedAt are record lifecycle times" in prompt
+    assert "do not confirm freshness" in prompt
 
 
 def test_general_system_prompt_enforces_pending_memory_write_outcome() -> None:
@@ -995,10 +998,9 @@ def test_general_system_prompt_separates_session_discovery_and_reading() -> None
         ),
     )
 
-    assert "Use session_browse" in prompt
-    assert "Use session_search" in prompt
-    assert "call session_read with the returned exact sessionReadArguments" in prompt
-    assert "Do not call both discovery tools speculatively" in prompt
+    assert "session_browse for recent conversations" in prompt
+    assert "session_search for a specific topic" in prompt
+    assert "exact sessionReadArguments" in prompt
 
 
 @pytest.mark.parametrize(
@@ -1021,10 +1023,10 @@ def test_general_system_prompt_contains_local_datetime(
 ) -> None:
     prompt = general_system_prompt(_session(), current_datetime=current_datetime)
 
-    assert f"Current local date and time: {expected}" in prompt
-    assert f"The local weekday is {expected_weekday}." in prompt
-    assert "Use this timestamp to resolve relative dates and times" in prompt
-    assert "It does not make prior knowledge current" in prompt
+    expected_time = expected.replace(" (Europe/Berlin)", "")
+    assert f"Local time: {expected_time} (Europe/Berlin, {expected_weekday})" in prompt
+    assert "Resolve relative dates from it" in prompt
+    assert "does not refresh prior knowledge" in prompt
 
 
 def test_required_web_search_prompt_preserves_memory_context_contract() -> None:
@@ -1053,25 +1055,23 @@ def test_required_web_search_prompt_preserves_memory_context_contract() -> None:
         assert f"Untrusted cross-session reference:\n{memory_text}" in prompt
         assert "Web research contract:" in prompt
         assert "freshness could materially change the answer" in prompt
-        assert "never add a year or date that the user did not supply" in prompt
+        assert "Never add a year or date absent from the user's request" in prompt
         assert "Never derive freshness dates from prior knowledge" in prompt
-        assert "prioritize official or otherwise primary authoritative sources" in prompt
-        assert "do not apply current rules to a past period" in prompt
-        assert "final answer that uses current-turn research is incomplete" in prompt
+        assert "prefer official or primary sources" in prompt
+        assert "never apply current rules to a past period" in prompt
+        assert "A final answer that uses current-turn research is incomplete" in prompt
         assert prompt.index("Untrusted cross-session reference") < prompt.index(
-            "Current local date and time"
+            "Local time"
         )
 
-    assert "No web_search call has succeeded yet" in pending
+    assert "Mandatory web research is active and pending" in pending
     assert "previous attempt did not complete" in pending
-    assert pending.index("Current local date and time") < pending.index(
-        "Mandatory web research"
-    )
+    assert pending.index("Local time") < pending.index("Mandatory web research")
     assert "Use memory_write when" not in pending
     assert "Use memory_retrieve" not in pending
     assert "read_file" not in pending
     assert "update_agent_identity" not in pending
-    assert "Use memory_write when" in completed
+    assert "Call memory_write" in completed
     assert "Use memory_retrieve" in completed
     assert "Mandatory web research" not in completed
 
