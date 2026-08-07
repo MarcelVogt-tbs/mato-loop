@@ -343,7 +343,9 @@ body.body--dark .app-floating-control--flat {
   .session-list-item:hover .session-list-item__pin-button,
   .session-list-item:hover .session-list-item__menu-button,
   .session-list-item:focus-within .session-list-item__pin-button,
-  .session-list-item:focus-within .session-list-item__menu-button {
+  .session-list-item:focus-within .session-list-item__menu-button,
+  .session-list-item--menu-open .session-list-item__pin-button,
+  .session-list-item--menu-open .session-list-item__menu-button {
     display: inline-flex;
   }
 }
