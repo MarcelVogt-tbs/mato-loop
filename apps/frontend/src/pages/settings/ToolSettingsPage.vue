@@ -353,7 +353,29 @@ const TOOL_DESCRIPTIONS = {
   calendar_query_events: 'Liest Termine aus einem ausgewählten Kalender.',
   calendar_create_event: 'Erstellt einen Termin in einem ausgewählten Kalender.',
   calendar_update_event: 'Ändert einen zuvor gelesenen Termin.',
-  calendar_delete_event: 'Löscht einen zuvor gelesenen Termin.'
+  calendar_delete_event: 'Löscht einen zuvor gelesenen Termin.',
+  knowledge_list_accounts: 'Listet die konfigurierten BookStack-Wissensdatenbanken auf.',
+  knowledge_list_books: 'Listet die Bücher einer Wissensdatenbank samt Regalzuordnung auf.',
+  knowledge_search: 'Durchsucht Bücher, Kapitel und Seiten einer Wissensdatenbank.',
+  knowledge_read_book: 'Listet Kapitel, Seiten und Regalzuordnung eines ausgewählten Buchs auf.',
+  knowledge_read_page: 'Liest den Markdown-Inhalt einer zuvor gefundenen Seite.',
+  knowledge_create_page: 'Erstellt eine Markdown-Seite in einem ausgewählten Buch.',
+  knowledge_update_page:
+    'Ersetzt Titel oder Inhalt einer zuvor gelesenen Seite und gibt den gespeicherten Inhalt zurück.',
+  knowledge_delete_page: 'Löscht eine zuvor gelesene Seite.',
+  knowledge_create_book: 'Erstellt ein neues Buch und ordnet es optional Regalen zu.',
+  knowledge_delete_book: 'Löscht ein Buch samt aller Kapitel und Seiten.',
+  knowledge_create_chapter: 'Erstellt ein Kapitel in einem ausgewählten Buch.',
+  knowledge_delete_chapter: 'Löscht ein zuvor gelesenes Kapitel samt Seiten.',
+  knowledge_list_shelves: 'Listet die Regale einer Wissensdatenbank auf.',
+  knowledge_read_shelf: 'Zeigt ein Regal samt zugeordneter Bücher an.',
+  knowledge_create_shelf: 'Erstellt ein neues Regal in einer Wissensdatenbank.',
+  knowledge_update_shelf: 'Ändert Name, Beschreibung oder Bücher eines Regals; Bücher können einzeln hinzugefügt oder entfernt werden.',
+  knowledge_delete_shelf: 'Löscht ein Regal, ohne die enthaltenen Bücher zu löschen.',
+  knowledge_list_attachments: 'Listet die Anhänge einer zuvor gelesenen Seite auf.',
+  knowledge_create_attachment:
+    'Hängt eine Datei oder einen Link an eine Seite: Download aus dem Internet, Datei aus Session- oder Workspace-Speicher oder reiner Verweis.',
+  knowledge_delete_attachment: 'Löscht einen zuvor aufgelisteten Anhang einer Seite.'
 }
 const form = reactive({
   policies: {},

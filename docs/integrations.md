@@ -44,6 +44,24 @@ The adapter discovers calendars live and maps DAV privileges to hard unavailable
 
 CalDAV tools release private integration data. A public model therefore needs an explicit session release in addition to the configured calendar action policy. This release is a data-transport boundary and cannot be replaced by `calendar.read=auto`.
 
+## BookStack
+
+The BookStack adapter is a knowledge integration. Each BookStack installation is an integration instance and each visible book is a resource. The static actions are `knowledge.read`, `knowledge.write`, and `knowledge.delete`; page, chapter, and book creation and page updates share the write action. API token ID and token secret are encrypted separately from settings and are sent as `Authorization: Token <id>:<secret>` over HTTPS only.
+
+Content is exchanged as Markdown. Reading a page prefers the stored Markdown source and falls back to the Markdown export when the page was authored in the WYSIWYG editor. Responses are truncated at host-controlled size limits and remote text is treated as untrusted data.
+
+Page updates replace the whole page, so the model must read the page immediately before updating it. The update response returns the stored Markdown, which lets the model verify what BookStack actually saved instead of trusting its own request.
+
+Models receive only integration UUIDs, opaque book keys, and encrypted page and chapter tokens, never raw BookStack IDs, URLs, or credentials. A token carries the integration ID and the binding revision, so a stale or foreign token is rejected instead of executed. Page reads, updates, and deletes additionally verify that the resolved page still belongs to the book named by the resource key, so a token cannot escape its per-book policy.
+
+Search and book listing are integration-wide discovery tools without a book key, analogous to calendar discovery. Per-book resource policies therefore do not narrow them; only the integration-level `knowledge.read` policy and the session data-release boundary apply. Deletion supports `disabled` and `ask` only.
+
+Shelves are organizational containers, not resources. Shelf tools therefore take a plain `shelf:<id>` key instead of an encrypted token and are governed by the integration-level policy only, like book creation. Book creation accepts shelf keys so a new book is filed immediately, and book listings and reads report the shelves a book belongs to. BookStack does not expose shelf membership on the book endpoint, so the adapter derives it by scanning the shelves; when that scan fails the field is omitted instead of failing the whole call. Shelf updates support a full replacement as well as incremental add and remove lists, which avoids dropping books the model never saw. Combining both forms in one call is rejected. Deleting a shelf never deletes the books it contains.
+
+Attachments belong to pages. The adapter can list, create, and delete them and returns encrypted attachment tokens bound to the same integration, binding revision, and book key as page tokens. An attachment is created from exactly one source: a URL that is downloaded and uploaded to BookStack, a file in session or workspace storage, or a plain link that is stored as a reference without any transfer. Downloads reuse the webfetch pipeline, so the same SSRF, redirect, content type, and size protections apply, the configured webfetch policy is enforced, and a URL approval is requested whenever a direct webfetch would need one. Uploads are capped at 32 MiB and at the configured webfetch response limit, whichever is smaller.
+
+A failed download reports the underlying webfetch code, such as a timeout or a rejected request, instead of one opaque failure. The model then sees why the host refused and can fall back to a link attachment rather than guessing at an unrelated cause. Servers that label documents as `application/octet-stream` are accepted when the file name still names a supported type; the extension then decides the type, and image payloads are still signature checked.
+
 ## Web Search
 
 For the model, `web_search` exposes only the `query` field. The host selects primary and fallback providers from `ToolSettings.web_search`; model arguments cannot override this choice. The no-key metasearch is always present in the tool-provider catalog as `no_key`, but it is not an integration. Every active SearXNG instance adds `searxng:<uuid>`. Display names are labels only; renaming does not change the stable tool identifier.

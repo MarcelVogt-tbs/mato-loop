@@ -45,6 +45,7 @@ _MESSAGES = {
     "http.unprocessable": "The request data could not be processed.",
     "internal.unexpected": "An unexpected error occurred.",
     "integration.authenticationFailed": "The integration credentials were rejected.",
+    "integration.attachmentTooLarge": "The file is too large to be attached.",
     "integration.searchUnavailable": "The required web search integration is unavailable.",
     "integration.changed": "The integration changed while it was being configured.",
     "integration.invalidConfiguration": "The integration configuration is invalid.",
@@ -57,6 +58,11 @@ _MESSAGES = {
     "integration.resourceDiscoveryFailed": "The integration resources could not be loaded.",
     "integration.resourcePoliciesUnsupported": "The integration has no configurable resources.",
     "integration.responseTooLarge": "The integration response is too large.",
+    "integration.staleReference": (
+        "The item reference is outdated or does not belong to the named container. List or "
+        "search the items again to obtain a current reference, then retry. Do not reuse a "
+        "reference from an earlier tool result."
+    ),
     "integration.unavailable": "The integration is unavailable.",
     "attachment.invalidVideo": "The video file is invalid or unsupported.",
     "provider.disabled": "The model provider is disabled.",
@@ -83,12 +89,21 @@ _MESSAGES = {
     "video.audioAnalysisUnavailable": "No eligible transcription model is available for the video audio.",
     "video.emptyAnalysis": "The video model returned no usable analysis.",
     "video.frameExtractionFailed": "The video frames could not be extracted.",
+    "webfetch.addressBlocked": "The web server's address is not allowed.",
+    "webfetch.connectionFailed": "The web server could not be reached.",
+    "webfetch.contentTypeMismatch": "The web server sent content that does not match its declared type.",
+    "webfetch.contentTypeUnsupported": "The web server sent an unsupported content type.",
+    "webfetch.dnsFailed": "The web server's host name could not be resolved.",
     "webfetch.pdfInvalid": "The PDF document is invalid or unsupported.",
     "webfetch.pdfRenderFailed": "The PDF page could not be rendered.",
     "webfetch.pdfVisionFailed": "The PDF page could not be read by the vision model.",
     "webfetch.pdfVisionUnavailable": "No eligible vision model is available for this PDF.",
+    "webfetch.requestFailed": "The web server rejected the request.",
     "webfetch.responseLimitInvalid": "The web response size limit is invalid.",
+    "webfetch.responseTooLarge": "The web response exceeds the configured size limit.",
+    "webfetch.timeout": "The web server did not answer in time.",
     "webfetch.tlsFailed": "The web server's TLS certificate could not be verified.",
+    "webfetch.tooManyRedirects": "The web server sent too many redirects.",
 }
 
 _NAMESPACE_MESSAGES = {

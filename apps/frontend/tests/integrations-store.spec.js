@@ -43,6 +43,22 @@ const calendarResponse = {
   ]
 }
 
+const knowledgeResponse = {
+  configured: true,
+  bases: [
+    {
+      id: 'knowledge-id',
+      name: 'Wiki',
+      integrationType: 'knowledge',
+      providerType: 'bookstack',
+      enabled: true,
+      hasCredential: true,
+      supportsResourcePolicies: true,
+      config: { baseUrl: 'https://wiki.example.com' }
+    }
+  ]
+}
+
 describe('integration store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -131,6 +147,51 @@ describe('integration store', () => {
 
     expect(api.put).toHaveBeenCalledWith('/integrations/calendar/accounts/calendar-id', {
       name: 'Arbeit',
+      enabled: true
+    })
+  })
+
+  it('loads and dispatches knowledge base operations', async () => {
+    api.get.mockResolvedValue({ data: knowledgeResponse })
+    api.post.mockResolvedValue({ data: { status: 'ok' } })
+    api.delete.mockResolvedValue({})
+    const store = useIntegrationStore()
+    const payload = {
+      integration_type: 'knowledge',
+      provider_type: 'bookstack',
+      name: 'Wiki',
+      base_url: 'https://wiki.example.com',
+      token_id: 'token',
+      token_secret: 'secret',
+      enabled: true
+    }
+
+    await store.fetchKnowledge()
+    await store.createKnowledge(payload)
+    await store.testKnowledge('knowledge-id')
+    await store.removeKnowledge('knowledge-id')
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/knowledge')
+    expect(api.post).toHaveBeenCalledWith('/integrations/knowledge/bases', payload)
+    expect(api.post).toHaveBeenCalledWith('/integrations/knowledge/bases/knowledge-id/test')
+    expect(api.delete).toHaveBeenCalledWith('/integrations/knowledge/bases/knowledge-id')
+    expect(store.knowledge.bases).toHaveLength(1)
+  })
+
+  it('omits incomplete token fields when updating a knowledge base', async () => {
+    api.get.mockResolvedValue({ data: knowledgeResponse })
+    api.put.mockResolvedValue({ data: knowledgeResponse })
+    const store = useIntegrationStore()
+
+    await store.updateKnowledge('knowledge-id', {
+      name: 'Wiki',
+      token_id: 'token',
+      token_secret: '',
+      enabled: true
+    })
+
+    expect(api.put).toHaveBeenCalledWith('/integrations/knowledge/bases/knowledge-id', {
+      name: 'Wiki',
       enabled: true
     })
   })

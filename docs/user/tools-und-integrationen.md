@@ -22,6 +22,7 @@ MatoLoop bündelt Werkzeuge für:
 - Lesen und Durchsuchen früherer Sessions
 - Memory
 - Persona
+- Wissensdatenbank (BookStack)
 
 Welche Tools tatsächlich erscheinen, hängt zusätzlich von Agent-Modus, Session-Einstellungen, Modellfähigkeiten und konfigurierten Standardmodellen ab.
 
@@ -44,6 +45,28 @@ Unter **Einstellungen > Integrationen** können Sie mehrere CalDAV-Konten mit Se
 Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**. Serverseitig schreibgeschützte Kalender bleiben unabhängig von der MatoLoop-Richtlinie schreibgeschützt.
 
 Lesefreigaben können für die aktuelle Chat-Session gelten. Schreib- und Löschfreigaben gelten nur für den konkreten Vorgang. Wiederkehrende Termine und Termine mit Einladungs- oder unbekannten Eigenschaften können gelesen, aber in der ersten Version nicht verändert werden.
+
+## BookStack integrieren
+
+Unter **Einstellungen > Integrationen** können Sie mehrere BookStack-Installationen mit Serveradresse, Token-ID und Token-Secret anlegen. Ein API-Token erstellen Sie in BookStack im Benutzerprofil unter **API-Tokens**. Die Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. BookStack erfordert HTTPS.
+
+Der Agent kann damit Seiten suchen und lesen, Seiten anlegen und bearbeiten sowie Bücher, Kapitel und Seiten anlegen und löschen. Zusätzlich kann er Regale auflisten, lesen, anlegen, bearbeiten und löschen. Neue Bücher lassen sich direkt einem oder mehreren Regalen zuordnen, und Buchlisten zeigen die zugehörigen Regale an. Inhalte werden als Markdown ausgetauscht.
+
+An Seiten kann der Agent außerdem Anhänge verwalten. Eine Datei stammt dabei entweder aus dem Internet, aus dem Session- oder Workspace-Speicher, oder es wird nur ein Link hinterlegt. Downloads laufen über dieselbe Webfetch-Strecke wie der normale Webseitenabruf: Ihre Webfetch-Richtlinie gilt weiterhin, und bei Bedarf werden Sie zusätzlich zur Freigabe der Adresse gefragt. Ist Webfetch deaktiviert, bleibt nur der reine Link oder eine lokale Datei. Anhänge sind auf 32 MiB begrenzt.
+
+Manche Anbieter sperren automatisierte Zugriffe. Schlägt ein Download fehl, nennt MatoLoop den tatsächlichen Grund, etwa eine Zeitüberschreitung oder eine Ablehnung durch den Server. Der Agent kann die Adresse dann als Link hinterlegen, statt einen falschen Grund zu vermuten.
+
+Beim Bearbeiten wird eine Seite immer vollständig ersetzt. Der Agent liest sie deshalb unmittelbar vorher und bekommt nach dem Speichern den in BookStack tatsächlich abgelegten Inhalt zurück, damit er das Ergebnis prüfen kann.
+
+Über **Zugriff** konfigurieren Sie zunächst den Standard der Installation und anschließend Abweichungen für einzelne Bücher:
+
+- **Nicht erlaubt** blockiert die Aktion.
+- **Nachfragen** zeigt vor der Aktion eine Freigabe.
+- **Automatisch** führt zulässige Aktionen ohne einzelne Nachfrage aus.
+
+Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**.
+
+Suche und Bücherliste gelten für die gesamte Installation und lassen sich nicht auf einzelne Bücher einschränken. Das Gleiche gilt für Regale: Sie sind Ordnungsstrukturen und keine einzeln freigebbaren Ressourcen, weshalb das Zuordnen von Büchern zu einem Regal nur über die Richtlinie der gesamten Installation abgesichert ist. Ein gelöschtes Regal löscht die enthaltenen Bücher nicht. Anhänge folgen dagegen der Richtlinie des Buches, zu dem die Seite gehört. Berechtigungen des verwendeten API-Tokens in BookStack bleiben zusätzlich wirksam: Was das Token dort nicht darf, kann MatoLoop nicht freigeben.
 
 ## Webfetch konfigurieren
 

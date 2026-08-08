@@ -113,6 +113,7 @@ const messages = {
   'http.unprocessable': () => 'Die Eingaben konnten nicht verarbeitet werden.',
   'internal.unexpected': () => 'Ein unerwarteter Fehler ist aufgetreten.',
   'integration.authenticationFailed': () => 'Die Integration hat die Zugangsdaten abgelehnt.',
+  'integration.attachmentTooLarge': () => 'Die Datei ist zu groß für einen Anhang.',
   'integration.changed': () => 'Die Integration wurde zwischenzeitlich geändert. Lade sie erneut.',
   'integration.configurationInvalid': () => 'Die Integrationskonfiguration ist unvollständig.',
   'integration.defaultMissing': () => 'Für die Integration ist kein verfügbarer Standardanbieter ausgewählt.',
@@ -131,6 +132,8 @@ const messages = {
   'integration.resourcePoliciesUnsupported': () => 'Diese Integration besitzt keine konfigurierbaren Ressourcen.',
   'integration.requestFailed': () => 'Die Anfrage an die Integration ist fehlgeschlagen.',
   'integration.remoteChanged': () => 'Der entfernte Eintrag wurde zwischenzeitlich geändert. Lade ihn erneut.',
+  'integration.staleReference': () =>
+    'Der Verweis auf den Eintrag ist veraltet. Der Eintrag muss erneut gesucht oder aufgelistet werden.',
   'integration.remoteNotFound': () => 'Der entfernte Eintrag wurde nicht gefunden.',
   'integration.responseTooLarge': () => 'Die Antwort der Integration ist zu groß.',
   'integration.searchUnavailable': () => 'Richte zuerst eine aktive Websuche mit Standardanbieter ein.',

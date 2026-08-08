@@ -16,15 +16,20 @@ from mato_loop_backend.agent.tools import (
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations import (
+    BOOKSTACK_CREDENTIAL_KIND,
     CALDAV_CREDENTIAL_KIND,
+    BookStackIntegrationService,
     CalDavIntegrationService,
     IntegrationSettingsError,
     SearchIntegrationError,
     SearchIntegrationService,
+    bookstack_error_code,
     caldav_error_code,
+    load_bookstack_resources,
     load_caldav_resources,
     search_with_provider,
 )
+from mato_loop_backend.integrations.bookstack_client import BookStackError
 from mato_loop_backend.integrations.caldav_client import CalDavError
 from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.registry import integration_adapter
@@ -77,6 +82,37 @@ class CalendarIntegrationRequest(BaseModel):
 
 class CalendarIntegrationCreateRequest(CalendarIntegrationRequest):
     password: str = Field(min_length=1, max_length=10_000)
+
+
+class KnowledgeIntegrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    integration_type: Literal["knowledge"] = "knowledge"
+    provider_type: Literal["bookstack"] = "bookstack"
+    name: str = Field(min_length=1, max_length=160)
+    base_url: HttpUrl
+    token_id: str | None = Field(default=None, max_length=10_000)
+    token_secret: str | None = Field(default=None, max_length=10_000)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def require_secure_url(self) -> KnowledgeIntegrationRequest:
+        if (
+            self.base_url.scheme != "https"
+            or self.base_url.username is not None
+            or self.base_url.password is not None
+            or self.base_url.query is not None
+            or self.base_url.fragment is not None
+        ):
+            raise ValueError(
+                "BookStack URL must be a secure endpoint without credentials"
+            )
+        return self
+
+
+class KnowledgeIntegrationCreateRequest(KnowledgeIntegrationRequest):
+    token_id: str = Field(min_length=1, max_length=10_000)
+    token_secret: str = Field(min_length=1, max_length=10_000)
 
 
 class IntegrationAccessRequest(BaseModel):
@@ -136,6 +172,12 @@ async def _integration_resources(
                 instance.integration_type == "calendar"
                 and instance.adapter_type == "caldav"
                 and record.kind != CALDAV_CREDENTIAL_KIND
+            ):
+                raise ValueError("invalid integration credential kind")
+            if (
+                instance.integration_type == "knowledge"
+                and instance.adapter_type == "bookstack"
+                and record.kind != BOOKSTACK_CREDENTIAL_KIND
             ):
                 raise ValueError("invalid integration credential kind")
             credential = read_credential(record)
@@ -267,6 +309,19 @@ def calendar_settings_payload(settings: IntegrationSettings) -> dict:
     }
 
 
+def knowledge_settings_payload(settings: IntegrationSettings) -> dict:
+    bases = [
+        instance
+        for instance in settings.instances
+        if instance.integration_type == "knowledge"
+        and instance.adapter_type == "bookstack"
+    ]
+    return {
+        "configured": bool(bases),
+        "bases": [_provider_payload(base) for base in bases],
+    }
+
+
 @router.get("/search")
 async def get_search_integrations(
     db: Annotated[AsyncSession, Depends(get_db_session)],
@@ -372,6 +427,106 @@ async def test_calendar_integration(
         logger.warning(
             "CalDAV integration test failed with %s", type(exc).__name__
         )
+        raise ApiError(502, "integration.unavailable") from exc
+    return {"status": "ok"}
+
+
+@router.get("/knowledge")
+async def get_knowledge_integrations(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    return knowledge_settings_payload(await SettingsStore.load(db, IntegrationSettings))
+
+
+@router.post("/knowledge/bases", status_code=status.HTTP_201_CREATED)
+async def create_knowledge_integration(
+    payload: KnowledgeIntegrationCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await BookStackIntegrationService.create(
+        db,
+        name=payload.name,
+        base_url=str(payload.base_url),
+        token_id=payload.token_id,
+        token_secret=payload.token_secret,
+        enabled=payload.enabled,
+    )
+    return knowledge_settings_payload(settings)
+
+
+@router.put("/knowledge/bases/{integration_id}")
+async def update_knowledge_integration(
+    integration_id: UUID,
+    payload: KnowledgeIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    try:
+        settings = await BookStackIntegrationService.update(
+            db,
+            integration_id,
+            name=payload.name,
+            base_url=str(payload.base_url),
+            token_id=payload.token_id,
+            token_secret=payload.token_secret,
+            enabled=payload.enabled,
+        )
+    except IntegrationSettingsError as exc:
+        status_code = 404 if exc.code == "integration.notFound" else 422
+        raise ApiError(status_code, exc.code, field="token_secret") from exc
+    return knowledge_settings_payload(settings)
+
+
+@router.delete(
+    "/knowledge/bases/{integration_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_knowledge_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    try:
+        await BookStackIntegrationService.delete(db, integration_id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+
+
+@router.post("/knowledge/bases/{integration_id}/test")
+async def test_knowledge_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, str]:
+    settings = await SettingsStore.load(db, IntegrationSettings)
+    base = next(
+        (
+            item
+            for item in settings.instances
+            if item.id == integration_id
+            and item.integration_type == "knowledge"
+            and item.adapter_type == "bookstack"
+        ),
+        None,
+    )
+    if base is None:
+        raise ApiError(404, "integration.notFound")
+    try:
+        if base.credential_id is None:
+            raise BookStackError("bookstack.authenticationFailed")
+        record = await db.get(Credential, base.credential_id, populate_existing=True)
+        if record is None or record.kind != BOOKSTACK_CREDENTIAL_KIND:
+            raise BookStackError("bookstack.authenticationFailed")
+        try:
+            credential = read_credential(record)
+        except Exception as exc:
+            raise BookStackError("bookstack.authenticationFailed") from exc
+        await db.rollback()
+        await load_bookstack_resources(base, credential)
+    except BookStackError as exc:
+        await db.rollback()
+        code = bookstack_error_code(exc)
+        logger.warning("BookStack integration test failed: %s", code)
+        raise ApiError(502, code) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("BookStack integration test failed with %s", type(exc).__name__)
         raise ApiError(502, "integration.unavailable") from exc
     return {"status": "ok"}
 

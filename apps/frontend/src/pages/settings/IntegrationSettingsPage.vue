@@ -32,7 +32,7 @@
           </q-item-section>
           <q-item-section>
             <q-item-label>Noch keine Integration konfiguriert</q-item-label>
-            <q-item-label caption>Füge einen externen Dienst wie SearXNG oder CalDAV hinzu.</q-item-label>
+            <q-item-label caption>Füge einen externen Dienst wie SearXNG, CalDAV oder BookStack hinzu.</q-item-label>
           </q-item-section>
         </q-item>
 
@@ -41,7 +41,7 @@
             <q-avatar
               color="primary"
               text-color="white"
-              :icon="integration.integrationType === 'calendar' ? 'calendar_month' : 'travel_explore'"
+              :icon="typeIcon(integration.integrationType)"
             />
           </q-item-section>
           <q-item-section>
@@ -52,7 +52,7 @@
               </q-chip>
             </div>
             <q-item-label caption>
-              {{ integration.integrationType === 'calendar' ? 'Kalender' : 'Websuche' }} ·
+              {{ typeLabel(integration.integrationType) }} ·
               {{ providerLabel(integration.providerType) }}
             </q-item-label>
             <q-item-label caption>
@@ -126,7 +126,10 @@ const accessIntegration = ref(null)
 const testingId = ref(null)
 const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)
-const configuredIntegrations = computed(() => [...searchProviders.value, ...calendarAccounts.value])
+const knowledgeBases = computed(() => integrations.knowledge.bases)
+const configuredIntegrations = computed(
+  () => [...searchProviders.value, ...calendarAccounts.value, ...knowledgeBases.value]
+)
 
 function openCreateDialog() {
   selectedIntegration.value = null
@@ -144,13 +147,22 @@ function openAccessDialog(integration) {
 }
 
 function providerLabel(providerType) {
-  return { searxng: 'SearXNG', caldav: 'CalDAV' }[providerType] || providerType
+  return { searxng: 'SearXNG', caldav: 'CalDAV', bookstack: 'BookStack' }[providerType] || providerType
+}
+
+function typeLabel(integrationType) {
+  return { calendar: 'Kalender', knowledge: 'Wissensdatenbank' }[integrationType] || 'Websuche'
+}
+
+function typeIcon(integrationType) {
+  return { calendar: 'calendar_month', knowledge: 'menu_book' }[integrationType] || 'travel_explore'
 }
 
 async function testIntegration(integration) {
   testingId.value = integration.id
   try {
     if (integration.integrationType === 'calendar') await integrations.testCalendar(integration.id)
+    else if (integration.integrationType === 'knowledge') await integrations.testKnowledge(integration.id)
     else await integrations.testSearch(integration.id)
     $q.notify({ type: 'positive', message: 'Verbindung erfolgreich' })
   } catch {
@@ -168,13 +180,18 @@ async function removeIntegration(integration) {
   )
   if (!confirmed) return
   if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
+  else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
   else await integrations.removeSearch(integration.id)
   $q.notify({ type: 'positive', message: 'Integration gelöscht' })
 }
 
 async function reload() {
   try {
-    await Promise.all([integrations.fetchSearch(), integrations.fetchCalendar()])
+    await Promise.all([
+      integrations.fetchSearch(),
+      integrations.fetchCalendar(),
+      integrations.fetchKnowledge()
+    ])
   } catch {
     // The central API interceptor displays the error as a toast.
   }
