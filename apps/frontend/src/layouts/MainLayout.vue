@@ -119,9 +119,13 @@
                       <q-item-label
                         lines="1"
                         class="session-list-item__title text-body2"
-                        :class="{ 'text-weight-medium': route.query.session === session.id }"
+                        :class="{
+                          'text-weight-bold': session.hasUnreadMessages,
+                          'text-weight-medium': !session.hasUnreadMessages && route.query.session === session.id
+                        }"
                       >
                         {{ session.title }}
+                        <span v-if="session.hasUnreadMessages" class="app-sr-only">, ungelesene Nachrichten</span>
                       </q-item-label>
                       <q-tooltip
                         v-if="$q.platform.is.mobile !== true"

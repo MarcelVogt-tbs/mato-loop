@@ -536,7 +536,6 @@ class AgentRuntimeSettings(SettingsDocument):
     compaction_target_ratio: float = Field(default=0.6, ge=0.1, le=0.9)
     safety_reserve_tokens: int = Field(default=4_096, ge=0, le=131_072)
     protected_recent_turns: int = Field(default=2, ge=1, le=100)
-    approval_timeout_seconds: int = Field(default=600, ge=10, le=86_400)
     max_compaction_requests: int = Field(default=3, ge=1, le=20)
     historical_tool_output_tokens: int = Field(default=2_000, ge=0, le=100_000)
 

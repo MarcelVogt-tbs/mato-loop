@@ -124,13 +124,13 @@ async def test_session_multipart_routes_forward_classified_attachments(monkeypat
 
 
 async def test_attachment_upload_count_is_bounded() -> None:
-    files = [upload() for _ in range(5)]
+    files = [upload() for _ in range(9)]
 
     with pytest.raises(ApiError) as exc_info:
         await sessions_route._attachment_uploads(files)
 
     assert exc_info.value.code == "validation.tooManyItems"
-    assert exc_info.value.params == {"maxItems": 4}
+    assert exc_info.value.params == {"maxItems": 8}
 
 
 async def test_invalid_image_upload_logs_safe_decoder_context(caplog) -> None:

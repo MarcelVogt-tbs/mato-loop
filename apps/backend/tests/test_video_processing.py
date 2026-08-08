@@ -150,6 +150,8 @@ def test_video_analysis_mode_profiles_and_audio_segments() -> None:
     assert len(video.video_frame_timestamps(802_434, "overview")) == 32
     assert len(video.video_frame_timestamps(802_434, "fine_grained")) == 64
     assert video.video_frame_timestamps(2_000, "overview") == [1_000]
+    with pytest.raises(video.VideoProcessingError):
+        video.video_frame_timestamps(2_000, "speech")
 
     buffer = BytesIO()
     with wave.open(buffer, "wb") as wav_file:

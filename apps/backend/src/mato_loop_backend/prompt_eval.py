@@ -62,7 +62,7 @@ ATTACHMENT_ID_2 = UUID("80000000-0000-4000-8000-000000000002")
 CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
 
-INVENTORY_VERSION = 9
+INVENTORY_VERSION = 10
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -990,6 +990,21 @@ CASES = (
             "root": "session",
             "path": f"attachments/{ATTACHMENT_ID}/video.mp4",
             "analysis_mode": "overview",
+        },
+    ),
+    PromptCase(
+        id="analyze_video_spoken_summary_uses_speech",
+        kind="general",
+        user=_video_request(
+            "interview.mp4",
+            "Was erzählt der Mann im Session-Video? Fasse seine Aussagen auf Deutsch zusammen.",
+        ),
+        tools=VIDEO_EVAL_TOOLS,
+        expected_tool="analyze_video",
+        expected_arguments={
+            "root": "session",
+            "path": f"attachments/{ATTACHMENT_ID}/interview.mp4",
+            "analysis_mode": "speech",
         },
     ),
     PromptCase(
@@ -2783,6 +2798,7 @@ _SEMANTIC_CONTRACTS = (
             "generate_audio_uses_duration",
             "transcribe_audio_uses_attachment_uuid",
             "analyze_video_uses_root_and_path",
+            "analyze_video_spoken_summary_uses_speech",
             "analyze_video_product_presentation_uses_overview",
             "analyze_video_speaker_script_uses_overview",
             "analyze_video_instructions_use_fine_grained",
@@ -2794,6 +2810,7 @@ _SEMANTIC_CONTRACTS = (
         "media",
         (
             "analyze_video_uses_root_and_path",
+            "analyze_video_spoken_summary_uses_speech",
             "analyze_video_product_presentation_uses_overview",
             "analyze_video_speaker_script_uses_overview",
             "analyze_video_instructions_use_fine_grained",

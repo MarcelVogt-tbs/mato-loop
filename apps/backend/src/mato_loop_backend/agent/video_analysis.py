@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -196,6 +197,7 @@ async def analyze_video(
     analysis_mode: VideoAnalysisMode = "overview",
     focus: str | None = None,
 ) -> dict[str, Any]:
+    started_at = time.monotonic()
     try:
         info: MediaInfo = await asyncio.to_thread(probe_video, data)
     except VideoProcessingTimeout as exc:
@@ -204,6 +206,8 @@ async def analyze_video(
     except VideoProcessingError as exc:
         logger.warning("Video probing failed", exc_info=True)
         raise VideoAnalysisError("attachment.invalidVideo") from exc
+    logger.info("Video probing completed in %d ms", round((time.monotonic() - started_at) * 1_000))
+    audio_started_at = time.monotonic()
     try:
         audio = await asyncio.to_thread(extract_video_audio, data) if info.has_audio else None
     except VideoProcessingTimeout as exc:
@@ -212,7 +216,41 @@ async def analyze_video(
     except VideoProcessingError as exc:
         logger.warning("Video audio extraction failed", exc_info=True)
         raise VideoAnalysisError("video.audioExtractionFailed") from exc
+    logger.info(
+        "Video audio extraction completed in %d ms",
+        round((time.monotonic() - audio_started_at) * 1_000),
+    )
     transcript_segments: list[TranscriptSegment] = []
+
+    if analysis_mode == "speech":
+        if audio is not None:
+            if transcription_handler is None:
+                raise VideoAnalysisError("video.audioAnalysisUnavailable")
+            transcription_started_at = time.monotonic()
+            transcript_segments = await _transcribe_segments(
+                audio,
+                language=language,
+                source_trust=source_trust,
+                handler=transcription_handler,
+            )
+            logger.info(
+                "Video transcription completed in %d ms",
+                round((time.monotonic() - transcription_started_at) * 1_000),
+            )
+        return {
+            "mode": "transcript_only",
+            "durationMs": info.duration_ms,
+            "width": info.width,
+            "height": info.height,
+            "audioStatus": "transcribed" if audio is not None else "absent",
+            "audioQuality": "not_assessed",
+            "visualSegments": [],
+            "transcriptSegments": [
+                _segment_dict(segment) for segment in transcript_segments
+            ],
+            "sampledFrameTimestampsMs": [],
+            "analysisMode": analysis_mode,
+        }
 
     if native_handler is not None:
         native = await native_handler(
@@ -261,6 +299,7 @@ async def analyze_video(
 
     if frame_handler is None:
         raise VideoAnalysisError("video.analysisUnavailable")
+    frame_started_at = time.monotonic()
     try:
         frames = await asyncio.to_thread(
             extract_video_frames, data, analysis_mode=analysis_mode
@@ -271,17 +310,31 @@ async def analyze_video(
     except VideoProcessingError as exc:
         logger.warning("Video frame extraction failed", exc_info=True)
         raise VideoAnalysisError("video.frameExtractionFailed") from exc
+    logger.info(
+        "Video frame extraction completed in %d ms",
+        round((time.monotonic() - frame_started_at) * 1_000),
+    )
     if audio is not None:
         if transcription_handler is None:
             raise VideoAnalysisError("video.audioAnalysisUnavailable")
+        transcription_started_at = time.monotonic()
         transcript_segments = await _transcribe_segments(
             audio,
             language=language,
             source_trust=source_trust,
             handler=transcription_handler,
         )
+        logger.info(
+            "Video transcription completed in %d ms",
+            round((time.monotonic() - transcription_started_at) * 1_000),
+        )
+    vision_started_at = time.monotonic()
     visual_segments = await frame_handler(
         frames, transcript_segments, info.duration_ms, source_trust, focus
+    )
+    logger.info(
+        "Video frame analysis completed in %d ms",
+        round((time.monotonic() - vision_started_at) * 1_000),
     )
     if not visual_segments or any(not segment.text.strip() for segment in visual_segments):
         logger.warning("Video frame analysis returned empty content")

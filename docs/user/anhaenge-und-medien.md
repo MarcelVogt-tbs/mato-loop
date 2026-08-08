@@ -2,7 +2,7 @@
 
 ## Nachrichtenanhänge
 
-Sie können Dateien über die Dateiauswahl oder die Zwischenablage an einen Nachrichtenentwurf anhängen. Pro Nachricht sind bis zu vier Anhänge mit jeweils höchstens 64 MiB möglich. Browserlokale Anhangsentwürfe sind über alle Sessions zusammen auf 256 MiB begrenzt.
+Sie können Dateien über die Dateiauswahl oder die Zwischenablage an einen Nachrichtenentwurf anhängen. Pro Nachricht sind bis zu acht Anhänge mit jeweils höchstens 64 MiB möglich. Browserlokale Anhangsentwürfe sind über alle Sessions zusammen auf 256 MiB begrenzt.
 
 MatoLoop zeigt unterstützte Bilder, Audio, Text und Dokumente passend an. Office-Dokumente, PDFs, Audio und weitere Formate können serverseitig in lesbare Ableitungen umgewandelt werden. Die Originaldatei bleibt als Download verfügbar.
 

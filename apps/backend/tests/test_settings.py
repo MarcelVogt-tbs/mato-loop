@@ -44,7 +44,6 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert settings.compaction_target_ratio == 0.6
     assert settings.safety_reserve_tokens == 4_096
     assert settings.protected_recent_turns == 2
-    assert settings.approval_timeout_seconds == 600
     assert settings.max_compaction_requests == 3
     assert settings.historical_tool_output_tokens == 2_000
     assert ToolSettings().web_fetch.default_policy == WebFetchPolicy.AUTO_PUBLIC

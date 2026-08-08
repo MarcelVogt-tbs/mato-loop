@@ -32,7 +32,7 @@ FFMPEG_FRAME_TIMEOUT_SECONDS = 30
 FFMPEG_AUDIO_TIMEOUT_SECONDS = 180
 AUDIO_SEGMENT_SECONDS = 120
 
-VideoAnalysisMode = Literal["overview", "fine_grained"]
+VideoAnalysisMode = Literal["speech", "overview", "fine_grained"]
 _FRAME_PROFILES: dict[VideoAnalysisMode, tuple[int, int]] = {
     "overview": (5_000, 32),
     "fine_grained": (2_000, 64),

@@ -29,7 +29,6 @@ from mato_loop_backend.models import AgentRun, ChatSession, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
-    AgentRuntimeSettings,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -195,7 +194,6 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
         ToolCall(id="delete", name="delete_path", arguments={}),
         request,
         root_files,
-        AgentRuntimeSettings(),
     )
 
     assert decision == PermissionDecision.DENY
@@ -262,7 +260,6 @@ async def test_runtime_uses_bound_integration_resource_policy(
         ToolCall(id="search", name="calendar_search", arguments={}),
         request,
         _root_files(tmp_path, session),
-        AgentRuntimeSettings(),
     )
 
     assert decision == PermissionDecision.ALLOW
@@ -325,7 +322,6 @@ async def test_runtime_discovery_uses_global_not_integration_policy(
         ToolCall(id="list", name="calendar_list_calendars", arguments={}),
         request,
         _root_files(tmp_path, session),
-        AgentRuntimeSettings(),
     )
 
     assert request.policy_integration_id is None
@@ -384,7 +380,6 @@ async def test_runtime_ignores_override_after_resource_contract_removal(
         ToolCall(id="search", name="calendar_search", arguments={}),
         request,
         _root_files(tmp_path, session),
-        AgentRuntimeSettings(),
     )
 
     assert decision == PermissionDecision.DENY

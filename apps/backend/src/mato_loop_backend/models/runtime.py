@@ -171,6 +171,9 @@ class ChatSession(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    last_read_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
     messages: Mapped[list[Message]] = relationship(
         back_populates="chat_session", cascade="all, delete-orphan", passive_deletes=True

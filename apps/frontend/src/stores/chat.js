@@ -19,7 +19,7 @@ const FILESYSTEM_MUTATION_TOOLS = new Set([
   'copy_path',
   'move_path'
 ])
-export const MAX_ATTACHMENT_DRAFTS = 4
+export const MAX_ATTACHMENT_DRAFTS = 8
 export const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
 export const MAX_ATTACHMENT_DRAFT_BYTES = 256 * 1024 * 1024
 
@@ -129,6 +129,10 @@ function lastVisibleMessageAt(messages) {
     .reverse()
     .find((message) => ['user', 'assistant'].includes(message.role))
     ?.createdAt || null
+}
+
+function lastAssistantMessage(messages) {
+  return [...(messages || [])].reverse().find((message) => message.role === 'assistant')
 }
 
 function sessionBeforeUserMessage(session, messageId) {
@@ -335,7 +339,7 @@ export const useChatStore = defineStore('chat', {
     addAttachmentFiles(files) {
       const incoming = Array.from(files || [])
       if (this.activeAttachmentDraft.length + incoming.length > MAX_ATTACHMENT_DRAFTS) {
-        return { added: 0, error: 'Du kannst höchstens vier Dateien pro Nachricht anhängen.' }
+        return { added: 0, error: `Du kannst höchstens ${MAX_ATTACHMENT_DRAFTS} Dateien pro Nachricht anhängen.` }
       }
       for (const file of incoming) {
         if (!Number.isFinite(file?.size) || file.size <= 0) {
@@ -400,7 +404,7 @@ export const useChatStore = defineStore('chat', {
     },
     attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
       if (files.length > MAX_ATTACHMENT_DRAFTS) {
-        return 'Du kannst höchstens vier Dateien pro Nachricht anhängen.'
+        return `Du kannst höchstens ${MAX_ATTACHMENT_DRAFTS} Dateien pro Nachricht anhängen.`
       }
       for (const file of files) {
         if (!Number.isFinite(file?.size) || file.size <= 0) {
@@ -605,6 +609,7 @@ export const useChatStore = defineStore('chat', {
         const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
         if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
         this.current = session
+        void this.markSessionRead(session).catch(() => {})
         if (session.activeRun && this.runId !== session.activeRun.id) {
           this.watchRun(id, session.activeRun.id, session.activeRun)
         } else if (!session.activeRun && !this.running) {
@@ -630,6 +635,7 @@ export const useChatStore = defineStore('chat', {
         const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
         if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
           this.current = session
+          void this.markSessionRead(session).catch(() => {})
           this.loadError = null
           if (session.activeRun && this.runId !== session.activeRun.id) {
             this.watchRun(id, session.activeRun.id, session.activeRun)
@@ -749,6 +755,20 @@ export const useChatStore = defineStore('chat', {
     applySessionResult(session) {
       this.current = session
       this.updateSessionSummary(session)
+    },
+    async markSessionRead(session) {
+      if (!session?.hasUnreadMessages) return
+      const message = lastAssistantMessage(session.messages)
+      if (!message) return
+      await api.post(
+        `/sessions/${session.id}/read`,
+        { throughMessageId: message.id },
+        { suppressErrorToast: true }
+      )
+      this.sessionListVersion += 1
+      if (this.current?.id === session.id) this.current.hasUnreadMessages = false
+      const summary = this.sessions.find((item) => item.id === session.id)
+      if (summary) summary.hasUnreadMessages = false
     },
     async undoUserMessage(message) {
       const session = this.current

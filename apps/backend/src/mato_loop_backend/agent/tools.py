@@ -1298,19 +1298,20 @@ class AnalyzeVideoArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=2_000)
     language: str | None = Field(default=None, min_length=2, max_length=35)
-    analysis_mode: Literal["overview", "fine_grained"] = Field(
+    analysis_mode: Literal["speech", "overview", "fine_grained"] = Field(
         default="overview",
         validation_alias=AliasChoices("analysis_mode", "detail"),
         description=(
-            "Controls sampling cost, not output quality. Use overview for summaries, product "
-            "presentations, and broad chronology. Use fine_grained only to reconstruct exact short "
-            "actions for step-by-step instructions or troubleshooting."
+            "Use speech for transcripts or questions about spoken content. Use overview for visual "
+            "summaries or broad chronology. Use fine_grained only for exact visual steps or "
+            "troubleshooting."
         ),
     )
-    focus: str = Field(
+    focus: str | None = Field(
+        default=None,
         min_length=1,
         max_length=2_000,
-        description="The user's requested deliverable or question.",
+        description="Requested deliverable or question.",
     )
 
     @field_validator("analysis_mode", mode="before")
@@ -3297,9 +3298,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "analyze_video",
-            "Analyze an MP4 or WebM video for the requested focus. Use the successful result to complete "
-            "the task and do not analyze the same video again unless it reports an error. A timeout does "
-            "not indicate video length.",
+            "Analyze an MP4 or WebM video. Choose speech for spoken content, overview for visual "
+            "summaries, or fine_grained for exact visual steps. Use the result to complete the task. "
+            "Do not repeat a successful analysis. A timeout does not indicate video length.",
             AnalyzeVideoArguments,
             _analyze_video,
             required_capability="media.analyze.video",

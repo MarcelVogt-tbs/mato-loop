@@ -225,7 +225,7 @@ describe('chat drafts', () => {
       return file
     }
 
-    expect(chat.addAttachmentFiles([wav(), wav(), wav(), wav(), wav()]).error).toContain('höchstens vier')
+    expect(chat.addAttachmentFiles(Array.from({ length: 9 }, wav)).error).toContain('höchstens 8')
     expect(chat.addAttachmentFiles([{ name: 'leer.txt', type: 'text/plain', size: 0 }]).error)
       .toContain('leer')
     expect(chat.addAttachmentFiles([{
@@ -440,6 +440,53 @@ describe('chat drafts', () => {
     expect(chat.current.id).toBe('session-2')
     expect(chat.loading).toBe(false)
     expect(chat.loadError).toBeNull()
+  })
+
+  it('marks the latest loaded assistant message as read', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        id: 'session-1',
+        hasUnreadMessages: true,
+        activeRun: null,
+        messages: [
+          { id: 'user-message', role: 'user' },
+          { id: 'assistant-message', role: 'assistant' }
+        ]
+      }
+    })
+    api.post.mockResolvedValue({ data: { read: true } })
+    const chat = useChatStore()
+    chat.sessions = [{ id: 'session-1', hasUnreadMessages: true }]
+
+    await chat.loadSession('session-1')
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith(
+      '/sessions/session-1/read',
+      { throughMessageId: 'assistant-message' },
+      { suppressErrorToast: true }
+    ))
+
+    expect(chat.current.hasUnreadMessages).toBe(false)
+    expect(chat.sessions[0].hasUnreadMessages).toBe(false)
+  })
+
+  it('keeps a session unread when acknowledging it fails', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        id: 'session-1',
+        hasUnreadMessages: true,
+        activeRun: null,
+        messages: [{ id: 'assistant-message', role: 'assistant' }]
+      }
+    })
+    api.post.mockRejectedValue(new Error('network'))
+    const chat = useChatStore()
+    chat.sessions = [{ id: 'session-1', hasUnreadMessages: true }]
+
+    await chat.loadSession('session-1')
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalled())
+
+    expect(chat.current.hasUnreadMessages).toBe(true)
+    expect(chat.sessions[0].hasUnreadMessages).toBe(true)
   })
 
   it('does not attach a late send response to a newly selected session', async () => {
