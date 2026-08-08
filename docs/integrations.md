@@ -54,7 +54,7 @@ CalDAV tools release private integration data. A public model therefore needs an
 
 ## BookStack
 
-The BookStack adapter is a knowledge integration. Each BookStack installation is an integration instance and each visible book is a resource. The static actions are `knowledge.read`, `knowledge.write`, and `knowledge.delete`; page, chapter, and book creation and page updates share the write action. API token ID and token secret are encrypted separately from settings and are sent as `Authorization: Token <id>:<secret>` over HTTPS only.
+The BookStack adapter is a knowledge integration. Each BookStack installation is an integration instance and each visible book is a resource. The static actions are `knowledge.read`, `knowledge.write`, and `knowledge.delete`; page, chapter, and book creation as well as page, chapter, and book updates share the write action. Book and chapter updates change name and description only; shelf membership is managed from the shelf side. API token ID and token secret are encrypted separately from settings and are sent as `Authorization: Token <id>:<secret>` over HTTPS only.
 
 Content is exchanged as Markdown. Reading a page prefers the stored Markdown source and falls back to the Markdown export when the page was authored in the WYSIWYG editor. Responses are truncated at host-controlled size limits and remote text is treated as untrusted data.
 

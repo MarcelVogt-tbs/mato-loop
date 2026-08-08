@@ -23,6 +23,8 @@ from mato_loop_backend.integrations.bookstack import (
     KnowledgeListAccountsArguments,
     KnowledgeListAttachmentsArguments,
     KnowledgeShelfArguments,
+    KnowledgeUpdateBookArguments,
+    KnowledgeUpdateChapterArguments,
     KnowledgeUpdatePageArguments,
     KnowledgeUpdateShelfArguments,
     knowledge_create_attachment,
@@ -38,6 +40,8 @@ from mato_loop_backend.integrations.bookstack import (
     knowledge_list_shelves,
     knowledge_read_book,
     knowledge_read_shelf,
+    knowledge_update_book,
+    knowledge_update_chapter,
     knowledge_update_page,
     knowledge_update_shelf,
     load_bookstack_resources,
@@ -147,8 +151,10 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "knowledge_update_page",
         "knowledge_delete_page",
         "knowledge_create_book",
+        "knowledge_update_book",
         "knowledge_delete_book",
         "knowledge_create_chapter",
+        "knowledge_update_chapter",
         "knowledge_delete_chapter",
         "knowledge_list_shelves",
         "knowledge_read_shelf",
@@ -184,8 +190,10 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "knowledge_create_page",
         "knowledge_update_page",
         "knowledge_delete_page",
+        "knowledge_update_book",
         "knowledge_delete_book",
         "knowledge_create_chapter",
+        "knowledge_update_chapter",
         "knowledge_delete_chapter",
     ):
         assert tools[name].resource_argument == "book_key"
@@ -633,6 +641,102 @@ async def test_create_book_without_shelves_reports_empty_membership(monkeypatch)
 
     client.update_shelf.assert_not_awaited()
     assert json.loads(result.content)["book"]["shelfKeys"] == []
+
+
+async def test_update_book_changes_metadata_only(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    client = AsyncMock()
+    client.update_book.return_value = BookStackBook(
+        id=7, name="Geraete neu", slug="geraete", description="Beschreibung"
+    )
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_update_book(
+        KnowledgeUpdateBookArguments(
+            integration_id=instance.id,
+            book_key="book:7",
+            name="Geraete neu",
+        ),
+        _context(instance, revision),
+    )
+
+    client.update_book.assert_awaited_once_with(7, name="Geraete neu", description=None)
+    client.update_shelf.assert_not_awaited()
+    payload = json.loads(result.content)["book"]
+    assert payload["bookKey"] == "book:7"
+    assert payload["name"] == "Geraete neu"
+    # Shelf membership is managed through shelves, so it is not reported here.
+    assert "shelfKeys" not in payload
+
+
+async def test_update_book_requires_a_changed_field() -> None:
+    with pytest.raises(ValidationError):
+        KnowledgeUpdateBookArguments(integration_id=uuid4(), book_key="book:7")
+
+
+async def test_update_chapter_uses_the_token_of_the_approved_book(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    chapter = BookStackChapter(id=11, book_id=7, name="Kapitel", slug="kapitel")
+    token = bookstack_module._chapter_token(chapter, instance.id, revision, "book:7")
+    client = AsyncMock()
+    client.update_chapter.return_value = BookStackChapter(
+        id=11, book_id=7, name="Kapitel neu", slug="kapitel"
+    )
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_update_chapter(
+        KnowledgeUpdateChapterArguments(
+            integration_id=instance.id,
+            book_key="book:7",
+            chapter_token=token,
+            name="Kapitel neu",
+        ),
+        _context(instance, revision),
+    )
+
+    client.update_chapter.assert_awaited_once_with(
+        11, name="Kapitel neu", description=None
+    )
+    assert json.loads(result.content)["chapter"]["name"] == "Kapitel neu"
+
+
+async def test_update_chapter_refuses_a_token_of_another_book(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    chapter = BookStackChapter(id=11, book_id=9, name="Kapitel", slug="kapitel")
+    token = bookstack_module._chapter_token(chapter, instance.id, revision, "book:9")
+    client = AsyncMock()
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_update_chapter(
+        KnowledgeUpdateChapterArguments(
+            integration_id=instance.id,
+            book_key="book:7",
+            chapter_token=token,
+            name="Kapitel neu",
+        ),
+        _context(instance, revision),
+    )
+
+    assert result.is_error is True
+    client.update_chapter.assert_not_awaited()
 
 
 async def test_book_listings_expose_shelf_membership(monkeypatch) -> None:

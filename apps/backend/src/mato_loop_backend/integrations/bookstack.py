@@ -191,10 +191,33 @@ class KnowledgeCreateBookArguments(KnowledgeIntegrationArguments):
         return self
 
 
+class KnowledgeUpdateBookArguments(KnowledgeBookArguments):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2_000)
+
+    @model_validator(mode="after")
+    def require_change(self) -> KnowledgeUpdateBookArguments:
+        if self.name is None and self.description is None:
+            raise ValueError("name or description is required")
+        return self
+
+
 class KnowledgeCreateChapterArguments(KnowledgeBookArguments):
     idempotency_key: UUID
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2_000)
+
+
+class KnowledgeUpdateChapterArguments(KnowledgeBookArguments):
+    chapter_token: str = Field(min_length=1, max_length=50_000)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2_000)
+
+    @model_validator(mode="after")
+    def require_change(self) -> KnowledgeUpdateChapterArguments:
+        if self.name is None and self.description is None:
+            raise ValueError("name or description is required")
+        return self
 
 
 class KnowledgeDeleteChapterArguments(KnowledgeBookArguments):
@@ -881,6 +904,24 @@ async def knowledge_create_book(
         return _error(exc)
 
 
+async def knowledge_update_book(
+    arguments: KnowledgeUpdateBookArguments, context: Any
+) -> Any:
+    try:
+        async with _selected_client(arguments.integration_id, context) as (
+            client,
+            _revision,
+        ):
+            book = await client.update_book(
+                _book_id(arguments.book_key),
+                name=arguments.name,
+                description=arguments.description,
+            )
+        return _result({"book": _book_payload(book)})
+    except BookStackError as exc:
+        return _error(exc)
+
+
 async def knowledge_delete_book(arguments: KnowledgeBookArguments, context: Any) -> Any:
     try:
         async with _selected_client(arguments.integration_id, context) as (
@@ -914,6 +955,40 @@ async def knowledge_create_chapter(
                 )
             }
         )
+    except BookStackError as exc:
+        return _error(exc)
+
+
+async def knowledge_update_chapter(
+    arguments: KnowledgeUpdateChapterArguments, context: Any
+) -> Any:
+    try:
+        _instance, revision = _binding(context, arguments.integration_id)
+        token = _decode_token(
+            _ChapterToken,
+            arguments.chapter_token,
+            arguments.integration_id,
+            revision,
+            arguments.book_key,
+        )
+        async with _selected_client(arguments.integration_id, context) as (
+            client,
+            _revision,
+        ):
+            chapter = await client.update_chapter(
+                token.chapter_id,
+                name=arguments.name,
+                description=arguments.description,
+            )
+        return _result(
+            {
+                "chapter": _chapter_summary(
+                    chapter, arguments.integration_id, revision, arguments.book_key
+                )
+            }
+        )
+    except ValueError:
+        return _invalid("chapter_token")
     except BookStackError as exc:
         return _error(exc)
 
@@ -1411,6 +1486,20 @@ def _create_book_permission(
     )
 
 
+def _update_book_permission(
+    arguments: KnowledgeUpdateBookArguments, context: Any
+) -> tuple[Any, ...]:
+    return _permission(
+        "knowledge.write",
+        _operation_key("update-book", arguments),
+        arguments,
+        context,
+        title="Buch ändern?",
+        summary="Der Agent möchte Name oder Beschreibung dieses Buchs ändern.",
+        resource=True,
+    )
+
+
 def _delete_book_permission(
     arguments: KnowledgeBookArguments, context: Any
 ) -> tuple[Any, ...]:
@@ -1435,6 +1524,20 @@ def _create_chapter_permission(
         context,
         title="Kapitel erstellen?",
         summary="Der Agent möchte ein Kapitel in diesem Buch erstellen.",
+        resource=True,
+    )
+
+
+def _update_chapter_permission(
+    arguments: KnowledgeUpdateChapterArguments, context: Any
+) -> tuple[Any, ...]:
+    return _permission(
+        "knowledge.write",
+        _operation_key("update-chapter", arguments),
+        arguments,
+        context,
+        title="Kapitel ändern?",
+        summary="Der Agent möchte Name oder Beschreibung dieses Kapitels ändern.",
         resource=True,
     )
 
@@ -1792,6 +1895,22 @@ BOOKSTACK_SHARED_TOOLS = (
         releases_private_data=True,
     ),
     ToolContribution(
+        name="knowledge_update_book",
+        description=(
+            "Update name or description of one book. "
+            "Use knowledge_update_shelf to change which shelves a book belongs to."
+        ),
+        arguments_model=KnowledgeUpdateBookArguments,
+        handler=knowledge_update_book,
+        label="Buch ändern",
+        icon="edit_note",
+        actions=(_WRITE,),
+        instance_argument="integration_id",
+        resource_argument="book_key",
+        authorization_factory=_update_book_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
         name="knowledge_delete_book",
         description="Delete one book including all of its chapters and pages.",
         arguments_model=KnowledgeBookArguments,
@@ -1815,6 +1934,19 @@ BOOKSTACK_SHARED_TOOLS = (
         instance_argument="integration_id",
         resource_argument="book_key",
         authorization_factory=_create_chapter_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="knowledge_update_chapter",
+        description="Update name or description of a previously returned chapter.",
+        arguments_model=KnowledgeUpdateChapterArguments,
+        handler=knowledge_update_chapter,
+        label="Kapitel ändern",
+        icon="edit_note",
+        actions=(_WRITE,),
+        instance_argument="integration_id",
+        resource_argument="book_key",
+        authorization_factory=_update_chapter_permission,
         releases_private_data=True,
     ),
     ToolContribution(

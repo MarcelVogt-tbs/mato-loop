@@ -476,6 +476,26 @@ class BookStackClient:
             await self._request("POST", "/books", payload=payload, expected={200, 201})
         )
 
+    async def update_book(
+        self,
+        book_id: int,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> BookStackBook:
+        payload: dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if description is not None:
+            payload["description"] = description
+        if not payload:
+            raise _error("invalidRequest")
+        return _book(
+            await self._request(
+                "PUT", f"/books/{_identifier(book_id)}", payload=payload
+            )
+        )
+
     async def delete_book(self, book_id: int) -> None:
         await self._request(
             "DELETE", f"/books/{_identifier(book_id)}", expected={200, 204}
@@ -490,6 +510,26 @@ class BookStackClient:
         return _chapter(
             await self._request(
                 "POST", "/chapters", payload=payload, expected={200, 201}
+            )
+        )
+
+    async def update_chapter(
+        self,
+        chapter_id: int,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> BookStackChapter:
+        payload: dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if description is not None:
+            payload["description"] = description
+        if not payload:
+            raise _error("invalidRequest")
+        return _chapter(
+            await self._request(
+                "PUT", f"/chapters/{_identifier(chapter_id)}", payload=payload
             )
         )
 

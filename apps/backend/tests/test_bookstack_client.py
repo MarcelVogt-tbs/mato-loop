@@ -180,6 +180,39 @@ async def test_page_mutations_send_markdown_payloads() -> None:
     assert bodies[1] == {"markdown": "Neuer Text"}
 
 
+async def test_book_and_chapter_updates_send_partial_payloads() -> None:
+    requests: list[tuple[str, str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(
+            (request.method, request.url.path, json.loads(request.content))
+        )
+        return httpx.Response(
+            200,
+            json={"id": 7, "book_id": 7, "name": "Neu", "slug": "neu"},
+        )
+
+    async with _client(handler) as client:
+        await client.update_book(7, name="Neu")
+        await client.update_chapter(11, description="Beschreibung")
+
+    assert requests[0] == ("PUT", "/api/books/7", {"name": "Neu"})
+    assert requests[1] == ("PUT", "/api/chapters/11", {"description": "Beschreibung"})
+
+
+async def test_empty_book_and_chapter_updates_are_rejected() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [], "total": 0})
+
+    async with _client(handler) as client:
+        with pytest.raises(BookStackError) as book_error:
+            await client.update_book(7)
+        with pytest.raises(BookStackError) as chapter_error:
+            await client.update_chapter(11)
+    assert book_error.value.code == "bookstack.invalidRequest"
+    assert chapter_error.value.code == "bookstack.invalidRequest"
+
+
 async def test_empty_update_and_invalid_limits_are_rejected() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"data": [], "total": 0})
