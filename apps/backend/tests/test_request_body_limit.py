@@ -134,3 +134,30 @@ async def test_workspace_file_edit_has_json_body_limit(monkeypatch) -> None:
 
     assert messages[0]["status"] == 413
     assert json.loads(messages[1]["body"])["error"]["code"] == "file.tooLarge"
+
+
+async def test_question_answers_have_json_body_limit(monkeypatch) -> None:
+    monkeypatch.setattr(request_body_limit, "QUESTION_ANSWERS_REQUEST_LIMIT", 4)
+    messages = []
+
+    async def app(_scope, _receive, _send):
+        raise AssertionError("Oversized request reached the application")
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    async def send(message):
+        messages.append(message)
+
+    middleware = MediaRequestBodyLimitMiddleware(app)
+    await middleware(
+        scope(
+            f"/api/questions/{'a' * 36}/answers",
+            [(b"content-length", b"5")],
+        ),
+        receive,
+        send,
+    )
+
+    assert messages[0]["status"] == 413
+    assert json.loads(messages[1]["body"])["error"]["code"] == "question.answerTooLarge"

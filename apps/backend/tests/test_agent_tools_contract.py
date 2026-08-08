@@ -12,6 +12,8 @@ import mato_loop_backend.agent.tools as tools_module
 import mato_loop_backend.integrations.registry as integration_registry
 from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
 from mato_loop_backend.agent.tools import (
+    BoundTool,
+    EffectiveToolSet,
     ToolAction,
     ToolAttachment,
     ToolContext,
@@ -73,6 +75,59 @@ class _SharedConfig(BaseModel):
 
 async def _successful_handler(_arguments, _context) -> ToolResult:
     return ToolResult.json({"ok": True})
+
+
+async def test_bound_tool_defaults_fill_only_fully_omitted_arguments(tmp_path) -> None:
+    received = []
+
+    async def handler(arguments, _context):
+        received.append(arguments)
+        return ToolResult.json({"ok": True})
+
+    definition = ToolDefinition("example", "Example tool", _SharedArguments, handler)
+    registry = ToolRegistry([])
+    effective = EffectiveToolSet(
+        registry,
+        {
+            "example": BoundTool(
+                definition,
+                default_arguments={
+                    "integration_id": str(uuid4()),
+                    "resource_key": "default",
+                },
+            )
+        },
+    )
+    schema = effective.schemas()[0]
+    assert schema["parameters"]["required"] == ["value"]
+    assert "configured default" in schema["description"]
+
+    omitted = ToolCall("omitted", "example", {"value": "first"})
+    result = await effective.execute(omitted, _context(tmp_path, omitted))
+    assert result.is_error is False
+    assert received[-1].resource_key == "default"
+
+    explicit_id = uuid4()
+    explicit = ToolCall(
+        "explicit",
+        "example",
+        {
+            "integration_id": str(explicit_id),
+            "resource_key": "explicit",
+            "value": "second",
+        },
+    )
+    result = await effective.execute(explicit, _context(tmp_path, explicit))
+    assert result.is_error is False
+    assert received[-1].integration_id == explicit_id
+    assert received[-1].resource_key == "explicit"
+
+    partial = ToolCall(
+        "partial", "example", {"resource_key": "explicit", "value": "third"}
+    )
+    result = await effective.execute(partial, _context(tmp_path, partial))
+    assert result.is_error is True
+    assert result.metadata["errorCode"] == "tool.invalidArguments"
 
 
 def _definition(name: str = "example") -> ToolDefinition:
@@ -611,9 +666,9 @@ def test_webfetch_schema_describes_verified_image_attachments() -> None:
     schemas = tool_registry.schemas(IntegrationSettings(), "read-only", webfetch_enabled=True)
     webfetch = next(item for item in schemas if item["name"] == "webfetch")
 
-    assert "Successful images are validated and attached" in webfetch["description"]
-    assert "whether the URL is citationEligible" in webfetch["description"]
-    assert "cite it as [title](URL)" in webfetch["description"]
+    assert "Images are validated and attached" in webfetch["description"]
+    assert "citationEligible" in webfetch["description"]
+    assert "[title](URL)" in webfetch["description"]
 
 
 def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
@@ -647,7 +702,7 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
             "destination_root",
             "destination_path",
         }
-        assert "exact new path" in schemas[name]["description"]
+        assert "exact new destination path" in schemas[name]["description"]
 
 
 async def test_read_only_mode_offers_only_read_file_tools_and_blocks_stale_mutations(
@@ -693,6 +748,109 @@ async def test_effective_toolset_rejects_a_call_that_was_not_offered(tmp_path) -
     result = await effective.execute(call, _context(tmp_path, call))
 
     assert result.metadata == {"errorCode": "tool.unavailable"}
+
+
+def test_inactive_capability_catalog_includes_installed_tools_without_schemas() -> None:
+    integrations = IntegrationSettings()
+    settings = ToolSettings()
+    capabilities = tools_module.effective_tool_capabilities(settings)
+    effective = tool_registry.effective(
+        integrations,
+        "read-only",
+        tool_capabilities=capabilities,
+        tool_settings=settings,
+    )
+
+    groups = tool_registry.inactive_capability_groups(
+        integrations,
+        frozenset(effective.tools),
+        workspace_access="read-only",
+        webfetch_enabled=False,
+        web_search_enabled=True,
+        memory_enabled=False,
+        memory_write_enabled=False,
+        tool_capabilities=capabilities,
+        tool_settings=settings,
+    )
+    catalog = "\n".join(groups)
+
+    assert "write_file" in catalog
+    assert 'switch "Agent-Modus" from "Lesen" to "Schreiben"' in catalog
+    assert "generate_image" in catalog
+    assert "memory_retrieve" in catalog
+    assert "webfetch" in catalog
+    assert "calendar_create_event" in catalog
+    assert '"Einstellungen > Integrationen"' in catalog
+    assert "question" not in catalog
+    assert "parameters" not in catalog
+
+
+def test_inactive_capability_catalog_keeps_every_tool_family_visible() -> None:
+    integrations = IntegrationSettings()
+    settings = ToolSettings()
+    capabilities = tools_module.effective_tool_capabilities(settings)
+    effective = tool_registry.effective(
+        integrations,
+        "read-only",
+        tool_capabilities=capabilities,
+        tool_settings=settings,
+    )
+
+    groups = tool_registry.inactive_capability_groups(
+        integrations,
+        frozenset(effective.tools),
+        workspace_access="read-only",
+        webfetch_enabled=False,
+        web_search_enabled=True,
+        memory_enabled=False,
+        memory_write_enabled=False,
+        tool_capabilities=capabilities,
+        tool_settings=settings,
+    )
+    integration_group = next(
+        group for group in groups if group.startswith("Integration tools")
+    )
+
+    # A large integration must not push smaller ones out of the guidance.
+    assert "calendar_list_accounts" in integration_group
+    assert "knowledge_list_accounts" in integration_group
+    # Named tools stay bounded so the prompt does not grow with each new tool.
+    assert integration_group.count("knowledge_") == 4
+    assert "more]" in integration_group
+
+
+def test_policy_disabled_integration_tool_points_to_tool_settings(monkeypatch) -> None:
+    _shared_adapter(monkeypatch, AsyncMock())
+    integrations = IntegrationSettings(instances=[_shared_integration("Tasks")])
+    settings = ToolSettings.model_validate(
+        {"policies": {"tasks.read": "disabled"}}
+    )
+    effective = tool_registry.effective(
+        integrations,
+        "read-only",
+        tool_settings=settings,
+    )
+
+    groups = tool_registry.inactive_capability_groups(
+        integrations,
+        frozenset(effective.tools),
+        workspace_access="read-only",
+        webfetch_enabled=False,
+        web_search_enabled=True,
+        memory_enabled=False,
+        memory_write_enabled=False,
+        tool_capabilities=frozenset(),
+        tool_settings=settings,
+    )
+    optional = next(group for group in groups if group.startswith("Optional tools"))
+
+    assert "tasks_read" in optional
+    assert 'enable them under "Einstellungen > Tools"' in optional
+    assert all(
+        "tasks_read" not in group
+        for group in groups
+        if group.startswith("Integration tools")
+    )
 
 
 def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:
@@ -775,6 +933,7 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
         ],
     }
     assert search.await_args.kwargs == {
+        "search_type": "web",
         "provider": "no_key",
         "fallback_provider": None,
     }
@@ -1894,9 +2053,11 @@ def test_memory_retrieve_schema_requires_explicit_mode() -> None:
         "context",
         "write",
     ]
-    assert "purpose=write" in schema["description"]
+    assert "prepares a memory_write" in schema["parameters"]["properties"]["purpose"][
+        "description"
+    ]
     assert "browse all visible memories" in schema["description"]
-    assert "session_search" in schema["description"]
+    assert "nextCursor" in schema["description"]
 
 
 async def test_memory_write_reports_invalid_identifier_field(tmp_path) -> None:
@@ -1927,16 +2088,35 @@ async def test_memory_write_reports_invalid_identifier_field(tmp_path) -> None:
     }
 
 
-def test_memory_write_schema_describes_stable_self_context() -> None:
+def test_memory_write_schema_keeps_update_arguments_explicit() -> None:
     schema = tool_registry._definitions["memory_write"].schema()
 
-    assert "implicitly supplies durable self-context" in schema["description"]
-    assert "persist it in the same turn" in schema["description"]
-    assert "Slowly changing details such as age" in schema["description"]
-    assert "transient, hypothetical, quoted, third-party" in schema["description"]
-    assert "never enrich it with inferred geography" in schema["description"]
-    assert "translation, rewriting, analysis, or extraction" in schema["description"]
     assert "action" in schema["parameters"]["required"]
+    assert "content" in schema["parameters"]["required"]
+    assert "category" in schema["parameters"]["required"]
+    assert "Create without memory_id or expected_revision" in schema["description"]
+
+
+def test_video_analysis_schema_uses_semantic_modes() -> None:
+    definition = tool_registry._definitions["analyze_video"]
+    schema = definition.schema()
+    mode = schema["parameters"]["properties"]["analysis_mode"]
+
+    assert mode["enum"] == ["overview", "fine_grained"]
+    assert mode["default"] == "overview"
+    assert "product presentations" in mode["description"]
+    assert "focus" in schema["parameters"]["required"]
+    assert "do not analyze the same video again" in schema["description"]
+    assert "timeout does not indicate video length" in schema["description"].lower()
+    legacy = definition.arguments_model.model_validate(
+        {
+            "root": "session",
+            "path": "attachments/video.mp4",
+            "detail": "detailed",
+            "focus": "Reconstruct the setup steps",
+        }
+    )
+    assert legacy.analysis_mode == "fine_grained"
 
 
 def test_model_facing_fields_preserve_search_scope_and_persona_text() -> None:
@@ -1945,9 +2125,9 @@ def test_model_facing_fields_preserve_search_scope_and_persona_text() -> None:
 
     query = web_search["parameters"]["properties"]["query"]["description"]
     instructions = identity["parameters"]["properties"]["instructions"]["description"]
-    assert "If the user supplies a year, copy it exactly" in query
-    assert "Copy versions, model numbers, and exact names" in query
-    assert "query must contain no year or date" in query
+    assert "Preserve user-supplied dates" in query
+    assert "versions, model numbers, and exact names" in query
+    assert "never add a date" in query
     assert "Copy explicit user-supplied persona instructions exactly" in instructions
 
 

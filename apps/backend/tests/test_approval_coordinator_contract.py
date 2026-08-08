@@ -50,3 +50,15 @@ async def test_resolution_claim_wins_against_timeout_expiration() -> None:
     assert coordinator.claim_expiration(approval_id) is False
     assert coordinator.complete_resolution(approval_id, "allow_session") is True
     assert await waiter == "allow_session"
+
+
+async def test_failed_resolution_returns_claim_to_expiration() -> None:
+    coordinator = ApprovalCoordinator()
+    approval_id = uuid4()
+    waiter = coordinator.register(approval_id)
+
+    assert coordinator.claim_resolution(approval_id) is True
+    assert coordinator.claim_expiration(approval_id) is False
+    coordinator.release_resolution(approval_id)
+    assert coordinator.claim_expiration(approval_id) is True
+    waiter.cancel()

@@ -427,6 +427,33 @@ class ApprovalRequest(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class QuestionRequest(Base):
+    __tablename__ = "question_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'answered', 'rejected', 'expired')",
+            name="status_valid",
+        ),
+        UniqueConstraint("run_id", "tool_call_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    session_id: Mapped[UUID] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tool_call_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    questions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    answers: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class PermissionGrant(Base):
     __tablename__ = "permission_grants"
 

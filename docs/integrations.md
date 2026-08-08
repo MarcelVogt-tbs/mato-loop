@@ -12,6 +12,8 @@ An adapter can:
 
 Every contributed tool declares its host-controlled group, German UI metadata, and security actions. A configurable action requires a host-side authorization factory that creates typed permission requests from validated arguments. Integration configuration and remote responses cannot provide groups, capabilities, resource matchers, or authorization behavior.
 
+Authorization factories also provide the German approval title, concise action summary, and resource display from validated host data. The frontend renders this common permission metadata and does not interpret integration-specific tool arguments. Display text never participates in authorization matching.
+
 Persisted configuration and external responses must not provide handlers, arbitrary JSON schemas, or prompt instructions. Duplicate tool names and contributions to undeclared configuration fields are programming errors. Host configuration values never become model arguments merely because an adapter contributes them.
 
 ## Resource Policies
@@ -40,7 +42,13 @@ Adapters with multiple active instances may contribute one stable shared tool se
 
 The CalDAV adapter is the first production user of shared integration tools and resource policies. Each account is an integration instance and each discovered calendar is a resource. The static actions are `calendar.read`, `calendar.write`, and `calendar.delete`; create and update share the write action. Basic or app-password credentials are encrypted separately from settings.
 
-The adapter discovers calendars live and maps DAV privileges to hard unavailable host actions. Models receive only integration UUIDs, opaque calendar keys, and encrypted event tokens, never DAV URLs, ETags, credentials, XML, or iCalendar source. Reads accept bounded aware time ranges. Creates use deterministic UIDs and `If-None-Match`; updates and deletes use ETags with `If-Match`. Recurring or scheduling-bearing events and events with unrepresented properties are not mutated.
+The adapter discovers calendars live and maps DAV privileges to hard unavailable host actions. Models receive only integration UUIDs, opaque calendar keys, and encrypted event tokens, never DAV URLs, ETags, credentials, XML, or iCalendar source. Every returned event includes its integration UUID and calendar key so later update or delete calls can reuse the exact authenticated token binding without discovery. Timed values are canonical UTC instants at the CalDAV boundary; all-day dates remain date values, and ambiguous remote timed values are rejected. Timed event results additionally contain host-derived `localTiming` for `Europe/Berlin`, including DST-correct offsets and weekdays, so models do not perform calendar arithmetic for user-facing output. Creates use a host-generated deterministic UID and `If-None-Match`; updates and deletes use ETags with `If-Match`. Event-token versions prevent pre-change timing snapshots from being reused after serialization semantics change. Recurring or scheduling-bearing events and events with unrepresented properties are not mutated.
+
+`ToolSettings.default_calendar` may select one installation-wide account and calendar resource. The effective query and create schemas then allow the model to omit both target arguments, and the system prompt requires this path unless the user explicitly names another calendar. Discovery tools are not used only to choose a target when the default applies. The bound host inserts the configured pair before validation, authorization, and live resource resolution. A complete explicit pair always wins; partial target arguments never mix with the default. Disabled or stale targets fail closed, and changing or deleting the selected integration removes the setting.
+
+Shared integration schemas enumerate the active host-bound integration UUIDs. Runtime binding and revision checks remain authoritative when a model or provider ignores that schema constraint. Calendar create idempotency is derived from the persisted assistant message and tool call instead of being supplied by the model.
+
+Validated resource discovery stores bounded resource labels in `ToolSettings.resource_labels` for later approval display. CalDAV approvals combine that label with the configured account name and summarize the requested event fields and timing. Missing labels fall back to the stable opaque resource key; labels remain display metadata and never replace the key in policy or grant matching.
 
 CalDAV tools release private integration data. A public model therefore needs an explicit session release in addition to the configured calendar action policy. This release is a data-transport boundary and cannot be replaced by `calendar.read=auto`.
 

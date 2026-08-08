@@ -146,10 +146,10 @@ def test_frame_and_audio_extraction_are_bounded_and_verified(monkeypatch) -> Non
         video.extract_video_frames(b"video", list(range(video.MAX_EXTRACTED_FRAMES + 1)))
 
 
-def test_video_detail_profiles_and_audio_segments() -> None:
-    assert len(video.video_frame_timestamps(802_434, "standard")) == 32
-    assert len(video.video_frame_timestamps(802_434, "detailed")) == 64
-    assert video.video_frame_timestamps(2_000, "standard") == [1_000]
+def test_video_analysis_mode_profiles_and_audio_segments() -> None:
+    assert len(video.video_frame_timestamps(802_434, "overview")) == 32
+    assert len(video.video_frame_timestamps(802_434, "fine_grained")) == 64
+    assert video.video_frame_timestamps(2_000, "overview") == [1_000]
 
     buffer = BytesIO()
     with wave.open(buffer, "wb") as wav_file:

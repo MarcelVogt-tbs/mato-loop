@@ -1,5 +1,6 @@
 <template>
-  <section>
+  <router-view v-if="showAccessPage" />
+  <section v-else>
     <header class="settings-section-header">
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Integrationen</h2>
@@ -36,7 +37,7 @@
           </q-item-section>
         </q-item>
 
-        <q-item v-for="integration in configuredIntegrations" :key="integration.id" class="integration-list-item">
+        <q-item v-for="integration in configuredIntegrations" :key="integration.id" class="q-py-md">
           <q-item-section avatar top>
             <q-avatar
               color="primary"
@@ -55,46 +56,54 @@
               {{ typeLabel(integration.integrationType) }} ·
               {{ providerLabel(integration.providerType) }}
             </q-item-label>
-            <q-item-label caption>
+            <q-item-label caption lines="1">
               {{ integration.config.baseUrl }}{{ integration.config.username ? ` · ${integration.config.username}` : '' }}
             </q-item-label>
           </q-item-section>
-          <q-item-section side class="integration-list-actions">
-            <q-btn
-              v-if="integration.supportsResourcePolicies"
-              flat
-              dense
-              no-caps
-              icon="policy"
-              label="Zugriff"
-              @click="openAccessDialog(integration)"
-            />
-            <q-btn
-              flat
-              dense
-              no-caps
-              icon="network_check"
-              label="Testen"
-              :loading="testingId === integration.id"
-              @click="testIntegration(integration)"
-            />
-            <q-btn
-              flat
-              dense
-              no-caps
-              icon="edit"
-              label="Bearbeiten"
-              @click="openEditDialog(integration)"
-            />
-            <q-btn
-              flat
-              round
-              dense
-              color="negative"
-              icon="delete"
-              :aria-label="`${integration.name} löschen`"
-              @click="removeIntegration(integration)"
-            />
+          <q-item-section side top>
+            <div class="row items-center no-wrap q-gutter-xs">
+              <q-btn
+                v-if="integration.supportsResourcePolicies"
+                flat
+                dense
+                no-caps
+                :round="$q.screen.lt.md"
+                icon="policy"
+                :label="$q.screen.gt.sm ? 'Zugriff' : undefined"
+                aria-label="Zugriff verwalten"
+                :to="{ name: 'settings-integration-access', params: { integrationId: integration.id } }"
+              />
+              <q-btn
+                flat
+                dense
+                no-caps
+                :round="$q.screen.lt.md"
+                icon="network_check"
+                :label="$q.screen.gt.sm ? 'Testen' : undefined"
+                aria-label="Verbindung testen"
+                :loading="testingId === integration.id"
+                @click="testIntegration(integration)"
+              />
+              <q-btn
+                flat
+                dense
+                no-caps
+                :round="$q.screen.lt.md"
+                icon="edit"
+                :label="$q.screen.gt.sm ? 'Bearbeiten' : undefined"
+                aria-label="Integration bearbeiten"
+                @click="openEditDialog(integration)"
+              />
+              <q-btn
+                flat
+                round
+                dense
+                color="negative"
+                icon="delete"
+                :aria-label="`${integration.name} löschen`"
+                @click="removeIntegration(integration)"
+              />
+            </div>
           </q-item-section>
         </q-item>
       </q-list>
@@ -102,28 +111,27 @@
     </q-card>
 
     <IntegrationConfigDialog v-model="dialogOpen" :integration="selectedIntegration" />
-    <IntegrationAccessDialog v-model="accessDialogOpen" :integration="accessIntegration" />
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRoute } from 'vue-router'
 import IntegrationConfigDialog from 'components/IntegrationConfigDialog.vue'
-import IntegrationAccessDialog from 'components/IntegrationAccessDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useIntegrationStore } from 'stores/integrations'
 
 defineOptions({ name: 'IntegrationSettingsPage' })
 
 const $q = useQuasar()
+const route = useRoute()
 const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
 const dialogOpen = ref(false)
 const selectedIntegration = ref(null)
-const accessDialogOpen = ref(false)
-const accessIntegration = ref(null)
 const testingId = ref(null)
+const showAccessPage = computed(() => route.name === 'settings-integration-access')
 const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)
 const knowledgeBases = computed(() => integrations.knowledge.bases)
@@ -139,11 +147,6 @@ function openCreateDialog() {
 function openEditDialog(integration) {
   selectedIntegration.value = integration
   dialogOpen.value = true
-}
-
-function openAccessDialog(integration) {
-  accessIntegration.value = integration
-  accessDialogOpen.value = true
 }
 
 function providerLabel(providerType) {

@@ -28,6 +28,7 @@ from mato_loop_backend.memory.indexing import MemoryIndexScheduler, MemoryIndexS
 from mato_loop_backend.models import (
     ApprovalRequest,
     ChatSession,
+    QuestionRequest,
     TitleGenerationStatus,
 )
 from mato_loop_backend.session_storage import SessionStorage
@@ -71,6 +72,11 @@ async def lifespan(_app: FastAPI):
                 .values(status="expired")
             )
             await db.execute(
+                update(QuestionRequest)
+                .where(QuestionRequest.status == "pending")
+                .values(status="expired")
+            )
+            await db.execute(
                 update(ChatSession)
                 .where(
                     ChatSession.title_generation_status
@@ -96,7 +102,7 @@ async def lifespan(_app: FastAPI):
                 await MemoryIndexService.reconcile(db)
                 await EpisodeIndexService.recover(db)
     except Exception:
-        logger.exception("Failed to clean up stale runs and approvals during startup")
+        logger.exception("Failed to clean up stale runs and interactions during startup")
     DreamingScheduler.start()
     MemoryIndexScheduler.start()
     EpisodeIndexScheduler.start()

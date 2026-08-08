@@ -421,6 +421,16 @@ class PolicyToolSettings(BaseModel):
     policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
 
 
+class DefaultCalendarSettings(BaseModel):
+    integration_id: UUID = Field(
+        validation_alias=AliasChoices("integration_id", "integrationId")
+    )
+    calendar_key: str = Field(
+        pattern=r"^calendar:[a-f0-9]{32}$",
+        validation_alias=AliasChoices("calendar_key", "calendarKey"),
+    )
+
+
 class ToolSettings(SettingsDocument):
     settings_key = "tools"
 
@@ -434,6 +444,14 @@ class ToolSettings(SettingsDocument):
     ] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("resource_policies", "resourcePolicies"),
+    )
+    resource_labels: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("resource_labels", "resourceLabels"),
+    )
+    default_calendar: DefaultCalendarSettings | None = Field(
+        default=None,
+        validation_alias=AliasChoices("default_calendar", "defaultCalendar"),
     )
     web_search: WebSearchToolSettings = Field(
         default_factory=WebSearchToolSettings,
@@ -465,7 +483,7 @@ class ToolSettings(SettingsDocument):
     )
     analyze_video: MediaToolSettings = Field(
         default_factory=lambda: MediaToolSettings(
-            policy=ToolExecutionPolicy.ASK, timeout_seconds=900
+            policy=ToolExecutionPolicy.ASK, timeout_seconds=1_800
         ),
         validation_alias=AliasChoices("analyze_video", "analyzeVideo"),
     )

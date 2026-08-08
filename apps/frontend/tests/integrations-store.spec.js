@@ -199,6 +199,7 @@ describe('integration store', () => {
   it('loads and saves resource policies for one integration', async () => {
     const access = {
       integrationId: 'integration-id',
+      defaultResourceKey: 'calendar:work',
       actions: [
         {
           capability: 'calendar.read',
@@ -226,14 +227,18 @@ describe('integration store', () => {
     await store.fetchAccess('integration-id')
     await store.saveAccess(
       'integration-id',
-      { 'calendar.read': 'auto' },
-      { 'calendar:work': { 'calendar.read': 'auto' } }
+      {
+        policies: { 'calendar.read': 'auto' },
+        resources: { 'calendar:work': { 'calendar.read': 'auto' } },
+        defaultResourceKey: 'calendar:work'
+      }
     )
 
     expect(api.get).toHaveBeenCalledWith('/integrations/integration-id/access')
     expect(api.put).toHaveBeenCalledWith('/integrations/integration-id/access', {
       policies: { 'calendar.read': 'auto' },
-      resources: { 'calendar:work': { 'calendar.read': 'auto' } }
+      resources: { 'calendar:work': { 'calendar.read': 'auto' } },
+      defaultResourceKey: 'calendar:work'
     })
     expect(store.accessByIntegration['integration-id']).toEqual(access)
   })

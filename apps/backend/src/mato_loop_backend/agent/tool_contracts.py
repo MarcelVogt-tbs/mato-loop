@@ -10,6 +10,7 @@ class ToolAction:
     default_policy: ToolExecutionPolicy
     configurable: bool = True
     allowed_policies: tuple[ToolExecutionPolicy, ...] | None = None
+    mutates: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(

@@ -24,7 +24,7 @@ const defaultWebSearch = () => ({
 
 const defaultMediaPolicy = () => ({ policy: 'disabled', timeoutSeconds: 300 })
 const defaultImageEditPolicy = () => ({ policy: 'ask', timeoutSeconds: 300 })
-const defaultVideoAnalysisPolicy = () => ({ policy: 'ask', timeoutSeconds: 900 })
+const defaultVideoAnalysisPolicy = () => ({ policy: 'ask', timeoutSeconds: 1800 })
 const defaultAgentIdentityPolicy = () => ({ policy: 'ask' })
 
 function settingsPayload(state) {

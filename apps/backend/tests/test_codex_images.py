@@ -114,7 +114,6 @@ async def test_edit_image_sends_ordered_data_urls(monkeypatch) -> None:
         credential={"access": "access"},
         images=inputs,
         prompt="Change only the background",
-        size=None,
         turn_id="turn",
         timeout=30,
     )
@@ -178,11 +177,18 @@ async def test_media_service_edits_with_native_codex_model(monkeypatch) -> None:
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = object()
     source_id = uuid4()
+    source = BytesIO()
+    Image.new("RGB", (3000, 2000), (10, 20, 30)).save(
+        source,
+        format="MPO",
+        save_all=True,
+        append_images=[Image.new("RGB", (3, 2), (30, 20, 10))],
+    )
 
     result = await MediaService.edit_image(
         db,
         prompt="Change only the background",
-        images=((_png(), "image/png"),),
+        images=((source.getvalue(), "image/jpeg"),),
         source_attachment_ids=(source_id,),
     )
 
@@ -190,3 +196,8 @@ async def test_media_service_edits_with_native_codex_model(monkeypatch) -> None:
     assert result.trust_level == TrustLevel.PRIVATE
     assert result.metadata["sourceAttachmentIds"] == [str(source_id)]
     assert transport.await_args.kwargs["prompt"] == "Change only the background"
+    normalized, mime_type = transport.await_args.kwargs["images"][0]
+    with Image.open(BytesIO(normalized)) as image:
+        assert image.format == "JPEG"
+        assert image.size == (2048, 1365)
+    assert mime_type == "image/jpeg"

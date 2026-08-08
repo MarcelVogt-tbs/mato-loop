@@ -29,7 +29,14 @@ const routes = [
           {
             path: 'integrations',
             name: 'settings-integrations',
-            component: () => import('pages/settings/IntegrationSettingsPage.vue')
+            component: () => import('pages/settings/IntegrationSettingsPage.vue'),
+            children: [
+              {
+                path: ':integrationId/access',
+                name: 'settings-integration-access',
+                component: () => import('pages/settings/IntegrationAccessPage.vue')
+              }
+            ]
           },
           {
             path: 'tools',

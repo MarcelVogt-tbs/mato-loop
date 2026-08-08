@@ -269,7 +269,15 @@
         </div>
       </transition>
 
+      <QuestionDock
+        v-if="activeQuestion"
+        :key="activeQuestion.id"
+        :request="activeQuestion"
+        :stopping="chat.stopping"
+        @stop="chat.stop"
+      />
       <ChatComposer
+        v-else
         ref="composer"
         :session="chat.activeContext"
         :draft="chat.activeDraft"
@@ -335,6 +343,7 @@ import ChatComposer from 'components/ChatComposer.vue'
 import FileExplorerPanel from 'components/FileExplorerPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
+import QuestionDock from 'components/QuestionDock.vue'
 import ReasoningPanel from 'components/ReasoningPanel.vue'
 import ToolHistoryPanel from 'components/ToolHistoryPanel.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
@@ -343,6 +352,7 @@ import { useChatStore } from 'stores/chat'
 import { useAuthStore } from 'stores/auth'
 import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
+import { useQuestionStore } from 'stores/questions'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import {
   MAX_WORKSPACE_SPLIT_RATIO,
@@ -366,6 +376,7 @@ const chat = useChatStore()
 const identity = useAgentIdentityStore()
 const auth = useAuthStore()
 const approvals = useApprovalStore()
+const questions = useQuestionStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
@@ -391,13 +402,16 @@ let messageTimestampTimer = null
 let runAnnouncementTimer = null
 let touchActive = false
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
+const sessionQuestions = computed(() => chat.current ? questions.forSession(chat.current.id) : [])
+const activeQuestion = computed(() => sessionQuestions.value[0] || null)
 const transcript = computed(() => buildChatTranscript(
   chat.current?.messages,
   sessionApprovals.value,
   {
     running: chat.running,
     toolExecutionActive: chat.activity.phase === 'processing_tool',
-    activeToolCallId: chat.activity.toolCallId
+    activeToolCallId: chat.activity.toolCallId,
+    questions: sessionQuestions.value
   }
 ))
 const hasCurrentAssistantTurn = computed(() => (
@@ -560,10 +574,11 @@ async function loadRouteSession() {
 }
 
 async function loadBackgroundData() {
-  const [providerResult, integrationResult, , defaultsResult] = await Promise.allSettled([
+  const [providerResult, integrationResult, , , defaultsResult] = await Promise.allSettled([
     providers.fetchAll(),
     integrations.fetchSearch(),
     approvals.fetchPending(),
+    questions.fetchPending(),
     chat.fetchDefaults(),
     toolSettings.fetchSettings()
   ])
@@ -720,6 +735,14 @@ watch(
     followingBottom.value = true
     await nextTick()
     scheduleFollowScroll()
+  }
+)
+watch(
+  [activeQuestion, () => chat.running],
+  async ([question, running], [previousQuestion, wasRunning]) => {
+    if (question || running || (!previousQuestion && !wasRunning)) return
+    await nextTick()
+    composer.value?.focus()
   }
 )
 onMounted(() => {

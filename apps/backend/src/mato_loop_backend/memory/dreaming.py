@@ -818,7 +818,7 @@ class DreamingService:
             active = await db.scalar(
                 select(AgentRun.id).where(
                     AgentRun.session_id == session.id,
-                    AgentRun.status.in_(["queued", "running", "waiting_approval"]),
+                    AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]),
                 )
             )
             if active is not None:
@@ -1056,7 +1056,7 @@ class DreamingService:
         active = await db.scalar(
             select(AgentRun.id).where(
                 AgentRun.session_id == session.id,
-                AgentRun.status.in_(["queued", "running", "waiting_approval"]),
+                AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]),
             )
         )
         if active is not None:

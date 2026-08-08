@@ -32,10 +32,10 @@ FFMPEG_FRAME_TIMEOUT_SECONDS = 30
 FFMPEG_AUDIO_TIMEOUT_SECONDS = 180
 AUDIO_SEGMENT_SECONDS = 120
 
-VideoDetail = Literal["standard", "detailed"]
-_FRAME_PROFILES: dict[VideoDetail, tuple[int, int]] = {
-    "standard": (5_000, 32),
-    "detailed": (2_000, 64),
+VideoAnalysisMode = Literal["overview", "fine_grained"]
+_FRAME_PROFILES: dict[VideoAnalysisMode, tuple[int, int]] = {
+    "overview": (5_000, 32),
+    "fine_grained": (2_000, 64),
 }
 
 _VIDEO_MIMES = {"video/mp4": "mp4", "video/webm": "webm"}
@@ -249,9 +249,11 @@ def _frame_timestamps(duration_ms: int, count: int) -> list[int]:
     )
 
 
-def video_frame_timestamps(duration_ms: int, detail: VideoDetail) -> list[int]:
+def video_frame_timestamps(
+    duration_ms: int, analysis_mode: VideoAnalysisMode
+) -> list[int]:
     try:
-        spacing_ms, maximum = _FRAME_PROFILES[detail]
+        spacing_ms, maximum = _FRAME_PROFILES[analysis_mode]
     except KeyError as exc:
         raise VideoProcessingError from exc
     count = min(maximum, max(1, math.ceil(duration_ms / spacing_ms)))
@@ -263,7 +265,7 @@ def extract_video_frames(
     timestamps_ms: Sequence[int] | None = None,
     *,
     max_frames: int | None = None,
-    detail: VideoDetail = "standard",
+    analysis_mode: VideoAnalysisMode = "overview",
 ) -> list[VideoFrame]:
     """Extract timestamped JPEGs in memory for an analyzer, never for persistence."""
     info = probe_video(data)
@@ -273,7 +275,7 @@ def extract_video_frames(
         else (
             _frame_timestamps(info.duration_ms, max_frames)
             if max_frames is not None
-            else video_frame_timestamps(info.duration_ms, detail)
+            else video_frame_timestamps(info.duration_ms, analysis_mode)
         )
     )
     if (

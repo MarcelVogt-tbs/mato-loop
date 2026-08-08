@@ -286,7 +286,7 @@ async def generate_image(
     api_key: str | None,
     model: str,
     prompt: str,
-    size: str = "512x512",
+    size: str | None = None,
     steps: int | None = None,
     cfg_scale: float | None = None,
     seed: int | None = None,
@@ -295,10 +295,11 @@ async def generate_image(
     payload: dict[str, Any] = {
         "model": model,
         "prompt": prompt,
-        "size": size,
         "n": 1,
         "response_format": "b64_json",
     }
+    if size is not None:
+        payload["size"] = size
     for key, value in (("steps", steps), ("cfg_scale", cfg_scale), ("seed", seed)):
         if value is not None:
             payload[key] = value

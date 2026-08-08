@@ -87,13 +87,13 @@ async def test_native_video_analysis_includes_audio(monkeypatch) -> None:
     monkeypatch.setattr(video_analysis, "probe_video", lambda _data: media_info())
     monkeypatch.setattr(video_analysis, "extract_video_audio", lambda _data: b"wav")
 
-    async def native(video, mime_type, audio, trust, detail, focus):
-        assert (video, mime_type, audio, trust, detail, focus) == (
+    async def native(video, mime_type, audio, trust, analysis_mode, focus):
+        assert (video, mime_type, audio, trust, analysis_mode, focus) == (
             b"video",
             "video/mp4",
             b"wav",
             TrustLevel.PRIVATE,
-            "standard",
+            "overview",
             None,
         )
         return NativeVideoResult("Chronological analysis", True)
@@ -184,7 +184,7 @@ async def test_frame_fallback_combines_timestamps_and_transcript(monkeypatch) ->
         native_handler=None,
         frame_handler=describe,
         transcription_handler=transcribe,
-        detail="detailed",
+        analysis_mode="fine_grained",
         focus="setup steps",
     )
 
@@ -201,4 +201,4 @@ async def test_frame_fallback_combines_timestamps_and_transcript(monkeypatch) ->
         {"startMs": 0, "endMs": 2_000, "text": "Gesprochener Text"}
     ]
     assert result["sampledFrameTimestampsMs"] == [0, 1_000]
-    assert result["detail"] == "detailed"
+    assert result["analysisMode"] == "fine_grained"

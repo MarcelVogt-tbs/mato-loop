@@ -9,6 +9,7 @@ from mato_loop_backend.integrations.caldav import CALDAV_ADAPTER
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
+    ToolContribution,
     ToolOptionContribution,
 )
 from mato_loop_backend.settings.models import IntegrationInstance, IntegrationSettings
@@ -52,6 +53,14 @@ def integration_adapter(
     integration_type: str, adapter_type: str
 ) -> IntegrationAdapterDefinition | None:
     return _ADAPTERS.get((integration_type, adapter_type))
+
+
+def installed_integration_tools() -> tuple[ToolContribution, ...]:
+    tools: dict[str, ToolContribution] = {}
+    for adapter in _ADAPTERS.values():
+        for tool in adapter.shared_tools:
+            tools.setdefault(tool.name, tool)
+    return tuple(tools.values())
 
 
 def validate_integration(instance: IntegrationInstance) -> None:

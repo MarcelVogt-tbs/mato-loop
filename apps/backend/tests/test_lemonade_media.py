@@ -45,7 +45,6 @@ async def test_generate_image_sends_strict_payload_and_decodes_result(monkeypatc
         assert json.loads(request.content) == {
             "model": "SD-Turbo",
             "prompt": "Bergsee",
-            "size": "512x512",
             "n": 1,
             "response_format": "b64_json",
             "steps": 4,
@@ -222,6 +221,7 @@ async def test_media_service_resolves_host_default_without_model_argument(monkey
     }
     assert result.trust_level == TrustLevel.PRIVATE
     assert transport.await_args.kwargs["model"] == "SD-Turbo"
+    assert transport.await_args.kwargs["size"] is None
 
 
 async def test_media_service_rejects_changed_target_trust_before_transport(

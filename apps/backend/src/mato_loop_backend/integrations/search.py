@@ -5,6 +5,7 @@ import html
 import json
 import logging
 from collections.abc import Iterable
+from typing import Literal
 
 import httpx
 from bs4 import BeautifulSoup
@@ -155,7 +156,9 @@ def _normalize_published_date(value: object) -> str | None:
     return normalized[:100] or None
 
 
-def _compact_results(results: Iterable[object]) -> str:
+def _compact_results(
+    results: Iterable[object], *, search_type: Literal["web", "images"] = "web"
+) -> str:
     compact = []
     seen_urls: set[str] = set()
     for item in results:
@@ -168,6 +171,15 @@ def _compact_results(results: Iterable[object]) -> str:
             url = canonicalize_url(url)
         except WebFetchError:
             continue
+        image_url = None
+        if search_type == "images":
+            image_url = _public_result_url(item.get("image") or item.get("img_src"))
+            if image_url is None:
+                continue
+            try:
+                image_url = canonicalize_url(image_url)
+            except WebFetchError:
+                continue
         if url in seen_urls:
             continue
         seen_urls.add(url)
@@ -180,6 +192,7 @@ def _compact_results(results: Iterable[object]) -> str:
                 "publishedDate": _normalize_published_date(
                     item.get("publishedDate") or item.get("pubdate") or item.get("date")
                 ),
+                **({"imageUrl": image_url} if image_url is not None else {}),
             }
         )
         if len(compact) == 8:
@@ -187,9 +200,13 @@ def _compact_results(results: Iterable[object]) -> str:
     return json.dumps(compact, ensure_ascii=False)
 
 
-async def search_without_api_key(query: str) -> str:
+async def search_without_api_key(
+    query: str, *, search_type: Literal["web", "images"] = "web"
+) -> str:
     def execute() -> list[dict[str, str]]:
-        return DDGS(timeout=30).text(
+        client = DDGS(timeout=30)
+        search = client.images if search_type == "images" else client.text
+        return search(
             query=query,
             max_results=8,
         )
@@ -200,10 +217,15 @@ async def search_without_api_key(query: str) -> str:
     except Exception as exc:
         logger.warning("No-key web search failed: %s", type(exc).__name__)
         raise SearchIntegrationError("integration.unavailable", transient=True) from exc
-    return _compact_results(results)
+    return _compact_results(results, search_type=search_type)
 
 
-async def search_with_provider(provider: IntegrationInstance, query: str) -> str:
+async def search_with_provider(
+    provider: IntegrationInstance,
+    query: str,
+    *,
+    search_type: Literal["web", "images"] = "web",
+) -> str:
     if provider.integration_type != "search" or provider.adapter_type != "searxng":
         raise SearchIntegrationError("integration.providerUnsupported")
     base_url = str(provider.config.get("base_url") or "").rstrip("/")
@@ -253,10 +275,11 @@ async def search_with_provider(provider: IntegrationInstance, query: str) -> str
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            results, unresponsive_engines = await request(
-                client, {"q": query, "format": "json"}
-            )
-            if not results and unresponsive_engines:
+            params = {"q": query, "format": "json"}
+            if search_type == "images":
+                params["categories"] = "images"
+            results, unresponsive_engines = await request(client, params)
+            if not results and unresponsive_engines and search_type == "web":
                 results, recovery_unresponsive = await request(
                     client,
                     {
@@ -272,24 +295,29 @@ async def search_with_provider(provider: IntegrationInstance, query: str) -> str
         raise SearchIntegrationError("integration.unavailable", transient=True) from exc
     if not results and unresponsive_engines:
         raise SearchIntegrationError("integration.unavailable", transient=True)
-    return _compact_results(results)
+    return _compact_results(results, search_type=search_type)
 
 
 async def search_with_key(
-    settings: IntegrationSettings, provider_key: str, query: str
+    settings: IntegrationSettings,
+    provider_key: str,
+    query: str,
+    *,
+    search_type: Literal["web", "images"] = "web",
 ) -> str:
     if provider_key == "no_key":
-        return await search_without_api_key(query)
+        return await search_without_api_key(query, search_type=search_type)
     provider = search_provider(settings, provider_key)
     if provider is None:
         raise SearchIntegrationError("integration.providerUnavailable")
-    return await search_with_provider(provider, query)
+    return await search_with_provider(provider, query, search_type=search_type)
 
 
 async def search_web(
     settings: IntegrationSettings,
     query: str,
     *,
+    search_type: Literal["web", "images"] = "web",
     provider: str = "no_key",
     fallback_provider: str | None = None,
 ) -> str:
@@ -298,10 +326,14 @@ async def search_web(
     try:
         async with asyncio.timeout(SEARCH_DEADLINE_SECONDS):
             try:
-                return await search_with_key(settings, provider, query)
+                return await search_with_key(
+                    settings, provider, query, search_type=search_type
+                )
             except SearchIntegrationError as exc:
                 if fallback_provider is None or not exc.transient:
                     raise
-            return await search_with_key(settings, fallback_provider, query)
+            return await search_with_key(
+                settings, fallback_provider, query, search_type=search_type
+            )
     except TimeoutError as exc:
         raise SearchIntegrationError("integration.unavailable", transient=True) from exc

@@ -82,7 +82,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "generateSpeech": {"policy": "disabled", "timeoutSeconds": 300},
         "generateAudio": {"policy": "disabled", "timeoutSeconds": 300},
         "transcribeAudio": {"policy": "disabled", "timeoutSeconds": 300},
-        "analyzeVideo": {"policy": "ask", "timeoutSeconds": 900},
+        "analyzeVideo": {"policy": "ask", "timeoutSeconds": 1800},
         "updateAgentIdentity": {"policy": "ask"},
     }
     assert result["policies"] == {

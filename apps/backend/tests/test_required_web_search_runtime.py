@@ -420,6 +420,80 @@ async def test_required_search_retries_hidden_after_tool_failure(monkeypatch) ->
     )
 
 
+async def test_failed_mutation_blocks_an_unconfirmed_final_response(monkeypatch) -> None:
+    db, run, _requests, _projections, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        "write-failed",
+                        "write_file",
+                        {"root": "session", "path": "files/note.txt", "content": "Hallo"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Die Datei wurde erfolgreich erstellt.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        workspace_access="read-write",
+        tool_result=ToolResult.error("tool.invalidArguments", field="path"),
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "tool.invalidArguments"
+    assert "Die Datei wurde erfolgreich erstellt." not in {
+        message.content for message in _assistant_messages(db)
+    }
+    assert all(event["type"] != "message.delta" for event in events)
+
+
+async def test_successful_mutation_correction_releases_the_final_response(monkeypatch) -> None:
+    db, run, _requests, _projections, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        "write-failed",
+                        "write_file",
+                        {"root": "session", "path": "files/wrong.txt", "content": "Hallo"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                content="Schon erledigt.",
+                tool_calls=[
+                    ToolCall(
+                        "write-corrected",
+                        "write_file",
+                        {"root": "session", "path": "files/note.txt", "content": "Hallo"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Die Datei wurde erstellt.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        workspace_access="read-write",
+    )
+    tool_registry._execute_definition.side_effect = [
+        ToolResult.error("tool.invalidArguments", field="path"),
+        ToolResult.json({"written": "files/note.txt"}),
+    ]
+
+    await AgentRuntime._execute_loop(db, run)
+
+    persisted = [message.content for message in _assistant_messages(db)]
+    assert "Schon erledigt." not in persisted
+    assert persisted[-1] == "Die Datei wurde erstellt."
+    assert [event.get("delta") for event in events].count("Die Datei wurde erstellt.") == 1
+
+
 async def test_available_uses_the_shared_research_budget(monkeypatch) -> None:
     db, run, requests, _, _ = await _runtime_setup(
         monkeypatch,
@@ -649,7 +723,7 @@ async def test_video_frames_are_analyzed_in_provider_sized_batches(monkeypatch) 
     async def execute(_call, context, _tool):
         assert context.video_analysis_handler is not None
         result = await context.video_analysis_handler(
-            b"video", TrustLevel.PUBLIC, None, "standard", None
+            b"video", TrustLevel.PUBLIC, None, "overview", None
         )
         assert [
             (segment["startMs"], segment["endMs"])

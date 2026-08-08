@@ -129,8 +129,8 @@ export const useIntegrationStore = defineStore('integrations', {
       this.accessByIntegration[id] = data
       return data
     },
-    async saveAccess(id, policies, resources) {
-      const { data } = await api.put(`/integrations/${id}/access`, { policies, resources })
+    async saveAccess(id, payload) {
+      const { data } = await api.put(`/integrations/${id}/access`, payload)
       this.accessByIntegration[id] = data
       return data
     }

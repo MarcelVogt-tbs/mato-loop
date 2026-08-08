@@ -51,6 +51,7 @@ from mato_loop_backend.integrations.contracts import (
 )
 from mato_loop_backend.models import Credential
 from mato_loop_backend.settings import (
+    DefaultCalendarSettings,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -215,15 +216,13 @@ def test_no_key_provider_makes_search_available_without_configuration() -> None:
     schemas = available_tool_schemas(settings, "read-only")
     search_schema = next(item for item in schemas if item["name"] == "web_search")
     properties = search_schema["parameters"]["properties"]
-    assert set(properties) == {"query"}
+    assert set(properties) == {"query", "search_type"}
     assert properties["query"]["description"] == (
-        "Compact search-engine query for exactly one information need. If the user supplies a "
-        "year, copy it exactly. If the user asks for current, latest, or today without a year, "
-        "the query must contain no year or date. Copy versions, model numbers, and exact names "
-        "needed by the requested scope. Examples: 'latest Python version' becomes 'latest stable "
-        "Python version'; 'Python 3.12 release notes from 2023' becomes 'Python 3.12 release notes "
-        "2023'."
+        "One compact search-engine query for one information need. Preserve user-supplied dates, "
+        "versions, model numbers, and exact names; never add a date."
     )
+    assert properties["search_type"]["enum"] == ["web", "images"]
+    assert properties["search_type"]["default"] == "web"
 
 
 def test_active_integrations_extend_the_host_search_provider_catalog() -> None:
@@ -429,6 +428,10 @@ async def test_integration_access_replaces_only_its_resource_overrides(
     assert tools.resource_policies[str(integration.id)] == {
         "calendar:work": {"network.search": ToolExecutionPolicy.AUTO}
     }
+    assert tools.resource_labels[str(integration.id)] == {
+        "calendar:private": "Privat",
+        "calendar:work": "Arbeit",
+    }
     assert str(other_id) in tools.resource_policies
     assert tools.integration_policies[str(integration.id)] == {
         "network.search": ToolExecutionPolicy.ASK
@@ -474,6 +477,85 @@ async def test_integration_access_replaces_sparse_integration_overrides(
         "network.search": ToolExecutionPolicy.AUTO
     }
     assert result["actions"][0]["effectiveIntegrationPolicy"] == "auto"
+
+
+async def test_calendar_access_sets_and_clears_the_global_default(monkeypatch) -> None:
+    key = f"calendar:{'a' * 32}"
+
+    async def load_resources(_instance, _credential):
+        return (IntegrationResource(key, "Privat"),)
+
+    current_adapter = integration_registry._ADAPTERS[("calendar", "caldav")]
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("calendar", "caldav"),
+        replace(current_adapter, resource_loader=load_resources),
+    )
+    integration = IntegrationInstance(
+        name="Kalender",
+        integration_type="calendar",
+        adapter_type="caldav",
+        config={"base_url": "https://calendar.example.com", "username": "user"},
+    )
+    integrations = IntegrationSettings(instances=[integration])
+    other_id = uuid4()
+    tools = ToolSettings.model_validate(
+        {
+            "defaultCalendar": {
+                "integrationId": str(other_id),
+                "calendarKey": f"calendar:{'b' * 32}",
+            }
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    db = AsyncMock(spec=AsyncSession)
+
+    unchanged = await update_integration_access(
+        integration.id,
+        IntegrationAccessRequest.model_validate(
+            {"resources": {}, "defaultResourceKey": None}
+        ),
+        db,
+    )
+    assert tools.default_calendar.integration_id == other_id
+    assert unchanged["defaultResourceKey"] is None
+
+    selected = await update_integration_access(
+        integration.id,
+        IntegrationAccessRequest.model_validate(
+            {"resources": {}, "defaultResourceKey": key}
+        ),
+        db,
+    )
+    assert tools.default_calendar.integration_id == integration.id
+    assert tools.default_calendar.calendar_key == key
+    assert selected["defaultResourceKey"] == key
+
+    cleared = await update_integration_access(
+        integration.id,
+        IntegrationAccessRequest.model_validate(
+            {"resources": {}, "defaultResourceKey": None}
+        ),
+        db,
+    )
+    assert tools.default_calendar is None
+    assert cleared["defaultResourceKey"] is None
+
+    with pytest.raises(ApiError) as exc_info:
+        await update_integration_access(
+            integration.id,
+            IntegrationAccessRequest.model_validate(
+                {"resources": {}, "defaultResourceKey": f"calendar:{'c' * 32}"}
+            ),
+            db,
+        )
+    assert exc_info.value.code == "validation.invalidChoice"
+    assert exc_info.value.field == "default_resource_key"
 
 
 async def test_disallowed_action_mode_is_rejected_by_both_settings_apis(
@@ -595,6 +677,39 @@ async def test_no_key_provider_uses_ddgs_auto_search_and_normalizes_results(
     ]
 
 
+async def test_no_key_provider_supports_image_search(monkeypatch) -> None:
+    images = Mock(
+        return_value=[
+            {
+                "title": "Official product image",
+                "url": "https://example.com/product",
+                "image": "https://cdn.example.com/product.jpg",
+                "body": "Rear view",
+            }
+        ]
+    )
+    client = Mock(images=images)
+    monkeypatch.setattr(search_module, "DDGS", Mock(return_value=client))
+
+    result = await search_module.search_without_api_key(
+        "product rear view", search_type="images"
+    )
+
+    images.assert_called_once_with(query="product rear view", max_results=8)
+    assert json.loads(result) == [
+        {
+            "sourceId": search_module.evidence_source_id(
+                "https://example.com/product"
+            ),
+            "title": "Official product image",
+            "url": "https://example.com/product",
+            "snippet": "Rear view",
+            "publishedDate": None,
+            "imageUrl": "https://cdn.example.com/product.jpg",
+        }
+    ]
+
+
 async def test_searxng_reports_unresponsive_engines_as_transient_failure(
     monkeypatch,
 ) -> None:
@@ -654,6 +769,42 @@ async def test_searxng_retries_unresponsive_default_engines(monkeypatch) -> None
     )
 
 
+async def test_searxng_supports_image_search(monkeypatch) -> None:
+    response = _StreamResponse(
+        {
+            "results": [
+                {
+                    "title": "Official product image",
+                    "url": "https://example.com/product",
+                    "img_src": "https://cdn.example.com/product.webp",
+                    "content": "Rear view",
+                }
+            ],
+            "unresponsive_engines": [],
+        }
+    )
+    client = AsyncMock()
+    client.stream = Mock(return_value=response)
+    context = AsyncMock()
+    context.__aenter__.return_value = client
+    monkeypatch.setattr(
+        search_module.httpx, "AsyncClient", Mock(return_value=context)
+    )
+
+    result = await search_module.search_with_provider(
+        _searxng(), "product rear view", search_type="images"
+    )
+
+    assert client.stream.call_args.kwargs["params"] == {
+        "q": "product rear view",
+        "format": "json",
+        "categories": "images",
+    }
+    assert json.loads(result)[0]["imageUrl"] == (
+        "https://cdn.example.com/product.webp"
+    )
+
+
 async def test_searxng_rejects_oversized_streamed_responses(monkeypatch) -> None:
     response = _StreamResponse(
         None,
@@ -694,7 +845,7 @@ async def test_searxng_rejects_compressed_responses(monkeypatch) -> None:
 
 
 async def test_search_deadline_includes_fallback(monkeypatch) -> None:
-    async def execute(_settings, provider, _query):
+    async def execute(_settings, provider, _query, **_kwargs):
         if provider == "no_key":
             raise SearchIntegrationError("integration.unavailable", transient=True)
         await search_module.asyncio.sleep(1)
@@ -824,6 +975,7 @@ async def test_search_uses_fallback_only_for_temporary_errors(monkeypatch) -> No
     result = await search_web(
         settings,
         "query",
+        search_type="images",
         provider="no_key",
         fallback_provider=f"searxng:{fallback.id}",
     )
@@ -832,6 +984,10 @@ async def test_search_uses_fallback_only_for_temporary_errors(monkeypatch) -> No
     assert [call.args[1] for call in execute.await_args_list] == [
         "no_key",
         f"searxng:{fallback.id}",
+    ]
+    assert [call.kwargs["search_type"] for call in execute.await_args_list] == [
+        "images",
+        "images",
     ]
 
 
@@ -928,6 +1084,14 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
             f"calendar:{'b' * 32}": {"calendar.read": ToolExecutionPolicy.AUTO}
         },
     }
+    tools.resource_labels = {
+        str(first.id): {f"calendar:{'a' * 32}": "Privat"},
+        str(second.id): {f"calendar:{'b' * 32}": "Arbeit"},
+    }
+    tools.default_calendar = DefaultCalendarSettings(
+        integration_id=first.id,
+        calendar_key=f"calendar:{'a' * 32}",
+    )
 
     assert first.credential_id == credential_ids[0]
     assert first_payload["accounts"][0]["config"] == {
@@ -948,6 +1112,7 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     assert first.credential_id == credential_ids[2]
     assert str(first.id) in tools.integration_policies
     assert str(first.id) in tools.resource_policies
+    assert tools.default_calendar.integration_id == first.id
     assert str(second.id) in tools.integration_policies
     assert str(second.id) in tools.resource_policies
     assert store_credential.await_args_list[-1].args == (db,)
@@ -969,13 +1134,21 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
 
     assert str(first.id) not in tools.integration_policies
     assert str(first.id) not in tools.resource_policies
+    assert str(first.id) not in tools.resource_labels
     assert str(second.id) in tools.integration_policies
     assert str(second.id) in tools.resource_policies
+    assert str(second.id) in tools.resource_labels
+    assert tools.default_calendar is None
     assert first.credential_id == credential_ids[2]
 
+    tools.default_calendar = DefaultCalendarSettings(
+        integration_id=second.id,
+        calendar_key=f"calendar:{'b' * 32}",
+    )
     await delete_calendar_integration(first.id, db)
 
     assert [instance.id for instance in settings.instances] == [second.id]
+    assert tools.default_calendar.integration_id == second.id
     assert db.execute.await_count == 2
 
 

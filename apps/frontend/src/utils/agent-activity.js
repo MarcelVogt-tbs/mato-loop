@@ -8,6 +8,7 @@ const LABELS = {
   streaming: 'Antwort wird erstellt',
   preparing_tools: 'Tool-Aufrufe werden vorbereitet',
   waiting_approval: 'Wartet auf Freigabe',
+  waiting_input: 'Wartet auf deine Antwort',
   finalizing: 'Antwort wird abgeschlossen',
   reconnecting: 'Verbindung wird wiederhergestellt'
 }
@@ -66,11 +67,16 @@ export function agentRunPresentation({
         : 'Freigabe erforderlich'
     }
   }
+  const question = toolItems.find((item) => item.question)?.question
+    || transcript?.unmatchedQuestions?.[0]
+  if (question) {
+    return { showActivity: false, announcement: 'Antwort erforderlich' }
+  }
 
   if (toolItems.some((item) => item.active)) {
     return { showActivity: false, announcement: agentActivityLabel(activity) }
   }
-  if (currentToolItems.length && ['processing_tool', 'preparing_tools', 'waiting_approval'].includes(activity?.phase)) {
+  if (currentToolItems.length && ['processing_tool', 'preparing_tools', 'waiting_approval', 'waiting_input'].includes(activity?.phase)) {
     return { showActivity: false, announcement: agentActivityLabel(activity) }
   }
   if (streamContent) {

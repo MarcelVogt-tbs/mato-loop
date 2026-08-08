@@ -16,6 +16,11 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from mato_loop_backend.agent.context import compaction_messages, general_system_prompt
+from mato_loop_backend.agent.media_prompt_profiles import (
+    GPT_IMAGE_2_EDIT_INSTRUCTIONS,
+    GPT_IMAGE_2_GENERATE_INSTRUCTIONS,
+    Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,
+)
 from mato_loop_backend.agent.title_generation import (
     TITLE_MAX_CHARACTERS,
     TITLE_SYSTEM_PROMPT,
@@ -23,7 +28,7 @@ from mato_loop_backend.agent.title_generation import (
     initial_title_output_budget,
     repair_title_output_budget,
 )
-from mato_loop_backend.agent.tools import tool_registry
+from mato_loop_backend.agent.tools import EffectiveToolSet, tool_registry
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.memory.dreaming import (
     DREAMING_SYSTEM_PROMPT,
@@ -38,7 +43,7 @@ from mato_loop_backend.models import ChatSession
 from mato_loop_backend.privacy import RequestPseudonymizer
 from mato_loop_backend.providers.base import ProviderRequest, ProviderResult, ToolCall
 from mato_loop_backend.providers.openai_compatible import chat_completions
-from mato_loop_backend.settings import IntegrationSettings
+from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings, ToolSettings
 from mato_loop_backend.settings.models import AgentIdentitySettings
 
 DEFAULT_MODELS = (
@@ -53,8 +58,11 @@ DREAM_ASSISTANT_MESSAGE_ID = UUID("30000000-0000-4000-8000-000000000002")
 EXISTING_MEMORY_ID = UUID("40000000-0000-4000-8000-000000000001")
 TOOL_RESULT_MESSAGE_ID = UUID("70000000-0000-4000-8000-000000000001")
 ATTACHMENT_ID = UUID("80000000-0000-4000-8000-000000000001")
+ATTACHMENT_ID_2 = UUID("80000000-0000-4000-8000-000000000002")
+CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
+CALENDAR_KEY = f"calendar:{'a' * 32}"
 
-INVENTORY_VERSION = 4
+INVENTORY_VERSION = 9
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -85,14 +93,17 @@ TEXT_ONLY_IMAGE_MARKER = "[Image saved but not sent to the current text-only mod
 
 SOURCE_FILES = (
     "src/mato_loop_backend/agent/context.py",
+    "src/mato_loop_backend/agent/media_prompt_profiles.py",
     "src/mato_loop_backend/agent/runtime.py",
     "src/mato_loop_backend/agent/title_generation.py",
     "src/mato_loop_backend/agent/tools.py",
     "src/mato_loop_backend/error_contract.py",
+    "src/mato_loop_backend/integrations/caldav.py",
     "src/mato_loop_backend/memory/dreaming.py",
     "src/mato_loop_backend/memory/embeddings.py",
     "src/mato_loop_backend/privacy/pseudonymization.py",
     "src/mato_loop_backend/providers/openai_compatible.py",
+    "src/mato_loop_backend/providers/media.py",
     "src/mato_loop_backend/providers/service.py",
     "src/mato_loop_backend/api/routes/providers.py",
 )
@@ -189,6 +200,9 @@ class PromptCase:
     json_pages: tuple[int, ...] = ()
     identity_name: str | None = None
     identity_instructions: str | None = None
+    calendar_fixture: bool = False
+    question_concepts: tuple[tuple[str, ...], ...] = ()
+    maximum_question_count: int | None = None
     memory_scope: dict[str, int] | None = None
     dreaming_existing_memories: tuple[dict[str, Any], ...] = ()
     dreaming_assistant: str = "Acknowledged."
@@ -216,6 +230,163 @@ _ERROR_INVALID_ARGUMENTS = json.dumps(
 _ERROR_DENIED = json.dumps(
     {"error": {"code": "permission.denied", "message": "Permission was denied."}}
 )
+VIDEO_EVAL_TOOLS = (
+    "list_directory",
+    "read_file",
+    "provide_file",
+    "web_search",
+    "webfetch",
+    "analyze_video",
+    "session_read",
+    "session_tool_result_read",
+    "session_browse",
+    "session_search",
+    "memory_retrieve",
+)
+VIDEO_ANALYSIS_RESULT_DATA = {
+        "mode": "sampled_frames",
+        "durationMs": 240_000,
+        "width": 1920,
+        "height": 1080,
+        "audioStatus": "transcribed",
+        "audioQuality": "not_assessed",
+        "visualSegments": [
+            {
+                "startMs": 0,
+                "endMs": 60_000,
+                "text": (
+                    "The MatoLoop dashboard opens with session navigation and a German chat "
+                    "composer. The user starts a new persistent agent session."
+                ),
+            },
+            {
+                "startMs": 60_000,
+                "endMs": 120_000,
+                "text": (
+                    "The provider settings show local and cloud models behind one common agent "
+                    "interface. A local model is selected for the session."
+                ),
+            },
+            {
+                "startMs": 120_000,
+                "endMs": 180_000,
+                "text": (
+                    "The agent requests approval before using a calendar tool. The user grants "
+                    "session access and the tool result appears in the chat."
+                ),
+            },
+            {
+                "startMs": 180_000,
+                "endMs": 240_000,
+                "text": (
+                    "The settings workflow opens Integrationen, selects a provider, enables the "
+                    "required tool permission, saves the configuration, and returns to chat."
+                ),
+            },
+        ],
+        "transcriptSegments": [
+            {
+                "startMs": 0,
+                "endMs": 120_000,
+                "text": (
+                    "MatoLoop verbindet lokale und Cloud-Modelle in einem persistenten, "
+                    "selbst gehosteten Agenten-Workspace."
+                ),
+            },
+            {
+                "startMs": 120_000,
+                "endMs": 240_000,
+                "text": (
+                    "Werkzeuge werden kontrolliert ausgeführt: Vor sensiblen Aktionen fragt "
+                    "MatoLoop nach einer Freigabe."
+                ),
+            },
+        ],
+        "sampledFrameTimestampsMs": [30_000, 90_000, 150_000, 210_000],
+}
+
+
+def _video_analysis_result(analysis_mode: str) -> str:
+    mode_data: dict[str, Any] = {}
+    if analysis_mode == "fine_grained":
+        mode_data = {
+            "visualSegments": [
+                {
+                    "startMs": 180_000,
+                    "endMs": 190_000,
+                    "text": "The user opens Einstellungen from the main navigation.",
+                },
+                {
+                    "startMs": 190_000,
+                    "endMs": 200_000,
+                    "text": "The user selects Integrationen in the settings navigation.",
+                },
+                {
+                    "startMs": 200_000,
+                    "endMs": 210_000,
+                    "text": "The integrations page lists providers; the user opens Local Provider.",
+                },
+                {
+                    "startMs": 210_000,
+                    "endMs": 220_000,
+                    "text": "The user enables the Kalender lesen permission toggle.",
+                },
+                {
+                    "startMs": 220_000,
+                    "endMs": 230_000,
+                    "text": "The user selects Fragen as the confirmation policy for the tool.",
+                },
+                {
+                    "startMs": 230_000,
+                    "endMs": 235_000,
+                    "text": "The user clicks Speichern and a success notification appears.",
+                },
+                {
+                    "startMs": 235_000,
+                    "endMs": 240_000,
+                    "text": "The user returns to chat; the configured calendar tool is available.",
+                },
+            ],
+            "sampledFrameTimestampsMs": [
+                182_000,
+                192_000,
+                202_000,
+                212_000,
+                222_000,
+                232_000,
+                238_000,
+            ],
+        }
+    return json.dumps(
+        {
+            "root": "session",
+            "path": f"attachments/{ATTACHMENT_ID}/demo.mp4",
+            **VIDEO_ANALYSIS_RESULT_DATA,
+            **mode_data,
+            "analysisMode": analysis_mode,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _video_request(filename: str, instruction: str) -> str:
+    path = f"attachments/{ATTACHMENT_ID}/{filename}"
+    return (
+        f"{instruction}\n\n"
+        f"[Session attachment: ID {ATTACHMENT_ID}, file {filename}, kind video, MIME "
+        f"video/mp4, path {path}, duration 00:04:00.000]"
+    )
+
+
+def _video_arguments(filename: str, analysis_mode: str, focus: str) -> dict[str, str]:
+    return {
+        "root": "session",
+        "path": f"attachments/{ATTACHMENT_ID}/{filename}",
+        "analysis_mode": analysis_mode,
+        "focus": focus,
+    }
+
+
 _NEGATIVE_OUTCOME = re.compile(
     r"\b(?:nicht|nichts|weder|keinesfalls|kein(?:e|en|em|er|es|erlei)?|verweigert|abgelehnt|"
     r"fehlgeschlagen|gescheitert|un(?:verfügbar|vollständig|möglich|zugänglich)|"
@@ -293,6 +464,129 @@ CASES = (
         working_directory="/data/home/project",
         expected_no_tools=True,
         content_contains=("Agent-Modus", "Schreiben"),
+    ),
+    PromptCase(
+        id="ambiguous_request_asks_user",
+        kind="general",
+        user="Plane mir bitte einen Wochenendausflug.",
+        tools=("question",),
+        expected_tool="question",
+    ),
+    PromptCase(
+        id="calendar_missing_details_uses_question",
+        kind="general",
+        user="ich möchte einen termin eintragn",
+        tools=("question", "calendar_create_event"),
+        calendar_fixture=True,
+        expected_tool="question",
+        expected_tool_call_count=1,
+        question_concepts=(
+            ("Termin", "Betreff", "Titel", "Ereignis", "appointment", "event", "subject"),
+            ("wann", "Datum", "Uhrzeit", "Zeitpunkt", "start", "when", "date", "time"),
+            ("Dauer", "Ende", "Endzeit", "bis wann", "duration", "end"),
+        ),
+        maximum_question_count=4,
+    ),
+    PromptCase(
+        id="calendar_missing_details_under_persona_uses_question",
+        kind="general",
+        user="ich möchte einen termin eintragn",
+        tools=("question", "calendar_create_event"),
+        calendar_fixture=True,
+        identity_name="codemato",
+        identity_instructions=(
+            "Antworte locker, humorvoll und persönlich, aber bleibe zuverlässig und hilfreich."
+        ),
+        expected_tool="question",
+        expected_tool_call_count=1,
+        question_concepts=(
+            ("Termin", "Betreff", "Titel", "Ereignis", "appointment", "event", "subject"),
+            ("wann", "Datum", "Uhrzeit", "Zeitpunkt", "start", "when", "date", "time"),
+            ("Dauer", "Ende", "Endzeit", "bis wann", "duration", "end"),
+        ),
+        maximum_question_count=4,
+    ),
+    PromptCase(
+        id="complete_calendar_event_skips_question",
+        kind="general",
+        user="Trage morgen von 10:00 bis 11:00 Uhr den Termin Zahnarzt ein.",
+        tools=("question", "calendar_create_event"),
+        calendar_fixture=True,
+        expected_tool="calendar_create_event",
+        expected_tool_call_count=1,
+        expected_arguments={"integration_id": None, "calendar_key": None},
+        argument_contains={"summary": ("Zahnarzt",)},
+        forbidden_tools=("question",),
+    ),
+    PromptCase(
+        id="answered_calendar_questions_continue_action",
+        kind="general",
+        user="ich möchte einen termin eintragn",
+        tools=("question", "calendar_create_event"),
+        calendar_fixture=True,
+        continuation=_exchange(
+            "question",
+            {
+                "questions": [
+                    {
+                        "id": "summary",
+                        "type": "free_text",
+                        "header": "Termin",
+                        "question": "Was soll der Termin sein?",
+                    },
+                    {
+                        "id": "start",
+                        "type": "free_text",
+                        "header": "Beginn",
+                        "question": "Wann beginnt der Termin?",
+                    },
+                    {
+                        "id": "duration",
+                        "type": "free_text",
+                        "header": "Dauer",
+                        "question": "Wie lange dauert der Termin?",
+                    },
+                ]
+            },
+            json.dumps(
+                {
+                    "answers": [
+                        {
+                            "questionId": "summary",
+                            "question": "Was soll der Termin sein?",
+                            "answers": ["Zahnarzt"],
+                            "answered": True,
+                        },
+                        {
+                            "questionId": "start",
+                            "question": "Wann beginnt der Termin?",
+                            "answers": ["Morgen um 10:00 Uhr"],
+                            "answered": True,
+                        },
+                        {
+                            "questionId": "duration",
+                            "question": "Wie lange dauert der Termin?",
+                            "answers": ["Eine Stunde"],
+                            "answered": True,
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+        ),
+        expected_tool="calendar_create_event",
+        expected_tool_call_count=1,
+        expected_arguments={"integration_id": None, "calendar_key": None},
+        argument_contains={"summary": ("Zahnarzt",)},
+        forbidden_tools=("question",),
+    ),
+    PromptCase(
+        id="calendar_information_request_skips_question",
+        kind="general",
+        user="Welche Angaben brauchst du normalerweise, um einen Termin einzutragen?",
+        tools=("question", "calendar_create_event"),
+        calendar_fixture=True,
+        expected_no_tools=True,
     ),
     PromptCase(
         id="readwrite_write_uses_tool",
@@ -541,19 +835,125 @@ CASES = (
         kind="general",
         user="Erzeuge ein 512 mal 512 Pixel großes Bild einer roten Tasse.",
         tools=("generate_image",),
+        system_options={
+            "tool_instructions": (GPT_IMAGE_2_GENERATE_INSTRUCTIONS,)
+        },
         expected_tool="generate_image",
         expected_arguments={"width": 512, "height": 512},
+        argument_contains={"prompt": ("red",)},
+        argument_contains_any={"prompt": ("cup", "mug")},
+        argument_excludes={"prompt": ("Tasse",)},
+    ),
+    PromptCase(
+        id="z_image_turbo_uses_natural_language_prompt",
+        kind="general",
+        user="Erzeuge ein Bild eines gelben Fahrrads vor einer alten Backsteinwand.",
+        tools=("generate_image",),
+        system_options={
+            "tool_instructions": (Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,)
+        },
+        expected_tool="generate_image",
+        argument_contains={"prompt": ("yellow", "brick")},
+        argument_contains_any={"prompt": ("bicycle", "bike")},
+        argument_excludes={"prompt": ("Fahrrad", "Backsteinwand")},
+    ),
+    PromptCase(
+        id="z_image_turbo_preserves_exact_prompt",
+        kind="general",
+        user=(
+            'Verwende exakt diesen Bildprompt ohne Übersetzung oder Erweiterung: '
+            'Ein minimalistisches Schild mit dem Text "Öffnungszeiten: Mo-Fr".'
+        ),
+        tools=("generate_image",),
+        system_options={
+            "tool_instructions": (Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,)
+        },
+        expected_tool="generate_image",
+        expected_arguments={
+            "prompt": 'Ein minimalistisches Schild mit dem Text "Öffnungszeiten: Mo-Fr".'
+        },
     ),
     PromptCase(
         id="edit_image_preserves_unspecified_content",
         kind="general",
         user=(
-            f"Bearbeite das Bild mit Attachment-ID {ATTACHMENT_ID}. Ändere nur den Hintergrund "
-            "zu Blau und lasse Motiv und Bildausschnitt unverändert."
+            f"Nutze Bild {ATTACHMENT_ID} als Basis und Bild {ATTACHMENT_ID_2} als Logo-Referenz. "
+            "Ändere nur den Hintergrund der Basis zu Blau und lasse Motiv, Logo und Bildausschnitt "
+            "unverändert."
         ),
         tools=("edit_image",),
+        system_options={"tool_instructions": (GPT_IMAGE_2_EDIT_INSTRUCTIONS,)},
+        expected_tool="edit_image",
+        expected_arguments={
+            "attachment_ids": [str(ATTACHMENT_ID), str(ATTACHMENT_ID_2)]
+        },
+        argument_contains={
+            "prompt": (
+                "EDIT Image 1",
+                "base canvas",
+                "same scene",
+                "Image 2",
+                "background",
+                "blue",
+                "camera",
+                "crop",
+            )
+        },
+        argument_contains_any={"prompt": ("unchanged", "preserve", "keep")},
+        argument_excludes={"prompt": ("Hintergrund", "Blau")},
+    ),
+    PromptCase(
+        id="edit_image_confines_precise_object_change",
+        kind="general",
+        user=(
+            f"Bearbeite Bild {ATTACHMENT_ID}. Ändere ausschließlich die vordere weiße Tasse zu "
+            "Grün. Szene, Positionen, Licht und Bildausschnitt müssen gleich bleiben."
+        ),
+        tools=("edit_image",),
+        system_options={"tool_instructions": (GPT_IMAGE_2_EDIT_INSTRUCTIONS,)},
         expected_tool="edit_image",
         expected_arguments={"attachment_ids": [str(ATTACHMENT_ID)]},
+        argument_contains={
+            "prompt": (
+                "EDIT Image 1",
+                "base canvas",
+                "same scene",
+                "green",
+                "crop",
+            )
+        },
+        argument_contains_any={"prompt": ("cup", "mug")},
+        argument_excludes={"prompt": ("Tasse", "Grün")},
+    ),
+    PromptCase(
+        id="edit_image_preserves_person_identity",
+        kind="general",
+        user=(
+            f"Bearbeite Bild {ATTACHMENT_ID}. Ersetze nur die rote Jacke der Person durch eine "
+            "blaue Jacke. Gesicht, Körper, Pose, Ausdruck, Haare, Hintergrund und Kamera bleiben "
+            "unverändert."
+        ),
+        tools=("edit_image",),
+        system_options={"tool_instructions": (GPT_IMAGE_2_EDIT_INSTRUCTIONS,)},
+        expected_tool="edit_image",
+        expected_arguments={"attachment_ids": [str(ATTACHMENT_ID)]},
+        argument_contains={
+            "prompt": (
+                "EDIT Image 1",
+                "base canvas",
+                "same scene",
+                "blue jacket",
+                "identity",
+                "face",
+                "pose",
+                "expression",
+                "hair",
+                "background",
+                "camera",
+            )
+        },
+        argument_contains_any={"prompt": ("unchanged", "preserve", "keep")},
+        argument_excludes={"prompt": ("blaue Jacke", "Gesicht", "Körper")},
     ),
     PromptCase(
         id="generate_speech_uses_text",
@@ -583,14 +983,177 @@ CASES = (
     PromptCase(
         id="analyze_video_uses_root_and_path",
         kind="general",
-        user="Analysiere das Video attachments/demo/video.mp4 aus der Session auf Deutsch.",
-        tools=("analyze_video",),
+        user=_video_request("video.mp4", "Analysiere das Session-Video auf Deutsch."),
+        tools=VIDEO_EVAL_TOOLS,
         expected_tool="analyze_video",
         expected_arguments={
             "root": "session",
-            "path": "attachments/demo/video.mp4",
+            "path": f"attachments/{ATTACHMENT_ID}/video.mp4",
+            "analysis_mode": "overview",
         },
-        argument_options={"language": ("de", "de-DE", "German", "Deutsch")},
+    ),
+    PromptCase(
+        id="analyze_video_product_presentation_uses_overview",
+        kind="general",
+        user=_video_request(
+            "product.mp4",
+            "Erstelle aus dem Session-Video den ersten Teil einer Produktvorstellung.",
+        ),
+        tools=VIDEO_EVAL_TOOLS,
+        expected_tool="analyze_video",
+        expected_arguments={
+            "root": "session",
+            "path": f"attachments/{ATTACHMENT_ID}/product.mp4",
+            "analysis_mode": "overview",
+        },
+        argument_contains_any={
+            "focus": (
+                "Produktvorstellung",
+                "Produktpräsentation",
+                "product presentation",
+                "Skript",
+            )
+        },
+    ),
+    PromptCase(
+        id="analyze_video_speaker_script_uses_overview",
+        kind="general",
+        user=_video_request(
+            "script.mp4",
+            "Schreibe aus dem Session-Video einen 60-sekündigen Sprechertext für einen Produktpitch.",
+        ),
+        tools=VIDEO_EVAL_TOOLS,
+        expected_tool="analyze_video",
+        expected_arguments={
+            "root": "session",
+            "path": f"attachments/{ATTACHMENT_ID}/script.mp4",
+            "analysis_mode": "overview",
+        },
+        argument_contains_any={
+            "focus": (
+                "Sprechertext",
+                "script",
+                "pitch",
+                "Produkt",
+                "Features",
+                "Botschaften",
+            )
+        },
+    ),
+    PromptCase(
+        id="analyze_video_instructions_use_fine_grained",
+        kind="general",
+        user=_video_request(
+            "tutorial.mp4",
+            "Analysiere das Session-Video so genau, dass daraus eine vollständige "
+            "Schritt-für-Schritt-Anleitung erstellt werden kann.",
+        ),
+        tools=VIDEO_EVAL_TOOLS,
+        expected_tool="analyze_video",
+        expected_arguments={
+            "root": "session",
+            "path": f"attachments/{ATTACHMENT_ID}/tutorial.mp4",
+            "analysis_mode": "fine_grained",
+        },
+        argument_contains_any={
+            "focus": ("Anleitung", "Schritt", "instructions", "step-by-step", "tutorial")
+        },
+    ),
+    PromptCase(
+        id="analyze_video_ui_troubleshooting_uses_fine_grained",
+        kind="general",
+        user=_video_request(
+            "troubleshooting.mp4",
+            "Erstelle aus dem Session-Video eine exakte Fehlerbehebungsanleitung, die jeden "
+            "kurzen UI-Schritt und jede Zustandsänderung erhält.",
+        ),
+        tools=VIDEO_EVAL_TOOLS,
+        expected_tool="analyze_video",
+        expected_arguments={
+            "root": "session",
+            "path": f"attachments/{ATTACHMENT_ID}/troubleshooting.mp4",
+            "analysis_mode": "fine_grained",
+        },
+        argument_contains_any={
+            "focus": ("Fehler", "UI", "troubleshooting", "Zustandsänderung")
+        },
+    ),
+    PromptCase(
+        id="analyze_video_result_becomes_product_presentation",
+        kind="general",
+        user=_video_request(
+            "demo.mp4",
+            "Erstelle nach der Analyse direkt den ersten Teil einer Produktvorstellung. "
+            "Frage nicht nach weiteren Vorgaben.",
+        ),
+        tools=VIDEO_EVAL_TOOLS,
+        continuation=_exchange(
+            "analyze_video",
+            _video_arguments(
+                "demo.mp4", "overview", "Ersten Teil einer Produktvorstellung erstellen"
+            ),
+            _video_analysis_result("overview"),
+        ),
+        expected_no_tools=True,
+        content_contains=("MatoLoop",),
+        content_excludes=("kann das Video nicht", "lade das Video", "welches Produkt"),
+    ),
+    PromptCase(
+        id="analyze_video_result_becomes_speaker_script",
+        kind="general",
+        user=_video_request(
+            "demo.mp4",
+            "Schreibe nach der Analyse direkt einen deutschen 60-sekündigen Sprechertext. "
+            "Gib nur den verwendbaren Text aus.",
+        ),
+        tools=VIDEO_EVAL_TOOLS,
+        continuation=_exchange(
+            "analyze_video",
+            _video_arguments("demo.mp4", "overview", "60-sekündigen Sprechertext schreiben"),
+            _video_analysis_result("overview"),
+        ),
+        expected_no_tools=True,
+        content_contains=("MatoLoop",),
+        content_excludes=("Soll ich", "kann das Video nicht", "weitere Vorgaben"),
+    ),
+    PromptCase(
+        id="analyze_video_result_becomes_instructions",
+        kind="general",
+        user=_video_request(
+            "demo.mp4",
+            "Erstelle nach der Analyse direkt eine vollständige deutsche "
+            "Schritt-für-Schritt-Anleitung für den gezeigten Einstellungsablauf.",
+        ),
+        tools=VIDEO_EVAL_TOOLS,
+        continuation=_exchange(
+            "analyze_video",
+            _video_arguments(
+                "demo.mp4", "fine_grained", "Einstellungsablauf als Anleitung rekonstruieren"
+            ),
+            _video_analysis_result("fine_grained"),
+        ),
+        expected_no_tools=True,
+        content_contains=("Schritt", "Integrationen"),
+        content_contains_any=(("speichern", "Speichere"),),
+        content_excludes=("Soll ich", "kann das Video nicht"),
+    ),
+    PromptCase(
+        id="analyze_video_result_respects_no_draft_instruction",
+        kind="general",
+        user=_video_request(
+            "demo.mp4",
+            "Analysiere das Video, aber erstelle noch keinen Entwurf. Bestätige danach nur in "
+            "einem kurzen Satz, dass die Analyse abgeschlossen ist.",
+        ),
+        tools=VIDEO_EVAL_TOOLS,
+        continuation=_exchange(
+            "analyze_video",
+            _video_arguments("demo.mp4", "overview", "Inhalt für spätere Aufgabe erfassen"),
+            _video_analysis_result("overview"),
+        ),
+        expected_no_tools=True,
+        content_contains_any=(("Analyse abgeschlossen", "analysiert", "abgeschlossen"),),
+        content_excludes=("Produktvorstellung", "Sprechertext", "Schritt-für-Schritt"),
     ),
     PromptCase(
         id="session_read_uses_session_uuid",
@@ -1656,6 +2219,18 @@ _SEMANTIC_CONTRACTS = (
         ("readwrite_write_uses_tool",),
     ),
     ContractCoverage(
+        "tools.question_selection_and_continuation",
+        "tools",
+        (
+            "ambiguous_request_asks_user",
+            "calendar_missing_details_uses_question",
+            "calendar_missing_details_under_persona_uses_question",
+            "complete_calendar_event_skips_question",
+            "answered_calendar_questions_continue_action",
+            "calendar_information_request_skips_question",
+        ),
+    ),
+    ContractCoverage(
         "tools.no_premature_success",
         "tools",
         (
@@ -1918,9 +2493,10 @@ _SEMANTIC_CONTRACTS = (
     ContractCoverage(
         "integration.prompt_fragments",
         "integration",
-        not_applicable=(
-            "No currently enabled production integration adapter contributes static prompt text; "
-            "there is no model-facing fragment to send to either chat model."
+        (
+            "calendar_missing_details_uses_question",
+            "complete_calendar_event_skips_question",
+            "answered_calendar_questions_continue_action",
         ),
     ),
     ContractCoverage(
@@ -2184,14 +2760,54 @@ _SEMANTIC_CONTRACTS = (
         ),
     ),
     ContractCoverage(
+        "media.target_prompt_profiles",
+        "media",
+        (
+            "generate_image_uses_prompt",
+            "z_image_turbo_uses_natural_language_prompt",
+            "z_image_turbo_preserves_exact_prompt",
+            "edit_image_preserves_unspecified_content",
+            "edit_image_confines_precise_object_change",
+            "edit_image_preserves_person_identity",
+        ),
+    ),
+    ContractCoverage(
         "media.chat_tool_selection",
         "media",
         (
             "generate_image_uses_prompt",
             "edit_image_preserves_unspecified_content",
+            "edit_image_confines_precise_object_change",
+            "edit_image_preserves_person_identity",
             "generate_speech_uses_text",
             "generate_audio_uses_duration",
             "transcribe_audio_uses_attachment_uuid",
+            "analyze_video_uses_root_and_path",
+            "analyze_video_product_presentation_uses_overview",
+            "analyze_video_speaker_script_uses_overview",
+            "analyze_video_instructions_use_fine_grained",
+            "analyze_video_ui_troubleshooting_uses_fine_grained",
+        ),
+    ),
+    ContractCoverage(
+        "media.video_analysis_mode_selection",
+        "media",
+        (
+            "analyze_video_uses_root_and_path",
+            "analyze_video_product_presentation_uses_overview",
+            "analyze_video_speaker_script_uses_overview",
+            "analyze_video_instructions_use_fine_grained",
+            "analyze_video_ui_troubleshooting_uses_fine_grained",
+        ),
+    ),
+    ContractCoverage(
+        "media.video_analysis_task_completion",
+        "media",
+        (
+            "analyze_video_result_becomes_product_presentation",
+            "analyze_video_result_becomes_speaker_script",
+            "analyze_video_result_becomes_instructions",
+            "analyze_video_result_respects_no_draft_instruction",
         ),
     ),
     ContractCoverage(
@@ -2286,6 +2902,54 @@ def validate_inventory() -> None:
         raise ValueError(f"Cases missing from inventory: {', '.join(sorted(missing))}")
 
 
+def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
+    capability_by_tool = {
+        "generate_image": "media.generate.image",
+        "edit_image": "media.edit.image",
+        "generate_speech": "media.generate.speech",
+        "generate_audio": "media.generate.audio",
+        "transcribe_audio": "media.transcribe.audio",
+        "analyze_video": "media.analyze.video",
+        "update_agent_identity": "settings.agent_identity.update",
+    }
+    capabilities = {capability_by_tool[name] for name in case.tools if name in capability_by_tool}
+    integration_settings = IntegrationSettings()
+    tool_settings = None
+    if case.calendar_fixture:
+        integration_settings = IntegrationSettings(
+            instances=[
+                IntegrationInstance(
+                    id=CALENDAR_INTEGRATION_ID,
+                    name="Kalender",
+                    integration_type="calendar",
+                    adapter_type="caldav",
+                    config={
+                        "base_url": "https://calendar.example.com",
+                        "username": "evaluator",
+                    },
+                )
+            ]
+        )
+        tool_settings = ToolSettings.model_validate(
+            {
+                "defaultCalendar": {
+                    "integrationId": str(CALENDAR_INTEGRATION_ID),
+                    "calendarKey": CALENDAR_KEY,
+                }
+            }
+        )
+    return tool_registry.effective(
+        integration_settings,
+        case.workspace_access,
+        webfetch_enabled="webfetch" in case.tools,
+        web_search_enabled="web_search" in case.tools,
+        memory_enabled=bool({"memory_retrieve", "memory_write"} & set(case.tools)),
+        memory_write_enabled="memory_write" in case.tools,
+        tool_capabilities=capabilities,
+        tool_settings=tool_settings,
+    )
+
+
 def _general_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     session = ChatSession(
         id=SESSION_ID,
@@ -2298,26 +2962,16 @@ def _general_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[str
         workspace_access=case.workspace_access,
         working_directory=case.working_directory,
     )
-    capability_by_tool = {
-        "generate_image": "media.generate.image",
-        "edit_image": "media.edit.image",
-        "generate_speech": "media.generate.speech",
-        "generate_audio": "media.generate.audio",
-        "transcribe_audio": "media.transcribe.audio",
-        "update_agent_identity": "settings.agent_identity.update",
-    }
-    capabilities = {capability_by_tool[name] for name in case.tools if name in capability_by_tool}
-    effective = tool_registry.effective(
-        IntegrationSettings(),
-        case.workspace_access,
-        webfetch_enabled="webfetch" in case.tools,
-        web_search_enabled="web_search" in case.tools,
-        memory_enabled=bool({"memory_retrieve", "memory_write"} & set(case.tools)),
-        memory_write_enabled="memory_write" in case.tools,
-        tool_capabilities=capabilities,
-    ).only(*case.tools)
+    offered = _general_offered_tools(case)
+    effective = offered.only(*case.tools)
     tools = effective.schemas()
     offered_names = frozenset(tool["name"] for tool in tools)
+    system_options = dict(case.system_options)
+    if offered.prompt_fragments:
+        system_options["tool_instructions"] = (
+            *system_options.get("tool_instructions", ()),
+            *offered.prompt_fragments,
+        )
     prompt = general_system_prompt(
         session,
         agent_identity=(
@@ -2334,7 +2988,7 @@ def _general_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[str
             case.memory_scope
             if case.memory_scope is not None
             else (
-                {"total": 0, "instant": 0, "retrieve": 0}
+                {"total": 0, "pinned": 0}
                 if "memory_retrieve" in offered_names
                 else None
             )
@@ -2342,7 +2996,7 @@ def _general_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[str
         current_datetime=FIXED_NOW,
         web_search_required=case.web_search_required,
         offered_tool_names=offered_names,
-        **case.system_options,
+        **system_options,
     )
     if case.expected_marker:
         prompt += "\n\n" + PRIVACY_MARKER_INSTRUCTION
@@ -2535,10 +3189,22 @@ def case_output_limit(case: PromptCase, default_limit: int) -> int:
     return min(case.output_limit, default_limit)
 
 
-def _validate_builtin_calls(calls: list[ToolCall]) -> list[str]:
+def _validate_tool_calls(case: PromptCase, calls: list[ToolCall]) -> list[str]:
     failures = []
+    effective_tools = (
+        _general_offered_tools(case).only(*case.tools).tools
+        if case.kind == "general"
+        else {}
+    )
+    if any(call.name == "question" for call in calls) and len(calls) != 1:
+        failures.append("question must be the only tool call")
     for call in calls:
-        definition = tool_registry._definitions.get(call.name)
+        bound_tool = effective_tools.get(call.name)
+        definition = (
+            bound_tool.definition
+            if bound_tool is not None
+            else tool_registry._definitions.get(call.name)
+        )
         if call.name == "record_memory_candidates":
             try:
                 DreamCandidates.model_validate(call.arguments)
@@ -2554,7 +3220,12 @@ def _validate_builtin_calls(calls: list[ToolCall]) -> list[str]:
         if definition is None:
             continue
         try:
-            definition.arguments_model.model_validate(call.arguments)
+            definition.arguments_model.model_validate(
+                {
+                    **(bound_tool.default_arguments if bound_tool is not None else {}),
+                    **call.arguments,
+                }
+            )
         except ValidationError:
             failures.append(f"{call.name} returned invalid arguments")
             continue
@@ -2570,6 +3241,16 @@ def _validate_builtin_calls(calls: list[ToolCall]) -> list[str]:
     return failures
 
 
+def _validated_arguments(call: ToolCall) -> dict[str, Any]:
+    definition = tool_registry._definitions.get(call.name)
+    if definition is None:
+        return call.arguments
+    try:
+        return definition.arguments_model.model_validate(call.arguments).model_dump(mode="json")
+    except ValidationError:
+        return call.arguments
+
+
 def _previous_call_signatures(case: PromptCase) -> set[str]:
     return {
         f"{call.get('name')}:{json.dumps(call.get('arguments') or {}, sort_keys=True)}"
@@ -2580,7 +3261,7 @@ def _previous_call_signatures(case: PromptCase) -> set[str]:
 
 
 def evaluate(case: PromptCase, result: ProviderResult) -> list[str]:
-    failures = _validate_builtin_calls(result.tool_calls)
+    failures = _validate_tool_calls(case, result.tool_calls)
     names = [call.name for call in result.tool_calls]
     required_tools = set(case.expected_tools)
     uncertainty_reported = bool(_UNCERTAINTY.search(result.content))
@@ -2615,43 +3296,73 @@ def evaluate(case: PromptCase, result: ProviderResult) -> list[str]:
             failures.append(f"forbidden tool called: {name}")
     if case.expected_arguments and case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
+        arguments = _validated_arguments(call)
         for key, value in case.expected_arguments.items():
-            if call.arguments.get(key) != value:
+            if arguments.get(key) != value:
                 failures.append(
-                    f"{case.expected_tool}.{key} expected {value!r}, got {call.arguments.get(key)!r}"
+                    f"{case.expected_tool}.{key} expected {value!r}, got {arguments.get(key)!r}"
                 )
     if case.argument_options and case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
+        arguments = _validated_arguments(call)
         for key, options in case.argument_options.items():
-            if call.arguments.get(key) not in options:
+            if arguments.get(key) not in options:
                 failures.append(
                     f"{case.expected_tool}.{key} expected one of {options!r}, "
-                    f"got {call.arguments.get(key)!r}"
+                    f"got {arguments.get(key)!r}"
                 )
     if case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
+        arguments = _validated_arguments(call)
         for key, values in case.argument_contains.items():
-            actual = str(call.arguments.get(key, ""))
+            actual = str(arguments.get(key, ""))
             for value in values:
                 if value.casefold() not in actual.casefold():
                     failures.append(f"{case.expected_tool}.{key} does not contain {value!r}")
         for key, values in case.argument_contains_any.items():
-            actual = str(call.arguments.get(key, ""))
+            actual = str(arguments.get(key, ""))
             if not any(value.casefold() in actual.casefold() for value in values):
                 failures.append(
                     f"{case.expected_tool}.{key} does not contain any of {values!r}"
                 )
         for key, values in case.argument_excludes.items():
-            actual = str(call.arguments.get(key, ""))
+            actual = str(arguments.get(key, ""))
             for value in values:
                 if value.casefold() in actual.casefold():
                     failures.append(f"{case.expected_tool}.{key} contains forbidden {value!r}")
         for key, maximum in case.max_argument_words.items():
-            actual = str(call.arguments.get(key, ""))
+            actual = str(arguments.get(key, ""))
             if len(actual.split()) > maximum:
                 failures.append(
                     f"{case.expected_tool}.{key} exceeds {maximum} words"
                 )
+        if case.expected_tool == "question":
+            questions = arguments.get("questions")
+            if isinstance(questions, list):
+                if (
+                    case.maximum_question_count is not None
+                    and len(questions) > case.maximum_question_count
+                ):
+                    failures.append(
+                        f"question returned more than {case.maximum_question_count} questions"
+                    )
+                headers = [
+                    str(question.get("header", "")).strip().casefold()
+                    for question in questions
+                    if isinstance(question, dict)
+                ]
+                if len(headers) != len(set(headers)):
+                    failures.append("question returned duplicate headers")
+                for header in headers:
+                    words = re.findall(r"\w+", header)
+                    if len(words) != len(set(words)):
+                        failures.append(f"question header repeats a word: {header!r}")
+                combined = json.dumps(questions, ensure_ascii=False).casefold()
+                for alternatives in case.question_concepts:
+                    if not any(value.casefold() in combined for value in alternatives):
+                        failures.append(
+                            f"question does not cover any of {alternatives!r}"
+                        )
         if case.requires_reformulated_query:
             actual_terms = set(re.findall(r"\w+", str(call.arguments.get("query", "")).casefold()))
             previous_terms = {

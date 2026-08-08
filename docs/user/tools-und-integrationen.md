@@ -4,11 +4,13 @@
 
 Unter **Einstellungen > Tools** legen Sie fest, welche Werkzeuge verfügbar sind und wann eine Freigabe erforderlich ist. Die üblichen Richtlinien sind:
 
-- **Deaktiviert**: Das Tool wird dem Agenten nicht angeboten.
+- **Deaktiviert**: Das Tool kann nicht aufgerufen werden. Der Agent kennt die installierte Fähigkeit weiterhin und kann bei einer passenden Anfrage erklären, wie sie aktiviert wird.
 - **Nachfragen**: Vor Agent-Tool-Aufrufen ist eine Freigabe erforderlich.
 - **Automatisch**: Zulässige Aktionen werden ohne einzelne Nachfrage ausgeführt.
 
 Hostseitige Sicherheitsgrenzen gelten auch bei **Automatisch** weiterhin.
+
+Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Agent-Modus, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
 
 Direkte Aktionen, die Sie selbst in der Oberfläche auslösen, verwenden keine Agent-Freigabekarte. Dazu gehören insbesondere Dateiaktionen im Explorer und das Diktat über die Mikrofonschaltfläche.
 
@@ -22,6 +24,7 @@ MatoLoop bündelt Werkzeuge für:
 - Lesen und Durchsuchen früherer Sessions
 - Memory
 - Persona
+- Kalender
 - Wissensdatenbank (BookStack)
 
 Welche Tools tatsächlich erscheinen, hängt zusätzlich von Agent-Modus, Session-Einstellungen, Modellfähigkeiten und konfigurierten Standardmodellen ab.
@@ -43,6 +46,8 @@ Unter **Einstellungen > Integrationen** können Sie mehrere CalDAV-Konten mit Se
 - **Automatisch** führt zulässige Aktionen ohne einzelne Nachfrage aus.
 
 Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**. Serverseitig schreibgeschützte Kalender bleiben unabhängig von der MatoLoop-Richtlinie schreibgeschützt.
+
+Auf derselben Seite können Sie einen Kalender dieses Kontos als installationsweiten **Standardkalender** auswählen. Unspezifische Kalenderabfragen und neue Termine verwenden ihn automatisch. Wenn Sie ausdrücklich einen anderen Kalender angeben, hat diese Auswahl Vorrang. Pro Installation kann nur ein Standardkalender aktiv sein.
 
 Lesefreigaben können für die aktuelle Chat-Session gelten. Schreib- und Löschfreigaben gelten nur für den konkreten Vorgang. Wiederkehrende Termine und Termine mit Einladungs- oder unbekannten Eigenschaften können gelesen, aber in der ersten Version nicht verändert werden.
 

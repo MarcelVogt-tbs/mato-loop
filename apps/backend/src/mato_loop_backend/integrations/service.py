@@ -47,6 +47,13 @@ class SearchIntegrationService:
                     is not None
                     or changed
                 )
+                changed = (
+                    tool_settings.resource_labels.pop(
+                        str(remove_resource_policies), None
+                    )
+                    is not None
+                    or changed
+                )
             if changed:
                 await SettingsStore.save(db, tool_settings)
         await SettingsStore.save(db, settings)
@@ -151,6 +158,13 @@ class CalDavIntegrationService:
             integration_id = str(clear_policies)
             changed = tools.integration_policies.pop(integration_id, None) is not None
             changed = tools.resource_policies.pop(integration_id, None) is not None or changed
+            changed = tools.resource_labels.pop(integration_id, None) is not None or changed
+            if (
+                tools.default_calendar is not None
+                and str(tools.default_calendar.integration_id) == integration_id
+            ):
+                tools.default_calendar = None
+                changed = True
             if changed:
                 await SettingsStore.save(db, tools)
         await SettingsStore.save(db, settings)

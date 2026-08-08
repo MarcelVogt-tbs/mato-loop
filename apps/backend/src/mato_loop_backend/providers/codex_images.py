@@ -151,7 +151,6 @@ async def edit_image(
     credential: dict[str, Any],
     images: tuple[tuple[bytes, str], ...],
     prompt: str,
-    size: str | None,
     turn_id: str,
     timeout: float,
 ) -> tuple[bytes, dict[str, Any]]:
@@ -172,7 +171,7 @@ async def edit_image(
             "background": "auto",
             "model": "gpt-image-2",
             "quality": "auto",
-            "size": size or "auto",
+            "size": "auto",
         },
         turn_id=turn_id,
         timeout=timeout,

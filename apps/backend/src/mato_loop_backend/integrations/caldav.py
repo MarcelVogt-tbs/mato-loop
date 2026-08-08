@@ -4,11 +4,12 @@ import hashlib
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid5
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.integrations.caldav_client import (
@@ -28,10 +29,22 @@ from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, read_credential
 from mato_loop_backend.settings import (
     IntegrationInstance,
+    SettingsStore,
     ToolExecutionPolicy,
+    ToolSettings,
 )
 
 CALDAV_CREDENTIAL_KIND = "caldav.password"
+_LOCAL_TIMEZONE = ZoneInfo("Europe/Berlin")
+_WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
 _READ = ToolAction(
     "calendar.read",
     "Kalender lesen",
@@ -41,12 +54,14 @@ _WRITE = ToolAction(
     "calendar.write",
     "Kalender ändern",
     ToolExecutionPolicy.ASK,
+    mutates=True,
 )
 _DELETE = ToolAction(
     "calendar.delete",
     "Kalendereinträge löschen",
     ToolExecutionPolicy.ASK,
     allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
+    mutates=True,
 )
 
 
@@ -139,20 +154,39 @@ class AllDayEventTiming(BaseModel):
 
 EventTiming = Annotated[
     TimedEventTiming | AllDayEventTiming,
-    Field(discriminator="type"),
+    Field(
+        discriminator="type",
+        description=(
+            'Every timing object requires type. Timed example: {"type":"timed",'
+            '"start":"2026-08-07T14:00:00+02:00","end":"2026-08-07T15:00:00+02:00"}. '
+            'All-day example: {"type":"allDay","start":"2026-08-07",'
+            '"end":"2026-08-08"}; the all-day end date is exclusive.'
+        ),
+    ),
 ]
 
 
 class CalendarCreateEventArguments(CalendarResourceArguments):
-    idempotency_key: UUID
     summary: str = Field(min_length=1, max_length=500)
     description: str | None = Field(default=None, max_length=10_000)
     location: str | None = Field(default=None, max_length=1_000)
     timing: EventTiming
 
 
-class CalendarUpdateEventArguments(CalendarResourceArguments):
+class CalendarEventArguments(CalendarResourceArguments):
     event_token: str = Field(min_length=1, max_length=50_000)
+
+    @field_validator("event_token")
+    @classmethod
+    def validate_event_token(cls, value: str) -> str:
+        try:
+            _EventToken.model_validate(CredentialCipher().decrypt(value.encode("ascii")))
+        except Exception as exc:
+            raise ValueError("invalid event token") from exc
+        return value
+
+
+class CalendarUpdateEventArguments(CalendarEventArguments):
     summary: str | None = Field(default=None, min_length=1, max_length=500)
     description: str | None = Field(default=None, max_length=10_000)
     location: str | None = Field(default=None, max_length=1_000)
@@ -172,13 +206,14 @@ class CalendarUpdateEventArguments(CalendarResourceArguments):
         return self
 
 
-class CalendarDeleteEventArguments(CalendarResourceArguments):
-    event_token: str = Field(min_length=1, max_length=50_000)
+class CalendarDeleteEventArguments(CalendarEventArguments):
+    pass
 
 
 class _EventToken(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    version: Literal[2]
     integration_id: UUID
     binding_revision: str = Field(max_length=50_000)
     calendar_key: str = Field(pattern=r"^calendar:[a-f0-9]{32}$")
@@ -385,6 +420,7 @@ def _draft(
 
 def _token(event: CalDavEvent, integration_id: UUID, revision: str, key: str) -> str:
     payload = _EventToken(
+        version=2,
         integration_id=integration_id,
         binding_revision=revision,
         calendar_key=key,
@@ -441,16 +477,90 @@ def _bounded(value: str | None, limit: int) -> str | None:
     return value[:limit] if value is not None else None
 
 
+def _display_text(value: str | None, limit: int = 180) -> str:
+    text = " ".join((value or "").split())
+    return f"{text[:limit]}..." if len(text) > limit else text
+
+
+def _format_offset(value: datetime) -> str:
+    offset = value.utcoffset()
+    if offset is None:
+        return ""
+    minutes = int(offset.total_seconds() // 60)
+    sign = "+" if minutes >= 0 else "-"
+    hours, remainder = divmod(abs(minutes), 60)
+    return f" (UTC{sign}{hours:02d}:{remainder:02d})"
+
+
+def _format_event_timing(timing: EventTiming) -> str:
+    if isinstance(timing, AllDayEventTiming):
+        last_day = timing.end - timedelta(days=1)
+        if timing.start == last_day:
+            return f"{timing.start:%d.%m.%Y} (ganztägig)"
+        return f"{timing.start:%d.%m.%Y} bis {last_day:%d.%m.%Y} (ganztägig)"
+    if (
+        timing.start.date() == timing.end.date()
+        and timing.start.utcoffset() == timing.end.utcoffset()
+    ):
+        return (
+            f"{timing.start:%d.%m.%Y}, {timing.start:%H:%M} bis "
+            f"{timing.end:%H:%M} Uhr{_format_offset(timing.start)}"
+        )
+    return (
+        f"{timing.start:%d.%m.%Y}, {timing.start:%H:%M} Uhr"
+        f"{_format_offset(timing.start)} bis {timing.end:%d.%m.%Y}, "
+        f"{timing.end:%H:%M} Uhr{_format_offset(timing.end)}"
+    )
+
+
+def _event_reference(event: _EventToken) -> str:
+    title = _display_text(event.summary) or "Ohne Titel"
+    timing = (
+        f" am {_format_event_timing(event.timing)}"
+        if event.timing is not None
+        else ""
+    )
+    return f'den Termin "{title}"{timing}'
+
+
+def _event_for_permission(
+    arguments: CalendarUpdateEventArguments | CalendarDeleteEventArguments,
+    context: Any,
+) -> _EventToken:
+    _instance, revision = _binding(context, arguments.integration_id)
+    event, _existing = _event_from_token(
+        arguments.event_token,
+        arguments.integration_id,
+        revision,
+        arguments.calendar_key,
+    )
+    return event
+
+
 def _event_payload(
     event: CalDavEvent, integration_id: UUID, revision: str, calendar_key: str
 ) -> dict[str, Any]:
     timing = _timing(event)
+    local_timing = None
+    if isinstance(timing, TimedEventTiming):
+        local_start = timing.start.astimezone(_LOCAL_TIMEZONE)
+        local_end = timing.end.astimezone(_LOCAL_TIMEZONE)
+        local_timing = {
+            "timeZone": _LOCAL_TIMEZONE.key,
+            "start": local_start.isoformat(),
+            "end": local_end.isoformat(),
+            "startWeekday": _WEEKDAYS[local_start.weekday()],
+            "endWeekday": _WEEKDAYS[local_end.weekday()],
+        }
     return {
         "eventToken": _token(event, integration_id, revision, calendar_key),
+        "integrationId": str(integration_id),
+        "calendarKey": calendar_key,
         "summary": _bounded(event.summary, 500),
         "description": _bounded(event.description, 10_000),
         "location": _bounded(event.location, 1_000),
         "timing": timing.model_dump(mode="json") if timing is not None else None,
+        "localTiming": local_timing,
         "recurring": event.recurring,
         "scheduled": event.scheduled,
     }
@@ -493,6 +603,21 @@ async def calendar_list_calendars(
     try:
         async with _selected_client(arguments.integration_id, context) as (client, _revision):
             discovery = await client.discover()
+        labels = {
+            f"calendar:{calendar.key}": _label(calendar.name)
+            for calendar in discovery.calendars
+        }
+        tools = await SettingsStore.load(context.db, ToolSettings, for_update=True)
+        integration_id = str(arguments.integration_id)
+        current_labels = tools.resource_labels.get(integration_id, {})
+        if current_labels != labels:
+            if labels:
+                tools.resource_labels[integration_id] = labels
+            else:
+                tools.resource_labels.pop(integration_id, None)
+            await SettingsStore.save(context.db, tools)
+        context.tool_settings.resource_labels = dict(tools.resource_labels)
+        context.tool_settings = tools
         return _result(
             {
                 "calendars": [
@@ -547,7 +672,10 @@ async def calendar_create_event(
                     arguments.description,
                     arguments.location,
                 ),
-                arguments.idempotency_key,
+                uuid5(
+                    context.assistant_message_id or context.run_id,
+                    f"{context.tool_call.name}:{context.tool_call.id}",
+                ),
             )
         return _result(
             {
@@ -654,11 +782,18 @@ def _permission(
     title: str,
     summary: str,
     resource: bool = False,
+    use_integration_policy: bool = True,
 ) -> tuple[Any, ...]:
     from mato_loop_backend.agent.permissions import integration_operation_permission
 
-    _instance, revision = _binding(context, arguments.integration_id)
+    instance, revision = _binding(context, arguments.integration_id)
     resource_key = arguments.calendar_key if resource else None
+    resource_display = f'Konto "{_display_text(instance.name)}"'
+    if resource_key is not None:
+        labels = getattr(getattr(context, "tool_settings", None), "resource_labels", {})
+        label = labels.get(str(arguments.integration_id), {}).get(resource_key)
+        calendar = f'"{_display_text(label)}"' if label else resource_key
+        resource_display = f'{calendar} · Konto "{_display_text(instance.name)}"'
     return (
         integration_operation_permission(
             capability=capability,
@@ -666,7 +801,8 @@ def _permission(
             binding_revision=revision,
             operation_key=operation_key,
             resource_key=resource_key,
-            resource_display=resource_key,
+            resource_display=resource_display,
+            use_integration_policy=use_integration_policy,
             title=title,
             summary=summary,
             available_decisions=(
@@ -685,7 +821,8 @@ def _list_permission(arguments: CalendarIntegrationArguments, context: Any) -> t
         arguments,
         context,
         title="Kalender auflisten?",
-        summary="Der Agent möchte die verfügbaren Kalender dieses Kontos lesen.",
+        summary="Der Agent möchte Namen und Kennungen der verfügbaren Kalender lesen.",
+        use_integration_policy=False,
     )
 
 
@@ -696,43 +833,83 @@ def _query_permission(arguments: CalendarQueryEventsArguments, context: Any) -> 
         arguments,
         context,
         title="Kalender lesen?",
-        summary="Der Agent möchte Termine aus diesem Kalender lesen.",
+        summary=(
+            "Der Agent möchte Termine im Zeitraum "
+            f"{arguments.start:%d.%m.%Y, %H:%M} Uhr{_format_offset(arguments.start)} bis "
+            f"{arguments.end:%d.%m.%Y, %H:%M} Uhr{_format_offset(arguments.end)} lesen."
+        ),
         resource=True,
     )
 
 
 def _create_permission(arguments: CalendarCreateEventArguments, context: Any) -> tuple[Any, ...]:
+    summary = (
+        f'Der Agent möchte den Termin "{_display_text(arguments.summary)}" am '
+        f"{_format_event_timing(arguments.timing)} erstellen."
+    )
+    if arguments.location:
+        summary += f' Ort: "{_display_text(arguments.location)}".'
+    if arguments.description:
+        summary += f' Beschreibung: "{_display_text(arguments.description, 240)}".'
     return _permission(
         "calendar.write",
         _operation_key("create", arguments),
         arguments,
         context,
         title="Termin erstellen?",
-        summary="Der Agent möchte einen Termin in diesem Kalender erstellen.",
+        summary=summary,
         resource=True,
     )
 
 
 def _update_permission(arguments: CalendarUpdateEventArguments, context: Any) -> tuple[Any, ...]:
+    try:
+        event = _event_for_permission(arguments, context)
+    except ValueError:
+        summary = "Der Agent möchte einen Termin in diesem Kalender ändern."
+    else:
+        changes = []
+        if "summary" in arguments.model_fields_set:
+            changes.append(f'Titel auf "{_display_text(arguments.summary)}" ändern')
+        if "timing" in arguments.model_fields_set and arguments.timing is not None:
+            changes.append(f"Zeit auf {_format_event_timing(arguments.timing)} ändern")
+        if "location" in arguments.model_fields_set:
+            changes.append(
+                f'Ort auf "{_display_text(arguments.location)}" ändern'
+                if arguments.location
+                else "Ort entfernen"
+            )
+        if "description" in arguments.model_fields_set:
+            changes.append(
+                f'Beschreibung auf "{_display_text(arguments.description, 240)}" ändern'
+                if arguments.description
+                else "Beschreibung entfernen"
+            )
+        summary = f"Der Agent möchte {_event_reference(event)} ändern: {'; '.join(changes)}."
     return _permission(
         "calendar.write",
         _operation_key("update", arguments),
         arguments,
         context,
         title="Termin ändern?",
-        summary="Der Agent möchte einen Termin in diesem Kalender ändern.",
+        summary=summary,
         resource=True,
     )
 
 
 def _delete_permission(arguments: CalendarDeleteEventArguments, context: Any) -> tuple[Any, ...]:
+    try:
+        event = _event_for_permission(arguments, context)
+        summary = f"Der Agent möchte {_event_reference(event)} löschen."
+    except ValueError:
+        summary = "Der Agent möchte einen Termin aus diesem Kalender löschen."
     return _permission(
         "calendar.delete",
         _operation_key("delete", arguments),
         arguments,
         context,
         title="Termin löschen?",
-        summary="Der Agent möchte einen Termin aus diesem Kalender löschen.",
+        summary=summary,
         resource=True,
     )
 
@@ -759,7 +936,10 @@ def _accounts_permission(
 CALDAV_AGGREGATE_TOOLS = (
     ToolContribution(
         name="calendar_list_accounts",
-        description="List the active CalDAV accounts available to this tool binding.",
+        description=(
+            "List active CalDAV accounts only when the user asks about accounts or explicitly "
+            "requests a non-default calendar."
+        ),
         arguments_model=CalendarListAccountsArguments,
         handler=calendar_list_accounts,
         label="Kalenderkonten auflisten",
@@ -774,7 +954,10 @@ CALDAV_AGGREGATE_TOOLS = (
 CALDAV_SHARED_TOOLS = (
     ToolContribution(
         name="calendar_list_calendars",
-        description="List calendars in one CalDAV account.",
+        description=(
+            "List calendars in one CalDAV account only when the user asks about available "
+            "calendars or explicitly requests a non-default calendar."
+        ),
         arguments_model=CalendarIntegrationArguments,
         handler=calendar_list_calendars,
         label="Kalender auflisten",
@@ -799,7 +982,10 @@ CALDAV_SHARED_TOOLS = (
     ),
     ToolContribution(
         name="calendar_create_event",
-        description="Create one timed or all-day calendar event.",
+        description=(
+            "Create one timed or all-day calendar event. Timed events require both start and end; "
+            "all-day events require start and exclusive end dates."
+        ),
         arguments_model=CalendarCreateEventArguments,
         handler=calendar_create_event,
         label="Termin erstellen",

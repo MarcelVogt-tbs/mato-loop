@@ -72,12 +72,14 @@ _WRITE = ToolAction(
     "knowledge.write",
     "Wissensdatenbank ändern",
     ToolExecutionPolicy.ASK,
+    mutates=True,
 )
 _DELETE = ToolAction(
     "knowledge.delete",
     "Wissenseinträge löschen",
     ToolExecutionPolicy.ASK,
     allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
+    mutates=True,
 )
 
 

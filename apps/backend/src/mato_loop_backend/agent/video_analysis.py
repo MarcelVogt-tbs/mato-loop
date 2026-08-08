@@ -20,7 +20,7 @@ from mato_loop_backend.settings.models import (
 from mato_loop_backend.video_processing import (
     AudioSegment,
     MediaInfo,
-    VideoDetail,
+    VideoAnalysisMode,
     VideoFrame,
     VideoProcessingError,
     VideoProcessingTimeout,
@@ -66,7 +66,7 @@ class VisualSegment:
 
 
 NativeVideoHandler = Callable[
-    [bytes, str, bytes | None, TrustLevel, VideoDetail, str | None],
+    [bytes, str, bytes | None, TrustLevel, VideoAnalysisMode, str | None],
     Awaitable[NativeVideoResult],
 ]
 FrameVisionHandler = Callable[
@@ -193,7 +193,7 @@ async def analyze_video(
     native_handler: NativeVideoHandler | None,
     frame_handler: FrameVisionHandler | None,
     transcription_handler: TranscriptionHandler | None,
-    detail: VideoDetail = "standard",
+    analysis_mode: VideoAnalysisMode = "overview",
     focus: str | None = None,
 ) -> dict[str, Any]:
     try:
@@ -216,7 +216,7 @@ async def analyze_video(
 
     if native_handler is not None:
         native = await native_handler(
-            data, info.mime_type, audio, source_trust, detail, focus
+            data, info.mime_type, audio, source_trust, analysis_mode, focus
         )
         if not native.analysis.strip():
             logger.warning("Native video analysis returned empty content")
@@ -256,13 +256,15 @@ async def analyze_video(
                 _segment_dict(segment) for segment in transcript_segments
             ],
             "sampledFrameTimestampsMs": [],
-            "detail": detail,
+            "analysisMode": analysis_mode,
         }
 
     if frame_handler is None:
         raise VideoAnalysisError("video.analysisUnavailable")
     try:
-        frames = await asyncio.to_thread(extract_video_frames, data, detail=detail)
+        frames = await asyncio.to_thread(
+            extract_video_frames, data, analysis_mode=analysis_mode
+        )
     except VideoProcessingTimeout as exc:
         logger.warning("Video frame extraction timed out", exc_info=True)
         raise VideoAnalysisError("video.analysisTimeout") from exc
@@ -296,5 +298,5 @@ async def analyze_video(
             _segment_dict(segment) for segment in transcript_segments
         ],
         "sampledFrameTimestampsMs": [frame.timestamp_ms for frame in frames],
-        "detail": detail,
+        "analysisMode": analysis_mode,
     }
