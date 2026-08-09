@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -266,6 +266,10 @@ class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=200_000)
 
 
+class SessionReadRequest(BaseModel):
+    through_message_id: UUID = Field(alias="throughMessageId")
+
+
 def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
     if len(value) > 1_000_000:
         raise ApiError(413, "validation.tooLong", field="payload")
@@ -329,6 +333,7 @@ def session_payload(
     memory_tools_available: bool | None = None,
     memory_unavailable_reason: str | None = None,
     last_message_at: datetime | None | object = _LAST_MESSAGE_AT_UNSET,
+    has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
     payload = {
         "id": str(item.id),
@@ -347,6 +352,8 @@ def session_payload(
         payload["lastMessageAt"] = (
             last_message_at.isoformat() if isinstance(last_message_at, datetime) else None
         )
+    if has_unread_messages is not None:
+        payload["hasUnreadMessages"] = has_unread_messages
     if effective_memory_mode is not None:
         payload["effectiveMemoryMode"] = effective_memory_mode.value
         payload["memoryToolsAvailable"] = memory_tools_available
@@ -359,6 +366,7 @@ async def _session_payload(
     item: ChatSession,
     *,
     last_message_at: datetime | None | object = _LAST_MESSAGE_AT_UNSET,
+    has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
     if item.memory_mode == MemoryMode.DISABLED.value:
         return session_payload(
@@ -367,6 +375,7 @@ async def _session_payload(
             memory_tools_available=False,
             memory_unavailable_reason="memory.sessionDisabled",
             last_message_at=last_message_at,
+            has_unread_messages=has_unread_messages,
         )
     ai = await SettingsStore.load(db, AiSettings)
     memory = await SettingsStore.load(db, MemorySettings, user_id=item.user_id)
@@ -379,6 +388,7 @@ async def _session_payload(
         memory_tools_available=state.tools_enabled,
         memory_unavailable_reason=state.unavailable_reason,
         last_message_at=last_message_at,
+        has_unread_messages=has_unread_messages,
     )
 
 
@@ -444,6 +454,18 @@ def message_payload(item: Message) -> dict[str, Any]:
     }
 
 
+def _has_unread_messages(
+    item: ChatSession, last_assistant_message_at: datetime | None
+) -> bool:
+    return bool(
+        last_assistant_message_at
+        and (
+            item.last_read_at is None
+            or last_assistant_message_at > item.last_read_at
+        )
+    )
+
+
 async def _session_detail_payload(db: AsyncSession, item: ChatSession) -> dict[str, Any]:
     messages = list(
         (
@@ -471,8 +493,25 @@ async def _session_detail_payload(db: AsyncSession, item: ChatSession) -> dict[s
         ),
         default=None,
     )
+    last_assistant_message_at = max(
+        (
+            message.created_at
+            for message in messages
+            if message.role == "assistant" and message.created_at
+        ),
+        default=None,
+    )
     return {
-        **(await _session_payload(db, item, last_message_at=last_message_at)),
+        **(
+            await _session_payload(
+                db,
+                item,
+                last_message_at=last_message_at,
+                has_unread_messages=_has_unread_messages(
+                    item, last_assistant_message_at
+                ),
+            )
+        ),
         "messages": [message_payload(message) for message in messages],
         "activeRun": (
             {
@@ -533,6 +572,9 @@ async def list_sessions(
         select(
             Message.session_id.label("session_id"),
             func.max(Message.created_at).label("last_message_at"),
+            func.max(Message.created_at)
+            .filter(Message.role == "assistant")
+            .label("last_assistant_message_at"),
         )
         .join(ChatSession, ChatSession.id == Message.session_id)
         .where(
@@ -547,6 +589,7 @@ async def list_sessions(
         select(
             ChatSession,
             latest_messages.c.last_message_at,
+            latest_messages.c.last_assistant_message_at,
             active_run_status.label("active_run_status"),
             activity_at.label("activity_at"),
         )
@@ -582,14 +625,23 @@ async def list_sessions(
     page = rows[:page_size]
     items = [
         {
-            **(await _session_payload(db, item, last_message_at=last_message_at)),
+            **(
+                await _session_payload(
+                    db,
+                    item,
+                    last_message_at=last_message_at,
+                    has_unread_messages=_has_unread_messages(
+                        item, last_assistant_message_at
+                    ),
+                )
+            ),
             "activeRunStatus": active_status,
         }
-        for item, last_message_at, active_status, _activity_at in page
+        for item, last_message_at, last_assistant_message_at, active_status, _activity_at in page
     ]
     next_cursor = None
     if len(rows) > page_size:
-        item, _last_message_at, _active_status, item_activity_at = page[-1]
+        item, _last_message_at, _last_assistant_message_at, _active_status, item_activity_at = page[-1]
         next_cursor = _encode_session_cursor(
             user.id, bool(item.is_pinned), item_activity_at, item.id
         )
@@ -741,6 +793,37 @@ async def get_session(
     if item is None:
         raise ApiError(404, "session.notFound")
     return await _session_detail_payload(db, item)
+
+
+@router.post("/{session_id}/read")
+async def mark_session_read(
+    session_id: UUID,
+    payload: SessionReadRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, bool]:
+    item = await _owned_session(db, session_id, user.id, for_update=True)
+    if item is None:
+        raise ApiError(404, "session.notFound")
+    read_at = await db.scalar(
+        select(Message.created_at).where(
+            Message.id == payload.through_message_id,
+            Message.session_id == session_id,
+            Message.role == "assistant",
+        )
+    )
+    if read_at is None:
+        raise ApiError(400, "validation.invalid", field="throughMessageId")
+    await db.execute(
+        update(ChatSession)
+        .where(
+            ChatSession.id == session_id,
+            ChatSession.last_read_at < read_at,
+        )
+        .values(last_read_at=read_at, updated_at=ChatSession.updated_at)
+    )
+    await db.commit()
+    return {"read": True}
 
 
 @router.patch("/{session_id}")

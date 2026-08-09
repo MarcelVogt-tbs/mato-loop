@@ -202,3 +202,63 @@ async def test_frame_fallback_combines_timestamps_and_transcript(monkeypatch) ->
     ]
     assert result["sampledFrameTimestampsMs"] == [0, 1_000]
     assert result["analysisMode"] == "fine_grained"
+
+
+async def test_speech_analysis_skips_frames_and_native_video(monkeypatch) -> None:
+    monkeypatch.setattr(video_analysis, "probe_video", lambda _data: media_info())
+    monkeypatch.setattr(video_analysis, "extract_video_audio", lambda _data: b"wav")
+
+    def unexpected_frames(*_args, **_kwargs):
+        raise AssertionError("speech analysis must not extract frames")
+
+    monkeypatch.setattr(video_analysis, "extract_video_frames", unexpected_frames)
+    monkeypatch.setattr(
+        video_analysis,
+        "split_wav_audio",
+        lambda _data: [AudioSegment(0, 2_000, b"wav")],
+    )
+
+    async def unexpected_native(*_args):
+        raise AssertionError("speech analysis must not send native video")
+
+    async def transcribe(audio, language, trust):
+        assert (audio, language, trust) == (b"wav", "de", TrustLevel.PUBLIC)
+        return "Gesprochener Text"
+
+    result = await analyze_video(
+        b"video",
+        source_trust=TrustLevel.PUBLIC,
+        language="de",
+        native_handler=unexpected_native,
+        frame_handler=None,
+        transcription_handler=transcribe,
+        analysis_mode="speech",
+    )
+
+    assert result["mode"] == "transcript_only"
+    assert result["audioStatus"] == "transcribed"
+    assert result["visualSegments"] == []
+    assert result["transcriptSegments"] == [
+        {"startMs": 0, "endMs": 2_000, "text": "Gesprochener Text"}
+    ]
+    assert result["sampledFrameTimestampsMs"] == []
+
+
+async def test_speech_analysis_reports_absent_audio_without_model_calls(monkeypatch) -> None:
+    monkeypatch.setattr(
+        video_analysis, "probe_video", lambda _data: media_info(audio=False)
+    )
+
+    result = await analyze_video(
+        b"video",
+        source_trust=TrustLevel.PUBLIC,
+        language=None,
+        native_handler=None,
+        frame_handler=None,
+        transcription_handler=None,
+        analysis_mode="speech",
+    )
+
+    assert result["mode"] == "transcript_only"
+    assert result["audioStatus"] == "absent"
+    assert result["transcriptSegments"] == []

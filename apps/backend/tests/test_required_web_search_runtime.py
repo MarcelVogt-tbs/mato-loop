@@ -746,6 +746,11 @@ async def test_video_frames_are_analyzed_in_provider_sized_batches(monkeypatch) 
         == 1
         for request in image_requests
     )
+    assert all(request["max_output_tokens"] == 1_024 for request in image_requests)
+    assert all(
+        "at most 300 words" in request["messages"][0]["content"]
+        for request in image_requests
+    )
     assert [
         image.data for request in image_requests for image in request["image_inputs"]
     ] == [frame.data for frame in frames]

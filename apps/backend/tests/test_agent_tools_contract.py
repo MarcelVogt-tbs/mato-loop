@@ -2068,11 +2068,12 @@ def test_video_analysis_schema_uses_semantic_modes() -> None:
     schema = definition.schema()
     mode = schema["parameters"]["properties"]["analysis_mode"]
 
-    assert mode["enum"] == ["overview", "fine_grained"]
+    assert mode["enum"] == ["speech", "overview", "fine_grained"]
     assert mode["default"] == "overview"
-    assert "product presentations" in mode["description"]
-    assert "focus" in schema["parameters"]["required"]
-    assert "do not analyze the same video again" in schema["description"]
+    assert "visual summaries" in mode["description"]
+    assert "spoken content" in mode["description"]
+    assert "focus" not in schema["parameters"]["required"]
+    assert "Do not repeat a successful analysis" in schema["description"]
     assert "timeout does not indicate video length" in schema["description"].lower()
     legacy = definition.arguments_model.model_validate(
         {

@@ -5,13 +5,18 @@ from collections.abc import Awaitable, Callable
 
 from starlette.types import Message, Receive, Scope, Send
 
-from mato_loop_backend.attachments import MAX_FILE_ATTACHMENT_BYTES
+from mato_loop_backend.attachments import (
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    MAX_FILE_ATTACHMENT_BYTES,
+)
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.workspace import MAX_EDITABLE_TEXT_BYTES
 
 _MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 TRANSCRIPTION_REQUEST_LIMIT = MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
-SESSION_ATTACHMENTS_REQUEST_LIMIT = 4 * MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
+SESSION_ATTACHMENTS_REQUEST_LIMIT = (
+    MAX_ATTACHMENTS_PER_MESSAGE * MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
+)
 WORKSPACE_UPLOAD_REQUEST_LIMIT = MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
 # JSON escapes each ASCII control byte as up to six bytes.
 WORKSPACE_FILE_EDIT_REQUEST_LIMIT = 6 * MAX_EDITABLE_TEXT_BYTES + 64 * 1024

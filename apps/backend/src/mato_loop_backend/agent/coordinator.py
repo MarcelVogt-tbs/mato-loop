@@ -40,12 +40,6 @@ class ApprovalCoordinator:
         if waiter is not None and not waiter.done() and self._states.get(approval_id) == "resolving":
             self._states[approval_id] = "waiting"
 
-    def claim_expiration(self, approval_id: UUID) -> bool:
-        if not self.is_waiting(approval_id):
-            return False
-        self._states[approval_id] = "expiring"
-        return True
-
     def complete_resolution(self, approval_id: UUID, decision: Any) -> bool:
         waiter = self._waiters.get(approval_id)
         if (

@@ -15,6 +15,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
     SendMessageRequest,
     SessionCreateRequest,
+    SessionReadRequest,
     SessionUpdateRequest,
     cancel_run,
     create_session,
@@ -22,6 +23,7 @@ from mato_loop_backend.api.routes.sessions import (
     download_attachment,
     get_session,
     list_sessions,
+    mark_session_read,
     message_payload,
     send_message,
     session_defaults,
@@ -116,6 +118,7 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None
         memory_mode="disabled",
         created_at=datetime(2026, 7, 1, 8, 0, tzinfo=UTC),
         updated_at=datetime(2026, 7, 2, 8, 0, tzinfo=UTC),
+        last_read_at=datetime(2026, 7, 23, 8, 0, tzinfo=UTC),
     )
     next_session = ChatSession(
         id=uuid4(),
@@ -128,8 +131,8 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None
     last_message_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
     execution_result = MagicMock()
     execution_result.all.return_value = [
-        (session, last_message_at, "running", last_message_at),
-        (next_session, None, None, next_session.created_at),
+        (session, last_message_at, last_message_at, "running", last_message_at),
+        (next_session, None, None, None, next_session.created_at),
     ]
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = execution_result
@@ -142,10 +145,12 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None
     assert result["items"][0]["createdAt"] == session.created_at.isoformat()
     assert result["items"][0]["updatedAt"] == session.updated_at.isoformat()
     assert result["items"][0]["lastMessageAt"] == last_message_at.isoformat()
+    assert result["items"][0]["hasUnreadMessages"] is True
     assert result["items"][0]["activeRunStatus"] == "running"
     statement = db.execute.await_args.args[0]
     sql = str(statement)
     assert "max(messages.created_at)" in sql
+    assert "FILTER (WHERE messages.role" in sql
     assert "messages.role IN" in sql
     assert "agent_runs.status IN" in sql
     assert "agent_runs.created_at DESC, agent_runs.id DESC" in sql
@@ -174,8 +179,8 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order() -> 
     )
     first_result = MagicMock()
     first_result.all.return_value = [
-        (pinned, None, None, pinned.created_at),
-        (overflow, None, None, overflow.created_at),
+        (pinned, None, None, None, pinned.created_at),
+        (overflow, None, None, None, overflow.created_at),
     ]
     first_db = AsyncMock(spec=AsyncSession)
     first_db.execute.return_value = first_result
@@ -183,7 +188,7 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order() -> 
 
     second_result = MagicMock()
     second_result.all.return_value = [
-        (overflow, None, "waiting_approval", overflow.created_at)
+        (overflow, None, None, "waiting_approval", overflow.created_at)
     ]
     second_db = AsyncMock(spec=AsyncSession)
     second_db.execute.return_value = second_result
@@ -217,6 +222,38 @@ async def test_session_list_rejects_malformed_cursor() -> None:
     assert exc_info.value.code == "validation.invalid"
     assert exc_info.value.field == "cursor"
     db.execute.assert_not_awaited()
+
+
+async def test_mark_session_read_uses_owned_assistant_message_monotonically() -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Gelesene Session",
+        last_read_at=datetime(2026, 7, 23, 8, 0, tzinfo=UTC),
+    )
+    message_id = uuid4()
+    read_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, read_at]
+
+    result = await mark_session_read(
+        session.id,
+        SessionReadRequest(throughMessageId=message_id),
+        user,
+        db,
+    )
+
+    assert result == {"read": True}
+    statements = [call.args[0] for call in db.scalar.await_args_list]
+    assert "FOR UPDATE" in str(statements[0])
+    assert message_id in statements[1].compile().params.values()
+    update_statement = db.execute.await_args.args[0]
+    sql = str(update_statement)
+    assert "chat_sessions.last_read_at <" in sql
+    assert "updated_at=chat_sessions.updated_at" in sql.replace(" ", "")
+    assert read_at in update_statement.compile().params.values()
+    db.commit.assert_awaited_once()
 
 
 async def test_session_is_created_with_first_message_and_run(monkeypatch) -> None:

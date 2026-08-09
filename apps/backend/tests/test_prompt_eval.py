@@ -50,7 +50,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 9
+    assert INVENTORY_VERSION == 10
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -82,7 +82,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 120
+    assert 80 <= len(CASES) <= 121
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -169,7 +169,8 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     mode = next(tool for tool in video_tools if tool["name"] == "analyze_video")[
         "parameters"
     ]["properties"]["analysis_mode"]
-    assert mode["enum"] == ["overview", "fine_grained"]
+    assert mode["enum"] == ["speech", "overview", "fine_grained"]
+    assert "spoken content" in mode["description"]
 
     completion_messages, _tools = build_case(
         _case("analyze_video_result_becomes_product_presentation")
@@ -979,10 +980,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 119
-    assert payload["contractCount"] == 239
-    assert "Cases: 120" in report
+    assert payload["contractCount"] == 240
+    assert "Cases: 121" in report
     assert "Semantic contracts: 119" in report
-    assert "All inventory rows: 239" in report
+    assert "All inventory rows: 240" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report
