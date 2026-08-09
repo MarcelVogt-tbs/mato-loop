@@ -81,7 +81,7 @@
               :label="integration?.hasCredential ? 'Neue Token-ID (optional)' : 'Token-ID'"
               :hint="integration?.hasCredential ? 'Leer lassen, um den gespeicherten API-Token beizubehalten.' : 'API-Token aus dem BookStack-Benutzerprofil.'"
               lazy-rules
-              :rules="isEditing ? [] : [requiredRule]"
+              :rules="isEditing ? [tokenPairRule] : [requiredRule]"
             />
             <q-input
               v-if="form.integration_type === 'knowledge'"
@@ -90,7 +90,7 @@
               type="password"
               :label="integration?.hasCredential ? 'Neues Token-Secret (optional)' : 'Token-Secret'"
               lazy-rules
-              :rules="isEditing ? [] : [requiredRule]"
+              :rules="isEditing ? [tokenPairRule] : [requiredRule]"
             />
             <q-toggle v-model="form.enabled" color="primary" label="Integration aktivieren" />
           </template>
@@ -177,6 +177,13 @@ function selectIntegrationType(type) {
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
+}
+
+function tokenPairRule() {
+  const hasId = Boolean(String(form.token_id || '').trim())
+  const hasSecret = Boolean(form.token_secret)
+  if (hasId === hasSecret) return true
+  return 'Bitte Token-ID und Token-Secret gemeinsam angeben oder beide leer lassen.'
 }
 
 function urlRule(value) {

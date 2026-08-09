@@ -372,13 +372,27 @@ class BookStackClient:
             raise _error("responseTooLarge")
         return data
 
-    async def list_books(self, limit: int = MAX_ITEMS) -> tuple[BookStackBook, ...]:
+    @staticmethod
+    def _is_truncated(payload: Any, received: int) -> bool:
+        """Report whether BookStack holds more entries than it returned.
+
+        Listings are capped, and a silently shortened list reads like a complete
+        one. The agent would then believe a book does not exist and create a
+        duplicate instead of using the existing one.
+        """
+        total = payload.get("total") if isinstance(payload, dict) else None
+        return isinstance(total, int) and total > received
+
+    async def list_books(
+        self, limit: int = MAX_ITEMS
+    ) -> tuple[tuple[BookStackBook, ...], bool]:
         if limit < 1 or limit > MAX_ITEMS:
             raise _error("invalidLimit")
         payload = await self._request(
             "GET", "/books", params={"count": limit, "sort": "+name"}
         )
-        return tuple(_book(item) for item in self._listing(payload))
+        items = tuple(_book(item) for item in self._listing(payload))
+        return items, self._is_truncated(payload, len(items))
 
     async def read_book(self, book_id: int) -> BookStackBookContents:
         payload = await self._request("GET", f"/books/{_identifier(book_id)}")
@@ -580,13 +594,16 @@ class BookStackClient:
             "DELETE", f"/chapters/{_identifier(chapter_id)}", expected={200, 204}
         )
 
-    async def list_shelves(self, limit: int = MAX_ITEMS) -> tuple[BookStackShelf, ...]:
+    async def list_shelves(
+        self, limit: int = MAX_ITEMS
+    ) -> tuple[tuple[BookStackShelf, ...], bool]:
         if limit < 1 or limit > MAX_ITEMS:
             raise _error("invalidLimit")
         payload = await self._request(
             "GET", "/shelves", params={"count": limit, "sort": "+name"}
         )
-        return tuple(_shelf(item) for item in self._listing(payload))
+        items = tuple(_shelf(item) for item in self._listing(payload))
+        return items, self._is_truncated(payload, len(items))
 
     async def read_shelf(self, shelf_id: int) -> BookStackShelfContents:
         payload = await self._request("GET", f"/shelves/{_identifier(shelf_id)}")

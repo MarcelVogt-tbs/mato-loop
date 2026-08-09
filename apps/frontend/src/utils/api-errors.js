@@ -25,6 +25,8 @@ const fieldLabels = {
   redirect_url: 'Die Weiterleitungs-URL',
   title: 'Der Titel',
   timeoutSeconds: 'Das Zeitlimit',
+  token_id: 'Die Token-ID',
+  token_secret: 'Das Token-Secret',
   username: 'Der Benutzername',
   workspace_access: 'Der Zugriffsmodus',
   web_search_policy: 'Die Websuch-Richtlinie'

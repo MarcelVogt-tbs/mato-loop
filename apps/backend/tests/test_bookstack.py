@@ -142,8 +142,11 @@ def _bind_location_checks(
 async def test_resource_loader_maps_books_to_policy_resources(monkeypatch) -> None:
     client = AsyncMock()
     client.list_books.return_value = (
-        BookStackBook(id=7, name="  Handbuch  ", slug="handbuch"),
-        BookStackBook(id=8, name="X" * 200, slug="x"),
+        (
+            BookStackBook(id=7, name="  Handbuch  ", slug="handbuch"),
+            BookStackBook(id=8, name="X" * 200, slug="x"),
+        ),
+        False,
     )
     context = AsyncMock()
     context.__aenter__.return_value = client
@@ -331,7 +334,6 @@ async def test_chapter_token_of_another_book_is_refused(monkeypatch) -> None:
     arguments = KnowledgeCreatePageArguments(
         integration_id=instance.id,
         book_key="book:7",
-        idempotency_key=uuid4(),
         name="Neu",
         markdown="Text",
         chapter_token=token,
@@ -357,7 +359,6 @@ async def test_page_creation_targets_the_approved_book(monkeypatch) -> None:
     arguments = KnowledgeCreatePageArguments(
         integration_id=instance.id,
         book_key="book:7",
-        idempotency_key=uuid4(),
         name="Neu",
         markdown="Text",
     )
@@ -376,7 +377,7 @@ async def test_shelf_tools_map_keys_to_bookstack_identifiers(monkeypatch) -> Non
     revision = _revision(instance)
     shelf = BookStackShelf(id=4, name="Technik", slug="technik")
     client = AsyncMock()
-    client.list_shelves.return_value = (shelf,)
+    client.list_shelves.return_value = ((shelf,), False)
     client.read_shelf.return_value = BookStackShelfContents(
         shelf=shelf, books=(BookStackBook(id=7, name="Handbuch", slug="handbuch"),)
     )
@@ -408,7 +409,6 @@ async def test_shelf_tools_map_keys_to_bookstack_identifiers(monkeypatch) -> Non
     await knowledge_create_shelf(
         KnowledgeCreateShelfArguments(
             integration_id=instance.id,
-            idempotency_key=uuid4(),
             name="Technik",
             book_keys=["book:7", "book:8"],
         ),
@@ -455,14 +455,12 @@ def test_shelf_arguments_reject_invalid_keys_and_empty_patches() -> None:
     with pytest.raises(ValidationError):
         KnowledgeCreateShelfArguments(
             integration_id=uuid4(),
-            idempotency_key=uuid4(),
             name="Technik",
             book_keys=["shelf:7"],
         )
     with pytest.raises(ValidationError):
         KnowledgeCreateShelfArguments(
             integration_id=uuid4(),
-            idempotency_key=uuid4(),
             name="Technik",
             book_keys=["book:7", "book:7"],
         )
@@ -640,7 +638,6 @@ async def test_create_book_files_the_book_into_requested_shelves(monkeypatch) ->
     result = await knowledge_create_book(
         KnowledgeCreateBookArguments(
             integration_id=instance.id,
-            idempotency_key=uuid4(),
             name="Geraete",
             shelf_keys=["shelf:10"],
         ),
@@ -667,7 +664,7 @@ async def test_create_book_without_shelves_reports_empty_membership(monkeypatch)
 
     result = await knowledge_create_book(
         KnowledgeCreateBookArguments(
-            integration_id=instance.id, idempotency_key=uuid4(), name="Geraete"
+            integration_id=instance.id, name="Geraete"
         ),
         _context(instance, revision),
     )
@@ -780,8 +777,8 @@ async def test_book_listings_expose_shelf_membership(monkeypatch) -> None:
     shelved = BookStackBook(id=8, name="Netzwerk", slug="netzwerk")
     orphan = BookStackBook(id=13, name="Geraete", slug="geraete")
     client = AsyncMock()
-    client.list_books.return_value = (shelved, orphan)
-    client.list_shelves.return_value = (shelf,)
+    client.list_books.return_value = ((shelved, orphan), False)
+    client.list_shelves.return_value = ((shelf,), False)
     client.read_shelf.return_value = BookStackShelfContents(
         shelf=shelf, books=(shelved,)
     )
@@ -814,7 +811,7 @@ async def test_book_listing_omits_membership_when_shelves_are_unreadable(
     instance = _base()
     revision = _revision(instance)
     client = AsyncMock()
-    client.list_books.return_value = (BookStackBook(id=8, name="Netzwerk", slug="n"),)
+    client.list_books.return_value = ((BookStackBook(id=8, name="Netzwerk", slug="n"),), False)
     client.list_shelves.side_effect = BookStackError("bookstack.accessDenied")
 
     @asynccontextmanager
@@ -888,14 +885,12 @@ def test_create_book_rejects_invalid_shelf_keys() -> None:
     with pytest.raises(ValidationError):
         KnowledgeCreateBookArguments(
             integration_id=uuid4(),
-            idempotency_key=uuid4(),
             name="Geraete",
             shelf_keys=["book:10"],
         )
     with pytest.raises(ValidationError):
         KnowledgeCreateBookArguments(
             integration_id=uuid4(),
-            idempotency_key=uuid4(),
             name="Geraete",
             shelf_keys=["shelf:10", "shelf:10"],
         )
@@ -952,7 +947,6 @@ async def test_attachment_from_url_is_downloaded_and_uploaded(monkeypatch) -> No
         integration_id=instance.id,
         book_key="book:7",
         page_token=token,
-        idempotency_key=uuid4(),
         name="Datenblatt",
         url="https://example.test/sheet.pdf",
     )
@@ -988,7 +982,6 @@ async def test_failed_download_reports_the_underlying_reason(monkeypatch) -> Non
         integration_id=instance.id,
         book_key="book:7",
         page_token=token,
-        idempotency_key=uuid4(),
         name="Datenblatt",
         url="https://example.test/sheet.pdf",
     )
@@ -1022,7 +1015,6 @@ async def test_download_is_refused_when_web_access_is_disabled(monkeypatch) -> N
         integration_id=instance.id,
         book_key="book:7",
         page_token=token,
-        idempotency_key=uuid4(),
         name="Datenblatt",
         url="https://example.test/sheet.pdf",
     )
@@ -1054,7 +1046,6 @@ async def test_attachment_from_local_file_uses_root_storage(monkeypatch) -> None
         integration_id=instance.id,
         book_key="book:7",
         page_token=token,
-        idempotency_key=uuid4(),
         name="Notiz",
         root="session",
         path="notes/notiz.md",
@@ -1092,7 +1083,6 @@ async def test_missing_local_file_reports_file_not_found(monkeypatch) -> None:
         integration_id=instance.id,
         book_key="book:7",
         page_token=token,
-        idempotency_key=uuid4(),
         name="Fehlt",
         root="workspace",
         path="missing.pdf",
@@ -1126,7 +1116,6 @@ async def test_link_attachment_skips_any_download(monkeypatch) -> None:
         integration_id=instance.id,
         book_key="book:7",
         page_token=token,
-        idempotency_key=uuid4(),
         name="Handbuch",
         link="https://example.test/manual",
     )
@@ -1146,7 +1135,6 @@ async def test_attachment_sources_are_mutually_exclusive() -> None:
         "integration_id": instance.id,
         "book_key": "book:7",
         "page_token": "token",
-        "idempotency_key": uuid4(),
         "name": "Datei",
     }
     for extra in (
@@ -1283,10 +1271,13 @@ async def test_book_listing_hides_books_with_disabled_read_policy(monkeypatch) -
     revision = _revision(instance)
     client = AsyncMock()
     client.list_books.return_value = (
-        BookStackBook(id=7, name="Handbuch", slug="handbuch"),
-        BookStackBook(id=9, name="Gesperrt", slug="gesperrt"),
+        (
+            BookStackBook(id=7, name="Handbuch", slug="handbuch"),
+            BookStackBook(id=9, name="Gesperrt", slug="gesperrt"),
+        ),
+        False,
     )
-    client.list_shelves.return_value = ()
+    client.list_shelves.return_value = ((), False)
 
     @asynccontextmanager
     async def selected_client(_integration_id, _context):
@@ -1456,3 +1447,27 @@ async def test_page_update_rejects_markdown_for_tokens_without_a_revision(
     assert result.is_error is True
     assert json.loads(result.content)["error"]["code"] == "integration.staleReference"
     client.update_page.assert_not_awaited()
+
+
+def test_write_tools_do_not_ask_the_model_for_an_idempotency_key() -> None:
+    """BookStack offers no idempotency API, so the field would only mislead.
+
+    A required key that nothing reads costs tokens on every call and suggests
+    protection against duplicate creation that does not exist.
+    """
+    instance = _base()
+    settings = IntegrationSettings(instances=[instance])
+    tools = {
+        tool.name: tool
+        for tool in effective_integration_contributions(settings).tools
+    }
+    write_tools = [
+        "knowledge_create_page",
+        "knowledge_create_book",
+        "knowledge_create_chapter",
+        "knowledge_create_shelf",
+        "knowledge_create_attachment",
+    ]
+    for name in write_tools:
+        schema = tools[name].arguments_model.model_json_schema()
+        assert "idempotency_key" not in schema["properties"], name

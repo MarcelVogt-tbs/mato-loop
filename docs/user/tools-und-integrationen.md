@@ -61,7 +61,7 @@ An Seiten kann der Agent außerdem Anhänge verwalten. Eine Datei stammt dabei e
 
 Manche Anbieter sperren automatisierte Zugriffe. Schlägt ein Download fehl, nennt MatoLoop den tatsächlichen Grund, etwa eine Zeitüberschreitung oder eine Ablehnung durch den Server. Der Agent kann die Adresse dann als Link hinterlegen, statt einen falschen Grund zu vermuten.
 
-Beim Bearbeiten wird eine Seite immer vollständig ersetzt. Der Agent liest sie deshalb unmittelbar vorher und bekommt nach dem Speichern den in BookStack tatsächlich abgelegten Inhalt zurück, damit er das Ergebnis prüfen kann.
+Beim Bearbeiten wird eine Seite immer vollständig ersetzt. Der Agent liest sie deshalb unmittelbar vorher und bekommt nach dem Speichern den in BookStack tatsächlich abgelegten Inhalt zurück, damit er das Ergebnis prüfen kann. Hat jemand die Seite in der Zwischenzeit geändert, lehnt MatoLoop das Überschreiben ab und der Agent muss die Seite zuerst neu lesen. Ein reines Umbenennen ist davon nicht betroffen. Sehr große Seiten meldet MatoLoop als Fehler, statt sie gekürzt zu liefern: Eine gekürzte Fassung könnte sonst versehentlich als vollständige Seite zurückgeschrieben werden.
 
 Über **Zugriff** konfigurieren Sie zunächst den Standard der Installation und anschließend Abweichungen für einzelne Bücher:
 
@@ -71,7 +71,7 @@ Beim Bearbeiten wird eine Seite immer vollständig ersetzt. Der Agent liest sie 
 
 Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**.
 
-Suche und Bücherliste gelten für die gesamte Installation und lassen sich nicht auf einzelne Bücher einschränken. Das Gleiche gilt für Regale: Sie sind Ordnungsstrukturen und keine einzeln freigebbaren Ressourcen, weshalb das Zuordnen von Büchern zu einem Regal nur über die Richtlinie der gesamten Installation abgesichert ist. Ein gelöschtes Regal löscht die enthaltenen Bücher nicht. Anhänge folgen dagegen der Richtlinie des Buches, zu dem die Seite gehört. Berechtigungen des verwendeten API-Tokens in BookStack bleiben zusätzlich wirksam: Was das Token dort nicht darf, kann MatoLoop nicht freigeben.
+Suche, Bücherliste und Regale sind keine einzeln freigebbaren Ressourcen. Sperren Sie ein Buch jedoch über **Nicht erlaubt**, verschwindet es trotzdem aus der Suche und aus der Bücherliste, und der Agent kann es auch nicht mehr einem Regal zuordnen oder daraus entfernen. Ersetzt er die Bücher eines Regals vollständig, bleiben gesperrte Bücher unangetastet, statt stillschweigend herauszufallen. Ein gelöschtes Regal löscht die enthaltenen Bücher nicht. Anhänge folgen der Richtlinie des Buches, zu dem die Seite gehört; das Hochladen einer lokalen Datei verlangt zusätzlich dieselbe Freigabe wie ein direkter Dateizugriff. Berechtigungen des verwendeten API-Tokens in BookStack bleiben zusätzlich wirksam: Was das Token dort nicht darf, kann MatoLoop nicht freigeben.
 
 ## Webfetch konfigurieren
 

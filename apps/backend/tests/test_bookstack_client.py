@@ -30,7 +30,7 @@ async def test_requests_are_token_authenticated_and_same_origin() -> None:
         )
 
     async with _client(handler, "https://wiki.example.test/docs/") as client:
-        books = await client.list_books()
+        books, _truncated = await client.list_books()
 
     assert requests[0].headers["Authorization"] == "Token token-id:token-secret"
     assert str(requests[0].url).startswith("https://wiki.example.test/docs/api/books?")
@@ -290,7 +290,7 @@ async def test_shelf_requests_use_shelf_endpoints_and_payloads() -> None:
         )
 
     async with _client(handler) as client:
-        shelves = await client.list_shelves()
+        shelves, _truncated = await client.list_shelves()
         contents = await client.read_shelf(4)
         await client.create_shelf(name="Technik", book_ids=(7, 8))
         await client.update_shelf(4, name="Neu", book_ids=())
@@ -459,3 +459,36 @@ async def test_page_location_reads_stay_available_for_oversized_pages() -> None:
         page = await client.read_page_location(21)
 
     assert page.book_id == 7
+
+
+async def test_listings_report_when_bookstack_holds_more_entries() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": 3, "name": "Handbuch", "slug": "handbuch"}],
+                "total": 900,
+            },
+        )
+
+    async with _client(handler) as client:
+        books, truncated = await client.list_books()
+
+    assert len(books) == 1
+    assert truncated is True
+
+
+async def test_complete_listings_are_not_marked_as_truncated() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": 3, "name": "Handbuch", "slug": "handbuch"}],
+                "total": 1,
+            },
+        )
+
+    async with _client(handler) as client:
+        _books, truncated = await client.list_books()
+
+    assert truncated is False

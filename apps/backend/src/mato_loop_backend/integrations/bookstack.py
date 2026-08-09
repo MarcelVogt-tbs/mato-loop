@@ -129,7 +129,6 @@ class KnowledgeReadPageArguments(KnowledgeBookArguments):
 
 
 class KnowledgeCreatePageArguments(KnowledgeBookArguments):
-    idempotency_key: UUID
     name: str = Field(min_length=1, max_length=255)
     markdown: str = Field(min_length=1, max_length=MAX_MARKDOWN_CHARS)
     chapter_token: str | None = Field(default=None, max_length=50_000)
@@ -156,7 +155,6 @@ class KnowledgeListAttachmentsArguments(KnowledgeBookArguments):
 
 
 class KnowledgeCreateAttachmentArguments(KnowledgeBookArguments):
-    idempotency_key: UUID
     page_token: str = Field(min_length=1, max_length=50_000)
     name: str = Field(min_length=1, max_length=255)
     url: str | None = Field(default=None, min_length=1, max_length=2_000)
@@ -180,7 +178,6 @@ class KnowledgeDeleteAttachmentArguments(KnowledgeBookArguments):
 
 
 class KnowledgeCreateBookArguments(KnowledgeIntegrationArguments):
-    idempotency_key: UUID
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2_000)
     shelf_keys: list[str] | None = Field(default=None, max_length=MAX_BOOK_SHELVES)
@@ -203,7 +200,6 @@ class KnowledgeUpdateBookArguments(KnowledgeBookArguments):
 
 
 class KnowledgeCreateChapterArguments(KnowledgeBookArguments):
-    idempotency_key: UUID
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2_000)
 
@@ -229,7 +225,6 @@ class KnowledgeShelfArguments(KnowledgeIntegrationArguments):
 
 
 class KnowledgeCreateShelfArguments(KnowledgeIntegrationArguments):
-    idempotency_key: UUID
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2_000)
     book_keys: list[str] | None = Field(
@@ -489,7 +484,7 @@ async def _shelf_memberships(client: BookStackClient) -> dict[int, list[str]] | 
     omit the field instead of failing an otherwise successful read.
     """
     try:
-        shelves = await client.list_shelves()
+        shelves, _truncated = await client.list_shelves()
         memberships: dict[int, list[str]] = {}
         for shelf in shelves:
             contents = await client.read_shelf(shelf.id)
@@ -712,17 +707,18 @@ async def knowledge_list_books(
             client,
             _revision,
         ):
-            books = await client.list_books()
+            books, truncated = await client.list_books()
             memberships = await _shelf_memberships(client)
-        return _result(
-            {
-                "books": [
-                    _book_payload(book, _book_shelf_keys(memberships, book.id))
-                    for book in books
-                    if f"book:{book.id}" not in blocked
-                ]
-            }
-        )
+        payload: dict[str, Any] = {
+            "books": [
+                _book_payload(book, _book_shelf_keys(memberships, book.id))
+                for book in books
+                if f"book:{book.id}" not in blocked
+            ]
+        }
+        if truncated:
+            payload["moreBooksExist"] = True
+        return _result(payload)
     except ValueError:
         return _invalid("integration_id")
     except BookStackError as exc:
@@ -1158,8 +1154,13 @@ async def knowledge_list_shelves(
             client,
             _revision,
         ):
-            shelves = await client.list_shelves()
-        return _result({"shelves": [_shelf_payload(shelf) for shelf in shelves]})
+            shelves, truncated = await client.list_shelves()
+        payload: dict[str, Any] = {
+            "shelves": [_shelf_payload(shelf) for shelf in shelves]
+        }
+        if truncated:
+            payload["moreShelvesExist"] = True
+        return _result(payload)
     except BookStackError as exc:
         return _error(exc)
 
@@ -1523,7 +1524,7 @@ async def load_bookstack_resources(
     async with BookStackClient(
         str(config.base_url), credential["token_id"], credential["token_secret"]
     ) as client:
-        books = await client.list_books()
+        books, _truncated = await client.list_books()
     return tuple(
         IntegrationResource(
             key=f"book:{book.id}",
