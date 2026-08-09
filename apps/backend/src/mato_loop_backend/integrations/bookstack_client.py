@@ -119,11 +119,13 @@ def _parse_url(value: str) -> httpx.URL:
     return url.copy_with(raw_path=url.raw_path.rstrip(b"/"))
 
 
-def _text(value: Any, limit: int) -> str | None:
+def _text(value: Any, limit: int | None) -> str | None:
     if not isinstance(value, str):
         return None
     cleaned = value.strip()
-    return cleaned[:limit] if cleaned else None
+    if not cleaned:
+        return None
+    return cleaned if limit is None else cleaned[:limit]
 
 
 def _identifier(value: Any) -> int:
@@ -203,8 +205,20 @@ def _page(payload: Any, book_id: int | None = None) -> BookStackPage:
         slug=_text(payload.get("slug"), 255) or "",
         updated_at=_text(payload.get("updated_at"), 64),
         draft=bool(payload.get("draft")),
-        markdown=_text(payload.get("markdown"), MAX_MARKDOWN_CHARS),
+        markdown=_text(payload.get("markdown"), None),
     )
+
+
+def _require_readable_markdown(page: BookStackPage) -> BookStackPage:
+    """Refuse pages whose markdown exceeds the readable limit.
+
+    Silently truncating would let the agent write the shortened text back as if
+    it were the full page, destroying the remainder. Reporting an error keeps
+    oversized pages readable only through BookStack itself.
+    """
+    if page.markdown is not None and len(page.markdown) > MAX_MARKDOWN_CHARS:
+        raise _error("pageTooLarge")
+    return page
 
 
 def _search_result(payload: Any) -> BookStackSearchResult | None:
@@ -409,20 +423,48 @@ class BookStackClient:
         payload = await self._request("GET", f"/pages/{_identifier(page_id)}")
         page = _page(payload)
         if page.markdown:
-            return page
+            return _require_readable_markdown(page)
         markdown = await self._request(
             "GET", f"/pages/{page.id}/export/markdown", text_response=True
         )
-        return BookStackPage(
-            id=page.id,
-            book_id=page.book_id,
-            chapter_id=page.chapter_id,
-            name=page.name,
-            slug=page.slug,
-            updated_at=page.updated_at,
-            draft=page.draft,
-            markdown=_text(markdown, MAX_MARKDOWN_CHARS),
+        return _require_readable_markdown(
+            BookStackPage(
+                id=page.id,
+                book_id=page.book_id,
+                chapter_id=page.chapter_id,
+                name=page.name,
+                slug=page.slug,
+                updated_at=page.updated_at,
+                draft=page.draft,
+                markdown=_text(markdown, None),
+            )
         )
+
+    async def read_page_location(self, page_id: int) -> BookStackPage:
+        """Fetch page metadata without its content.
+
+        Used to verify that a page still belongs to an approved book. Skipping
+        the markdown export keeps this cheap and, unlike read_page, keeps
+        oversized pages usable for operations that never touch their content.
+        """
+        payload = await self._request("GET", f"/pages/{_identifier(page_id)}")
+        if not isinstance(payload, dict):
+            raise _error("malformedResponse")
+        return _page({**payload, "markdown": None})
+
+    async def read_chapter(self, chapter_id: int) -> BookStackChapter:
+        payload = await self._request("GET", f"/chapters/{_identifier(chapter_id)}")
+        if not isinstance(payload, dict):
+            raise _error("malformedResponse")
+        return _chapter(payload)
+
+    async def read_attachment_location(self, attachment_id: int) -> BookStackAttachment:
+        payload = await self._request(
+            "GET", f"/attachments/{_identifier(attachment_id)}"
+        )
+        if not isinstance(payload, dict):
+            raise _error("malformedResponse")
+        return _attachment(payload)
 
     async def create_page(
         self,

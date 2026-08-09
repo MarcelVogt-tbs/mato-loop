@@ -22,6 +22,7 @@ from mato_loop_backend.integrations.bookstack import (
     KnowledgeIntegrationArguments,
     KnowledgeListAccountsArguments,
     KnowledgeListAttachmentsArguments,
+    KnowledgeSearchArguments,
     KnowledgeShelfArguments,
     KnowledgeUpdateBookArguments,
     KnowledgeUpdateChapterArguments,
@@ -40,6 +41,7 @@ from mato_loop_backend.integrations.bookstack import (
     knowledge_list_shelves,
     knowledge_read_book,
     knowledge_read_shelf,
+    knowledge_search,
     knowledge_update_book,
     knowledge_update_chapter,
     knowledge_update_page,
@@ -53,6 +55,7 @@ from mato_loop_backend.integrations.bookstack_client import (
     BookStackChapter,
     BookStackError,
     BookStackPage,
+    BookStackSearchResult,
     BookStackShelf,
     BookStackShelfContents,
 )
@@ -64,6 +67,7 @@ from mato_loop_backend.integrations.webfetch import DownloadedFile, WebFetchErro
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
+    ToolExecutionPolicy,
     ToolSettings,
     WebFetchPolicy,
 )
@@ -105,9 +109,34 @@ def _page(**overrides) -> BookStackPage:
         "chapter_id": None,
         "name": "Seite",
         "slug": "seite",
+        "updated_at": "2026-01-01T10:00:00.000000Z",
     }
     values.update(overrides)
     return BookStackPage(**values)
+
+
+def _bind_location_checks(
+    client: AsyncMock,
+    *,
+    book_id: int = 7,
+    page_id: int = 21,
+    chapter_id: int = 5,
+    attachment_page_id: int = 21,
+) -> None:
+    """Give a mocked client answers for the live book-membership checks.
+
+    Write operations re-read the current book of the page, chapter or
+    attachment they touch, so every mock needs these lookups to resolve to the
+    approved book.
+    """
+    client.read_page_location.return_value = _page(id=page_id, book_id=book_id)
+    client.read_chapter.return_value = BookStackChapter(
+        id=chapter_id, book_id=book_id, name="Kapitel", slug="kapitel"
+    )
+    client.read_attachment_location.return_value = BookStackAttachment(
+        id=12, name="Datenblatt", page_id=attachment_page_id, external=False,
+        extension="pdf",
+    )
 
 
 async def test_resource_loader_maps_books_to_policy_resources(monkeypatch) -> None:
@@ -234,6 +263,7 @@ async def test_page_token_is_binding_scoped(monkeypatch) -> None:
     client = AsyncMock()
     client.read_page.return_value = _page()
     client.update_page.return_value = _page(name="Neu")
+    _bind_location_checks(client)
 
     @asynccontextmanager
     async def selected_client(_integration_id, _context):
@@ -450,6 +480,7 @@ async def test_update_page_treats_explicit_nulls_as_absent_and_keeps_tokens_shor
     client = AsyncMock()
     client.read_page.return_value = _page()
     client.update_page.return_value = _page(name="IP-Adressen")
+    _bind_location_checks(client)
 
     @asynccontextmanager
     async def selected_client(_integration_id, _context):
@@ -533,6 +564,7 @@ async def test_update_page_returns_stored_markdown_for_verification(monkeypatch)
     client = AsyncMock()
     client.read_page.return_value = _page()
     client.update_page.return_value = stored
+    _bind_location_checks(client)
 
     @asynccontextmanager
     async def selected_client(_integration_id, _context):
@@ -561,11 +593,9 @@ async def test_update_page_reloads_when_bookstack_omits_markdown(monkeypatch) ->
     token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
 
     client = AsyncMock()
-    client.read_page.side_effect = [
-        _page(),
-        _page(markdown="# Aus BookStack\n"),
-    ]
+    client.read_page.return_value = _page(markdown="# Aus BookStack\n")
     client.update_page.return_value = _page()
+    _bind_location_checks(client)
 
     @asynccontextmanager
     async def selected_client(_integration_id, _context):
@@ -583,8 +613,11 @@ async def test_update_page_reloads_when_bookstack_omits_markdown(monkeypatch) ->
         _context(instance, revision),
     )
 
-    assert client.read_page.await_count == 2
+    # The membership check no longer loads content, so exactly one full read
+    # remains: the reload that fetches the stored markdown.
+    assert client.read_page.await_count == 1
     assert json.loads(result.content)["page"]["markdown"] == "# Aus BookStack\n"
+
 
 async def test_create_book_files_the_book_into_requested_shelves(monkeypatch) -> None:
     instance = _base()
@@ -689,6 +722,7 @@ async def test_update_chapter_uses_the_token_of_the_approved_book(monkeypatch) -
     client.update_chapter.return_value = BookStackChapter(
         id=11, book_id=7, name="Kapitel neu", slug="kapitel"
     )
+    _bind_location_checks(client, chapter_id=11)
 
     @asynccontextmanager
     async def selected_client(_integration_id, _context):
@@ -885,6 +919,9 @@ def _download_context(instance: IntegrationInstance, revision: str) -> SimpleNam
     context.allowed_private_origins = ()
     context.ask = AsyncMock(return_value=PermissionDecision.ALLOW)
     context.root_files = Mock()
+    # Uploading a local file asks for filesystem.read, which builds a permission
+    # scope from the root identity.
+    context.root_files.root_identity.return_value = "root-identity"
     return context
 
 
@@ -893,6 +930,7 @@ async def test_attachment_from_url_is_downloaded_and_uploaded(monkeypatch) -> No
     revision = _revision(instance)
     token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
     client = AsyncMock()
+    _bind_location_checks(client)
     client.create_file_attachment.return_value = _attachment()
 
     @asynccontextmanager
@@ -1001,6 +1039,7 @@ async def test_attachment_from_local_file_uses_root_storage(monkeypatch) -> None
     revision = _revision(instance)
     token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
     client = AsyncMock()
+    _bind_location_checks(client)
     client.create_file_attachment.return_value = _attachment(name="Notiz", extension="md")
 
     @asynccontextmanager
@@ -1037,6 +1076,7 @@ async def test_missing_local_file_reports_file_not_found(monkeypatch) -> None:
     revision = _revision(instance)
     token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
     client = AsyncMock()
+    _bind_location_checks(client)
 
     @asynccontextmanager
     async def selected_client(_integration_id, _context):
@@ -1070,6 +1110,7 @@ async def test_link_attachment_skips_any_download(monkeypatch) -> None:
     revision = _revision(instance)
     token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
     client = AsyncMock()
+    _bind_location_checks(client)
     client.create_link_attachment.return_value = _attachment(
         id=13, name="Handbuch", external=True, extension=""
     )
@@ -1126,6 +1167,7 @@ async def test_attachment_tokens_are_binding_scoped(monkeypatch) -> None:
         _attachment(), instance.id, revision, "book:7"
     )
     client = AsyncMock()
+    _bind_location_checks(client)
 
     @asynccontextmanager
     async def selected_client(_integration_id, _context):
@@ -1158,6 +1200,7 @@ async def test_attachment_listing_returns_reusable_tokens(monkeypatch) -> None:
     revision = _revision(instance)
     page_token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
     client = AsyncMock()
+    _bind_location_checks(client)
     client.list_attachments.return_value = (
         _attachment(),
         _attachment(id=13, name="Link", external=True, extension=""),
@@ -1186,3 +1229,230 @@ async def test_attachment_listing_returns_reusable_tokens(monkeypatch) -> None:
         delete_arguments, _context(instance, revision)
     )
     assert json.loads(deleted.content)["deleted"] is True
+
+
+def _blocked_context(instance, revision, *, book_key: str = "book:9"):
+    context = _context(instance, revision)
+    context.tool_settings = ToolSettings(
+        resource_policies={
+            str(instance.id): {book_key: {"knowledge.read": ToolExecutionPolicy.DISABLED}}
+        }
+    )
+    return context
+
+
+async def test_search_hides_results_from_books_with_disabled_read_policy(
+    monkeypatch,
+) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    client = AsyncMock()
+    client.search.return_value = (
+        BookStackSearchResult(
+            type="page", id=1, name="Sichtbar", book_id=7, chapter_id=None,
+            preview="Erlaubt",
+        ),
+        BookStackSearchResult(
+            type="page", id=2, name="Geheim", book_id=9, chapter_id=None,
+            preview="Vertraulich",
+        ),
+        BookStackSearchResult(
+            type="book", id=9, name="Gesperrtes Buch", book_id=None, chapter_id=None,
+            preview="Vertraulich",
+        ),
+    )
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_search(
+        KnowledgeSearchArguments(integration_id=instance.id, query="Netz"),
+        _blocked_context(instance, revision),
+    )
+
+    payload = json.loads(result.content)["results"]
+    assert [item["name"] for item in payload] == ["Sichtbar"]
+    assert "Vertraulich" not in result.content
+
+
+async def test_book_listing_hides_books_with_disabled_read_policy(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    client = AsyncMock()
+    client.list_books.return_value = (
+        BookStackBook(id=7, name="Handbuch", slug="handbuch"),
+        BookStackBook(id=9, name="Gesperrt", slug="gesperrt"),
+    )
+    client.list_shelves.return_value = ()
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_list_books(
+        KnowledgeIntegrationArguments(integration_id=instance.id),
+        _blocked_context(instance, revision),
+    )
+
+    assert [book["name"] for book in json.loads(result.content)["books"]] == ["Handbuch"]
+
+
+async def test_shelf_update_refuses_books_with_disabled_read_policy(
+    monkeypatch,
+) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    client = AsyncMock()
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_update_shelf(
+        KnowledgeUpdateShelfArguments(
+            integration_id=instance.id,
+            shelf_key="shelf:4",
+            remove_book_keys=["book:9"],
+        ),
+        _blocked_context(instance, revision),
+    )
+
+    assert result.is_error is True
+    assert json.loads(result.content)["error"]["code"] == "permission.denied"
+    client.update_shelf.assert_not_awaited()
+
+
+async def test_shelf_replacement_keeps_books_the_agent_cannot_see(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    client = AsyncMock()
+    client.read_shelf.return_value = BookStackShelfContents(
+        shelf=BookStackShelf(id=4, name="Regal", slug="regal"),
+        books=(
+            BookStackBook(id=9, name="Gesperrt", slug="gesperrt"),
+            BookStackBook(id=7, name="Handbuch", slug="handbuch"),
+        ),
+    )
+    client.update_shelf.return_value = BookStackShelf(id=4, name="Regal", slug="regal")
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    await knowledge_update_shelf(
+        KnowledgeUpdateShelfArguments(
+            integration_id=instance.id, shelf_key="shelf:4", book_keys=["book:7"]
+        ),
+        _blocked_context(instance, revision),
+    )
+
+    assert set(client.update_shelf.await_args.kwargs["book_ids"]) == {7, 9}
+
+
+async def test_page_update_rejects_markdown_based_on_an_outdated_page(
+    monkeypatch,
+) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
+
+    client = AsyncMock()
+    client.read_page_location.return_value = _page(
+        updated_at="2026-02-02T20:00:00.000000Z"
+    )
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_update_page(
+        KnowledgeUpdatePageArguments(
+            integration_id=instance.id,
+            book_key="book:7",
+            page_token=token,
+            markdown="# Ueberschreibt fremde Aenderung\n",
+        ),
+        _context(instance, revision),
+    )
+
+    assert result.is_error is True
+    payload = json.loads(result.content)["error"]
+    assert payload["code"] == "integration.staleReference"
+    assert payload["field"] == "page_token"
+    client.update_page.assert_not_awaited()
+
+
+async def test_page_rename_is_allowed_on_an_outdated_page(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
+
+    client = AsyncMock()
+    client.read_page_location.return_value = _page(
+        updated_at="2026-02-02T20:00:00.000000Z"
+    )
+    client.update_page.return_value = _page(name="Neuer Titel")
+    client.read_page.return_value = _page(name="Neuer Titel", markdown="# Inhalt\n")
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_update_page(
+        KnowledgeUpdatePageArguments(
+            integration_id=instance.id,
+            book_key="book:7",
+            page_token=token,
+            name="Neuer Titel",
+        ),
+        _context(instance, revision),
+    )
+
+    assert result.is_error is False
+    client.update_page.assert_awaited_once()
+
+
+async def test_page_update_rejects_markdown_for_tokens_without_a_revision(
+    monkeypatch,
+) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    token = bookstack_module._page_token(
+        _page(updated_at=None), instance.id, revision, "book:7"
+    )
+
+    client = AsyncMock()
+    client.read_page_location.return_value = _page()
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_update_page(
+        KnowledgeUpdatePageArguments(
+            integration_id=instance.id,
+            book_key="book:7",
+            page_token=token,
+            markdown="# Blind ueberschrieben\n",
+        ),
+        _context(instance, revision),
+    )
+
+    assert result.is_error is True
+    assert json.loads(result.content)["error"]["code"] == "integration.staleReference"
+    client.update_page.assert_not_awaited()

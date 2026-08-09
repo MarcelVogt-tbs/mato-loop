@@ -5,6 +5,7 @@ import pytest
 
 from mato_loop_backend.integrations.bookstack_client import (
     MAX_ATTACHMENT_BYTES,
+    MAX_MARKDOWN_CHARS,
     BookStackClient,
     BookStackError,
 )
@@ -419,3 +420,42 @@ async def test_empty_or_oversized_uploads_are_rejected() -> None:
 
     assert empty_error.value.code == "bookstack.attachmentTooLarge"
     assert large_error.value.code == "bookstack.attachmentTooLarge"
+
+async def test_oversized_page_markdown_is_refused_instead_of_truncated() -> None:
+    oversized = "# Grosse Seite\n" + ("x" * (MAX_MARKDOWN_CHARS + 1))
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": 21,
+                "name": "Seite",
+                "book_id": 7,
+                "markdown": oversized,
+                "updated_at": "2026-01-01T10:00:00.000000Z",
+            },
+        )
+
+    async with _client(handler) as client:
+        with pytest.raises(BookStackError) as error:
+            await client.read_page(21)
+    assert error.value.code == "bookstack.pageTooLarge"
+
+
+async def test_page_location_reads_stay_available_for_oversized_pages() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": 21,
+                "name": "Seite",
+                "book_id": 7,
+                "markdown": "x" * (MAX_MARKDOWN_CHARS + 1),
+                "updated_at": "2026-01-01T10:00:00.000000Z",
+            },
+        )
+
+    async with _client(handler) as client:
+        page = await client.read_page_location(21)
+
+    assert page.book_id == 7

@@ -286,6 +286,9 @@ class _PageToken(BaseModel):
     book_key: str = Field(alias="b", pattern=_BOOK_KEY_PATTERN)
     page_id: int = Field(alias="p", ge=1)
     chapter_id: int | None = Field(alias="c", default=None, ge=1)
+    # Revision the agent observed. Carried in the token so conflict detection
+    # does not depend on the model passing it back.
+    updated_at: str | None = Field(alias="u", default=None, max_length=64)
 
 
 class _ChapterToken(BaseModel):
@@ -318,6 +321,7 @@ _BOOKSTACK_ERROR_CODES = {
     "bookstack.malformedResponse": "integration.invalidResponse",
     "bookstack.notFound": "integration.remoteNotFound",
     "bookstack.outcomeUnknown": "integration.outcomeUnknown",
+    "bookstack.pageTooLarge": "integration.responseTooLarge",
     "bookstack.permissionDenied": "integration.authenticationFailed",
     "bookstack.rateLimited": "integration.rateLimited",
     "bookstack.redirectRejected": "integration.unavailable",
@@ -329,6 +333,67 @@ _BOOKSTACK_ERROR_CODES = {
 
 def bookstack_error_code(error: BookStackError) -> str:
     return _BOOKSTACK_ERROR_CODES.get(error.code, "integration.unavailable")
+
+
+def _disabled_book_keys(context: Any, instance: IntegrationInstance) -> set[str]:
+    """Collect books whose read policy is disabled for this integration.
+
+    Book policies are enforced through the resource key of a permission
+    request. Tools that operate across a whole knowledge base carry no such key,
+    so they have to drop disabled books themselves. Otherwise a book the user
+    switched off would still leak names, previews and reusable tokens.
+    """
+    from mato_loop_backend.agent.tools import (
+        resolve_tool_execution_policy,
+        tool_registry,
+    )
+
+    tool_settings = getattr(context, "tool_settings", None)
+    if tool_settings is None:
+        return set()
+    action = next(
+        (
+            item
+            for item in tool_registry.integration_resource_actions(instance)
+            if item.capability == "knowledge.read"
+        ),
+        None,
+    )
+    if action is None:
+        return set()
+    disabled = set()
+    for resource_key in _resource_keys(context, instance):
+        resolution = resolve_tool_execution_policy(
+            tool_settings,
+            "knowledge.read",
+            action.default_policy,
+            allowed_policies=action.allowed_policies,
+            integration_id=instance.id,
+            resource_key=resource_key,
+        )
+        if resolution.policy == ToolExecutionPolicy.DISABLED:
+            disabled.add(resource_key)
+    return disabled
+
+
+def _resource_keys(context: Any, instance: IntegrationInstance) -> set[str]:
+    tool_settings = getattr(context, "tool_settings", None)
+    policies = getattr(tool_settings, "resource_policies", None) or {}
+    entries = policies.get(str(instance.id)) or {}
+    return {key for key in entries if _BOOK_KEY_RE.match(key)}
+
+
+def _refuse_blocked_books(
+    keys: list[str] | None, blocked: set[str], field: str
+) -> Any:
+    """Reject shelf changes that name a book the user switched off."""
+    if not keys or not blocked:
+        return None
+    if any(key in blocked for key in keys):
+        from mato_loop_backend.agent.tools import ToolResult
+
+        return ToolResult.error("permission.denied", field=field)
+    return None
 
 
 def _bound_ids(context: Any) -> set[str]:
@@ -476,6 +541,7 @@ def _page_token(
         b=book_key,
         p=page.id,
         c=page.chapter_id,
+        u=page.updated_at,
     )
     return (
         CredentialCipher()
@@ -640,6 +706,8 @@ async def knowledge_list_books(
     arguments: KnowledgeIntegrationArguments, context: Any
 ) -> Any:
     try:
+        instance, _revision_value = _binding(context, arguments.integration_id)
+        blocked = _disabled_book_keys(context, instance)
         async with _selected_client(arguments.integration_id, context) as (
             client,
             _revision,
@@ -651,15 +719,20 @@ async def knowledge_list_books(
                 "books": [
                     _book_payload(book, _book_shelf_keys(memberships, book.id))
                     for book in books
+                    if f"book:{book.id}" not in blocked
                 ]
             }
         )
+    except ValueError:
+        return _invalid("integration_id")
     except BookStackError as exc:
         return _error(exc)
 
 
 async def knowledge_search(arguments: KnowledgeSearchArguments, context: Any) -> Any:
     try:
+        instance, _revision_value = _binding(context, arguments.integration_id)
+        blocked = _disabled_book_keys(context, instance)
         async with _selected_client(arguments.integration_id, context) as (
             client,
             revision,
@@ -674,6 +747,8 @@ async def knowledge_search(arguments: KnowledgeSearchArguments, context: Any) ->
                 if result.type != "book"
                 else f"book:{result.id}"
             )
+            if book_key in blocked:
+                continue
             item: dict[str, Any] = {
                 "type": result.type,
                 "name": _bounded(result.name, 255),
@@ -770,7 +845,7 @@ async def knowledge_read_page(
                     **_page_summary(
                         page, arguments.integration_id, revision, arguments.book_key
                     ),
-                    "markdown": _bounded(page.markdown, MAX_MARKDOWN_CHARS),
+                    "markdown": page.markdown,
                 }
             }
         )
@@ -798,6 +873,10 @@ async def knowledge_create_page(
             client,
             _revision,
         ):
+            if chapter_id is not None and await _chapter_outside_book(
+                client, chapter_id, arguments.book_key
+            ):
+                return _invalid("chapter_token")
             page = await client.create_page(
                 book_id=_book_id(arguments.book_key),
                 chapter_id=chapter_id,
@@ -817,6 +896,50 @@ async def knowledge_create_page(
         return _error(exc)
 
 
+async def _page_outside_book(client: Any, page_id: int, book_key: str) -> bool:
+    """Check the live book of a page instead of trusting the token.
+
+    Tokens record the book a resource belonged to when it was listed. Moving a
+    page in BookStack would otherwise let an approval for one book act on
+    content that now lives in another.
+    """
+    location = await client.read_page_location(page_id)
+    return location.book_id != _book_id(book_key)
+
+
+async def _chapter_outside_book(client: Any, chapter_id: int, book_key: str) -> bool:
+    chapter = await client.read_chapter(chapter_id)
+    return chapter.book_id != _book_id(book_key)
+
+
+async def _attachment_outside_book(
+    client: Any, attachment_id: int, book_key: str
+) -> bool:
+    attachment = await client.read_attachment_location(attachment_id)
+    return await _page_outside_book(client, attachment.page_id, book_key)
+
+
+def _page_write_conflict(
+    token: Any, existing: BookStackPage, markdown: str | None
+) -> Any:
+    """Reject content replacements that are based on an outdated page.
+
+    Replacing markdown overwrites the whole page, so it is only safe when the
+    agent has seen the current version. The observed revision travels inside the
+    page token, which means the check cannot be skipped by the model.
+    """
+    if markdown is None:
+        return None
+    from mato_loop_backend.agent.tools import ToolResult
+
+    observed = getattr(token, "updated_at", None)
+    if observed is None:
+        return ToolResult.error("integration.staleReference", field="page_token")
+    if existing.updated_at is not None and existing.updated_at != observed:
+        return ToolResult.error("integration.staleReference", field="page_token")
+    return None
+
+
 async def knowledge_update_page(
     arguments: KnowledgeUpdatePageArguments, context: Any
 ) -> Any:
@@ -833,9 +956,12 @@ async def knowledge_update_page(
             client,
             _revision,
         ):
-            existing = await client.read_page(token.page_id)
+            existing = await client.read_page_location(token.page_id)
             if existing.book_id != _book_id(arguments.book_key):
                 return _invalid("page_token")
+            conflict = _page_write_conflict(token, existing, arguments.markdown)
+            if conflict is not None:
+                return conflict
             page = await client.update_page(
                 token.page_id,
                 name=arguments.name,
@@ -849,7 +975,7 @@ async def knowledge_update_page(
                     **_page_summary(
                         page, arguments.integration_id, revision, arguments.book_key
                     ),
-                    "markdown": _bounded(page.markdown, MAX_MARKDOWN_CHARS),
+                    "markdown": page.markdown,
                 }
             }
         )
@@ -875,8 +1001,7 @@ async def knowledge_delete_page(
             client,
             _revision,
         ):
-            existing = await client.read_page(token.page_id)
-            if existing.book_id != _book_id(arguments.book_key):
+            if await _page_outside_book(client, token.page_id, arguments.book_key):
                 return _invalid("page_token")
             await client.delete_page(token.page_id)
         return _result({"deleted": True})
@@ -975,6 +1100,10 @@ async def knowledge_update_chapter(
             client,
             _revision,
         ):
+            if await _chapter_outside_book(
+                client, token.chapter_id, arguments.book_key
+            ):
+                return _invalid("chapter_token")
             chapter = await client.update_chapter(
                 token.chapter_id,
                 name=arguments.name,
@@ -1009,6 +1138,10 @@ async def knowledge_delete_chapter(
             client,
             _revision,
         ):
+            if await _chapter_outside_book(
+                client, token.chapter_id, arguments.book_key
+            ):
+                return _invalid("chapter_token")
             await client.delete_chapter(token.chapter_id)
         return _result({"deleted": True})
     except ValueError:
@@ -1033,6 +1166,8 @@ async def knowledge_list_shelves(
 
 async def knowledge_read_shelf(arguments: KnowledgeShelfArguments, context: Any) -> Any:
     try:
+        instance, _revision_value = _binding(context, arguments.integration_id)
+        blocked = _disabled_book_keys(context, instance)
         async with _selected_client(arguments.integration_id, context) as (
             client,
             _revision,
@@ -1041,9 +1176,15 @@ async def knowledge_read_shelf(arguments: KnowledgeShelfArguments, context: Any)
         return _result(
             {
                 "shelf": _shelf_payload(contents.shelf),
-                "books": [_book_payload(book) for book in contents.books],
+                "books": [
+                    _book_payload(book)
+                    for book in contents.books
+                    if f"book:{book.id}" not in blocked
+                ],
             }
         )
+    except ValueError:
+        return _invalid("integration_id")
     except BookStackError as exc:
         return _error(exc)
 
@@ -1052,6 +1193,11 @@ async def knowledge_create_shelf(
     arguments: KnowledgeCreateShelfArguments, context: Any
 ) -> Any:
     try:
+        instance, _revision_value = _binding(context, arguments.integration_id)
+        blocked = _disabled_book_keys(context, instance)
+        refused = _refuse_blocked_books(arguments.book_keys, blocked, "book_keys")
+        if refused is not None:
+            return refused
         async with _selected_client(arguments.integration_id, context) as (
             client,
             _revision,
@@ -1062,6 +1208,8 @@ async def knowledge_create_shelf(
                 book_ids=_book_ids(arguments.book_keys),
             )
         return _result({"shelf": _shelf_payload(shelf)})
+    except ValueError:
+        return _invalid("integration_id")
     except BookStackError as exc:
         return _error(exc)
 
@@ -1070,6 +1218,16 @@ async def knowledge_update_shelf(
     arguments: KnowledgeUpdateShelfArguments, context: Any
 ) -> Any:
     try:
+        instance, _revision_value = _binding(context, arguments.integration_id)
+        blocked = _disabled_book_keys(context, instance)
+        for keys, field in (
+            (arguments.book_keys, "book_keys"),
+            (arguments.add_book_keys, "add_book_keys"),
+            (arguments.remove_book_keys, "remove_book_keys"),
+        ):
+            refused = _refuse_blocked_books(keys, blocked, field)
+            if refused is not None:
+                return refused
         async with _selected_client(arguments.integration_id, context) as (
             client,
             _revision,
@@ -1086,6 +1244,18 @@ async def knowledge_update_shelf(
                     if book_id not in merged:
                         merged.append(book_id)
                 book_ids = tuple(merged)
+            elif book_ids is not None and blocked:
+                # A full replacement would silently drop books the agent is not
+                # allowed to see, so keep their membership untouched.
+                contents = await client.read_shelf(shelf_id)
+                retained = [
+                    book.id
+                    for book in contents.books
+                    if f"book:{book.id}" in blocked
+                ]
+                book_ids = tuple(
+                    list(book_ids) + [b for b in retained if b not in book_ids]
+                )
             shelf = await client.update_shelf(
                 shelf_id,
                 name=arguments.name,
@@ -1093,6 +1263,8 @@ async def knowledge_update_shelf(
                 book_ids=book_ids,
             )
         return _result({"shelf": _shelf_payload(shelf)})
+    except ValueError:
+        return _invalid("integration_id")
     except BookStackError as exc:
         return _error(exc)
 
@@ -1116,6 +1288,8 @@ async def knowledge_list_attachments(
             client,
             _revision,
         ):
+            if await _page_outside_book(client, token.page_id, arguments.book_key):
+                return _invalid("page_token")
             attachments = await client.list_attachments(token.page_id)
         return _result(
             {
@@ -1189,11 +1363,31 @@ async def _local_attachment_source(
     import mimetypes
     from pathlib import PurePosixPath
 
+    from mato_loop_backend.agent.permissions import PermissionDecision, path_permission
     from mato_loop_backend.agent.tools import ToolResult
     from mato_loop_backend.workspace import RootFileError
 
     try:
         normalized = context.root_files.normalize_relative_path(path)
+    except (RootFileError, ValueError, OSError):
+        return ToolResult.error("file.fileNotFound", field="path")
+    # Reading a local file for an upload is still a file read, so it must pass
+    # the same permission gate as read_file instead of inheriting the broader
+    # knowledge.write approval.
+    try:
+        request = path_permission(
+            root_files=context.root_files,
+            root=root,
+            capability="filesystem.read",
+            relative_path=normalized,
+            action_kind="read_file",
+            action_label="Datei lesen",
+        )
+    except (RootFileError, ValueError, OSError):
+        return ToolResult.error("file.fileNotFound", field="path")
+    if await context.ask(request) != PermissionDecision.ALLOW:
+        return ToolResult.error("permission.denied", field="path")
+    try:
         data = await asyncio.to_thread(
             context.root_files.read_bytes,
             root,
@@ -1245,6 +1439,8 @@ async def knowledge_create_attachment(
             client,
             _revision,
         ):
+            if await _page_outside_book(client, token.page_id, arguments.book_key):
+                return _invalid("page_token")
             if source is None:
                 attachment = await client.create_link_attachment(
                     page_id=token.page_id,
@@ -1290,6 +1486,10 @@ async def knowledge_delete_attachment(
             client,
             _revision,
         ):
+            if await _attachment_outside_book(
+                client, token.attachment_id, arguments.book_key
+            ):
+                return _invalid("attachment_token")
             await client.delete_attachment(token.attachment_id)
         return _result({"deleted": True})
     except BookStackError as exc:
