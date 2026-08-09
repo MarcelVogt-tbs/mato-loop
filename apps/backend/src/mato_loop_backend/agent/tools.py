@@ -1141,6 +1141,11 @@ class QuestionBase(ToolArguments):
     id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")
     header: str = Field(min_length=1, max_length=30)
     question: str = Field(min_length=1, max_length=2_000)
+    default_answers: list[str] = Field(
+        default_factory=list,
+        max_length=13,
+        description="Answers to use when the user submits no answer.",
+    )
 
     @field_validator("header", "question")
     @classmethod
@@ -1188,11 +1193,42 @@ class QuestionArguments(ToolArguments):
     questions: list[QuestionItem] = Field(min_length=1, max_length=5)
 
     @model_validator(mode="after")
-    def ids_are_unique(self) -> QuestionArguments:
+    def ids_and_defaults_are_valid(self) -> QuestionArguments:
         ids = [question.id for question in self.questions]
         if len(ids) != len(set(ids)):
             raise ValueError("question IDs must be unique")
+        for question in self.questions:
+            _validate_question_answer(question, question.default_answers)
         return self
+
+
+def _validate_question_answer(question: QuestionItem, answer: list[str]) -> list[str]:
+    if not isinstance(answer, list) or len(answer) != len(set(answer)):
+        raise ValueError("answer must be a list of unique strings")
+    cleaned = []
+    for item in answer:
+        if not isinstance(item, str) or len(item) > 20_000:
+            raise ValueError("answer item is invalid")
+        value = item.strip()
+        if value:
+            cleaned.append(value)
+    if len(cleaned) != len(set(cleaned)):
+        raise ValueError("answer items must be unique")
+    if question.type == "free_text":
+        if len(cleaned) > 1:
+            raise ValueError("free-text answer is invalid")
+    elif question.type == "single_choice":
+        options = {option.label for option in question.options}
+        if len(cleaned) > 1 or (
+            cleaned and cleaned[0] not in options and not question.allow_custom
+        ):
+            raise ValueError("single-choice answer is invalid")
+    else:
+        options = {option.label for option in question.options}
+        custom = [item for item in cleaned if item not in options]
+        if custom and (not question.allow_custom or len(custom) > 1):
+            raise ValueError("multiple-choice answer is invalid")
+    return cleaned
 
 
 def validate_question_answers(
@@ -1202,33 +1238,10 @@ def validate_question_answers(
         raise ValueError("every question requires exactly one answer")
     validated: dict[str, list[str]] = {}
     for question in questions.questions:
-        answer = answers[question.id]
-        if not isinstance(answer, list) or len(answer) != len(set(answer)):
-            raise ValueError("answer must be a list of unique strings")
-        cleaned = []
-        for item in answer:
-            if not isinstance(item, str) or len(item) > 20_000:
-                raise ValueError("answer item is invalid")
-            value = item.strip()
-            if value:
-                cleaned.append(value)
-        if len(cleaned) != len(set(cleaned)):
-            raise ValueError("answer items must be unique")
-        if question.type == "free_text":
-            if len(cleaned) > 1:
-                raise ValueError("free-text answer is invalid")
-        elif question.type == "single_choice":
-            options = {option.label for option in question.options}
-            if len(cleaned) > 1 or (
-                cleaned and cleaned[0] not in options and not question.allow_custom
-            ):
-                raise ValueError("single-choice answer is invalid")
-        else:
-            options = {option.label for option in question.options}
-            custom = [item for item in cleaned if item not in options]
-            if custom and (not question.allow_custom or len(custom) > 1):
-                raise ValueError("multiple-choice answer is invalid")
-        validated[question.id] = cleaned
+        answer = _validate_question_answer(question, answers[question.id])
+        validated[question.id] = answer or _validate_question_answer(
+            question, question.default_answers
+        )
     return validated
 
 
@@ -3400,13 +3413,16 @@ tool_registry = ToolRegistry(
             "question",
             "Ask all required user-specific questions for one blocked action in one call. Every item "
             "requires a unique id, a unique short header, question, and type. Free-text example: "
-            '{"id":"date","type":"free_text","header":"Date","question":"When?"}. '
+            '{"id":"date","type":"free_text","header":"Date","question":"When?",'
+            '"default_answers":["Tomorrow"]}. '
             "Choice example: "
             '{"id":"format","type":"single_choice","header":"Format",'
             '"question":"Which format?","options":[{"label":"PDF"},{"label":"Markdown"}]}. '
             "Use free_text for open answers, single_choice for one option, and multiple_choice for "
             "several. Choice options are objects with label and optional description. allow_custom "
-            "already provides a custom answer, so never add an Other option. Call this tool alone.",
+            "already provides a custom answer, so never add an Other option. When proposing a "
+            "default, state it in the question and pass the exact answer list in default_answers; an "
+            "empty user answer accepts it. Call this tool alone.",
             QuestionArguments,
             _question,
             group="agent",

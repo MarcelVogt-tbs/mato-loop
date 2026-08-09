@@ -195,6 +195,7 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     question_parameters = json.dumps(calendar_tools[0]["parameters"])
     assert "free_text" in question_parameters
     assert "QuestionOption" in question_parameters
+    assert "default_answers" in question_parameters
     assert "Timed events require both start and end" in calendar_tools[1]["description"]
     assert "A default calendar is configured" in calendar_messages[0]["content"]
     assert "Missing-information contract" in calendar_messages[0]["content"]
