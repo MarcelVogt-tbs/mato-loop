@@ -351,31 +351,6 @@ class EffectiveToolSet:
         return await self.registry._execute_definition(call, context, tool)
 
 
-_MAX_INACTIVE_TOOL_NAMES_PER_FAMILY = 4
-
-
-def _summarize_tool_names(names: list[str]) -> str:
-    """Keep guidance about unavailable tools short but representative.
-
-    A single integration can contribute twenty tools or more. Truncating the
-    plain list would hide whole integrations behind whichever one happens to be
-    listed first, so names are capped per family (the shared prefix, such as
-    ``calendar_`` or ``knowledge_``) instead. Every family stays visible while
-    the text does not grow with the number of tools an integration adds.
-    """
-    families: dict[str, list[str]] = {}
-    for name in names:
-        families.setdefault(name.split("_", 1)[0], []).append(name)
-    parts = []
-    for members in families.values():
-        shown = members[:_MAX_INACTIVE_TOOL_NAMES_PER_FAMILY]
-        hidden = len(members) - len(shown)
-        parts.extend(shown)
-        if hidden:
-            parts.append(f"+{hidden} more")
-    return ", ".join(parts)
-
-
 class ToolRegistry:
     def __init__(self, definitions: list[ToolDefinition]) -> None:
         self._definitions: dict[str, ToolDefinition] = {}
@@ -554,7 +529,7 @@ class ToolRegistry:
             ),
         }
         return tuple(
-            templates[reason].format(names=_summarize_tool_names(names))
+            templates[reason].format(names=", ".join(names))
             for reason, names in grouped.items()
             if names
         )

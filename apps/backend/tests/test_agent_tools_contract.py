@@ -785,40 +785,6 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     assert "parameters" not in catalog
 
 
-def test_inactive_capability_catalog_keeps_every_tool_family_visible() -> None:
-    integrations = IntegrationSettings()
-    settings = ToolSettings()
-    capabilities = tools_module.effective_tool_capabilities(settings)
-    effective = tool_registry.effective(
-        integrations,
-        "read-only",
-        tool_capabilities=capabilities,
-        tool_settings=settings,
-    )
-
-    groups = tool_registry.inactive_capability_groups(
-        integrations,
-        frozenset(effective.tools),
-        workspace_access="read-only",
-        webfetch_enabled=False,
-        web_search_enabled=True,
-        memory_enabled=False,
-        memory_write_enabled=False,
-        tool_capabilities=capabilities,
-        tool_settings=settings,
-    )
-    integration_group = next(
-        group for group in groups if group.startswith("Integration tools")
-    )
-
-    # A large integration must not push smaller ones out of the guidance.
-    assert "calendar_list_accounts" in integration_group
-    assert "knowledge_list_accounts" in integration_group
-    # Named tools stay bounded so the prompt does not grow with each new tool.
-    assert integration_group.count("knowledge_") == 4
-    assert "more]" in integration_group
-
-
 def test_policy_disabled_integration_tool_points_to_tool_settings(monkeypatch) -> None:
     _shared_adapter(monkeypatch, AsyncMock())
     integrations = IntegrationSettings(instances=[_shared_integration("Tasks")])
