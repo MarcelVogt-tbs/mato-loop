@@ -22,6 +22,10 @@ describe('approval display', () => {
       resourceScope: '*',
       details: {}
     })).toEqual({ label: 'Session-Sammlung', value: 'Alle Sessions' })
+    expect(approvalResource({
+      resourceType: 'skill_collection',
+      resourceDisplay: 'API-Recherche'
+    })).toEqual({ label: 'Skill-Sammlung', value: '„API-Recherche“' })
   })
 
   it('shows cleaned URL approvals and readable session grants', () => {
@@ -86,6 +90,17 @@ describe('approval display', () => {
         resourceDisplay: 'Aufgabenliste Arbeit'
       })).toEqual({ label, value: 'Aufgabenliste Arbeit', icon })
     }
+  })
+
+  it('labels skill write grants', () => {
+    expect(permissionGrantDisplay({
+      capability: 'skills.write',
+      resourceType: 'skill_collection'
+    })).toEqual({
+      label: 'Skills erstellen',
+      value: 'Persönliche Skills',
+      icon: 'auto_awesome'
+    })
   })
 
   it('redacts sensitive and bounds large technical details', () => {

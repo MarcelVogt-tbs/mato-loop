@@ -58,6 +58,22 @@ def normalize_agent_display_name(value: str) -> str:
     return cleaned
 
 
+def normalize_skill_name(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("name must not be blank")
+    if any(unicode_category(character) in {"Cc", "Cf"} for character in cleaned):
+        raise ValueError("name must not contain control characters")
+    return cleaned
+
+
+def normalize_skill_text(value: str, field: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError(f"{field} must not be blank")
+    return cleaned
+
+
 class MemoryPolicy(StrEnum):
     INHERIT = "inherit"
     ALLOW = "allow"
@@ -523,6 +539,7 @@ class AiSettings(SettingsDocument):
     default_model_id: UUID | None = None
     compaction_model_id: UUID | None = None
     title_generation_model_id: UUID | None = None
+    skill_creation_model_id: UUID | None = None
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
     video_model_id: UUID | None = None
@@ -589,6 +606,30 @@ class AgentIdentitySettings(SettingsDocument):
     @classmethod
     def normalize_instructions(cls, value: str) -> str:
         return value.strip()
+
+
+class SkillDefinition(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    name: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=240)
+    instructions: str = Field(min_length=1, max_length=8_000)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> Any:
+        return normalize_skill_name(value) if isinstance(value, str) else value
+
+    @field_validator("description", "instructions", mode="before")
+    @classmethod
+    def validate_text(cls, value: Any, info: Any) -> Any:
+        return normalize_skill_text(value, info.field_name) if isinstance(value, str) else value
+
+
+class SkillsSettings(SettingsDocument):
+    settings_key = "skills"
+    settings_scope = SettingsScope.USER
+
+    skills: list[SkillDefinition] = Field(default_factory=list, max_length=20)
 
 
 class UserPreferences(SettingsDocument):

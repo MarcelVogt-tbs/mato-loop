@@ -74,6 +74,13 @@ _MESSAGES = {
     "session.modelUnavailable": "The selected model is unavailable.",
     "session.messageNotFound": "The chat message was not found.",
     "session.retryUnavailable": "The failed response can no longer be retried.",
+    "skill.duplicate": "A skill with this name already exists.",
+    "skill.alreadyActive": "A different skill is already active for this run.",
+    "skill.creationModelFailed": "The skill creation model could not produce a valid draft.",
+    "skill.draftInvalid": "The skill draft is invalid or unavailable.",
+    "skill.limitReached": "The maximum number of skills has been reached.",
+    "skill.loadMustBeExclusive": "The skill loader must be called without other tools in the same response.",
+    "skill.notFound": "The skill was not found.",
     "tool.executionFailed": "The tool execution failed.",
     "tool.executionInterrupted": (
         "The tool execution was interrupted and its outcome is unknown. Do not infer success or "
@@ -112,6 +119,7 @@ _NAMESPACE_MESSAGES = {
     "provider": "The model provider request could not be completed.",
     "question": "The question request could not be completed.",
     "session": "The session request could not be completed.",
+    "skill": "The skill operation could not be completed.",
     "stream": "The event stream failed.",
     "tool": "The tool operation could not be completed.",
     "validation": "The request contains invalid data.",

@@ -1,6 +1,6 @@
 <template>
   <q-page class="app-page settings-page column no-wrap">
-    <AppPageHeader title="Einstellungen" subtitle="Persona, Provider, Standardmodelle, Integrationen, Tools und Memory zentral verwalten." />
+    <AppPageHeader title="Einstellungen" subtitle="Persona, Provider, Standardmodelle, Integrationen, Tools, Skills und Memory zentral verwalten." />
 
     <q-tabs
       no-caps
@@ -15,6 +15,7 @@
       <q-route-tab icon="stars" label="Standardmodelle" :to="{ name: 'settings-default-models' }" />
       <q-route-tab icon="extension" label="Integrationen" :to="{ name: 'settings-integrations' }" />
       <q-route-tab icon="build" label="Tools" :to="{ name: 'settings-tools' }" />
+      <q-route-tab icon="school" label="Skills" :to="{ name: 'settings-skills' }" />
       <q-route-tab icon="face" label="Persona" :to="{ name: 'settings-persona' }" />
       <q-route-tab icon="psychology" label="Memory" :to="{ name: 'settings-memory' }" />
     </q-tabs>
@@ -61,6 +62,16 @@
           >
             <q-item-section avatar><q-icon name="build" /></q-item-section>
             <q-item-section>Tools</q-item-section>
+          </q-item>
+          <q-item
+            clickable
+            v-ripple
+            class="q-mb-xs"
+            :to="{ name: 'settings-skills' }"
+            active-class="app-nav-item--active"
+          >
+            <q-item-section avatar><q-icon name="school" /></q-item-section>
+            <q-item-section>Skills</q-item-section>
           </q-item>
           <q-item
             clickable

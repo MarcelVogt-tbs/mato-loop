@@ -138,6 +138,7 @@
       :key="`approval-${item.approval.id}`"
       :approval="item.approval"
       class="work-history__attention"
+      @open-approval-draft="emit('open-approval-draft', $event)"
     />
 
     <div v-if="outputs.length" class="work-history__outputs">
@@ -211,7 +212,7 @@ const props = defineProps({
   running: Boolean,
   expanded: Boolean
 })
-const emit = defineEmits(['open-file', 'update:expanded'])
+const emit = defineEmits(['open-file', 'open-approval-draft', 'update:expanded'])
 const panelExpanded = ref(props.expanded)
 const now = ref(Date.now())
 let timer = null

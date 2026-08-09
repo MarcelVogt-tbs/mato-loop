@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -37,6 +38,7 @@ class PermissionRequest:
     policy_integration_id: UUID | None = None
     policy_resource_key: str | None = None
     policy_hard_unavailable_capabilities: frozenset[str] = frozenset()
+    approval_details: dict[str, Any] | None = None
     available_decisions: tuple[str, ...] = (
         "allow_once",
         "allow_session",
@@ -388,6 +390,38 @@ def agent_identity_permission(
     )
 
 
+def skill_load_permission(user_id: UUID, skill_name: str) -> PermissionRequest:
+    return PermissionRequest(
+        capability="skills.load",
+        resource_type="skill_collection",
+        resource_scope=str(user_id),
+        action_kind="load_skill",
+        risk_level="low",
+        title="Skill laden?",
+        summary=f'Der Agent möchte den persönlichen Skill „{skill_name}“ verwenden.',
+        resource_display=skill_name,
+    )
+
+
+def skill_write_permission(
+    user_id: UUID,
+    skill_name: str,
+    *,
+    approval_details: dict[str, Any] | None = None,
+) -> PermissionRequest:
+    return PermissionRequest(
+        capability="skills.write",
+        resource_type="skill_collection",
+        resource_scope=str(user_id),
+        action_kind="build_skill",
+        risk_level="medium",
+        title="Skill speichern?",
+        summary=f'Der Agent möchte den persönlichen Skill „{skill_name}“ speichern.',
+        resource_display=skill_name,
+        approval_details=approval_details,
+    )
+
+
 def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath] | None:
     try:
         value = json.loads(resource_scope)
@@ -535,6 +569,11 @@ class PermissionPolicy:
         }:
             return request.resource_scope == grant.resource_scope
         if request.resource_type == "agent_identity":
+            try:
+                return UUID(request.resource_scope) == UUID(grant.resource_scope)
+            except ValueError:
+                return False
+        if request.resource_type == "skill_collection":
             try:
                 return UUID(request.resource_scope) == UUID(grant.resource_scope)
             except ValueError:

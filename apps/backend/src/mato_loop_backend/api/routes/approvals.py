@@ -5,11 +5,15 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.runtime import AgentRuntime, approval_payload
+from mato_loop_backend.agent.runtime import (
+    AgentRuntime,
+    ApprovalResolution,
+    approval_payload,
+)
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.events import run_events
@@ -21,6 +25,10 @@ router = APIRouter(prefix="/approvals", dependencies=[Depends(require_user)])
 
 class ApprovalDecisionRequest(BaseModel):
     decision: Literal["allow_once", "allow_session", "deny"]
+    expected_revision: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 @router.get("/pending")
@@ -59,6 +67,19 @@ async def decide_approval(
         raise ApiError(409, "approval.alreadyDecided")
     if payload.decision not in approval.available_decisions:
         raise ApiError(400, "approval.decisionUnavailable")
+    skill_draft_approval = (
+        approval.action_kind == "build_skill"
+        and approval.capability == "skills.write"
+        and approval.resource_type == "skill_collection"
+    )
+    if (
+        skill_draft_approval
+        and payload.decision.startswith("allow")
+        and payload.expected_revision is None
+    ):
+        raise ApiError(422, "validation.required", field="expected_revision")
+    if not skill_draft_approval and payload.expected_revision is not None:
+        raise ApiError(400, "validation.invalid", field="expected_revision")
     if not AgentRuntime.claim_approval_resolution(approval.id):
         approval.status = "expired"
         approval.resolved_at = datetime.now(UTC)
@@ -67,6 +88,11 @@ async def decide_approval(
     approval.status = "approved" if payload.decision.startswith("allow") else "denied"
     approval.decision = payload.decision
     approval.resolved_at = datetime.now(UTC)
+    if skill_draft_approval and payload.expected_revision is not None:
+        approval.payload = {
+            **approval.payload,
+            "approvedRevision": payload.expected_revision,
+        }
     created_grant: PermissionGrant | None = None
     if payload.decision == "allow_session":
         existing_grant = await db.scalar(
@@ -91,9 +117,15 @@ async def decide_approval(
     except Exception:
         AgentRuntime.release_approval_resolution(approval.id)
         raise
-    if not AgentRuntime.resolve_approval(approval.id, payload.decision):
+    resolution = ApprovalResolution(payload.decision, payload.expected_revision)
+    if not AgentRuntime.resolve_approval(approval.id, resolution):
         approval.status = "expired"
         approval.decision = None
+        approval.payload = {
+            key: value
+            for key, value in approval.payload.items()
+            if key != "approvedRevision"
+        }
         if created_grant is not None:
             await db.delete(created_grant)
         await db.commit()
@@ -128,7 +160,9 @@ async def list_permissions(
         resource_display = None
         if item.source_approval_id is not None:
             source = await db.get(ApprovalRequest, item.source_approval_id)
-            if source and isinstance(source.payload.get("resourceDisplay"), str):
+            if item.resource_type == "skill_collection":
+                resource_display = "Persönliche Skills"
+            elif source and isinstance(source.payload.get("resourceDisplay"), str):
                 resource_display = source.payload["resourceDisplay"]
         payloads.append(
             {

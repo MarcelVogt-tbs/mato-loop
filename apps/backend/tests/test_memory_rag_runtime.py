@@ -42,6 +42,7 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     MemorySettings,
     SettingsStore,
+    SkillsSettings,
     ToolSettings,
     TrustLevel,
 )
@@ -139,6 +140,7 @@ async def _runtime_setup(
             AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
             MemorySettings: MemorySettings(enabled=True),
+            SkillsSettings: SkillsSettings(),
             IntegrationSettings: IntegrationSettings(),
             ToolSettings: ToolSettings(),
         }[settings_type]

@@ -85,6 +85,21 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'memory.duplicate' } })).toBe(
       'Diese Erinnerung ist bereits vorhanden.'
     )
+    expect(apiErrorMessage({ error: { code: 'skill.draftInvalid' } })).toBe(
+      'Der Skill-Entwurf ist ungültig. Prüfe die Entwurfsdatei und versuche es erneut.'
+    )
+    expect(apiErrorMessage({ error: { code: 'skill.creationModelFailed' } })).toBe(
+      'Der Skill-Entwurf konnte vom ausgewählten Modell nicht erstellt werden.'
+    )
+    expect(apiErrorMessage({ error: { code: 'skill.notFound' } })).toBe(
+      'Der Skill wurde nicht gefunden.'
+    )
+    expect(apiErrorMessage({ error: { code: 'skill.duplicate' } })).toBe(
+      'Ein Skill mit diesem Namen ist bereits vorhanden.'
+    )
+    expect(apiErrorMessage({ error: { code: 'skill.limitReached' } })).toBe(
+      'Die maximale Anzahl persönlicher Skills ist erreicht.'
+    )
     expect(apiErrorMessage({ error: { code: 'privacy.pseudonymizationUnavailable' } })).toBe(
       'Die lokale Pseudonymisierung ist derzeit nicht verfügbar.'
     )

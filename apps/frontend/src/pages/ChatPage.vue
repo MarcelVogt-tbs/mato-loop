@@ -93,6 +93,7 @@
                     || message.generationStatus === 'interrupted'
                 }"
                 @open-file="openToolFile"
+                @open-approval-draft="openApprovalDraft"
                 @update:expanded="updateThinkingExpanded"
               />
               <MessageContent
@@ -230,6 +231,7 @@
             :key="approval.id"
             :approval="approval"
             class="q-mt-md"
+            @open-approval-draft="openApprovalDraft"
           />
           <AgentActivity v-if="runPresentation.showActivity" :activity="chat.activity" />
         </div>
@@ -473,6 +475,27 @@ async function openToolFile(action) {
     workingDirectory: chat.current.workingDirectory
   })
   await workspace.openToolFile(action)
+}
+
+async function openApprovalDraft(approval) {
+  const draft = approval?.details?.draftFile
+  const sessionId = approval?.sessionId
+  if (approval?.actionKind !== 'build_skill' || !draft || chat.current?.id !== sessionId) return
+  if (workspace.editorDirty) {
+    const accepted = await confirm(
+      'Sollen die ungespeicherten Änderungen verworfen werden?',
+      'Änderungen verwerfen?',
+      { okLabel: 'Verwerfen' }
+    )
+    if (!accepted) return
+    workspace.discardEdit()
+  }
+  if (chat.current?.id !== sessionId) return
+  workspace.configure({
+    sessionId,
+    workingDirectory: chat.current.workingDirectory
+  })
+  await workspace.openApprovalDraft({ ...draft, sessionId })
 }
 
 function trustImageOrigin(origin) {

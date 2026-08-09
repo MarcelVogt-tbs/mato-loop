@@ -44,6 +44,11 @@ const routes = [
             component: () => import('pages/settings/ToolSettingsPage.vue')
           },
           {
+            path: 'skills',
+            name: 'settings-skills',
+            component: () => import('pages/settings/SkillSettingsPage.vue')
+          },
+          {
             path: 'memory',
             name: 'settings-memory',
             component: () => import('pages/settings/MemorySettingsPage.vue')

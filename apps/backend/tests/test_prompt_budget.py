@@ -10,6 +10,7 @@ from mato_loop_backend.settings import (
     DefaultTaskListSettings,
     IntegrationInstance,
     IntegrationSettings,
+    SkillDefinition,
     ToolExecutionPolicy,
     ToolSettings,
 )
@@ -82,12 +83,28 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
             Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,
         ),
         inactive_capability_groups=inactive,
+        skill_catalog=tuple(
+            SkillDefinition(
+                name=f"{index:02d}-" + "n" * 61,
+                description="d" * 240,
+                instructions="inactive instructions",
+            )
+            for index in range(20)
+        ),
+        active_skill=SkillDefinition(
+            name="a" * 64,
+            description="active",
+            instructions="i" * 8_000,
+        ),
     )
     schemas = effective.schemas()
     prompt_tokens = estimate_tokens(prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert len(schemas) == 31
-    assert prompt_tokens <= 2_600, prompt_tokens
-    assert schema_tokens <= 5_500, schema_tokens
-    assert prompt_tokens + schema_tokens <= 8_000
+    assert len(schemas) == 33
+    assert {"load_skill", "build_skill"} <= {schema["name"] for schema in schemas}
+    build_skill = next(schema for schema in schemas if schema["name"] == "build_skill")
+    assert set(build_skill["parameters"]["properties"]) == {"brief", "name_hint"}
+    assert prompt_tokens <= 7_000, prompt_tokens
+    assert schema_tokens <= 5_900, schema_tokens
+    assert prompt_tokens + schema_tokens <= 13_000

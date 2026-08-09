@@ -20,6 +20,27 @@
         <div class="text-caption app-muted">Memory-Inhalt</div>
         <pre class="approval-details q-mt-xs">{{ memoryContent }}</pre>
       </div>
+      <div v-if="skillPreview" class="approval-resource q-mt-md">
+        <div class="text-caption app-muted">Skill-Vorschau</div>
+        <div class="text-subtitle1 text-weight-bold q-mt-xs">{{ skillPreview.name }}</div>
+        <div class="text-body2 q-mt-xs">{{ skillPreview.description }}</div>
+        <div class="text-caption app-muted q-mt-md">Anweisungen</div>
+        <pre class="approval-details q-mt-xs">{{ skillPreview.instructions }}</pre>
+        <q-btn
+          v-if="draftFile"
+          outline
+          no-caps
+          color="primary"
+          icon="edit_document"
+          label="Entwurf öffnen und bearbeiten"
+          class="q-mt-md"
+          @click="emit('open-approval-draft', approval)"
+        />
+      </div>
+      <q-banner v-if="matchingDraftDirty" rounded class="app-surface-tonal q-mt-md">
+        <template #avatar><q-icon name="edit_note" color="warning" /></template>
+        Speichere oder verwirf zuerst die Änderungen am Skill-Entwurf.
+      </q-banner>
       <q-banner
         v-if="approval.capability === 'integration.private_data.release'"
         rounded
@@ -60,7 +81,7 @@
         color="primary"
         label="Einmal erlauben"
         :loading="loadingDecision === 'allow_once'"
-        :disable="Boolean(loadingDecision)"
+        :disable="Boolean(loadingDecision) || matchingDraftDirty"
         @click="decide('allow_once')"
       />
       <q-btn
@@ -70,7 +91,7 @@
         color="primary"
         label="Für Session erlauben"
         :loading="loadingDecision === 'allow_session'"
-        :disable="Boolean(loadingDecision)"
+        :disable="Boolean(loadingDecision) || matchingDraftDirty"
         @click="decide('allow_session')"
       />
     </q-card-actions>
@@ -83,17 +104,22 @@ import { approvalResource, formatTechnicalDetails } from 'src/utils/approval-dis
 import { formatToolArguments, memoryWriteContent } from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
+import { useWorkspaceStore } from 'stores/workspace'
 
 defineOptions({ name: 'ApprovalCard' })
 
 const props = defineProps({ approval: { type: Object, required: true } })
+const emit = defineEmits(['open-approval-draft'])
 const approvals = useApprovalStore()
 const chat = useChatStore()
+const workspace = useWorkspaceStore()
 const loadingDecision = ref(null)
 const riskColor = computed(() => props.approval.riskLevel === 'high' ? 'negative' : 'warning')
 const riskLabel = computed(() => ({ high: 'Hoch', medium: 'Mittel', low: 'Niedrig' })[props.approval.riskLevel] || props.approval.riskLevel)
 const actionIcon = computed(() => {
   if (props.approval.capability?.startsWith('filesystem')) return 'folder_managed'
+  if (props.approval.capability === 'skills.load') return 'school'
+  if (props.approval.capability === 'skills.write' || props.approval.actionKind === 'build_skill') return 'auto_awesome'
   if (props.approval.capability === 'integration.private_data.release') return 'cloud_upload'
   if (props.approval.resourceType === 'url') return 'language'
   if (props.approval.resourceType === 'session_collection') return 'folder_shared'
@@ -106,6 +132,23 @@ const approvalTool = computed(() => ({
   arguments: props.approval.details?.arguments
 }))
 const memoryContent = computed(() => memoryWriteContent(approvalTool.value))
+const skillPreview = computed(() => props.approval.actionKind === 'build_skill'
+  ? props.approval.details?.skillPreview
+  : null)
+const draftFile = computed(() => props.approval.actionKind === 'build_skill'
+  ? props.approval.details?.draftFile
+  : null)
+const matchingDraftDirty = computed(() => Boolean(
+  draftFile.value
+  && workspace.editorDirty
+  && workspace.sessionId === props.approval.sessionId
+  && workspace.scope === 'session'
+  && !workspace.rootIdentity
+  && workspace.viewedEntry?.path === draftFile.value.path
+))
+const draftRevision = computed(() => draftFile.value
+  ? workspace.filePreviews[draftFile.value.path]?.revision ?? draftFile.value.initialRevision
+  : undefined)
 const technicalDetails = computed(() => memoryContent.value
   ? formatToolArguments(approvalTool.value.arguments, approvalTool.value.name)
   : formatTechnicalDetails(props.approval.details))
@@ -117,7 +160,7 @@ function hasDecision(decision) {
 async function decide(decision) {
   loadingDecision.value = decision
   try {
-    await approvals.decide(props.approval.id, decision)
+    await approvals.decide(props.approval.id, decision, draftRevision.value)
   } finally {
     loadingDecision.value = null
   }

@@ -20,10 +20,15 @@ export const useApprovalStore = defineStore('approvals', {
     add(approval) {
       if (!this.pending.some((item) => item.id === approval.id)) this.pending.push(approval)
     },
-    async decide(id, decision) {
+    async decide(id, decision, expectedRevision) {
       this.submittingId = id
       try {
-        await api.post(`/approvals/${id}/decisions`, { decision })
+        await api.post(`/approvals/${id}/decisions`, {
+          decision,
+          ...(decision.startsWith('allow') && expectedRevision != null
+            ? { expected_revision: expectedRevision }
+            : {})
+        })
         this.pending = this.pending.filter((item) => item.id !== id)
       } catch (error) {
         if (TERMINAL_DECISION_ERRORS.has(errorDescriptor(error)?.code)) {

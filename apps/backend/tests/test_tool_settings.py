@@ -100,6 +100,8 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "session.search": "ask",
         "memory.write": "ask",
         "memory.read": "auto",
+        "skills.load": "auto",
+        "skills.write": "ask",
         "settings.agent_identity.update": "ask",
     }
     assert [group["id"] for group in result["groups"]] == [

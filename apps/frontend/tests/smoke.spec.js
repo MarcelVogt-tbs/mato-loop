@@ -15,6 +15,7 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-persona',
       'settings-integrations',
       'settings-tools',
+      'settings-skills',
       'settings-memory'
     ])
     expect(

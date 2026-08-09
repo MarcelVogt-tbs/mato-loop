@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.permissions import PermissionRequest
-from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.runtime import AgentRuntime, ApprovalResolution
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, decide_approval
 from mato_loop_backend.events import run_events
@@ -62,7 +62,9 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
     assert grant.resource_scope == approval.resource_scope
     assert approval.status == "approved"
     db.commit.assert_awaited_once()
-    resolve.assert_called_once_with(approval.id, "allow_session")
+    resolve.assert_called_once_with(
+        approval.id, ApprovalResolution(decision="allow_session")
+    )
     assert result == {"status": "approved", "decision": "allow_session"}
 
 
@@ -84,6 +86,47 @@ async def test_approval_without_live_waiter_expires_without_creating_grant(monke
     assert exc_info.value.code == "approval.runInactive"
     assert approval.status == "expired"
     db.add.assert_not_called()
+
+
+async def test_skill_approval_requires_and_forwards_exact_revision(monkeypatch) -> None:
+    approval = _approval()
+    approval.action_kind = "build_skill"
+    approval.capability = "skills.write"
+    approval.resource_type = "skill_collection"
+    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
+    session = ChatSession(id=approval.session_id, user_id=user.id, title="Test")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [approval, session]
+
+    with pytest.raises(ApiError) as exc_info:
+        await decide_approval(
+            approval.id, ApprovalDecisionRequest(decision="allow_once"), user, db
+        )
+    assert exc_info.value.code == "validation.required"
+
+    db.get.side_effect = [approval, session]
+    monkeypatch.setattr(
+        AgentRuntime, "claim_approval_resolution", Mock(return_value=True)
+    )
+    resolve = Mock(return_value=True)
+    monkeypatch.setattr(AgentRuntime, "resolve_approval", resolve)
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+    revision = "a" * 64
+
+    await decide_approval(
+        approval.id,
+        ApprovalDecisionRequest(
+            decision="allow_once", expected_revision=revision
+        ),
+        user,
+        db,
+    )
+
+    resolve.assert_called_once_with(
+        approval.id,
+        ApprovalResolution(decision="allow_once", expected_revision=revision),
+    )
+    assert approval.payload["approvedRevision"] == revision
 
 
 async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:

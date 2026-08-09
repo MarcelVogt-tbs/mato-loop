@@ -11,7 +11,7 @@ from datetime import datetime
 from io import BytesIO
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import zxingcpp
 from PIL import Image
@@ -47,6 +47,8 @@ from mato_loop_backend.agent.permissions import (
     session_browse_permission,
     session_permission,
     session_search_permission,
+    skill_load_permission,
+    skill_write_permission,
     web_search_permission,
     webfetch_permission,
 )
@@ -107,6 +109,7 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     ModelCapability,
     SettingsStore,
+    SkillDefinition,
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
@@ -114,11 +117,20 @@ from mato_loop_backend.settings import (
     resolve_web_fetch_policy,
 )
 from mato_loop_backend.settings.models import normalize_agent_display_name
+from mato_loop_backend.skills import (
+    RunSkillState,
+    SkillDraft,
+    SkillError,
+    SkillService,
+    parse_skill_draft,
+    serialize_skill_draft,
+)
 from mato_loop_backend.video_processing import MAX_VIDEO_BYTES, VideoAnalysisMode
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService, WorkspaceError
 
 logger = logging.getLogger(__name__)
 AskHandler = Callable[[PermissionRequest], Awaitable[PermissionDecision]]
+SkillCreationHandler = Callable[[str, str | None], Awaitable[SkillDraft]]
 QuestionHandler = Callable[
     ["QuestionArguments"], Awaitable[dict[str, list[str]] | Literal["rejected"] | None]
 ]
@@ -130,6 +142,7 @@ VideoAnalysisTargetResolver = Callable[[int], ResolvedVideoModel | None]
 SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
 QR_CODE_MAX_CONTENT_BYTES = 2_000
 QR_CODE_MAX_RESULTS = 16
+SKILL_DRAFT_MAX_BYTES = 40 * 1024
 ALL_TOOL_EXECUTION_POLICIES = tuple(ToolExecutionPolicy)
 
 
@@ -237,6 +250,9 @@ class ToolContext:
     model_id: UUID | None = None
     model_trust_level: TrustLevel = TrustLevel.PUBLIC
     bound_resource: IntegrationResource | None = None
+    skill_state: RunSkillState = field(default_factory=RunSkillState)
+    skill_creation_handler: SkillCreationHandler | None = None
+    approval_resolution: dict[str, str] = field(default_factory=dict)
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
         return await self.ask_handler(request)
@@ -1519,6 +1535,34 @@ class UpdateAgentIdentityArguments(ToolArguments):
         return self
 
 
+class BuildSkillArguments(ToolArguments):
+    brief: str = Field(
+        min_length=1,
+        max_length=2_000,
+        description="Compact description of the skill the user wants.",
+    )
+    name_hint: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="Optional short name suggested by the user.",
+    )
+
+    @field_validator("brief", "name_hint")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value must not be blank")
+        return cleaned
+
+
+class LoadSkillArguments(ToolArguments):
+    skill_id: UUID = Field(description="Exact ID copied from the available skill catalog.")
+
+
 async def _allow(context: ToolContext, request: PermissionRequest) -> bool:
     return await context.ask(request) == PermissionDecision.ALLOW
 
@@ -2251,6 +2295,152 @@ async def _update_agent_identity(
             "effectiveFrom": "next_run",
         },
         metadata={"agentIdentity": identity_payload},
+    )
+
+
+async def _build_skill(
+    arguments: BuildSkillArguments, context: ToolContext
+) -> ToolResult:
+    context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
+    policy = tool_execution_policy(
+        context.tool_settings, "skills.write", ToolExecutionPolicy.ASK
+    )
+    if policy == ToolExecutionPolicy.DISABLED:
+        return ToolResult.error("tool.unavailable")
+    if context.skill_creation_handler is None:
+        return ToolResult.error("skill.creationModelFailed")
+    try:
+        draft = await context.skill_creation_handler(arguments.brief, arguments.name_hint)
+    except SkillError as error:
+        return ToolResult.error(error.code)
+
+    skill_id = uuid4()
+    draft_bytes = serialize_skill_draft(draft).encode("utf-8")
+    initial_revision = hashlib.sha256(draft_bytes).hexdigest()
+    draft_path = f"files/skill-draft-{skill_id}.json"
+    try:
+        entry = context.root_files.create_file(
+            FileRoot.SESSION,
+            draft_path,
+            BytesIO(draft_bytes),
+            max_bytes=SKILL_DRAFT_MAX_BYTES,
+        )
+    except RootFileError as error:
+        return ToolResult.error(error.code)
+
+    approval_details = {
+        "skillPreview": draft.model_dump(),
+        "draftFile": {
+            "root": "session",
+            "path": entry.path,
+            "filename": entry.name,
+            "sizeBytes": entry.size,
+            "initialRevision": initial_revision,
+        },
+    }
+    approval_received = False
+    if policy == ToolExecutionPolicy.ASK:
+        context.approval_resolution.clear()
+        if not await _allow(
+            context,
+            skill_write_permission(
+                context.session.user_id,
+                draft.name,
+                approval_details=approval_details,
+            ),
+        ):
+            return ToolResult.error("permission.denied")
+        approval_received = True
+
+    context.tool_settings = await SettingsStore.load(
+        context.db, ToolSettings, for_update=True
+    )
+    current_policy = tool_execution_policy(
+        context.tool_settings, "skills.write", ToolExecutionPolicy.ASK
+    )
+    if current_policy == ToolExecutionPolicy.DISABLED or (
+        current_policy == ToolExecutionPolicy.ASK and not approval_received
+    ):
+        return ToolResult.error("tool.unavailable")
+    expected_revision = context.approval_resolution.get(
+        "expected_revision", initial_revision
+    )
+    try:
+        current_bytes = context.root_files.read_bytes(
+            FileRoot.SESSION,
+            draft_path,
+            limit=SKILL_DRAFT_MAX_BYTES,
+        )
+    except RootFileError:
+        return ToolResult.error("skill.draftInvalid")
+    if len(current_bytes) > SKILL_DRAFT_MAX_BYTES:
+        return ToolResult.error("skill.draftInvalid")
+    if hashlib.sha256(current_bytes).hexdigest() != expected_revision:
+        return ToolResult.error("file.changed")
+    try:
+        current_draft = parse_skill_draft(current_bytes)
+        skill = await SkillService.create_definition(
+            context.db,
+            user_id=context.session.user_id,
+            definition=SkillDefinition(id=skill_id, **current_draft.model_dump()),
+        )
+    except SkillError as error:
+        return ToolResult.error(
+            error.code,
+            field="name" if error.code == "skill.duplicate" else None,
+            params={"maxSkills": 20} if error.code == "skill.limitReached" else None,
+        )
+    return ToolResult.json(
+        {
+            "id": str(skill.id),
+            "name": skill.name,
+            "effectiveFrom": "next_run",
+        }
+    )
+
+
+async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> ToolResult:
+    skill = context.skill_state.catalog.get(arguments.skill_id)
+    if skill is None:
+        return ToolResult.error("skill.notFound")
+    if context.skill_state.active is not None:
+        if context.skill_state.active.id == skill.id:
+            return ToolResult.json(
+                {"id": str(skill.id), "name": skill.name, "loaded": True}
+            )
+        return ToolResult.error("skill.alreadyActive")
+
+    context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
+    policy = tool_execution_policy(
+        context.tool_settings, "skills.load", ToolExecutionPolicy.AUTO
+    )
+    if policy == ToolExecutionPolicy.DISABLED:
+        return ToolResult.error("tool.unavailable")
+    approval_received = False
+    if policy == ToolExecutionPolicy.ASK:
+        if not await _allow(
+            context,
+            skill_load_permission(context.session.user_id, skill.name),
+        ):
+            return ToolResult.error("permission.denied")
+        approval_received = True
+    context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
+    current_policy = tool_execution_policy(
+        context.tool_settings, "skills.load", ToolExecutionPolicy.AUTO
+    )
+    if current_policy == ToolExecutionPolicy.DISABLED or (
+        current_policy == ToolExecutionPolicy.ASK and not approval_received
+    ):
+        return ToolResult.error("tool.unavailable")
+
+    context.skill_state.active = skill.model_copy(deep=True)
+    return ToolResult.json(
+        {
+            "id": str(skill.id),
+            "name": skill.name,
+            "loaded": True,
+            "effectiveFrom": "next_model_request",
+        }
     )
 
 
@@ -3198,6 +3388,10 @@ _MEMORY_READ = ToolAction("memory.read", "Memories lesen", ToolExecutionPolicy.A
 _MEMORY_WRITE = ToolAction(
     "memory.write", "Memories speichern", ToolExecutionPolicy.ASK, mutates=True
 )
+_SKILL_LOAD = ToolAction("skills.load", "Skills laden", ToolExecutionPolicy.AUTO)
+_SKILL_WRITE = ToolAction(
+    "skills.write", "Skills speichern", ToolExecutionPolicy.ASK, mutates=True
+)
 
 
 tool_registry = ToolRegistry(
@@ -3527,6 +3721,30 @@ tool_registry = ToolRegistry(
             label="Memory abrufen",
             icon="psychology",
             actions=(_MEMORY_READ,),
+        ),
+        ToolDefinition(
+            "load_skill",
+            "Load one user-authored skill from the supplied catalog before following its instructions. "
+            "Use it automatically for one clear match or when the user explicitly names a skill. Call "
+            "this tool alone. A skill only guides use of currently offered tools.",
+            LoadSkillArguments,
+            _load_skill,
+            group="agent",
+            label="Skill laden",
+            icon="school",
+            actions=(_SKILL_LOAD,),
+        ),
+        ToolDefinition(
+            "build_skill",
+            "Create one reusable user skill only after an explicit request in the current user message. "
+            "Delegate a compact brief and optional user-suggested name; a separate model writes the "
+            "complete editable draft from currently available tools. Changes apply from the next run.",
+            BuildSkillArguments,
+            _build_skill,
+            group="agent",
+            label="Skill speichern",
+            icon="construction",
+            actions=(_SKILL_WRITE,),
         ),
         ToolDefinition(
             "update_agent_identity",

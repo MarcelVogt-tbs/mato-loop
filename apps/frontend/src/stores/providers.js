@@ -21,6 +21,7 @@ function assignProviderPayload(store, payload) {
   store.speechGenerationModelId = payload.speechGenerationModelId ?? null
   store.audioGenerationModelId = payload.audioGenerationModelId ?? null
   store.audioTranscriptionModelId = payload.audioTranscriptionModelId ?? null
+  store.skillCreationModelId = payload.skillCreationModelId ?? null
   store.enabled = payload.enabled !== false
 }
 
@@ -95,6 +96,7 @@ export const useProviderStore = defineStore('providers', {
     speechGenerationModelId: null,
     audioGenerationModelId: null,
     audioTranscriptionModelId: null,
+    skillCreationModelId: null,
     enabled: true,
     codex: {},
     loading: false,
@@ -106,6 +108,8 @@ export const useProviderStore = defineStore('providers', {
     capabilityOptions: (state) => (capability) => effectiveModelOptions(state, capability),
     visionModelOptions: (state) => effectiveVisionModelOptions(state),
     videoModelOptions: (state) => effectiveVideoModelOptions(state),
+    skillCreationModelOptions: (state) => effectiveModelOptions(state)
+      .filter((option) => state.models.find((model) => model.id === option.value)?.supportsTools === true),
     selectionOptions: (state) => (modelId, requiresTools = false, capability = 'chat') => {
       const options = effectiveModelOptions(state, capability, requiresTools)
       if (!modelId || options.some((option) => option.value === modelId)) return options
@@ -236,7 +240,8 @@ export const useProviderStore = defineStore('providers', {
       imageGenerationModelId,
       speechGenerationModelId,
       audioGenerationModelId,
-      audioTranscriptionModelId
+      audioTranscriptionModelId,
+      skillCreationModelId
     }) {
       return (await mutateAndRefresh(this, () => api.put('/providers/default-models', {
         default_model_id: defaultModelId || null,
@@ -248,7 +253,8 @@ export const useProviderStore = defineStore('providers', {
         image_generation_model_id: imageGenerationModelId || null,
         speech_generation_model_id: speechGenerationModelId || null,
         audio_generation_model_id: audioGenerationModelId || null,
-        audio_transcription_model_id: audioTranscriptionModelId || null
+        audio_transcription_model_id: audioTranscriptionModelId || null,
+        skill_creation_model_id: skillCreationModelId || null
       })))?.data
     },
     async removeProvider(id) {

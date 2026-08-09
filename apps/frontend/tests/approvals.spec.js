@@ -22,6 +22,26 @@ describe('inline approvals', () => {
     await approvals.decide('approval-1', 'allow_once')
 
     expect(approvals.pending).toEqual([])
+    expect(api.post).toHaveBeenCalledWith('/approvals/approval-1/decisions', {
+      decision: 'allow_once'
+    })
+  })
+
+  it('sends the expected draft revision only for allow decisions', async () => {
+    api.post.mockResolvedValue({ data: { status: 'approved' } })
+    const approvals = useApprovalStore()
+    approvals.add({ id: 'allow', sessionId: 'session-1' })
+    approvals.add({ id: 'deny', sessionId: 'session-1' })
+
+    await approvals.decide('allow', 'allow_once', 'revision-2')
+    await approvals.decide('deny', 'deny', 'revision-2')
+
+    expect(api.post).toHaveBeenNthCalledWith(1, '/approvals/allow/decisions', {
+      decision: 'allow_once', expected_revision: 'revision-2'
+    })
+    expect(api.post).toHaveBeenNthCalledWith(2, '/approvals/deny/decisions', {
+      decision: 'deny'
+    })
   })
 
   it('keeps an approval visible when the decision fails', async () => {
