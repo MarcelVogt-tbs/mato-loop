@@ -1,4 +1,5 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -523,6 +524,23 @@ def test_write_file_content_is_fully_redacted_before_persistence() -> None:
     assert secret not in str(arguments)
 
 
+def test_qr_code_content_is_fully_redacted_before_persistence() -> None:
+    secret = "WIFI:T:WPA;S:Guest;P:not-for-tool-history;;"
+
+    arguments = _safe_tool_arguments("generate_qr_code", {"content": secret})
+
+    assert arguments["content"] == {"characters": len(secret), "redacted": True}
+    assert secret not in str(arguments)
+
+
+def test_mutation_tokens_are_redacted_before_persistence() -> None:
+    arguments = _safe_tool_arguments(
+        "tasks_update", {"task_token": "encrypted-secret", "title": "Neu"}
+    )
+
+    assert arguments == {"task_token": "[Redacted]", "title": "Neu"}
+
+
 def test_memory_write_content_is_preserved_for_user_review() -> None:
     content = "Stabiler Selbstkontext " * 1000
 
@@ -586,6 +604,32 @@ def test_responses_replay_webfetch_arguments_are_redacted() -> None:
     )
 
     assert "secret" not in result["responses_output_items"][0]["arguments"]
+
+
+def test_responses_replay_mutation_tokens_are_redacted() -> None:
+    call = ToolCall(
+        id="task-1",
+        name="tasks_update",
+        arguments={"task_token": "encrypted-secret", "title": "Neu"},
+    )
+
+    result = _safe_provider_data(
+        {
+            "responses_output_items": [
+                {
+                    "type": "function_call",
+                    "call_id": call.id,
+                    "name": call.name,
+                    "arguments": json.dumps(call.arguments),
+                }
+            ]
+        },
+        [call],
+    )
+
+    persisted = result["responses_output_items"][0]["arguments"]
+    assert "encrypted-secret" not in persisted
+    assert "[Redacted]" in persisted
 
 
 def test_agent_identity_instructions_are_redacted_and_reprojected_as_text() -> None:

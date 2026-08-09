@@ -750,6 +750,11 @@ async def responses_api(
                         content_parts.append(answer_delta)
                         if on_delta:
                             await on_delta(answer_delta)
+                elif event_type == "response.reasoning_summary_part.added":
+                    if reasoning_parts:
+                        reasoning_parts.append("\n\n")
+                        if on_reasoning:
+                            await on_reasoning("\n\n", "summary")
                 elif event_type == "response.reasoning_summary_text.delta":
                     text = event.get("delta") or ""
                     if isinstance(text, str) and text:
@@ -824,7 +829,7 @@ async def responses_api(
                         if isinstance(item, dict) and item.get("type") == "reasoning"
                     ]
                     if any(completed_summaries):
-                        reasoning_parts = [item for item in completed_summaries if item]
+                        reasoning_parts = ["\n\n".join(item for item in completed_summaries if item)]
 
     final_content, tagged_reasoning = splitter.finish()
     if final_content != "".join(content_parts):

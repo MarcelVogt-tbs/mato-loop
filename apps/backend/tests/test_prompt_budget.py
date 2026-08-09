@@ -7,6 +7,7 @@ from mato_loop_backend.integrations.caldav import CalDavConfig
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
+    DefaultTaskListSettings,
     IntegrationInstance,
     IntegrationSettings,
     ToolExecutionPolicy,
@@ -29,6 +30,10 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         default_calendar=DefaultCalendarSettings(
             integration_id=account.id,
             calendar_key=f"calendar:{'a' * 32}",
+        ),
+        default_task_list=DefaultTaskListSettings(
+            integration_id=account.id,
+            task_list_key=f"tasklist:{'a' * 32}",
         ),
         generate_image={"policy": ToolExecutionPolicy.AUTO},
         transcribe_audio={"policy": ToolExecutionPolicy.AUTO},
@@ -82,7 +87,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     prompt_tokens = estimate_tokens(prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert len(schemas) == 22
-    assert prompt_tokens <= 2_500, prompt_tokens
-    assert schema_tokens <= 4_400, schema_tokens
-    assert prompt_tokens + schema_tokens <= 6_800
+    assert len(schemas) == 31
+    assert prompt_tokens <= 2_600, prompt_tokens
+    assert schema_tokens <= 5_500, schema_tokens
+    assert prompt_tokens + schema_tokens <= 8_000

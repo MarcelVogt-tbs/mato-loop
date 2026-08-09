@@ -58,25 +58,40 @@
     </div>
 
     <q-form v-else-if="access" class="q-gutter-md" @submit.prevent="save">
-      <q-card v-if="supportsDefaultCalendar" flat class="app-surface-tonal">
+      <q-card v-if="supportsDefaultResources" flat class="app-surface-tonal">
         <q-card-section>
-          <div class="text-subtitle1 text-weight-bold">Standardkalender dieses Kontos</div>
+          <div class="text-subtitle1 text-weight-bold">Standardressourcen dieses Kontos</div>
           <div class="text-caption app-muted">
-            Gilt installationsweit für unspezifische Kalenderabfragen und neue Termine.
-            Eine Auswahl ersetzt den bisherigen Standard.
+            Gilt installationsweit für unspezifische Kalender- und Aufgabenanfragen sowie neue
+            Einträge. Beide Standards können unabhängig festgelegt werden.
           </div>
         </q-card-section>
         <q-separator />
         <q-card-section>
-          <q-select
-            v-model="defaultResourceKey"
-            outlined
-            dense
-            emit-value
-            map-options
-            label="Standardkalender"
-            :options="defaultCalendarOptions"
-          />
+          <div class="row q-col-gutter-md">
+            <div v-if="calendarResourceList.length" class="col-12 col-md-6">
+              <q-select
+                v-model="defaultResourceKey"
+                outlined
+                dense
+                emit-value
+                map-options
+                label="Standardkalender"
+                :options="defaultCalendarOptions"
+              />
+            </div>
+            <div v-if="taskListResourceList.length" class="col-12 col-md-6">
+              <q-select
+                v-model="defaultTaskListKey"
+                outlined
+                dense
+                emit-value
+                map-options
+                label="Standard-Aufgabenliste"
+                :options="defaultTaskListOptions"
+              />
+            </div>
+          </div>
         </q-card-section>
       </q-card>
 
@@ -110,29 +125,43 @@
         Diese Integration stellt derzeit keine konfigurierbaren Ressourcen bereit.
       </q-banner>
 
-      <q-card v-for="resource in access.resources" :key="resource.key" flat class="app-surface-tonal">
+      <q-card
+        v-for="group in resourceGroups"
+        :key="group[0].key"
+        flat
+        class="app-surface-tonal"
+      >
         <q-card-section>
-          <div class="text-subtitle1 text-weight-bold">{{ resource.label }}</div>
+          <div class="text-subtitle1 text-weight-bold">{{ group[0].label }}</div>
         </q-card-section>
-        <q-separator />
-        <q-card-section>
-          <div class="row q-col-gutter-md">
-            <div v-for="action in access.actions" :key="action.capability" class="col-12 col-md-4">
-              <q-select
-                v-model="resourceForm[resource.key][action.capability]"
-                outlined
-                dense
-                emit-value
-                map-options
-                :label="action.label"
-                :options="policyOptions(action, action.effectiveIntegrationPolicy)"
-                :hint="effectiveHint(resource, action)"
-                :disable="action.globalPolicy === 'disabled' || resource.hardUnavailableCapabilities.includes(action.capability)"
-                persistent-hint
-              />
+        <template v-for="resource in group" :key="resource.key">
+          <q-separator />
+          <q-card-section>
+            <div class="text-subtitle2 text-weight-bold q-mb-sm">
+              {{ resourceDomainLabel(resource) }}
             </div>
-          </div>
-        </q-card-section>
+            <div class="row q-col-gutter-md">
+              <div
+                v-for="action in applicableResourceActions(access.actions, resource)"
+                :key="action.capability"
+                class="col-12 col-md-4"
+              >
+                <q-select
+                  v-model="resourceForm[resource.key][action.capability]"
+                  outlined
+                  dense
+                  emit-value
+                  map-options
+                  :label="action.label"
+                  :options="policyOptions(action, action.effectiveIntegrationPolicy)"
+                  :hint="effectiveHint(resource, action)"
+                  :disable="action.globalPolicy === 'disabled' || resource.hardUnavailableCapabilities.includes(action.capability)"
+                  persistent-hint
+                />
+              </div>
+            </div>
+          </q-card-section>
+        </template>
       </q-card>
 
       <div class="row justify-end q-gutter-sm q-pb-md">
@@ -163,6 +192,12 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import { useConfirm } from 'src/composables/confirm'
+import {
+  applicableResourceActions,
+  calendarResources,
+  groupResources,
+  taskListResources
+} from 'src/utils/integration-access'
 import { useIntegrationStore } from 'stores/integrations'
 
 defineOptions({ name: 'IntegrationAccessPage' })
@@ -173,6 +208,7 @@ const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
 const access = ref(null)
 const defaultResourceKey = ref(null)
+const defaultTaskListKey = ref(null)
 const integrationForm = reactive({})
 const resourceForm = reactive({})
 const loading = ref(false)
@@ -189,12 +225,28 @@ const integration = computed(() => [
 const dirty = computed(() => Boolean(
   access.value && JSON.stringify(requestPayload()) !== savedPayload.value
 ))
-const supportsDefaultCalendar = computed(() => Boolean(
-  access.value && 'defaultResourceKey' in access.value
+const calendarResourceList = computed(() => calendarResources(access.value?.resources || []))
+const taskListResourceList = computed(() => taskListResources(access.value?.resources || []))
+const hasDefaultResourceFields = computed(() => Boolean(
+  access.value
+    && 'defaultResourceKey' in access.value
+    && 'defaultTaskListKey' in access.value
 ))
+const supportsDefaultResources = computed(() => Boolean(
+  hasDefaultResourceFields.value
+    && (calendarResourceList.value.length || taskListResourceList.value.length)
+))
+const resourceGroups = computed(() => groupResources(access.value?.resources || []))
 const defaultCalendarOptions = computed(() => [
   { label: 'Keiner in diesem Konto', value: null },
-  ...(access.value?.resources || []).map((resource) => ({
+  ...calendarResourceList.value.map((resource) => ({
+    label: resource.label,
+    value: resource.key
+  }))
+])
+const defaultTaskListOptions = computed(() => [
+  { label: 'Keine in diesem Konto', value: null },
+  ...taskListResourceList.value.map((resource) => ({
     label: resource.label,
     value: resource.key
   }))
@@ -224,6 +276,12 @@ function effectiveHint(resource, action) {
   return `Wirksam: ${policyLabel(resource.effectivePolicies[action.capability])}`
 }
 
+function resourceDomainLabel(resource) {
+  if (resource.key.startsWith('calendar:')) return 'Kalender'
+  if (resource.key.startsWith('tasklist:')) return 'Aufgaben'
+  return 'Ressource'
+}
+
 function requestPayload() {
   const policies = Object.fromEntries(
     Object.entries(integrationForm).filter(([, policy]) => policy !== 'inherit')
@@ -238,14 +296,18 @@ function requestPayload() {
   return {
     policies,
     resources,
-    ...(supportsDefaultCalendar.value
-      ? { defaultResourceKey: defaultResourceKey.value }
+    ...(hasDefaultResourceFields.value
+      ? {
+          defaultResourceKey: defaultResourceKey.value,
+          defaultTaskListKey: defaultTaskListKey.value
+        }
       : {})
   }
 }
 
 function assignAccess(value) {
-  defaultResourceKey.value = value.defaultResourceKey || null
+  defaultResourceKey.value = value.defaultResourceKey ?? null
+  defaultTaskListKey.value = value.defaultTaskListKey ?? null
   for (const key of Object.keys(integrationForm)) delete integrationForm[key]
   for (const key of Object.keys(resourceForm)) delete resourceForm[key]
   for (const action of value.actions) {
@@ -253,7 +315,7 @@ function assignAccess(value) {
   }
   for (const resource of value.resources) {
     resourceForm[resource.key] = {}
-    for (const action of value.actions) {
+    for (const action of applicableResourceActions(value.actions, resource)) {
       resourceForm[resource.key][action.capability] = resource.policies[action.capability] || 'inherit'
     }
   }

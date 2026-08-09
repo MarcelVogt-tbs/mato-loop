@@ -244,6 +244,27 @@ def test_message_projection_never_restores_persisted_write_file_content() -> Non
     assert "note.txt" not in content
 
 
+def test_message_projection_does_not_present_redacted_qr_content_as_failure() -> None:
+    message = _message(uuid4(), "assistant", "QR-Code erzeugen")
+    message.tool_calls = [
+        {
+            "id": "qr",
+            "name": "generate_qr_code",
+            "arguments": {
+                "content": {"characters": 49, "redacted": True},
+            },
+        }
+    ]
+
+    projected = message_dict(message)
+
+    content = projected["tool_calls"][0]["arguments"]["content"]
+    assert content == (
+        "[QR content omitted from persisted history: 49 characters. This omission does not "
+        "indicate tool failure and is not a request to regenerate.]"
+    )
+
+
 def test_public_projection_redacts_only_private_memory_results() -> None:
     session = _session()
     assistant = _message(session.id, "assistant", "Ich prüfe das Memory.")

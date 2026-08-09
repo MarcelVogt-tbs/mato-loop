@@ -62,7 +62,7 @@ ATTACHMENT_ID_2 = UUID("80000000-0000-4000-8000-000000000002")
 CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
 
-INVENTORY_VERSION = 10
+INVENTORY_VERSION = 12
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -831,6 +831,29 @@ CASES = (
         expected_arguments={"url": "https://example.com/specification"},
     ),
     PromptCase(
+        id="generate_qr_code_avoids_image_generation",
+        kind="general",
+        user=(
+            "Erzeuge einen QR-Code mit exakt diesem Inhalt: "
+            "WIFI:T:WPA;S:Guest;P:correct-horse-battery-staple;;"
+        ),
+        tools=("generate_qr_code", "generate_image"),
+        expected_tool="generate_qr_code",
+        expected_arguments={
+            "content": "WIFI:T:WPA;S:Guest;P:correct-horse-battery-staple;;"
+        },
+        forbidden_tools=("generate_image",),
+    ),
+    PromptCase(
+        id="read_qr_code_uses_attachment_uuid",
+        kind="general",
+        user=f"Lies alle QR-Codes aus dem Bildanhang mit ID {ATTACHMENT_ID}.",
+        tools=("read_qr_code", "generate_image"),
+        expected_tool="read_qr_code",
+        expected_arguments={"attachment_id": str(ATTACHMENT_ID)},
+        forbidden_tools=("generate_image",),
+    ),
+    PromptCase(
         id="generate_image_uses_prompt",
         kind="general",
         user="Erzeuge ein 512 mal 512 Pixel großes Bild einer roten Tasse.",
@@ -1242,6 +1265,25 @@ CASES = (
         ),
         expected_no_tools=True,
         content_contains=("note.txt",),
+    ),
+    PromptCase(
+        id="successful_qr_result_is_not_repeated",
+        kind="general",
+        user="Erzeuge einen QR-Code für meine WLAN-Zugangsdaten und bestätige erst nach Erfolg.",
+        tools=("generate_qr_code", "generate_image"),
+        continuation=_exchange(
+            "generate_qr_code",
+            {
+                "content": (
+                    "[QR content omitted from persisted history: 49 characters. This omission "
+                    "does not indicate tool failure and is not a request to regenerate.]"
+                )
+            },
+            "QR code generated.",
+        ),
+        expected_no_tools=True,
+        forbidden_tools=("generate_qr_code", "generate_image"),
+        content_contains=("QR",),
     ),
     PromptCase(
         id="failed_tool_call_is_not_repeated_unchanged",
@@ -2791,6 +2833,9 @@ _SEMANTIC_CONTRACTS = (
         "media",
         (
             "generate_image_uses_prompt",
+            "generate_qr_code_avoids_image_generation",
+            "read_qr_code_uses_attachment_uuid",
+            "successful_qr_result_is_not_repeated",
             "edit_image_preserves_unspecified_content",
             "edit_image_confines_precise_object_change",
             "edit_image_preserves_person_identity",

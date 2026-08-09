@@ -15,6 +15,7 @@
 
         <q-item-section class="tool-call__identity">
           <q-item-label lines="1" class="text-weight-medium">{{ identity.label }}</q-item-label>
+          <q-item-label v-if="summary" caption lines="1">{{ summary }}</q-item-label>
         </q-item-section>
 
         <q-item-section side class="tool-call__state">
@@ -79,17 +80,10 @@
           {{ resultData.errorMessage }}
         </q-banner>
 
-        <q-expansion-item
-          v-if="resultData.text"
-          v-model="resultExpanded"
-          dense
-          dense-toggle
-          icon="terminal"
-          label="Ergebnis anzeigen"
-          class="tool-call__result-expansion"
-        >
+        <div v-if="resultData.text" class="tool-call__section q-mt-md">
+          <div class="tool-call__section-label">Ergebnis</div>
           <pre class="tool-call__details tool-call__result">{{ resultData.text }}</pre>
-        </q-expansion-item>
+        </div>
 
         <ApprovalCard v-if="!technicalOnly && approval" :approval="approval" class="tool-call__approval" />
       </div>
@@ -114,6 +108,7 @@ import {
   memoryWriteContent,
   parseToolResult,
   toolIdentity,
+  toolSummary,
   toolStatus
 } from 'src/utils/tool-display'
 
@@ -130,6 +125,7 @@ const props = defineProps({
 const emit = defineEmits(['open-file'])
 
 const identity = computed(() => toolIdentity(props.tool.name))
+const summary = computed(() => toolSummary(props.tool))
 const memoryContent = computed(() => memoryWriteContent(props.tool))
 const argumentsText = computed(() => formatToolArguments(props.tool.arguments, props.tool.name))
 const resultData = computed(() => parseToolResult(props.result?.content, props.tool.name))
@@ -143,7 +139,6 @@ const attachments = computed(() => {
 const fileActions = computed(() => toolFileActions(props.result))
 const status = computed(() => toolStatus(props))
 const expanded = ref(['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name))
-const resultExpanded = ref(Boolean(resultData.value.error))
 watch(() => status.value.name, (name) => {
   if (['approval', 'question', 'failed', 'denied', 'interrupted'].includes(name)) expanded.value = true
 })

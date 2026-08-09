@@ -1,10 +1,13 @@
 import json
 from datetime import UTC, datetime
+from io import BytesIO
 from unittest.mock import AsyncMock, Mock
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
 
 import pytest
+import zxingcpp
+from PIL import Image
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +28,7 @@ from mato_loop_backend.agent.tools import (
     tool_execution_policy,
     tool_registry,
 )
+from mato_loop_backend.attachments import AttachmentService
 from mato_loop_backend.integrations import WebFetchError, WebFetchResult
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -194,7 +198,11 @@ def _shared_integration(name: str) -> IntegrationInstance:
 
 
 def _shared_adapter(
-    monkeypatch, handler: AsyncMock, *, releases_private_data: bool = False
+    monkeypatch,
+    handler: AsyncMock,
+    *,
+    releases_private_data: bool = False,
+    applicable_capabilities: frozenset[str] | None = None,
 ) -> ToolAction:
     action = ToolAction(
         "tasks.read",
@@ -203,7 +211,13 @@ def _shared_adapter(
     )
 
     async def resources(_instance, _credential):
-        return (IntegrationResource("project:main", "Hauptprojekt"),)
+        return (
+            IntegrationResource(
+                "project:main",
+                "Hauptprojekt",
+                applicable_capabilities=applicable_capabilities,
+            ),
+        )
 
     monkeypatch.setitem(
         integration_registry._ADAPTERS,
@@ -245,6 +259,110 @@ def _shared_adapter(
 def test_tool_registry_rejects_duplicate_names() -> None:
     with pytest.raises(ValueError, match="duplicate tool: example"):
         ToolRegistry([_definition(), _definition()])
+
+
+async def test_generate_qr_code_returns_scannable_png(tmp_path) -> None:
+    content = "WIFI:T:WPA;S:Gäste;P:correct-horse-battery-staple;;"
+    call = ToolCall(
+        id="qr-generate",
+        name="generate_qr_code",
+        arguments={"content": content},
+    )
+
+    result = await tool_registry.execute(call, _context(tmp_path, call))
+
+    assert result.is_error is False
+    assert result.content == "QR code generated."
+    assert result.attachments[0].mime_type == "image/png"
+    assert result.attachments[0].filename == "qr-code.png"
+    with Image.open(BytesIO(result.attachments[0].data)) as image:
+        decoded = zxingcpp.read_barcode(
+            image,
+            formats=zxingcpp.BarcodeFormat.QRCode,
+            text_mode=zxingcpp.TextMode.Plain,
+        )
+    assert decoded is not None
+    assert decoded.text == content
+
+
+async def test_generate_qr_code_rejects_oversized_utf8_content(tmp_path) -> None:
+    call = ToolCall(
+        id="qr-large",
+        name="generate_qr_code",
+        arguments={"content": "ü" * 1_001},
+    )
+
+    result = await tool_registry.execute(call, _context(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+
+
+async def test_read_qr_code_uses_current_session_image_and_source_trust(
+    tmp_path, monkeypatch
+) -> None:
+    content = "https://example.com/über-uns"
+    generate_call = ToolCall(
+        id="qr-generate",
+        name="generate_qr_code",
+        arguments={"content": content},
+    )
+    generated = await tool_registry.execute(
+        generate_call, _context(tmp_path, generate_call)
+    )
+    attachment_id = uuid4()
+    read_call = ToolCall(
+        id="qr-read",
+        name="read_qr_code",
+        arguments={"attachment_id": str(attachment_id)},
+    )
+    context = _context(tmp_path, read_call)
+    message = Message(
+        id=uuid4(),
+        session_id=context.session.id,
+        role="user",
+        content="Lies den QR-Code",
+        trust_level="private",
+    )
+    attachment = MessageAttachment(
+        id=attachment_id,
+        message_id=message.id,
+        message=message,
+        position=0,
+        kind="image",
+        category="user_upload",
+        processing_status="ready",
+        mime_type="image/png",
+        size_bytes=len(generated.attachments[0].data),
+        sha256="0" * 64,
+        storage_path=f"attachments/{attachment_id}/qr.png",
+    )
+    context.db.scalar.return_value = attachment
+    read_image = AsyncMock(return_value=generated.attachments[0].data)
+    monkeypatch.setattr(AttachmentService, "read_image", read_image)
+
+    result = await tool_registry.execute(read_call, context)
+
+    assert json.loads(result.content) == {"codes": [content]}
+    assert result.trust_level == TrustLevel.PRIVATE
+    read_image.assert_awaited_once_with(attachment, context.session.id)
+    statement = context.db.scalar.await_args.args[0]
+    assert context.session.id in statement.compile().params.values()
+
+
+async def test_read_qr_code_rejects_unknown_session_attachment(tmp_path) -> None:
+    read_call = ToolCall(
+        id="qr-read",
+        name="read_qr_code",
+        arguments={"attachment_id": str(uuid4())},
+    )
+    context = _context(tmp_path, read_call)
+    context.db.scalar.return_value = None
+
+    result = await tool_registry.execute(read_call, context)
+
+    assert result.metadata == {"errorCode": "attachment.notFound"}
+    statement = context.db.scalar.await_args.args[0]
+    assert context.session.id in statement.compile().params.values()
 
 
 def test_effective_toolset_accepts_host_registered_integration_tools(monkeypatch) -> None:
@@ -448,6 +566,35 @@ async def test_shared_tool_rejects_unbound_and_stale_instance_ids(
 
     assert unbound.metadata == {"errorCode": "tool.unavailable"}
     assert stale.metadata == {"errorCode": "tool.unavailable"}
+    handler.assert_not_awaited()
+
+
+async def test_shared_tool_rejects_action_irrelevant_to_selected_resource(
+    tmp_path, monkeypatch
+) -> None:
+    handler = AsyncMock(return_value=ToolResult.json({"ok": True}))
+    _shared_adapter(
+        monkeypatch,
+        handler,
+        applicable_capabilities=frozenset(),
+    )
+    integration = _shared_integration("First")
+    settings = IntegrationSettings(instances=[integration])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    effective = ToolRegistry([]).effective(settings, "read-only")
+    call = ToolCall(
+        id="irrelevant",
+        name="tasks_read",
+        arguments={
+            "integration_id": str(integration.id),
+            "resource_key": "project:main",
+            "value": "open",
+        },
+    )
+
+    result = await effective.execute(call, _context(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
     handler.assert_not_awaited()
 
 
@@ -2331,14 +2478,28 @@ def test_tool_schemas_remove_annotative_titles_recursively() -> None:
         )
     ]
 
-    def contains_title(value) -> bool:
+    def contains_annotative_title(value) -> bool:
         if isinstance(value, dict):
-            return "title" in value or any(contains_title(item) for item in value.values())
+            return isinstance(value.get("title"), str) or any(
+                contains_annotative_title(item) for item in value.values()
+            )
         if isinstance(value, list):
-            return any(contains_title(item) for item in value)
+            return any(contains_annotative_title(item) for item in value)
         return False
 
-    assert not contains_title(schemas)
+    class TitledArguments(BaseModel):
+        title: str
+
+    titled_schema = ToolDefinition(
+        "titled",
+        "Use a title.",
+        TitledArguments,
+        AsyncMock(),
+    ).schema()
+
+    assert "title" in titled_schema["parameters"]["properties"]
+    assert "title" in titled_schema["parameters"]["required"]
+    assert not contains_annotative_title([*schemas, titled_schema])
     assert all(schema["parameters"]["additionalProperties"] is False for schema in schemas)
 
 

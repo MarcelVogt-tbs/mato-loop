@@ -74,6 +74,20 @@ describe('approval display', () => {
     })
   })
 
+  it('labels task grants', () => {
+    for (const [capability, label, icon] of [
+      ['tasks.read', 'Aufgaben lesen', 'checklist'],
+      ['tasks.write', 'Aufgaben ändern', 'edit_note'],
+      ['tasks.delete', 'Aufgaben löschen', 'delete_outline']
+    ]) {
+      expect(permissionGrantDisplay({
+        capability,
+        resourceType: 'integration_operation',
+        resourceDisplay: 'Aufgabenliste Arbeit'
+      })).toEqual({ label, value: 'Aufgabenliste Arbeit', icon })
+    }
+  })
+
   it('redacts sensitive and bounds large technical details', () => {
     const formatted = formatTechnicalDetails({
       path: 'Notizen/plan.md',

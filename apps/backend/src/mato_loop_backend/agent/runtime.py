@@ -787,11 +787,14 @@ def _bounded_memory_overview(
 
 def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     safe = dict(arguments)
+    for key in safe:
+        if key.lower().endswith(("token", "password", "secret", "credential", "api_key")):
+            safe[key] = "[Redacted]"
     content = safe.get("content")
     if isinstance(content, str) and tool_name != "memory_write":
         safe["content"] = (
             {"characters": len(content), "redacted": True}
-            if tool_name == "write_file"
+            if tool_name in {"write_file", "generate_qr_code"}
             else {"characters": len(content), "preview": content[:200]}
         )
     if tool_name == "webfetch" and isinstance(safe.get("url"), str):
@@ -837,7 +840,7 @@ def _safe_provider_data(
         call_id = str(item.get("call_id") or item.get("id") or "")
         tool_name = str(item.get("name") or call_names.get(call_id) or "")
         arguments = item.get("arguments")
-        if tool_name in {"update_agent_identity", "webfetch", "write_file"} and isinstance(arguments, str):
+        if isinstance(arguments, str):
             try:
                 parsed = json.loads(arguments)
             except (TypeError, ValueError):
@@ -846,7 +849,7 @@ def _safe_provider_data(
                 item["arguments"] = json.dumps(
                     _safe_tool_arguments(tool_name, parsed), ensure_ascii=True
                 )
-        elif tool_name in {"update_agent_identity", "webfetch", "write_file"} and isinstance(arguments, dict):
+        elif isinstance(arguments, dict):
             item["arguments"] = json.dumps(
                 _safe_tool_arguments(tool_name, arguments), ensure_ascii=True
             )

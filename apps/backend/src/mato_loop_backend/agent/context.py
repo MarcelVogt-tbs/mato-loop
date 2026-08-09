@@ -155,8 +155,13 @@ def _model_tool_calls(
                 characters = content.get("characters")
                 count = characters if isinstance(characters, int) else "unknown"
                 projected_arguments["content"] = (
-                    f"[Persisted file content omitted: {count} characters. "
-                    "Regenerate content before retrying.]"
+                    f"[QR content omitted from persisted history: {count} characters. This "
+                    "omission does not indicate tool failure and is not a request to regenerate.]"
+                    if item.get("name") == "generate_qr_code"
+                    else (
+                        f"[Persisted file content omitted: {count} characters. "
+                        "Regenerate content before retrying.]"
+                    )
                 )
             instructions = projected_arguments.get("instructions")
             if isinstance(instructions, dict) and isinstance(

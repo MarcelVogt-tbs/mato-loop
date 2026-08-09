@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from urllib.parse import urljoin
@@ -13,6 +13,7 @@ from defusedxml import ElementTree as DefusedElementTree
 from defusedxml.common import DefusedXmlException
 from icalendar import Calendar as ICalendar
 from icalendar import Event as ICalendarEvent
+from icalendar import Todo as ICalendarTodo
 
 DAV = "DAV:"
 CALDAV = "urn:ietf:params:xml:ns:caldav"
@@ -22,6 +23,7 @@ MAX_EVENTS = 1_000
 MAX_QUERY_SPAN = timedelta(days=366)
 
 CalDavPrivilege = Literal["read", "write", "delete"]
+CalDavComponent = Literal["VEVENT", "VTODO"]
 
 
 class CalDavError(RuntimeError):
@@ -37,6 +39,7 @@ class CalDavCalendar:
     href: str
     name: str
     privileges: frozenset[CalDavPrivilege]
+    supported_components: frozenset[CalDavComponent] = frozenset({"VEVENT"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +71,33 @@ class CalDavEvent:
     location: str | None = None
     recurring: bool = False
     scheduled: bool = False
+    mutation_safe: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class CalDavTaskDraft:
+    title: str
+    description: str | None = None
+    due: date | datetime | None = None
+    completed: bool = False
+    completed_at: datetime | None = None
+    created: datetime | None = None
+    sequence: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class CalDavTask:
+    uid: str
+    href: str
+    etag: str | None
+    title: str
+    description: str | None = None
+    due: date | datetime | None = None
+    completed: bool = False
+    completed_at: datetime | None = None
+    created: datetime | None = None
+    sequence: int = 0
+    recurring: bool = False
     mutation_safe: bool = True
 
 
@@ -125,6 +155,19 @@ def _property(response: ElementTree.Element, name: str) -> ElementTree.Element |
         (value for prop in _properties(response) if (value := prop.find(name)) is not None),
         None,
     )
+
+
+def _task_properties_are_safe(component: ICalendarTodo) -> bool:
+    for name in component.keys():
+        value = component.get(name)
+        if isinstance(value, list):
+            return False
+        parameters = {str(key).upper() for key in getattr(value, "params", {})}
+        if parameters and (
+            str(name).upper() != "DUE" or not parameters <= {"VALUE", "TZID"}
+        ):
+            return False
+    return True
 
 
 def _privileges(value: ElementTree.Element | None) -> frozenset[CalDavPrivilege]:
@@ -344,10 +387,17 @@ class CalDavClient:
             if resource_type is None or resource_type.find(f"{{{CALDAV}}}calendar") is None:
                 continue
             components = _property(response, f"{{{CALDAV}}}supported-calendar-component-set")
-            if components is not None and not any(
-                component.get("name", "").upper() == "VEVENT"
-                for component in components.findall(f"{{{CALDAV}}}comp")
-            ):
+            supported_components = (
+                frozenset(
+                    name
+                    for component in components.findall(f"{{{CALDAV}}}comp")
+                    if (name := component.get("name", "").upper())
+                    in {"VEVENT", "VTODO"}
+                )
+                if components is not None
+                else frozenset({"VEVENT", "VTODO"})
+            )
+            if not supported_components:
                 continue
             href = response.findtext(f"{{{DAV}}}href")
             if not href:
@@ -364,6 +414,7 @@ class CalDavClient:
                     privileges=_privileges(
                         _property(response, f"{{{DAV}}}current-user-privilege-set")
                     ),
+                    supported_components=supported_components,
                 )
             )
         calendars.sort(key=lambda calendar: calendar.key)
@@ -511,6 +562,151 @@ class CalDavClient:
                 raise _error("malformedCalendarData") from exc
         return tuple(events)
 
+    async def query_tasks(
+        self,
+        calendar: CalDavCalendar,
+        *,
+        include_completed: bool = False,
+    ) -> tuple[CalDavTask, ...]:
+        query = ElementTree.tostring(
+            ElementTree.fromstring(
+                f'<c:calendar-query xmlns="{DAV}" xmlns:c="{CALDAV}"><prop>'
+                "<getetag/><c:calendar-data/></prop><c:filter>"
+                '<c:comp-filter name="VCALENDAR"><c:comp-filter name="VTODO"/>'
+                "</c:comp-filter></c:filter></c:calendar-query>"
+            ),
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        calendar_url = self._collection_url(calendar.href)
+        body, _headers = await self._request(
+            "REPORT",
+            calendar_url,
+            headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
+            content=query,
+            expected={207},
+        )
+        root = self._xml(body)
+        if root.tag != f"{{{DAV}}}multistatus":
+            raise _error("malformedResponse")
+        tasks: list[CalDavTask] = []
+        task_count = 0
+        for response in root.findall(f"{{{DAV}}}response"):
+            href = response.findtext(f"{{{DAV}}}href")
+            calendar_data = _property(response, f"{{{CALDAV}}}calendar-data")
+            if not href or calendar_data is None or not calendar_data.text:
+                continue
+            task_url = self._url(href, relative_to=calendar_url)
+            etag_value = _property(response, f"{{{DAV}}}getetag")
+            etag = etag_value.text.strip() if etag_value is not None and etag_value.text else None
+            try:
+                parsed = ICalendar.from_ical(calendar_data.text)
+                calendar_safe = {str(key).upper() for key in parsed.keys()} <= {
+                    "PRODID",
+                    "VERSION",
+                    "CALSCALE",
+                }
+                components = [component for component in parsed.walk() if component.name == "VTODO"]
+                primary_components = [
+                    component
+                    for component in parsed.subcomponents
+                    if component.name != "VTIMEZONE"
+                ]
+                single_task = len(primary_components) == 1 and len(components) == 1
+                for component in components:
+                    task_count += 1
+                    if task_count > MAX_EVENTS:
+                        raise _error("tooManyEvents")
+                    uid = str(component.get("uid", "")).strip()
+                    due_property = component.get("due")
+                    due = due_property.dt if due_property is not None else None
+                    completed_property = component.get("completed")
+                    completed_at = (
+                        completed_property.dt if completed_property is not None else None
+                    )
+                    created_property = component.get("created")
+                    created = created_property.dt if created_property is not None else None
+                    sequence = int(component.get("sequence", 0))
+                    if not uid or (due is not None and not isinstance(due, (date, datetime))):
+                        raise ValueError
+                    if isinstance(due, datetime):
+                        if due.tzinfo is not None and due.utcoffset() is not None:
+                            due = due.astimezone(UTC)
+                    if completed_at is not None:
+                        if (
+                            not isinstance(completed_at, datetime)
+                            or completed_at.tzinfo is None
+                            or completed_at.utcoffset() is None
+                        ):
+                            raise ValueError
+                        completed_at = completed_at.astimezone(UTC)
+                    if created is not None:
+                        if (
+                            not isinstance(created, datetime)
+                            or created.tzinfo is None
+                            or created.utcoffset() is None
+                        ):
+                            raise ValueError
+                        created = created.astimezone(UTC)
+                    if sequence < 0:
+                        raise ValueError
+                    status = str(component.get("status", "")).upper()
+                    completed = status == "COMPLETED"
+                    if include_completed or not completed:
+                        recurring = any(
+                            component.get(name) is not None
+                            for name in ("rrule", "recurrence-id", "rdate", "exdate")
+                        )
+                        tasks.append(
+                            CalDavTask(
+                                uid=uid,
+                                href=str(task_url),
+                                etag=etag,
+                                title=str(component.get("summary", "")),
+                                description=(
+                                    str(component.get("description"))
+                                    if component.get("description") is not None
+                                    else None
+                                ),
+                                due=due,
+                                completed=completed,
+                                completed_at=completed_at,
+                                created=created,
+                                sequence=sequence,
+                                recurring=recurring,
+                                mutation_safe=(
+                                    single_task
+                                    and calendar_safe
+                                    and _task_properties_are_safe(component)
+                                    and not recurring
+                                    and component.get("related-to") is None
+                                    and not component.subcomponents
+                                    and status in {"", "NEEDS-ACTION", "COMPLETED"}
+                                    and (completed or completed_at is None)
+                                    and len(str(component.get("summary", ""))) <= 500
+                                    and len(str(component.get("description", ""))) <= 10_000
+                                    and {str(key).upper() for key in component.keys()}
+                                    <= {
+                                        "UID",
+                                        "DTSTAMP",
+                                        "DUE",
+                                        "SUMMARY",
+                                        "DESCRIPTION",
+                                        "STATUS",
+                                        "COMPLETED",
+                                        "CREATED",
+                                        "LAST-MODIFIED",
+                                        "SEQUENCE",
+                                    }
+                                ),
+                            )
+                        )
+            except CalDavError:
+                raise
+            except Exception as exc:
+                raise _error("malformedCalendarData") from exc
+        return tuple(tasks)
+
     def _calendar_data(self, uid: str, draft: CalDavEventDraft) -> bytes:
         all_day = isinstance(draft.start, date) and not isinstance(draft.start, datetime)
         end_all_day = isinstance(draft.end, date) and not isinstance(draft.end, datetime)
@@ -547,6 +743,48 @@ class CalDavClient:
         if draft.location is not None:
             event.add("location", draft.location)
         calendar.add_component(event)
+        return calendar.to_ical()
+
+    def _task_calendar_data(self, uid: str, draft: CalDavTaskDraft) -> bytes:
+        due = draft.due
+        if isinstance(due, datetime):
+            if due.tzinfo is not None and due.utcoffset() is not None:
+                due = due.astimezone(UTC)
+        completed_at = draft.completed_at
+        if completed_at is not None:
+            if (
+                not draft.completed
+                or completed_at.tzinfo is None
+                or completed_at.utcoffset() is None
+            ):
+                raise _error("invalidEvent")
+            completed_at = completed_at.astimezone(UTC)
+        created = draft.created
+        if created is not None:
+            if created.tzinfo is None or created.utcoffset() is None:
+                raise _error("invalidEvent")
+            created = created.astimezone(UTC)
+        if draft.sequence < 0:
+            raise _error("invalidEvent")
+        calendar = ICalendar()
+        calendar.add("prodid", "-//MatoLoop//CalDAV Client//EN")
+        calendar.add("version", "2.0")
+        task = ICalendarTodo()
+        task.add("uid", uid)
+        now = datetime.now(UTC)
+        task.add("dtstamp", now)
+        task.add("created", created or now)
+        task.add("last-modified", now)
+        task.add("sequence", draft.sequence)
+        task.add("summary", draft.title)
+        if draft.description is not None:
+            task.add("description", draft.description)
+        if due is not None:
+            task.add("due", due)
+        task.add("status", "COMPLETED" if draft.completed else "NEEDS-ACTION")
+        if completed_at is not None:
+            task.add("completed", completed_at)
+        calendar.add_component(task)
         return calendar.to_ical()
 
     async def create_event(
@@ -603,6 +841,61 @@ class CalDavClient:
             expected={200, 204, 404},
         )
 
+    async def create_task(
+        self,
+        calendar: CalDavCalendar,
+        draft: CalDavTaskDraft,
+        idempotency_key: UUID,
+    ) -> CalDavTask:
+        draft = replace(draft, created=draft.created or datetime.now(UTC))
+        uid = f"{idempotency_key}@mato-loop"
+        collection_url = self._collection_url(calendar.href)
+        task_url = self._url(f"{idempotency_key}.ics", relative_to=collection_url)
+        _body, headers = await self._request(
+            "PUT",
+            task_url,
+            headers={"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"},
+            content=self._task_calendar_data(uid, draft),
+            expected={201, 204},
+        )
+        return self._task_from_draft(uid, str(task_url), headers.get("etag"), draft)
+
+    async def update_task(
+        self,
+        existing: CalDavTask,
+        draft: CalDavTaskDraft,
+    ) -> CalDavTask:
+        if not existing.etag:
+            raise _error("etagRequired")
+        if existing.recurring or not existing.mutation_safe:
+            raise _error("unsupportedMutation")
+        task_url = self._url(existing.href)
+        _body, headers = await self._request(
+            "PUT",
+            task_url,
+            headers={
+                "Content-Type": "text/calendar; charset=utf-8",
+                "If-Match": existing.etag,
+            },
+            content=self._task_calendar_data(existing.uid, draft),
+            expected={200, 201, 204},
+        )
+        return self._task_from_draft(
+            existing.uid, str(task_url), headers.get("etag"), draft
+        )
+
+    async def delete_task(self, existing: CalDavTask) -> None:
+        if not existing.etag:
+            raise _error("etagRequired")
+        if existing.recurring or not existing.mutation_safe:
+            raise _error("unsupportedMutation")
+        await self._request(
+            "DELETE",
+            self._url(existing.href),
+            headers={"If-Match": existing.etag},
+            expected={200, 204, 404},
+        )
+
     @staticmethod
     def _event_from_draft(
         uid: str,
@@ -630,4 +923,34 @@ class CalDavClient:
             all_day=isinstance(draft.start, date) and not isinstance(draft.start, datetime),
             description=draft.description,
             location=draft.location,
+        )
+
+    @staticmethod
+    def _task_from_draft(
+        uid: str,
+        href: str,
+        etag: str | None,
+        draft: CalDavTaskDraft,
+    ) -> CalDavTask:
+        due = draft.due
+        if (
+            isinstance(due, datetime)
+            and due.tzinfo is not None
+            and due.utcoffset() is not None
+        ):
+            due = due.astimezone(UTC)
+        completed_at = (
+            draft.completed_at.astimezone(UTC) if draft.completed_at is not None else None
+        )
+        return CalDavTask(
+            uid=uid,
+            href=href,
+            etag=etag,
+            title=draft.title,
+            description=draft.description,
+            due=due,
+            completed=draft.completed,
+            completed_at=completed_at,
+            created=draft.created,
+            sequence=draft.sequence,
         )

@@ -164,6 +164,12 @@ class CalDavIntegrationService:
             ):
                 tools.default_calendar = None
                 changed = True
+            if (
+                tools.default_task_list is not None
+                and str(tools.default_task_list.integration_id) == integration_id
+            ):
+                tools.default_task_list = None
+                changed = True
             if changed:
                 await SettingsStore.save(db, tools)
         await SettingsStore.save(db, settings)

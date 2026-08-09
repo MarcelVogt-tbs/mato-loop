@@ -12,6 +12,7 @@ from mato_loop_backend.api.routes.auth import (
 )
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.settings import (
+    DefaultTaskListSettings,
     IntegrationSettings,
     MemorySettings,
     SettingsScope,
@@ -48,6 +49,7 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert settings.historical_tool_output_tokens == 2_000
     assert ToolSettings().web_fetch.default_policy == WebFetchPolicy.AUTO_PUBLIC
     assert ToolSettings().default_calendar is None
+    assert ToolSettings().default_task_list is None
     assert ToolSettings().resource_labels == {}
 
 
@@ -71,6 +73,39 @@ def test_default_calendar_requires_a_stable_calendar_target() -> None:
                     "calendarKey": "calendar:unstable",
                 }
             }
+        )
+
+
+def test_default_task_list_accepts_aliases_and_requires_a_stable_target() -> None:
+    integration_id = uuid4()
+    key = f"tasklist:{'a' * 32}"
+
+    camel = ToolSettings.model_validate(
+        {
+            "defaultTaskList": {
+                "integrationId": str(integration_id),
+                "taskListKey": key,
+            }
+        }
+    )
+    snake = ToolSettings.model_validate(
+        {
+            "default_task_list": {
+                "integration_id": integration_id,
+                "task_list_key": key,
+            }
+        }
+    )
+
+    expected = DefaultTaskListSettings(
+        integration_id=integration_id, task_list_key=key
+    )
+    assert camel.default_task_list == expected
+    assert snake.default_task_list == expected
+    with pytest.raises(ValidationError):
+        DefaultTaskListSettings(
+            integration_id=integration_id,
+            task_list_key=f"calendar:{'a' * 32}",
         )
 
 

@@ -273,3 +273,54 @@ async def test_responses_stream_routes_summary_separately(monkeypatch) -> None:
     assert result.content == "Antwort"
     assert result.reasoning is not None
     assert result.reasoning.text == "Kurz begründet."
+
+
+async def test_responses_stream_separates_summary_parts(monkeypatch) -> None:
+    events = [
+        {"type": "response.reasoning_summary_part.added"},
+        {"type": "response.reasoning_summary_text.delta", "delta": "**Planung**"},
+        {"type": "response.reasoning_summary_part.added"},
+        {"type": "response.reasoning_summary_text.delta", "delta": "**Prüfung**"},
+        {
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "**Planung**"},
+                            {"type": "summary_text", "text": "**Prüfung**"},
+                        ],
+                    }
+                ],
+            },
+        },
+    ]
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, text=body))
+    monkeypatch.setattr(
+        "mato_loop_backend.providers.openai_compatible.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    reasoning = []
+
+    async def on_reasoning(text: str, kind: str) -> None:
+        reasoning.append((text, kind))
+
+    result = await responses_api(
+        url="https://provider.test/v1/responses",
+        headers={},
+        request=ProviderRequest(model="reasoning", messages=[]),
+        on_delta=None,
+        on_reasoning=on_reasoning,
+    )
+
+    assert reasoning == [
+        ("**Planung**", "summary"),
+        ("\n\n", "summary"),
+        ("**Prüfung**", "summary"),
+    ]
+    assert result.reasoning is not None
+    assert result.reasoning.text == "**Planung**\n\n**Prüfung**"

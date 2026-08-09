@@ -54,8 +54,10 @@ export function agentRunPresentation({
   if (!running) return { showActivity: false, announcement: '' }
 
   const toolItems = (transcript?.messages || []).flatMap((message) => (
-    message.toolHistory?.items || message.toolCalls || []
+    message.workHistory?.entries?.filter((entry) => entry.type === 'tool') || message.toolCalls || []
   ))
+  const currentWorkHistory = (transcript?.messages || [])
+    .some((message) => message.currentTurn && message.workHistory)
   const currentToolItems = toolItems.filter((item) => item.current)
   const approval = toolItems.find((item) => item.approval)?.approval
     || transcript?.unmatchedApprovals?.[0]
@@ -83,7 +85,10 @@ export function agentRunPresentation({
     return { showActivity: false, announcement: 'Antwort wird erstellt' }
   }
   if (streamReasoning) {
-    return { showActivity: false, announcement: 'Denkprozess' }
+    return { showActivity: false, announcement: 'Überlegung' }
+  }
+  if (currentWorkHistory) {
+    return { showActivity: false, announcement: agentActivityLabel(activity) }
   }
   if (activity?.phase === 'finalizing') {
     return { showActivity: false, announcement: 'Antwort wird abgeschlossen' }
@@ -97,5 +102,7 @@ export function formatActivityDuration(startedAt, now = Date.now()) {
   if (!Number.isFinite(started)) return '0 s'
   const seconds = Math.max(0, Math.floor((now - started) / 1000))
   if (seconds < 60) return `${seconds} s`
-  return `${Math.floor(seconds / 60)} min ${seconds % 60} s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ${seconds % 60} s`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ${Math.floor((seconds % 3600) / 60)} min`
+  return `${Math.floor(seconds / 86400)} T ${Math.floor((seconds % 86400) / 3600)} h`
 }

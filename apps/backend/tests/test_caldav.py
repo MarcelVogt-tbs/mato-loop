@@ -1,3 +1,4 @@
+import hashlib
 import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -24,6 +25,7 @@ from mato_loop_backend.integrations.caldav_client import (
     CalDavCalendar,
     CalDavDiscovery,
     CalDavEvent,
+    CalDavTask,
 )
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
@@ -50,7 +52,54 @@ def _revision(account: IntegrationInstance) -> str:
     )
 
 
-async def test_resource_loader_maps_only_remote_privilege_limits(monkeypatch) -> None:
+def _task(**changes) -> CalDavTask:
+    values = {
+        "uid": "task-1",
+        "href": "https://calendar.example.com/home/tasks/task-1.ics",
+        "etag": '"etag"',
+        "title": "Bericht abgeben",
+    }
+    return CalDavTask(**(values | changes))
+
+
+def _task_context(
+    account: IntegrationInstance, revision: str, **values
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        bound_options={
+            "integration_id": str(account.id),
+            "binding_revision": revision,
+        },
+        integration_settings=IntegrationSettings(instances=[account]),
+        **values,
+    )
+
+
+def _mock_task_client(monkeypatch, client, revision: str) -> None:
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(caldav_module, "_selected_client", selected_client)
+    monkeypatch.setattr(caldav_module, "_task_list", AsyncMock())
+
+
+async def _updated_task(existing, draft) -> CalDavTask:
+    return replace(
+        existing,
+        title=draft.title,
+        description=draft.description,
+        due=draft.due,
+        completed=draft.completed,
+        completed_at=draft.completed_at,
+        created=draft.created,
+        sequence=draft.sequence,
+    )
+
+
+async def test_resource_loader_maps_components_and_remote_privilege_limits(
+    monkeypatch,
+) -> None:
     discovery = CalDavDiscovery(
         "https://calendar.example.com/principal",
         "https://calendar.example.com/home/",
@@ -60,12 +109,21 @@ async def test_resource_loader_maps_only_remote_privilege_limits(monkeypatch) ->
                 href="https://calendar.example.com/home/private/",
                 name="  Privat  ",
                 privileges=frozenset({"read"}),
+                supported_components=frozenset({"VEVENT"}),
             ),
             CalDavCalendar(
                 key="b" * 32,
-                href="https://calendar.example.com/home/work/",
+                href="https://calendar.example.com/home/tasks/",
+                name="  Aufgaben  ",
+                privileges=frozenset({"write", "delete"}),
+                supported_components=frozenset({"VTODO"}),
+            ),
+            CalDavCalendar(
+                key="c" * 32,
+                href="https://calendar.example.com/home/mixed/",
                 name="X" * 200,
                 privileges=frozenset({"read", "write", "delete"}),
+                supported_components=frozenset({"VEVENT", "VTODO"}),
             ),
         ),
     )
@@ -81,14 +139,49 @@ async def test_resource_loader_maps_only_remote_privilege_limits(monkeypatch) ->
     constructor.assert_called_once_with(
         "https://calendar.example.com/", "user", "secret"
     )
-    assert resources[0].key == f"calendar:{'a' * 32}"
-    assert resources[0].label == "Privat"
-    assert resources[0].hard_unavailable_capabilities == {
+    by_key = {resource.key: resource for resource in resources}
+    assert set(by_key) == {
+        f"calendar:{'a' * 32}",
+        f"tasklist:{'b' * 32}",
+        f"calendar:{'c' * 32}",
+        f"tasklist:{'c' * 32}",
+    }
+    private = by_key[f"calendar:{'a' * 32}"]
+    assert private.label == "Privat"
+    assert private.applicable_capabilities == {
+        "calendar.read",
         "calendar.write",
         "calendar.delete",
     }
-    assert len(resources[1].label) == 160
-    assert resources[1].hard_unavailable_capabilities == set()
+    assert private.hard_unavailable_capabilities == {
+        "calendar.write",
+        "calendar.delete",
+    }
+    tasks = by_key[f"tasklist:{'b' * 32}"]
+    assert tasks.label == "Aufgaben"
+    assert tasks.applicable_capabilities == {
+        "tasks.read",
+        "tasks.write",
+        "tasks.delete",
+    }
+    assert tasks.hard_unavailable_capabilities == {"tasks.read"}
+    mixed_calendar = by_key[f"calendar:{'c' * 32}"]
+    mixed_tasks = by_key[f"tasklist:{'c' * 32}"]
+    assert mixed_calendar.group_key == mixed_tasks.group_key == "c" * 32
+    assert mixed_calendar.key != mixed_tasks.key
+    assert mixed_calendar.applicable_capabilities == {
+        "calendar.read",
+        "calendar.write",
+        "calendar.delete",
+    }
+    assert mixed_tasks.applicable_capabilities == {
+        "tasks.read",
+        "tasks.write",
+        "tasks.delete",
+    }
+    for key in (f"calendar:{'c' * 32}", f"tasklist:{'c' * 32}"):
+        assert len(by_key[key].label) == 160
+        assert by_key[key].hard_unavailable_capabilities == set()
 
 
 def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
@@ -107,6 +200,13 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "calendar_create_event",
         "calendar_update_event",
         "calendar_delete_event",
+        "tasks_list_accounts",
+        "tasks_list_lists",
+        "tasks_query",
+        "tasks_create",
+        "tasks_update",
+        "tasks_set_completed",
+        "tasks_delete",
     }
     assert all(tool.write is False for tool in tools.values())
     assert tools["calendar_list_accounts"].instance_argument is None
@@ -119,6 +219,16 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
     assert tools["calendar_create_event"].resource_argument == "calendar_key"
     assert tools["calendar_update_event"].resource_argument == "calendar_key"
     assert tools["calendar_delete_event"].resource_argument == "calendar_key"
+    assert tools["tasks_list_accounts"].instance_argument is None
+    assert tools["tasks_list_lists"].instance_argument == "integration_id"
+    for name in (
+        "tasks_query",
+        "tasks_create",
+        "tasks_update",
+        "tasks_set_completed",
+        "tasks_delete",
+    ):
+        assert tools[name].resource_argument == "task_list_key"
     discovery_permission = tools["calendar_list_calendars"].authorization_factory(
         CalendarIntegrationArguments(integration_id=first.id),
         SimpleNamespace(
@@ -142,6 +252,18 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "disabled",
         "ask",
     ]
+    assert set(actions) == {
+        "calendar.read",
+        "calendar.write",
+        "calendar.delete",
+        "tasks.read",
+        "tasks.write",
+        "tasks.delete",
+    }
+    assert [item.value for item in actions["tasks.delete"].allowed_policies] == [
+        "disabled",
+        "ask",
+    ]
     create_schema = tools["calendar_create_event"].arguments_model.model_json_schema()
     assert "idempotency_key" not in create_schema["properties"]
     assert create_schema["properties"]["timing"]["discriminator"]["propertyName"] == "type"
@@ -159,6 +281,8 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
     }
     assert actions["calendar.write"].mutates is True
     assert actions["calendar.delete"].mutates is True
+    assert actions["tasks.write"].mutates is True
+    assert actions["tasks.delete"].mutates is True
     with pytest.raises(ValueError):
         tools["calendar_create_event"].arguments_model.model_validate(
             {
@@ -170,6 +294,52 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
                     "end": "2026-08-07T15:00:00+02:00",
                 },
             }
+        )
+
+
+def test_task_schemas_accept_dates_or_aware_datetimes_and_default_to_open() -> None:
+    account = _account()
+    key = f"tasklist:{'a' * 32}"
+    tools = {
+        tool.name: tool
+        for tool in effective_integration_contributions(
+            IntegrationSettings(instances=[account])
+        ).tools
+    }
+    query_model = tools["tasks_query"].arguments_model
+    create_model = tools["tasks_create"].arguments_model
+    query_schema = query_model.model_json_schema()
+    create_schema = create_model.model_json_schema()
+
+    assert query_schema["properties"]["include_completed"]["default"] is False
+    assert (
+        query_model(integration_id=account.id, task_list_key=key).include_completed
+        is False
+    )
+    assert {
+        option.get("format")
+        for option in create_schema["properties"]["due"]["anyOf"]
+        if option.get("format")
+    } == {"date", "date-time"}
+    assert create_model(
+        integration_id=account.id,
+        task_list_key=key,
+        title="Abgabe",
+        due=date(2026, 8, 8),
+    ).due == date(2026, 8, 8)
+    aware = datetime(2026, 8, 8, 10, tzinfo=UTC)
+    assert create_model(
+        integration_id=account.id,
+        task_list_key=key,
+        title="Abgabe",
+        due=aware,
+    ).due == aware
+    with pytest.raises(ValueError):
+        create_model(
+            integration_id=account.id,
+            task_list_key=key,
+            title="Abgabe",
+            due=datetime(2026, 8, 8, 10),
         )
 
 
@@ -191,13 +361,14 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
         tool_settings=settings,
     )
 
-    assert len(effective.prompt_fragments) == 2
+    assert len(effective.prompt_fragments) == 3
     assert effective.prompt_fragments[0].startswith("A default calendar is configured.")
     assert "call calendar_query_events or calendar_create_event directly" in (
         effective.prompt_fragments[0]
     )
     assert "copy eventToken, integrationId, and calendarKey" in effective.prompt_fragments[1]
     assert "mutation succeeds only" in effective.prompt_fragments[1]
+    assert "copy taskToken, integrationId, and taskListKey" in effective.prompt_fragments[2]
     for name in ("calendar_query_events", "calendar_create_event"):
         tool = effective.tools[name]
         assert tool.default_arguments == {
@@ -226,10 +397,90 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
     ]["required"]
     assert "integration_id" in required
     assert "calendar_key" in required
-    assert len(without_active_default.prompt_fragments) == 1
+    assert len(without_active_default.prompt_fragments) == 2
     assert "copy eventToken, integrationId, and calendarKey" in (
         without_active_default.prompt_fragments[0]
     )
+    assert "copy taskToken, integrationId, and taskListKey" in (
+        without_active_default.prompt_fragments[1]
+    )
+
+
+def test_active_default_task_list_is_bound_only_to_query_and_create() -> None:
+    account = _account()
+    disabled = _account(name="Aus")
+    disabled.enabled = False
+    key = f"tasklist:{'a' * 32}"
+    settings = ToolSettings.model_validate(
+        {
+            "defaultTaskList": {
+                "integrationId": str(account.id),
+                "taskListKey": key,
+            }
+        }
+    )
+    integrations = IntegrationSettings(instances=[account, disabled])
+
+    effective = tool_registry.effective(
+        integrations,
+        "read-only",
+        tool_settings=settings,
+    )
+
+    assert any(
+        fragment.startswith("A default task list is configured.")
+        for fragment in effective.prompt_fragments
+    )
+    for name in ("tasks_query", "tasks_create"):
+        tool = effective.tools[name]
+        assert tool.default_arguments == {
+            "integration_id": str(account.id),
+            "task_list_key": key,
+        }
+        required = tool.schema()["parameters"]["required"]
+        assert "integration_id" not in required
+        assert "task_list_key" not in required
+
+    create_parameters = effective.tools["tasks_create"].schema()["parameters"]
+    assert create_parameters["properties"]["title"]["minLength"] == 1
+    assert create_parameters["properties"]["title"]["maxLength"] == 500
+    assert "title" in create_parameters["required"]
+    update_parameters = effective.tools["tasks_update"].schema()["parameters"]
+    assert "title" in update_parameters["properties"]
+    assert "title" not in update_parameters["required"]
+
+    for name in (
+        "tasks_list_accounts",
+        "tasks_list_lists",
+        "tasks_update",
+        "tasks_set_completed",
+        "tasks_delete",
+    ):
+        assert effective.tools[name].default_arguments == {}
+    assert "integration_id" in effective.tools["tasks_list_lists"].schema()[
+        "parameters"
+    ]["required"]
+    for name in ("tasks_update", "tasks_set_completed", "tasks_delete"):
+        required = effective.tools[name].schema()["parameters"]["required"]
+        assert "integration_id" in required
+        assert "task_list_key" in required
+
+    for integration_id in (disabled.id, uuid4()):
+        settings.default_task_list.integration_id = integration_id
+        unbound = tool_registry.effective(
+            integrations,
+            "read-only",
+            tool_settings=settings,
+        )
+        assert not any(
+            fragment.startswith("A default task list is configured.")
+            for fragment in unbound.prompt_fragments
+        )
+        for name in ("tasks_query", "tasks_create"):
+            assert unbound.tools[name].default_arguments == {}
+            assert {"integration_id", "task_list_key"} <= set(
+                unbound.tools[name].schema()["parameters"]["required"]
+            )
 
 
 def test_calendar_permissions_describe_the_requested_action() -> None:
@@ -359,6 +610,78 @@ async def test_calendar_listing_remembers_resource_labels(monkeypatch) -> None:
     save.assert_awaited_once_with(context.db, tools)
 
 
+def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> None:
+    account = _account(name="Arbeit")
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    task = _task(due=date(2026, 8, 8))
+    token = caldav_module._task_token(task, account.id, revision, key)
+    context = _task_context(
+        account,
+        revision,
+        tool_settings=ToolSettings(
+            resource_labels={str(account.id): {key: "Teamaufgaben"}}
+        ),
+    )
+    tools = {
+        tool.name: tool
+        for tool in effective_integration_contributions(
+            IntegrationSettings(instances=[account])
+        ).tools
+    }
+
+    accounts = tools["tasks_list_accounts"].authorization_factory(None, context)[0]
+    listing = tools["tasks_list_lists"].authorization_factory(
+        caldav_module.TaskIntegrationArguments(integration_id=account.id), context
+    )[0]
+    query = tools["tasks_query"].authorization_factory(
+        caldav_module.TaskQueryArguments(
+            integration_id=account.id,
+            task_list_key=key,
+        ),
+        context,
+    )[0]
+    create = tools["tasks_create"].authorization_factory(
+        caldav_module.TaskCreateArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            title="Bericht abgeben",
+        ),
+        context,
+    )[0]
+    delete = tools["tasks_delete"].authorization_factory(
+        caldav_module.TaskDeleteArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=token,
+        ),
+        context,
+    )[0]
+
+    assert accounts.capability == "tasks.read"
+    assert accounts.resource_scope == "task_accounts"
+    assert listing.use_integration_policy is False
+    assert "resourceKey" not in json.loads(listing.resource_scope)
+    expected_scope = {
+        "bindingRevision": hashlib.sha256(revision.encode()).hexdigest(),
+        "integrationId": str(account.id),
+        "operationKey": "query-tasks",
+        "resourceKey": key,
+    }
+    assert query.resource_scope == json.dumps(
+        expected_scope, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    )
+    assert query.policy_resource_key == key
+    assert query.resource_display == '"Teamaufgaben" · Konto "Arbeit"'
+    assert query.available_decisions == ("allow_once", "allow_session", "deny")
+    assert create.capability == "tasks.write"
+    assert delete.capability == "tasks.delete"
+    for permission in (create, delete):
+        assert json.loads(permission.resource_scope)["resourceKey"] == key
+        assert permission.policy_resource_key == key
+        assert permission.available_decisions == ("allow_once", "deny")
+
+
 async def test_account_list_uses_only_bound_active_caldav_snapshot() -> None:
     first = _account(name="Privat")
     second = _account(name="Arbeit")
@@ -446,6 +769,90 @@ async def test_create_uses_a_stable_host_generated_idempotency_key(monkeypatch) 
     }
 
 
+async def test_task_query_hides_remote_fields_and_returns_binding_token(
+    monkeypatch,
+) -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    task = _task(
+        uid="remote-secret-task-uid",
+        href="https://calendar.example.com/home/tasks/remote-secret-task.ics",
+        etag='"remote-secret-etag"',
+        description="Bis Mittag",
+        due=datetime(2026, 8, 8, 10, tzinfo=UTC),
+    )
+    client = AsyncMock()
+    client.query_tasks.return_value = (task,)
+    _mock_task_client(monkeypatch, client, revision)
+    result = await caldav_module.tasks_query(
+        caldav_module.TaskQueryArguments(
+            integration_id=account.id,
+            task_list_key=key,
+        ),
+        _task_context(account, revision),
+    )
+
+    payload = json.loads(result.content)
+    returned = payload["tasks"][0]
+    assert set(returned) == {
+        "taskToken",
+        "integrationId",
+        "taskListKey",
+        "title",
+        "description",
+        "due",
+        "dueIsFloating",
+        "completed",
+        "completedAt",
+        "recurring",
+    }
+    assert "remote-secret" not in result.content
+    assert client.query_tasks.await_args.kwargs == {"include_completed": False}
+    decrypted = caldav_module.CredentialCipher().decrypt(
+        returned["taskToken"].encode("ascii")
+    )
+    assert decrypted["integration_id"] == str(account.id)
+    assert decrypted["binding_revision"] == revision
+    assert decrypted["task_list_key"] == key
+    assert decrypted["uid"] == task.uid
+    assert decrypted["href"] == task.href
+    assert decrypted["etag"] == task.etag
+
+
+async def test_task_create_uses_one_stable_host_idempotency_key(monkeypatch) -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    assistant_message_id = uuid4()
+    client = AsyncMock()
+    client.create_task.return_value = _task(due=date(2026, 8, 8))
+    _mock_task_client(monkeypatch, client, revision)
+    context = _task_context(
+        account,
+        revision,
+        assistant_message_id=assistant_message_id,
+        run_id=uuid4(),
+        tool_call=SimpleNamespace(name="tasks_create", id="call-1"),
+    )
+    result = await caldav_module.tasks_create(
+        caldav_module.TaskCreateArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            title="Bericht abgeben",
+            due=date(2026, 8, 8),
+        ),
+        context,
+    )
+
+    assert result.is_error is False
+    client.create_task.assert_awaited_once()
+    assert client.create_task.await_args.args[2] == uuid5(
+        assistant_message_id, "tasks_create:call-1"
+    )
+    assert client.create_task.await_args.args[1].due == date(2026, 8, 8)
+
+
 async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
     monkeypatch,
 ) -> None:
@@ -531,6 +938,154 @@ async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
     )
     invalid = await calendar_update_event(arguments, wrong_binding)
     assert invalid.is_error is True
+
+
+async def test_task_update_preserves_omitted_and_clears_explicit_fields(
+    monkeypatch,
+) -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    task = _task(
+        title="Alt",
+        description="Beschreibung",
+        due=date(2026, 8, 8),
+        created=datetime(2026, 8, 1, 8, tzinfo=UTC),
+        sequence=4,
+    )
+    token = caldav_module._task_token(task, account.id, revision, key)
+    client = AsyncMock()
+    client.update_task.side_effect = _updated_task
+
+    _mock_task_client(monkeypatch, client, revision)
+    context = _task_context(account, revision)
+
+    preserved = await caldav_module.tasks_update(
+        caldav_module.TaskUpdateArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=token,
+            title="Neu",
+        ),
+        context,
+    )
+    preserved_draft = client.update_task.await_args.args[1]
+    cleared = await caldav_module.tasks_update(
+        caldav_module.TaskUpdateArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=json.loads(preserved.content)["task"]["taskToken"],
+            description=None,
+            due=None,
+        ),
+        context,
+    )
+    cleared_draft = client.update_task.await_args.args[1]
+
+    assert preserved_draft.title == "Neu"
+    assert preserved_draft.description == "Beschreibung"
+    assert preserved_draft.due == date(2026, 8, 8)
+    assert preserved_draft.created == datetime(2026, 8, 1, 8, tzinfo=UTC)
+    assert preserved_draft.sequence == 5
+    assert cleared.is_error is False
+    assert cleared_draft.title == "Neu"
+    assert cleared_draft.description is None
+    assert cleared_draft.due is None
+
+
+async def test_task_completion_sets_timestamp_and_reopen_clears_it(monkeypatch) -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    task = _task()
+    token = caldav_module._task_token(task, account.id, revision, key)
+    client = AsyncMock()
+    client.update_task.side_effect = _updated_task
+
+    _mock_task_client(monkeypatch, client, revision)
+    context = _task_context(account, revision)
+    before = datetime.now(UTC)
+
+    completed = await caldav_module.tasks_set_completed(
+        caldav_module.TaskSetCompletedArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=token,
+            completed=True,
+        ),
+        context,
+    )
+    completed_draft = client.update_task.await_args.args[1]
+    reopened = await caldav_module.tasks_set_completed(
+        caldav_module.TaskSetCompletedArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=json.loads(completed.content)["task"]["taskToken"],
+            completed=False,
+        ),
+        context,
+    )
+    reopened_draft = client.update_task.await_args.args[1]
+
+    assert completed_draft.completed is True
+    assert before <= completed_draft.completed_at <= datetime.now(UTC)
+    assert reopened.is_error is False
+    assert reopened_draft.completed is False
+    assert reopened_draft.completed_at is None
+
+
+async def test_task_delete_uses_token_target(monkeypatch) -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    task = _task()
+    token = caldav_module._task_token(task, account.id, revision, key)
+    client = AsyncMock()
+    _mock_task_client(monkeypatch, client, revision)
+    context = _task_context(account, revision)
+
+    result = await caldav_module.tasks_delete(
+        caldav_module.TaskDeleteArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=token,
+        ),
+        context,
+    )
+
+    assert json.loads(result.content) == {
+        "deleted": True,
+        "contentIsUntrusted": True,
+    }
+    client.delete_task.assert_awaited_once_with(task)
+
+
+async def test_task_mutation_rejects_invalid_or_wrong_binding_tokens() -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    task = _task()
+    context = _task_context(account, revision)
+
+    invalid = await caldav_module.tasks_delete(
+        caldav_module.TaskDeleteArguments.model_construct(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token="invalid",
+        ),
+        context,
+    )
+    wrong_binding = await caldav_module.tasks_delete(
+        caldav_module.TaskDeleteArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=caldav_module._task_token(task, uuid4(), revision, key),
+        ),
+        context,
+    )
+
+    assert invalid.metadata == {"errorCode": "tool.invalidArguments"}
+    assert wrong_binding.metadata == {"errorCode": "tool.invalidArguments"}
 
 
 def test_timed_event_schema_requires_aware_datetimes() -> None:

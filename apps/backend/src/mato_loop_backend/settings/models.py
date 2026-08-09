@@ -431,6 +431,16 @@ class DefaultCalendarSettings(BaseModel):
     )
 
 
+class DefaultTaskListSettings(BaseModel):
+    integration_id: UUID = Field(
+        validation_alias=AliasChoices("integration_id", "integrationId")
+    )
+    task_list_key: str = Field(
+        pattern=r"^tasklist:[a-f0-9]{32}$",
+        validation_alias=AliasChoices("task_list_key", "taskListKey"),
+    )
+
+
 class ToolSettings(SettingsDocument):
     settings_key = "tools"
 
@@ -452,6 +462,10 @@ class ToolSettings(SettingsDocument):
     default_calendar: DefaultCalendarSettings | None = Field(
         default=None,
         validation_alias=AliasChoices("default_calendar", "defaultCalendar"),
+    )
+    default_task_list: DefaultTaskListSettings | None = Field(
+        default=None,
+        validation_alias=AliasChoices("default_task_list", "defaultTaskList"),
     )
     web_search: WebSearchToolSettings = Field(
         default_factory=WebSearchToolSettings,

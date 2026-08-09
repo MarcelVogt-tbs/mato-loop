@@ -120,6 +120,9 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'calendar.read': { label: 'Kalender lesen', icon: 'event' },
     'calendar.write': { label: 'Kalender ändern', icon: 'edit_calendar' },
     'calendar.delete': { label: 'Kalendereintrag löschen', icon: 'event_busy' },
+    'tasks.read': { label: 'Aufgaben lesen', icon: 'checklist' },
+    'tasks.write': { label: 'Aufgaben ändern', icon: 'edit_note' },
+    'tasks.delete': { label: 'Aufgaben löschen', icon: 'delete_outline' },
     'integration.private_data.release': { label: 'Private Integrationsdaten freigeben', icon: 'cloud_upload' }
   }[grant?.capability]
   return {

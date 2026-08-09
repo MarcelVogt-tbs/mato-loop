@@ -77,20 +77,22 @@
             </template>
             <template
               v-else-if="message.content
-                || message.reasoningHistory
-                || message.reasoning
+                || message.workHistory
                 || message.generationStatus === 'interrupted'"
             >
-              <ReasoningPanel
-                v-if="message.reasoningHistory || message.reasoning"
-                :reasoning="message.reasoningHistory || message.reasoning"
+              <WorkHistoryPanel
+                v-if="message.workHistory"
+                :history="message.workHistory"
+                :reasoning="message.currentTurn ? chat.streamReasoning : null"
+                :activity="chat.activity"
+                :running="chat.running && message.currentTurn"
                 :expanded="auth.preferences.thinkingExpanded"
                 :class="{
                   'q-mb-sm': message.content
                     || message.attachments?.length
-                    || message.toolHistory
                     || message.generationStatus === 'interrupted'
                 }"
+                @open-file="openToolFile"
                 @update:expanded="updateThinkingExpanded"
               />
               <MessageContent
@@ -107,14 +109,6 @@
               v-if="message.attachments?.length"
               class="q-mt-sm"
               :attachments="message.attachments"
-            />
-            <ToolHistoryPanel
-              v-if="message.toolHistory"
-              :class="{ 'q-mt-md': message.content }"
-              :history="message.toolHistory"
-              :activity="chat.activity"
-              :running="chat.running"
-              @open-file="openToolFile"
             />
             <div
               v-if="message.generationStatus === 'interrupted'"
@@ -201,14 +195,15 @@
             </div>
           </div>
           <div
-            v-if="chat.streamContent || chat.streamReasoning"
+            v-if="chat.streamContent || (chat.streamReasoning && !hasCurrentWorkHistory)"
             class="chat-message chat-message--assistant"
           >
             <div v-if="!hasCurrentAssistantTurn" class="chat-message__label">
               <span>{{ identity.displayName }}</span>
             </div>
-            <ReasoningPanel
-              v-if="chat.streamReasoning"
+            <WorkHistoryPanel
+              v-if="chat.streamReasoning && !hasCurrentWorkHistory"
+              :history="emptyWorkHistory"
               :reasoning="chat.streamReasoning"
               :activity="chat.activity"
               :running="chat.running"
@@ -344,8 +339,7 @@ import FileExplorerPanel from 'components/FileExplorerPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import QuestionDock from 'components/QuestionDock.vue'
-import ReasoningPanel from 'components/ReasoningPanel.vue'
-import ToolHistoryPanel from 'components/ToolHistoryPanel.vue'
+import WorkHistoryPanel from 'components/WorkHistoryPanel.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
@@ -390,6 +384,7 @@ const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
 const announcedRunStatus = ref('')
 const bottomThreshold = 64
+const emptyWorkHistory = { entries: [], observedDurationMs: null }
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
 ))
@@ -416,6 +411,9 @@ const transcript = computed(() => buildChatTranscript(
 ))
 const hasCurrentAssistantTurn = computed(() => (
   transcript.value.messages.some((message) => message.currentTurn)
+))
+const hasCurrentWorkHistory = computed(() => (
+  transcript.value.messages.some((message) => message.currentTurn && message.workHistory)
 ))
 const runPresentation = computed(() => agentRunPresentation({
   running: chat.running,

@@ -19,7 +19,7 @@ describe('chat transcript', () => {
     const transcript = buildChatTranscript(messages, approvals, { running: true })
 
     expect(transcript.messages).toHaveLength(2)
-    expect(transcript.messages[1].toolHistory.items[0]).toMatchObject({
+    expect(transcript.messages[1].workHistory.entries[0]).toMatchObject({
       result: messages[2],
       approval: approvals[0],
       active: false
@@ -44,7 +44,7 @@ describe('chat transcript', () => {
 
     const transcript = buildChatTranscript(messages, [], { running: true, questions: [question] })
 
-    expect(transcript.messages[1].toolHistory.items[0]).toMatchObject({
+    expect(transcript.messages[1].workHistory.entries[0]).toMatchObject({
       question,
       active: false
     })
@@ -53,11 +53,15 @@ describe('chat transcript', () => {
 
   it('marks only the next unresolved sequential call as running', () => {
     const messages = [
-      { id: 'user-1', role: 'user', content: 'Arbeite die Schritte ab' },
+      {
+        id: 'user-1', role: 'user', content: 'Arbeite die Schritte ab',
+        createdAt: '2026-08-06T12:00:00Z'
+      },
       {
         id: 'assistant-1',
         role: 'assistant',
         content: '',
+        createdAt: '2026-08-06T12:00:01Z',
         toolCalls: [
           { id: 'call-1', name: 'read_file', arguments: { path: 'eins.md' } },
           { id: 'call-2', name: 'read_file', arguments: { path: 'zwei.md' } }
@@ -65,9 +69,15 @@ describe('chat transcript', () => {
       }
     ]
 
-    const calls = buildChatTranscript(messages, [], { running: true }).messages[1].toolHistory.items
+    const history = buildChatTranscript(messages, [], { running: true })
+      .messages[1].workHistory
+    const calls = history.entries
 
     expect(calls.map((call) => call.active)).toEqual([true, false])
+    expect(history).toMatchObject({
+      startedAt: '2026-08-06T12:00:00Z',
+      completedAt: null
+    })
   })
 
   it('uses the runtime tool call id instead of stale result ordering', () => {
@@ -87,7 +97,7 @@ describe('chat transcript', () => {
     const calls = buildChatTranscript(messages, [], {
       running: true,
       activeToolCallId: 'call-2'
-    }).messages[1].toolHistory.items
+    }).messages[1].workHistory.entries
 
     expect(calls.map((call) => call.active)).toEqual([false, true])
   })
@@ -106,7 +116,7 @@ describe('chat transcript', () => {
     const calls = buildChatTranscript(messages, [], {
       running: true,
       toolExecutionActive: false
-    }).messages[1].toolHistory.items
+    }).messages[1].workHistory.entries
 
     expect(calls[0].active).toBe(false)
   })
@@ -126,18 +136,22 @@ describe('chat transcript', () => {
     ]
     const approvals = [{ id: 'approval-1', details: { toolCallId: 'call-1' } }]
 
-    const calls = buildChatTranscript(messages, approvals, { running: true }).messages[1].toolHistory.items
+    const calls = buildChatTranscript(messages, approvals, { running: true })
+      .messages[1].workHistory.entries
 
     expect(calls.map((call) => call.active)).toEqual([false, false])
   })
 
-  it('groups every tool round of one user request into one history', () => {
+  it('groups reasoning and tools chronologically into one work history', () => {
     const messages = [
-      { id: 'user-1', role: 'user', content: 'Recherchiere das' },
+      {
+        id: 'user-1', role: 'user', content: 'Recherchiere das',
+        createdAt: '2026-08-06T12:00:00Z'
+      },
       {
         id: 'assistant-1',
         role: 'assistant',
-        content: '',
+        content: 'Ich starte mit einer Suche.',
         createdAt: '2026-08-06T12:00:01Z',
         trustLevel: 'private',
         reasoning: { kind: 'summary', text: 'Suche planen', observedDurationMs: 200, reasoningTokens: 10 },
@@ -161,23 +175,30 @@ describe('chat transcript', () => {
     const transcript = buildChatTranscript(messages)
 
     expect(transcript.messages.map((message) => message.id))
-      .toEqual(['user-1', 'assistant-1', 'assistant-2', 'assistant-3'])
-    expect(transcript.messages[1].toolHistory.items.map((item) => item.tool.name))
-      .toEqual(['web_search', 'webfetch'])
-    expect(transcript.messages[2].reasoningHistory).toMatchObject({
+      .toEqual(['user-1', 'assistant-1', 'assistant-3'])
+    expect(transcript.messages[1].workHistory).toMatchObject({
       observedDurationMs: 500,
-      reasoningTokens: 30
+      startedAt: '2026-08-06T12:00:00Z',
+      completedAt: '2026-08-06T12:00:03Z'
     })
-    expect(transcript.messages[2].reasoningHistory.entries.map((item) => item.text))
-      .toEqual(['Suche planen', 'Treffer prüfen'])
+    expect(transcript.messages[1].workHistory.entries.map((entry) => (
+      entry.reasoning?.text || entry.text || entry.tool.name
+    ))).toEqual([
+      'Suche planen',
+      'Ich starte mit einer Suche.',
+      'web_search',
+      'Treffer prüfen',
+      'webfetch'
+    ])
     expect(transcript.messages[1]).toMatchObject({
       showAgentLabel: true,
       continuesAssistantTurn: true,
+      content: '',
       createdAt: null,
       modelName: null,
       trustLevel: null
     })
-    expect(transcript.messages[3]).toMatchObject({
+    expect(transcript.messages[2]).toMatchObject({
       hasAssistantContent: true,
       createdAt: '2026-08-06T12:00:03Z',
       modelName: 'Antwortmodell',
@@ -202,10 +223,10 @@ describe('chat transcript', () => {
     ]
 
     const histories = buildChatTranscript(messages).messages
-      .filter((message) => message.toolHistory)
-      .map((message) => message.toolHistory)
+      .filter((message) => message.workHistory)
+      .map((message) => message.workHistory)
 
-    expect(histories[0].items[0].result.content).toBe('Erstes Ergebnis')
-    expect(histories[1].items[0].result.content).toBe('Zweites Ergebnis')
+    expect(histories[0].entries[0].result.content).toBe('Erstes Ergebnis')
+    expect(histories[1].entries[0].result.content).toBe('Zweites Ergebnis')
   })
 })

@@ -353,7 +353,14 @@ const TOOL_DESCRIPTIONS = {
   calendar_query_events: 'Liest Termine aus einem ausgewählten Kalender.',
   calendar_create_event: 'Erstellt einen Termin in einem ausgewählten Kalender.',
   calendar_update_event: 'Ändert einen zuvor gelesenen Termin.',
-  calendar_delete_event: 'Löscht einen zuvor gelesenen Termin.'
+  calendar_delete_event: 'Löscht einen zuvor gelesenen Termin.',
+  tasks_list_accounts: 'Listet die konfigurierten CalDAV-Konten für Aufgaben auf.',
+  tasks_list_lists: 'Listet Aufgabenlisten eines CalDAV-Kontos auf.',
+  tasks_query: 'Liest Aufgaben aus einer ausgewählten Aufgabenliste.',
+  tasks_create: 'Erstellt eine Aufgabe in einer ausgewählten Aufgabenliste.',
+  tasks_update: 'Ändert eine zuvor gelesene Aufgabe.',
+  tasks_set_completed: 'Markiert eine zuvor gelesene Aufgabe als erledigt oder offen.',
+  tasks_delete: 'Löscht eine zuvor gelesene Aufgabe.'
 }
 const form = reactive({
   policies: {},

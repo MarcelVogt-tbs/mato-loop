@@ -53,7 +53,7 @@
               </q-chip>
             </div>
             <q-item-label caption>
-              {{ integration.integrationType === 'calendar' ? 'Kalender' : 'Websuche' }} ·
+              {{ integration.integrationType === 'calendar' ? 'Kalender & Aufgaben' : 'Websuche' }} ·
               {{ providerLabel(integration.providerType) }}
             </q-item-label>
             <q-item-label caption lines="1">

@@ -115,7 +115,7 @@ const formRef = ref(null)
 const saving = ref(false)
 const integrationTypes = [
   { label: 'Websuche', value: 'search' },
-  { label: 'Kalender', value: 'calendar' }
+  { label: 'Kalender & Aufgaben', value: 'calendar' }
 ]
 const providerTypes = computed(() => form.integration_type === 'calendar'
   ? [{ label: 'CalDAV', value: 'caldav' }]
