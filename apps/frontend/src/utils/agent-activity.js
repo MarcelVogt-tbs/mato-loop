@@ -24,6 +24,14 @@ function toolProgress(activity) {
 
 export function agentActivityLabel(activity) {
   if (activity?.phase === 'waiting_model') {
+    if (
+      Number.isInteger(activity.providerAttempt)
+      && Number.isInteger(activity.providerAttemptTotal)
+      && activity.providerAttempt >= 2
+      && activity.providerAttempt <= activity.providerAttemptTotal
+    ) {
+      return `Provider-Anfrage wird wiederholt (${activity.providerAttempt}/${activity.providerAttemptTotal})`
+    }
     return activity.modelRequest > 1
       ? 'Modell wertet Tool-Ergebnisse aus'
       : 'Modell analysiert die Anfrage'

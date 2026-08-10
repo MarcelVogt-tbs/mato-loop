@@ -100,9 +100,11 @@ The following command deletes containers and all development volumes, including 
 
 ## Production Preparation
 
-`docker-compose.yaml` and `apps/backend/Dockerfile` prepare a combined MatoLoop container, PostgreSQL with pgvector, and an internal Infinity CPU service. The prepared Infinity container targets `linux/amd64`. This is not the development stack and is not started during normal development work.
+`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and an optional Execution Agent profile. With no image variables set, `docker compose build` builds MatoLoop locally; `docker compose --profile execution-agent build` includes the Execution Agent. Set `MATO_LOOP_IMAGE` and `MATO_LOOP_EXECUTION_AGENT_IMAGE` to consume published images instead. Published images currently target `linux/amd64` only.
 
 The prepared production setup uses `./data:/data` and `./db:/var/lib/postgresql/data` bind mounts. Before production use, define and verify TLS, secure cookies, credentials, backups, and restoration for the target environment.
+
+Forgejo CI and the manual release process are documented in [CI and releases](docs/ci-and-releases.md). CI publishes images and Forgejo releases; it does not deploy MatoLoop.
 
 ## Providers
 
@@ -149,5 +151,6 @@ API keys and OAuth tokens are encrypted in PostgreSQL. The local Fernet key is s
 - [User handbook](docs/user/index.md)
 - [Coding agent rules](AGENTS.md)
 - [Architecture](docs/architecture.md)
+- [CI and releases](docs/ci-and-releases.md)
 - [Backend](apps/backend/README.md)
 - [Frontend](apps/frontend/README.md)

@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS frontend
+FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS frontend
 
 RUN corepack enable
 WORKDIR /build/frontend
@@ -7,7 +7,7 @@ RUN yarn install --immutable
 COPY apps/frontend/ ./
 RUN yarn build
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS documentation
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 AS documentation
 
 WORKDIR /build
 COPY apps/backend/pyproject.toml apps/backend/uv.lock apps/backend/README.md ./
@@ -17,7 +17,7 @@ COPY docs/user ./docs/user
 RUN .venv/bin/mkdocs build --strict --site-dir /build/site \
     && rm -f /build/site/404.html
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ffmpeg poppler-utils \

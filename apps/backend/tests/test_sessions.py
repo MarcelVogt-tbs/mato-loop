@@ -519,6 +519,19 @@ def test_message_payload_exposes_only_public_reasoning() -> None:
     assert payload["attachments"] == []
 
 
+def test_message_payload_canonicalizes_historical_assistant_markdown() -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="assistant",
+        content="````markdown\n# Document\n\n```mermaid\ngraph TD\nA --> B\n```\n````",
+    )
+
+    assert message_payload(message)["content"] == (
+        "# Document\n\n```mermaid\ngraph TD\nA --> B\n```\n"
+    )
+
+
 def test_message_payload_exposes_only_validated_research_snapshot() -> None:
     message = Message(
         id=uuid4(),
@@ -556,13 +569,19 @@ def test_message_payload_exposes_only_validated_research_snapshot() -> None:
 
 def test_message_payload_validates_file_actions_and_derives_download_url() -> None:
     session_id = uuid4()
+    execution_agent_id = str(uuid4())
+    root_id = str(uuid4())
     stored_action = {
         "operation": "copy",
         "root": "workspace",
-        "rootIdentity": "original project",
+        "rootIdentity": root_id,
         "path": "reports/result.txt",
         "filename": "result.txt",
         "sizeBytes": 7,
+        "executionAgentId": execution_agent_id,
+        "rootId": root_id,
+        "rootRevision": "a" * 64,
+        "workingDirectory": "original/project",
     }
     message = Message(
         id=uuid4(),
@@ -581,9 +600,68 @@ def test_message_payload_validates_file_actions_and_derives_download_url() -> No
         "path": ["reports/result.txt"],
         "scope": ["filesystem"],
         "session_id": [str(session_id)],
-        "root_identity": ["original project"],
+        "root_identity": [root_id],
+        "execution_agent_id": [execution_agent_id],
+        "root_id": [root_id],
+        "root_revision": ["a" * 64],
+        "working_directory": ["original/project"],
     }
     assert "downloadUrl" not in str(message.provider_data)
+
+
+def test_message_payload_keeps_session_file_action_url_exact() -> None:
+    session_id = uuid4()
+    stored_action = {
+        "operation": "write",
+        "root": "session",
+        "rootIdentity": str(session_id),
+        "path": "files/result.txt",
+        "filename": "result.txt",
+        "sizeBytes": 7,
+    }
+    message = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="tool",
+        content="{}",
+        provider_data={"_matoloop": {"fileActions": [stored_action]}},
+    )
+
+    action = message_payload(message)["fileActions"][0]
+
+    query = parse_qs(urlparse(action.pop("downloadUrl")).query)
+    assert action == stored_action
+    assert query == {
+        "path": ["files/result.txt"],
+        "scope": ["session"],
+        "session_id": [str(session_id)],
+        "root_identity": [str(session_id)],
+    }
+
+
+def test_message_payload_rejects_workspace_snapshot_fields_on_session_actions() -> None:
+    session_id = uuid4()
+    action = {
+        "operation": "write",
+        "root": "session",
+        "rootIdentity": str(session_id),
+        "path": "files/result.txt",
+        "filename": "result.txt",
+        "sizeBytes": 7,
+        "executionAgentId": str(uuid4()),
+        "rootId": str(uuid4()),
+        "rootRevision": "a" * 64,
+        "workingDirectory": ".",
+    }
+    message = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="tool",
+        content="{}",
+        provider_data={"_matoloop": {"fileActions": [action]}},
+    )
+
+    assert message_payload(message)["fileActions"] == []
 
 
 @pytest.mark.parametrize(
@@ -732,6 +810,7 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             position=0,
             kind="image",
             category="generated",
+            purpose="attachment",
             processing_status="ready",
             mime_type="image/png",
             size_bytes=123,
@@ -752,6 +831,7 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             "id": str(attachment_id),
             "kind": "image",
             "category": "generated",
+            "purpose": "attachment",
             "processingStatus": "ready",
             "mimeType": "image/png",
             "sizeBytes": 123,

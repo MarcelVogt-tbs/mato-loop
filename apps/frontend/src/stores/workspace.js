@@ -66,6 +66,26 @@ function requireWritableContext(store) {
   if (store.rootIdentity) throw new Error('Tool file contexts are read-only')
 }
 
+export function supportsWorkspaceOperation(context, operation) {
+  if (!context) return true
+  if (context.available === false || context.connected === false || context.agentConnected === false) return false
+  const operations = Array.isArray(context.operations)
+    ? context.operations
+    : Array.isArray(context.capabilities) ? context.capabilities : null
+  return operations ? operations.includes(operation) : true
+}
+
+function contextKey(context) {
+  return JSON.stringify([
+    context?.executionAgentId || null,
+    context?.rootId || null,
+    context?.available,
+    context?.connected,
+    context?.agentConnected,
+    context?.operations || context?.capabilities || null
+  ])
+}
+
 export function withFileSuffix(name, suffix) {
   const value = String(name || '').trim()
   return value.toLocaleLowerCase().endsWith(suffix) ? value : `${value}${suffix}`
@@ -77,6 +97,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     scope: 'filesystem',
     sessionId: null,
     workingDirectory: null,
+    workspaceContext: null,
     rootIdentity: null,
     entries: {},
     hasMore: {},
@@ -96,6 +117,13 @@ export const useWorkspaceStore = defineStore('workspace', {
     splitRatio: storedSplitRatio(),
     contextVersion: 0
   }),
+  getters: {
+    operationAvailable: (state) => (operation) => (
+      state.scope === 'session'
+      || Boolean(state.rootIdentity)
+      || supportsWorkspaceOperation(state.workspaceContext, operation)
+    )
+  },
   actions: {
     show() {
       if (this.rootIdentity) this.reset()
@@ -106,11 +134,19 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (this.open) this.open = false
       else this.show()
     },
-    configure({ sessionId = null, workingDirectory = null } = {}) {
+    configure({ sessionId = null, workingDirectory = null, workspaceContext = null } = {}) {
       if (this.scope === 'session' && !sessionId) this.scope = 'filesystem'
-      const changed = this.sessionId !== sessionId || this.workingDirectory !== workingDirectory
+      if (
+        this.scope === 'filesystem'
+        && sessionId
+        && !supportsWorkspaceOperation(workspaceContext, 'workspace.list')
+      ) this.scope = 'session'
+      const changed = this.sessionId !== sessionId
+        || this.workingDirectory !== workingDirectory
+        || contextKey(this.workspaceContext) !== contextKey(workspaceContext)
       this.sessionId = sessionId
       this.workingDirectory = workingDirectory
+      this.workspaceContext = workspaceContext
       if (changed) this.reset()
     },
     setScope(scope) {
@@ -219,6 +255,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       return {
         scope: this.scope,
         ...(this.sessionId ? { session_id: this.sessionId } : {}),
+        ...(!this.sessionId && this.workspaceContext?.executionAgentId
+          ? { execution_agent_id: this.workspaceContext.executionAgentId }
+          : {}),
+        ...(!this.sessionId && this.workspaceContext?.rootId
+          ? { root_id: this.workspaceContext.rootId }
+          : {}),
         ...(!this.sessionId && this.workingDirectory
           ? { working_directory: this.workingDirectory }
           : {}),
@@ -237,6 +279,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       return `/api/workspace/files/${action}?${params}`
     },
     async load(path = '.', append = false, force = false) {
+      if (!this.operationAvailable('workspace.list')) return false
       if (this.loading[path] && !force) return
       const version = this.contextVersion
       const loadVersion = (this.loadVersions[path] || 0) + 1
@@ -273,6 +316,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     async createDirectory(parent, name) {
       requireWritableContext(this)
+      if (!this.operationAvailable('workspace.mkdir')) throw new Error('Workspace operation is unavailable')
       await api.post('/workspace/directories', { parent, name }, {
         params: this.requestParams()
       })
@@ -280,6 +324,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     async deleteEntry(path) {
       requireWritableContext(this)
+      if (!this.operationAvailable('workspace.delete')) throw new Error('Workspace operation is unavailable')
       const version = this.contextVersion
       await api.delete('/workspace/entries', {
         params: this.requestParams({ path })
@@ -296,6 +341,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     async renameEntry(path, name) {
       requireWritableContext(this)
+      if (!this.operationAvailable('workspace.rename')) throw new Error('Workspace operation is unavailable')
       const version = this.contextVersion
       const params = this.requestParams()
       const { data } = await api.patch(
@@ -320,6 +366,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     async uploadFiles(parent, files) {
       requireWritableContext(this)
+      if (!this.operationAvailable('workspace.import')) throw new Error('Workspace operation is unavailable')
       const version = this.contextVersion
       const params = this.requestParams({ parent })
       this.uploading = true
@@ -355,6 +402,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     async createFile(parent, name) {
       requireWritableContext(this)
+      if (!this.operationAvailable('workspace.import')) throw new Error('Workspace operation is unavailable')
       const version = this.contextVersion
       const body = new FormData()
       body.append('file', new File([''], name, { type: 'text/plain;charset=utf-8' }), name)
@@ -370,6 +418,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       return data.entry
     },
     async preview(path) {
+      if (!this.operationAvailable('workspace.read')) return null
       const contextVersion = this.contextVersion
       const previewVersion = (this.previewVersions[path] || 0) + 1
       this.previewVersions[path] = previewVersion
@@ -386,6 +435,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     async saveFile(path, content, expectedRevision) {
       requireWritableContext(this)
+      if (!this.operationAvailable('workspace.write')) throw new Error('Workspace operation is unavailable')
       const version = this.contextVersion
       const { data } = await api.put('/workspace/files', {
         path,
@@ -418,6 +468,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       return data
     },
     download(path) {
+      if (!this.operationAvailable('workspace.export')) return
       const anchor = document.createElement('a')
       anchor.href = this.fileUrl('download', path)
       anchor.download = ''

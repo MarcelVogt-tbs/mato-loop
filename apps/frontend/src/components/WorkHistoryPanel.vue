@@ -124,6 +124,7 @@
               :result="entry.result"
               :approval="entry.approval"
               :question="entry.question"
+              :process-output="entry.processOutput || processOutputs[entry.tool.id]"
               :active="entry.active"
               technical-only
               @open-file="emit('open-file', $event)"
@@ -209,6 +210,7 @@ const props = defineProps({
   history: { type: Object, required: true },
   activity: { type: Object, default: null },
   reasoning: { type: Object, default: null },
+  processOutputs: { type: Object, default: () => ({}) },
   running: Boolean,
   expanded: Boolean
 })

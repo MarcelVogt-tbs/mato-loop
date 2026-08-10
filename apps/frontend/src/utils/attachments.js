@@ -5,6 +5,8 @@ const INTERNAL_ATTACHMENT_URL = new RegExp(
   'i'
 )
 const INTERNAL_FILE_DOWNLOAD_PATH = '/api/workspace/files/download'
+const UUID_PATTERN = new RegExp(`^${UUID}$`, 'i')
+const ROOT_REVISION_PATTERN = /^[0-9a-f]{64}$/u
 
 function validRelativePath(value, allowRoot = false) {
   if (value === '.') return allowRoot
@@ -31,22 +33,46 @@ export function safeFileDownloadUrl(value) {
     return null
   }
   const keys = [...parsed.searchParams.keys()]
-  const allowedKeys = new Set(['path', 'scope', 'session_id', 'root_identity'])
+  const scope = parsed.searchParams.get('scope')
+  const allowedKeys = scope === 'session'
+    ? new Set(['path', 'scope', 'session_id', 'root_identity'])
+    : scope === 'filesystem'
+      ? new Set([
+        'path',
+        'scope',
+        'session_id',
+        'root_identity',
+        'execution_agent_id',
+        'root_id',
+        'root_revision',
+        'working_directory'
+      ])
+      : null
   if (
     parsed.origin !== 'https://mato-loop.invalid'
     || parsed.pathname !== INTERNAL_FILE_DOWNLOAD_PATH
     || parsed.hash
+    || !allowedKeys
     || keys.length !== allowedKeys.size
     || new Set(keys).size !== keys.length
     || keys.some((key) => !allowedKeys.has(key))
   ) return null
   const path = parsed.searchParams.get('path')
-  const scope = parsed.searchParams.get('scope')
   const sessionId = parsed.searchParams.get('session_id')
   const rootIdentity = parsed.searchParams.get('root_identity')
-  if (!validRelativePath(path) || !new RegExp(`^${UUID}$`, 'i').test(sessionId || '')) return null
+  if (!validRelativePath(path) || !UUID_PATTERN.test(sessionId || '')) return null
   if (scope === 'session') return rootIdentity === sessionId ? value : null
-  return scope === 'filesystem' && validRelativePath(rootIdentity, true) ? value : null
+  const executionAgentId = parsed.searchParams.get('execution_agent_id')
+  const rootId = parsed.searchParams.get('root_id')
+  const rootRevision = parsed.searchParams.get('root_revision')
+  const workingDirectory = parsed.searchParams.get('working_directory')
+  return UUID_PATTERN.test(executionAgentId || '')
+    && UUID_PATTERN.test(rootId || '')
+    && rootIdentity === rootId
+    && ROOT_REVISION_PATTERN.test(rootRevision || '')
+    && validRelativePath(workingDirectory, true)
+    ? value
+    : null
 }
 
 export function toolFileAttachment(tool, result) {
@@ -92,6 +118,10 @@ export function toolFileActions(result) {
     const filename = typeof action.filename === 'string' ? action.filename : ''
     const rootIdentity = typeof action.rootIdentity === 'string' ? action.rootIdentity : ''
     const scope = action.root === 'session' ? 'session' : action.root === 'workspace' ? 'filesystem' : null
+    const executionAgentId = typeof action.executionAgentId === 'string' ? action.executionAgentId : ''
+    const rootId = typeof action.rootId === 'string' ? action.rootId : ''
+    const rootRevision = typeof action.rootRevision === 'string' ? action.rootRevision : ''
+    const workingDirectory = typeof action.workingDirectory === 'string' ? action.workingDirectory : ''
     if (
       !safeUrl
       || !scope
@@ -108,6 +138,15 @@ export function toolFileActions(result) {
       || params.get('path') !== path
       || params.get('root_identity') !== rootIdentity
       || !sessionId
+      || (scope === 'filesystem' && (
+        params.get('execution_agent_id') !== executionAgentId
+        || params.get('root_id') !== rootId
+        || params.get('root_revision') !== rootRevision
+        || params.get('working_directory') !== workingDirectory
+      ))
+      || (scope === 'session' && [
+        'executionAgentId', 'rootId', 'rootRevision', 'workingDirectory'
+      ].some((key) => Object.hasOwn(action, key)))
     ) return []
     return [{
       operation: action.operation,
@@ -117,6 +156,9 @@ export function toolFileActions(result) {
       filename,
       sizeBytes: size,
       sessionId,
+      ...(scope === 'filesystem'
+        ? { executionAgentId, rootId, rootRevision, workingDirectory }
+        : {}),
       downloadUrl: safeUrl
     }]
   })

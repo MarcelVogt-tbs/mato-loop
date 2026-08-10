@@ -140,6 +140,24 @@ describe('tool display', () => {
     ).text).toBe('1: [More lines are available. Continue with offset=3.]')
   })
 
+  it('separates process stdout and stderr from result metadata', () => {
+    const result = parseToolResult(JSON.stringify({
+      stdout: 'Ausgabe\n',
+      stderr: 'Warnung\n',
+      exitCode: 0,
+      truncated: true
+    }), 'process_exec')
+
+    expect(toolIdentity('process_exec')).toEqual({ label: 'Prozess ausführen', icon: 'terminal' })
+    expect(result).toMatchObject({
+      stdout: 'Ausgabe\n',
+      stderr: 'Warnung\n',
+      truncated: true
+    })
+    expect(result.text).toContain('exitCode')
+    expect(result.text).not.toContain('Ausgabe')
+  })
+
   it('renders memory retrieval with its visible scope and contents', () => {
     expect(toolIdentity('memory_retrieve')).toEqual({ label: 'Memory abrufen', icon: 'psychology' })
     expect(toolSummary({

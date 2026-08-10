@@ -6,7 +6,7 @@ MatoLoop ist eine selbst gehostete Arbeitsumgebung für KI-gestützte Chats und 
 
 - [Schnellstart](schnellstart.md): Benutzer einrichten, Provider verbinden und die erste Session starten
 - [Chat und Sessions](chat-und-sessions.md): Nachrichten, Agent-Modus, Modelle und Session-Verwaltung
-- [Dateien und Arbeitsordner](dateien-und-arbeitsordner.md): Agent-Home, Arbeitsordner und Session-Dateien
+- [Dateien und Arbeitsordner](dateien-und-arbeitsordner.md): Ausführungsagenten, Arbeitsbereiche und Session-Dateien
 - [Freigaben und Datenfreigabe](freigaben-und-datenfreigabe.md): Entscheidungen über sensible Aktionen und externe Modelle
 - [Skills](skills.md): wiederverwendbare Anweisungen verwenden, im Chat erstellen und verwalten
 

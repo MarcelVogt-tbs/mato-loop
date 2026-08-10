@@ -6,9 +6,17 @@ import { verifyExternalImage } from '../src/utils/image-verification'
 import {
   classifyMarkdownImageUrl,
   containsMarkdownImage,
+  containsMermaidFence,
   renderMarkdown,
   safeMarkdownLinkUrl
 } from '../src/utils/markdown'
+import { markdownPrintRequest } from '../src/utils/markdown-print'
+import {
+  MAX_MERMAID_CACHE_ENTRIES,
+  renderMermaid,
+  sanitizeMermaidSvg,
+  validateMermaidSource
+} from '../src/utils/mermaid'
 
 const internalImage = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
 
@@ -25,6 +33,13 @@ describe('assistant markdown rendering', () => {
     expect(containsMarkdownImage('<img src="https://example.com/image.png">')).toBe(true)
     expect(containsMarkdownImage('\\![nur Text](https://example.com/image.png)')).toBe(false)
     expect(containsMarkdownImage('[normaler Link](https://example.com)')).toBe(false)
+  })
+
+  it('detects Mermaid fences for safe editor mode selection', () => {
+    expect(containsMermaidFence('Text\n\n```mermaid\ngraph TD\nA --> B\n```\n\nMehr Text')).toBe(true)
+    expect(containsMermaidFence('~~~MERMAID extra\ngraph TD\n~~~')).toBe(true)
+    expect(containsMermaidFence('```mermaid\nnoch offen')).toBe(true)
+    expect(containsMermaidFence('`mermaid` und ```mermaidish\nText\n```')).toBe(false)
   })
 
   it('blocks all markdown images in static file previews', () => {
@@ -89,6 +104,48 @@ describe('assistant markdown rendering', () => {
     expect(codeBlocks).toEqual(['erster Block\n', 'zweiter Block\n'])
     expect(html).not.toContain('erster Block"')
     expect(html).not.toContain('zweiter Block"')
+  })
+
+  it('collects completed Mermaid fences without exposing their source in attributes', () => {
+    const source = 'flowchart LR\n  A["<script>alert(1)</script>"] --> B\n'
+    const { root, codeBlocks, html, mermaidBlocks } = renderedDom(`\`\`\`mermaid\n${source}\`\`\``)
+
+    expect(root.querySelector('[data-markdown-mermaid]')?.dataset.markdownMermaid).toBe('0')
+    expect(root.querySelector('.chat-markdown__mermaid-block button, .chat-markdown__mermaid-block pre')).toBeNull()
+    expect(root.querySelector('script')).toBeNull()
+    expect(codeBlocks).toEqual([])
+    expect(mermaidBlocks).toEqual([source])
+    expect(html).not.toContain('data-markdown-mermaid="flowchart')
+  })
+
+  it('shows only progress for unfinished Mermaid fences in preview mode', () => {
+    const source = 'flowchart LR\n  A["<script>alert(1)</script>"] --> B\n'
+    const streaming = renderedDom(`\`\`\`mermaid\n${source}`, { streaming: true })
+    expect(streaming.root.querySelector('[data-markdown-mermaid]')).toBeNull()
+    expect(streaming.root.querySelector('[role="status"]')?.textContent.trim()).toBe('Diagramm wird erstellt …')
+    expect(streaming.root.querySelector('button, pre')).toBeNull()
+    expect(streaming.root.querySelector('script')).toBeNull()
+    expect(streaming.mermaidBlocks).toEqual([source])
+
+    const falseClosingFence = renderedDom(`\`\`\`mermaid\n${source}\`\`\` noch nicht`, { streaming: true })
+    expect(falseClosingFence.root.querySelector('[data-markdown-mermaid]')).toBeNull()
+    expect(falseClosingFence.root.textContent).toContain('Diagramm wird erstellt …')
+  })
+
+  it('renders a genuinely closed Mermaid fence while streaming', () => {
+    const source = 'flowchart LR\n  A --> B\n'
+    const streaming = renderedDom(`\`\`\`mermaid\n${source}\`\`\`\``, { streaming: true })
+    expect(streaming.root.querySelector('[data-markdown-mermaid]')).not.toBeNull()
+    expect(streaming.root.querySelector('.chat-markdown__mermaid-block button')).toBeNull()
+    expect(streaming.mermaidBlocks).toEqual([source])
+
+    const preview = renderedDom(`\`\`\`mermaid\n${source}\`\`\``, { interactive: false })
+    expect(preview.root.querySelector('[data-markdown-mermaid]')).not.toBeNull()
+    expect(preview.root.querySelector('[data-markdown-code]')).toBeNull()
+    expect(preview.mermaidBlocks).toEqual([source])
+
+    const similar = renderedDom(`\`\`\`mermaidish\n${source}\`\`\``)
+    expect(similar.root.querySelector('[data-markdown-mermaid]')).toBeNull()
   })
 
   it('renders inline TeX with dollar and bracket delimiters', () => {
@@ -269,6 +326,79 @@ describe('assistant markdown rendering', () => {
 
     const nextRender = renderedDom('[Primärquelle](https://example.com/report)').root
     expect(nextRender.querySelector('.chat-markdown__source-link')).toBeNull()
+  })
+})
+
+describe('Mermaid safety', () => {
+  it('rejects oversized and content-controlled Mermaid configuration', () => {
+    expect(() => validateMermaidSource('%%{init: {"securityLevel": "loose"}}%%\ngraph LR\nA-->B')).toThrow()
+    expect(() => validateMermaidSource('---\nconfig:\n  securityLevel: loose\n---\ngraph LR\nA-->B')).toThrow()
+    expect(validateMermaidSource('graph LR\nA-->B')).toBe('graph LR\nA-->B')
+  })
+
+  it('sanitizes active and external SVG content while preserving local markers', () => {
+    const svg = sanitizeMermaidSvg(`
+      <svg xmlns="http://www.w3.org/2000/svg" id="diagram" viewBox="0 0 10 10" onload="alert(0)">
+        <style>@-webkit-keyframes pulse { from { opacity: 0; } } #diagram path { animation-name: pulse; stroke: black; }</style>
+        <marker id="arrow"><path d="M0 0L1 1" /></marker>
+        <script>alert(1)</script>
+        <foreignObject><div>HTML</div></foreignObject>
+        <image href="https://tracking.example/pixel.png" />
+        <a href="javascript:alert(2)"><text>Link</text></a>
+        <path marker-end="url(#arrow)" onclick="alert(3)" d="M0 0L10 10" />
+      </svg>
+    `)
+    const root = document.createElement('div')
+    root.innerHTML = svg
+
+    expect(root.querySelector('script, foreignObject, image, a, [onclick], [onload]')).toBeNull()
+    expect(root.querySelector('svg')?.id).toBe('diagram')
+    expect(root.querySelector('style')?.textContent).toContain('#diagram path')
+    expect(root.querySelector('style')?.textContent).not.toMatch(/@(?:-webkit-)?keyframes|animation(?:-[\w-]+)?\s*:/i)
+    expect(root.querySelector('marker')?.id).toBe('arrow')
+    expect(root.querySelector('path[marker-end]')?.getAttribute('marker-end')).toBe('url(#arrow)')
+    expect(root.querySelector('svg')?.getAttribute('width')).toBe('10')
+  })
+
+  it('shares render promises by source and theme with a strict cache bound', async () => {
+    const repeated = '%%{cache-test-repeated'
+    const first = renderMermaid(repeated)
+    expect(renderMermaid(repeated)).toBe(first)
+    expect(renderMermaid(repeated, { dark: true })).not.toBe(first)
+    await Promise.allSettled([first, renderMermaid(repeated, { dark: true })])
+
+    const sources = Array.from(
+      { length: MAX_MERMAID_CACHE_ENTRIES + 1 },
+      (_, index) => `%%{cache-bound-${index}`
+    )
+    const tasks = sources.map((source) => renderMermaid(source))
+    await Promise.allSettled(tasks)
+    const afterEviction = renderMermaid(sources[0])
+    expect(afterEviction).not.toBe(tasks[0])
+    await Promise.allSettled([afterEviction])
+  })
+})
+
+describe('Markdown print requests', () => {
+  it('keeps only the authenticated file context and expected revision', () => {
+    const revision = 'a'.repeat(64)
+    expect(markdownPrintRequest({
+      content: '# must not travel',
+      path: 'files/report.md',
+      revision,
+      root_identity: 'root-a',
+      scope: 'session',
+      session_id: 'session-a'
+    })).toEqual({
+      expectedRevision: revision,
+      params: {
+        path: 'files/report.md',
+        root_identity: 'root-a',
+        scope: 'session',
+        session_id: 'session-a'
+      }
+    })
+    expect(markdownPrintRequest({ path: 'report.md', scope: 'invalid' })).toBeNull()
   })
 })
 

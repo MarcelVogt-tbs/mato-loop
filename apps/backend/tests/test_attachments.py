@@ -170,10 +170,45 @@ async def test_service_persists_validated_metadata_and_relative_path(tmp_path: P
 
     assert attachment.kind == "image"
     assert attachment.category == "user_upload"
+    assert attachment.purpose == "attachment"
     assert attachment.processing_status == "ready"
     assert attachment.filename == "diagram.png"
     assert attachment.storage_path.startswith("attachments/")
     assert storage.path(session_id, attachment.storage_path).read_bytes() == data
+
+
+async def test_service_validates_and_persists_artifact_purpose(tmp_path: Path) -> None:
+    session_id = uuid4()
+    sessions, storage = provisioned_storage(tmp_path, session_id)
+    message = Message(id=uuid4(), session_id=session_id, role="tool", content="Datei")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session_id
+
+    attachment = await AttachmentService(storage).create_attachment(
+        db,
+        message,
+        b"\x00\x01tool-output",
+        "application/octet-stream",
+        kind="file",
+        category="generated",
+        filename="result.bin",
+        purpose="artifact",
+    )
+
+    assert attachment.purpose == "artifact"
+    assert attachment.category == "generated"
+    assert attachment.mime_type == "application/octet-stream"
+    assert storage.path(session_id, attachment.storage_path).read_bytes() == b"\x00\x01tool-output"
+    with pytest.raises(AttachmentError, match="attachment.invalidPurpose"):
+        await AttachmentService(storage).create_attachment(
+            db,
+            message,
+            b"data",
+            "application/octet-stream",
+            kind="file",
+            purpose="other",  # type: ignore[arg-type]
+        )
+    assert len(list((sessions.session_path(session_id) / "generated").iterdir())) == 1
 
 
 async def test_image_read_revalidates_persisted_content(tmp_path: Path) -> None:

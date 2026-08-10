@@ -16,6 +16,12 @@ Authorization factories also provide the German approval title, concise action s
 
 Persisted configuration and external responses must not provide handlers, arbitrary JSON schemas, or prompt instructions. Duplicate tool names and contributions to undeclared configuration fields are programming errors. Host configuration values never become model arguments merely because an adapter contributes them.
 
+## Execution Locations
+
+Every adapter declares one static execution location. `backend` adapters execute inside MatoLoop and cannot have an Execution Agent assignment. `agent` adapters represent local operations, require one configured Execution Agent, and contribute only host-declared tools whose operation names and schemas are compiled into MatoLoop. Configuration and agent advertisements cannot add executable schemas or permission behavior.
+
+An agent-bound integration is offered only when its configured agent matches the immutable agent snapshot of the current run, is connected, and advertises the static operation. Multiple agents are supported, with at most one instance of an agent adapter kind per agent. There is no model-selected target, automatic failover, backend fallback, retry, or redelivery. The backend still validates arguments and results and owns policies, approvals, credentials, and canonical tool results; the selected outbound Python agent performs the local operation.
+
 ## Resource Policies
 
 An adapter may optionally declare host-controlled resource actions and an asynchronous resource loader. Resource actions must exactly match actions of a tool contributed by that adapter and that tool must have an authorization factory; tool-option integrations are unsupported until their built-in tool explicitly binds resource policy targets. The loader receives the validated integration instance and an optional decrypted credential payload, but no database session. It returns only stable adapter-generated keys, display labels, an optional subset of adapter-declared capabilities that apply to the resource, and an optional `groupKey`. Capabilities allow one account to expose distinct resource domains without showing irrelevant policy controls. `groupKey` only groups related resources for presentation; it has no policy inheritance or security semantics. External services never define capabilities, policy modes, matchers, or prompt text. Resource keys and group keys use a bounded host-safe character set, and labels are rendered only as untrusted UI text.

@@ -15,6 +15,7 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-persona',
       'settings-integrations',
       'settings-tools',
+      'settings-execution-agents',
       'settings-skills',
       'settings-memory'
     ])
@@ -22,5 +23,6 @@ describe('MatoLoop frontend scaffold', () => {
       settingsRoute.children.find((route) => route.name === 'settings-integrations').children
         .map((route) => route.name)
     ).toEqual(['settings-integration-access'])
+    expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
   })
 })

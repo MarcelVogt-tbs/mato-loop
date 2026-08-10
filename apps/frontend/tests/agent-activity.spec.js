@@ -15,6 +15,9 @@ describe('agent activity', () => {
       .toBe('Modell analysiert die Anfrage')
     expect(agentActivityLabel({ phase: 'waiting_model', modelRequest: 2 }))
       .toBe('Modell wertet Tool-Ergebnisse aus')
+    expect(agentActivityLabel({
+      phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
+    })).toBe('Provider-Anfrage wird wiederholt (2/3)')
     expect(agentActivityLabel({ phase: 'streaming' })).toBe('Antwort wird erstellt')
   })
 
@@ -31,6 +34,15 @@ describe('agent activity', () => {
   it('identifies changes to the visible activity independently from event timestamps', () => {
     expect(agentActivityDisplayKey({ phase: 'waiting_model', modelRequest: 2 }))
       .toBe(agentActivityDisplayKey({ phase: 'waiting_model', modelRequest: 3 }))
+    expect(agentActivityDisplayKey({ phase: 'waiting_model', modelRequest: 2 }))
+      .toBe(agentActivityDisplayKey({
+        phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
+      }))
+    expect(agentActivityDisplayKey({
+      phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
+    })).toBe(agentActivityDisplayKey({
+      phase: 'waiting_model', modelRequest: 2, providerAttempt: 3, providerAttemptTotal: 3
+    }))
     expect(agentActivityDisplayKey({ phase: 'processing_tool', tool: 'read_file', index: 0, total: 2 }))
       .not.toBe(agentActivityDisplayKey({ phase: 'processing_tool', tool: 'read_file', index: 1, total: 2 }))
   })

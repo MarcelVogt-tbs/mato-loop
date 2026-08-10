@@ -1,6 +1,11 @@
 const routes = [
   { path: '/login', name: 'login', component: () => import('pages/AuthPage.vue'), meta: { public: true } },
   {
+    path: '/print/markdown',
+    name: 'markdown-print',
+    component: () => import('pages/MarkdownPrintPage.vue')
+  },
+  {
     path: '/',
     component: () => import('layouts/MainLayout.vue'),
     children: [
@@ -42,6 +47,11 @@ const routes = [
             path: 'tools',
             name: 'settings-tools',
             component: () => import('pages/settings/ToolSettingsPage.vue')
+          },
+          {
+            path: 'execution-agents',
+            name: 'settings-execution-agents',
+            component: () => import('pages/settings/ExecutionAgentSettingsPage.vue')
           },
           {
             path: 'skills',

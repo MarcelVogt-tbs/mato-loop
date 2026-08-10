@@ -21,7 +21,7 @@ from mato_loop_backend.models import Credential, LoginSession, UserAccount
 password_hash = PasswordHash.recommended()
 
 
-def _token_hash(token: str) -> str:
+def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
@@ -37,7 +37,7 @@ async def create_login_session(db: AsyncSession, user: UserAccount) -> tuple[str
     config = get_runtime_config()
     token = secrets.token_urlsafe(48)
     expires_at = datetime.now(UTC) + timedelta(days=config.session_duration_days)
-    db.add(LoginSession(user_id=user.id, token_hash=_token_hash(token), expires_at=expires_at))
+    db.add(LoginSession(user_id=user.id, token_hash=hash_token(token), expires_at=expires_at))
     await db.flush()
     return token, expires_at
 
@@ -52,7 +52,7 @@ async def require_user(
         raise ApiError(status.HTTP_401_UNAUTHORIZED, "auth.notAuthenticated")
     login = await db.scalar(
         select(LoginSession).where(
-            LoginSession.token_hash == _token_hash(session_token),
+            LoginSession.token_hash == hash_token(session_token),
             LoginSession.expires_at > datetime.now(UTC),
         )
     )
@@ -66,7 +66,7 @@ async def require_user(
 
 async def remove_login_session(db: AsyncSession, token: str | None) -> None:
     if token:
-        await db.execute(delete(LoginSession).where(LoginSession.token_hash == _token_hash(token)))
+        await db.execute(delete(LoginSession).where(LoginSession.token_hash == hash_token(token)))
 
 
 class CredentialCipher:

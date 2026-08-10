@@ -22,7 +22,6 @@ from mato_loop_backend.agent.tools import (
     ToolAttachment,
     ToolContext,
     ToolDefinition,
-    ToolFileAction,
     ToolRegistry,
     ToolResult,
     permission_for,
@@ -188,15 +187,6 @@ def _context(
         context.db.scalar.return_value = Mock(
             data=tool_settings.model_dump(mode="json")
         )
-    return context
-
-
-def _context_with_workdir(
-    tmp_path, call: ToolCall, *, decision=PermissionDecision.ALLOW
-) -> ToolContext:
-    context = _context(tmp_path, call, decision=decision)
-    context.session.working_directory = "project"
-    context.root_files.working_directory = "project"
     return context
 
 
@@ -1444,142 +1434,6 @@ async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
     assert result.metadata == {"errorCode": "tool.unavailable"}
 
 
-async def test_copy_and_move_handlers_check_both_roots_before_effect(tmp_path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    copy_call = ToolCall(
-        id="copy",
-        name="copy_path",
-        arguments={
-            "source_root": "session",
-            "source_path": "generated/result.txt",
-            "destination_root": "workspace",
-            "destination_path": "result.txt",
-        },
-    )
-    context = _context_with_workdir(tmp_path, copy_call)
-    context.session.workspace_access = "read-write"
-    session_root = context.root_files.session_storage.session_path(context.session.id)
-    (session_root / "generated" / "result.txt").write_text(
-        "Ergebnis", encoding="utf-8"
-    )
-
-    copied = await tool_registry.execute(copy_call, context)
-
-    assert json.loads(copied.content) == {"root": "workspace", "copied": "result.txt"}
-    assert copied.file_actions == (
-        ToolFileAction("copy", "workspace", "project", "result.txt", "result.txt", 8),
-    )
-    assert (project / "result.txt").read_text(encoding="utf-8") == "Ergebnis"
-    assert context.ask_handler.await_count == 2
-
-    move_call = ToolCall(
-        id="move",
-        name="move_path",
-        arguments={
-            "source_root": "workspace",
-            "source_path": "result.txt",
-            "destination_root": "session",
-            "destination_path": "files/result.txt",
-        },
-    )
-    context.tool_call = move_call
-    moved = await tool_registry.execute(move_call, context)
-
-    assert json.loads(moved.content) == {"root": "session", "moved": "files/result.txt"}
-    assert moved.file_actions == (
-        ToolFileAction(
-            "move",
-            "session",
-            str(context.session.id),
-            "files/result.txt",
-            "result.txt",
-            8,
-        ),
-    )
-    assert not (project / "result.txt").exists()
-    assert (session_root / "files" / "result.txt").read_text(encoding="utf-8") == "Ergebnis"
-
-
-async def test_copy_denied_destination_has_no_partial_effect(tmp_path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    call = ToolCall(
-        id="copy",
-        name="copy_path",
-        arguments={
-            "source_root": "session",
-            "source_path": "files/source.txt",
-            "destination_root": "workspace",
-            "destination_path": "destination.txt",
-        },
-    )
-    context = _context_with_workdir(tmp_path, call)
-    context.session.workspace_access = "read-write"
-    context.ask_handler.side_effect = [PermissionDecision.ALLOW, PermissionDecision.DENY]
-    session_root = context.root_files.session_storage.session_path(context.session.id)
-    (session_root / "files" / "source.txt").write_text("Quelle", encoding="utf-8")
-
-    result = await tool_registry.execute(call, context)
-
-    assert result.metadata == {"errorCode": "permission.denied"}
-    assert result.file_actions == ()
-    assert not (project / "destination.txt").exists()
-
-
-async def test_write_file_action_uses_post_write_host_metadata(tmp_path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    call = ToolCall(
-        id="write",
-        name="write_file",
-        arguments={"root": "workspace", "path": "report.txt", "content": "Ergebnis"},
-    )
-    context = _context_with_workdir(tmp_path, call)
-    context.session.workspace_access = "read-write"
-
-    result = await tool_registry.execute(call, context)
-
-    assert result.file_actions == (
-        ToolFileAction("write", "workspace", "project", "report.txt", "report.txt", 8),
-    )
-
-
-async def test_directory_copy_and_move_create_no_file_actions(tmp_path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    call = ToolCall(
-        id="copy-directory",
-        name="copy_path",
-        arguments={
-            "source_root": "session",
-            "source_path": "files/source",
-            "destination_root": "workspace",
-            "destination_path": "copied",
-        },
-    )
-    context = _context_with_workdir(tmp_path, call)
-    context.session.workspace_access = "read-write"
-    session_root = context.root_files.session_storage.session_path(context.session.id)
-    (session_root / "files" / "source").mkdir()
-
-    copied = await tool_registry.execute(call, context)
-    context.tool_call = ToolCall(
-        id="move-directory",
-        name="move_path",
-        arguments={
-            "source_root": "workspace",
-            "source_path": "copied",
-            "destination_root": "session",
-            "destination_path": "files/moved",
-        },
-    )
-    moved = await tool_registry.execute(context.tool_call, context)
-
-    assert copied.file_actions == ()
-    assert moved.file_actions == ()
-
-
 @pytest.mark.parametrize(
     ("call", "expected_error"),
     [
@@ -2492,71 +2346,6 @@ async def test_memory_write_requires_session_permission_before_mutation(
     create_memory.assert_not_awaited()
 
 
-async def test_read_file_returns_numbered_page_and_continuation(tmp_path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "notes.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
-    call = ToolCall(
-        id="read",
-        name="read_file",
-        arguments={"root": "workspace", "path": "notes.txt", "offset": 2, "limit": 1},
-    )
-    context = _context_with_workdir(tmp_path, call)
-
-    result = await tool_registry.execute(call, context)
-
-    assert result.content == "2: two\n\n[More lines are available. Continue with offset=3.]"
-    assert result.metadata == {
-        "root": "workspace",
-        "path": "notes.txt",
-        "offset": 2,
-        "limit": 1,
-        "linesRead": 1,
-        "hasMore": True,
-        "nextOffset": 3,
-        "truncatedLines": [],
-    }
-
-
-async def test_provide_file_returns_a_bound_download_without_reading_contents(
-    tmp_path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    target = project / "large.bin"
-    with target.open("wb") as handle:
-        handle.truncate(128 * 1024 * 1024)
-    call = ToolCall(
-        id="provide",
-        name="provide_file",
-        arguments={"root": "workspace", "path": "large.bin"},
-    )
-    context = _context_with_workdir(tmp_path, call)
-    context.root_files.read_bytes = Mock(side_effect=AssertionError("must not read contents"))
-
-    result = await tool_registry.execute(call, context)
-
-    payload = json.loads(result.content)
-    query = parse_qs(urlparse(payload["downloadUrl"]).query)
-    assert payload == {
-        "root": "workspace",
-        "path": "large.bin",
-        "filename": "large.bin",
-        "sizeBytes": 128 * 1024 * 1024,
-        "downloadUrl": payload["downloadUrl"],
-    }
-    assert query == {
-        "path": ["large.bin"],
-        "scope": ["filesystem"],
-        "session_id": [str(context.session.id)],
-        "root_identity": ["project"],
-    }
-    context.root_files.read_bytes.assert_not_called()
-    request = context.ask_handler.await_args.args[0]
-    assert request.capability == "filesystem.read"
-    assert request.action_kind == "provide_file"
-
-
 async def test_provide_file_does_not_open_after_denial(tmp_path) -> None:
     call = ToolCall(
         id="provide",
@@ -2589,64 +2378,6 @@ async def test_provide_file_supports_session_files(tmp_path) -> None:
     assert payload["sizeBytes"] == 6
     assert query["scope"] == ["session"]
     assert query["root_identity"] == [str(context.session.id)]
-
-
-async def test_provide_file_rejects_workspace_symlinks(tmp_path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (tmp_path / "secret.txt").write_text("secret", encoding="utf-8")
-    (project / "link.txt").symlink_to(tmp_path / "secret.txt")
-    call = ToolCall(
-        id="provide",
-        name="provide_file",
-        arguments={"root": "workspace", "path": "link.txt"},
-    )
-
-    result = await tool_registry.execute(call, _context_with_workdir(tmp_path, call))
-
-    assert result.metadata == {"errorCode": "file.fileNotFound"}
-
-
-async def test_read_file_rejects_workspace_symlinks(tmp_path) -> None:
-    project = tmp_path / "project"
-    private = tmp_path / "private"
-    project.mkdir()
-    private.mkdir()
-    (private / "notes.txt").write_text("secret", encoding="utf-8")
-    (project / "link").symlink_to(private, target_is_directory=True)
-    call = ToolCall(
-        id="read",
-        name="read_file",
-        arguments={"root": "workspace", "path": "link/notes.txt"},
-    )
-    context = _context_with_workdir(tmp_path, call)
-
-    result = await tool_registry.execute(call, context)
-
-    assert result.metadata == {"errorCode": "file.symlinkForbidden"}
-    request = context.ask_handler.await_args.args[0]
-    assert request.resource_display == "workspace:link/notes.txt"
-
-
-async def test_list_directory_rejects_workspace_symlinks(tmp_path) -> None:
-    project = tmp_path / "project"
-    private = tmp_path / "private"
-    project.mkdir()
-    private.mkdir()
-    (private / "notes.txt").write_text("secret", encoding="utf-8")
-    (project / "link").symlink_to(private, target_is_directory=True)
-    call = ToolCall(
-        id="list",
-        name="list_directory",
-        arguments={"root": "workspace", "path": "link"},
-    )
-    context = _context_with_workdir(tmp_path, call)
-
-    result = await tool_registry.execute(call, context)
-
-    request = context.ask_handler.await_args.args[0]
-    assert request.resource_display == "workspace:link"
-    assert result.metadata == {"errorCode": "file.symlinkForbidden"}
 
 
 async def test_read_file_does_not_read_after_denial(tmp_path) -> None:

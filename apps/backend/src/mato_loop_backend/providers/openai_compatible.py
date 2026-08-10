@@ -29,6 +29,8 @@ from mato_loop_backend.settings.models import ModelCapability, ModelInputModalit
 
 logger = logging.getLogger(__name__)
 
+_SAFE_RESPONSE_ERROR_CODES = {"rate_limit_exceeded", "server_error"}
+
 
 class DiscoveredModel(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -543,10 +545,26 @@ def _responses_finish_reason(data: dict[str, Any]) -> str | None:
     return str(status) if status else None
 
 
+def _failed_response_error(data: dict[str, Any]) -> ProviderError:
+    error = data.get("error")
+    raw_code = error.get("code") if isinstance(error, dict) else None
+    provider_code = raw_code if raw_code in _SAFE_RESPONSE_ERROR_CODES else "unknown"
+    logger.warning("Provider response failed with code %s", provider_code)
+    return ProviderError(
+        "Provider response failed",
+        status_code=429 if provider_code == "rate_limit_exceeded" else 503,
+        code=(
+            "provider.rateLimited"
+            if provider_code == "rate_limit_exceeded"
+            else "provider.requestFailed"
+        ),
+    )
+
+
 def _responses_result(data: dict[str, Any]) -> ProviderResult:
     status = data.get("status")
     if status == "failed":
-        raise ProviderError("Provider response failed", code="provider.requestFailed")
+        raise _failed_response_error(data)
     incomplete_reason = (data.get("incomplete_details") or {}).get("reason")
     if status == "incomplete" and incomplete_reason not in {None, "max_output_tokens"}:
         raise ProviderError("Provider response incomplete", code="provider.invalidResponse")
@@ -805,9 +823,7 @@ async def responses_api(
                 }:
                     response_data = event.get("response") or {}
                     if event_type == "response.failed":
-                        raise ProviderError(
-                            "Provider response failed", code="provider.requestFailed"
-                        )
+                        raise _failed_response_error(response_data)
                     incomplete_reason = (response_data.get("incomplete_details") or {}).get(
                         "reason"
                     )

@@ -85,6 +85,20 @@
           <pre class="tool-call__details tool-call__result">{{ resultData.text }}</pre>
         </div>
 
+        <div v-if="resultData.stdout" class="tool-call__section q-mt-md">
+          <div class="tool-call__section-label">Standardausgabe</div>
+          <pre class="tool-call__details tool-call__result">{{ resultData.stdout }}</pre>
+        </div>
+
+        <div v-if="resultData.stderr" class="tool-call__section q-mt-md">
+          <div class="tool-call__section-label">Fehlerausgabe</div>
+          <pre class="tool-call__details tool-call__result">{{ resultData.stderr }}</pre>
+        </div>
+
+        <div v-if="resultData.truncated" class="text-caption app-muted q-mt-sm">
+          Die Prozessausgabe wurde gekürzt.
+        </div>
+
         <ApprovalCard v-if="!technicalOnly && approval" :approval="approval" class="tool-call__approval" />
       </div>
     </q-expansion-item>
@@ -119,6 +133,7 @@ const props = defineProps({
   result: { type: Object, default: null },
   approval: { type: Object, default: null },
   question: { type: Object, default: null },
+  processOutput: { type: Object, default: null },
   active: Boolean,
   technicalOnly: Boolean
 })
@@ -128,7 +143,10 @@ const identity = computed(() => toolIdentity(props.tool.name))
 const summary = computed(() => toolSummary(props.tool))
 const memoryContent = computed(() => memoryWriteContent(props.tool))
 const argumentsText = computed(() => formatToolArguments(props.tool.arguments, props.tool.name))
-const resultData = computed(() => parseToolResult(props.result?.content, props.tool.name))
+const resultData = computed(() => ({
+  ...parseToolResult(props.result?.content, props.tool.name),
+  ...(props.processOutput || {})
+}))
 const attachments = computed(() => {
   const providedFile = toolFileAttachment(props.tool, props.result)
   return supportedAttachments([

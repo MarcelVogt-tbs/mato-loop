@@ -972,6 +972,28 @@ async def test_transient_errors_use_retry_after(monkeypatch) -> None:
     sleep.assert_awaited_once_with(1.5)
 
 
+async def test_transient_errors_use_increasing_delays_and_report_attempts(
+    monkeypatch,
+) -> None:
+    operation = AsyncMock(
+        side_effect=[
+            ProviderError("temporary", status_code=503),
+            ProviderError("temporary", status_code=503),
+            ProviderResult(content="OK"),
+        ]
+    )
+    sleep = AsyncMock()
+    on_retry = AsyncMock()
+    monkeypatch.setattr(service_module.asyncio, "sleep", sleep)
+
+    result = await _with_retries(operation, on_retry=on_retry)
+
+    assert result.content == "OK"
+    assert operation.await_count == 3
+    assert [item.args for item in sleep.await_args_list] == [(2.0,), (5.0,)]
+    assert [item.args for item in on_retry.await_args_list] == [(2, 3), (3, 3)]
+
+
 async def test_non_transient_error_is_not_retried() -> None:
     operation = AsyncMock(side_effect=ProviderError("bad request", status_code=400))
 

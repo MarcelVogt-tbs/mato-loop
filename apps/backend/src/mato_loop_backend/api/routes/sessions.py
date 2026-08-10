@@ -34,11 +34,14 @@ from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution import execution_agent_connections
 from mato_loop_backend.integrations import WebFetchError, canonicalize_url
 from mato_loop_backend.memory import effective_memory
+from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
+    ExecutionAgent,
     MemoryMode,
     Message,
     MessageAttachment,
@@ -60,8 +63,6 @@ from mato_loop_backend.settings.models import (
 from mato_loop_backend.workspace import (
     RootFileError,
     RootFileService,
-    WorkspaceError,
-    WorkspaceService,
 )
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
@@ -145,6 +146,16 @@ class _StoredFileAction(BaseModel):
     path: str = Field(min_length=1, max_length=1_000)
     filename: str = Field(min_length=1, max_length=1_000)
     size_bytes: int = Field(alias="sizeBytes", ge=0)
+    execution_agent_id: str | None = Field(
+        default=None, alias="executionAgentId", min_length=1, max_length=36
+    )
+    root_id: str | None = Field(default=None, alias="rootId", min_length=1, max_length=36)
+    root_revision: str | None = Field(
+        default=None, alias="rootRevision", min_length=64, max_length=64
+    )
+    working_directory: str | None = Field(
+        default=None, alias="workingDirectory", min_length=1, max_length=1_000
+    )
 
     @model_validator(mode="after")
     def validate_paths(self) -> _StoredFileAction:
@@ -153,10 +164,35 @@ class _StoredFileAction(BaseModel):
             raise ValueError("path must be a normalized file path")
         if self.filename != self.path.rsplit("/", 1)[-1]:
             raise ValueError("filename must match path")
-        if self.root == "workspace" and (
-            service.normalize_relative_path(self.root_identity) != self.root_identity
-        ):
-            raise ValueError("root identity must be normalized")
+        snapshot_fields = {
+            "execution_agent_id",
+            "root_id",
+            "root_revision",
+            "working_directory",
+        }
+        if self.root == "session":
+            if self.model_fields_set & snapshot_fields:
+                raise ValueError("session actions cannot contain workspace snapshot fields")
+            return self
+        if any(getattr(self, field) is None for field in snapshot_fields):
+            raise ValueError("workspace snapshot fields are required")
+        assert self.execution_agent_id is not None
+        assert self.root_id is not None
+        assert self.root_revision is not None
+        assert self.working_directory is not None
+        try:
+            valid_ids = all(
+                str(UUID(value)) == value
+                for value in (self.execution_agent_id, self.root_id)
+            )
+        except ValueError:
+            valid_ids = False
+        if not valid_ids or self.root_identity != self.root_id:
+            raise ValueError("workspace identifiers must match canonical UUIDs")
+        if any(character not in "0123456789abcdef" for character in self.root_revision):
+            raise ValueError("root revision must be a lowercase SHA-256 digest")
+        if service.normalize_relative_path(self.working_directory) != self.working_directory:
+            raise ValueError("working directory must be normalized")
         return self
 
 
@@ -176,18 +212,24 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
         if action.root == "session" and action.root_identity != str(item.session_id):
             continue
         scope = "session" if action.root == "session" else "filesystem"
+        query = {
+            "path": action.path,
+            "scope": scope,
+            "session_id": str(item.session_id),
+            "root_identity": action.root_identity,
+        }
+        if action.root == "workspace":
+            query.update(
+                execution_agent_id=action.execution_agent_id,
+                root_id=action.root_id,
+                root_revision=action.root_revision,
+                working_directory=action.working_directory,
+            )
         actions.append(
             {
-                **action.model_dump(mode="json", by_alias=True),
+                **action.model_dump(mode="json", by_alias=True, exclude_none=True),
                 "downloadUrl": "/api/workspace/files/download?"
-                + urlencode(
-                    {
-                        "path": action.path,
-                        "scope": scope,
-                        "session_id": str(item.session_id),
-                        "root_identity": action.root_identity,
-                    }
-                ),
+                + urlencode(query),
             }
         )
     return actions
@@ -248,7 +290,9 @@ class SessionCreateRequest(BaseModel):
     model_id: UUID | None = None
     memory_mode: MemoryMode = MemoryMode.FULL
     web_search_policy: WebSearchPolicy = WebSearchPolicy.AVAILABLE
-    working_directory: str | None = None
+    preferred_execution_agent_id: UUID | None = None
+    preferred_root_id: UUID | None = None
+    working_directory: str | None = Field(default=None, max_length=1_000)
     workspace_access: str = Field(default="read-only", pattern="^(read-only|read-write)$")
 
 
@@ -258,7 +302,9 @@ class SessionUpdateRequest(BaseModel):
     model_id: UUID | None = None
     memory_mode: MemoryMode | None = None
     web_search_policy: WebSearchPolicy | None = None
-    working_directory: str | None = None
+    preferred_execution_agent_id: UUID | None = None
+    preferred_root_id: UUID | None = None
+    working_directory: str | None = Field(default=None, max_length=1_000)
     workspace_access: str | None = Field(default=None, pattern="^(read-only|read-write)$")
 
 
@@ -268,6 +314,43 @@ class SendMessageRequest(BaseModel):
 
 class SessionReadRequest(BaseModel):
     through_message_id: UUID = Field(alias="throughMessageId")
+
+
+async def _validate_execution_preferences(
+    db: AsyncSession,
+    user_id: UUID,
+    agent_id: UUID | None,
+    root_id: UUID | None,
+    working_directory: str | None,
+) -> str | None:
+    if agent_id is None:
+        if root_id is not None:
+            raise ApiError(400, "validation.invalid", field="preferredRootId")
+        if working_directory is not None:
+            raise ApiError(400, "session.invalidWorkingDirectory", field="workingDirectory")
+        return None
+    agent = await db.scalar(
+        select(ExecutionAgent)
+        .options(selectinload(ExecutionAgent.roots))
+        .where(ExecutionAgent.id == agent_id, ExecutionAgent.user_id == user_id)
+    )
+    if agent is None:
+        raise ApiError(404, "executionAgent.notFound", field="preferredExecutionAgentId")
+    if agent.revoked_at is not None:
+        raise ApiError(409, "executionAgent.revoked", field="preferredExecutionAgentId")
+    if root_id is not None and not any(root.id == root_id for root in agent.roots):
+        raise ApiError(400, "validation.invalid", field="preferredRootId")
+    if working_directory is None:
+        return None
+    if root_id is None:
+        raise ApiError(400, "session.invalidWorkingDirectory", field="workingDirectory")
+    try:
+        normalized = RootFileService(UUID(int=0)).normalize_relative_path(working_directory)
+    except RootFileError as exc:
+        raise ApiError(400, "session.invalidWorkingDirectory", field="workingDirectory") from exc
+    if normalized != working_directory:
+        raise ApiError(400, "session.invalidWorkingDirectory", field="workingDirectory")
+    return normalized
 
 
 def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
@@ -332,6 +415,7 @@ def session_payload(
     effective_memory_mode: MemoryMode | None = None,
     memory_tools_available: bool | None = None,
     memory_unavailable_reason: str | None = None,
+    workspace_context: dict[str, Any] | None = None,
     last_message_at: datetime | None | object = _LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
@@ -343,8 +427,25 @@ def session_payload(
         "modelId": str(item.model_config_id) if item.model_config_id else None,
         "memoryMode": item.memory_mode,
         "webSearchPolicy": item.web_search_policy,
+        "preferredExecutionAgentId": (
+            str(item.preferred_execution_agent_id)
+            if item.preferred_execution_agent_id
+            else None
+        ),
+        "preferredRootId": str(item.preferred_root_id) if item.preferred_root_id else None,
         "workingDirectory": item.working_directory,
         "workspaceAccess": item.workspace_access,
+        "workspaceContext": workspace_context
+        or {
+            "executionAgentId": (
+                str(item.preferred_execution_agent_id)
+                if item.preferred_execution_agent_id
+                else None
+            ),
+            "rootId": str(item.preferred_root_id) if item.preferred_root_id else None,
+            "connected": False,
+            "operations": [],
+        },
         "createdAt": item.created_at.isoformat() if item.created_at else None,
         "updatedAt": item.updated_at.isoformat() if item.updated_at else None,
     }
@@ -368,12 +469,14 @@ async def _session_payload(
     last_message_at: datetime | None | object = _LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
+    workspace_context = await _workspace_context(db, item)
     if item.memory_mode == MemoryMode.DISABLED.value:
         return session_payload(
             item,
             effective_memory_mode=MemoryMode.DISABLED,
             memory_tools_available=False,
             memory_unavailable_reason="memory.sessionDisabled",
+            workspace_context=workspace_context,
             last_message_at=last_message_at,
             has_unread_messages=has_unread_messages,
         )
@@ -387,9 +490,48 @@ async def _session_payload(
         effective_memory_mode=state.mode,
         memory_tools_available=state.tools_enabled,
         memory_unavailable_reason=state.unavailable_reason,
+        workspace_context=workspace_context,
         last_message_at=last_message_at,
         has_unread_messages=has_unread_messages,
     )
+
+
+async def _workspace_context(db: AsyncSession, item: ChatSession) -> dict[str, Any]:
+    agent_id = item.preferred_execution_agent_id
+    root_id = item.preferred_root_id
+    context = {
+        "executionAgentId": str(agent_id) if agent_id else None,
+        "rootId": str(root_id) if root_id else None,
+        "connected": False,
+        "operations": [],
+    }
+    if agent_id is None or root_id is None:
+        return context
+    agent = await db.scalar(
+        select(ExecutionAgent)
+        .options(selectinload(ExecutionAgent.roots))
+        .where(
+            ExecutionAgent.id == agent_id,
+            ExecutionAgent.user_id == item.user_id,
+            ExecutionAgent.revoked_at.is_(None),
+        )
+    )
+    snapshot = execution_agent_connections.snapshot(agent_id)
+    if agent is None or snapshot is None:
+        return context
+    root = next((root for root in agent.roots if root.id == root_id), None)
+    live_root = next((root for root in snapshot[1] if root.id == root_id), None)
+    if root is None or live_root is None or live_root.revision != root.revision:
+        return context
+    operations = snapshot[0]
+    if item.workspace_access == "read-only":
+        operations = operations & {
+            "workspace.list",
+            "workspace.read",
+            "workspace.stat",
+            "workspace.export",
+        }
+    return {**context, "connected": True, "operations": sorted(operations)}
 
 
 async def _owned_session(
@@ -420,7 +562,13 @@ def message_payload(item: Message) -> dict[str, Any]:
         "id": str(item.id),
         "role": item.role,
         "kind": "runtime_error" if error else "message",
-        "content": error.message if error else item.content,
+        "content": (
+            error.message
+            if error
+            else canonical_assistant_content(item.content)
+            if item.role == "assistant"
+            else item.content
+        ),
         "modelName": item.model_name,
         "generationStatus": item.generation_status or "completed",
         "trustLevel": item.trust_level,
@@ -435,6 +583,7 @@ def message_payload(item: Message) -> dict[str, Any]:
                 "id": str(attachment.id),
                 "kind": attachment.kind,
                 "category": attachment.category,
+                "purpose": attachment.purpose,
                 "processingStatus": attachment.processing_status,
                 "mimeType": attachment.mime_type,
                 "sizeBytes": attachment.size_bytes,
@@ -663,20 +812,13 @@ async def _create_session(
         raise ApiError(409, "session.modelUnavailable", field="modelId")
     if not _model_supports_tools(ai, model_id):
         raise ApiError(409, "session.modelToolsUnavailable", field="modelId")
-    working_directory = None
-    if payload.working_directory is not None:
-        await db.scalar(
-            select(UserAccount.id)
-            .where(UserAccount.id == user.id)
-            .with_for_update()
-        )
-        try:
-            directory = WorkspaceService().resolve(payload.working_directory)
-        except WorkspaceError as exc:
-            raise ApiError(400, exc.code) from exc
-        if not directory.is_dir() or directory.is_symlink():
-            raise ApiError(400, "session.invalidWorkingDirectory")
-        working_directory = WorkspaceService().relative(directory)
+    working_directory = await _validate_execution_preferences(
+        db,
+        user.id,
+        payload.preferred_execution_agent_id,
+        payload.preferred_root_id,
+        payload.working_directory,
+    )
     item = ChatSession(
         id=uuid4(),
         user_id=user.id,
@@ -685,6 +827,8 @@ async def _create_session(
         model_config_id=model_id,
         memory_mode=payload.memory_mode.value,
         web_search_policy=payload.web_search_policy.value,
+        preferred_execution_agent_id=payload.preferred_execution_agent_id,
+        preferred_root_id=payload.preferred_root_id,
         working_directory=working_directory,
         workspace_access=payload.workspace_access,
     )
@@ -702,6 +846,13 @@ async def _create_session(
         await db.rollback()
         logger.exception("Session storage could not be provisioned")
         raise ApiError(500, "session.storageUnavailable") from exc
+    except AgentRunError as exc:
+        await db.rollback()
+        try:
+            await asyncio.to_thread(session_storage.remove_session, item.id)
+        except Exception:
+            logger.exception("Unpersisted session storage could not be removed")
+        raise ApiError(409, exc.code, params=exc.params) from exc
     except Exception:
         await db.rollback()
         try:
@@ -834,22 +985,29 @@ async def update_session(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     fields = payload.model_fields_set
-    if "working_directory" in fields:
+    execution_fields = {
+        "preferred_execution_agent_id",
+        "preferred_root_id",
+        "working_directory",
+    }
+    policy_fields = {
+        "memory_mode",
+        "model_id",
+        "web_search_policy",
+        "preferred_execution_agent_id",
+        "preferred_root_id",
+        "working_directory",
+        "workspace_access",
+    }
+    if fields & policy_fields:
         await db.scalar(
-            select(UserAccount.id)
-            .where(UserAccount.id == user.id)
+            select(ChatSession.id)
+            .where(ChatSession.id == session_id, ChatSession.user_id == user.id)
             .with_for_update()
         )
     item = await _owned_session(db, session_id, user.id)
     if item is None:
         raise ApiError(404, "session.notFound")
-    policy_fields = {
-        "memory_mode",
-        "model_id",
-        "web_search_policy",
-        "working_directory",
-        "workspace_access",
-    }
     if fields & policy_fields:
         active = await db.scalar(
             select(AgentRun.id).where(
@@ -884,17 +1042,27 @@ async def update_session(
             if not _model_supports_tools(ai, model_id):
                 raise ApiError(409, "session.modelToolsUnavailable")
         item.web_search_policy = payload.web_search_policy.value
-    if "working_directory" in fields:
-        if payload.working_directory is None:
-            item.working_directory = None
-        else:
-            try:
-                directory = WorkspaceService().resolve(payload.working_directory)
-            except WorkspaceError as exc:
-                raise ApiError(400, exc.code) from exc
-            if not directory.is_dir() or directory.is_symlink():
-                raise ApiError(400, "session.invalidWorkingDirectory")
-            item.working_directory = WorkspaceService().relative(directory)
+    if fields & execution_fields:
+        agent_id = (
+            payload.preferred_execution_agent_id
+            if "preferred_execution_agent_id" in fields
+            else item.preferred_execution_agent_id
+        )
+        root_id = (
+            payload.preferred_root_id
+            if "preferred_root_id" in fields
+            else item.preferred_root_id
+        )
+        working_directory = (
+            payload.working_directory
+            if "working_directory" in fields
+            else item.working_directory
+        )
+        item.working_directory = await _validate_execution_preferences(
+            db, user.id, agent_id, root_id, working_directory
+        )
+        item.preferred_execution_agent_id = agent_id
+        item.preferred_root_id = root_id
     if "workspace_access" in fields and payload.workspace_access is not None:
         item.workspace_access = payload.workspace_access
     await db.flush()
@@ -1090,11 +1258,14 @@ async def _send_message(
         raise ApiError(409, "session.modelUnavailable")
     if not _model_supports_tools(ai, model_id):
         raise ApiError(409, "session.modelToolsUnavailable")
-    run = (
-        await AgentRuntime.start(db, item, content, attachments=attachments)
-        if attachments
-        else await AgentRuntime.start(db, item, content)
-    )
+    try:
+        run = (
+            await AgentRuntime.start(db, item, content, attachments=attachments)
+            if attachments
+            else await AgentRuntime.start(db, item, content)
+        )
+    except AgentRunError as exc:
+        raise ApiError(409, exc.code, params=exc.params) from exc
     user_message = await _latest_user_message(db, item.id)
     return {
         "runId": str(run.id),

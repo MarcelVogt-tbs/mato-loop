@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, func, text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from mato_loop_backend.db.base import Base
+
+
+class ExecutionAgent(Base):
+    __tablename__ = "execution_agents"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    platform: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    protocol_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    operations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    roots: Mapped[list[ExecutionAgentRoot]] = relationship(
+        back_populates="agent",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ExecutionAgentRoot.label",
+    )
+
+
+class ExecutionAgentRoot(Base):
+    __tablename__ = "execution_agent_roots"
+
+    execution_agent_id: Mapped[UUID] = mapped_column(
+        ForeignKey("execution_agents.id", ondelete="CASCADE"), primary_key=True
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    label: Mapped[str] = mapped_column(String(160), nullable=False)
+    revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    agent: Mapped[ExecutionAgent] = relationship(back_populates="roots")

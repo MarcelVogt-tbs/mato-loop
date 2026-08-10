@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from typing import Any, Protocol
+from dataclasses import dataclass, field, replace
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -46,7 +47,7 @@ class ToolContribution:
     name: str
     description: str
     arguments_model: type[BaseModel]
-    handler: ToolHandler
+    handler: ToolHandler | None
     write: bool = False
     requires_search: bool = False
     requires_webfetch: bool = False
@@ -63,6 +64,8 @@ class ToolContribution:
     resource_argument: str | None = None
     releases_private_data: bool = False
     authorization_factory: Callable[[Any, Any], tuple[Any, ...]] | None = None
+    execution_operation: str | None = None
+    result_model: type[BaseModel] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,10 +103,73 @@ class IntegrationAdapterDefinition:
     resource_actions: tuple[ToolAction, ...] = ()
     resource_loader: ResourceLoader | None = None
     shared_tools: tuple[ToolContribution, ...] = ()
+    execution_location: Literal["backend", "agent"] = "backend"
+    execution_kind: str | None = None
+    execution_tools: tuple[ToolContribution, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.execution_location == "backend":
+            if self.execution_kind is not None or self.execution_tools:
+                raise ValueError("backend adapters cannot declare agent execution tools")
+            return
+        if self.execution_kind is None or re.fullmatch(
+            r"[a-z][a-z0-9]*", self.execution_kind
+        ) is None:
+            raise ValueError("agent adapters require a valid execution kind")
+        if self.shared_tools:
+            raise ValueError("agent integration tools must be instance-bound")
+        if any(
+            tool.result_model is None
+            or not isinstance(tool.result_model, type)
+            or not issubclass(tool.result_model, BaseModel)
+            for tool in self.execution_tools
+        ):
+            raise ValueError("agent integration tools require Pydantic result models")
+        prefix = f"integration.{self.execution_kind}."
+        operations = [tool.execution_operation for tool in self.execution_tools]
+        if (
+            not operations
+            or any(
+                operation is None
+                or len(operation) > 64
+                or not operation.startswith(prefix)
+                or re.fullmatch(r"[a-z][a-z0-9]*", operation.removeprefix(prefix))
+                is None
+                for operation in operations
+            )
+            or len(operations) != len(set(operations))
+        ):
+            raise ValueError("agent integration operations must be unique and match their kind")
 
     def contributions(self, instance: IntegrationInstance) -> IntegrationContributions:
         self.config_model.model_validate(instance.config)
-        return self.contribution_factory(instance)
+        contributions = self.contribution_factory(instance)
+        if self.execution_location == "backend":
+            return contributions
+        if instance.execution_agent_id is None:
+            raise ValueError("agent integrations require an execution agent")
+        if contributions.tools:
+            raise ValueError("agent integration tools must use static execution tools")
+        from mato_loop_backend.integrations.execution import execution_tool_handler
+
+        tools = tuple(
+            replace(
+                tool,
+                handler=execution_tool_handler(
+                    instance,
+                    tool.execution_operation,
+                    tool.result_model,
+                ),
+            )
+            for tool in self.execution_tools
+            if instance._execution_operations is None
+            or tool.execution_operation in instance._execution_operations
+        )
+        return IntegrationContributions(
+            tools=(*contributions.tools, *tools),
+            tool_options=contributions.tool_options,
+            prompt_fragments=contributions.prompt_fragments,
+        )
 
     async def resources(
         self, instance: IntegrationInstance, credential: dict[str, Any] | None

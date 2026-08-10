@@ -63,6 +63,18 @@ from mato_loop_backend.agent.video_analysis import (
 )
 from mato_loop_backend.attachments import AttachmentError, AttachmentService
 from mato_loop_backend.error_contract import error_payload
+from mato_loop_backend.events import run_events
+from mato_loop_backend.execution import (
+    ExecutionClient,
+    ExecutionClientError,
+    ProcessResult,
+    WorkspaceDeleteResult,
+    WorkspaceListResult,
+    WorkspacePathResult,
+    WorkspaceReadResult,
+    WorkspaceStatResult,
+    WorkspaceWriteResult,
+)
 from mato_loop_backend.integrations import (
     PdfVisionHandler,
     SearchIntegrationError,
@@ -183,6 +195,10 @@ class ToolFileAction:
     path: str
     filename: str
     size_bytes: int
+    execution_agent_id: str | None = None
+    root_id: str | None = None
+    root_revision: str | None = None
+    working_directory: str | None = None
 
 
 @dataclass(slots=True)
@@ -253,6 +269,7 @@ class ToolContext:
     skill_state: RunSkillState = field(default_factory=RunSkillState)
     skill_creation_handler: SkillCreationHandler | None = None
     approval_resolution: dict[str, str] = field(default_factory=dict)
+    execution_client: ExecutionClient | None = None
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
         return await self.ask_handler(request)
@@ -267,6 +284,7 @@ class ToolContext:
 
 TOOL_GROUPS = (
     {"id": "filesystem", "label": "Dateisystem", "icon": "folder"},
+    {"id": "process", "label": "Prozesse", "icon": "terminal"},
     {"id": "web", "label": "Web", "icon": "language"},
     {"id": "media", "label": "Medien", "icon": "perm_media"},
     {"id": "sessions", "label": "Sessions", "icon": "forum"},
@@ -288,6 +306,7 @@ class ToolDefinition:
     requires_memory: bool = False
     requires_memory_write: bool = False
     required_capability: str | None = None
+    required_operation: str | None = None
     group: str = "agent"
     label: str | None = None
     icon: str = "build"
@@ -374,12 +393,21 @@ class EffectiveToolSet:
 
 
 class ToolRegistry:
-    def __init__(self, definitions: list[ToolDefinition]) -> None:
+    def __init__(
+        self,
+        definitions: list[ToolDefinition],
+        operation_definitions: list[ToolDefinition] | None = None,
+    ) -> None:
         self._definitions: dict[str, ToolDefinition] = {}
         for definition in definitions:
             if definition.name in self._definitions:
                 raise ValueError(f"duplicate tool: {definition.name}")
             self._definitions[definition.name] = definition
+        self._operation_definitions = {
+            definition.name: definition for definition in operation_definitions or []
+        }
+        if self._definitions.keys() & self._operation_definitions.keys():
+            raise ValueError("duplicate operation tool")
 
     def _combined_definitions(
         self, integration_settings: IntegrationSettings
@@ -467,10 +495,18 @@ class ToolRegistry:
         memory_write_enabled: bool,
         tool_capabilities: set[str] | frozenset[str],
         tool_settings: ToolSettings,
+        execution_operations: set[str] | frozenset[str] = frozenset(),
     ) -> tuple[str, ...]:
         active_definitions = self._combined_definitions(integration_settings)[0]
         installed_definitions = dict(self._definitions)
         installed_definitions.update(active_definitions)
+        installed_definitions.update(
+            {
+                name: definition
+                for name, definition in self._operation_definitions.items()
+                if definition.required_operation in execution_operations
+            }
+        )
         for contribution in installed_integration_tools():
             installed_definitions.setdefault(
                 contribution.name, self._contributed_definition(contribution)
@@ -509,6 +545,11 @@ class ToolRegistry:
                     if definition.required_capability.startswith("media.")
                     else "settings"
                 )
+            elif (
+                definition.required_operation is not None
+                and definition.required_operation not in execution_operations
+            ):
+                reason = "temporary"
             elif any(
                 tool_execution_policy(
                     tool_settings,
@@ -565,10 +606,11 @@ class ToolRegistry:
         memory_enabled: bool = False,
         memory_write_enabled: bool = False,
         tool_capabilities: set[str] | frozenset[str] = frozenset(),
+        execution_operations: set[str] | frozenset[str] = frozenset(),
     ) -> list[ToolDefinition]:
         return [
             definition
-            for definition in self._definitions.values()
+            for definition in (*self._definitions.values(), *self._operation_definitions.values())
             if self._is_available(
                 definition,
                 workspace_access=workspace_access,
@@ -577,6 +619,7 @@ class ToolRegistry:
                 memory_enabled=memory_enabled,
                 memory_write_enabled=memory_write_enabled,
                 tool_capabilities=tool_capabilities,
+                execution_operations=execution_operations,
             )
         ]
 
@@ -590,6 +633,7 @@ class ToolRegistry:
         memory_enabled: bool,
         memory_write_enabled: bool,
         tool_capabilities: set[str] | frozenset[str],
+        execution_operations: set[str] | frozenset[str] = frozenset(),
     ) -> bool:
         return (
             (workspace_access == "read-write" or not definition.write)
@@ -600,6 +644,10 @@ class ToolRegistry:
             and (
                 definition.required_capability is None
                 or definition.required_capability in tool_capabilities
+            )
+            and (
+                definition.required_operation is None
+                or definition.required_operation in execution_operations
             )
         )
 
@@ -612,6 +660,7 @@ class ToolRegistry:
         memory_enabled: bool = False,
         memory_write_enabled: bool = False,
         tool_capabilities: set[str] | frozenset[str] = frozenset(),
+        execution_operations: set[str] | frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         return self.effective(
             integration_settings,
@@ -621,6 +670,7 @@ class ToolRegistry:
             memory_enabled,
             memory_write_enabled,
             tool_capabilities,
+            execution_operations=execution_operations,
         ).schemas()
 
     def effective(
@@ -633,10 +683,15 @@ class ToolRegistry:
         memory_write_enabled: bool = False,
         tool_capabilities: set[str] | frozenset[str] = frozenset(),
         tool_settings: ToolSettings | None = None,
+        execution_operations: set[str] | frozenset[str] = frozenset(),
     ) -> EffectiveToolSet:
         definitions, sources, prompt_fragments = self._combined_definitions(
             integration_settings
         )
+        for name, definition in self._operation_definitions.items():
+            if definition.required_operation in execution_operations:
+                definitions[name] = definition
+                sources[name] = ("builtin", None, None, ())
         available_names = {
             item.name
             for item in definitions.values()
@@ -648,6 +703,7 @@ class ToolRegistry:
                 memory_enabled=memory_enabled,
                 memory_write_enabled=memory_write_enabled,
                 tool_capabilities=tool_capabilities,
+                execution_operations=execution_operations,
             )
             and (
                 tool_settings is None
@@ -831,7 +887,7 @@ class ToolRegistry:
         definitions = (
             self._combined_definitions(integration_settings)[0]
             if integration_settings is not None
-            else self._definitions
+            else {**self._definitions, **self._operation_definitions}
         )
         defaults = {
             action.default_policy
@@ -1105,6 +1161,7 @@ class ToolRegistry:
             return result
         except (
             AttachmentError,
+            ExecutionClientError,
             RootFileError,
             SearchIntegrationError,
             WebFetchError,
@@ -1290,6 +1347,21 @@ class CopyPathArguments(ToolArguments):
 
 class MovePathArguments(CopyPathArguments):
     pass
+
+
+class ProcessExecArguments(ToolArguments):
+    program: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Configured program alias, never an executable path.",
+    )
+    args: list[Annotated[str, Field(max_length=10_000)]] = Field(
+        default_factory=list, max_length=256
+    )
+
+
+class ShellRunArguments(ToolArguments):
+    command: str = Field(min_length=1, max_length=256 * 1024)
 
 
 class WebSearchArguments(ToolArguments):
@@ -1589,6 +1661,31 @@ def _filesystem_permission(
     action_kind: str,
     action_label: str,
 ) -> PermissionRequest:
+    if FileRoot(root) is FileRoot.WORKSPACE:
+        client = _workspace_client(context)
+        normalized_path = context.root_files.normalize_relative_path(path)
+        scope = json.dumps(
+            {
+                "agentId": str(client.agent_id),
+                "path": normalized_path,
+                "rootId": str(client.root_id),
+                "rootRevision": client.root_revision,
+                "workingDirectory": client.working_directory,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return PermissionRequest(
+            capability=capability,
+            resource_type="execution_root_path",
+            resource_scope=scope,
+            action_kind=action_kind,
+            risk_level="high" if capability == "filesystem.delete" else "medium",
+            title=f"{action_label} erlauben?",
+            summary=f"Der Agent möchte workspace:{normalized_path} verwenden.",
+            resource_display=f"workspace:{normalized_path}",
+        )
     return path_permission(
         root_files=context.root_files,
         root=root,
@@ -1597,6 +1694,31 @@ def _filesystem_permission(
         action_kind=action_kind,
         action_label=action_label,
     )
+
+
+def _workspace_client(context: ToolContext) -> ExecutionClient:
+    if context.execution_client is None:
+        raise ExecutionClientError("file.workspaceNotSelected")
+    return context.execution_client
+
+
+def _require_workspace_path(actual: str, expected: str) -> None:
+    if actual != expected:
+        raise ExecutionClientError("executionAgent.protocolError")
+
+
+async def _workspace_request(
+    context: ToolContext,
+    operation: str,
+    arguments: dict[str, Any],
+    result_model: type[WorkspaceDeleteResult]
+    | type[WorkspaceListResult]
+    | type[WorkspacePathResult]
+    | type[WorkspaceReadResult]
+    | type[WorkspaceStatResult]
+    | type[WorkspaceWriteResult],
+) -> Any:
+    return await _workspace_client(context).request(operation, arguments, result_model)
 
 
 async def _list_directory(
@@ -1612,12 +1734,24 @@ async def _list_directory(
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
-    result = context.root_files.list_directory(
-        arguments.root,
-        arguments.path,
-        offset=arguments.offset,
-        limit=arguments.limit,
-    )
+    if arguments.root == "workspace":
+        result = await _workspace_request(
+            context,
+            "workspace.list",
+            {
+                "path": context.root_files.normalize_relative_path(arguments.path),
+                "offset": arguments.offset,
+                "limit": arguments.limit,
+            },
+            WorkspaceListResult,
+        )
+    else:
+        result = context.root_files.list_directory(
+            arguments.root,
+            arguments.path,
+            offset=arguments.offset,
+            limit=arguments.limit,
+        )
     return ToolResult.json(
         {
             "root": arguments.root,
@@ -1649,12 +1783,25 @@ async def _read_file(arguments: ReadFileArguments, context: ToolContext) -> Tool
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
-    result = context.root_files.read_file(
-        arguments.root,
-        arguments.path,
-        offset=arguments.offset,
-        limit=arguments.limit,
-    )
+    if arguments.root == "workspace":
+        result = await _workspace_request(
+            context,
+            "workspace.read",
+            {
+                "path": context.root_files.normalize_relative_path(arguments.path),
+                "offset": arguments.offset,
+                "limit": arguments.limit,
+                "maxLineLength": 2_000,
+            },
+            WorkspaceReadResult,
+        )
+    else:
+        result = context.root_files.read_file(
+            arguments.root,
+            arguments.path,
+            offset=arguments.offset,
+            limit=arguments.limit,
+        )
     content = result.content
     notices = []
     if result.truncated_lines:
@@ -1695,17 +1842,38 @@ async def _provide_file(
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
     path = context.root_files.normalize_relative_path(arguments.path)
-    with context.root_files.open_file(arguments.root, path) as handle:
-        size = os.fstat(handle.fileno()).st_size
+    if arguments.root == "workspace":
+        client = _workspace_client(context)
+        result = await client.request(
+            "workspace.stat", {"path": path}, WorkspaceStatResult
+        )
+        assert isinstance(result, WorkspaceStatResult)
+        if result.path != path or result.kind != "file" or result.size is None:
+            return ToolResult.error("file.notAFile", field="path")
+        size = result.size
+    else:
+        with context.root_files.open_file(arguments.root, path) as handle:
+            size = os.fstat(handle.fileno()).st_size
     scope = "session" if arguments.root == "session" else "filesystem"
-    download_url = "/api/workspace/files/download?" + urlencode(
-        {
-            "path": path,
-            "scope": scope,
-            "session_id": str(context.session.id),
-            "root_identity": context.root_files.root_identity(arguments.root),
-        }
-    )
+    query = {
+        "path": path,
+        "scope": scope,
+        "session_id": str(context.session.id),
+        "root_identity": (
+            str(_workspace_client(context).root_id)
+            if arguments.root == "workspace"
+            else context.root_files.root_identity(arguments.root)
+        ),
+    }
+    if arguments.root == "workspace":
+        client = _workspace_client(context)
+        query.update(
+            execution_agent_id=str(client.agent_id),
+            root_id=str(client.root_id),
+            root_revision=client.root_revision,
+            working_directory=client.working_directory,
+        )
+    download_url = "/api/workspace/files/download?" + urlencode(query)
     return ToolResult.json(
         {
             "root": arguments.root,
@@ -1743,6 +1911,29 @@ def _regular_file_action(
     )
 
 
+def _workspace_file_action(
+    context: ToolContext,
+    operation: Literal["write", "copy", "move"],
+    path: str,
+    size: int,
+) -> tuple[ToolFileAction, ...]:
+    client = _workspace_client(context)
+    return (
+        ToolFileAction(
+            operation=operation,
+            root="workspace",
+            root_identity=str(client.root_id),
+            path=path,
+            filename=path.rsplit("/", 1)[-1],
+            size_bytes=size,
+            execution_agent_id=str(client.agent_id),
+            root_id=str(client.root_id),
+            root_revision=client.root_revision,
+            working_directory=client.working_directory,
+        ),
+    )
+
+
 async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> ToolResult:
     request = _filesystem_permission(
         context,
@@ -1754,6 +1945,25 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
+    if arguments.root == "workspace":
+        path = context.root_files.normalize_relative_path(arguments.path)
+        result = await _workspace_request(
+            context,
+            "workspace.write",
+            {
+                "path": path,
+                "content": arguments.content,
+            },
+            WorkspaceWriteResult,
+        )
+        assert isinstance(result, WorkspaceWriteResult)
+        _require_workspace_path(result.path, path)
+        return ToolResult.json(
+            {"root": arguments.root, "written": result.path},
+            file_actions=_workspace_file_action(
+                context, "write", result.path, result.size
+            ),
+        )
     written = context.root_files.write_file(arguments.root, arguments.path, arguments.content)
     return ToolResult.json(
         {"root": arguments.root, "written": written},
@@ -1774,6 +1984,20 @@ async def _create_directory(
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
+    if arguments.root == "workspace":
+        path = context.root_files.normalize_relative_path(arguments.path)
+        result = await _workspace_request(
+            context,
+            "workspace.mkdir",
+            {
+                "path": path,
+                "parents": False,
+            },
+            WorkspacePathResult,
+        )
+        assert isinstance(result, WorkspacePathResult)
+        _require_workspace_path(result.path, path)
+        return ToolResult.json({"root": arguments.root, "created": result.path})
     created = context.root_files.create_directory(arguments.root, arguments.path)
     return ToolResult.json({"root": arguments.root, "created": created})
 
@@ -1789,9 +2013,20 @@ async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> 
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
-    context.root_files.delete_path(
-        arguments.root, arguments.path, recursive=arguments.recursive
-    )
+    if arguments.root == "workspace":
+        await _workspace_request(
+            context,
+            "workspace.delete",
+            {
+                "path": context.root_files.normalize_relative_path(arguments.path),
+                "recursive": arguments.recursive,
+            },
+            WorkspaceDeleteResult,
+        )
+    else:
+        context.root_files.delete_path(
+            arguments.root, arguments.path, recursive=arguments.recursive
+        )
     return ToolResult.json({"root": arguments.root, "deleted": arguments.path})
 
 
@@ -1816,6 +2051,45 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
     destination_allowed = await _allow(context, destination_request)
     if not source_allowed or not destination_allowed:
         return ToolResult.error("permission.denied")
+    if arguments.source_root == arguments.destination_root == "workspace":
+        destination = context.root_files.normalize_relative_path(
+            arguments.destination_path
+        )
+        result = await _workspace_request(
+            context,
+            "workspace.copy",
+            {
+                "path": context.root_files.normalize_relative_path(arguments.source_path),
+                "destination": destination,
+            },
+            WorkspacePathResult,
+        )
+        assert isinstance(result, WorkspacePathResult)
+        _require_workspace_path(result.path, destination)
+        file_actions: tuple[ToolFileAction, ...] = ()
+        client = _workspace_client(context)
+        if client.supports("workspace.stat"):
+            try:
+                stat_result = await client.request(
+                    "workspace.stat", {"path": result.path}, WorkspaceStatResult
+                )
+                if (
+                    isinstance(stat_result, WorkspaceStatResult)
+                    and stat_result.path == result.path
+                    and stat_result.kind == "file"
+                    and stat_result.size is not None
+                ):
+                    file_actions = _workspace_file_action(
+                        context, "copy", result.path, stat_result.size
+                    )
+            except ExecutionClientError:
+                pass
+        return ToolResult.json(
+            {"root": arguments.destination_root, "copied": result.path},
+            file_actions=file_actions,
+        )
+    if "workspace" in {arguments.source_root, arguments.destination_root}:
+        return ToolResult.error("executionAgent.operationUnavailable")
     copied = context.root_files.copy_path(
         arguments.source_root,
         arguments.source_path,
@@ -1851,6 +2125,45 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
     destination_allowed = await _allow(context, destination_request)
     if not source_allowed or not destination_allowed:
         return ToolResult.error("permission.denied")
+    if arguments.source_root == arguments.destination_root == "workspace":
+        destination = context.root_files.normalize_relative_path(
+            arguments.destination_path
+        )
+        result = await _workspace_request(
+            context,
+            "workspace.move",
+            {
+                "path": context.root_files.normalize_relative_path(arguments.source_path),
+                "destination": destination,
+            },
+            WorkspacePathResult,
+        )
+        assert isinstance(result, WorkspacePathResult)
+        _require_workspace_path(result.path, destination)
+        file_actions: tuple[ToolFileAction, ...] = ()
+        client = _workspace_client(context)
+        if client.supports("workspace.stat"):
+            try:
+                stat_result = await client.request(
+                    "workspace.stat", {"path": result.path}, WorkspaceStatResult
+                )
+                if (
+                    isinstance(stat_result, WorkspaceStatResult)
+                    and stat_result.path == result.path
+                    and stat_result.kind == "file"
+                    and stat_result.size is not None
+                ):
+                    file_actions = _workspace_file_action(
+                        context, "move", result.path, stat_result.size
+                    )
+            except ExecutionClientError:
+                pass
+        return ToolResult.json(
+            {"root": arguments.destination_root, "moved": result.path},
+            file_actions=file_actions,
+        )
+    if "workspace" in {arguments.source_root, arguments.destination_root}:
+        return ToolResult.error("executionAgent.operationUnavailable")
     moved = context.root_files.move_path(
         arguments.source_root,
         arguments.source_path,
@@ -1863,6 +2176,87 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
             context, "move", arguments.destination_root, moved
         ),
     )
+
+
+def _process_permission(
+    context: ToolContext, *, shell: bool
+) -> PermissionRequest:
+    client = _workspace_client(context)
+    warning = (
+        "Shell-Befehle können Dateien verändern, Programme starten und auf Netzwerkdienste "
+        "zugreifen. Das Arbeitsverzeichnis begrenzt keinen Prozess als Betriebssystem-Sandbox."
+    )
+    return PermissionRequest(
+        capability="process.execute",
+        resource_type="execution_workspace",
+        resource_scope=json.dumps(
+            {
+                "agentId": str(client.agent_id),
+                "rootId": str(client.root_id),
+                "rootRevision": client.root_revision,
+                "workingDirectory": client.working_directory,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        action_kind="shell_run" if shell else "process_exec",
+        risk_level="high",
+        title="Shell-Befehl ausführen?" if shell else "Prozess ausführen?",
+        summary=warning,
+        resource_display=f"workspace:{client.working_directory}",
+        approval_details={"warning": warning},
+        available_decisions=("allow_once", "deny"),
+    )
+
+
+async def _execute_process(
+    context: ToolContext, operation: str, arguments: dict[str, Any]
+) -> ToolResult:
+    if not await _allow(context, _process_permission(context, shell=operation == "shell.run")):
+        return ToolResult.error("permission.denied")
+    output = {"stdout": "", "stderr": ""}
+
+    async def publish(event: Any) -> None:
+        output[event.event] += event.data
+        await run_events.publish(
+            context.run_id,
+            {
+                "type": "process.output",
+                "toolCallId": context.tool_call.id,
+                "output": dict(output),
+            },
+        )
+
+    result = await _workspace_client(context).request(
+        operation,
+        arguments,
+        ProcessResult,
+        timeout=3_610,
+        on_event=publish,
+    )
+    assert isinstance(result, ProcessResult)
+    return ToolResult.json(
+        {
+            **result.model_dump(by_alias=True),
+            "output": {
+                **output,
+                "truncated": result.stdout_truncated or result.stderr_truncated,
+            },
+        }
+    )
+
+
+async def _process_exec(
+    arguments: ProcessExecArguments, context: ToolContext
+) -> ToolResult:
+    return await _execute_process(
+        context, "process.exec", {"program": arguments.program, "args": arguments.args}
+    )
+
+
+async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> ToolResult:
+    return await _execute_process(context, "shell.run", {"command": arguments.command})
 
 
 async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> ToolResult:
@@ -3407,6 +3801,14 @@ _SKILL_LOAD = ToolAction("skills.load", "Skills laden", ToolExecutionPolicy.AUTO
 _SKILL_WRITE = ToolAction(
     "skills.write", "Skills speichern", ToolExecutionPolicy.ASK, mutates=True
 )
+_PROCESS_EXECUTE = ToolAction(
+    "process.execute",
+    "Prozesse ausführen",
+    ToolExecutionPolicy.ASK,
+    configurable=False,
+    allowed_policies=(ToolExecutionPolicy.ASK,),
+    mutates=True,
+)
 
 
 tool_registry = ToolRegistry(
@@ -3783,7 +4185,34 @@ tool_registry = ToolRegistry(
                 ),
             ),
         ),
-    ]
+    ],
+    operation_definitions=[
+        ToolDefinition(
+            "process_exec",
+            "Run one configured program alias with an argument array in the selected workspace. "
+            "The program is host-configured; never pass an executable path.",
+            ProcessExecArguments,
+            _process_exec,
+            write=True,
+            required_operation="process.exec",
+            group="process",
+            label="Prozess ausführen",
+            icon="terminal",
+            actions=(_PROCESS_EXECUTE,),
+        ),
+        ToolDefinition(
+            "shell_run",
+            "Run one command with the host-configured shell in the selected workspace.",
+            ShellRunArguments,
+            _shell_run,
+            write=True,
+            required_operation="shell.run",
+            group="process",
+            label="Shell-Befehl ausführen",
+            icon="terminal",
+            actions=(_PROCESS_EXECUTE,),
+        ),
+    ],
 )
 
 WRITE_TOOL_NAMES = frozenset(

@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     Field,
     HttpUrl,
+    PrivateAttr,
     TypeAdapter,
     computed_field,
     field_validator,
@@ -324,8 +325,13 @@ class IntegrationInstance(BaseModel):
     integration_type: str
     adapter_type: str
     enabled: bool = True
+    execution_agent_id: UUID | None = Field(
+        default=None,
+        validation_alias=AliasChoices("execution_agent_id", "executionAgentId"),
+    )
     credential_id: UUID | None = None
     config: dict[str, Any] = Field(default_factory=dict)
+    _execution_operations: frozenset[str] | None = PrivateAttr(default=None)
 
 
 _HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
@@ -553,6 +559,17 @@ class IntegrationSettings(SettingsDocument):
     settings_key = "integrations"
 
     instances: list[IntegrationInstance] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_agent_integration_kinds(self) -> Self:
+        keys = [
+            (instance.execution_agent_id, instance.adapter_type)
+            for instance in self.instances
+            if instance.execution_agent_id is not None
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("only one integration instance per kind and execution agent is allowed")
+        return self
 
 
 class AgentRuntimeSettings(SettingsDocument):

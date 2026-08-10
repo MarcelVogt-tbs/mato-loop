@@ -77,8 +77,11 @@ function defaultSessionOptions() {
     memoryToolsAvailable: true,
     memoryUnavailableReason: null,
     webSearchPolicy: 'available',
+    preferredExecutionAgentId: null,
+    preferredRootId: null,
     workingDirectory: null,
-    workspaceAccess: 'read-only'
+    workspaceAccess: 'read-only',
+    workspaceContext: null
   }
 }
 
@@ -90,8 +93,11 @@ function optionsFromSession(session) {
     memoryToolsAvailable: session.memoryToolsAvailable,
     memoryUnavailableReason: session.memoryUnavailableReason,
     webSearchPolicy: session.webSearchPolicy,
+    preferredExecutionAgentId: session.preferredExecutionAgentId,
+    preferredRootId: session.preferredRootId,
     workingDirectory: session.workingDirectory,
-    workspaceAccess: session.workspaceAccess
+    workspaceAccess: session.workspaceAccess,
+    workspaceContext: session.workspaceContext || null
   }
 }
 
@@ -109,6 +115,8 @@ function emptyActivity(revision = 0) {
     tool: null,
     toolCallId: null,
     modelRequest: null,
+    providerAttempt: null,
+    providerAttemptTotal: null,
     index: null,
     total: null,
     revision
@@ -193,8 +201,13 @@ function loadDrafts() {
           webSearchPolicy: ['required', 'available', 'disabled'].includes(options.webSearchPolicy)
             ? options.webSearchPolicy
             : (options.forceWebSearch === true ? 'required' : 'available'),
+          preferredExecutionAgentId: typeof options.preferredExecutionAgentId === 'string'
+            ? options.preferredExecutionAgentId
+            : null,
+          preferredRootId: typeof options.preferredRootId === 'string' ? options.preferredRootId : null,
           workingDirectory: typeof options.workingDirectory === 'string' ? options.workingDirectory : null,
-          workspaceAccess: options.workspaceAccess === 'read-write' ? 'read-write' : 'read-only'
+          workspaceAccess: options.workspaceAccess === 'read-write' ? 'read-write' : 'read-only',
+          workspaceContext: null
         }
       },
       sessionMessages
@@ -215,6 +228,7 @@ export const useChatStore = defineStore('chat', {
     streamContent: '',
     streamReasoning: null,
     streamModelName: null,
+    processOutputs: {},
     eventSource: null,
     selectedSessionId: null,
     runSessionId: null,
@@ -230,6 +244,7 @@ export const useChatStore = defineStore('chat', {
     sessionsLoadMoreFailed: false,
     sessionPageRequest: null,
     historyActionPending: false,
+    sessionSettingsPending: 0,
     sessionRequestController: null,
     loadError: null,
     sessionDefaults: defaultSessionOptions(),
@@ -259,6 +274,10 @@ export const useChatStore = defineStore('chat', {
         tool: details.tool || null,
         toolCallId: details.toolCallId || null,
         modelRequest: details.modelRequest || null,
+        providerAttempt: Number.isInteger(details.providerAttempt) ? details.providerAttempt : null,
+        providerAttemptTotal: Number.isInteger(details.providerAttemptTotal)
+          ? details.providerAttemptTotal
+          : null,
         index: Number.isInteger(details.index) ? details.index : null,
         total: Number.isInteger(details.total) ? details.total : null
       }
@@ -284,7 +303,10 @@ export const useChatStore = defineStore('chat', {
       }
     },
     async fetchDefaults() {
-      this.sessionDefaults = (await api.get('/sessions/defaults')).data
+      this.sessionDefaults = {
+        ...defaultSessionOptions(),
+        ...(await api.get('/sessions/defaults')).data
+      }
       const options = this.drafts.newSession.options
       if (options.modelId === null) {
         Object.assign(options, this.sessionDefaults)
@@ -598,6 +620,7 @@ export const useChatStore = defineStore('chat', {
         this.streamContent = ''
         this.streamReasoning = null
         this.streamModelName = null
+        this.processOutputs = {}
         this.clearActivity()
       }
       if (!id) {
@@ -659,10 +682,25 @@ export const useChatStore = defineStore('chat', {
         model_id: 'modelId',
         memory_mode: 'memoryMode',
         web_search_policy: 'webSearchPolicy',
+        preferred_execution_agent_id: 'preferredExecutionAgentId',
+        preferred_root_id: 'preferredRootId',
         working_directory: 'workingDirectory',
         workspace_access: 'workspaceAccess'
       }
-      for (const [field, value] of Object.entries(patch)) {
+      const normalizedPatch = { ...patch }
+      if (
+        Object.hasOwn(patch, 'preferred_execution_agent_id')
+        && patch.preferred_execution_agent_id !== options.preferredExecutionAgentId
+      ) {
+        normalizedPatch.preferred_root_id = null
+        normalizedPatch.working_directory = null
+      } else if (
+        Object.hasOwn(patch, 'preferred_root_id')
+        && patch.preferred_root_id !== options.preferredRootId
+      ) {
+        normalizedPatch.working_directory = null
+      }
+      for (const [field, value] of Object.entries(normalizedPatch)) {
         if (fields[field]) options[fields[field]] = value
         if (field === 'memory_mode') {
           options.effectiveMemoryMode = options.memoryUnavailableReason
@@ -690,12 +728,31 @@ export const useChatStore = defineStore('chat', {
     async updateCurrent(patch) {
       const session = this.current
       if (!session) return
-      const { data } = await api.patch(`/sessions/${session.id}`, patch)
-      if (this.current?.id === session.id && this.selectedSessionId === session.id) {
-        this.current = { ...session, ...data }
+      const normalizedPatch = { ...patch }
+      if (
+        Object.hasOwn(patch, 'preferred_execution_agent_id')
+        && patch.preferred_execution_agent_id !== session.preferredExecutionAgentId
+      ) {
+        normalizedPatch.preferred_root_id = null
+        normalizedPatch.working_directory = null
+      } else if (
+        Object.hasOwn(patch, 'preferred_root_id')
+        && patch.preferred_root_id !== session.preferredRootId
+      ) {
+        normalizedPatch.working_directory = null
       }
-      const index = this.sessions.findIndex((item) => item.id === data.id)
-      if (index >= 0) this.sessions[index] = { ...this.sessions[index], ...data }
+      this.sessionSettingsPending += 1
+      try {
+        const { data } = await api.patch(`/sessions/${session.id}`, normalizedPatch)
+        if (this.current?.id === session.id && this.selectedSessionId === session.id) {
+          this.current = { ...session, ...data }
+        }
+        const index = this.sessions.findIndex((item) => item.id === data.id)
+        if (index >= 0) this.sessions[index] = { ...this.sessions[index], ...data }
+        return data
+      } finally {
+        this.sessionSettingsPending = Math.max(0, this.sessionSettingsPending - 1)
+      }
     },
     async renameSession(id, title) {
       const { data } = await api.patch(`/sessions/${id}`, { title })
@@ -735,6 +792,7 @@ export const useChatStore = defineStore('chat', {
       this.streamContent = ''
       this.streamReasoning = null
       this.streamModelName = null
+      this.processOutputs = {}
       this.clearActivity()
       if (sessionId) this.setSessionRunStatus(sessionId, null)
     },
@@ -933,7 +991,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
     async send(content) {
-      if (this.running || this.historyActionPending) return null
+      if (this.running || this.historyActionPending || this.sessionSettingsPending) return null
       const attachments = [...this.activeAttachmentDraft]
       return this.current
         ? this.sendToCurrent(content, attachments)
@@ -965,6 +1023,7 @@ export const useChatStore = defineStore('chat', {
       this.streamContent = ''
       this.streamReasoning = null
       this.streamModelName = null
+      this.processOutputs = {}
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
       const options = this.drafts.newSession.options
       try {
@@ -973,6 +1032,8 @@ export const useChatStore = defineStore('chat', {
           model_id: options.modelId,
           memory_mode: options.memoryMode,
           web_search_policy: options.webSearchPolicy,
+          preferred_execution_agent_id: options.preferredExecutionAgentId,
+          preferred_root_id: options.preferredRootId,
           working_directory: options.workingDirectory,
           workspace_access: options.workspaceAccess
         }
@@ -1013,6 +1074,7 @@ export const useChatStore = defineStore('chat', {
       this.streamContent = ''
       this.streamReasoning = null
       this.streamModelName = null
+      this.processOutputs = {}
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
       const localMessage = {
         id: `local-${Date.now()}`,
@@ -1141,6 +1203,27 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('reasoning.updated', (event) => {
         if (this.eventSource !== source) return
         this.streamReasoning = JSON.parse(event.data).reasoning
+      })
+      source.addEventListener('process.output', (event) => {
+        if (this.eventSource !== source) return
+        const payload = JSON.parse(event.data)
+        const toolCallId = payload.toolCallId
+        if (!toolCallId) return
+        const incoming = payload.output && typeof payload.output === 'object'
+          ? payload.output
+          : payload
+        const previous = this.processOutputs[toolCallId] || { stdout: '', stderr: '' }
+        const next = { ...previous }
+        if (typeof incoming.stdout === 'string') next.stdout = incoming.stdout
+        if (typeof incoming.stderr === 'string') next.stderr = incoming.stderr
+        const stream = incoming.stream || incoming.event
+        const content = incoming.content ?? incoming.data
+        if (['stdout', 'stderr'].includes(stream) && typeof content === 'string') {
+          next[stream] = content
+        }
+        if (typeof incoming.truncated === 'boolean') next.truncated = incoming.truncated
+        if (typeof incoming.outputTruncated === 'boolean') next.truncated = incoming.outputTruncated
+        this.processOutputs = { ...this.processOutputs, [toolCallId]: next }
       })
       const promoteStreamedMessage = (message) => {
         if (message && this.current?.id === sessionId) {

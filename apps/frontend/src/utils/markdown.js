@@ -19,7 +19,8 @@ const ALLOWED_TAGS = [
 const ALLOWED_ATTR = [
   'accent', 'accentunder', 'alt', 'aria-hidden', 'aria-label', 'aria-live', 'checked',
   'class', 'columnalign', 'columnlines', 'columnspacing', 'd', 'data-markdown-code', 'data-markdown-image',
-  'decoding', 'disabled', 'display', 'displaystyle', 'encoding', 'fence', 'height',
+  'data-markdown-mermaid',
+  'decoding', 'disabled', 'display', 'displaystyle', 'encoding', 'fence', 'height', 'hidden',
   'href', 'loading', 'lspace', 'mathbackground', 'mathcolor', 'mathvariant', 'maxsize',
   'minsize', 'movablelimits', 'preserveaspectratio', 'referrerpolicy', 'rel', 'role',
   'rowlines', 'rowspacing', 'scriptlevel', 'separator', 'src', 'stretchy', 'style',
@@ -29,6 +30,7 @@ const LINK_PROTOCOL = /^(?:https?:|mailto:)/i
 const IMAGE_PROTOCOL = /^https?:/i
 const SAFE_FRAGMENT = /^#[A-Za-z0-9_-]+$/
 const LANGUAGE_NAME = /^[A-Za-z0-9_+-]+$/
+const MAX_MERMAID_BLOCKS = 12
 
 function currentOrigin() {
   return typeof window !== 'undefined' && window.location?.origin
@@ -60,6 +62,20 @@ function highlightedCode(source, languageName) {
     }
   }
   return `<pre class="chat-markdown__code"><code>${escapeHtml(source)}</code></pre>`
+}
+
+function isClosedStreamingFence(token, source) {
+  const endLine = token.map?.[1]
+  const marker = token.markup
+  if (!endLine || !marker) return false
+  const line = String(source || '').split(/\r?\n/)[endLine - 1]
+  if (line === undefined) return false
+  const candidate = line.trimStart()
+  let markerLength = 0
+  while (candidate[markerLength] === marker[0]) markerLength += 1
+  return markerLength >= marker.length
+    && candidate.slice(markerLength).trim() === ''
+    && line.length - candidate.length <= 3
 }
 
 function renderedMath(content, displayMode) {
@@ -227,6 +243,26 @@ function imageHtml(image, alt, title, requestId = null) {
 function configureRenderRules() {
   markdown.renderer.rules.fence = (tokens, index, options, env) => {
     const token = tokens[index]
+    const language = normalizedLanguage(token.info).toLowerCase()
+    if (
+      language === 'mermaid'
+      && env.mermaidBlocks.length < MAX_MERMAID_BLOCKS
+    ) {
+      const mermaidIndex = String(env.mermaidBlocks.length)
+      env.mermaidBlocks.push(token.content)
+      if (env.streaming && !isClosedStreamingFence(token, env.source)) {
+        return `<div class="chat-markdown__mermaid-block chat-markdown__mermaid-block--streaming">
+          <div class="chat-markdown__mermaid-output" role="status" aria-live="polite">
+            <span class="chat-markdown__mermaid-status">Diagramm wird erstellt …</span>
+          </div>
+        </div>`
+      }
+      return `<div class="chat-markdown__mermaid-block">
+        <div class="chat-markdown__mermaid-output" data-markdown-mermaid="${mermaidIndex}" role="status" aria-live="polite">
+          <span class="chat-markdown__mermaid-status">Diagramm wird erstellt …</span>
+        </div>
+      </div>`
+    }
     if (!env.interactive) return highlightedCode(token.content, token.info)
     const codeIndex = String(env.codeBlocks.length)
     env.codeBlocks.push(token.content)
@@ -312,6 +348,12 @@ function configureRenderRules() {
 
 configureRenderRules()
 
+export function containsMermaidFence(content) {
+  return markdown.parse(String(content || ''), {}).some((token) => (
+    token.type === 'fence' && normalizedLanguage(token.info).toLowerCase() === 'mermaid'
+  ))
+}
+
 export function renderMarkdown(
   content,
   {
@@ -331,11 +373,13 @@ export function renderMarkdown(
   const env = {
     codeBlocks: [],
     externalImages: [],
+    mermaidBlocks: [],
     allowImages,
     imageStates,
     interactive,
     researchSources: sourceMap,
     streaming,
+    source: String(content || ''),
     trustedOrigins: new Set(trustedImageOrigins)
   }
   const rendered = markdown.render(String(content || ''), env)
@@ -346,5 +390,10 @@ export function renderMarkdown(
     RETURN_TRUSTED_TYPE: false,
     SANITIZE_NAMED_PROPS: true
   })
-  return { codeBlocks: env.codeBlocks, html, externalImages: env.externalImages }
+  return {
+    codeBlocks: env.codeBlocks,
+    html,
+    externalImages: env.externalImages,
+    mermaidBlocks: env.mermaidBlocks
+  }
 }

@@ -1,3 +1,4 @@
+from mato_loop_backend.models.execution_agent import ExecutionAgent, ExecutionAgentRoot
 from mato_loop_backend.models.runtime import (
     AgentRun,
     ApprovalRequest,
@@ -33,6 +34,8 @@ __all__ = [
     "ChatSession",
     "ContextSummary",
     "Credential",
+    "ExecutionAgent",
+    "ExecutionAgentRoot",
     "LoginSession",
     "MemoryCategory",
     "MemoryRecord",

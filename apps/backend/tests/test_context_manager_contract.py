@@ -782,6 +782,17 @@ def test_inactive_capability_catalog_is_informational_only() -> None:
     assert "write_file" in prompt
 
 
+def test_general_system_prompt_exposes_mermaid_rendering() -> None:
+    prompt = general_system_prompt(_session())
+
+    assert "chat renders fenced Mermaid blocks" in prompt
+    assert "materially clarifies a complex flow" in prompt
+    assert "Keep essential explanation in text" in prompt
+    assert "never add a diagram only as decoration" in prompt
+    assert "fenced `mermaid` block" in prompt
+    assert "Never wrap the complete response in a `markdown` code fence" in prompt
+
+
 def test_skill_catalog_contains_selection_metadata_without_instructions() -> None:
     skill = SkillDefinition(
         name="Quellenpruefung",

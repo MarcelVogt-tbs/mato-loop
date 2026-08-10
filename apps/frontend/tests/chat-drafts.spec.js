@@ -86,9 +86,17 @@ describe('chat drafts', () => {
     const firstToolStartedAt = '2026-07-27T12:00:10.000Z'
     const secondToolStartedAt = '2026-07-27T12:00:12.000Z'
 
+    expect(chat.activity).toMatchObject({ providerAttempt: null, providerAttemptTotal: null })
+
     chat.setActivity('waiting_model', { modelRequest: 2, startedAt: modelStartedAt })
-    chat.setActivity('waiting_model', { modelRequest: 3, startedAt: repeatedEventAt })
+    chat.setActivity('waiting_model', {
+      modelRequest: 2,
+      providerAttempt: 2,
+      providerAttemptTotal: 3,
+      startedAt: repeatedEventAt
+    })
     expect(chat.activity.startedAt).toBe(modelStartedAt)
+    expect(chat.activity).toMatchObject({ providerAttempt: 2, providerAttemptTotal: 3 })
 
     chat.setActivity('processing_tool', {
       tool: 'read_file', toolCallId: 'call-1', index: 0, total: 2, startedAt: firstToolStartedAt
@@ -160,6 +168,95 @@ describe('chat drafts', () => {
     expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
       web_search_policy: 'required'
     }))
+  })
+
+  it('persists executor preferences and sends them when creating a session', async () => {
+    api.post.mockResolvedValue({
+      data: { session: { id: 'session-agent', messages: [] }, runId: 'run-agent' }
+    })
+    const chat = useChatStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+
+    await chat.updateActive({ preferred_execution_agent_id: 'agent-1' })
+    await chat.updateActive({ preferred_root_id: 'root-1' })
+    await chat.updateActive({ working_directory: 'projekt' })
+    expect(JSON.parse(window.localStorage.getItem('matoLoopChatDrafts')).newSession.options)
+      .toMatchObject({
+        preferredExecutionAgentId: 'agent-1',
+        preferredRootId: 'root-1',
+        workingDirectory: 'projekt'
+      })
+    await chat.startSession('Lokal ausführen')
+
+    expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
+      preferred_execution_agent_id: 'agent-1',
+      preferred_root_id: 'root-1',
+      working_directory: 'projekt'
+    }))
+    const stored = JSON.parse(window.localStorage.getItem('matoLoopChatDrafts'))
+    expect(stored.newSession.options.preferredExecutionAgentId).toBeNull()
+  })
+
+  it('clears root and working directory when the executor changes', async () => {
+    const chat = useChatStore()
+    Object.assign(chat.activeContext, {
+      preferredExecutionAgentId: 'agent-old',
+      preferredRootId: 'root-old',
+      workingDirectory: 'projekt'
+    })
+
+    await chat.updateActive({ preferred_execution_agent_id: 'agent-new' })
+
+    expect(chat.activeContext).toMatchObject({
+      preferredExecutionAgentId: 'agent-new',
+      preferredRootId: null,
+      workingDirectory: null
+    })
+  })
+
+  it('sends reset fields in one request when a persisted session changes executor', async () => {
+    api.patch.mockResolvedValue({
+      data: {
+        id: 'session-1',
+        preferredExecutionAgentId: 'agent-new',
+        preferredRootId: null,
+        workingDirectory: null
+      }
+    })
+    const chat = useChatStore()
+    chat.current = {
+      id: 'session-1',
+      preferredExecutionAgentId: 'agent-old',
+      preferredRootId: 'root-old',
+      workingDirectory: 'projekt'
+    }
+    chat.selectedSessionId = 'session-1'
+
+    await chat.updateActive({ preferred_execution_agent_id: 'agent-new' })
+
+    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
+      preferred_execution_agent_id: 'agent-new',
+      preferred_root_id: null,
+      working_directory: null
+    })
+  })
+
+  it('does not start a run while a persisted session setting is being saved', async () => {
+    let resolvePatch
+    api.patch.mockReturnValue(new Promise((resolve) => { resolvePatch = resolve }))
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [], workingDirectory: null }
+    chat.selectedSessionId = 'session-1'
+
+    const updating = chat.updateActive({ working_directory: 'projekt' })
+
+    expect(chat.sessionSettingsPending).toBe(1)
+    await expect(chat.send('Nicht mit altem Kontext senden')).resolves.toBeNull()
+    expect(api.post).not.toHaveBeenCalled()
+
+    resolvePatch({ data: { id: 'session-1', workingDirectory: 'projekt' } })
+    await updating
+    expect(chat.sessionSettingsPending).toBe(0)
   })
 
   it('keeps attachments out of local storage and uses the general multipart route', async () => {
@@ -684,8 +781,15 @@ describe('chat drafts', () => {
     expect(chat.streamModelName).toBe('Streaming-Modell')
     expect(chat.sessions[0].activeRunStatus).toBe('running')
 
-    source.emit('run.phase', { phase: 'waiting_model', modelRequest: 1 })
-    expect(chat.activity).toMatchObject({ phase: 'waiting_model', modelRequest: 1 })
+    source.emit('run.phase', {
+      phase: 'waiting_model', modelRequest: 1, providerAttempt: 2, providerAttemptTotal: 3
+    })
+    expect(chat.activity).toMatchObject({
+      phase: 'waiting_model',
+      modelRequest: 1,
+      providerAttempt: 2,
+      providerAttemptTotal: 3
+    })
 
     source.emit('reasoning.updated', {
       reasoning: { kind: 'content', text: 'Plan prüfen', status: 'streaming' }
@@ -731,6 +835,23 @@ describe('chat drafts', () => {
 
     source.emit('question.rejected', {})
     expect(chat.sessions[0].activeRunStatus).toBe('running')
+  })
+
+  it('replaces cumulative process output snapshots from SSE', () => {
+    global.EventSource = EventSourceMock
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    const source = EventSourceMock.instances[0]
+
+    source.emit('process.output', { toolCallId: 'call-1', stdout: 'eins', stderr: '' })
+    source.emit('process.output', { toolCallId: 'call-1', stdout: 'eins\nzwei', stderr: 'warnung' })
+
+    expect(chat.processOutputs['call-1']).toEqual({
+      stdout: 'eins\nzwei',
+      stderr: 'warnung'
+    })
   })
 
   it('refreshes session files after a successful filesystem tool completes', () => {

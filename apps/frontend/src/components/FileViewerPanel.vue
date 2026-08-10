@@ -1,5 +1,14 @@
 <template>
+  <ImageViewerPanel
+    v-if="directImage"
+    :image="directImage"
+    :fullscreen="fullscreen"
+    :fullscreen-toggle="fullscreenToggle"
+    @close="emit('close')"
+    @toggle-fullscreen="emit('toggle-fullscreen')"
+  />
   <section
+    v-else
     ref="viewerRoot"
     class="file-viewer column no-wrap full-height"
     tabindex="-1"
@@ -7,12 +16,12 @@
     @keydown.esc="handleEscape"
   >
     <q-toolbar class="file-viewer__toolbar q-px-md">
-      <q-btn v-if="!directImage" class="file-icon-action" flat round dense icon="arrow_back" aria-label="Zur Dateiliste" @click="emit('back')">
+      <q-btn class="file-icon-action" flat round dense icon="arrow_back" aria-label="Zur Dateiliste" @click="emit('back')">
         <q-tooltip>Zur Dateiliste</q-tooltip>
       </q-btn>
       <q-toolbar-title id="file-viewer-title" class="text-subtitle1 text-weight-bold ellipsis">{{ viewerName }}</q-toolbar-title>
       <q-btn
-        v-if="!directImage && editable && !workspace.editorActive"
+        v-if="editable && !workspace.editorActive"
         ref="editButton"
         class="file-viewer__edit"
         unelevated
@@ -39,7 +48,21 @@
       >
         <q-tooltip>In neuem Tab öffnen</q-tooltip>
       </q-btn>
-      <q-btn v-if="directImage || !workspace.editorActive" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
+      <q-btn
+        v-if="preview.kind === 'markdown' && !workspace.editorActive"
+        class="file-icon-action"
+        flat
+        round
+        dense
+        icon="picture_as_pdf"
+        :href="printUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Markdown als PDF speichern"
+      >
+        <q-tooltip>Als PDF speichern</q-tooltip>
+      </q-btn>
+      <q-btn v-if="!workspace.editorActive && canDownload" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
         <q-tooltip>Datei herunterladen</q-tooltip>
       </q-btn>
       <q-btn
@@ -54,11 +77,11 @@
       >
         <q-tooltip>{{ fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen' }}</q-tooltip>
       </q-btn>
-      <q-btn class="file-icon-action" flat round dense icon="close" :aria-label="directImage ? 'Bildansicht schließen' : 'Explorer schließen'" @click="emit('close')">
-        <q-tooltip>{{ directImage ? 'Bildansicht schließen' : 'Explorer schließen' }}</q-tooltip>
+      <q-btn class="file-icon-action" flat round dense icon="close" aria-label="Explorer schließen" @click="emit('close')">
+        <q-tooltip>Explorer schließen</q-tooltip>
       </q-btn>
     </q-toolbar>
-    <div v-if="!directImage" class="file-viewer__path q-px-md q-pb-sm">
+    <div class="file-viewer__path q-px-md q-pb-sm">
       <div class="row items-center no-wrap">
         <q-btn class="file-icon-action q-mr-xs" flat round dense icon="arrow_upward" aria-label="Zum übergeordneten Ordner" @click="emit('navigate', parentPath)">
           <q-tooltip>Zum übergeordneten Ordner</q-tooltip>
@@ -126,27 +149,34 @@
           @error="imageFailed"
         />
       </div>
-      <div v-else-if="preview.kind === 'markdown'" class="chat-markdown file-viewer__markdown" v-html="markdownHtml" />
+      <MessageContent
+        v-else-if="preview.kind === 'markdown'"
+        class="file-viewer__markdown"
+        :content="preview.content"
+        :allow-images="false"
+        :interactive="false"
+        viewer-controls
+      />
       <pre v-else-if="preview.kind === 'text'" class="file-viewer__text">{{ preview.content }}</pre>
       <div v-else class="fit column flex-center text-center q-pa-xl">
         <q-icon name="draft" size="64px" class="app-muted q-mb-md" />
         <div class="text-subtitle1">Keine Vorschau verfügbar</div>
         <div class="app-muted q-mt-xs">{{ unavailableMessage }}</div>
-        <q-btn class="q-mt-lg" color="primary" no-caps icon="download" label="Datei herunterladen" @click="download" />
+        <q-btn v-if="canDownload" class="q-mt-lg" color="primary" no-caps icon="download" label="Datei herunterladen" @click="download" />
       </div>
     </div>
   </section>
 </template>
 
 <script setup>
-import 'katex/dist/katex.min.css'
-
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRouter } from 'vue-router'
+import ImageViewerPanel from 'components/ImageViewerPanel.vue'
+import MessageContent from 'components/MessageContent.vue'
 import WorkspaceFileEditor from 'components/WorkspaceFileEditor.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
-import { renderMarkdown } from 'src/utils/markdown'
 import { useWorkspaceStore } from 'stores/workspace'
 
 defineOptions({ name: 'FileViewerPanel' })
@@ -159,6 +189,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['back', 'close', 'navigate', 'toggle-fullscreen'])
 const $q = useQuasar()
+const router = useRouter()
 const { confirm } = useConfirm()
 const workspace = useWorkspaceStore()
 const viewerRoot = ref(null)
@@ -174,25 +205,30 @@ const preview = ref({ kind: 'none', reason: 'unsupported' })
 const loadedImageUrl = ref('')
 let previewVersion = 0
 const directImage = computed(() => props.image?.url ? props.image : null)
-const viewerName = computed(() => directImage.value?.name || props.entry?.name || '')
+const viewerName = computed(() => props.entry?.name || '')
 const draft = computed({
   get: () => workspace.editorDraft ?? '',
   set: (value) => workspace.updateEditorDraft(value, preview.value.content)
 })
-const imageUrl = computed(() => directImage.value?.url || (
-  props.entry?.path ? workspace.fileUrl('content', props.entry.path) : ''
-))
+const imageUrl = computed(() => props.entry?.path ? workspace.fileUrl('content', props.entry.path) : '')
 const editable = computed(() => (
-  !directImage.value
-  && props.entry?.path
+  props.entry?.path
   && !workspace.rootIdentity
   && ['text', 'markdown'].includes(preview.value.kind)
   && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
+  && workspace.operationAvailable('workspace.write')
 ))
-const markdownHtml = computed(() => renderMarkdown(preview.value.content, {
-  allowImages: false,
-  interactive: false
-}).html)
+const canDownload = computed(() => workspace.operationAvailable('workspace.export'))
+const printUrl = computed(() => {
+  if (!props.entry?.path || preview.value.kind !== 'markdown') return undefined
+  return router.resolve({
+    name: 'markdown-print',
+    query: workspace.readRequestParams({
+      path: props.entry.path,
+      revision: preview.value.revision
+    })
+  }).href
+})
 const fileDetails = computed(() => {
   const size = props.entry?.size
   if (!Number.isFinite(size)) return props.entry?.path || ''
@@ -227,14 +263,6 @@ async function loadPreview() {
   const version = ++previewVersion
   preview.value = { kind: 'none', reason: 'unsupported' }
   loadError.value = null
-  if (directImage.value) {
-    imageLoading.value = loadedImageUrl.value !== imageUrl.value
-    preview.value = { kind: 'image' }
-    loading.value = false
-    await nextTick()
-    viewerRoot.value?.focus()
-    return
-  }
   if (!props.entry?.path) return
   loading.value = true
   await nextTick()
@@ -320,21 +348,12 @@ function warnBeforeUnload(event) {
 }
 
 function download() {
-  if (!directImage.value) {
-    workspace.download(props.entry.path)
-    return
-  }
-  const anchor = document.createElement('a')
-  anchor.href = directImage.value.url
-  anchor.download = directImage.value.name || 'bild'
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
+  workspace.download(props.entry.path)
 }
 
 function handleEscape() {
   if (props.fullscreen) emit('toggle-fullscreen')
-  else if (!directImage.value) emit('back')
+  else emit('back')
 }
 
 function imageFailed() {
@@ -350,11 +369,11 @@ function imageLoaded() {
 watch(
   [
     () => props.entry?.path,
-    () => props.image?.url,
     () => workspace.scope,
     () => workspace.sessionId,
     () => workspace.workingDirectory,
-    () => workspace.rootIdentity
+    () => workspace.rootIdentity,
+    () => workspace.workspaceContext
   ],
   loadPreview,
   { immediate: true }

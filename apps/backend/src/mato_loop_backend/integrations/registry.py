@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from uuid import UUID
 
 from pydantic import BaseModel, HttpUrl
 
@@ -55,6 +56,21 @@ def integration_adapter(
     return _ADAPTERS.get((integration_type, adapter_type))
 
 
+def register_integration_adapter(adapter: IntegrationAdapterDefinition) -> None:
+    key = (adapter.integration_type, adapter.adapter_type)
+    if key in _ADAPTERS:
+        raise ValueError("duplicate integration adapter")
+    _ADAPTERS[key] = adapter
+    if adapter.execution_location == "agent":
+        from mato_loop_backend.execution import manager as execution_manager
+
+        execution_manager.SUPPORTED_OPERATIONS |= frozenset(
+            tool.execution_operation
+            for tool in adapter.execution_tools
+            if tool.execution_operation is not None
+        )
+
+
 def installed_integration_tools() -> tuple[ToolContribution, ...]:
     tools: dict[str, ToolContribution] = {}
     for adapter in _ADAPTERS.values():
@@ -67,7 +83,31 @@ def validate_integration(instance: IntegrationInstance) -> None:
     adapter = integration_adapter(instance.integration_type, instance.adapter_type)
     if adapter is None:
         raise ValueError("unsupported integration adapter")
+    if (adapter.execution_location == "agent") != (
+        instance.execution_agent_id is not None
+    ):
+        raise ValueError("integration execution location does not match its agent binding")
     adapter.config_model.model_validate(instance.config)
+
+
+def effective_execution_integration_settings(
+    settings: IntegrationSettings,
+    execution_agent_id: UUID | None,
+    execution_operations: set[str] | frozenset[str],
+) -> IntegrationSettings:
+    effective = settings.model_copy(deep=True)
+    for instance in effective.instances:
+        adapter = integration_adapter(instance.integration_type, instance.adapter_type)
+        if adapter is None:
+            continue
+        if adapter.execution_location == "backend":
+            if instance.execution_agent_id is not None:
+                instance.enabled = False
+            continue
+        if instance.execution_agent_id != execution_agent_id:
+            instance.enabled = False
+        instance._execution_operations = frozenset(execution_operations)
+    return effective
 
 
 def effective_integration_contributions(
