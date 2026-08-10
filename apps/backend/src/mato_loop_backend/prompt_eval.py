@@ -63,7 +63,7 @@ CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 13
+INVENTORY_VERSION = 14
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -467,11 +467,15 @@ CASES = (
         content_contains=("Agent-Modus", "Schreiben"),
     ),
     PromptCase(
-        id="ambiguous_request_asks_user",
+        id="console_diagnostics_use_assistant_text",
         kind="general",
-        user="Plane mir bitte einen Wochenendausflug.",
+        user=(
+            "Gib mir Docker-Befehle, mit denen ich die Lemonade-Version und das tatsächlich "
+            "gestartete llama-server-Binary prüfe. Ich führe sie selbst aus und sende dir die Ausgabe."
+        ),
         tools=("question",),
-        expected_tool="question",
+        expected_no_tools=True,
+        content_contains=("docker", "llama-server"),
     ),
     PromptCase(
         id="calendar_missing_details_uses_question",
@@ -2340,7 +2344,7 @@ _SEMANTIC_CONTRACTS = (
         "tools.question_selection_and_continuation",
         "tools",
         (
-            "ambiguous_request_asks_user",
+            "console_diagnostics_use_assistant_text",
             "calendar_missing_details_uses_question",
             "calendar_missing_details_under_persona_uses_question",
             "complete_calendar_event_skips_question",

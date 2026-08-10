@@ -50,7 +50,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 13
+    assert INVENTORY_VERSION == 14
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -192,6 +192,9 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     ]
     assert "instead of asking" in calendar_messages[0]["content"]
     assert "Call this tool alone" in calendar_tools[0]["description"]
+    assert "Never use question for console commands" in calendar_tools[0]["description"]
+    assert "Use shell_run for requested execution only" in calendar_tools[0]["description"]
+    assert "output requests in assistant text" in calendar_tools[0]["description"]
     question_parameters = json.dumps(calendar_tools[0]["parameters"])
     assert "free_text" in question_parameters
     assert "QuestionOption" in question_parameters

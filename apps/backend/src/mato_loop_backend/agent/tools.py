@@ -3816,17 +3816,16 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "question",
             "Ask all required user-specific questions for one blocked action in one call. Every item "
-            "requires a unique id, a unique short header, question, and type. Free-text example: "
-            '{"id":"date","type":"free_text","header":"Date","question":"When?",'
-            '"default_answers":["Tomorrow"]}. '
-            "Choice example: "
+            "requires a unique id, a unique short header, question, and type. Choice example: "
             '{"id":"format","type":"single_choice","header":"Format",'
             '"question":"Which format?","options":[{"label":"PDF"},{"label":"Markdown"}]}. '
             "Use free_text for open answers, single_choice for one option, and multiple_choice for "
             "several. Choice options are objects with label and optional description. allow_custom "
             "already provides a custom answer, so never add an Other option. When proposing a "
             "default, state it in the question and pass the exact answer list in default_answers; an "
-            "empty user answer accepts it. Call this tool alone.",
+            "empty user answer accepts it. Never use question for console commands, output, or "
+            "permission. Use shell_run for requested execution only; otherwise put commands and "
+            "output requests in assistant text. Host handles approval. Call this tool alone.",
             QuestionArguments,
             _question,
             group="agent",
