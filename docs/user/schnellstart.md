@@ -18,7 +18,11 @@ Beim Anlegen synchronisiert MatoLoop die verfügbaren Modelle. Eine erneute Sync
 
 Öffnen Sie beim Provider das gewünschte Modell und aktivieren Sie es, falls es nicht bereits als natives Providermodell aktiv ist. Danach können Sie die Verbindung mit einem aktiven Chatmodell testen. Wählen Sie anschließend unter **Einstellungen > Standardmodelle** mindestens ein Standardmodell für **Agent** aus.
 
-## 4. Erste Session starten
+## 4. Ausführungsagent optional verbinden
+
+Für reinen Chat ist kein Ausführungsagent erforderlich. Für lokale Arbeitsbereiche, Prozesse oder lokale Integrationen öffnen Sie **Einstellungen > Ausführungsagenten**, fügen einen Agenten hinzu und übernehmen Agent-ID sowie das nur einmal angezeigte Token in dessen Konfiguration. Der optionale Compose-Agent verwendet `MATO_EXECUTION_AGENT_ID`, `MATO_EXECUTION_AGENT_TOKEN`, `MATO_EXECUTION_AGENT_WORKSPACE` und `MATO_EXECUTION_AGENT_CONFIG` im Profil `execution-agent`. Ausführliche Hinweise stehen unter [Betrieb und Datensicherung](betrieb-und-datensicherung.md#optionalen-ausfuhrungsagenten-einrichten).
+
+## 5. Erste Session starten
 
 Kehren Sie zum Chat zurück, geben Sie eine Nachricht ein und senden Sie sie ab. Eine neue Session wird erst mit dieser ersten Nachricht dauerhaft angelegt.
 
@@ -28,9 +32,13 @@ Vor dem Senden können Sie unter anderem auswählen:
 - Agent-Modus **Lesen** oder **Schreiben**
 - Memory-Modus
 - Websuchmodus
+- Ausführungsagent
+- Arbeitsbereich
 - Arbeitsordner
 
-## 5. Freigaben prüfen
+Ohne gewählten und verbundenen Ausführungsagenten bleibt der Chat nutzbar; lokale Arbeitsbereiche und lokale Integrationen fehlen.
+
+## 6. Freigaben prüfen
 
 Benötigt eine Aktion Ihre Zustimmung, erscheint die Anfrage direkt beim zugehörigen Tool-Aufruf. Prüfen Sie Ressource, Risikostufe und Details, bevor Sie **Einmal erlauben**, **Für Session erlauben** oder **Ablehnen** wählen.
 

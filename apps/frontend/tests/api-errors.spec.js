@@ -137,6 +137,45 @@ describe('API error messages', () => {
     })).toBe('Die Audioauswahl darf höchstens 4 Einträge enthalten.')
   })
 
+  it('translates execution, process and transfer errors without unsafe retry advice', () => {
+    const codes = [
+      'executionAgent.notFound',
+      'executionAgent.operationUnavailable',
+      'executionAgent.outcomeUnknown',
+      'executionAgent.protocolError',
+      'executionAgent.replaced',
+      'executionAgent.requestTooLarge',
+      'executionAgent.responseTooLarge',
+      'executionAgent.revoked',
+      'executionAgent.timeout',
+      'executionAgent.unavailable',
+      'process.interrupted',
+      'process.cancelled',
+      'process.failed',
+      'process.notAllowed',
+      'process.outcomeUnknown',
+      'process.outputTooLarge',
+      'process.startFailed',
+      'process.timedOut',
+      'process.unavailable',
+      'transfer.expired',
+      'transfer.invalidContent',
+      'transfer.invalidTicket',
+      'transfer.tooLarge'
+    ]
+
+    for (const code of codes) {
+      expect(apiErrorMessage({ error: { code } })).not.toBe('Die Aktion ist fehlgeschlagen.')
+    }
+    for (const code of [
+      'executionAgent.outcomeUnknown',
+      'process.outcomeUnknown',
+      'integration.outcomeUnknown'
+    ]) {
+      expect(apiErrorMessage({ error: { code } })).toContain('nicht blind')
+    }
+  })
+
   it('never renders legacy validation payloads', () => {
     const source = {
       response: {

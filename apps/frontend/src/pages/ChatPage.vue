@@ -85,6 +85,7 @@
                 :history="message.workHistory"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
                 :activity="chat.activity"
+                :process-outputs="chat.processOutputs"
                 :running="chat.running && message.currentTurn"
                 :expanded="auth.preferences.thinkingExpanded"
                 :class="{
@@ -207,6 +208,7 @@
               :history="emptyWorkHistory"
               :reasoning="chat.streamReasoning"
               :activity="chat.activity"
+              :process-outputs="chat.processOutputs"
               :running="chat.running"
               :expanded="auth.preferences.thinkingExpanded"
               :class="{ 'q-mb-sm': chat.streamContent }"
@@ -278,7 +280,7 @@
         ref="composer"
         :session="chat.activeContext"
         :draft="chat.activeDraft"
-        :disabled="chat.historyActionPending"
+        :disabled="chat.historyActionPending || chat.sessionSettingsPending > 0"
         :running="chat.running"
         :stopping="chat.stopping"
         :pending-count="sessionApprovals.length"
@@ -346,6 +348,7 @@ import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useAuthStore } from 'stores/auth'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
 import { useQuestionStore } from 'stores/questions'
@@ -373,6 +376,7 @@ const identity = useAgentIdentityStore()
 const auth = useAuthStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
+const executionAgents = useExecutionAgentStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
@@ -408,6 +412,7 @@ const transcript = computed(() => buildChatTranscript(
     running: chat.running,
     toolExecutionActive: chat.activity.phase === 'processing_tool',
     activeToolCallId: chat.activity.toolCallId,
+    processOutputs: chat.processOutputs,
     questions: sessionQuestions.value
   }
 ))
@@ -430,6 +435,7 @@ const trustedImageOrigins = computed(() => (
 const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
 ))
+const liveWorkspaceContext = computed(() => executionAgents.workspaceContextFor(chat.activeContext))
 const desktopExplorerOpen = computed(() => workspace.open && $q.screen.gt.sm)
 const splitLimits = computed(() => (
   desktopExplorerOpen.value
@@ -472,7 +478,8 @@ async function openToolFile(action) {
   if (chat.current?.id !== sessionId) return
   workspace.configure({
     sessionId,
-    workingDirectory: chat.current.workingDirectory
+    workingDirectory: chat.current.workingDirectory,
+    workspaceContext: liveWorkspaceContext.value
   })
   await workspace.openToolFile(action)
 }
@@ -493,7 +500,8 @@ async function openApprovalDraft(approval) {
   if (chat.current?.id !== sessionId) return
   workspace.configure({
     sessionId,
-    workingDirectory: chat.current.workingDirectory
+    workingDirectory: chat.current.workingDirectory,
+    workspaceContext: liveWorkspaceContext.value
   })
   await workspace.openApprovalDraft({ ...draft, sessionId })
 }
@@ -772,6 +780,7 @@ onMounted(() => {
     messageTimestampNow.value = Date.now()
   }, 60_000)
   void loadBackgroundData()
+  executionAgents.startPolling()
 })
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
@@ -781,6 +790,7 @@ onBeforeUnmount(() => {
   scrollTarget?.removeEventListener('touchcancel', handleTouchEnd)
   scrollTarget?.removeEventListener('wheel', handleWheel)
   window.clearInterval(messageTimestampTimer)
+  executionAgents.stopPolling()
   clearTimeout(runAnnouncementTimer)
   clearTimeout(userScrollTimer)
   cancelFollowScroll()

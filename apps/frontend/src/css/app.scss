@@ -1935,10 +1935,15 @@ body.body--dark .question-dock {
 
 .provider-list-card,
 .integration-list-card,
+.execution-agent-list-card,
 .tool-settings-card,
 .default-models-card {
   position: relative;
   min-height: 150px;
+}
+
+.execution-agent-dialog {
+  width: min(560px, calc(100vw - 32px));
 }
 
 .default-model-setting {
@@ -2786,6 +2791,16 @@ body.body--dark .file-viewer .app-muted {
 
   .provider-list-item {
     flex-wrap: wrap;
+  }
+
+  .execution-agent-item {
+    flex-wrap: wrap;
+  }
+
+  .execution-agent-item__actions {
+    width: 100%;
+    align-items: flex-end;
+    padding-top: 8px;
   }
 
   .provider-list-actions {

@@ -41,7 +41,11 @@ const TOOL_DISPLAY = {
   session_search: { label: 'Sessions durchsuchen', icon: 'manage_search' },
   memory_retrieve: { label: 'Memory abrufen', icon: 'psychology' },
   memory_write: { label: 'Memory speichern', icon: 'save' },
-  update_agent_identity: { label: 'Persona ändern', icon: 'face' }
+  update_agent_identity: { label: 'Persona ändern', icon: 'face' },
+  process_exec: { label: 'Prozess ausführen', icon: 'terminal' },
+  'process.exec': { label: 'Prozess ausführen', icon: 'terminal' },
+  shell_run: { label: 'Shell-Befehl ausführen', icon: 'terminal' },
+  'shell.run': { label: 'Shell-Befehl ausführen', icon: 'terminal' }
 }
 
 function truncate(value, maxLength = 140) {
@@ -170,6 +174,21 @@ export function parseToolResult(content, toolName = null) {
   try {
     const value = JSON.parse(content)
     const error = errorDescriptor(value)
+    const processValue = value?.output && typeof value.output === 'object' ? value.output : value
+    const hasProcessOutput = typeof processValue?.stdout === 'string'
+      || typeof processValue?.stderr === 'string'
+    const processMetadata = hasProcessOutput ? { ...value } : null
+    if (processMetadata) {
+      if (processMetadata.output === processValue) delete processMetadata.output
+      else {
+        delete processMetadata.stdout
+        delete processMetadata.stderr
+        delete processMetadata.truncated
+      }
+    }
+    const processMetadataText = processMetadata && Object.keys(processMetadata).length
+      ? formatTechnicalDetails(processMetadata)
+      : ''
     const memoryValue = toolName === 'memory_retrieve' && Array.isArray(value?.items)
       ? {
           mode: value.mode,
@@ -188,9 +207,18 @@ export function parseToolResult(content, toolName = null) {
         }
       : null
     return {
-      text: memoryValue ? JSON.stringify(memoryValue, null, 2) : formatTechnicalDetails(value),
+      text: memoryValue
+        ? JSON.stringify(memoryValue, null, 2)
+        : processMetadata ? processMetadataText : formatTechnicalDetails(value),
       error,
-      errorMessage: error ? apiErrorMessage(error, 'Die Tool-Aktion ist fehlgeschlagen.') : null
+      errorMessage: error ? apiErrorMessage(error, 'Die Tool-Aktion ist fehlgeschlagen.') : null,
+      ...(hasProcessOutput
+        ? {
+            stdout: processValue.stdout || '',
+            stderr: processValue.stderr || '',
+            truncated: processValue.truncated === true
+          }
+        : {})
     }
   } catch {
     const localized = localizePlainToolResult(content, toolName)

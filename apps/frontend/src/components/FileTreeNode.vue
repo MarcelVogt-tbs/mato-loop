@@ -28,7 +28,7 @@
         <span class="ellipsis q-ml-sm">{{ entry.name }}</span>
       </div>
       <q-btn
-        v-if="canMutate || entry.kind === 'file'"
+        v-if="canRename || canDelete || canDownload"
         flat
         round
         dense
@@ -41,17 +41,17 @@
         <q-tooltip>Aktionen</q-tooltip>
         <q-menu anchor="bottom right" self="top right" :offset="[0, 6]" class="app-action-menu">
           <q-list padding class="file-actions-menu">
-            <q-item v-if="entry.kind === 'file'" clickable v-ripple v-close-popup @click="emit('download-entry', entry)">
+            <q-item v-if="canDownload" clickable v-ripple v-close-popup @click="emit('download-entry', entry)">
               <q-item-section avatar><q-icon name="download" /></q-item-section>
               <q-item-section>Herunterladen</q-item-section>
             </q-item>
-            <q-item v-if="canMutate" clickable v-ripple v-close-popup @click="emit('rename-entry', entry)">
+            <q-item v-if="canRename" clickable v-ripple v-close-popup @click="emit('rename-entry', entry)">
               <q-item-section avatar><q-icon name="edit" /></q-item-section>
               <q-item-section>Umbenennen</q-item-section>
             </q-item>
-            <q-separator v-if="canMutate" class="q-my-xs" />
+            <q-separator v-if="canDelete && (canDownload || canRename)" class="q-my-xs" />
             <q-item
-              v-if="canMutate"
+              v-if="canDelete"
               clickable
               v-ripple
               v-close-popup
@@ -125,10 +125,15 @@ const emit = defineEmits(['open-file', 'focus-entry', 'download-entry', 'rename-
 const workspace = useWorkspaceStore()
 const expanded = ref(false)
 const selected = computed(() => workspace.selectedPath === props.entry.path)
-const canMutate = computed(() => (
+const mutableEntry = computed(() => (
   !workspace.rootIdentity
   && ['file', 'directory'].includes(props.entry.kind)
   && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
+))
+const canRename = computed(() => mutableEntry.value && workspace.operationAvailable('workspace.rename'))
+const canDelete = computed(() => mutableEntry.value && workspace.operationAvailable('workspace.delete'))
+const canDownload = computed(() => (
+  props.entry.kind === 'file' && workspace.operationAvailable('workspace.export')
 ))
 const visible = computed(() => !props.filter || cachedSubtreeMatches(props.entry) || expanded.value)
 const icon = computed(() => ({ directory: expanded.value ? 'folder_open' : 'folder', symlink: 'link', file: 'description' })[props.entry.kind])
@@ -146,7 +151,9 @@ function cachedSubtreeMatches(entry) {
 function activate() {
   workspace.selectedPath = props.entry.path
   if (props.entry.kind === 'directory') toggle()
-  else if (props.entry.kind === 'file') emit('open-file', { entry: props.entry })
+  else if (props.entry.kind === 'file' && workspace.operationAvailable('workspace.read')) {
+    emit('open-file', { entry: props.entry })
+  }
 }
 
 function selectOnly() {
@@ -155,6 +162,7 @@ function selectOnly() {
 
 async function toggle() {
   if (props.entry.kind !== 'directory') return
+  if (!workspace.operationAvailable('workspace.list')) return
   expanded.value = !expanded.value
   if (expanded.value && !workspace.entries[props.entry.path]) await workspace.load(props.entry.path)
 }

@@ -1,0 +1,9 @@
+#!/bin/sh
+
+if [ ! -w "$(dirname "${UV_CACHE_DIR:-$HOME/.cache/uv}")" ]; then
+    export UV_CACHE_DIR="$HOME/.cache/uv"
+fi
+if [ ! -w "$(dirname "${UV_PROJECT_ENVIRONMENT:-$HOME/.venv}")" ]; then
+    export UV_PROJECT_ENVIRONMENT="$HOME/.venv"
+fi
+exec /usr/local/bin/uv-real "$@"

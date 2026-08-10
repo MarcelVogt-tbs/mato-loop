@@ -53,6 +53,7 @@ services:
       start_period: 10m
 
   mato-loop:
+    image: ${MATO_LOOP_IMAGE:-mato-loop:local}
     build:
       context: .
       dockerfile: apps/backend/Dockerfile
@@ -78,5 +79,25 @@ services:
       retries: 30
       start_period: 20s
 
+  execution-agent:
+    profiles: ["execution-agent"]
+    image: ${MATO_LOOP_EXECUTION_AGENT_IMAGE:-mato-loop-execution-agent:local}
+    build:
+      context: ./apps/execution-agent
+    restart: unless-stopped
+    environment:
+      MATO_EXECUTION_AGENT_BACKEND_URL: ws://mato-loop:6020/api/execution-agents/connect
+      MATO_EXECUTION_AGENT_ID: ${MATO_EXECUTION_AGENT_ID:-00000000-0000-4000-8000-000000000001}
+      MATO_EXECUTION_AGENT_TOKEN: ${MATO_EXECUTION_AGENT_TOKEN:-replace-with-the-token-from-matoloop}
+      MATO_EXECUTION_AGENT_NAME: ${MATO_EXECUTION_AGENT_NAME:-Docker Agent}
+    volumes:
+      - ${MATO_EXECUTION_AGENT_CONFIG:-./apps/execution-agent/agent.example.json}:/config/agent.json:ro
+      - ${MATO_EXECUTION_AGENT_WORKSPACE:-./data/home}:/workspace
+      - execution_agent_data:/data
+    depends_on:
+      mato-loop:
+        condition: service_healthy
+
 volumes:
   embedding_cache:
+  execution_agent_data:

@@ -67,10 +67,12 @@ from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import ErrorDescriptor, describe_error, error_payload
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution import ExecutionClient, execution_agent_connections
 from mato_loop_backend.integrations import (
     SearchIntegrationError,
     WebFetchError,
     canonicalize_url,
+    effective_execution_integration_settings,
     normalize_source_title,
     sanitize_url_for_display,
     search_available,
@@ -89,6 +91,7 @@ from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
     ChatSession,
+    ExecutionAgent,
     MemoryRecord,
     Message,
     QuestionRequest,
@@ -944,6 +947,49 @@ class AgentRuntime:
             trust_level == TrustLevel.PUBLIC
             and effective_model_pseudonymization(provider, model)
         )
+        execution_agent = None
+        execution_root = None
+        execution_operations: list[str] = []
+        if chat_session.preferred_execution_agent_id is None:
+            if chat_session.preferred_root_id is not None or chat_session.working_directory is not None:
+                raise AgentRunError("executionAgent.unavailable")
+        else:
+            execution_agent = await db.scalar(
+                select(ExecutionAgent)
+                .options(selectinload(ExecutionAgent.roots))
+                .where(
+                    ExecutionAgent.id == chat_session.preferred_execution_agent_id,
+                    ExecutionAgent.user_id == chat_session.user_id,
+                    ExecutionAgent.revoked_at.is_(None),
+                )
+            )
+            snapshot = execution_agent_connections.snapshot(
+                chat_session.preferred_execution_agent_id
+            )
+            if execution_agent is None or snapshot is None:
+                raise AgentRunError("executionAgent.unavailable")
+            if chat_session.preferred_root_id is not None:
+                execution_root = next(
+                    (
+                        root
+                        for root in execution_agent.roots
+                        if root.id == chat_session.preferred_root_id
+                    ),
+                    None,
+                )
+                live_root = next(
+                    (root for root in snapshot[1] if root.id == chat_session.preferred_root_id),
+                    None,
+                )
+                if (
+                    execution_root is None
+                    or live_root is None
+                    or live_root.revision != execution_root.revision
+                ):
+                    raise AgentRunError("executionAgent.unavailable")
+            elif chat_session.working_directory is not None:
+                raise AgentRunError("executionAgent.unavailable")
+            execution_operations = sorted(snapshot[0])
         message = Message(
             session_id=chat_session.id,
             role="user",
@@ -957,6 +1003,12 @@ class AgentRuntime:
             model_name=(model.name or model.model_id) if model is not None else None,
             trust_level=trust_level.value,
             pseudonymization_enabled=pseudonymization_enabled,
+            execution_agent_id=(execution_agent.id if execution_agent else None),
+            execution_agent_revision=(execution_agent.revision if execution_agent else None),
+            execution_root_id=(execution_root.id if execution_root else None),
+            execution_root_revision=(execution_root.revision if execution_root else None),
+            working_directory_snapshot=chat_session.working_directory,
+            execution_operations=execution_operations,
         )
         db.add_all([message, run])
         generate_title = (
@@ -1049,6 +1101,12 @@ class AgentRuntime:
             model_name=failed_run.model_name or model.name or model.model_id,
             trust_level=failed_run.trust_level,
             pseudonymization_enabled=failed_run.pseudonymization_enabled,
+            execution_agent_id=failed_run.execution_agent_id,
+            execution_agent_revision=failed_run.execution_agent_revision,
+            execution_root_id=failed_run.execution_root_id,
+            execution_root_revision=failed_run.execution_root_revision,
+            working_directory_snapshot=failed_run.working_directory_snapshot,
+            execution_operations=list(failed_run.execution_operations or []),
         )
         db.add(run)
         commit_task: asyncio.Task[None] | None = None
@@ -1326,7 +1384,7 @@ class AgentRuntime:
             records = await cls._records(db, chat_session.id)
             root_files = RootFileService(
                 chat_session.id,
-                working_directory=chat_session.working_directory,
+                working_directory=run.working_directory_snapshot,
             )
             if (
                 model_trust_level == TrustLevel.PUBLIC
@@ -1554,6 +1612,29 @@ class AgentRuntime:
                     ai_settings, active_model_id=model.id
                 ),
             )
+            execution_client = (
+                ExecutionClient(
+                    run.execution_agent_id,
+                    run.execution_root_id,
+                    run.execution_root_revision,
+                    run.working_directory_snapshot or ".",
+                    frozenset(run.execution_operations or []),
+                )
+                if run.execution_agent_id is not None
+                and run.execution_root_id is not None
+                and run.execution_root_revision is not None
+                else None
+            )
+            execution_operations = (
+                frozenset(run.execution_operations or [])
+                if run.execution_agent_id is not None
+                else frozenset()
+            )
+            integration_settings = effective_execution_integration_settings(
+                integration_settings,
+                run.execution_agent_id,
+                execution_operations,
+            )
             effective_toolset = (
                 tool_registry.effective(
                     integration_settings,
@@ -1566,6 +1647,7 @@ class AgentRuntime:
                     memory_write_enabled=memory_state.write_enabled,
                     tool_capabilities=tool_capabilities,
                     tool_settings=tool_settings,
+                    execution_operations=execution_operations,
                 )
                 if model.supports_tools
                 else None
@@ -1601,6 +1683,7 @@ class AgentRuntime:
                 memory_write_enabled=memory_state.write_enabled,
                 tool_capabilities=tool_capabilities,
                 tool_settings=tool_settings,
+                execution_operations=execution_operations,
             )
             mutating_tool_names = {
                 name
@@ -2745,6 +2828,7 @@ class AgentRuntime:
                         skill_state=skill_state,
                         skill_creation_handler=create_skill_draft,
                         approval_resolution=approval_resolution,
+                        execution_client=execution_client,
                     )
                     assert effective_toolset is not None
                     tool_result = await effective_toolset.execute(call, tool_context)
@@ -2784,6 +2868,16 @@ class AgentRuntime:
                                         "path": action.path,
                                         "filename": action.filename,
                                         "sizeBytes": action.size_bytes,
+                                        **(
+                                            {
+                                                "executionAgentId": action.execution_agent_id,
+                                                "rootId": action.root_id,
+                                                "rootRevision": action.root_revision,
+                                                "workingDirectory": action.working_directory,
+                                            }
+                                            if action.root == "workspace"
+                                            else {}
+                                        ),
                                     }
                                     for action in tool_file_actions
                                 ]
@@ -2820,6 +2914,11 @@ class AgentRuntime:
                     try:
                         await asyncio.shield(commit_task)
                     except asyncio.CancelledError:
+                        while not commit_task.done():
+                            try:
+                                await asyncio.shield(commit_task)
+                            except asyncio.CancelledError:
+                                continue
                         await commit_task
                         attachments_committed = True
                         raise
@@ -2850,6 +2949,8 @@ class AgentRuntime:
                         for attachment in created_attachments:
                             await attachment_service.discard(attachment, chat_session.id)
                     raise
+                if execution_client is not None and execution_client.cancellation_deferred:
+                    raise asyncio.CancelledError
                 error_code = metadata.get("errorCode")
                 if call.name in mutating_tool_names:
                     if isinstance(error_code, str) and error_code != "permission.denied":

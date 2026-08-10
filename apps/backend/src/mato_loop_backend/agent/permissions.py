@@ -441,6 +441,63 @@ def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath]
         return None
 
 
+def _execution_root_path_scope(
+    resource_scope: str,
+) -> tuple[UUID, UUID, str, PurePosixPath, PurePosixPath] | None:
+    try:
+        value = json.loads(resource_scope)
+        if set(value) != {
+            "agentId",
+            "path",
+            "rootId",
+            "rootRevision",
+            "workingDirectory",
+        }:
+            return None
+        agent_id = UUID(value["agentId"])
+        root_id = UUID(value["rootId"])
+        revision = value["rootRevision"]
+        working_directory = value["workingDirectory"]
+        path = value["path"]
+        if (
+            str(agent_id) != value["agentId"]
+            or str(root_id) != value["rootId"]
+            or not isinstance(revision, str)
+            or re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", revision) is None
+            or not isinstance(working_directory, str)
+            or not isinstance(path, str)
+        ):
+            return None
+
+        def relative(value: str) -> PurePosixPath | None:
+            parsed = PurePosixPath(value)
+            if value == ".":
+                return parsed
+            if (
+                not value
+                or "\\" in value
+                or parsed.is_absolute()
+                or any(part in {"", ".", ".."} for part in value.split("/"))
+                or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+            ):
+                return None
+            return parsed
+
+        working_path = relative(working_directory)
+        resource_path = relative(path)
+        canonical = json.dumps(
+            value,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        if working_path is None or resource_path is None or canonical != resource_scope:
+            return None
+        return agent_id, root_id, revision, working_path, resource_path
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _path_is_within(resource: PurePosixPath, scope: PurePosixPath) -> bool:
     return resource == scope or scope == PurePosixPath(".") or scope in resource.parents
 
@@ -465,24 +522,29 @@ class PermissionPolicy:
             except ValueError:
                 return PermissionDecision.DENY
 
-        if request.resource_type == "root_path":
-            scope = _root_path_scope(request.resource_scope)
+        if request.resource_type in {"root_path", "execution_root_path"}:
+            scope = (
+                _root_path_scope(request.resource_scope)
+                if request.resource_type == "root_path"
+                else _execution_root_path_scope(request.resource_scope)
+            )
             if scope is None or root_files.session_id != chat_session.id:
                 return PermissionDecision.DENY
-            root, identity, _path = scope
-            try:
-                current_identity = root_files.root_identity(root)
-            except RootFileError:
-                return PermissionDecision.DENY
-            if identity != current_identity:
-                return PermissionDecision.DENY
-            if root is FileRoot.SESSION and identity != str(chat_session.id):
-                return PermissionDecision.DENY
-            if root is FileRoot.WORKSPACE and (
-                chat_session.working_directory is None
-                or root_files.working_directory != chat_session.working_directory
-            ):
-                return PermissionDecision.DENY
+            if request.resource_type == "root_path":
+                root, identity, _path = scope
+                try:
+                    current_identity = root_files.root_identity(root)
+                except RootFileError:
+                    return PermissionDecision.DENY
+                if identity != current_identity:
+                    return PermissionDecision.DENY
+                if root is FileRoot.SESSION and identity != str(chat_session.id):
+                    return PermissionDecision.DENY
+                if root is FileRoot.WORKSPACE and (
+                    chat_session.working_directory is None
+                    or root_files.working_directory != chat_session.working_directory
+                ):
+                    return PermissionDecision.DENY
             if request.capability not in {
                 "filesystem.read",
                 "filesystem.write",
@@ -546,6 +608,14 @@ class PermissionPolicy:
                 resource_root is grant_root
                 and resource_identity == grant_identity == current_identity
                 and _path_is_within(resource_path, grant_path)
+            )
+        if request.resource_type == "execution_root_path":
+            resource = _execution_root_path_scope(request.resource_scope)
+            granted = _execution_root_path_scope(grant.resource_scope)
+            if resource is None or granted is None:
+                return False
+            return resource[:4] == granted[:4] and _path_is_within(
+                resource[4], granted[4]
             )
         if request.resource_type == "session":
             try:

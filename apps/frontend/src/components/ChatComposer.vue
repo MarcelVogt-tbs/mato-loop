@@ -198,6 +198,75 @@
                   <q-card-section class="chat-session-settings-panel__content scroll">
                     <div class="chat-session-settings-panel__fields column">
                       <q-select
+                        :model-value="session?.preferredExecutionAgentId"
+                        :options="executionAgentOptions"
+                        emit-value
+                        map-options
+                        outlined
+                        :dense="$q.screen.gt.xs"
+                        options-dense
+                        label="Ausführungsagent"
+                        hint="Der Agent wird für den nächsten Lauf verwendet."
+                        persistent-hint
+                        popup-content-class="app-menu-popup"
+                        :disable="interactionDisabled"
+                        @update:model-value="selectExecutionAgent"
+                      >
+                        <template #prepend><q-icon name="computer" /></template>
+                        <template #option="scope">
+                          <q-item v-bind="scope.itemProps">
+                            <q-item-section avatar>
+                              <q-icon :name="scope.opt.connected === false ? 'cloud_off' : 'computer'" />
+                            </q-item-section>
+                            <q-item-section>
+                              <q-item-label>{{ scope.opt.label }}</q-item-label>
+                              <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
+                            </q-item-section>
+                          </q-item>
+                        </template>
+                      </q-select>
+
+                      <q-select
+                        :model-value="session?.preferredRootId"
+                        :options="rootOptions"
+                        emit-value
+                        map-options
+                        outlined
+                        :dense="$q.screen.gt.xs"
+                        options-dense
+                        label="Arbeitsbereich"
+                        hint="Der Agent gibt verfügbare Arbeitsbereiche vor."
+                        persistent-hint
+                        popup-content-class="app-menu-popup"
+                        :disable="interactionDisabled || !selectedExecutionAgent"
+                        @update:model-value="selectRoot"
+                      >
+                        <template #prepend><q-icon name="folder" /></template>
+                      </q-select>
+
+                      <q-input
+                        :model-value="session?.workingDirectory"
+                        outlined
+                        :dense="$q.screen.gt.xs"
+                        clearable
+                        label="Arbeitsordner"
+                        hint="Relativer Ordner innerhalb des Arbeitsbereichs. Leer bedeutet dessen Wurzel."
+                        persistent-hint
+                        :disable="interactionDisabled || !session?.preferredRootId"
+                        @change="updateWorkingDirectory"
+                        @clear="update({ working_directory: null })"
+                      >
+                        <template #prepend><q-icon name="folder_open" /></template>
+                      </q-input>
+
+                      <q-banner v-if="executionAgentMessage" dense rounded class="app-surface-tonal">
+                        <template #avatar>
+                          <q-icon :name="selectedExecutionAgent?.connected === false ? 'cloud_off' : 'info_outline'" color="warning" />
+                        </template>
+                        {{ executionAgentMessage }}
+                      </q-banner>
+
+                      <q-select
                         :model-value="session?.memoryMode"
                         :options="memoryModeOptions"
                         emit-value
@@ -315,6 +384,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'components/ComposerAttachments.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useChatStore } from 'stores/chat'
 import { useProviderStore } from 'stores/providers'
@@ -362,7 +432,7 @@ const dictationKey = computed(() => props.session?.id || null)
 const currentDictation = computed(() => chat.getAudioDictation(dictationKey.value))
 const transcribing = computed(() => currentDictation.value?.status === 'transcribing')
 const recordingDuration = computed(() => formatAttachmentDuration(recordingDurationMs.value) || '0:00')
-const agentModes = [
+const agentModeDefinitions = [
   {
     label: 'Lesen',
     value: 'read-only',
@@ -376,6 +446,67 @@ const agentModes = [
     description: 'Lesende und schreibende Dateitools anbieten'
   }
 ]
+const executionAgents = useExecutionAgentStore()
+const selectedExecutionAgent = computed(() => (
+  executionAgents.byId(props.session?.preferredExecutionAgentId)
+))
+const executionAgentOptions = computed(() => {
+  const options = [
+    { label: 'Kein Ausführungsagent', value: null, connected: null, caption: 'Nur Backend-Funktionen verwenden' },
+    ...executionAgents.items.map((agent) => ({
+      label: agent.name,
+      value: agent.id,
+      connected: agent.connected,
+      caption: agent.connected ? agent.platform : 'Offline'
+    }))
+  ]
+  if (props.session?.preferredExecutionAgentId && !selectedExecutionAgent.value) {
+    options.push({
+      label: 'Nicht verfügbarer Agent',
+      value: props.session.preferredExecutionAgentId,
+      connected: false,
+      caption: 'Nicht mehr eingerichtet'
+    })
+  }
+  return options
+})
+const rootOptions = computed(() => {
+  const roots = (selectedExecutionAgent.value?.roots || []).map((root) => ({
+    label: root.label,
+    value: root.id
+  }))
+  if (props.session?.preferredRootId && !roots.some((root) => root.value === props.session.preferredRootId)) {
+    roots.push({ label: 'Nicht verfügbarer Arbeitsbereich', value: props.session.preferredRootId })
+  }
+  return roots
+})
+const liveWorkspaceContext = computed(() => executionAgents.workspaceContextFor(props.session))
+const mutatingWorkspaceOperations = new Set([
+  'workspace.copy',
+  'workspace.delete',
+  'workspace.import',
+  'workspace.mkdir',
+  'workspace.move',
+  'workspace.rename',
+  'workspace.write'
+])
+const agentModes = computed(() => agentModeDefinitions.map((mode) => ({
+  ...mode,
+  disable: mode.value === 'read-write'
+    && selectedExecutionAgent.value
+    && !selectedExecutionAgent.value.operations?.some((operation) => (
+      mutatingWorkspaceOperations.has(operation)
+    ))
+})))
+const executionAgentMessage = computed(() => {
+  if (executionAgents.loadFailed) return 'Der Status der Ausführungsagenten konnte nicht geladen werden.'
+  if (!props.session?.preferredExecutionAgentId) return 'Ohne Ausführungsagent stehen keine lokalen Arbeitsbereiche zur Verfügung.'
+  if (!selectedExecutionAgent.value) return 'Der ausgewählte Agent ist nicht mehr eingerichtet.'
+  if (!selectedExecutionAgent.value.connected) return 'Der ausgewählte Agent ist offline. Es erfolgt kein automatischer Wechsel.'
+  if (!props.session?.preferredRootId) return 'Wähle einen Arbeitsbereich für lokale Dateioperationen aus.'
+  if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
+  return ''
+})
 const effectiveModelId = computed(() => props.session?.modelId || providers.defaultModelId)
 const modelSelectionOptions = computed(() => providers.selectionOptions(effectiveModelId.value, true))
 const selectedModelConfig = computed(() => providers.models.find((model) => (
@@ -498,11 +629,24 @@ const sessionSettingsWarning = computed(() => {
   if (requiredSearchUnavailable.value) {
     warnings.push(webSearchTooltip.value || 'Die erforderliche Websuche ist nicht verfügbar.')
   }
+  if (executionAgentMessage.value) warnings.push(executionAgentMessage.value)
   return warnings.join(' ')
 })
 
 function update(patch) {
   if (props.session) emit('update', patch)
+}
+
+function selectExecutionAgent(value) {
+  update({ preferred_execution_agent_id: value })
+}
+
+function selectRoot(value) {
+  update({ preferred_root_id: value })
+}
+
+function updateWorkingDirectory(value) {
+  update({ working_directory: String(value || '').trim() || null })
 }
 
 function submit() {

@@ -30,7 +30,7 @@
         <q-menu anchor="bottom right" self="top right" class="app-action-menu">
           <q-list padding class="file-toolbar-menu">
             <q-item
-              v-if="!workspace.rootIdentity && workspace.scope === 'filesystem' && selectedIsDirectory"
+              v-if="!workspace.rootIdentity && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('workspace.list')"
               clickable
               v-ripple
               v-close-popup
@@ -98,20 +98,20 @@
         <template #prepend><q-icon name="search" /></template>
       </q-input>
       <div class="file-explorer__actions row items-center no-wrap q-gutter-sm">
-        <q-btn-dropdown v-if="canWrite" unelevated no-caps color="primary" icon="add" label="Neu">
+        <q-btn-dropdown v-if="canCreateFile || canCreateDirectory" unelevated no-caps color="primary" icon="add" label="Neu">
           <q-list padding class="file-actions-menu">
-            <q-item clickable v-ripple v-close-popup @click="openCreateDialog('file')">
+            <q-item v-if="canCreateFile" clickable v-ripple v-close-popup @click="openCreateDialog('file')">
               <q-item-section avatar><q-icon name="note_add" /></q-item-section>
               <q-item-section>Neue Datei</q-item-section>
             </q-item>
-            <q-item clickable v-ripple v-close-popup @click="openCreateDialog('directory')">
+            <q-item v-if="canCreateDirectory" clickable v-ripple v-close-popup @click="openCreateDialog('directory')">
               <q-item-section avatar><q-icon name="create_new_folder" /></q-item-section>
               <q-item-section>Neuer Ordner</q-item-section>
             </q-item>
           </q-list>
         </q-btn-dropdown>
         <q-btn
-          v-if="canWrite"
+          v-if="canUpload"
           class="file-upload-action"
           outline
           no-caps
@@ -360,9 +360,11 @@ import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import {
   MAX_WORKSPACE_UPLOAD_BYTES,
   MAX_WORKSPACE_UPLOADS,
+  supportsWorkspaceOperation,
   withFileSuffix,
   useWorkspaceStore
 } from 'stores/workspace'
@@ -373,6 +375,7 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const workspace = useWorkspaceStore()
 const chat = useChatStore()
+const executionAgents = useExecutionAgentStore()
 const approvals = useApprovalStore()
 const permissions = ref([])
 const permissionLoading = ref(false)
@@ -417,11 +420,14 @@ const targetDirectory = computed(() => {
 const mutationDirectory = computed(() => (
   workspace.scope === 'session' && targetDirectory.value === '.' ? 'files' : targetDirectory.value
 ))
-const canWrite = computed(() => !workspace.rootIdentity && (
+const writableLocation = computed(() => !workspace.rootIdentity && (
   workspace.scope === 'filesystem'
   || mutationDirectory.value === 'files'
   || mutationDirectory.value.startsWith('files/')
 ))
+const canCreateFile = computed(() => writableLocation.value && workspace.operationAvailable('workspace.import'))
+const canCreateDirectory = computed(() => writableLocation.value && workspace.operationAvailable('workspace.mkdir'))
+const canUpload = computed(() => writableLocation.value && workspace.operationAvailable('workspace.import'))
 const canRename = computed(() => Boolean(
   !renaming.value
   && renameName.value.trim()
@@ -434,7 +440,11 @@ const rootLabel = computed(() => {
 })
 const scopeOptions = computed(() => [
   { label: 'Session', value: 'session', disable: !chat.current },
-  { label: 'Dateisystem', value: 'filesystem' }
+  {
+    label: 'Dateisystem',
+    value: 'filesystem',
+    disable: !supportsWorkspaceOperation(workspace.workspaceContext, 'workspace.list')
+  }
 ])
 const scopeDescription = computed(() => {
   if (workspace.rootIdentity) {
@@ -443,6 +453,7 @@ const scopeDescription = computed(() => {
       : `Tool-Datei · ${workspace.rootIdentity} · nur Lesen`
   }
   if (workspace.scope === 'session') return 'Session-Dateien · nur „files“ ist veränderbar'
+  if (!workspace.operationAvailable('workspace.list')) return 'Der ausgewählte Arbeitsbereich ist nicht verfügbar.'
   return workspace.workingDirectory
     ? `Arbeitsordner · ${workspace.workingDirectory}`
     : 'Agent-Home · noch kein Arbeitsordner ausgewählt'
@@ -471,6 +482,7 @@ const permissionErrorMessage = computed(() => apiErrorMessage(
   'Die Session-Freigaben konnten nicht geladen werden.'
 ))
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Name erforderlich.'
+const activeWorkspaceContext = computed(() => executionAgents.workspaceContextFor(chat.activeContext))
 
 function parentPath(path) {
   return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.'
@@ -726,14 +738,15 @@ watch(
     chat.selectedSessionId || null,
     chat.current?.id || null,
     chat.current?.workingDirectory || null,
-    chat.activeContext?.workingDirectory || null
+    chat.activeContext?.workingDirectory || null,
+    activeWorkspaceContext.value
   ],
-  ([selectedSessionId, currentSessionId, currentWorkingDirectory, draftWorkingDirectory]) => {
+  ([selectedSessionId, currentSessionId, currentWorkingDirectory, draftWorkingDirectory, workspaceContext]) => {
     const sessionId = selectedSessionId || currentSessionId
     const workingDirectory = currentSessionId === sessionId
       ? currentWorkingDirectory
       : sessionId ? null : draftWorkingDirectory
-    workspace.configure({ sessionId, workingDirectory })
+    workspace.configure({ sessionId, workingDirectory, workspaceContext })
     workspace.load('.')
     if (permissionsDialogOpen.value) loadPermissions()
   },

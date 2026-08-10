@@ -18,6 +18,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - `docker-compose.dev.yaml`: local development environment with separate frontend and backend services.
 - `docker-compose.yaml`: prepared production stack.
 - `scripts/dev.sh`: unified entry point for development, checks, tests, and migrations.
+- `docs/ci-and-releases.md`: Forgejo runner, branch, image, and release contract.
 
 ## Language and Style
 
@@ -129,3 +130,11 @@ Targeted checks are also available:
 ```
 
 For UI changes, verify at least desktop and mobile in light and dark mode. For API errors, verify both the backend contract and the human-readable frontend message.
+
+## CI and Releases
+
+- Pull requests run complete checks and image builds without registry or release secrets and never publish artifacts.
+- Feature branch pushes run tests only. `develop` publishes only mutable `develop` images. `main` has no mutable publication channel.
+- Start a release explicitly from a clean, current `develop` branch with `./scripts/release.sh X.Y.Z`; the script fast-forwards release-only `main` and pushes atomically. Do not create release tags manually.
+- Release images use `vX.Y.Z`, `X.Y.Z`, and `latest`. Published artifacts currently target `linux/amd64` only.
+- CI publishes images and Forgejo releases only. It does not deploy, mutate deployment storage, or clean runner Docker storage.

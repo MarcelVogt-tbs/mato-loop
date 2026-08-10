@@ -15,9 +15,13 @@ Für jede Session können Sie festlegen:
 | Agent-Modus **Schreiben** | Bietet zusätzlich Dateiänderungen an |
 | Memory | Voll, nur lesen oder deaktiviert |
 | Websuche | Erzwingen, verfügbar oder deaktiviert |
-| Arbeitsordner | Optionaler Ordner aus dem Agent-Home |
+| Ausführungsagent | Optionaler verbundener Agent für lokale Funktionen |
+| Arbeitsbereich | Vom Ausführungsagenten gemeldete Wurzel |
+| Arbeitsordner | Optionaler relativer Unterordner im Arbeitsbereich |
 
 Der Agent-Modus beschränkt den Agenten. Direkte Dateiaktionen, die Sie selbst im Explorer ausführen, richten sich nach den dort geltenden Grenzen.
+
+Die Ausführungsagent-, Arbeitsbereich- und Arbeitsordnerauswahl ist eine veränderbare Session-Vorgabe. Beim Start eines Laufs speichert MatoLoop davon eine unveränderliche Momentaufnahme. Änderungen gelten erst für den nächsten Lauf. Ist kein Agent gewählt oder der gewählte Agent offline, bleiben Chat und Backend-Tools verfügbar; Workspace-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Agenten und wiederholt keine fehlgeschlagene lokale Operation automatisch.
 
 ## Laufende Antworten
 

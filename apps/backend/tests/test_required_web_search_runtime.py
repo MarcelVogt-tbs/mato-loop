@@ -23,6 +23,7 @@ from mato_loop_backend.agent.tools import (
     tool_registry,
 )
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution.protocol import ResponseMessage
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
@@ -635,13 +636,19 @@ async def test_failed_skill_builder_request_consumes_model_budget(monkeypatch) -
 
 
 async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) -> None:
+    execution_agent_id = str(uuid4())
+    root_id = str(uuid4())
     action = ToolFileAction(
         "write",
-        "session",
-        "9fbd5cf9-70fd-41ad-a88a-ff74be2c3a1a",
+        "workspace",
+        root_id,
         "files/report.txt",
         "report.txt",
         7,
+        execution_agent_id,
+        root_id,
+        "a" * 64,
+        "persisted/project",
     )
     db, run, *_ = await _runtime_setup(
         monkeypatch,
@@ -681,16 +688,131 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
             "fileActions": [
                 {
                     "operation": "write",
-                    "root": "session",
+                    "root": "workspace",
                     "rootIdentity": action.root_identity,
                     "path": "files/report.txt",
                     "filename": "report.txt",
                     "sizeBytes": 7,
+                    "executionAgentId": execution_agent_id,
+                    "rootId": root_id,
+                    "rootRevision": "a" * 64,
+                    "workingDirectory": "persisted/project",
                 }
             ]
         }
     }
     assert "download" not in str(tool_message.provider_data).casefold()
+
+
+async def test_cancelled_dispatched_workspace_write_commits_before_run_stops(
+    monkeypatch,
+) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="write-1",
+                        name="write_file",
+                        arguments={
+                            "root": "workspace",
+                            "path": "a.txt",
+                            "content": "x",
+                        },
+                    )
+                ]
+            ),
+            ProviderResult(content="Must not be requested", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        workspace_access="read-write",
+    )
+    run.execution_agent_id = uuid4()
+    run.execution_root_id = uuid4()
+    run.execution_root_revision = "a" * 64
+    run.working_directory_snapshot = "project"
+    run.execution_operations = ["workspace.write"]
+    dispatched = asyncio.Event()
+    release_response = asyncio.Event()
+    timeline = []
+
+    async def request(
+        _agent_id,
+        _operation,
+        _arguments,
+        *,
+        on_cancellation_deferred,
+        **_kwargs,
+    ):
+        dispatched.set()
+        try:
+            await release_response.wait()
+        except asyncio.CancelledError:
+            on_cancellation_deferred()
+            await release_response.wait()
+        return ResponseMessage.model_validate(
+            {
+                "type": "response",
+                "id": uuid4(),
+                "ok": True,
+                "result": {"path": "a.txt", "sha256": "b" * 64, "size": 1},
+            }
+        )
+
+    async def commit() -> None:
+        if any(
+            isinstance(call.args[0], Message) and call.args[0].role == "tool"
+            for call in db.add.call_args_list
+        ) and "tool committed" not in timeline:
+            timeline.append("tool committed")
+
+    original_execute = ToolRegistry._execute_definition
+
+    async def execute(call, context, bound_tool):
+        return await original_execute(tool_registry, call, context, bound_tool)
+
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.request",
+        request,
+    )
+    monkeypatch.setattr(
+        AgentRuntime, "_authorize", AsyncMock(return_value=PermissionDecision.ALLOW)
+    )
+    tool_registry._execute_definition.side_effect = execute
+    db.commit.side_effect = commit
+
+    task = asyncio.create_task(AgentRuntime._execute_loop(db, run))
+    await dispatched.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    release_response.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    timeline.append("run cancelled")
+
+    tool_message = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message) and call.args[0].role == "tool"
+    )
+    assert timeline == ["tool committed", "run cancelled"]
+    assert tool_message.tool_call_id == "write-1"
+    assert tool_message.provider_data["_matoloop"]["fileActions"] == [
+        {
+            "operation": "write",
+            "root": "workspace",
+            "rootIdentity": str(run.execution_root_id),
+            "path": "a.txt",
+            "filename": "a.txt",
+            "sizeBytes": 1,
+            "executionAgentId": str(run.execution_agent_id),
+            "rootId": str(run.execution_root_id),
+            "rootRevision": run.execution_root_revision,
+            "workingDirectory": "project",
+        }
+    ]
+    assert len(requests) == 1
 
 
 def test_linked_research_sources_ignore_hidden_and_foreign_links() -> None:

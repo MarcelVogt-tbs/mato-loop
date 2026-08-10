@@ -1,0 +1,240 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v')) && 'publication' || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && !startsWith(github.ref, 'refs/tags/v') }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  backend:
+    runs-on: docker
+    timeout-minutes: 30
+    env:
+      MATO_LOOP_COMPOSE_PROJECT_NAME: mato-ci-backend-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check backend
+        run: ./scripts/dev.sh check backend
+      - name: Test backend
+        run: ./scripts/dev.sh test backend
+      - name: Remove CI containers and volumes
+        if: always()
+        run: docker compose --env-file .env.default --env-file .env.dev -f docker-compose.dev.yaml down --volumes --remove-orphans
+
+  frontend:
+    runs-on: docker
+    timeout-minutes: 30
+    env:
+      MATO_LOOP_COMPOSE_PROJECT_NAME: mato-ci-frontend-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check frontend
+        run: ./scripts/dev.sh check frontend
+      - name: Test frontend
+        run: ./scripts/dev.sh test frontend
+      - name: Remove CI containers and volumes
+        if: always()
+        run: docker compose --env-file .env.default --env-file .env.dev -f docker-compose.dev.yaml down --volumes --remove-orphans
+
+  execution-agent:
+    runs-on: docker
+    timeout-minutes: 30
+    env:
+      MATO_LOOP_COMPOSE_PROJECT_NAME: mato-ci-agent-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check execution agent
+        run: ./scripts/dev.sh check execution-agent
+      - name: Test execution agent
+        run: ./scripts/dev.sh test execution-agent
+      - name: Remove CI containers and volumes
+        if: always()
+        run: docker compose --env-file .env.default --env-file .env.dev -f docker-compose.dev.yaml down --volumes --remove-orphans
+
+  migrations:
+    runs-on: docker
+    timeout-minutes: 30
+    env:
+      MATO_LOOP_COMPOSE_PROJECT_NAME: mato-ci-migrations-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Start fresh database
+        run: docker compose --env-file .env.default --env-file .env.dev -f docker-compose.dev.yaml up -d --wait db
+      - name: Verify migration round trip
+        run: |
+          ./scripts/dev.sh db upgrade head
+          ./scripts/dev.sh db check
+          ./scripts/dev.sh db downgrade base
+          ./scripts/dev.sh db upgrade head
+          ./scripts/dev.sh db check
+      - name: Remove CI containers and volumes
+        if: always()
+        run: docker compose --env-file .env.default --env-file .env.dev -f docker-compose.dev.yaml down --volumes --remove-orphans
+
+  version:
+    runs-on: docker
+    timeout-minutes: 5
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Syntax-check CI scripts
+        run: |
+          bash -n scripts/ci/publish-docker-image.sh
+          python3 -m py_compile scripts/check-version.py scripts/ci/create-forgejo-release.py
+      - name: Test CI helpers
+        run: |
+          bash scripts/ci/publish-docker-image.sh --self-test
+          python3 scripts/ci/create-forgejo-release.py --self-test
+          python3 scripts/check-version.py --self-test
+      - name: Check versions and release tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            python3 scripts/check-version.py "${GITHUB_REF#refs/tags/}"
+            [[ "$(git cat-file -t "$GITHUB_REF")" == tag ]] || { printf 'Release tag must be annotated.\n' >&2; exit 1; }
+            git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || { printf 'Release tag must point to a commit on main.\n' >&2; exit 1; }
+          else
+            python3 scripts/check-version.py
+          fi
+  image-mato-loop:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    needs: [backend, frontend, execution-agent, migrations, version]
+    runs-on: docker
+    timeout-minutes: 45
+    env:
+      CI_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build production image
+        run: bash scripts/ci/publish-docker-image.sh build mato-loop . apps/backend/Dockerfile
+
+  image-execution-agent:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    needs: [backend, frontend, execution-agent, migrations, version]
+    runs-on: docker
+    timeout-minutes: 30
+    env:
+      CI_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build production image
+        run: bash scripts/ci/publish-docker-image.sh build mato-loop-execution-agent apps/execution-agent apps/execution-agent/Dockerfile
+
+  publish-images:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [backend, frontend, execution-agent, migrations, version]
+    runs-on: docker
+    timeout-minutes: 90
+    env:
+      CI_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY }}
+      CONTAINER_IMAGE_NAMESPACE: ${{ vars.CONTAINER_IMAGE_NAMESPACE }}
+      CONTAINER_USERNAME: ${{ secrets.CONTAINER_USERNAME }}
+      CONTAINER_PASSWORD: ${{ secrets.CONTAINER_PASSWORD }}
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build both images before publication
+        env:
+          KEEP_LOCAL_IMAGE: "1"
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            IMAGE_VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            IMAGE_VERSION=develop
+          fi
+          export IMAGE_VERSION
+          bash scripts/ci/publish-docker-image.sh build mato-loop . apps/backend/Dockerfile
+          bash scripts/ci/publish-docker-image.sh build mato-loop-execution-agent apps/execution-agent apps/execution-agent/Dockerfile
+      - name: Check current develop revision
+        id: freshness
+        if: github.ref == 'refs/heads/develop'
+        env:
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: |
+          remote_sha="$(python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, request, fp, code, msg, headers, newurl):
+                  return None
+
+          server = os.environ["FORGEJO_SERVER_URL"].rstrip("/")
+          if urllib.parse.urlsplit(server).scheme != "https":
+              raise SystemExit("FORGEJO_SERVER_URL must use HTTPS")
+          repository = "/".join(urllib.parse.quote(part, safe="") for part in os.environ["FORGEJO_REPOSITORY"].split("/"))
+          request = urllib.request.Request(
+              f"{server}/api/v1/repos/{repository}/branches/develop",
+              headers={"Authorization": f"token {os.environ['FORGEJO_TOKEN']}"},
+          )
+          with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+              print(json.load(response)["commit"]["id"])
+          PY
+          )"
+          if [[ "$remote_sha" == "$GITHUB_SHA" ]]; then
+            printf 'current=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'Skipping stale develop publication for %s; current commit is %s.\n' "$GITHUB_SHA" "$remote_sha"
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish both images
+        if: github.ref != 'refs/heads/develop' || steps.freshness.outputs.current == 'true'
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            mode=release
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            mode=develop
+            tag=
+          fi
+          bash scripts/ci/publish-docker-image.sh "$mode" mato-loop . apps/backend/Dockerfile "$tag"
+          bash scripts/ci/publish-docker-image.sh "$mode" mato-loop-execution-agent apps/execution-agent apps/execution-agent/Dockerfile "$tag"
+      - name: Remove local publication images
+        if: always()
+        run: docker image rm --force "mato-loop:ci-$CI_RUN_ID" "mato-loop-execution-agent:ci-$CI_RUN_ID" >/dev/null 2>&1 || true
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [publish-images]
+    runs-on: docker
+    timeout-minutes: 10
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Create Forgejo release
+        env:
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: python3 scripts/ci/create-forgejo-release.py "${GITHUB_REF#refs/tags/}" "$GITHUB_SHA"

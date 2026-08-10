@@ -11,6 +11,7 @@ from mato_loop_backend.integrations.caldav import (
     load_caldav_resources,
 )
 from mato_loop_backend.integrations.evidence import evidence_source_id
+from mato_loop_backend.integrations.registry import effective_execution_integration_settings
 from mato_loop_backend.integrations.search import (
     SearchIntegrationError,
     effective_search_providers,
@@ -56,6 +57,7 @@ __all__ = [
     "caldav_error_code",
     "evidence_source_id",
     "effective_search_providers",
+    "effective_execution_integration_settings",
     "normalize_search_tool_settings",
     "search_available",
     "search_provider_options",

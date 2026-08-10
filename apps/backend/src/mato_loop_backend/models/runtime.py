@@ -160,6 +160,10 @@ class ChatSession(Base):
     web_search_policy: Mapped[str] = mapped_column(
         String(20), nullable=False, default=WebSearchPolicy.AVAILABLE.value
     )
+    preferred_execution_agent_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("execution_agents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    preferred_root_id: Mapped[UUID | None] = mapped_column(nullable=True)
     working_directory: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     workspace_access: Mapped[str] = mapped_column(String(20), nullable=False, default="read-only")
     private_integration_data_used: Mapped[bool] = mapped_column(
@@ -401,6 +405,16 @@ class AgentRun(Base):
     )
     pseudonymization_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
+    )
+    execution_agent_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("execution_agents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    execution_agent_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    execution_root_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    execution_root_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    working_directory_snapshot: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    execution_operations: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

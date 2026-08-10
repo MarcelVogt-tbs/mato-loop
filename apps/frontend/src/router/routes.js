@@ -49,6 +49,11 @@ const routes = [
             component: () => import('pages/settings/ToolSettingsPage.vue')
           },
           {
+            path: 'execution-agents',
+            name: 'settings-execution-agents',
+            component: () => import('pages/settings/ExecutionAgentSettingsPage.vue')
+          },
+          {
             path: 'skills',
             name: 'settings-skills',
             component: () => import('pages/settings/SkillSettingsPage.vue')

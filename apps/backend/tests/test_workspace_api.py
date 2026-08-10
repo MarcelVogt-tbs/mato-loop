@@ -2,7 +2,6 @@ import hashlib
 import json
 from io import BytesIO
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -10,7 +9,6 @@ import pytest
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.workspace as workspace_module
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import workspace as workspace_route
 from mato_loop_backend.api.routes.workspace import (
@@ -38,43 +36,6 @@ async def test_file_context_hides_foreign_sessions() -> None:
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.code == "session.notFound"
-
-
-async def test_file_context_keeps_a_bound_workspace_after_session_switch(
-    tmp_path: Path, monkeypatch
-) -> None:
-    user = _user()
-    original = tmp_path / "original"
-    current = tmp_path / "current"
-    original.mkdir()
-    current.mkdir()
-    (original / "report.bin").write_bytes(b"report")
-    session = ChatSession(
-        id=uuid4(),
-        user_id=user.id,
-        title="Test",
-        working_directory="current",
-    )
-    db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    monkeypatch.setattr(
-        workspace_module,
-        "get_runtime_config",
-        lambda: SimpleNamespace(agent_home=tmp_path),
-    )
-
-    context = await workspace_route._file_context(
-        FileScope.FILESYSTEM,
-        session.id,
-        user,
-        db,
-        root_identity="original",
-    )
-
-    assert context.working_directory == "original"
-    assert context.root_files is not None
-    with context.root_files.open_file(FileRoot.WORKSPACE, "report.bin") as handle:
-        assert handle.read() == b"report"
 
 
 async def test_download_file_streams_the_bound_workspace_file(

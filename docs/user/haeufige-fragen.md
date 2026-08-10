@@ -6,7 +6,7 @@ Eine Session wird erst mit der ersten gesendeten Nachricht dauerhaft angelegt. E
 
 ## Warum kann der Agent nicht auf meinen Arbeitsordner zugreifen?
 
-Prüfen Sie, ob für die Session ein Arbeitsordner gewählt wurde und ob der Agent-Modus die benötigten Dateiaktionen erlaubt. Der interne Session-Speicher ist vom Arbeitsordner getrennt.
+Prüfen Sie, ob ein verbundener Ausführungsagent, einer seiner Arbeitsbereiche und der richtige Agent-Modus gewählt sind. Der interne Session-Speicher liegt getrennt im Backend und bleibt auch ohne Ausführungsagent verfügbar.
 
 ## Warum wird ein Modell nicht im Chat angeboten?
 
@@ -30,7 +30,7 @@ Nein. Bilder aus MatoLoop-Anhängen werden lokal geladen. Für externe Bildurspr
 
 ## Wo liegen meine Dateien?
 
-Arbeitsdateien liegen unter dem verwalteten Agent-Home `/data/home`. Zusätzlich besitzt jede dauerhaft angelegte Session eigenen Speicher unter `/data/sessions/<session-id>`.
+Arbeitsdateien liegen im konfigurierten Arbeitsbereich des jeweiligen Ausführungsagenten. Beim Compose-Agenten ist dies standardmäßig der über `MATO_EXECUTION_AGENT_WORKSPACE` eingebundene Pfad. Jede dauerhaft angelegte Session besitzt zusätzlich eigenen Backend-Speicher unter `/data/sessions/<session-id>`.
 
 ## Ist die Dokumentation nur nach Anmeldung erreichbar?
 

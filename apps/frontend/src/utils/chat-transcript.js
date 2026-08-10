@@ -1,7 +1,13 @@
 export function buildChatTranscript(
   messages = [],
   approvals = [],
-  { running = false, toolExecutionActive = running, activeToolCallId = null, questions = [] } = {}
+  {
+    running = false,
+    toolExecutionActive = running,
+    activeToolCallId = null,
+    processOutputs = {},
+    questions = []
+  } = {}
 ) {
   const results = new Map()
   for (const message of messages) {
@@ -53,7 +59,8 @@ export function buildChatTranscript(
           approval,
           question,
           current: currentRound,
-          active
+          active,
+          ...(processOutputs[tool.id] ? { processOutput: processOutputs[tool.id] } : {})
         }
       }),
       workHistory: null

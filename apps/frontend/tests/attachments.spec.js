@@ -17,7 +17,10 @@ import {
 } from '../src/utils/attachments'
 
 const url = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
-const downloadUrl = '/api/workspace/files/download?path=reports%2Flarge.zip&scope=filesystem&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=original-workspace'
+const executionAgentId = '550e8400-e29b-41d4-a716-446655440003'
+const rootId = '550e8400-e29b-41d4-a716-446655440004'
+const rootRevision = 'a'.repeat(64)
+const downloadUrl = `/api/workspace/files/download?path=reports%2Flarge.zip&scope=filesystem&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=${rootId}&execution_agent_id=${executionAgentId}&root_id=${rootId}&root_revision=${rootRevision}&working_directory=original-workspace`
 
 describe('persisted attachments', () => {
   it('only permits the internal hierarchical attachment route', () => {
@@ -29,11 +32,15 @@ describe('persisted attachments', () => {
   it('accepts only bound internal file-download URLs', () => {
     expect(safeFileDownloadUrl(downloadUrl)).toBe(downloadUrl)
     expect(safeFileDownloadUrl(`${downloadUrl}&working_directory=other`)).toBeNull()
+    expect(safeFileDownloadUrl(downloadUrl.replace(`&root_revision=${rootRevision}`, ''))).toBeNull()
+    expect(safeFileDownloadUrl(downloadUrl.replace(rootRevision, 'A'.repeat(64)))).toBeNull()
+    expect(safeFileDownloadUrl(downloadUrl.replace('original-workspace', '../other'))).toBeNull()
     expect(safeFileDownloadUrl(downloadUrl.replace('reports%2Flarge.zip', '..%2Fsecret'))).toBeNull()
     expect(safeFileDownloadUrl(`https://example.com${downloadUrl}`)).toBeNull()
     const sessionUrl = '/api/workspace/files/download?path=files%2Freport.pdf&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440000'
     expect(safeFileDownloadUrl(sessionUrl)).toBe(sessionUrl)
     expect(safeFileDownloadUrl(sessionUrl.replace(/root_identity=[^&]+/u, 'root_identity=other'))).toBeNull()
+    expect(safeFileDownloadUrl(`${sessionUrl}&execution_agent_id=${executionAgentId}`)).toBeNull()
   })
 
   it('turns only a valid provide_file result into a download attachment', () => {
@@ -67,10 +74,14 @@ describe('persisted attachments', () => {
     const action = {
       operation: 'write',
       root: 'workspace',
-      rootIdentity: 'original-workspace',
+      rootIdentity: rootId,
       path: 'reports/large.zip',
       filename: 'large.zip',
       sizeBytes: 3_000_000_000,
+      executionAgentId,
+      rootId,
+      rootRevision,
+      workingDirectory: 'original-workspace',
       downloadUrl
     }
     const expected = {

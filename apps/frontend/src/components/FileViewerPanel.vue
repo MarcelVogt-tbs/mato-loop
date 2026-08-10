@@ -62,7 +62,7 @@
       >
         <q-tooltip>Als PDF speichern</q-tooltip>
       </q-btn>
-      <q-btn v-if="!workspace.editorActive" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
+      <q-btn v-if="!workspace.editorActive && canDownload" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
         <q-tooltip>Datei herunterladen</q-tooltip>
       </q-btn>
       <q-btn
@@ -162,7 +162,7 @@
         <q-icon name="draft" size="64px" class="app-muted q-mb-md" />
         <div class="text-subtitle1">Keine Vorschau verfügbar</div>
         <div class="app-muted q-mt-xs">{{ unavailableMessage }}</div>
-        <q-btn class="q-mt-lg" color="primary" no-caps icon="download" label="Datei herunterladen" @click="download" />
+        <q-btn v-if="canDownload" class="q-mt-lg" color="primary" no-caps icon="download" label="Datei herunterladen" @click="download" />
       </div>
     </div>
   </section>
@@ -216,7 +216,9 @@ const editable = computed(() => (
   && !workspace.rootIdentity
   && ['text', 'markdown'].includes(preview.value.kind)
   && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
+  && workspace.operationAvailable('workspace.write')
 ))
+const canDownload = computed(() => workspace.operationAvailable('workspace.export'))
 const printUrl = computed(() => {
   if (!props.entry?.path || preview.value.kind !== 'markdown') return undefined
   return router.resolve({
@@ -370,7 +372,8 @@ watch(
     () => workspace.scope,
     () => workspace.sessionId,
     () => workspace.workingDirectory,
-    () => workspace.rootIdentity
+    () => workspace.rootIdentity,
+    () => workspace.workspaceContext
   ],
   loadPreview,
   { immediate: true }

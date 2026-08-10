@@ -150,6 +150,62 @@ describe('workspace store', () => {
     })
   })
 
+  it('routes a draft workspace through its selected agent and advertised root', async () => {
+    api.get.mockResolvedValue({ data: { entries: [] } })
+    const workspace = useWorkspaceStore()
+    workspace.configure({
+      workingDirectory: 'projekt',
+      workspaceContext: {
+        executionAgentId: 'agent-1',
+        rootId: 'root-1',
+        connected: true,
+        operations: ['workspace.list', 'workspace.read']
+      }
+    })
+
+    await workspace.load('.')
+
+    expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
+      params: {
+        path: '.',
+        scope: 'filesystem',
+        execution_agent_id: 'agent-1',
+        root_id: 'root-1',
+        working_directory: 'projekt'
+      },
+      suppressErrorToast: true
+    })
+    expect(workspace.operationAvailable('workspace.read')).toBe(true)
+    expect(workspace.operationAvailable('workspace.write')).toBe(false)
+  })
+
+  it('does not call the workspace API while the selected agent is offline', async () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({
+      workspaceContext: {
+        connected: false,
+        operations: ['workspace.list']
+      }
+    })
+
+    expect(await workspace.load('.')).toBe(false)
+    expect(api.get).not.toHaveBeenCalled()
+  })
+
+  it('keeps import, export and editing capabilities separate', () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({
+      workspaceContext: {
+        connected: true,
+        operations: ['workspace.export', 'workspace.import', 'workspace.list']
+      }
+    })
+
+    expect(workspace.operationAvailable('workspace.import')).toBe(true)
+    expect(workspace.operationAvailable('workspace.export')).toBe(true)
+    expect(workspace.operationAvailable('workspace.write')).toBe(false)
+  })
+
   it('opens a tool file through the existing read-only explorer context', async () => {
     api.get
       .mockResolvedValueOnce({ data: { entries: [] } })
