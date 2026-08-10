@@ -49,6 +49,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationResource,
     ToolContribution,
 )
+from mato_loop_backend.integrations.service import BookStackIntegrationService
 from mato_loop_backend.models import Credential
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
@@ -82,6 +83,24 @@ class _StreamResponse:
 
     async def aiter_raw(self):
         yield self.body
+
+
+async def test_bookstack_policy_cleanup_removes_resource_labels(monkeypatch) -> None:
+    integration_id = uuid4()
+    tools = ToolSettings(
+        integration_policies={str(integration_id): {}},
+        resource_policies={str(integration_id): {}},
+        resource_labels={str(integration_id): {"book:7": "Handbuch"}},
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=tools))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    db = AsyncMock(spec=AsyncSession)
+
+    await BookStackIntegrationService._save(
+        db, IntegrationSettings(), clear_policies=integration_id
+    )
+
+    assert str(integration_id) not in tools.resource_labels
 
 
 def _request(*, name: str = "SearXNG", enabled: bool = True) -> SearchIntegrationRequest:

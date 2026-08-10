@@ -14,10 +14,16 @@ const emptyCalendar = () => ({
   accounts: []
 })
 
+const emptyKnowledge = () => ({
+  configured: false,
+  bases: []
+})
+
 export const useIntegrationStore = defineStore('integrations', {
   state: () => ({
     search: emptySearch(),
     calendar: emptyCalendar(),
+    knowledge: emptyKnowledge(),
     accessByIntegration: {},
     loading: false,
     loaded: false,
@@ -83,6 +89,40 @@ export const useIntegrationStore = defineStore('integrations', {
     },
     async testCalendar(id) {
       return (await api.post(`/integrations/calendar/accounts/${id}/test`)).data
+    },
+    async fetchKnowledge() {
+      this.loading = true
+      this.loadFailed = false
+      try {
+        this.knowledge = (await api.get('/integrations/knowledge')).data
+        this.loaded = true
+      } catch (error) {
+        this.loadFailed = true
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+    async createKnowledge(payload) {
+      await api.post('/integrations/knowledge/bases', payload)
+      await this.fetchKnowledge()
+    },
+    async updateKnowledge(id, payload) {
+      const request = { ...payload }
+      if (!request.token_id || !request.token_secret) {
+        delete request.token_id
+        delete request.token_secret
+      }
+      await api.put(`/integrations/knowledge/bases/${id}`, request)
+      await this.fetchKnowledge()
+    },
+    async removeKnowledge(id) {
+      await api.delete(`/integrations/knowledge/bases/${id}`)
+      delete this.accessByIntegration[id]
+      await this.fetchKnowledge()
+    },
+    async testKnowledge(id) {
+      return (await api.post(`/integrations/knowledge/bases/${id}/test`)).data
     },
     async fetchAccess(id) {
       const { data } = await api.get(`/integrations/${id}/access`)

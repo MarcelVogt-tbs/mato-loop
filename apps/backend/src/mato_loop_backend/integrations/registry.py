@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from pydantic import BaseModel, HttpUrl
 
+from mato_loop_backend.integrations.bookstack import BOOKSTACK_ADAPTER
 from mato_loop_backend.integrations.caldav import CALDAV_ADAPTER
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -44,6 +45,7 @@ _ADAPTERS = {
         contribution_factory=_searxng_contributions,
     ),
     ("calendar", "caldav"): CALDAV_ADAPTER,
+    ("knowledge", "bookstack"): BOOKSTACK_ADAPTER,
 }
 
 

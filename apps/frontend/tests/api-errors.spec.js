@@ -13,6 +13,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'integration.remoteChanged' } })).toBe(
       'Der entfernte Eintrag wurde zwischenzeitlich geändert. Lade ihn erneut.'
     )
+    expect(apiErrorMessage({ error: { code: 'integration.permissionDenied' } })).toBe(
+      'Der verbundene Dienst erlaubt diese Aktion nicht.'
+    )
     expect(apiErrorMessage({ error: { code: 'provider.discoveryUnsupported' } })).toBe(
       'Dieser Provider unterstützt keine automatische Modellerkennung.'
     )

@@ -51,8 +51,8 @@
             <q-input
               v-model="form.base_url"
               outlined
-              :label="form.integration_type === 'calendar' ? 'CalDAV Base URL' : 'SearXNG Base URL'"
-              :placeholder="form.integration_type === 'calendar' ? 'https://calendar.example.com' : 'https://search.example.com'"
+              :label="baseUrlLabel"
+              :placeholder="baseUrlPlaceholder"
               lazy-rules
               :rules="[requiredRule, urlRule]"
             />
@@ -73,6 +73,24 @@
               :hint="integration?.hasCredential ? 'Leer lassen, um das gespeicherte Passwort beizubehalten.' : ''"
               lazy-rules
               :rules="isEditing ? [] : [requiredRule]"
+            />
+            <q-input
+              v-if="form.integration_type === 'knowledge'"
+              v-model="form.token_id"
+              outlined
+              :label="integration?.hasCredential ? 'Neue Token-ID (optional)' : 'Token-ID'"
+              :hint="integration?.hasCredential ? 'Leer lassen, um den gespeicherten API-Token beizubehalten.' : 'API-Token aus dem BookStack-Benutzerprofil.'"
+              lazy-rules
+              :rules="isEditing ? [tokenPairRule] : [requiredRule]"
+            />
+            <q-input
+              v-if="form.integration_type === 'knowledge'"
+              v-model="form.token_secret"
+              outlined
+              type="password"
+              :label="integration?.hasCredential ? 'Neues Token-Secret (optional)' : 'Token-Secret'"
+              lazy-rules
+              :rules="isEditing ? [tokenPairRule] : [requiredRule]"
             />
             <q-toggle v-model="form.enabled" color="primary" label="Integration aktivieren" />
           </template>
@@ -115,11 +133,25 @@ const formRef = ref(null)
 const saving = ref(false)
 const integrationTypes = [
   { label: 'Websuche', value: 'search' },
-  { label: 'Kalender & Aufgaben', value: 'calendar' }
+  { label: 'Kalender & Aufgaben', value: 'calendar' },
+  { label: 'Wissensdatenbank', value: 'knowledge' }
 ]
-const providerTypes = computed(() => form.integration_type === 'calendar'
-  ? [{ label: 'CalDAV', value: 'caldav' }]
-  : [{ label: 'SearXNG', value: 'searxng' }])
+const PROVIDER_DEFAULTS = {
+  search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
+  calendar: { provider: 'caldav', label: 'CalDAV', placeholder: 'https://calendar.example.com' },
+  knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' }
+}
+const providerTypes = computed(() => {
+  const preset = PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search
+  return [{ label: preset.label, value: preset.provider }]
+})
+const baseUrlLabel = computed(
+  () => `${(PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).label}-Basis-URL`
+)
+const baseUrlPlaceholder = computed(
+  () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
+)
+const requiresHttps = computed(() => form.integration_type !== 'search')
 const form = reactive(defaultForm())
 const isEditing = computed(() => Boolean(props.integration))
 
@@ -131,31 +163,42 @@ function defaultForm() {
     base_url: '',
     username: '',
     password: '',
+    token_id: '',
+    token_secret: '',
     enabled: true
   }
 }
 
 function selectIntegrationType(type) {
-  form.provider_type = type === 'calendar' ? 'caldav' : 'searxng'
-  form.name = type === 'calendar' ? 'CalDAV' : 'SearXNG'
+  const preset = PROVIDER_DEFAULTS[type] || PROVIDER_DEFAULTS.search
+  form.provider_type = preset.provider
+  form.name = preset.label
 }
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
 }
 
+function tokenPairRule() {
+  const hasId = Boolean(String(form.token_id || '').trim())
+  const hasSecret = Boolean(form.token_secret)
+  if (hasId === hasSecret) return true
+  return 'Bitte Token-ID und Token-Secret gemeinsam angeben oder beide leer lassen.'
+}
+
 function urlRule(value) {
+  const label = (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).label
   try {
     const protocol = new URL(value).protocol
-    const allowed = form.integration_type === 'calendar'
+    const allowed = requiresHttps.value
       ? protocol === 'https:'
       : ['http:', 'https:'].includes(protocol)
-    return allowed || (form.integration_type === 'calendar'
-      ? 'CalDAV erfordert eine HTTPS-URL.'
+    return allowed || (requiresHttps.value
+      ? `${label} erfordert eine HTTPS-URL.`
       : 'Bitte gib eine gültige HTTP-URL ein.')
   } catch {
-    return form.integration_type === 'calendar'
-      ? 'CalDAV erfordert eine gültige HTTPS-URL.'
+    return requiresHttps.value
+      ? `${label} erfordert eine gültige HTTPS-URL.`
       : 'Bitte gib eine gültige HTTP-URL ein.'
   }
 }
@@ -176,6 +219,11 @@ async function save() {
       payload.password = form.password
       if (props.integration) await integrations.updateCalendar(props.integration.id, payload)
       else await integrations.createCalendar(payload)
+    } else if (form.integration_type === 'knowledge') {
+      payload.token_id = form.token_id.trim()
+      payload.token_secret = form.token_secret
+      if (props.integration) await integrations.updateKnowledge(props.integration.id, payload)
+      else await integrations.createKnowledge(payload)
     } else if (props.integration) await integrations.updateSearch(props.integration.id, payload)
     else await integrations.createSearch(payload)
     $q.notify({ type: 'positive', message: 'Integration gespeichert' })
@@ -198,6 +246,8 @@ watch(() => props.modelValue, (open) => {
     base_url: props.integration.config?.baseUrl || '',
     username: props.integration.config?.username || '',
     password: '',
+    token_id: '',
+    token_secret: '',
     enabled: props.integration.enabled
   } : {})
 })

@@ -1936,44 +1936,46 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
     )
 
 
-async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
-    async def ensure_binding_is_current() -> None:
-        revision = context.bound_options.get("settings_revision")
-        if revision is None:
-            return
-        current_tools = await SettingsStore.load(context.db, ToolSettings)
+async def _ensure_webfetch_binding_is_current(context: ToolContext) -> None:
+    current_tools = await SettingsStore.load(context.db, ToolSettings)
+    revision = context.bound_options.get("settings_revision")
+    if not current_tools.web_fetch.enabled or (
+        revision is not None
+        and _model_revision(current_tools.web_fetch) != revision
+    ):
+        raise WebFetchError("tool.unavailable")
+    if revision is None and current_tools.web_fetch != context.tool_settings.web_fetch:
+        raise WebFetchError("tool.unavailable")
+    if context.model_id is not None:
+        current_ai = await SettingsStore.load(context.db, AiSettings)
+        current_model = next(
+            (item for item in current_ai.models if item.id == context.model_id), None
+        )
         if (
-            not current_tools.web_fetch.enabled
-            or _model_revision(current_tools.web_fetch) != revision
+            current_model is None
+            or resolve_web_fetch_policy(current_tools, current_model)
+            != context.web_fetch_policy
         ):
             raise WebFetchError("tool.unavailable")
-        if context.model_id is not None:
-            current_ai = await SettingsStore.load(context.db, AiSettings)
-            current_model = next(
-                (item for item in current_ai.models if item.id == context.model_id), None
-            )
-            if (
-                current_model is None
-                or resolve_web_fetch_policy(current_tools, current_model)
-                != context.web_fetch_policy
-            ):
-                raise WebFetchError("tool.unavailable")
-        context.tool_settings = current_tools
-        context.allowed_private_origins = tuple(
-            current_tools.web_fetch.allowed_private_origins
-        )
+    context.tool_settings = current_tools
+    context.allowed_private_origins = tuple(
+        current_tools.web_fetch.allowed_private_origins
+    )
+
+
+async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
 
     async def authorize_url(url: str) -> None:
-        await ensure_binding_is_current()
+        await _ensure_webfetch_binding_is_current(context)
         requires_approval = context.web_fetch_policy == WebFetchPolicy.ASK or (
             context.web_fetch_policy == WebFetchPolicy.AUTO_PUBLIC
             and private_origin_is_allowed(url, context.allowed_private_origins)
         )
         if requires_approval and not await _allow(context, webfetch_permission(url)):
             raise WebFetchError("permission.denied")
-        await ensure_binding_is_current()
+        await _ensure_webfetch_binding_is_current(context)
 
-    await ensure_binding_is_current()
+    await _ensure_webfetch_binding_is_current(context)
     result = await fetch_web(
         arguments.url,
         format=arguments.format,

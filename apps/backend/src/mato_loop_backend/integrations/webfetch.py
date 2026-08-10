@@ -76,6 +76,46 @@ _UNWRAP_HTML_TAGS = {"button", "fieldset", "form", "input", "option", "select", 
 _URL_ATTRIBUTES = {"action", "formaction", "href", "poster", "src", "xlink:href"}
 _UNSAFE_URL_SCHEME = re.compile(r"^[\x00-\x20]*(?:data|javascript|vbscript):", re.IGNORECASE)
 _CHARSET_PATTERN = re.compile(br"charset\s*=\s*['\"]?\s*([a-zA-Z0-9._:+-]+)", re.IGNORECASE)
+_DEFAULT_ACCEPT = (
+    "text/html, text/markdown, text/plain, application/pdf, "
+    "image/png, image/jpeg, image/webp, image/gif"
+)
+DOWNLOAD_TYPES = {
+    "application/gzip": ".gz",
+    "application/json": ".json",
+    "application/msword": ".doc",
+    "application/pdf": ".pdf",
+    "application/rtf": ".rtf",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.oasis.opendocument.spreadsheet": ".ods",
+    "application/vnd.oasis.opendocument.text": ".odt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/zip": ".zip",
+    "image/gif": ".gif",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/svg+xml": ".svg",
+    "image/webp": ".webp",
+    "text/csv": ".csv",
+    "text/markdown": ".md",
+    "text/plain": ".txt",
+}
+_OPAQUE_DOWNLOAD_TYPE = "application/octet-stream"
+_DOWNLOAD_ACCEPT = ", ".join([*sorted(DOWNLOAD_TYPES), _OPAQUE_DOWNLOAD_TYPE])
+_EXTENSION_TYPES = {
+    extension: content_type for content_type, extension in DOWNLOAD_TYPES.items()
+} | {".jpeg": "image/jpeg", ".markdown": "text/markdown", ".text": "text/plain"}
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadedFile:
+    final_url: str
+    content_type: str
+    filename: str
+    data: bytes
 
 
 class WebFetchError(RuntimeError):
@@ -336,7 +376,11 @@ async def _read_limited(
 
 
 async def _request_once(
-    target: _Target, timeout: float, max_response_bytes: int, user_agent: str
+    target: _Target,
+    timeout: float,
+    max_response_bytes: int,
+    user_agent: str,
+    accept: str = _DEFAULT_ACCEPT,
 ) -> _Response:
     resolver = _PinnedResolver(target.host, target.addresses)
     connector = aiohttp.TCPConnector(
@@ -346,10 +390,7 @@ async def _request_once(
         limit=1,
     )
     headers = {
-        "Accept": (
-            "text/html, text/markdown, text/plain, application/pdf, "
-            "image/png, image/jpeg, image/webp, image/gif"
-        ),
+        "Accept": accept,
         "Accept-Encoding": "gzip, deflate",
         "Connection": "close",
         "User-Agent": user_agent,
@@ -701,6 +742,149 @@ async def _build_result(
     )
 
 
+async def _follow_redirects(
+    url: str,
+    timeout: float,
+    origins: set[tuple[str, str, int]],
+    authorize_url: Callable[[str], Awaitable[None]] | None,
+    max_response_bytes: int,
+    user_agent: str,
+    accept: str,
+) -> tuple[_Target, _Response, float]:
+    loop = asyncio.get_running_loop()
+    remaining = float(timeout)
+    current_url = url
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        current_url = canonicalize_url(current_url)
+        if authorize_url is not None:
+            await authorize_url(current_url)
+        started = loop.time()
+        async with asyncio.timeout(max(remaining, 0.001)):
+            target = await _validate_target(current_url, origins)
+            response = await _request_once(
+                target, remaining, max_response_bytes, user_agent, accept
+            )
+        remaining -= loop.time() - started
+        if response.status in _REDIRECT_STATUSES:
+            if not response.location:
+                raise _error("redirectInvalid")
+            if redirect_count == MAX_REDIRECTS:
+                raise _error("tooManyRedirects")
+            try:
+                current_url = str(target.url.join(URL(response.location)))
+            except (TypeError, ValueError) as exc:
+                raise _error("redirectInvalid") from exc
+            continue
+        if not 200 <= response.status < 300:
+            raise _error("requestFailed", statusCode=response.status)
+        return target, response, remaining
+    raise _error("tooManyRedirects")
+
+
+def _validate_fetch_limits(timeout: float, max_response_bytes: int) -> None:
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 120:
+        raise _error("timeoutInvalid")
+    if (
+        isinstance(max_response_bytes, bool)
+        or not isinstance(max_response_bytes, int)
+        or max_response_bytes < 1
+    ):
+        raise _error("responseLimitInvalid")
+
+
+def _raw_download_name(url: URL, content_disposition: str | None) -> str:
+    filename: str | None = None
+    if content_disposition:
+        message = Message()
+        message["Content-Disposition"] = content_disposition
+        filename = message.get_filename()
+    if not filename:
+        filename = unquote(PurePosixPath(url.path).name)
+    filename = re.sub(r"[\x00-\x1f\x7f]", "", (filename or "").replace("\\", "/"))
+    return PurePosixPath(filename).name.strip(" .")[:240]
+
+
+def _download_filename(
+    url: URL, content_disposition: str | None, content_type: str
+) -> str:
+    filename = _raw_download_name(url, content_disposition)
+    extension = DOWNLOAD_TYPES[content_type]
+    if not filename:
+        return f"download{extension}"
+    if PurePosixPath(filename).suffix:
+        return filename
+    return f"{filename}{extension}"
+
+
+def _resolve_download_type(
+    content_type: str, url: URL, content_disposition: str | None
+) -> str:
+    """Resolve the effective type of a download.
+
+    Servers routinely label documents as application/octet-stream. The declared
+    type alone is then useless, so the extension decides, and it must still name
+    a supported type. That keeps the allow list intact instead of turning the
+    opaque type into a way to fetch anything.
+    """
+    if content_type in DOWNLOAD_TYPES:
+        return content_type
+    if content_type != _OPAQUE_DOWNLOAD_TYPE:
+        raise _error("contentTypeUnsupported")
+    suffix = PurePosixPath(_raw_download_name(url, content_disposition)).suffix.lower()
+    resolved = _EXTENSION_TYPES.get(suffix)
+    if resolved is None:
+        raise _error("contentTypeUnsupported")
+    return resolved
+
+
+async def download_file(
+    url: str,
+    timeout: float = 30,
+    allowed_private_origins: tuple[str, ...] | list[str] = (),
+    authorize_url: Callable[[str], Awaitable[None]] | None = None,
+    max_response_bytes: int = MAX_RESPONSE_BYTES,
+    user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
+) -> DownloadedFile:
+    """Fetch a document by URL and return its raw bytes.
+
+    Applies the same SSRF, redirect, and size protections as fetch_web, but
+    keeps the payload untouched so it can be handed to another system.
+    """
+    _validate_fetch_limits(timeout, max_response_bytes)
+    origins = _allowed_origins(allowed_private_origins)
+    try:
+        target, response, _remaining = await _follow_redirects(
+            url,
+            timeout,
+            origins,
+            authorize_url,
+            max_response_bytes,
+            user_agent,
+            _DOWNLOAD_ACCEPT,
+        )
+    except WebFetchError:
+        raise
+    except TimeoutError as exc:
+        raise _error("timeout") from exc
+    content_type = _resolve_download_type(
+        response.content_type, target.url, response.content_disposition
+    )
+    if content_type in _IMAGE_TYPES and not _valid_image_signature(
+        content_type, response.body
+    ):
+        raise _error("contentTypeMismatch")
+    if not response.body:
+        raise _error("contentTypeMismatch")
+    return DownloadedFile(
+        final_url=str(target.url),
+        content_type=content_type,
+        filename=_download_filename(
+            target.url, response.content_disposition, content_type
+        ),
+        data=response.body,
+    )
+
+
 async def fetch_web(
     url: str,
     format: str = "markdown",
@@ -713,56 +897,29 @@ async def fetch_web(
 ) -> WebFetchResult:
     if format not in {"html", "markdown", "text"}:
         raise _error("formatUnsupported")
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 120:
-        raise _error("timeoutInvalid")
-    if (
-        isinstance(max_response_bytes, bool)
-        or not isinstance(max_response_bytes, int)
-        or max_response_bytes < 1
-    ):
-        raise _error("responseLimitInvalid")
+    _validate_fetch_limits(timeout, max_response_bytes)
     origins = _allowed_origins(allowed_private_origins)
-    loop = asyncio.get_running_loop()
-    remaining = float(timeout)
-    current_url = url
     try:
-        for redirect_count in range(MAX_REDIRECTS + 1):
-            current_url = canonicalize_url(current_url)
-            if authorize_url is not None:
-                await authorize_url(current_url)
-            started = loop.time()
+        target, response, remaining = await _follow_redirects(
+            url,
+            timeout,
+            origins,
+            authorize_url,
+            max_response_bytes,
+            user_agent,
+            _DEFAULT_ACCEPT,
+        )
+        try:
             async with asyncio.timeout(max(remaining, 0.001)):
-                target = await _validate_target(current_url, origins)
-                response = await _request_once(
-                    target, remaining, max_response_bytes, user_agent
+                result = await _build_result(
+                    target, response, format, pdf_vision_handler
                 )
-            remaining -= loop.time() - started
-            if response.status in _REDIRECT_STATUSES:
-                if not response.location:
-                    raise _error("redirectInvalid")
-                if redirect_count == MAX_REDIRECTS:
-                    raise _error("tooManyRedirects")
-                try:
-                    current_url = str(target.url.join(URL(response.location)))
-                except (TypeError, ValueError) as exc:
-                    raise _error("redirectInvalid") from exc
-                continue
-            if not 200 <= response.status < 300:
-                raise _error("requestFailed", statusCode=response.status)
-            try:
-                started = loop.time()
-                async with asyncio.timeout(max(remaining, 0.001)):
-                    result = await _build_result(
-                        target, response, format, pdf_vision_handler
-                    )
-                remaining -= loop.time() - started
-                return result
-            except WebFetchError as exc:
-                if exc.params is None:
-                    exc.params = {"statusCode": response.status}
-                raise
+            return result
+        except WebFetchError as exc:
+            if exc.params is None:
+                exc.params = {"statusCode": response.status}
+            raise
     except WebFetchError:
         raise
     except TimeoutError as exc:
         raise _error("timeout") from exc
-    raise _error("tooManyRedirects")

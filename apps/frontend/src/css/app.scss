@@ -1921,6 +1921,12 @@ body.body--dark .question-dock {
   max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.q-dialog__inner--minimized > .provider-dialog {
+  max-width: min(760px, calc(100vw - 32px));
 }
 
 .provider-dialog__body {
@@ -1930,6 +1936,13 @@ body.body--dark .question-dock {
 .integration-dialog {
   width: min(560px, calc(100vw - 32px));
   max-width: 560px;
+  max-height: calc(100dvh - 32px);
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.integration-dialog > .scroll {
+  min-height: 0;
 }
 
 .provider-form-grid {

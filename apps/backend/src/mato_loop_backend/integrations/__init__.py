@@ -1,3 +1,9 @@
+from mato_loop_backend.integrations.bookstack import (
+    BOOKSTACK_CREDENTIAL_KIND,
+    BookStackConfig,
+    bookstack_error_code,
+    load_bookstack_resources,
+)
 from mato_loop_backend.integrations.caldav import (
     CALDAV_CREDENTIAL_KIND,
     CalDavConfig,
@@ -16,6 +22,7 @@ from mato_loop_backend.integrations.search import (
     search_with_provider,
 )
 from mato_loop_backend.integrations.service import (
+    BookStackIntegrationService,
     CalDavIntegrationService,
     IntegrationSettingsError,
     SearchIntegrationService,
@@ -33,7 +40,10 @@ from mato_loop_backend.integrations.webfetch import (
 
 __all__ = [
     "SearchIntegrationError",
+    "BOOKSTACK_CREDENTIAL_KIND",
     "CALDAV_CREDENTIAL_KIND",
+    "BookStackConfig",
+    "BookStackIntegrationService",
     "CalDavConfig",
     "CalDavIntegrationService",
     "IntegrationSettingsError",
@@ -42,6 +52,7 @@ __all__ = [
     "WebFetchError",
     "WebFetchResult",
     "canonicalize_url",
+    "bookstack_error_code",
     "caldav_error_code",
     "evidence_source_id",
     "effective_search_providers",
@@ -53,6 +64,7 @@ __all__ = [
     "search_with_provider",
     "fetch_web",
     "normalize_source_title",
+    "load_bookstack_resources",
     "load_caldav_resources",
     "private_origin_is_allowed",
     "sanitize_url_for_display",

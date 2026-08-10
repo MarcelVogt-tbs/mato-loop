@@ -130,6 +130,9 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'tasks.read': { label: 'Aufgaben lesen', icon: 'checklist' },
     'tasks.write': { label: 'Aufgaben ändern', icon: 'edit_note' },
     'tasks.delete': { label: 'Aufgaben löschen', icon: 'delete_outline' },
+    'knowledge.read': { label: 'Wissensdatenbank lesen', icon: 'menu_book' },
+    'knowledge.write': { label: 'Wissensdatenbank ändern', icon: 'edit_note' },
+    'knowledge.delete': { label: 'Wissenseintrag löschen', icon: 'delete_sweep' },
     'integration.private_data.release': { label: 'Private Integrationsdaten freigeben', icon: 'cloud_upload' }
   }[grant?.capability]
   return {

@@ -165,7 +165,9 @@ def _context(
     session = _session()
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session.id)
-    return ToolContext(
+    tool_settings = ToolSettings()
+    tool_settings.web_fetch.allowed_private_origins = list(allowed_private_origins)
+    context = ToolContext(
         db=AsyncMock(spec=AsyncSession),
         run_id=uuid4(),
         session=session,
@@ -178,9 +180,15 @@ def _context(
         ),
         integration_settings=IntegrationSettings(),
         ask_handler=AsyncMock(return_value=decision),
+        tool_settings=tool_settings,
         web_fetch_policy=web_fetch_policy,
         allowed_private_origins=allowed_private_origins,
     )
+    if web_fetch_policy != WebFetchPolicy.DISABLED:
+        context.db.scalar.return_value = Mock(
+            data=tool_settings.model_dump(mode="json")
+        )
+    return context
 
 
 def _context_with_workdir(
@@ -2763,6 +2771,7 @@ async def test_webfetch_applies_the_effective_policy(
         allowed_private_origins=allowed_origins,
     )
     context.tool_settings.web_fetch.user_agent = "ConfiguredBrowser/1.0"
+    context.db.scalar.return_value.data = context.tool_settings.model_dump(mode="json")
 
     result = await tool_registry.execute(call, context)
 

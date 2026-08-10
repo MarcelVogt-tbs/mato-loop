@@ -1043,7 +1043,7 @@ async def calendar_update_event(
     except ValueError:
         from mato_loop_backend.agent.tools import ToolResult
 
-        return ToolResult.error("tool.invalidArguments", field="event_token")
+        return ToolResult.error("integration.staleReference", field="event_token")
     except CalDavError as exc:
         return _error(exc)
 
@@ -1066,7 +1066,7 @@ async def calendar_delete_event(
     except ValueError:
         from mato_loop_backend.agent.tools import ToolResult
 
-        return ToolResult.error("tool.invalidArguments", field="event_token")
+        return ToolResult.error("integration.staleReference", field="event_token")
     except CalDavError as exc:
         return _error(exc)
 

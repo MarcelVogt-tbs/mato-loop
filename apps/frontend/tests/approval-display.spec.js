@@ -92,6 +92,20 @@ describe('approval display', () => {
     }
   })
 
+  it('labels knowledge grants', () => {
+    for (const [capability, label, icon] of [
+      ['knowledge.read', 'Wissensdatenbank lesen', 'menu_book'],
+      ['knowledge.write', 'Wissensdatenbank ändern', 'edit_note'],
+      ['knowledge.delete', 'Wissenseintrag löschen', 'delete_sweep']
+    ]) {
+      expect(permissionGrantDisplay({
+        capability,
+        resourceType: 'integration_operation',
+        resourceDisplay: '„Handbuch“ · Wissensdatenbank „Wiki“'
+      })).toEqual({ label, value: '„Handbuch“ · Wissensdatenbank „Wiki“', icon })
+    }
+  })
+
   it('labels skill write grants', () => {
     expect(permissionGrantDisplay({
       capability: 'skills.write',

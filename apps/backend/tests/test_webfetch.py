@@ -626,3 +626,148 @@ async def test_dns_failures_have_a_stable_code(monkeypatch) -> None:
 
     monkeypatch.setattr(webfetch.asyncio, "get_running_loop", FailingLoop)
     assert await _error_code(fetch_web("https://does-not-resolve.invalid")) == "webfetch.dnsFailed"
+
+
+async def test_download_file_returns_raw_bytes_and_derives_the_filename() -> None:
+    payload = _blank_pdf()
+
+    async def responder(target: str, _headers: dict[str, str]) -> bytes:
+        if target == "/redirect":
+            return _response(status=302, headers={"Location": "/files/datasheet"})
+        return _response(
+            payload,
+            headers={
+                "Content-Type": "application/pdf",
+                "Content-Disposition": 'attachment; filename="sheet.pdf"',
+            },
+        )
+
+    async with _server(responder) as port:
+        result = await webfetch.download_file(
+            f"{_origin(port)}/redirect",
+            allowed_private_origins=(_origin(port),),
+        )
+
+    assert result.data == payload
+    assert result.content_type == "application/pdf"
+    assert result.filename == "sheet.pdf"
+    assert result.final_url.endswith("/files/datasheet")
+
+
+async def test_download_file_names_files_from_the_url_when_no_header_is_sent() -> None:
+    async def responder(_target: str, _headers: dict[str, str]) -> bytes:
+        return _response(
+            _blank_pdf(),
+            headers={"Content-Type": "application/pdf"},
+        )
+
+    async with _server(responder) as port:
+        named = await webfetch.download_file(
+            f"{_origin(port)}/docs/manual%20v2.pdf",
+            allowed_private_origins=(_origin(port),),
+        )
+        unnamed = await webfetch.download_file(
+            f"{_origin(port)}/",
+            allowed_private_origins=(_origin(port),),
+        )
+
+    assert named.filename == "manual v2.pdf"
+    assert unnamed.filename == "download.pdf"
+
+
+async def test_download_file_rejects_unsupported_types_and_oversized_bodies() -> None:
+    async def responder(target: str, _headers: dict[str, str]) -> bytes:
+        if target == "/page":
+            return _response(b"<html></html>", headers={"Content-Type": "text/html"})
+        return _response(_blank_pdf(), headers={"Content-Type": "application/pdf"})
+
+    async with _server(responder) as port:
+        origins = (_origin(port),)
+        unsupported = await _error_code(
+            webfetch.download_file(f"{_origin(port)}/page", allowed_private_origins=origins)
+        )
+        oversized = await _error_code(
+            webfetch.download_file(
+                f"{_origin(port)}/sheet.pdf",
+                allowed_private_origins=origins,
+                max_response_bytes=16,
+            )
+        )
+
+    assert unsupported == "webfetch.contentTypeUnsupported"
+    assert oversized == "webfetch.responseTooLarge"
+
+
+async def test_download_file_applies_the_same_ssrf_protection_as_fetch() -> None:
+    async def responder(_target: str, _headers: dict[str, str]) -> bytes:
+        return _response(_blank_pdf(), headers={"Content-Type": "application/pdf"})
+
+    async with _server(responder) as port:
+        blocked = await _error_code(webfetch.download_file(f"{_origin(port)}/sheet.pdf"))
+
+    assert blocked == "webfetch.addressBlocked"
+
+async def test_download_file_resolves_opaque_types_by_extension() -> None:
+    async def responder(target: str, _headers: dict[str, str]) -> bytes:
+        if target.endswith(".pdf"):
+            return _response(
+                _blank_pdf(), headers={"Content-Type": "application/octet-stream"}
+            )
+        if target.endswith(".exe"):
+            return _response(
+                b"MZ binary", headers={"Content-Type": "application/octet-stream"}
+            )
+        if target == "/blob":
+            return _response(
+                b"payload", headers={"Content-Type": "application/octet-stream"}
+            )
+        return _response(
+            b"payload",
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Disposition": 'attachment; filename="report.csv"',
+            },
+        )
+
+    async with _server(responder) as port:
+        origins = (_origin(port),)
+        from_path = await webfetch.download_file(
+            f"{_origin(port)}/files/sheet.pdf", allowed_private_origins=origins
+        )
+        from_header = await webfetch.download_file(
+            f"{_origin(port)}/download", allowed_private_origins=origins
+        )
+        rejected = await _error_code(
+            webfetch.download_file(
+                f"{_origin(port)}/tool.exe", allowed_private_origins=origins
+            )
+        )
+        unnamed = await _error_code(
+            webfetch.download_file(
+                f"{_origin(port)}/blob", allowed_private_origins=origins
+            )
+        )
+
+    assert from_path.content_type == "application/pdf"
+    assert from_path.filename == "sheet.pdf"
+    assert from_header.content_type == "text/csv"
+    assert from_header.filename == "report.csv"
+    assert rejected == "webfetch.contentTypeUnsupported"
+    assert unnamed == "webfetch.contentTypeUnsupported"
+
+
+async def test_opaque_downloads_still_verify_image_signatures() -> None:
+    async def responder(_target: str, _headers: dict[str, str]) -> bytes:
+        return _response(
+            b"not really a png",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+    async with _server(responder) as port:
+        code = await _error_code(
+            webfetch.download_file(
+                f"{_origin(port)}/logo.png", allowed_private_origins=(_origin(port),)
+            )
+        )
+
+    assert code == "webfetch.contentTypeMismatch"

@@ -65,6 +65,13 @@ def test_tls_error_has_controlled_fallback() -> None:
     )
 
 
+def test_integration_permission_error_has_controlled_fallback() -> None:
+    assert (
+        describe_error("integration.permissionDenied").message
+        == "The integration does not permit this operation."
+    )
+
+
 def test_video_processing_errors_have_controlled_fallbacks() -> None:
     assert (
         describe_error("video.frameExtractionFailed").message

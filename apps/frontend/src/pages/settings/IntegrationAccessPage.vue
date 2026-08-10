@@ -220,7 +220,8 @@ let loadToken = 0
 const integrationId = computed(() => String(route.params.integrationId || ''))
 const integration = computed(() => [
   ...integrations.search.providers,
-  ...integrations.calendar.accounts
+  ...integrations.calendar.accounts,
+  ...integrations.knowledge.bases
 ].find((item) => item.id === integrationId.value))
 const dirty = computed(() => Boolean(
   access.value && JSON.stringify(requestPayload()) !== savedPayload.value
@@ -279,6 +280,7 @@ function effectiveHint(resource, action) {
 function resourceDomainLabel(resource) {
   if (resource.key.startsWith('calendar:')) return 'Kalender'
   if (resource.key.startsWith('tasklist:')) return 'Aufgaben'
+  if (resource.key.startsWith('book:')) return 'Buch'
   return 'Ressource'
 }
 

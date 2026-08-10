@@ -927,7 +927,7 @@ async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
         arguments.model_copy(update={"event_token": legacy_token}), context
     )
     assert legacy.is_error is True
-    assert legacy.metadata["errorCode"] == "tool.invalidArguments"
+    assert legacy.metadata["errorCode"] == "integration.staleReference"
 
     wrong_binding = SimpleNamespace(
         bound_options={

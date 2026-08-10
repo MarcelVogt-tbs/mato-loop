@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.integrations.bookstack import BOOKSTACK_CREDENTIAL_KIND
 from mato_loop_backend.integrations.caldav import CALDAV_CREDENTIAL_KIND
 from mato_loop_backend.integrations.registry import validate_integration
 from mato_loop_backend.integrations.search import normalize_search_tool_settings
@@ -276,6 +277,135 @@ class CalDavIntegrationService:
             ),
             None,
         )
+        if instance is None:
+            raise IntegrationSettingsError("integration.notFound")
+        settings.instances = [item for item in settings.instances if item.id != integration_id]
+        if instance.credential_id is not None:
+            await db.execute(
+                delete(Credential).where(Credential.id == instance.credential_id)
+            )
+        return await cls._save(db, settings, clear_policies=integration_id)
+
+
+class BookStackIntegrationService:
+    @staticmethod
+    async def _save(
+        db: AsyncSession,
+        settings: IntegrationSettings,
+        *,
+        clear_policies: UUID | None = None,
+    ) -> IntegrationSettings:
+        if clear_policies is not None:
+            tools = await SettingsStore.load(db, ToolSettings, for_update=True)
+            integration_id = str(clear_policies)
+            changed = tools.integration_policies.pop(integration_id, None) is not None
+            changed = tools.resource_policies.pop(integration_id, None) is not None or changed
+            changed = tools.resource_labels.pop(integration_id, None) is not None or changed
+            if changed:
+                await SettingsStore.save(db, tools)
+        await SettingsStore.save(db, settings)
+        await db.commit()
+        return settings
+
+    @staticmethod
+    def _find(
+        settings: IntegrationSettings, integration_id: UUID
+    ) -> IntegrationInstance | None:
+        return next(
+            (
+                item
+                for item in settings.instances
+                if item.id == integration_id
+                and item.integration_type == "knowledge"
+                and item.adapter_type == "bookstack"
+            ),
+            None,
+        )
+
+    @classmethod
+    async def create(
+        cls,
+        db: AsyncSession,
+        *,
+        name: str,
+        base_url: str,
+        token_id: str,
+        token_secret: str,
+        enabled: bool,
+    ) -> IntegrationSettings:
+        if not token_id or not token_secret:
+            raise IntegrationSettingsError("validation.required")
+        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        instance = IntegrationInstance(
+            name=name,
+            integration_type="knowledge",
+            adapter_type="bookstack",
+            enabled=enabled,
+            config={"base_url": base_url},
+        )
+        validate_integration(instance)
+        credential = await store_credential(
+            db,
+            kind=BOOKSTACK_CREDENTIAL_KIND,
+            label=name,
+            payload={"token_id": token_id, "token_secret": token_secret},
+        )
+        instance.credential_id = credential.id
+        settings.instances.append(instance)
+        return await cls._save(db, settings)
+
+    @classmethod
+    async def update(
+        cls,
+        db: AsyncSession,
+        integration_id: UUID,
+        *,
+        name: str,
+        base_url: str,
+        token_id: str | None,
+        token_secret: str | None,
+        enabled: bool,
+    ) -> IntegrationSettings:
+        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        instance = cls._find(settings, integration_id)
+        if instance is None:
+            raise IntegrationSettingsError("integration.notFound")
+        if token_id == "" or token_secret == "":
+            raise IntegrationSettingsError("validation.required")
+        if (token_id is None) != (token_secret is None):
+            raise IntegrationSettingsError("validation.required")
+
+        config = {"base_url": base_url}
+        connection_changed = instance.config != config
+        old_credential_id = instance.credential_id
+        instance.name = name
+        instance.enabled = enabled
+        instance.config = config
+        validate_integration(instance)
+        if token_id is not None and token_secret is not None:
+            credential = await store_credential(
+                db,
+                kind=BOOKSTACK_CREDENTIAL_KIND,
+                label=name,
+                payload={"token_id": token_id, "token_secret": token_secret},
+            )
+            instance.credential_id = credential.id
+            if old_credential_id is not None:
+                await db.execute(
+                    delete(Credential).where(Credential.id == old_credential_id)
+                )
+        return await cls._save(
+            db,
+            settings,
+            clear_policies=integration_id if connection_changed else None,
+        )
+
+    @classmethod
+    async def delete(
+        cls, db: AsyncSession, integration_id: UUID
+    ) -> IntegrationSettings:
+        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
