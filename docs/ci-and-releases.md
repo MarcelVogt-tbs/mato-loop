@@ -29,7 +29,7 @@ Pull requests run the complete test and production-image build path, but registr
 
 ## Runner Requirements
 
-Jobs require a self-hosted Forgejo Runner registered with the `docker` label and running on `linux/amd64`. The runner needs:
+Jobs require a self-hosted Forgejo Runner registered with the `ubuntu-latest` label and running on `linux/amd64`. The runner needs:
 
 - a Docker daemon available to job containers, commonly through `/var/run/docker.sock` or an isolated Docker service
 - Bash, Python 3.11 or newer, Git, and the Docker Compose plugin

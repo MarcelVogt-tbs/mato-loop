@@ -17,7 +17,7 @@ defaults:
 
 jobs:
   backend:
-    runs-on: docker
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       MATO_LOOP_COMPOSE_PROJECT_NAME: mato-ci-backend-${{ github.run_id }}-${{ github.run_attempt }}
@@ -34,7 +34,7 @@ jobs:
         run: docker compose --env-file .env.default --env-file .env.dev -f docker-compose.dev.yaml down --volumes --remove-orphans
 
   frontend:
-    runs-on: docker
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       MATO_LOOP_COMPOSE_PROJECT_NAME: mato-ci-frontend-${{ github.run_id }}-${{ github.run_attempt }}
@@ -51,7 +51,7 @@ jobs:
         run: docker compose --env-file .env.default --env-file .env.dev -f docker-compose.dev.yaml down --volumes --remove-orphans
 
   execution-agent:
-    runs-on: docker
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       MATO_LOOP_COMPOSE_PROJECT_NAME: mato-ci-agent-${{ github.run_id }}-${{ github.run_attempt }}
@@ -68,7 +68,7 @@ jobs:
         run: docker compose --env-file .env.default --env-file .env.dev -f docker-compose.dev.yaml down --volumes --remove-orphans
 
   migrations:
-    runs-on: docker
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       MATO_LOOP_COMPOSE_PROJECT_NAME: mato-ci-migrations-${{ github.run_id }}-${{ github.run_attempt }}
@@ -90,7 +90,7 @@ jobs:
         run: docker compose --env-file .env.default --env-file .env.dev -f docker-compose.dev.yaml down --volumes --remove-orphans
 
   version:
-    runs-on: docker
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -118,7 +118,7 @@ jobs:
   image-mato-loop:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     needs: [backend, frontend, execution-agent, migrations, version]
-    runs-on: docker
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       CI_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -132,7 +132,7 @@ jobs:
   image-execution-agent:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     needs: [backend, frontend, execution-agent, migrations, version]
-    runs-on: docker
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       CI_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -146,7 +146,7 @@ jobs:
   publish-images:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v'))
     needs: [backend, frontend, execution-agent, migrations, version]
-    runs-on: docker
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
       CI_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -225,7 +225,7 @@ jobs:
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [publish-images]
-    runs-on: docker
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
