@@ -63,6 +63,7 @@ from mato_loop_backend.settings.models import (
 logger = logging.getLogger(__name__)
 
 _IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+_RETRY_DELAYS = (2.0, 5.0)
 _MODEL_IMAGE_MAX_EDGE = 2048
 _MODEL_IMAGE_MAX_BYTES = MAX_PROVIDER_IMAGE_BYTES // MAX_PROVIDER_IMAGES
 _AUDIO_FORMATS = {
@@ -329,26 +330,44 @@ def _direct_provider_media(
 async def _with_retries(
     operation: Callable[[], Awaitable[ProviderResult]],
     can_retry: Callable[[], bool] | None = None,
+    on_retry: Callable[[int, int], Awaitable[None]] | None = None,
 ) -> ProviderResult:
-    max_retries = 2
-    for attempt in range(max_retries + 1):
+    total_attempts = len(_RETRY_DELAYS) + 1
+    for attempt in range(total_attempts):
         try:
             return await operation()
         except ProviderError as exc:
             transient = exc.status_code == 429 or (
                 exc.status_code is not None and exc.status_code >= 500
             )
-            if not transient or attempt == max_retries or (can_retry and not can_retry()):
+            if (
+                not transient
+                or attempt == len(_RETRY_DELAYS)
+                or (can_retry and not can_retry())
+            ):
                 raise
-            delay = exc.retry_after if exc.retry_after is not None else 0.25 * (2**attempt)
+            delay = (
+                exc.retry_after
+                if exc.retry_after is not None
+                else _RETRY_DELAYS[attempt]
+            )
         except httpx.RequestError as exc:
-            if attempt == max_retries or (can_retry and not can_retry()):
+            if attempt == len(_RETRY_DELAYS) or (can_retry and not can_retry()):
                 raise ProviderError(
                     "Provider network request failed", code="provider.unavailable"
                 ) from exc
-            delay = 0.25 * (2**attempt)
-        logger.info("Retrying transient provider request (attempt %s)", attempt + 2)
-        await asyncio.sleep(min(delay, 30.0))
+            delay = _RETRY_DELAYS[attempt]
+        next_attempt = attempt + 2
+        if on_retry:
+            await on_retry(next_attempt, total_attempts)
+        delay = min(delay, 30.0)
+        logger.info(
+            "Retrying transient provider request (attempt %s/%s in %.1f seconds)",
+            next_attempt,
+            total_attempts,
+            delay,
+        )
+        await asyncio.sleep(delay)
     raise ProviderError("Provider request failed", code="provider.requestFailed")
 
 
@@ -415,6 +434,7 @@ class ProviderService:
         tool_choice: Literal["auto", "required", "none"] = "auto",
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning: ReasoningDeltaCallback | None = None,
+        on_retry: Callable[[int, int], Awaitable[None]] | None = None,
         timeout: float = 300,
         max_output_tokens: int | None = None,
         target_trust_level: TrustLevel | None = None,
@@ -615,7 +635,9 @@ class ProviderService:
                     on_reasoning=reasoning_callback,
                 )
 
-            return await finalize(await _with_retries(execute_codex, can_retry))
+            return await finalize(
+                await _with_retries(execute_codex, can_retry, on_retry)
+            )
 
         base_url = str(provider.config.get("base_url") or "").rstrip("/")
         if not base_url:
@@ -637,7 +659,9 @@ class ProviderService:
                     on_reasoning=reasoning_callback,
                 )
 
-            return await finalize(await _with_retries(execute_responses, can_retry))
+            return await finalize(
+                await _with_retries(execute_responses, can_retry, on_retry)
+            )
 
         async def execute_chat() -> ProviderResult:
             return await chat_completions(
@@ -648,4 +672,4 @@ class ProviderService:
                 on_reasoning=reasoning_callback,
             )
 
-        return await finalize(await _with_retries(execute_chat, can_retry))
+        return await finalize(await _with_retries(execute_chat, can_retry, on_retry))

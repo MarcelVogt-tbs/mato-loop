@@ -141,6 +141,9 @@
           <q-chip v-if="pendingCount" dense square color="warning" text-color="dark" icon="pending_actions">
             {{ pendingCount }} offen
           </q-chip>
+          <q-chip v-if="providerRetryVisible" dense square color="warning" text-color="dark" icon="refresh">
+            Provider erneut {{ chat.activity.providerAttempt }}/{{ chat.activity.providerAttemptTotal }}
+          </q-chip>
           <q-space />
           <input
             ref="attachmentInput"
@@ -421,6 +424,13 @@ const memoryMessage = computed(() => {
 const memoryModeIcon = computed(() => ({ full: 'memory', read_only: 'visibility', disabled: 'memory_alt' })[props.session?.memoryMode] || 'memory')
 const interactionDisabled = computed(() => (
   !props.session || props.disabled || props.running || props.pendingCount > 0
+))
+const providerRetryVisible = computed(() => (
+  chat.activity.phase === 'waiting_model'
+  && Number.isInteger(chat.activity.providerAttempt)
+  && Number.isInteger(chat.activity.providerAttemptTotal)
+  && chat.activity.providerAttempt >= 2
+  && chat.activity.providerAttempt <= chat.activity.providerAttemptTotal
 ))
 const requiredSearchUnavailable = computed(() => (
   props.session?.webSearchPolicy === 'required'

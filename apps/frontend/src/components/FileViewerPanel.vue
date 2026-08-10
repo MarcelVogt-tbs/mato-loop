@@ -39,6 +39,20 @@
       >
         <q-tooltip>In neuem Tab öffnen</q-tooltip>
       </q-btn>
+      <q-btn
+        v-if="preview.kind === 'markdown' && !workspace.editorActive"
+        class="file-icon-action"
+        flat
+        round
+        dense
+        icon="picture_as_pdf"
+        :href="printUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Markdown als PDF speichern"
+      >
+        <q-tooltip>Als PDF speichern</q-tooltip>
+      </q-btn>
       <q-btn v-if="directImage || !workspace.editorActive" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
         <q-tooltip>Datei herunterladen</q-tooltip>
       </q-btn>
@@ -126,7 +140,13 @@
           @error="imageFailed"
         />
       </div>
-      <div v-else-if="preview.kind === 'markdown'" class="chat-markdown file-viewer__markdown" v-html="markdownHtml" />
+      <MessageContent
+        v-else-if="preview.kind === 'markdown'"
+        class="file-viewer__markdown"
+        :content="preview.content"
+        :allow-images="false"
+        :interactive="false"
+      />
       <pre v-else-if="preview.kind === 'text'" class="file-viewer__text">{{ preview.content }}</pre>
       <div v-else class="fit column flex-center text-center q-pa-xl">
         <q-icon name="draft" size="64px" class="app-muted q-mb-md" />
@@ -139,14 +159,13 @@
 </template>
 
 <script setup>
-import 'katex/dist/katex.min.css'
-
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRouter } from 'vue-router'
+import MessageContent from 'components/MessageContent.vue'
 import WorkspaceFileEditor from 'components/WorkspaceFileEditor.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
-import { renderMarkdown } from 'src/utils/markdown'
 import { useWorkspaceStore } from 'stores/workspace'
 
 defineOptions({ name: 'FileViewerPanel' })
@@ -159,6 +178,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['back', 'close', 'navigate', 'toggle-fullscreen'])
 const $q = useQuasar()
+const router = useRouter()
 const { confirm } = useConfirm()
 const workspace = useWorkspaceStore()
 const viewerRoot = ref(null)
@@ -189,10 +209,16 @@ const editable = computed(() => (
   && ['text', 'markdown'].includes(preview.value.kind)
   && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
 ))
-const markdownHtml = computed(() => renderMarkdown(preview.value.content, {
-  allowImages: false,
-  interactive: false
-}).html)
+const printUrl = computed(() => {
+  if (!props.entry?.path || preview.value.kind !== 'markdown') return undefined
+  return router.resolve({
+    name: 'markdown-print',
+    query: workspace.readRequestParams({
+      path: props.entry.path,
+      revision: preview.value.revision
+    })
+  }).href
+})
 const fileDetails = computed(() => {
   const size = props.entry?.size
   if (!Number.isFinite(size)) return props.entry?.path || ''

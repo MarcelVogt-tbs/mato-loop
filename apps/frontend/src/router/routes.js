@@ -1,6 +1,11 @@
 const routes = [
   { path: '/login', name: 'login', component: () => import('pages/AuthPage.vue'), meta: { public: true } },
   {
+    path: '/print/markdown',
+    name: 'markdown-print',
+    component: () => import('pages/MarkdownPrintPage.vue')
+  },
+  {
     path: '/',
     component: () => import('layouts/MainLayout.vue'),
     children: [

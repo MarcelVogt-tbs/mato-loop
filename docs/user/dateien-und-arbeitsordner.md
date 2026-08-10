@@ -40,7 +40,9 @@ Bis zu vier Dateien mit jeweils höchstens 64 MiB können gemeinsam hochgeladen 
 
 Unterstützte Bilder bis 5 MiB sowie geeignete UTF-8-Text- und Markdown-Dateien bis 1 MiB besitzen eine Vorschau. Das Limit von 1 MiB gilt auch für den integrierten Texteditor. Andere Formate stehen zum Download bereit. Textdateien werden mit einer Revisionsprüfung gespeichert, damit parallele Änderungen nicht unbemerkt überschrieben werden.
 
-Markdown kann als Quelltext oder visuell bearbeitet werden. Enthält das Dokument Bildreferenzen, bleibt es aus Sicherheitsgründen im Quelltextmodus.
+Markdown kann als Quelltext oder visuell bearbeitet werden. Die gespeicherte Vorschau stellt Mermaid-Codeblöcke als Diagramme dar. Enthält das Dokument Bildreferenzen, bleibt es aus Sicherheitsgründen im Quelltextmodus.
+
+Gespeicherte Markdown-Dateien können über **Als PDF speichern** in einer hellen Druckansicht geöffnet werden. Nach dem Rendern von Formeln und Mermaid-Diagrammen erscheint der Druckdialog des Browsers; dort kann das Dokument als PDF gespeichert werden. Ungespeicherte Änderungen werden nicht exportiert.
 
 !!! warning "Löschen"
     Das Löschen eines Ordners wirkt rekursiv. Prüfen Sie den angezeigten Pfad vor der Bestätigung.

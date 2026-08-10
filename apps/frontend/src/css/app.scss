@@ -1185,6 +1185,59 @@ body.body--dark .app-floating-control--flat {
   max-width: 100%;
 }
 
+.chat-markdown__mermaid-block {
+  max-width: 100%;
+  margin: 0 0 0.9em;
+  border: 1px solid var(--app-surface-border);
+  border-radius: 10px;
+  background: var(--app-surface);
+  overflow: hidden;
+}
+
+.chat-markdown__mermaid-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 7px 7px 0;
+}
+
+.chat-markdown__mermaid-actions .chat-markdown__code-copy {
+  position: static;
+}
+
+.chat-markdown__mermaid-output {
+  max-width: 100%;
+  padding: 14px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-markdown__mermaid-output svg {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.chat-markdown__mermaid-output pre {
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 0;
+  padding: 13px 15px;
+  border-radius: 8px;
+  background: var(--app-code-bg);
+  color: var(--app-code-text);
+  overflow: auto;
+  white-space: pre;
+  line-height: 1.55;
+}
+
+.chat-markdown__mermaid-error {
+  margin-bottom: 10px;
+  color: var(--q-negative);
+  font-weight: 600;
+}
+
 .chat-markdown__code-copy {
   position: absolute;
   z-index: 1;
@@ -1353,6 +1406,10 @@ body.body--dark .app-floating-control--flat {
   .chat-markdown__code-copy {
     min-height: 44px;
     padding-inline: 12px;
+  }
+
+  .chat-markdown__mermaid-output {
+    padding: 10px;
   }
 
   .chat-markdown__image-button {
@@ -2457,6 +2514,119 @@ body.body--dark .file-viewer .app-muted {
 
 .app-file-dialog {
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+.markdown-print-page {
+  min-height: 100vh;
+  background: #fff;
+  color: rgba(15, 23, 42, 0.94);
+  color-scheme: light;
+  --app-code-bg: #f3f6fa;
+  --app-code-text: #24292f;
+  --app-muted: rgba(15, 23, 42, 0.6);
+  --app-surface: #fff;
+  --app-surface-border: rgba(15, 23, 42, 0.12);
+  --app-surface-tonal: rgba(37, 99, 235, 0.045);
+  --app-text: rgba(15, 23, 42, 0.94);
+}
+
+.markdown-print__toolbar {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background: #fff;
+}
+
+.markdown-print__state {
+  min-height: calc(100vh - 51px);
+}
+
+.markdown-print__document {
+  box-sizing: border-box;
+  width: min(900px, 100%);
+  margin: 0 auto;
+  padding: 32px clamp(18px, 4vw, 48px) 64px;
+}
+
+@page {
+  size: A4;
+  margin: 15mm 14mm 18mm;
+}
+
+@media print {
+  html,
+  body,
+  #q-app,
+  .markdown-print-page {
+    min-height: 0;
+    background: #fff !important;
+  }
+
+  .markdown-print-page {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .markdown-print__toolbar {
+    display: none !important;
+  }
+
+  .markdown-print__document {
+    width: auto;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .markdown-print-page .chat-markdown h1,
+  .markdown-print-page .chat-markdown h2,
+  .markdown-print-page .chat-markdown h3,
+  .markdown-print-page .chat-markdown h4,
+  .markdown-print-page .chat-markdown h5,
+  .markdown-print-page .chat-markdown h6 {
+    break-after: avoid-page;
+  }
+
+  .markdown-print-page .chat-markdown p,
+  .markdown-print-page .chat-markdown li {
+    orphans: 3;
+    widows: 3;
+  }
+
+  .markdown-print-page .chat-markdown blockquote,
+  .markdown-print-page .chat-markdown pre,
+  .markdown-print-page .chat-markdown .katex-display,
+  .markdown-print-page .chat-markdown__mermaid-block {
+    break-inside: avoid-page;
+  }
+
+  .markdown-print-page .chat-markdown table {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+    overflow: visible;
+  }
+
+  .markdown-print-page .chat-markdown th,
+  .markdown-print-page .chat-markdown td {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .markdown-print-page .chat-markdown pre,
+  .markdown-print-page .chat-markdown__mermaid-output pre {
+    overflow: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .markdown-print-page .chat-markdown__mermaid-output {
+    overflow: visible;
+  }
+
+  .markdown-print-page .chat-markdown__mermaid-output svg {
+    max-height: 240mm;
+  }
 }
 
 .approval-resource {

@@ -264,6 +264,24 @@ def test_failed_responses_result_raises_safe_provider_error() -> None:
         _responses_result({"status": "failed", "error": {"message": "secret upstream"}})
 
     assert exc_info.value.public_code == "provider.requestFailed"
+    assert exc_info.value.status_code == 503
+    assert "secret upstream" not in str(exc_info.value)
+
+
+def test_rate_limited_responses_result_preserves_safe_error_code() -> None:
+    with pytest.raises(ProviderError) as exc_info:
+        _responses_result(
+            {
+                "status": "failed",
+                "error": {
+                    "code": "rate_limit_exceeded",
+                    "message": "secret upstream",
+                },
+            }
+        )
+
+    assert exc_info.value.public_code == "provider.rateLimited"
+    assert exc_info.value.status_code == 429
     assert "secret upstream" not in str(exc_info.value)
 
 

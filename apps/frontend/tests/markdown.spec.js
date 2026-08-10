@@ -9,6 +9,8 @@ import {
   renderMarkdown,
   safeMarkdownLinkUrl
 } from '../src/utils/markdown'
+import { markdownPrintRequest } from '../src/utils/markdown-print'
+import { sanitizeMermaidSvg, validateMermaidSource } from '../src/utils/mermaid'
 
 const internalImage = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
 
@@ -89,6 +91,35 @@ describe('assistant markdown rendering', () => {
     expect(codeBlocks).toEqual(['erster Block\n', 'zweiter Block\n'])
     expect(html).not.toContain('erster Block"')
     expect(html).not.toContain('zweiter Block"')
+  })
+
+  it('collects completed Mermaid fences without exposing their source in attributes', () => {
+    const source = 'flowchart LR\n  A["<script>alert(1)</script>"] --> B\n'
+    const { root, codeBlocks, html, mermaidBlocks } = renderedDom(`\`\`\`mermaid\n${source}\`\`\``)
+
+    expect(root.querySelector('[data-markdown-mermaid]')?.dataset.markdownMermaid).toBe('0')
+    expect(root.querySelector('[data-markdown-code]')?.getAttribute('aria-label')).toBe('Mermaid-Quelltext kopieren')
+    expect(root.querySelector('script')).toBeNull()
+    expect(codeBlocks).toEqual([source])
+    expect(mermaidBlocks).toEqual([source])
+    expect(html).not.toContain('data-markdown-mermaid="flowchart')
+    expect(html).not.toContain('data-markdown-code="flowchart')
+  })
+
+  it('keeps Mermaid as code while streaming and renders it in static previews after completion', () => {
+    const source = 'flowchart LR\n  A --> B\n'
+    const streaming = renderedDom(`\`\`\`mermaid\n${source}\`\`\``, { streaming: true })
+    expect(streaming.root.querySelector('[data-markdown-mermaid]')).toBeNull()
+    expect(streaming.root.querySelector('pre')?.textContent).toContain('A --> B')
+    expect(streaming.mermaidBlocks).toEqual([])
+
+    const preview = renderedDom(`\`\`\`mermaid\n${source}\`\`\``, { interactive: false })
+    expect(preview.root.querySelector('[data-markdown-mermaid]')).not.toBeNull()
+    expect(preview.root.querySelector('[data-markdown-code]')).toBeNull()
+    expect(preview.mermaidBlocks).toEqual([source])
+
+    const similar = renderedDom(`\`\`\`mermaidish\n${source}\`\`\``)
+    expect(similar.root.querySelector('[data-markdown-mermaid]')).toBeNull()
   })
 
   it('renders inline TeX with dollar and bracket delimiters', () => {
@@ -269,6 +300,59 @@ describe('assistant markdown rendering', () => {
 
     const nextRender = renderedDom('[Primärquelle](https://example.com/report)').root
     expect(nextRender.querySelector('.chat-markdown__source-link')).toBeNull()
+  })
+})
+
+describe('Mermaid safety', () => {
+  it('rejects oversized and content-controlled Mermaid configuration', () => {
+    expect(() => validateMermaidSource('%%{init: {"securityLevel": "loose"}}%%\ngraph LR\nA-->B')).toThrow()
+    expect(() => validateMermaidSource('---\nconfig:\n  securityLevel: loose\n---\ngraph LR\nA-->B')).toThrow()
+    expect(validateMermaidSource('graph LR\nA-->B')).toBe('graph LR\nA-->B')
+  })
+
+  it('sanitizes active and external SVG content while preserving local markers', () => {
+    const svg = sanitizeMermaidSvg(`
+      <svg xmlns="http://www.w3.org/2000/svg" id="diagram" viewBox="0 0 10 10" onload="alert(0)">
+        <style>#diagram path { stroke: black; }</style>
+        <marker id="arrow"><path d="M0 0L1 1" /></marker>
+        <script>alert(1)</script>
+        <foreignObject><div>HTML</div></foreignObject>
+        <image href="https://tracking.example/pixel.png" />
+        <a href="javascript:alert(2)"><text>Link</text></a>
+        <path marker-end="url(#arrow)" onclick="alert(3)" d="M0 0L10 10" />
+      </svg>
+    `)
+    const root = document.createElement('div')
+    root.innerHTML = svg
+
+    expect(root.querySelector('script, foreignObject, image, a, [onclick], [onload]')).toBeNull()
+    expect(root.querySelector('svg')?.id).toBe('diagram')
+    expect(root.querySelector('style')?.textContent).toContain('#diagram path')
+    expect(root.querySelector('marker')?.id).toBe('arrow')
+    expect(root.querySelector('path[marker-end]')?.getAttribute('marker-end')).toBe('url(#arrow)')
+  })
+})
+
+describe('Markdown print requests', () => {
+  it('keeps only the authenticated file context and expected revision', () => {
+    const revision = 'a'.repeat(64)
+    expect(markdownPrintRequest({
+      content: '# must not travel',
+      path: 'files/report.md',
+      revision,
+      root_identity: 'root-a',
+      scope: 'session',
+      session_id: 'session-a'
+    })).toEqual({
+      expectedRevision: revision,
+      params: {
+        path: 'files/report.md',
+        root_identity: 'root-a',
+        scope: 'session',
+        session_id: 'session-a'
+      }
+    })
+    expect(markdownPrintRequest({ path: 'report.md', scope: 'invalid' })).toBeNull()
   })
 })
 

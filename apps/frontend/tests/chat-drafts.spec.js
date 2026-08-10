@@ -86,9 +86,17 @@ describe('chat drafts', () => {
     const firstToolStartedAt = '2026-07-27T12:00:10.000Z'
     const secondToolStartedAt = '2026-07-27T12:00:12.000Z'
 
+    expect(chat.activity).toMatchObject({ providerAttempt: null, providerAttemptTotal: null })
+
     chat.setActivity('waiting_model', { modelRequest: 2, startedAt: modelStartedAt })
-    chat.setActivity('waiting_model', { modelRequest: 3, startedAt: repeatedEventAt })
+    chat.setActivity('waiting_model', {
+      modelRequest: 2,
+      providerAttempt: 2,
+      providerAttemptTotal: 3,
+      startedAt: repeatedEventAt
+    })
     expect(chat.activity.startedAt).toBe(modelStartedAt)
+    expect(chat.activity).toMatchObject({ providerAttempt: 2, providerAttemptTotal: 3 })
 
     chat.setActivity('processing_tool', {
       tool: 'read_file', toolCallId: 'call-1', index: 0, total: 2, startedAt: firstToolStartedAt
@@ -684,8 +692,15 @@ describe('chat drafts', () => {
     expect(chat.streamModelName).toBe('Streaming-Modell')
     expect(chat.sessions[0].activeRunStatus).toBe('running')
 
-    source.emit('run.phase', { phase: 'waiting_model', modelRequest: 1 })
-    expect(chat.activity).toMatchObject({ phase: 'waiting_model', modelRequest: 1 })
+    source.emit('run.phase', {
+      phase: 'waiting_model', modelRequest: 1, providerAttempt: 2, providerAttemptTotal: 3
+    })
+    expect(chat.activity).toMatchObject({
+      phase: 'waiting_model',
+      modelRequest: 1,
+      providerAttempt: 2,
+      providerAttemptTotal: 3
+    })
 
     source.emit('reasoning.updated', {
       reasoning: { kind: 'content', text: 'Plan prüfen', status: 'streaming' }

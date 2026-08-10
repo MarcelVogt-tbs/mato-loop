@@ -26,7 +26,7 @@ usage() {
         "  status              Show service status" \
         "  doctor              Check pgvector and the embedding index" \
         "  db [args]           Run Alembic" \
-        "  lock backend        Update the backend lockfile" \
+        "  lock <target>       Update the backend or frontend lockfile" \
         "  check [target]      Check the backend and/or frontend" \
         "  test [target]       Test the backend, frontend, or local RAG stack" \
         "  eval-prompts [args] Run serial live prompt evaluations"
@@ -97,11 +97,11 @@ case "${1:-}" in
         ;;
     db) shift; compose run --rm backend uv run alembic "$@" ;;
     lock)
-        if [[ "${2:-}" != "backend" ]]; then
-            printf 'Unbekanntes Lock-Target: %s\n' "${2:-}" >&2
-            exit 1
-        fi
-        compose run --rm --no-deps backend uv lock
+        case "${2:-}" in
+            backend) compose run --rm --no-deps backend uv lock ;;
+            frontend) run_frontend "yarn install --mode=update-lockfile" ;;
+            *) printf 'Unbekanntes Lock-Target: %s\n' "${2:-}" >&2; exit 1 ;;
+        esac
         ;;
     check) run_target check "${2:-all}" ;;
     test) run_target test "${2:-all}" ;;

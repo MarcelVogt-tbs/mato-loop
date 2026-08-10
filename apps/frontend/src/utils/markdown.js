@@ -19,6 +19,7 @@ const ALLOWED_TAGS = [
 const ALLOWED_ATTR = [
   'accent', 'accentunder', 'alt', 'aria-hidden', 'aria-label', 'aria-live', 'checked',
   'class', 'columnalign', 'columnlines', 'columnspacing', 'd', 'data-markdown-code', 'data-markdown-image',
+  'data-markdown-mermaid',
   'decoding', 'disabled', 'display', 'displaystyle', 'encoding', 'fence', 'height',
   'href', 'loading', 'lspace', 'mathbackground', 'mathcolor', 'mathvariant', 'maxsize',
   'minsize', 'movablelimits', 'preserveaspectratio', 'referrerpolicy', 'rel', 'role',
@@ -29,6 +30,7 @@ const LINK_PROTOCOL = /^(?:https?:|mailto:)/i
 const IMAGE_PROTOCOL = /^https?:/i
 const SAFE_FRAGMENT = /^#[A-Za-z0-9_-]+$/
 const LANGUAGE_NAME = /^[A-Za-z0-9_+-]+$/
+const MAX_MERMAID_BLOCKS = 12
 
 function currentOrigin() {
   return typeof window !== 'undefined' && window.location?.origin
@@ -227,6 +229,30 @@ function imageHtml(image, alt, title, requestId = null) {
 function configureRenderRules() {
   markdown.renderer.rules.fence = (tokens, index, options, env) => {
     const token = tokens[index]
+    const language = normalizedLanguage(token.info).toLowerCase()
+    if (
+      language === 'mermaid'
+      && !env.streaming
+      && env.mermaidBlocks.length < MAX_MERMAID_BLOCKS
+    ) {
+      const mermaidIndex = String(env.mermaidBlocks.length)
+      env.mermaidBlocks.push(token.content)
+      const copyButton = env.interactive
+        ? (() => {
+            const codeIndex = String(env.codeBlocks.length)
+            env.codeBlocks.push(token.content)
+            return `<div class="chat-markdown__mermaid-actions">
+              <button type="button" class="chat-markdown__code-copy" data-markdown-code="${codeIndex}" aria-label="Mermaid-Quelltext kopieren">Quelltext kopieren</button>
+            </div>`
+          })()
+        : ''
+      return `<div class="chat-markdown__mermaid-block">
+        ${copyButton}
+        <div class="chat-markdown__mermaid-output" data-markdown-mermaid="${mermaidIndex}" role="status" aria-live="polite">
+          ${highlightedCode(token.content, token.info)}
+        </div>
+      </div>`
+    }
     if (!env.interactive) return highlightedCode(token.content, token.info)
     const codeIndex = String(env.codeBlocks.length)
     env.codeBlocks.push(token.content)
@@ -331,6 +357,7 @@ export function renderMarkdown(
   const env = {
     codeBlocks: [],
     externalImages: [],
+    mermaidBlocks: [],
     allowImages,
     imageStates,
     interactive,
@@ -346,5 +373,10 @@ export function renderMarkdown(
     RETURN_TRUSTED_TYPE: false,
     SANITIZE_NAMED_PROPS: true
   })
-  return { codeBlocks: env.codeBlocks, html, externalImages: env.externalImages }
+  return {
+    codeBlocks: env.codeBlocks,
+    html,
+    externalImages: env.externalImages,
+    mermaidBlocks: env.mermaidBlocks
+  }
 }

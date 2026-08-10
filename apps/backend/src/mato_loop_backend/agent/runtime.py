@@ -1794,11 +1794,26 @@ class AgentRuntime:
                 )
                 visible_response.reasoning = payload
 
+            model_request = model_requests + 1
             await _publish_run_phase(
                 run.id,
                 "waiting_model",
-                modelRequest=model_requests + 1,
+                modelRequest=model_request,
             )
+
+            async def on_provider_retry(
+                attempt: int,
+                total: int,
+                model_request: int = model_request,
+            ) -> None:
+                await _publish_run_phase(
+                    run.id,
+                    "waiting_model",
+                    modelRequest=model_request,
+                    providerAttempt=attempt,
+                    providerAttemptTotal=total,
+                )
+
             if (
                 model_trust_level == TrustLevel.PUBLIC
                 and chat_session.private_integration_data_used
@@ -1822,6 +1837,7 @@ class AgentRuntime:
                 ),
                 on_delta=on_delta,
                 on_reasoning=on_reasoning,
+                on_retry=on_provider_retry,
                 timeout=runtime_settings.request_timeout_seconds,
                 target_trust_level=model_trust_level,
                 pseudonymization_enabled=run_pseudonymization_enabled,

@@ -1,5 +1,6 @@
 <template>
   <div
+    ref="contentRoot"
     class="chat-markdown"
     @click="handleClick"
     @error.capture="handleImageError"
@@ -11,10 +12,11 @@
 import 'katex/dist/katex.min.css'
 
 import { copyToClipboard, useQuasar } from 'quasar'
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import { renderMarkdown } from 'src/utils/markdown'
 import { verifyExternalImage } from 'src/utils/image-verification'
+import { renderMermaid } from 'src/utils/mermaid'
 
 defineOptions({ name: 'MessageContent' })
 
@@ -23,6 +25,15 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  allowImages: {
+    type: Boolean,
+    default: true
+  },
+  interactive: {
+    type: Boolean,
+    default: true
+  },
+  forceLight: Boolean,
   streaming: Boolean,
   researchSources: {
     type: Array,
@@ -33,22 +44,59 @@ const props = defineProps({
     default: () => []
   }
 })
-const emit = defineEmits(['trust-image-origin'])
+const emit = defineEmits(['rendered', 'trust-image-origin'])
 const $q = useQuasar()
-const rendered = ref({ codeBlocks: [], html: '', externalImages: [] })
+const contentRoot = ref(null)
+const rendered = ref({ codeBlocks: [], html: '', externalImages: [], mermaidBlocks: [] })
 const imageStates = ref({})
 const verificationTasks = new Map()
 let renderFrame = null
+let renderVersion = 0
 
 function renderContent() {
   renderFrame = null
+  const version = ++renderVersion
   rendered.value = renderMarkdown(props.content, {
+    allowImages: props.allowImages,
     imageStates: imageStates.value,
+    interactive: props.interactive,
     researchSources: props.researchSources,
     streaming: props.streaming,
     trustedImageOrigins: props.trustedImageOrigins
   })
   syncImageVerifications()
+  hydrateMermaid(version)
+}
+
+async function hydrateMermaid(version) {
+  await nextTick()
+  if (version !== renderVersion || !contentRoot.value) return
+  const blocks = rendered.value.mermaidBlocks
+  for (const placeholder of contentRoot.value.querySelectorAll('[data-markdown-mermaid]')) {
+    const source = blocks[Number(placeholder.dataset.markdownMermaid)]
+    if (typeof source !== 'string') continue
+    try {
+      const svg = await renderMermaid(source, {
+        dark: !props.forceLight && $q.dark.isActive
+      })
+      if (version !== renderVersion || !placeholder.isConnected) return
+      placeholder.innerHTML = svg
+      placeholder.removeAttribute('aria-live')
+      placeholder.removeAttribute('role')
+      const diagram = placeholder.querySelector('svg')
+      if (diagram && !diagram.hasAttribute('aria-label') && !diagram.hasAttribute('aria-labelledby')) {
+        diagram.setAttribute('aria-label', 'Mermaid-Diagramm')
+      }
+    } catch {
+      if (version !== renderVersion || !placeholder.isConnected) return
+      const error = document.createElement('div')
+      error.className = 'chat-markdown__mermaid-error'
+      error.textContent = 'Das Diagramm konnte nicht dargestellt werden.'
+      placeholder.prepend(error)
+      placeholder.setAttribute('role', 'alert')
+    }
+  }
+  if (version === renderVersion) emit('rendered')
 }
 
 function scheduleRender() {
@@ -128,12 +176,22 @@ function handleImageError(event) {
 }
 
 watch(
-  () => [props.content, props.researchSources, props.streaming, props.trustedImageOrigins],
+  () => [
+    props.allowImages,
+    props.content,
+    props.forceLight,
+    props.interactive,
+    props.researchSources,
+    props.streaming,
+    props.trustedImageOrigins,
+    $q.dark.isActive
+  ],
   scheduleRender,
   { immediate: true }
 )
 
 onBeforeUnmount(() => {
+  renderVersion += 1
   if (renderFrame !== null) window.cancelAnimationFrame(renderFrame)
   for (const task of verificationTasks.values()) task.cancel()
   verificationTasks.clear()

@@ -109,6 +109,8 @@ function emptyActivity(revision = 0) {
     tool: null,
     toolCallId: null,
     modelRequest: null,
+    providerAttempt: null,
+    providerAttemptTotal: null,
     index: null,
     total: null,
     revision
@@ -259,6 +261,10 @@ export const useChatStore = defineStore('chat', {
         tool: details.tool || null,
         toolCallId: details.toolCallId || null,
         modelRequest: details.modelRequest || null,
+        providerAttempt: Number.isInteger(details.providerAttempt) ? details.providerAttempt : null,
+        providerAttemptTotal: Number.isInteger(details.providerAttemptTotal)
+          ? details.providerAttemptTotal
+          : null,
         index: Number.isInteger(details.index) ? details.index : null,
         total: Number.isInteger(details.total) ? details.total : null
       }

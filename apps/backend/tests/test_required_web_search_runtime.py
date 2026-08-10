@@ -196,6 +196,30 @@ def _assistant_messages(db) -> list[Message]:
     ]
 
 
+async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None:
+    db, run, requests, _projections, events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="Fertig", finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+    events.clear()
+    await requests[0]["on_retry"](2, 3)
+
+    started_at = events[0].pop("startedAt")
+    assert isinstance(started_at, str)
+    assert events == [
+        {
+            "type": "run.phase",
+            "phase": "waiting_model",
+            "modelRequest": 1,
+            "providerAttempt": 2,
+            "providerAttemptTotal": 3,
+        }
+    ]
+
+
 async def test_required_search_loads_matching_skill_before_search(monkeypatch) -> None:
     skill = SkillDefinition(
         name="Current research",
