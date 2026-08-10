@@ -13,6 +13,7 @@ import warnings
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath
+from typing import Literal
 from uuid import UUID, uuid4
 
 from PIL import Image
@@ -93,6 +94,7 @@ _CATEGORY_DIRECTORIES = {
     "generated": "generated",
     "downloaded": "downloads",
 }
+_DERIVED_FILENAMES = {"audio.wav", "content.txt", "diagram.svg"}
 _STORAGE_PATH_PATTERN = re.compile(
     r"^(attachments|generated|downloads)/"
     r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/([^/]+)$"
@@ -258,6 +260,7 @@ def _safe_metadata(metadata: dict | None) -> dict:
             "sampleWidth",
             "size",
             "sourceAttachmentIds",
+            "sourceSha256",
             "targetTrustLevel",
         }:
             continue
@@ -435,7 +438,7 @@ class AttachmentStorage:
     ) -> dict[str, str]:
         if not files:
             return {}
-        if set(files) - {"content.txt", "audio.wav"}:
+        if set(files) - _DERIVED_FILENAMES:
             raise AttachmentStorageError("Invalid derived filename")
         root = self._derived_root(session_id)
         target = root / str(attachment_id)
@@ -477,7 +480,7 @@ class AttachmentStorage:
         if not derived_path.startswith(expected_prefix):
             raise AttachmentStorageError("Invalid derived path")
         name = derived_path.removeprefix(expected_prefix)
-        if name not in {"content.txt", "audio.wav"}:
+        if name not in _DERIVED_FILENAMES:
             raise AttachmentStorageError("Invalid derived path")
         target = self._derived_root(session_id) / str(attachment_id) / name
         try:
@@ -543,12 +546,15 @@ class AttachmentService:
         position: int | None = None,
         metadata: dict | None = None,
         category: str = "user_upload",
+        purpose: Literal["attachment", "artifact"] = "attachment",
         processing_status: str | None = "ready",
     ) -> MessageAttachment:
         if not data:
             raise AttachmentError("attachment.empty")
         if len(data) > MAX_FILE_ATTACHMENT_BYTES:
             raise AttachmentError("attachment.tooLarge")
+        if purpose not in {"attachment", "artifact"}:
+            raise AttachmentError("attachment.invalidPurpose")
         attachment_id = uuid4()
         cleaned_filename = safe_filename(filename, fallback=f"attachment-{attachment_id}")
         width = height = duration_ms = None
@@ -584,7 +590,8 @@ class AttachmentService:
                     sampleWidth=processed.sample_width,
                 )
         elif kind == "file":
-            mime_type = "application/octet-stream"
+            if purpose == "attachment":
+                mime_type = "application/octet-stream"
         else:
             raise AttachmentError("attachment.unsupportedType")
         if kind == "audio" and duration_ms is None:
@@ -674,6 +681,7 @@ class AttachmentService:
             position=position,
             kind=kind,
             category=category,
+            purpose=purpose,
             processing_status=processing_status,
             mime_type=mime_type,
             size_bytes=len(data),

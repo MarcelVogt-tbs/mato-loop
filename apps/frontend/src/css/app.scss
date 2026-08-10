@@ -1185,28 +1185,57 @@ body.body--dark .app-floating-control--flat {
   max-width: 100%;
 }
 
+.markdown-viewer {
+  position: relative;
+}
+
+.markdown-viewer__actions {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  padding: 2px;
+  border: 1px solid var(--app-surface-border);
+  border-radius: 10px;
+  align-items: center;
+  opacity: 0;
+  background: var(--app-surface);
+  color: var(--app-muted);
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.markdown-viewer:hover > .markdown-viewer__actions,
+.markdown-viewer__actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.markdown-viewer__mode-tab,
+.markdown-viewer__copy {
+  min-width: 30px;
+  min-height: 30px;
+  border-radius: 7px;
+}
+
+.markdown-viewer__mode-tab {
+  padding: 0 4px;
+}
+
+.markdown-viewer__mode-tab--active {
+  background: var(--app-active);
+}
+
 .chat-markdown__mermaid-block {
   max-width: 100%;
   margin: 0 0 0.9em;
-  border: 1px solid var(--app-surface-border);
-  border-radius: 10px;
-  background: var(--app-surface);
-  overflow: hidden;
-}
-
-.chat-markdown__mermaid-actions {
-  display: flex;
-  justify-content: flex-end;
-  padding: 7px 7px 0;
-}
-
-.chat-markdown__mermaid-actions .chat-markdown__code-copy {
-  position: static;
 }
 
 .chat-markdown__mermaid-output {
+  position: relative;
   max-width: 100%;
-  padding: 14px;
+  padding: 0.4em 0;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -1214,22 +1243,40 @@ body.body--dark .app-floating-control--flat {
 .chat-markdown__mermaid-output svg {
   display: block;
   width: auto;
-  max-width: 100%;
+  max-width: 100% !important;
   height: auto;
   margin: 0 auto;
 }
 
-.chat-markdown__mermaid-output pre {
-  box-sizing: border-box;
-  max-width: 100%;
-  margin: 0;
-  padding: 13px 15px;
-  border-radius: 8px;
-  background: var(--app-code-bg);
-  color: var(--app-code-text);
-  overflow: auto;
-  white-space: pre;
-  line-height: 1.55;
+.chat-markdown__mermaid-fullscreen {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--app-surface-border);
+  border-radius: 50%;
+  opacity: 0;
+  background: color-mix(in srgb, var(--app-surface) 90%, transparent);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.14);
+  color: var(--app-text);
+  cursor: pointer;
+  font-size: 20px;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.chat-markdown__mermaid-block:hover .chat-markdown__mermaid-fullscreen,
+.chat-markdown__mermaid-fullscreen:focus-visible {
+  opacity: 1;
+}
+
+.chat-markdown__mermaid-fullscreen:hover {
+  background: color-mix(in srgb, var(--app-surface) 82%, var(--q-primary) 18%);
+}
+
+.chat-markdown__mermaid-status {
+  color: var(--app-muted);
 }
 
 .chat-markdown__mermaid-error {
@@ -1406,10 +1453,6 @@ body.body--dark .app-floating-control--flat {
   .chat-markdown__code-copy {
     min-height: 44px;
     padding-inline: 12px;
-  }
-
-  .chat-markdown__mermaid-output {
-    padding: 10px;
   }
 
   .chat-markdown__image-button {
@@ -2106,7 +2149,7 @@ body.body--dark .question-dock {
 }
 
 .attachment-preview__image img {
-  height: clamp(300px, 42vw, 420px);
+  max-height: clamp(300px, 42vw, 420px);
 }
 
 .attachment-preview__error {
@@ -2489,6 +2532,23 @@ body.body--dark .file-viewer .app-muted {
 }
 
 @media (pointer: coarse) {
+  .markdown-viewer__actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .markdown-viewer__mode-tab,
+  .markdown-viewer__copy {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .chat-markdown__mermaid-fullscreen {
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+  }
+
   .attachment-preview__actions .q-btn,
   .work-history__file-output .q-btn,
   .tool-call__file-actions .q-btn {
@@ -2625,8 +2685,10 @@ body.body--dark .file-viewer .app-muted {
   }
 
   .markdown-print-page .chat-markdown__mermaid-output svg {
+    max-width: 100% !important;
     max-height: 240mm;
   }
+
 }
 
 .approval-resource {
@@ -2983,8 +3045,14 @@ body.body--dark .file-viewer .app-muted {
   }
 
   .work-history__timeline {
-    max-height: min(520px, 60dvh);
+    max-height: none;
     margin-left: 2px;
     padding-right: 0;
+    overflow-y: visible;
+    overscroll-behavior: auto;
+  }
+
+  .tool-call__details {
+    max-height: none;
   }
 }

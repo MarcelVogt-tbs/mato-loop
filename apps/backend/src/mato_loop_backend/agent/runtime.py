@@ -84,6 +84,7 @@ from mato_loop_backend.memory.episode_retrieval import (
 )
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
 from mato_loop_backend.memory.service import MemoryService, memory_reference_timestamps
+from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -1157,7 +1158,7 @@ class AgentRuntime:
                             interrupted_message = Message(
                                 session_id=session_id,
                                 role="assistant",
-                                content=visible_response.content,
+                                content=canonical_assistant_content(visible_response.content),
                                 model_name=cancelled_run.model_name,
                                 generation_status="interrupted",
                                 trust_level=cancelled_run.trust_level,
@@ -1942,12 +1943,13 @@ class AgentRuntime:
                         kind=streamed_reasoning_state["kind"],
                     )
                 )
+            assistant_content = canonical_assistant_content(result.content)
             public_research = None
             if not normalized_calls:
                 public_research = _research_snapshot(
                     policy=chat_session.web_search_policy,
                     used=research_used,
-                    content=result.content,
+                    content=assistant_content,
                     sources=research_sources,
                     titles=research_source_titles,
                 )
@@ -1958,7 +1960,7 @@ class AgentRuntime:
             assistant = Message(
                 session_id=chat_session.id,
                 role="assistant",
-                content="" if hide_tool_round else result.content,
+                content="" if hide_tool_round else assistant_content,
                 model_name=run.model_name,
                 trust_level=model_trust_level.value,
                 tool_calls=serialized_calls,
@@ -1973,13 +1975,13 @@ class AgentRuntime:
             if not normalized_calls:
                 cls._cancellable_runs.discard(run.id)
             visible_response.reset()
-            if hold_response and not normalized_calls and result.content:
-                for offset in range(0, len(result.content), GATED_DELTA_CHARACTERS):
+            if hold_response and not normalized_calls and assistant.content:
+                for offset in range(0, len(assistant.content), GATED_DELTA_CHARACTERS):
                     await run_events.publish(
                         run.id,
                         {
                             "type": "message.delta",
-                            "delta": result.content[
+                            "delta": assistant.content[
                                 offset : offset + GATED_DELTA_CHARACTERS
                             ],
                         },
@@ -2811,6 +2813,7 @@ class AgentRuntime:
                                 category=(
                                     "downloaded" if call.name == "webfetch" else "generated"
                                 ),
+                                purpose="artifact",
                             )
                         )
                     commit_task = asyncio.create_task(db.commit())

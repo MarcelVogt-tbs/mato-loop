@@ -255,6 +255,10 @@ class MessageAttachment(Base):
             name="category_valid",
         ),
         CheckConstraint(
+            "purpose IN ('attachment', 'artifact')",
+            name="purpose_valid",
+        ),
+        CheckConstraint(
             "processing_status IS NULL OR processing_status IN ('pending', 'ready', 'failed')",
             name="processing_status_valid",
         ),
@@ -273,6 +277,9 @@ class MessageAttachment(Base):
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default="image")
     category: Mapped[str] = mapped_column(
         String(20), nullable=False, default="user_upload", server_default="user_upload"
+    )
+    purpose: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="attachment", server_default="attachment"
     )
     processing_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)

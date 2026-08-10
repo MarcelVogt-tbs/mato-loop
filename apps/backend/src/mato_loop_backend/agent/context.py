@@ -308,6 +308,7 @@ def general_system_prompt(
     file_tools_available = bool(file_tool_names & offered_tool_names)
     parts = [
         "You are the general-purpose assistant operating inside MatoLoop. Respond in the user's language.",
+        "Return response Markdown directly. Never wrap the complete response in a `markdown` code fence.",
         "The chat renders fenced Mermaid blocks. Use one when the user requests a diagram or when it "
         "materially clarifies a complex flow, timeline, state model, or architecture. Keep essential "
         "explanation in text and never add a diagram only as decoration. Return valid Mermaid source "

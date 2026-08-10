@@ -122,6 +122,7 @@ _MESSAGES = {
 _NAMESPACE_MESSAGES = {
     "agent": "The agent run could not be completed.",
     "approval": "The approval request could not be completed.",
+    "artifact": "The artifact request could not be completed.",
     "attachment": "The attachment request could not be completed.",
     "auth": "Authentication failed.",
     "file": "The file operation could not be completed.",

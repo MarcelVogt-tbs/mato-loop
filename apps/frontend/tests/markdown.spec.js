@@ -6,11 +6,17 @@ import { verifyExternalImage } from '../src/utils/image-verification'
 import {
   classifyMarkdownImageUrl,
   containsMarkdownImage,
+  containsMermaidFence,
   renderMarkdown,
   safeMarkdownLinkUrl
 } from '../src/utils/markdown'
 import { markdownPrintRequest } from '../src/utils/markdown-print'
-import { sanitizeMermaidSvg, validateMermaidSource } from '../src/utils/mermaid'
+import {
+  MAX_MERMAID_CACHE_ENTRIES,
+  renderMermaid,
+  sanitizeMermaidSvg,
+  validateMermaidSource
+} from '../src/utils/mermaid'
 
 const internalImage = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
 
@@ -27,6 +33,13 @@ describe('assistant markdown rendering', () => {
     expect(containsMarkdownImage('<img src="https://example.com/image.png">')).toBe(true)
     expect(containsMarkdownImage('\\![nur Text](https://example.com/image.png)')).toBe(false)
     expect(containsMarkdownImage('[normaler Link](https://example.com)')).toBe(false)
+  })
+
+  it('detects Mermaid fences for safe editor mode selection', () => {
+    expect(containsMermaidFence('Text\n\n```mermaid\ngraph TD\nA --> B\n```\n\nMehr Text')).toBe(true)
+    expect(containsMermaidFence('~~~MERMAID extra\ngraph TD\n~~~')).toBe(true)
+    expect(containsMermaidFence('```mermaid\nnoch offen')).toBe(true)
+    expect(containsMermaidFence('`mermaid` und ```mermaidish\nText\n```')).toBe(false)
   })
 
   it('blocks all markdown images in static file previews', () => {
@@ -98,20 +111,33 @@ describe('assistant markdown rendering', () => {
     const { root, codeBlocks, html, mermaidBlocks } = renderedDom(`\`\`\`mermaid\n${source}\`\`\``)
 
     expect(root.querySelector('[data-markdown-mermaid]')?.dataset.markdownMermaid).toBe('0')
-    expect(root.querySelector('[data-markdown-code]')?.getAttribute('aria-label')).toBe('Mermaid-Quelltext kopieren')
+    expect(root.querySelector('.chat-markdown__mermaid-block button, .chat-markdown__mermaid-block pre')).toBeNull()
     expect(root.querySelector('script')).toBeNull()
-    expect(codeBlocks).toEqual([source])
+    expect(codeBlocks).toEqual([])
     expect(mermaidBlocks).toEqual([source])
     expect(html).not.toContain('data-markdown-mermaid="flowchart')
-    expect(html).not.toContain('data-markdown-code="flowchart')
   })
 
-  it('keeps Mermaid as code while streaming and renders it in static previews after completion', () => {
-    const source = 'flowchart LR\n  A --> B\n'
-    const streaming = renderedDom(`\`\`\`mermaid\n${source}\`\`\``, { streaming: true })
+  it('shows only progress for unfinished Mermaid fences in preview mode', () => {
+    const source = 'flowchart LR\n  A["<script>alert(1)</script>"] --> B\n'
+    const streaming = renderedDom(`\`\`\`mermaid\n${source}`, { streaming: true })
     expect(streaming.root.querySelector('[data-markdown-mermaid]')).toBeNull()
-    expect(streaming.root.querySelector('pre')?.textContent).toContain('A --> B')
-    expect(streaming.mermaidBlocks).toEqual([])
+    expect(streaming.root.querySelector('[role="status"]')?.textContent.trim()).toBe('Diagramm wird erstellt …')
+    expect(streaming.root.querySelector('button, pre')).toBeNull()
+    expect(streaming.root.querySelector('script')).toBeNull()
+    expect(streaming.mermaidBlocks).toEqual([source])
+
+    const falseClosingFence = renderedDom(`\`\`\`mermaid\n${source}\`\`\` noch nicht`, { streaming: true })
+    expect(falseClosingFence.root.querySelector('[data-markdown-mermaid]')).toBeNull()
+    expect(falseClosingFence.root.textContent).toContain('Diagramm wird erstellt …')
+  })
+
+  it('renders a genuinely closed Mermaid fence while streaming', () => {
+    const source = 'flowchart LR\n  A --> B\n'
+    const streaming = renderedDom(`\`\`\`mermaid\n${source}\`\`\`\``, { streaming: true })
+    expect(streaming.root.querySelector('[data-markdown-mermaid]')).not.toBeNull()
+    expect(streaming.root.querySelector('.chat-markdown__mermaid-block button')).toBeNull()
+    expect(streaming.mermaidBlocks).toEqual([source])
 
     const preview = renderedDom(`\`\`\`mermaid\n${source}\`\`\``, { interactive: false })
     expect(preview.root.querySelector('[data-markdown-mermaid]')).not.toBeNull()
@@ -313,7 +339,7 @@ describe('Mermaid safety', () => {
   it('sanitizes active and external SVG content while preserving local markers', () => {
     const svg = sanitizeMermaidSvg(`
       <svg xmlns="http://www.w3.org/2000/svg" id="diagram" viewBox="0 0 10 10" onload="alert(0)">
-        <style>#diagram path { stroke: black; }</style>
+        <style>@-webkit-keyframes pulse { from { opacity: 0; } } #diagram path { animation-name: pulse; stroke: black; }</style>
         <marker id="arrow"><path d="M0 0L1 1" /></marker>
         <script>alert(1)</script>
         <foreignObject><div>HTML</div></foreignObject>
@@ -328,8 +354,28 @@ describe('Mermaid safety', () => {
     expect(root.querySelector('script, foreignObject, image, a, [onclick], [onload]')).toBeNull()
     expect(root.querySelector('svg')?.id).toBe('diagram')
     expect(root.querySelector('style')?.textContent).toContain('#diagram path')
+    expect(root.querySelector('style')?.textContent).not.toMatch(/@(?:-webkit-)?keyframes|animation(?:-[\w-]+)?\s*:/i)
     expect(root.querySelector('marker')?.id).toBe('arrow')
     expect(root.querySelector('path[marker-end]')?.getAttribute('marker-end')).toBe('url(#arrow)')
+    expect(root.querySelector('svg')?.getAttribute('width')).toBe('10')
+  })
+
+  it('shares render promises by source and theme with a strict cache bound', async () => {
+    const repeated = '%%{cache-test-repeated'
+    const first = renderMermaid(repeated)
+    expect(renderMermaid(repeated)).toBe(first)
+    expect(renderMermaid(repeated, { dark: true })).not.toBe(first)
+    await Promise.allSettled([first, renderMermaid(repeated, { dark: true })])
+
+    const sources = Array.from(
+      { length: MAX_MERMAID_CACHE_ENTRIES + 1 },
+      (_, index) => `%%{cache-bound-${index}`
+    )
+    const tasks = sources.map((source) => renderMermaid(source))
+    await Promise.allSettled(tasks)
+    const afterEviction = renderMermaid(sources[0])
+    expect(afterEviction).not.toBe(tasks[0])
+    await Promise.allSettled([afterEviction])
   })
 })
 

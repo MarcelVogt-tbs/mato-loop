@@ -196,6 +196,22 @@ def _assistant_messages(db) -> list[Message]:
     ]
 
 
+async def test_completed_response_persists_canonical_markdown(monkeypatch) -> None:
+    wrapped = "````markdown\n# Document\n\n```mermaid\ngraph TD\nA --> B\n```\n````"
+    expected = "# Document\n\n```mermaid\ngraph TD\nA --> B\n```\n"
+    db, run, _requests, _projections, events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content=wrapped, finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert _assistant_messages(db)[0].content == expected
+    completed = next(event for event in events if event.get("type") == "message.completed")
+    assert completed["message"]["content"] == expected
+
+
 async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None:
     db, run, requests, _projections, events = await _runtime_setup(
         monkeypatch,

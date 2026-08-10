@@ -20,7 +20,7 @@ const ALLOWED_ATTR = [
   'accent', 'accentunder', 'alt', 'aria-hidden', 'aria-label', 'aria-live', 'checked',
   'class', 'columnalign', 'columnlines', 'columnspacing', 'd', 'data-markdown-code', 'data-markdown-image',
   'data-markdown-mermaid',
-  'decoding', 'disabled', 'display', 'displaystyle', 'encoding', 'fence', 'height',
+  'decoding', 'disabled', 'display', 'displaystyle', 'encoding', 'fence', 'height', 'hidden',
   'href', 'loading', 'lspace', 'mathbackground', 'mathcolor', 'mathvariant', 'maxsize',
   'minsize', 'movablelimits', 'preserveaspectratio', 'referrerpolicy', 'rel', 'role',
   'rowlines', 'rowspacing', 'scriptlevel', 'separator', 'src', 'stretchy', 'style',
@@ -62,6 +62,20 @@ function highlightedCode(source, languageName) {
     }
   }
   return `<pre class="chat-markdown__code"><code>${escapeHtml(source)}</code></pre>`
+}
+
+function isClosedStreamingFence(token, source) {
+  const endLine = token.map?.[1]
+  const marker = token.markup
+  if (!endLine || !marker) return false
+  const line = String(source || '').split(/\r?\n/)[endLine - 1]
+  if (line === undefined) return false
+  const candidate = line.trimStart()
+  let markerLength = 0
+  while (candidate[markerLength] === marker[0]) markerLength += 1
+  return markerLength >= marker.length
+    && candidate.slice(markerLength).trim() === ''
+    && line.length - candidate.length <= 3
 }
 
 function renderedMath(content, displayMode) {
@@ -232,24 +246,20 @@ function configureRenderRules() {
     const language = normalizedLanguage(token.info).toLowerCase()
     if (
       language === 'mermaid'
-      && !env.streaming
       && env.mermaidBlocks.length < MAX_MERMAID_BLOCKS
     ) {
       const mermaidIndex = String(env.mermaidBlocks.length)
       env.mermaidBlocks.push(token.content)
-      const copyButton = env.interactive
-        ? (() => {
-            const codeIndex = String(env.codeBlocks.length)
-            env.codeBlocks.push(token.content)
-            return `<div class="chat-markdown__mermaid-actions">
-              <button type="button" class="chat-markdown__code-copy" data-markdown-code="${codeIndex}" aria-label="Mermaid-Quelltext kopieren">Quelltext kopieren</button>
-            </div>`
-          })()
-        : ''
+      if (env.streaming && !isClosedStreamingFence(token, env.source)) {
+        return `<div class="chat-markdown__mermaid-block chat-markdown__mermaid-block--streaming">
+          <div class="chat-markdown__mermaid-output" role="status" aria-live="polite">
+            <span class="chat-markdown__mermaid-status">Diagramm wird erstellt …</span>
+          </div>
+        </div>`
+      }
       return `<div class="chat-markdown__mermaid-block">
-        ${copyButton}
         <div class="chat-markdown__mermaid-output" data-markdown-mermaid="${mermaidIndex}" role="status" aria-live="polite">
-          ${highlightedCode(token.content, token.info)}
+          <span class="chat-markdown__mermaid-status">Diagramm wird erstellt …</span>
         </div>
       </div>`
     }
@@ -338,6 +348,12 @@ function configureRenderRules() {
 
 configureRenderRules()
 
+export function containsMermaidFence(content) {
+  return markdown.parse(String(content || ''), {}).some((token) => (
+    token.type === 'fence' && normalizedLanguage(token.info).toLowerCase() === 'mermaid'
+  ))
+}
+
 export function renderMarkdown(
   content,
   {
@@ -363,6 +379,7 @@ export function renderMarkdown(
     interactive,
     researchSources: sourceMap,
     streaming,
+    source: String(content || ''),
     trustedOrigins: new Set(trustedImageOrigins)
   }
   const rendered = markdown.render(String(content || ''), env)

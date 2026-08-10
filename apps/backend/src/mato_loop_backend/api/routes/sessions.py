@@ -36,6 +36,7 @@ from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
 from mato_loop_backend.integrations import WebFetchError, canonicalize_url
 from mato_loop_backend.memory import effective_memory
+from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -420,7 +421,13 @@ def message_payload(item: Message) -> dict[str, Any]:
         "id": str(item.id),
         "role": item.role,
         "kind": "runtime_error" if error else "message",
-        "content": error.message if error else item.content,
+        "content": (
+            error.message
+            if error
+            else canonical_assistant_content(item.content)
+            if item.role == "assistant"
+            else item.content
+        ),
         "modelName": item.model_name,
         "generationStatus": item.generation_status or "completed",
         "trustLevel": item.trust_level,
@@ -435,6 +442,7 @@ def message_payload(item: Message) -> dict[str, Any]:
                 "id": str(attachment.id),
                 "kind": attachment.kind,
                 "category": attachment.category,
+                "purpose": attachment.purpose,
                 "processingStatus": attachment.processing_status,
                 "mimeType": attachment.mime_type,
                 "sizeBytes": attachment.size_bytes,

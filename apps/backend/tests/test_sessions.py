@@ -519,6 +519,19 @@ def test_message_payload_exposes_only_public_reasoning() -> None:
     assert payload["attachments"] == []
 
 
+def test_message_payload_canonicalizes_historical_assistant_markdown() -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="assistant",
+        content="````markdown\n# Document\n\n```mermaid\ngraph TD\nA --> B\n```\n````",
+    )
+
+    assert message_payload(message)["content"] == (
+        "# Document\n\n```mermaid\ngraph TD\nA --> B\n```\n"
+    )
+
+
 def test_message_payload_exposes_only_validated_research_snapshot() -> None:
     message = Message(
         id=uuid4(),
@@ -732,6 +745,7 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             position=0,
             kind="image",
             category="generated",
+            purpose="attachment",
             processing_status="ready",
             mime_type="image/png",
             size_bytes=123,
@@ -752,6 +766,7 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             "id": str(attachment_id),
             "kind": "image",
             "category": "generated",
+            "purpose": "attachment",
             "processingStatus": "ready",
             "mimeType": "image/png",
             "sizeBytes": 123,

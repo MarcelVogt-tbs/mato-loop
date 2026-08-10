@@ -28,7 +28,7 @@
       />
     </div>
     <div v-if="markdown && !visualAvailable" class="text-caption app-muted q-px-sm q-pb-sm">
-      Markdown mit Bildverweisen bleibt zum Schutz vor externen Abrufen im Quelltextmodus.
+      {{ visualUnavailableMessage }}
     </div>
     <q-separator />
 
@@ -55,7 +55,7 @@
 import DOMPurify from 'dompurify'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { containsMarkdownImage } from 'src/utils/markdown'
+import { containsMarkdownImage, containsMermaidFence } from 'src/utils/markdown'
 
 defineOptions({ name: 'WorkspaceFileEditor' })
 const props = defineProps({
@@ -68,7 +68,12 @@ const emit = defineEmits(['update:modelValue', 'save', 'cancel'])
 const $q = useQuasar()
 const toastRoot = ref(null)
 const sourceEditor = ref(null)
-const visualAvailable = computed(() => props.markdown && !containsMarkdownImage(props.modelValue))
+const hasMarkdownImage = computed(() => containsMarkdownImage(props.modelValue))
+const hasMermaid = computed(() => containsMermaidFence(props.modelValue))
+const visualAvailable = computed(() => props.markdown && !hasMarkdownImage.value && !hasMermaid.value)
+const visualUnavailableMessage = computed(() => hasMermaid.value
+  ? 'Markdown mit Mermaid-Diagrammen kann nur im Quelltextmodus bearbeitet werden.'
+  : 'Markdown mit Bildverweisen bleibt zum Schutz vor externen Abrufen im Quelltextmodus.')
 const mode = ref(visualAvailable.value ? 'visual' : 'source')
 const loading = ref(false)
 const modeOptions = computed(() => [

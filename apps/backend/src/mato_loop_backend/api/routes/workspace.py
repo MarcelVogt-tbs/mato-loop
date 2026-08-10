@@ -4,7 +4,6 @@ import asyncio
 import errno
 import hashlib
 import json
-import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
@@ -12,10 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, BinaryIO
 from urllib.parse import quote
 from uuid import UUID
-from xml.etree.ElementTree import ParseError
 
-from defusedxml import ElementTree as DefusedElementTree
-from defusedxml.common import DefusedXmlException
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,6 +27,7 @@ from mato_loop_backend.attachments import (
 )
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
+from mato_loop_backend.safe_svg import MAX_SAFE_SVG_BYTES, validate_svg
 from mato_loop_backend.security import require_user
 from mato_loop_backend.workspace import (
     MAX_EDITABLE_TEXT_BYTES,
@@ -44,31 +41,12 @@ from mato_loop_backend.workspace import (
 )
 
 router = APIRouter(prefix="/workspace", dependencies=[Depends(require_user)])
+_validate_svg = validate_svg
 
 MAX_TEXT_PREVIEW_BYTES = MAX_EDITABLE_TEXT_BYTES
-_IMAGE_PREVIEW_BYTES = 5 * 1024 * 1024
+_IMAGE_PREVIEW_BYTES = MAX_SAFE_SVG_BYTES
 _IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 _MARKDOWN_SUFFIXES = {".md", ".markdown"}
-_SVG_NAMESPACE = "http://www.w3.org/2000/svg"
-_SVG_FORBIDDEN_ELEMENTS = {
-    "animate",
-    "animatemotion",
-    "animatetransform",
-    "audio",
-    "discard",
-    "embed",
-    "foreignobject",
-    "iframe",
-    "link",
-    "object",
-    "script",
-    "set",
-    "video",
-}
-_SVG_URL_PATTERN = re.compile(r"url\s*\(([^)]*)\)", re.IGNORECASE)
-_SVG_ACTIVE_CSS_PATTERN = re.compile(
-    r"@import|@keyframes|(?:^|[;{\s])(?:animation|transition)\s*:", re.IGNORECASE
-)
 _FILE_RESPONSE_HEADERS = {
     "Cache-Control": "private, no-store",
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -363,65 +341,6 @@ def _stream_file(handle: BinaryIO) -> Iterator[bytes]:
     with handle:
         while chunk := handle.read(1024 * 1024):
             yield chunk
-
-
-def _svg_local_name(value: str) -> str:
-    return value.rsplit("}", 1)[-1].casefold()
-
-
-def _validate_svg_references(value: str) -> None:
-    if _SVG_ACTIVE_CSS_PATTERN.search(value):
-        raise ValueError("unsafeSvg")
-    matches = list(_SVG_URL_PATTERN.finditer(value))
-    if len(matches) != len(re.findall(r"url\s*\(", value, re.IGNORECASE)):
-        raise ValueError("unsafeSvg")
-    for match in matches:
-        target = match.group(1).strip().strip("'\"").strip()
-        if not target.startswith("#"):
-            raise ValueError("unsafeSvg")
-
-
-def _validate_svg(data: bytes) -> None:
-    if len(data) > _IMAGE_PREVIEW_BYTES:
-        raise ValueError("tooLarge")
-    try:
-        source = data.decode("utf-8", errors="strict")
-        if "<?xml-stylesheet" in source.casefold():
-            raise ValueError("unsafeSvg")
-        root = DefusedElementTree.fromstring(
-            source,
-            forbid_dtd=True,
-            forbid_entities=True,
-            forbid_external=True,
-        )
-    except UnicodeDecodeError as exc:
-        raise ValueError("invalidImage") from exc
-    except (DefusedXmlException, ParseError) as exc:
-        raise ValueError("unsafeSvg" if isinstance(exc, DefusedXmlException) else "invalidImage") from exc
-
-    root_name = root.tag
-    if root_name not in {"svg", f"{{{_SVG_NAMESPACE}}}svg"}:
-        raise ValueError("invalidImage")
-    count = 0
-    pending = [(root, 1)]
-    while pending:
-        element, depth = pending.pop()
-        count += 1
-        if count > 10_000 or depth > 100:
-            raise ValueError("unsafeSvg")
-        name = _svg_local_name(element.tag)
-        if name in _SVG_FORBIDDEN_ELEMENTS:
-            raise ValueError("unsafeSvg")
-        for attribute, value in element.attrib.items():
-            attribute_name = _svg_local_name(attribute)
-            if attribute_name.startswith("on") or attribute_name == "base":
-                raise ValueError("unsafeSvg")
-            if attribute_name in {"href", "src"} and value and not value.strip().startswith("#"):
-                raise ValueError("unsafeSvg")
-            _validate_svg_references(value)
-        if name == "style" and element.text:
-            _validate_svg_references(element.text)
-        pending.extend((child, depth + 1) for child in element)
 
 
 @router.get("/entries")
