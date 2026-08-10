@@ -17,7 +17,7 @@ describe('agent activity', () => {
       .toBe('Modell wertet Tool-Ergebnisse aus')
     expect(agentActivityLabel({
       phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
-    })).toBe('Modell wertet Tool-Ergebnisse aus')
+    })).toBe('Provider-Anfrage wird wiederholt (2/3)')
     expect(agentActivityLabel({ phase: 'streaming' })).toBe('Antwort wird erstellt')
   })
 
@@ -34,6 +34,10 @@ describe('agent activity', () => {
   it('identifies changes to the visible activity independently from event timestamps', () => {
     expect(agentActivityDisplayKey({ phase: 'waiting_model', modelRequest: 2 }))
       .toBe(agentActivityDisplayKey({ phase: 'waiting_model', modelRequest: 3 }))
+    expect(agentActivityDisplayKey({ phase: 'waiting_model', modelRequest: 2 }))
+      .toBe(agentActivityDisplayKey({
+        phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
+      }))
     expect(agentActivityDisplayKey({
       phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
     })).toBe(agentActivityDisplayKey({
