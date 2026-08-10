@@ -165,6 +165,12 @@ class CalDavIntegrationService:
             ):
                 tools.default_calendar = None
                 changed = True
+            if (
+                tools.default_task_list is not None
+                and str(tools.default_task_list.integration_id) == integration_id
+            ):
+                tools.default_task_list = None
+                changed = True
             if changed:
                 await SettingsStore.save(db, tools)
         await SettingsStore.save(db, settings)
@@ -294,6 +300,7 @@ class BookStackIntegrationService:
             integration_id = str(clear_policies)
             changed = tools.integration_policies.pop(integration_id, None) is not None
             changed = tools.resource_policies.pop(integration_id, None) is not None or changed
+            changed = tools.resource_labels.pop(integration_id, None) is not None or changed
             if changed:
                 await SettingsStore.save(db, tools)
         await SettingsStore.save(db, settings)

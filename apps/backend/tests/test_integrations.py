@@ -49,9 +49,11 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationResource,
     ToolContribution,
 )
+from mato_loop_backend.integrations.service import BookStackIntegrationService
 from mato_loop_backend.models import Credential
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
+    DefaultTaskListSettings,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -81,6 +83,24 @@ class _StreamResponse:
 
     async def aiter_raw(self):
         yield self.body
+
+
+async def test_bookstack_policy_cleanup_removes_resource_labels(monkeypatch) -> None:
+    integration_id = uuid4()
+    tools = ToolSettings(
+        integration_policies={str(integration_id): {}},
+        resource_policies={str(integration_id): {}},
+        resource_labels={str(integration_id): {"book:7": "Handbuch"}},
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=tools))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    db = AsyncMock(spec=AsyncSession)
+
+    await BookStackIntegrationService._save(
+        db, IntegrationSettings(), clear_policies=integration_id
+    )
+
+    assert str(integration_id) not in tools.resource_labels
 
 
 def _request(*, name: str = "SearXNG", enabled: bool = True) -> SearchIntegrationRequest:
@@ -114,8 +134,16 @@ async def _resource_handler(_arguments, _context) -> ToolResult:
 def _resource_adapter(monkeypatch) -> None:
     async def load_resources(_instance, _credential):
         return (
-            IntegrationResource("calendar:private", "Privat"),
-            IntegrationResource("calendar:work", "Arbeit"),
+            IntegrationResource(
+                "calendar:private",
+                "Privat",
+                applicable_capabilities=frozenset({"network.search"}),
+            ),
+            IntegrationResource(
+                "calendar:work",
+                "Arbeit",
+                applicable_capabilities=frozenset({"network.search"}),
+            ),
         )
 
     current = integration_registry._ADAPTERS[("search", "searxng")]
@@ -266,6 +294,9 @@ async def test_integration_access_inherits_and_overrides_global_policy(
     assert resources["calendar:private"]["effectivePolicies"] == {
         "network.search": "auto"
     }
+    assert resources["calendar:private"]["applicableCapabilities"] == [
+        "network.search"
+    ]
     assert resources["calendar:work"]["policies"] == {}
     assert resources["calendar:work"]["effectivePolicies"] == {
         "network.search": "ask"
@@ -324,20 +355,34 @@ async def test_integration_access_reports_integration_policy_and_hard_limits(
     }
 
 
+@pytest.mark.parametrize(
+    "resource",
+    [
+        IntegrationResource(
+            "project:main",
+            "Hauptprojekt",
+            hard_unavailable_capabilities=frozenset({"tasks.invented"}),
+        ),
+        IntegrationResource(
+            "project:main",
+            "Hauptprojekt",
+            applicable_capabilities=frozenset({"tasks.invented"}),
+        ),
+        IntegrationResource(
+            "project:main",
+            "Hauptprojekt",
+            group_key="invalid group key",
+        ),
+    ],
+)
 async def test_resource_discovery_cannot_invent_adapter_capabilities(
-    monkeypatch,
+    monkeypatch, resource
 ) -> None:
     _resource_adapter(monkeypatch)
     current = integration_registry._ADAPTERS[("search", "searxng")]
 
     async def load_resources(_instance, _credential):
-        return (
-            IntegrationResource(
-                "project:main",
-                "Hauptprojekt",
-                frozenset({"tasks.invented"}),
-            ),
-        )
+        return (resource,)
 
     monkeypatch.setitem(
         integration_registry._ADAPTERS,
@@ -479,11 +524,38 @@ async def test_integration_access_replaces_sparse_integration_overrides(
     assert result["actions"][0]["effectiveIntegrationPolicy"] == "auto"
 
 
-async def test_calendar_access_sets_and_clears_the_global_default(monkeypatch) -> None:
+async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
     key = f"calendar:{'a' * 32}"
+    task_list_key = f"tasklist:{'a' * 32}"
+    other_task_list_key = f"tasklist:{'b' * 32}"
 
     async def load_resources(_instance, _credential):
-        return (IntegrationResource(key, "Privat"),)
+        return (
+            IntegrationResource(
+                key,
+                "Privat",
+                applicable_capabilities=frozenset(
+                    {"calendar.read", "calendar.write", "calendar.delete"}
+                ),
+                group_key="a" * 32,
+            ),
+            IntegrationResource(
+                task_list_key,
+                "Aufgaben",
+                applicable_capabilities=frozenset(
+                    {"tasks.read", "tasks.write", "tasks.delete"}
+                ),
+                group_key="a" * 32,
+            ),
+            IntegrationResource(
+                other_task_list_key,
+                "Weitere Aufgaben",
+                applicable_capabilities=frozenset(
+                    {"tasks.read", "tasks.write", "tasks.delete"}
+                ),
+                group_key="b" * 32,
+            ),
+        )
 
     current_adapter = integration_registry._ADAPTERS[("calendar", "caldav")]
     monkeypatch.setitem(
@@ -502,9 +574,13 @@ async def test_calendar_access_sets_and_clears_the_global_default(monkeypatch) -
     tools = ToolSettings.model_validate(
         {
             "defaultCalendar": {
-                "integrationId": str(other_id),
-                "calendarKey": f"calendar:{'b' * 32}",
-            }
+                "integrationId": str(integration.id),
+                "calendarKey": key,
+            },
+            "defaultTaskList": {
+                "integrationId": str(integration.id),
+                "taskListKey": task_list_key,
+            },
         }
     )
 
@@ -515,38 +591,128 @@ async def test_calendar_access_sets_and_clears_the_global_default(monkeypatch) -
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     db = AsyncMock(spec=AsyncSession)
 
+    access = await get_integration_access(integration.id, db)
+    access_resources = {resource["key"]: resource for resource in access["resources"]}
+    assert access["defaultResourceKey"] == key
+    assert access["defaultTaskListKey"] == task_list_key
+    assert access_resources[key]["groupKey"] == "a" * 32
+    assert access_resources[task_list_key]["groupKey"] == "a" * 32
+
+    preserved = await update_integration_access(
+        integration.id,
+        IntegrationAccessRequest.model_validate({"resources": {}}),
+        db,
+    )
+    assert tools.default_calendar.calendar_key == key
+    assert tools.default_task_list.task_list_key == task_list_key
+    assert preserved["defaultResourceKey"] == key
+    assert preserved["defaultTaskListKey"] == task_list_key
+
+    tools.default_task_list = DefaultTaskListSettings(
+        integration_id=other_id,
+        task_list_key=other_task_list_key,
+    )
     unchanged = await update_integration_access(
         integration.id,
         IntegrationAccessRequest.model_validate(
-            {"resources": {}, "defaultResourceKey": None}
+            {"resources": {}, "defaultTaskListKey": None}
         ),
         db,
     )
-    assert tools.default_calendar.integration_id == other_id
-    assert unchanged["defaultResourceKey"] is None
+    assert tools.default_task_list.integration_id == other_id
+    assert unchanged["defaultTaskListKey"] is None
 
     selected = await update_integration_access(
         integration.id,
         IntegrationAccessRequest.model_validate(
-            {"resources": {}, "defaultResourceKey": key}
+            {"resources": {}, "defaultTaskListKey": task_list_key}
         ),
         db,
     )
-    assert tools.default_calendar.integration_id == integration.id
-    assert tools.default_calendar.calendar_key == key
+    assert tools.default_task_list.integration_id == integration.id
+    assert tools.default_task_list.task_list_key == task_list_key
     assert selected["defaultResourceKey"] == key
+    assert selected["defaultTaskListKey"] == task_list_key
+    resources = {resource["key"]: resource for resource in selected["resources"]}
+    assert resources[key]["applicableCapabilities"] == [
+        "calendar.delete",
+        "calendar.read",
+        "calendar.write",
+    ]
+    assert set(resources[key]["effectivePolicies"]) == {
+        "calendar.read",
+        "calendar.write",
+        "calendar.delete",
+    }
+    assert resources[task_list_key]["applicableCapabilities"] == [
+        "tasks.delete",
+        "tasks.read",
+        "tasks.write",
+    ]
+    assert set(resources[task_list_key]["effectivePolicies"]) == {
+        "tasks.read",
+        "tasks.write",
+        "tasks.delete",
+    }
+
+    replaced = await update_integration_access(
+        integration.id,
+        IntegrationAccessRequest.model_validate(
+            {"resources": {}, "defaultTaskListKey": other_task_list_key}
+        ),
+        db,
+    )
+    assert tools.default_task_list.task_list_key == other_task_list_key
+    assert replaced["defaultResourceKey"] == key
+    assert replaced["defaultTaskListKey"] == other_task_list_key
 
     cleared = await update_integration_access(
         integration.id,
         IntegrationAccessRequest.model_validate(
-            {"resources": {}, "defaultResourceKey": None}
+            {"resources": {}, "defaultTaskListKey": None}
         ),
         db,
     )
-    assert tools.default_calendar is None
-    assert cleared["defaultResourceKey"] is None
+    assert tools.default_task_list is None
+    assert tools.default_calendar.calendar_key == key
+    assert cleared["defaultResourceKey"] == key
+    assert cleared["defaultTaskListKey"] is None
 
-    with pytest.raises(ApiError) as exc_info:
+    with pytest.raises(ApiError) as irrelevant_policy:
+        await update_integration_access(
+            integration.id,
+            IntegrationAccessRequest.model_validate(
+                {"resources": {task_list_key: {"calendar.read": "ask"}}}
+            ),
+            db,
+        )
+    assert irrelevant_policy.value.code == "validation.invalidChoice"
+    assert irrelevant_policy.value.field == "resources"
+
+    with pytest.raises(ApiError) as task_default:
+        await update_integration_access(
+            integration.id,
+            IntegrationAccessRequest.model_validate(
+                {"resources": {}, "defaultResourceKey": task_list_key}
+            ),
+            db,
+        )
+    assert task_default.value.code == "validation.invalidChoice"
+    assert task_default.value.field == "default_resource_key"
+
+    for invalid_key in (key, f"tasklist:{'c' * 32}"):
+        with pytest.raises(ApiError) as exc_info:
+            await update_integration_access(
+                integration.id,
+                IntegrationAccessRequest.model_validate(
+                    {"resources": {}, "defaultTaskListKey": invalid_key}
+                ),
+                db,
+            )
+        assert exc_info.value.code == "validation.invalidChoice"
+        assert exc_info.value.field == "default_task_list_key"
+
+    with pytest.raises(ApiError) as stale_calendar:
         await update_integration_access(
             integration.id,
             IntegrationAccessRequest.model_validate(
@@ -554,8 +720,30 @@ async def test_calendar_access_sets_and_clears_the_global_default(monkeypatch) -
             ),
             db,
         )
+    assert stale_calendar.value.code == "validation.invalidChoice"
+    assert stale_calendar.value.field == "default_resource_key"
+
+
+async def test_non_caldav_access_rejects_a_task_default(monkeypatch) -> None:
+    _resource_adapter(monkeypatch)
+    integration = _searxng()
+    integrations = IntegrationSettings(instances=[integration])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=integrations))
+
+    with pytest.raises(ApiError) as exc_info:
+        await update_integration_access(
+            integration.id,
+            IntegrationAccessRequest.model_validate(
+                {
+                    "resources": {},
+                    "defaultTaskListKey": f"tasklist:{'a' * 32}",
+                }
+            ),
+            AsyncMock(spec=AsyncSession),
+        )
+
     assert exc_info.value.code == "validation.invalidChoice"
-    assert exc_info.value.field == "default_resource_key"
+    assert exc_info.value.field == "default_task_list_key"
 
 
 async def test_disallowed_action_mode_is_rejected_by_both_settings_apis(
@@ -1092,6 +1280,10 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
         integration_id=first.id,
         calendar_key=f"calendar:{'a' * 32}",
     )
+    tools.default_task_list = DefaultTaskListSettings(
+        integration_id=first.id,
+        task_list_key=f"tasklist:{'a' * 32}",
+    )
 
     assert first.credential_id == credential_ids[0]
     assert first_payload["accounts"][0]["config"] == {
@@ -1105,7 +1297,7 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
 
     await update_calendar_integration(
         first.id,
-        _calendar_request(password="new-secret"),
+        _calendar_request(name="Umbenannt", password="new-secret", enabled=False),
         db,
     )
 
@@ -1113,12 +1305,13 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     assert str(first.id) in tools.integration_policies
     assert str(first.id) in tools.resource_policies
     assert tools.default_calendar.integration_id == first.id
+    assert tools.default_task_list.integration_id == first.id
     assert str(second.id) in tools.integration_policies
     assert str(second.id) in tools.resource_policies
     assert store_credential.await_args_list[-1].args == (db,)
     assert store_credential.await_args_list[-1].kwargs == {
         "kind": "caldav.password",
-        "label": "Kalender",
+        "label": "Umbenannt",
         "payload": {"password": "new-secret"},
     }
     assert db.execute.await_count == 1
@@ -1139,16 +1332,22 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     assert str(second.id) in tools.resource_policies
     assert str(second.id) in tools.resource_labels
     assert tools.default_calendar is None
+    assert tools.default_task_list is None
     assert first.credential_id == credential_ids[2]
 
     tools.default_calendar = DefaultCalendarSettings(
         integration_id=second.id,
         calendar_key=f"calendar:{'b' * 32}",
     )
+    tools.default_task_list = DefaultTaskListSettings(
+        integration_id=first.id,
+        task_list_key=f"tasklist:{'a' * 32}",
+    )
     await delete_calendar_integration(first.id, db)
 
     assert [instance.id for instance in settings.instances] == [second.id]
     assert tools.default_calendar.integration_id == second.id
+    assert tools.default_task_list is None
     assert db.execute.await_count == 2
 
 

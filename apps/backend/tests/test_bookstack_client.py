@@ -162,6 +162,8 @@ async def test_page_mutations_send_markdown_payloads() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         bodies.append(json.loads(request.content))
+        if request.method == "PUT":
+            return httpx.Response(200, content=b"not json")
         return httpx.Response(
             200,
             json={

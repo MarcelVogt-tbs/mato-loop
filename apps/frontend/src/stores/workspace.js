@@ -159,6 +159,24 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.open = true
       return this.load('.')
     },
+    openApprovalDraft(action) {
+      if (
+        action?.root !== 'session'
+        || action.sessionId !== this.sessionId
+        || !action.path?.startsWith('files/')
+        || !action.filename
+      ) return
+      this.scope = 'session'
+      this.reset()
+      this.openEntry({
+        kind: 'file',
+        name: action.filename,
+        path: action.path,
+        size: action.sizeBytes
+      }, true)
+      this.open = true
+      return this.load('.')
+    },
     openEntry(entry, edit = false) {
       if (entry?.kind !== 'file') return
       this.selectedPath = entry.path

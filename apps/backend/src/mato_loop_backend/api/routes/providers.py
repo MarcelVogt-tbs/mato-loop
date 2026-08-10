@@ -223,6 +223,7 @@ class DefaultModelsRequest(ApiRequest):
     default_model_id: UUID | None
     compaction_model_id: UUID | None
     title_generation_model_id: UUID | None
+    skill_creation_model_id: UUID | None = None
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
     video_model_id: UUID | None = None
@@ -305,6 +306,7 @@ def _clear_invalid_defaults(settings: AiSettings) -> None:
         "default_model_id": ModelCapability.CHAT,
         "compaction_model_id": ModelCapability.CHAT,
         "title_generation_model_id": ModelCapability.CHAT,
+        "skill_creation_model_id": ModelCapability.CHAT,
         "dreaming_model_id": ModelCapability.CHAT,
         "vision_model_id": ModelCapability.CHAT,
         "video_model_id": ModelCapability.CHAT,
@@ -318,7 +320,10 @@ def _clear_invalid_defaults(settings: AiSettings) -> None:
         media_capability = capability != ModelCapability.CHAT
         if model_id is not None and (
             _available_model(settings, model_id, capability) is None
-            or (field == "default_model_id" and not _model(settings, model_id).supports_tools)
+            or (
+                field in {"default_model_id", "skill_creation_model_id"}
+                and not _model(settings, model_id).supports_tools
+            )
             or (field == "vision_model_id" and not _model(settings, model_id).supports_image_input)
             or (
                 field == "video_model_id"
@@ -375,6 +380,11 @@ def _settings_payload(
         "titleGenerationModelId": (
             str(settings.title_generation_model_id)
             if settings.title_generation_model_id
+            else None
+        ),
+        "skillCreationModelId": (
+            str(settings.skill_creation_model_id)
+            if settings.skill_creation_model_id
             else None
         ),
         "dreamingModelId": (
@@ -995,6 +1005,7 @@ async def set_default_models(
         "default_model_id": ("defaultModelId", ModelCapability.CHAT),
         "compaction_model_id": ("compactionModelId", ModelCapability.CHAT),
         "title_generation_model_id": ("titleGenerationModelId", ModelCapability.CHAT),
+        "skill_creation_model_id": ("skillCreationModelId", ModelCapability.CHAT),
         "dreaming_model_id": ("dreamingModelId", ModelCapability.CHAT),
         "vision_model_id": ("visionModelId", ModelCapability.CHAT),
         "video_model_id": ("videoModelId", ModelCapability.CHAT),
@@ -1026,7 +1037,7 @@ async def set_default_models(
             raise ApiError(
                 409, "provider.modelCapabilityUnavailable", field=api_field
             )
-        if field == "default_model_id" and not model.supports_tools:
+        if field in {"default_model_id", "skill_creation_model_id"} and not model.supports_tools:
             raise ApiError(409, "session.modelToolsUnavailable", field=api_field)
         if field == "vision_model_id" and not model.supports_image_input:
             raise ApiError(
@@ -1049,6 +1060,7 @@ async def set_default_models(
             raise ApiError(409, "memory.dreamingModelToolsUnavailable", field=api_field)
     additive_fields = {
         "vision_model_id",
+        "skill_creation_model_id",
         "video_model_id",
         "image_generation_model_id",
         "speech_generation_model_id",

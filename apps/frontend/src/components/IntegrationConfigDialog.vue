@@ -133,7 +133,7 @@ const formRef = ref(null)
 const saving = ref(false)
 const integrationTypes = [
   { label: 'Websuche', value: 'search' },
-  { label: 'Kalender', value: 'calendar' },
+  { label: 'Kalender & Aufgaben', value: 'calendar' },
   { label: 'Wissensdatenbank', value: 'knowledge' }
 ]
 const PROVIDER_DEFAULTS = {
@@ -146,7 +146,7 @@ const providerTypes = computed(() => {
   return [{ label: preset.label, value: preset.provider }]
 })
 const baseUrlLabel = computed(
-  () => `${(PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).label} Base URL`
+  () => `${(PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).label}-Basis-URL`
 )
 const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder

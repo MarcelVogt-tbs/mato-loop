@@ -42,6 +42,23 @@ describe('provider store', () => {
     }])
   })
 
+  it('offers only effective tool-capable chat models for skill creation', () => {
+    const store = useProviderStore()
+    store.providers = [
+      { id: 'active', name: 'Aktiv', enabled: true },
+      { id: 'disabled', name: 'Aus', enabled: false }
+    ]
+    store.models = [
+      { id: 'tools', providerId: 'active', name: 'Tools', enabled: true, supportsTools: true },
+      { id: 'unknown', providerId: 'active', name: 'Unbekannt', enabled: true },
+      { id: 'no-tools', providerId: 'active', name: 'Ohne Tools', enabled: true, supportsTools: false },
+      { id: 'disabled-model', providerId: 'disabled', name: 'Aus', enabled: true, supportsTools: true },
+      { id: 'image', providerId: 'active', name: 'Bild', enabled: true, supportsTools: true, capabilities: ['image_generation'] }
+    ]
+
+    expect(store.skillCreationModelOptions.map((option) => option.value)).toEqual(['tools'])
+  })
+
   it('keeps media models out of chat selectors and filters options by capability', () => {
     const store = useProviderStore()
     store.providers = [{ id: 'p1', name: 'Lemonade', enabled: true, adapterType: 'lemonade' }]
@@ -254,7 +271,8 @@ describe('provider store', () => {
         imageGenerationModelId: 'image',
         speechGenerationModelId: null,
         audioGenerationModelId: 'audio',
-        audioTranscriptionModelId: 'transcription'
+        audioTranscriptionModelId: 'transcription',
+        skillCreationModelId: 'compact'
       }
     })
 
@@ -268,7 +286,8 @@ describe('provider store', () => {
       imageGenerationModelId: 'image',
       speechGenerationModelId: null,
       audioGenerationModelId: 'audio',
-      audioTranscriptionModelId: 'transcription'
+      audioTranscriptionModelId: 'transcription',
+      skillCreationModelId: 'compact'
     })
 
     expect(api.put).toHaveBeenCalledTimes(1)
@@ -282,7 +301,8 @@ describe('provider store', () => {
       image_generation_model_id: 'image',
       speech_generation_model_id: null,
       audio_generation_model_id: 'audio',
-      audio_transcription_model_id: 'transcription'
+      audio_transcription_model_id: 'transcription',
+      skill_creation_model_id: 'compact'
     })
     expect(store.defaultModelId).toBe('agent')
     expect(store.compactionModelId).toBe('compact')
@@ -294,6 +314,7 @@ describe('provider store', () => {
     expect(store.speechGenerationModelId).toBeNull()
     expect(store.audioGenerationModelId).toBe('audio')
     expect(store.audioTranscriptionModelId).toBe('transcription')
+    expect(store.skillCreationModelId).toBe('compact')
   })
 
   it('creates and updates Lemonade providers through the configured endpoints', async () => {

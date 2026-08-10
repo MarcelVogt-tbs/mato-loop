@@ -549,7 +549,10 @@ async def test_default_models_are_saved_atomically(monkeypatch) -> None:
     agent = ModelConfig(provider_id=provider.id, model_id="agent")
     compaction = ModelConfig(provider_id=provider.id, model_id="compaction")
     title = ModelConfig(provider_id=provider.id, model_id="title")
-    settings = AiSettings(providers=[provider], models=[agent, compaction, title])
+    skill_builder = ModelConfig(provider_id=provider.id, model_id="skill-builder")
+    settings = AiSettings(
+        providers=[provider], models=[agent, compaction, title, skill_builder]
+    )
     _mock_settings(monkeypatch, settings)
 
     result = await set_default_models(
@@ -557,6 +560,7 @@ async def test_default_models_are_saved_atomically(monkeypatch) -> None:
             default_model_id=agent.id,
             compaction_model_id=compaction.id,
             title_generation_model_id=title.id,
+            skill_creation_model_id=skill_builder.id,
         ),
         _db(),
     )
@@ -564,9 +568,25 @@ async def test_default_models_are_saved_atomically(monkeypatch) -> None:
     assert settings.default_model_id == agent.id
     assert settings.compaction_model_id == compaction.id
     assert settings.title_generation_model_id == title.id
+    assert settings.skill_creation_model_id == skill_builder.id
     assert result["defaultModelId"] == str(agent.id)
     assert result["compactionModelId"] == str(compaction.id)
     assert result["titleGenerationModelId"] == str(title.id)
+    assert result["skillCreationModelId"] == str(skill_builder.id)
+
+    skill_builder.supports_tools = False
+    with pytest.raises(ApiError) as exc_info:
+        await set_default_models(
+            DefaultModelsRequest(
+                default_model_id=agent.id,
+                compaction_model_id=compaction.id,
+                title_generation_model_id=title.id,
+                skill_creation_model_id=skill_builder.id,
+            ),
+            _db(),
+        )
+    assert exc_info.value.code == "session.modelToolsUnavailable"
+    assert exc_info.value.field == "skillCreationModelId"
 
 
 async def test_capability_defaults_require_matching_models(monkeypatch) -> None:

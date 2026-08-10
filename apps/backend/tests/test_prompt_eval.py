@@ -50,7 +50,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 10
+    assert INVENTORY_VERSION == 13
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -71,6 +71,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "media",
         "session",
         "identity",
+        "skill",
         "continuation",
         "attachment",
         "memory",
@@ -82,7 +83,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 121
+    assert 80 <= len(CASES) <= 128
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -194,6 +195,7 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     question_parameters = json.dumps(calendar_tools[0]["parameters"])
     assert "free_text" in question_parameters
     assert "QuestionOption" in question_parameters
+    assert "default_answers" in question_parameters
     assert "Timed events require both start and end" in calendar_tools[1]["description"]
     assert "A default calendar is configured" in calendar_messages[0]["content"]
     assert "Missing-information contract" in calendar_messages[0]["content"]
@@ -209,6 +211,39 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
         "assistant",
         "tool",
     ]
+
+    skill_messages, skill_tools = build_case(
+        _case("explicit_skill_selection_loads_skill")
+    )
+    assert [tool["name"] for tool in skill_tools] == ["load_skill"]
+    assert str(prompt_eval.SKILL_ID) in skill_messages[0]["content"]
+
+    build_messages, build_tools = build_case(_case("explicit_skill_build_uses_tool"))
+    assert [tool["name"] for tool in build_tools] == ["build_skill"]
+    assert "Delegate a compact brief" in build_messages[0]["content"]
+    assert build_tools[0]["parameters"]["required"] == ["brief"]
+
+
+def test_skill_build_case_checks_compact_brief_not_generated_draft() -> None:
+    case = _case("explicit_skill_build_uses_tool")
+
+    assert case.argument_contains == {"brief": ("API", "Tool", "valid")}
+    assert case.expected_arguments == {"name_hint": "API-Recherche"}
+    assert evaluate(
+        case,
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    "skill-build",
+                    "build_skill",
+                    {
+                        "brief": "Check API requests with the Tool and validate responses.",
+                        "name_hint": "API-Recherche",
+                    },
+                )
+            ]
+        ),
+    ) == []
 
 
 def test_evaluator_applies_tool_argument_defaults() -> None:
@@ -979,11 +1014,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 119
-    assert payload["contractCount"] == 240
-    assert "Cases: 121" in report
-    assert "Semantic contracts: 119" in report
-    assert "All inventory rows: 240" in report
+    assert payload["semanticContractCount"] == 121
+    assert payload["contractCount"] == 249
+    assert "Cases: 128" in report
+    assert "Semantic contracts: 121" in report
+    assert "All inventory rows: 249" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

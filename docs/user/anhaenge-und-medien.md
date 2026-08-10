@@ -12,6 +12,10 @@ Bildfähige Modelle können geeignete aktuelle oder ausdrücklich referenzierte 
 
 Externe Markdown-Bilder werden nicht automatisch geladen. Sie entscheiden je Ursprung und Session, ob der Browser die externe Ressource abrufen darf.
 
+## QR-Codes
+
+Der Agent kann QR-Codes lokal und ohne Bildgenerator als scannbare PNG-Datei erzeugen. Zum Lesen hängen Sie ein Bild mit einem QR-Code an und formulieren einen kurzen Auftrag. Die Verarbeitung findet lokal statt; QR-Bilder und codierte Inhalte werden dafür nicht an einen Medienprovider gesendet.
+
 ## Diktat
 
 Mit der Mikrofonschaltfläche nehmen Sie Sprache direkt im Browser auf. Die Aufnahme endet spätestens nach fünf Minuten und wird als direkte Benutzeraktion an das konfigurierte Standardmodell für Transkription übertragen. Dafür erscheint auch bei der Tool-Richtlinie **Nachfragen** keine separate Freigabekarte. Der erkannte Text wird in den aktuellen Entwurf eingefügt.

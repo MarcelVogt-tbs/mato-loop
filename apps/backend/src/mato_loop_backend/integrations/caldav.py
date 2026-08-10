@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
@@ -18,6 +18,8 @@ from mato_loop_backend.integrations.caldav_client import (
     CalDavError,
     CalDavEvent,
     CalDavEventDraft,
+    CalDavTask,
+    CalDavTaskDraft,
 )
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -63,6 +65,28 @@ _DELETE = ToolAction(
     allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
     mutates=True,
 )
+_TASKS_READ = ToolAction(
+    "tasks.read",
+    "Aufgaben lesen",
+    ToolExecutionPolicy.ASK,
+)
+_TASKS_WRITE = ToolAction(
+    "tasks.write",
+    "Aufgaben ändern",
+    ToolExecutionPolicy.ASK,
+    mutates=True,
+)
+_TASKS_DELETE = ToolAction(
+    "tasks.delete",
+    "Aufgaben löschen",
+    ToolExecutionPolicy.ASK,
+    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
+    mutates=True,
+)
+_CALENDAR_CAPABILITIES = frozenset(
+    {"calendar.read", "calendar.write", "calendar.delete"}
+)
+_TASK_CAPABILITIES = frozenset({"tasks.read", "tasks.write", "tasks.delete"})
 
 
 class CalDavConfig(BaseModel):
@@ -210,6 +234,79 @@ class CalendarDeleteEventArguments(CalendarEventArguments):
     pass
 
 
+class TaskListAccountsArguments(_Arguments):
+    pass
+
+
+class TaskIntegrationArguments(_Arguments):
+    integration_id: UUID
+
+
+class TaskResourceArguments(TaskIntegrationArguments):
+    task_list_key: str = Field(pattern=r"^tasklist:[a-f0-9]{32}$")
+
+
+class TaskQueryArguments(TaskResourceArguments):
+    include_completed: bool = False
+    limit: int = Field(default=100, ge=1, le=100)
+
+
+class TaskCreateArguments(TaskResourceArguments):
+    title: str = Field(min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=10_000)
+    due: date | datetime | None = None
+
+    @field_validator("due")
+    @classmethod
+    def validate_due(cls, value: date | datetime | None) -> date | datetime | None:
+        if isinstance(value, datetime) and (
+            value.tzinfo is None or value.utcoffset() is None
+        ):
+            raise ValueError("due datetime must be aware")
+        return value
+
+
+class TaskTokenArguments(TaskResourceArguments):
+    task_token: str = Field(min_length=1, max_length=50_000)
+
+    @field_validator("task_token")
+    @classmethod
+    def validate_task_token(cls, value: str) -> str:
+        try:
+            _TaskToken.model_validate(CredentialCipher().decrypt(value.encode("ascii")))
+        except Exception as exc:
+            raise ValueError("invalid task token") from exc
+        return value
+
+
+class TaskUpdateArguments(TaskTokenArguments):
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=10_000)
+    due: date | datetime | None = None
+
+    @field_validator("due")
+    @classmethod
+    def validate_due(cls, value: date | datetime | None) -> date | datetime | None:
+        return TaskCreateArguments.validate_due(value)
+
+    @model_validator(mode="after")
+    def require_patch(self) -> TaskUpdateArguments:
+        fields = self.model_fields_set.intersection({"title", "description", "due"})
+        if not fields:
+            raise ValueError("at least one task field is required")
+        if "title" in fields and self.title is None:
+            raise ValueError("title cannot be null")
+        return self
+
+
+class TaskSetCompletedArguments(TaskTokenArguments):
+    completed: bool
+
+
+class TaskDeleteArguments(TaskTokenArguments):
+    pass
+
+
 class _EventToken(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -226,6 +323,27 @@ class _EventToken(BaseModel):
     location: str | None = Field(max_length=1_000)
     recurring: bool
     scheduled: bool
+    mutation_safe: bool
+
+
+class _TaskToken(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1]
+    integration_id: UUID
+    binding_revision: str = Field(max_length=50_000)
+    task_list_key: str = Field(pattern=r"^tasklist:[a-f0-9]{32}$")
+    href: str = Field(max_length=4_000)
+    uid: str = Field(max_length=1_000)
+    etag: str | None = Field(max_length=1_000)
+    title: str = Field(max_length=500)
+    description: str | None = Field(max_length=10_000)
+    due: date | datetime | None
+    completed: bool
+    completed_at: datetime | None
+    created: datetime | None
+    sequence: int = Field(ge=0)
+    recurring: bool
     mutation_safe: bool
 
 
@@ -345,24 +463,58 @@ async def _calendar(
         (item for item in discovery.calendars if item.key == opaque_key),
         None,
     )
-    if calendar is None:
+    if calendar is None or "VEVENT" not in calendar.supported_components:
         raise CalDavError("caldav.notFound")
     return calendar
+
+
+async def _task_list(
+    client: CalDavClient, task_list_key: str, context: Any | None = None
+) -> CalDavCalendar:
+    if context is not None:
+        resource = getattr(context, "bound_resource", None)
+        if (
+            isinstance(resource, IntegrationResource)
+            and resource.key == task_list_key
+            and isinstance(resource.binding, CalDavCalendar)
+            and "VTODO" in resource.binding.supported_components
+        ):
+            return resource.binding
+    opaque_key = task_list_key.removeprefix("tasklist:")
+    discovery = await client.discover()
+    task_list = next(
+        (
+            item
+            for item in discovery.calendars
+            if item.key == opaque_key and "VTODO" in item.supported_components
+        ),
+        None,
+    )
+    if task_list is None:
+        raise CalDavError("caldav.notFound")
+    return task_list
 
 
 def _label(value: str) -> str:
     return (value.strip() or "Kalender")[:160]
 
 
-def _unavailable(calendar: CalDavCalendar) -> frozenset[str]:
-    capabilities = {
-        "read": "calendar.read",
-        "write": "calendar.write",
-        "delete": "calendar.delete",
+def _task_label(value: str) -> str:
+    return (value.strip() or "Aufgaben")[:160]
+
+
+def _unavailable(
+    calendar: CalDavCalendar, capabilities: frozenset[str] = _CALENDAR_CAPABILITIES
+) -> frozenset[str]:
+    prefix = "tasks" if "tasks.read" in capabilities else "calendar"
+    by_privilege = {
+        "read": f"{prefix}.read",
+        "write": f"{prefix}.write",
+        "delete": f"{prefix}.delete",
     }
     return frozenset(
         capability
-        for privilege, capability in capabilities.items()
+        for privilege, capability in by_privilege.items()
         if privilege not in calendar.privileges
     )
 
@@ -382,14 +534,37 @@ async def load_caldav_resources(
         str(config.base_url), config.username, credential["password"]
     ) as client:
         discovery = await client.discover()
+    resources = []
+    for calendar in discovery.calendars:
+        if "VEVENT" in calendar.supported_components:
+            resources.append(
+                IntegrationResource(
+                    key=f"calendar:{calendar.key}",
+                    label=_label(calendar.name),
+                    hard_unavailable_capabilities=_unavailable(calendar),
+                    applicable_capabilities=_CALENDAR_CAPABILITIES,
+                    binding=calendar,
+                    group_key=calendar.key,
+                )
+            )
+        if "VTODO" in calendar.supported_components:
+            resources.append(
+                IntegrationResource(
+                    key=f"tasklist:{calendar.key}",
+                    label=_task_label(calendar.name),
+                    hard_unavailable_capabilities=_unavailable(
+                        calendar, _TASK_CAPABILITIES
+                    ),
+                    applicable_capabilities=_TASK_CAPABILITIES,
+                    binding=calendar,
+                    group_key=calendar.key,
+                )
+            )
     return tuple(
-        IntegrationResource(
-            key=f"calendar:{calendar.key}",
-            label=_label(calendar.name),
-            hard_unavailable_capabilities=_unavailable(calendar),
-            binding=calendar,
+        sorted(
+            resources,
+            key=lambda resource: (resource.key.split(":", 1)[0], resource.label, resource.key),
         )
-        for calendar in discovery.calendars
     )
 
 
@@ -469,6 +644,64 @@ def _event_from_token(
         location=payload.location,
         recurring=payload.recurring,
         scheduled=payload.scheduled,
+        mutation_safe=payload.mutation_safe,
+    )
+
+
+def _task_token(
+    task: CalDavTask, integration_id: UUID, revision: str, key: str
+) -> str:
+    payload = _TaskToken(
+        version=1,
+        integration_id=integration_id,
+        binding_revision=revision,
+        task_list_key=key,
+        href=task.href,
+        uid=task.uid,
+        etag=task.etag,
+        title=_bounded(task.title, 500) or "",
+        description=_bounded(task.description, 10_000),
+        due=task.due,
+        completed=task.completed,
+        completed_at=task.completed_at,
+        created=task.created,
+        sequence=task.sequence,
+        recurring=task.recurring,
+        mutation_safe=task.mutation_safe,
+    )
+    return CredentialCipher().encrypt(payload.model_dump(mode="json")).decode("ascii")
+
+
+def _task_from_token(
+    value: str,
+    integration_id: UUID,
+    revision: str,
+    task_list_key: str,
+) -> tuple[_TaskToken, CalDavTask]:
+    try:
+        payload = _TaskToken.model_validate(
+            CredentialCipher().decrypt(value.encode("ascii"))
+        )
+    except Exception as exc:
+        raise ValueError("invalid task token") from exc
+    if (
+        payload.integration_id != integration_id
+        or payload.binding_revision != revision
+        or payload.task_list_key != task_list_key
+    ):
+        raise ValueError("task token binding mismatch")
+    return payload, CalDavTask(
+        uid=payload.uid,
+        href=payload.href,
+        etag=payload.etag,
+        title=payload.title,
+        description=payload.description,
+        due=payload.due,
+        completed=payload.completed,
+        completed_at=payload.completed_at,
+        created=payload.created,
+        sequence=payload.sequence,
+        recurring=payload.recurring,
         mutation_safe=payload.mutation_safe,
     )
 
@@ -566,6 +799,49 @@ def _event_payload(
     }
 
 
+def _task_payload(
+    task: CalDavTask, integration_id: UUID, revision: str, task_list_key: str
+) -> dict[str, Any]:
+    return {
+        "taskToken": _task_token(task, integration_id, revision, task_list_key),
+        "integrationId": str(integration_id),
+        "taskListKey": task_list_key,
+        "title": _bounded(task.title, 500),
+        "description": _bounded(task.description, 10_000),
+        "due": task.due.isoformat() if task.due is not None else None,
+        "dueIsFloating": (
+            isinstance(task.due, datetime)
+            and (task.due.tzinfo is None or task.due.utcoffset() is None)
+        ),
+        "completed": task.completed,
+        "completedAt": (
+            task.completed_at.isoformat() if task.completed_at is not None else None
+        ),
+        "recurring": task.recurring,
+    }
+
+
+def _task_draft(
+    *,
+    title: str,
+    description: str | None,
+    due: date | datetime | None,
+    completed: bool = False,
+    completed_at: datetime | None = None,
+    created: datetime | None = None,
+    sequence: int = 0,
+) -> CalDavTaskDraft:
+    return CalDavTaskDraft(
+        title=title,
+        description=description,
+        due=due,
+        completed=completed,
+        completed_at=completed_at,
+        created=created,
+        sequence=sequence,
+    )
+
+
 def _result(value: dict[str, Any]) -> Any:
     from mato_loop_backend.agent.tools import ToolResult
 
@@ -597,27 +873,34 @@ async def calendar_list_accounts(
     return _result({"accounts": accounts})
 
 
+async def _remember_resource_labels(
+    integration_id: UUID, discovery: Any, context: Any
+) -> None:
+    labels = {}
+    for calendar in discovery.calendars:
+        if "VEVENT" in calendar.supported_components:
+            labels[f"calendar:{calendar.key}"] = _label(calendar.name)
+        if "VTODO" in calendar.supported_components:
+            labels[f"tasklist:{calendar.key}"] = _task_label(calendar.name)
+    tools = await SettingsStore.load(context.db, ToolSettings, for_update=True)
+    key = str(integration_id)
+    if tools.resource_labels.get(key, {}) != labels:
+        if labels:
+            tools.resource_labels[key] = labels
+        else:
+            tools.resource_labels.pop(key, None)
+        await SettingsStore.save(context.db, tools)
+    context.tool_settings.resource_labels = dict(tools.resource_labels)
+    context.tool_settings = tools
+
+
 async def calendar_list_calendars(
     arguments: CalendarIntegrationArguments, context: Any
 ) -> Any:
     try:
         async with _selected_client(arguments.integration_id, context) as (client, _revision):
             discovery = await client.discover()
-        labels = {
-            f"calendar:{calendar.key}": _label(calendar.name)
-            for calendar in discovery.calendars
-        }
-        tools = await SettingsStore.load(context.db, ToolSettings, for_update=True)
-        integration_id = str(arguments.integration_id)
-        current_labels = tools.resource_labels.get(integration_id, {})
-        if current_labels != labels:
-            if labels:
-                tools.resource_labels[integration_id] = labels
-            else:
-                tools.resource_labels.pop(integration_id, None)
-            await SettingsStore.save(context.db, tools)
-        context.tool_settings.resource_labels = dict(tools.resource_labels)
-        context.tool_settings = tools
+        await _remember_resource_labels(arguments.integration_id, discovery, context)
         return _result(
             {
                 "calendars": [
@@ -627,6 +910,31 @@ async def calendar_list_calendars(
                         "unavailableCapabilities": sorted(_unavailable(calendar)),
                     }
                     for calendar in discovery.calendars
+                    if "VEVENT" in calendar.supported_components
+                ]
+            }
+        )
+    except CalDavError as exc:
+        return _error(exc)
+
+
+async def tasks_list_lists(arguments: TaskIntegrationArguments, context: Any) -> Any:
+    try:
+        async with _selected_client(arguments.integration_id, context) as (client, _revision):
+            discovery = await client.discover()
+        await _remember_resource_labels(arguments.integration_id, discovery, context)
+        return _result(
+            {
+                "taskLists": [
+                    {
+                        "taskListKey": f"tasklist:{calendar.key}",
+                        "name": _task_label(calendar.name),
+                        "unavailableCapabilities": sorted(
+                            _unavailable(calendar, _TASK_CAPABILITIES)
+                        ),
+                    }
+                    for calendar in discovery.calendars
+                    if "VTODO" in calendar.supported_components
                 ]
             }
         )
@@ -759,6 +1067,177 @@ async def calendar_delete_event(
         from mato_loop_backend.agent.tools import ToolResult
 
         return ToolResult.error("integration.staleReference", field="event_token")
+    except CalDavError as exc:
+        return _error(exc)
+
+
+async def tasks_query(arguments: TaskQueryArguments, context: Any) -> Any:
+    try:
+        async with _selected_client(arguments.integration_id, context) as (client, revision):
+            task_list = await _task_list(client, arguments.task_list_key, context)
+            tasks = await client.query_tasks(
+                task_list, include_completed=arguments.include_completed
+            )
+        return _result(
+            {
+                "tasks": [
+                    _task_payload(
+                        task,
+                        arguments.integration_id,
+                        revision,
+                        arguments.task_list_key,
+                    )
+                    for task in tasks[: arguments.limit]
+                ],
+                "truncated": len(tasks) > arguments.limit,
+            }
+        )
+    except CalDavError as exc:
+        return _error(exc)
+
+
+async def tasks_create(arguments: TaskCreateArguments, context: Any) -> Any:
+    try:
+        async with _selected_client(arguments.integration_id, context) as (client, revision):
+            task_list = await _task_list(client, arguments.task_list_key, context)
+            task = await client.create_task(
+                task_list,
+                _task_draft(
+                    title=arguments.title,
+                    description=arguments.description,
+                    due=arguments.due,
+                ),
+                uuid5(
+                    context.assistant_message_id or context.run_id,
+                    f"{context.tool_call.name}:{context.tool_call.id}",
+                ),
+            )
+        return _result(
+            {
+                "task": _task_payload(
+                    task,
+                    arguments.integration_id,
+                    revision,
+                    arguments.task_list_key,
+                )
+            }
+        )
+    except CalDavError as exc:
+        return _error(exc)
+
+
+async def tasks_update(arguments: TaskUpdateArguments, context: Any) -> Any:
+    try:
+        _instance, revision = _binding(context, arguments.integration_id)
+        token, existing = _task_from_token(
+            arguments.task_token,
+            arguments.integration_id,
+            revision,
+            arguments.task_list_key,
+        )
+        async with _selected_client(arguments.integration_id, context) as (client, _revision):
+            await _task_list(client, arguments.task_list_key, context)
+            task = await client.update_task(
+                existing,
+                _task_draft(
+                    title=(
+                        arguments.title
+                        if "title" in arguments.model_fields_set
+                        else token.title
+                    ),
+                    description=(
+                        arguments.description
+                        if "description" in arguments.model_fields_set
+                        else token.description
+                    ),
+                    due=(arguments.due if "due" in arguments.model_fields_set else token.due),
+                    completed=token.completed,
+                    completed_at=token.completed_at,
+                    created=token.created,
+                    sequence=token.sequence + 1,
+                ),
+            )
+        return _result(
+            {
+                "task": _task_payload(
+                    task,
+                    arguments.integration_id,
+                    revision,
+                    arguments.task_list_key,
+                )
+            }
+        )
+    except ValueError:
+        from mato_loop_backend.agent.tools import ToolResult
+
+        return ToolResult.error("tool.invalidArguments", field="task_token")
+    except CalDavError as exc:
+        return _error(exc)
+
+
+async def tasks_set_completed(
+    arguments: TaskSetCompletedArguments, context: Any
+) -> Any:
+    try:
+        _instance, revision = _binding(context, arguments.integration_id)
+        token, existing = _task_from_token(
+            arguments.task_token,
+            arguments.integration_id,
+            revision,
+            arguments.task_list_key,
+        )
+        completed_at = None
+        if arguments.completed:
+            completed_at = token.completed_at or datetime.now(UTC)
+        async with _selected_client(arguments.integration_id, context) as (client, _revision):
+            await _task_list(client, arguments.task_list_key, context)
+            task = await client.update_task(
+                existing,
+                _task_draft(
+                    title=token.title,
+                    description=token.description,
+                    due=token.due,
+                    completed=arguments.completed,
+                    completed_at=completed_at,
+                    created=token.created,
+                    sequence=token.sequence + 1,
+                ),
+            )
+        return _result(
+            {
+                "task": _task_payload(
+                    task,
+                    arguments.integration_id,
+                    revision,
+                    arguments.task_list_key,
+                )
+            }
+        )
+    except ValueError:
+        from mato_loop_backend.agent.tools import ToolResult
+
+        return ToolResult.error("tool.invalidArguments", field="task_token")
+    except CalDavError as exc:
+        return _error(exc)
+
+
+async def tasks_delete(arguments: TaskDeleteArguments, context: Any) -> Any:
+    try:
+        _instance, revision = _binding(context, arguments.integration_id)
+        _token_value, existing = _task_from_token(
+            arguments.task_token,
+            arguments.integration_id,
+            revision,
+            arguments.task_list_key,
+        )
+        async with _selected_client(arguments.integration_id, context) as (client, _revision):
+            await _task_list(client, arguments.task_list_key, context)
+            await client.delete_task(existing)
+        return _result({"deleted": True})
+    except ValueError:
+        from mato_loop_backend.agent.tools import ToolResult
+
+        return ToolResult.error("tool.invalidArguments", field="task_token")
     except CalDavError as exc:
         return _error(exc)
 
@@ -914,6 +1393,184 @@ def _delete_permission(arguments: CalendarDeleteEventArguments, context: Any) ->
     )
 
 
+def _task_permission(
+    capability: str,
+    operation_key: str,
+    arguments: TaskIntegrationArguments,
+    context: Any,
+    *,
+    title: str,
+    summary: str,
+    resource: bool = False,
+    use_integration_policy: bool = True,
+) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import integration_operation_permission
+
+    instance, revision = _binding(context, arguments.integration_id)
+    resource_key = arguments.task_list_key if resource else None
+    resource_display = f'Konto "{_display_text(instance.name)}"'
+    if resource_key is not None:
+        labels = getattr(getattr(context, "tool_settings", None), "resource_labels", {})
+        label = labels.get(str(arguments.integration_id), {}).get(resource_key)
+        task_list = f'"{_display_text(label)}"' if label else resource_key
+        resource_display = f'{task_list} · Konto "{_display_text(instance.name)}"'
+    return (
+        integration_operation_permission(
+            capability=capability,
+            integration_id=arguments.integration_id,
+            binding_revision=revision,
+            operation_key=operation_key,
+            resource_key=resource_key,
+            resource_display=resource_display,
+            use_integration_policy=use_integration_policy,
+            title=title,
+            summary=summary,
+            available_decisions=(
+                ("allow_once", "allow_session", "deny")
+                if capability == "tasks.read"
+                else ("allow_once", "deny")
+            ),
+        ),
+    )
+
+
+def _task_reference(task: _TaskToken) -> str:
+    title = _display_text(task.title) or "Ohne Titel"
+    if isinstance(task.due, datetime):
+        due = f" mit Fälligkeit {task.due:%d.%m.%Y, %H:%M} Uhr{_format_offset(task.due)}"
+    elif isinstance(task.due, date):
+        due = f" mit Fälligkeit {task.due:%d.%m.%Y}"
+    else:
+        due = ""
+    return f'die Aufgabe "{title}"{due}'
+
+
+def _task_for_permission(
+    arguments: TaskUpdateArguments | TaskSetCompletedArguments | TaskDeleteArguments,
+    context: Any,
+) -> _TaskToken:
+    _instance, revision = _binding(context, arguments.integration_id)
+    task, _existing = _task_from_token(
+        arguments.task_token,
+        arguments.integration_id,
+        revision,
+        arguments.task_list_key,
+    )
+    return task
+
+
+def _task_lists_permission(
+    arguments: TaskIntegrationArguments, context: Any
+) -> tuple[Any, ...]:
+    return _task_permission(
+        "tasks.read",
+        "list-task-lists",
+        arguments,
+        context,
+        title="Aufgabenlisten auflisten?",
+        summary="Der Agent möchte Namen und Kennungen der verfügbaren Aufgabenlisten lesen.",
+        use_integration_policy=False,
+    )
+
+
+def _tasks_query_permission(
+    arguments: TaskQueryArguments, context: Any
+) -> tuple[Any, ...]:
+    completed = " einschließlich erledigter Aufgaben" if arguments.include_completed else ""
+    return _task_permission(
+        "tasks.read",
+        "query-tasks",
+        arguments,
+        context,
+        title="Aufgaben lesen?",
+        summary=f"Der Agent möchte bis zu {arguments.limit} Aufgaben{completed} lesen.",
+        resource=True,
+    )
+
+
+def _task_create_permission(
+    arguments: TaskCreateArguments, context: Any
+) -> tuple[Any, ...]:
+    summary = f'Der Agent möchte die Aufgabe "{_display_text(arguments.title)}" erstellen.'
+    if arguments.description:
+        summary += f' Notiz: "{_display_text(arguments.description, 240)}".'
+    return _task_permission(
+        "tasks.write",
+        _operation_key("create-task", arguments),
+        arguments,
+        context,
+        title="Aufgabe erstellen?",
+        summary=summary,
+        resource=True,
+    )
+
+
+def _task_update_permission(
+    arguments: TaskUpdateArguments, context: Any
+) -> tuple[Any, ...]:
+    try:
+        task = _task_for_permission(arguments, context)
+        changes = []
+        if "title" in arguments.model_fields_set:
+            changes.append(f'Titel auf "{_display_text(arguments.title)}" ändern')
+        if "description" in arguments.model_fields_set:
+            changes.append("Notiz ändern" if arguments.description else "Notiz entfernen")
+        if "due" in arguments.model_fields_set:
+            changes.append("Fälligkeit ändern" if arguments.due else "Fälligkeit entfernen")
+        summary = f"Der Agent möchte {_task_reference(task)} ändern: {'; '.join(changes)}."
+    except ValueError:
+        summary = "Der Agent möchte eine Aufgabe in dieser Aufgabenliste ändern."
+    return _task_permission(
+        "tasks.write",
+        _operation_key("update-task", arguments),
+        arguments,
+        context,
+        title="Aufgabe ändern?",
+        summary=summary,
+        resource=True,
+    )
+
+
+def _task_completed_permission(
+    arguments: TaskSetCompletedArguments, context: Any
+) -> tuple[Any, ...]:
+    try:
+        task = _task_for_permission(arguments, context)
+        summary = (
+            f"Der Agent möchte {_task_reference(task)} als "
+            f"{'erledigt' if arguments.completed else 'offen'} markieren."
+        )
+    except ValueError:
+        summary = "Der Agent möchte den Status einer Aufgabe ändern."
+    return _task_permission(
+        "tasks.write",
+        _operation_key("set-task-completed", arguments),
+        arguments,
+        context,
+        title="Aufgabenstatus ändern?",
+        summary=summary,
+        resource=True,
+    )
+
+
+def _task_delete_permission(
+    arguments: TaskDeleteArguments, context: Any
+) -> tuple[Any, ...]:
+    try:
+        summary = f"Der Agent möchte {_task_reference(_task_for_permission(arguments, context))} löschen."
+    except ValueError:
+        summary = "Der Agent möchte eine Aufgabe aus dieser Aufgabenliste löschen."
+    return _task_permission(
+        "tasks.delete",
+        _operation_key("delete-task", arguments),
+        arguments,
+        context,
+        title="Aufgabe löschen?",
+        summary=summary,
+        resource=True,
+    )
+
+
 def _accounts_permission(
     _arguments: CalendarListAccountsArguments, _context: Any
 ) -> tuple[Any, ...]:
@@ -933,6 +1590,25 @@ def _accounts_permission(
     )
 
 
+def _task_accounts_permission(
+    _arguments: TaskListAccountsArguments, _context: Any
+) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionRequest
+
+    return (
+        PermissionRequest(
+            capability="tasks.read",
+            resource_type="network_service",
+            resource_scope="task_accounts",
+            action_kind="tasks_list_accounts",
+            risk_level="medium",
+            title="Aufgabenkonten auflisten?",
+            summary="Der Agent möchte die konfigurierten CalDAV-Konten für Aufgaben lesen.",
+            resource_display="Konfigurierte CalDAV-Konten",
+        ),
+    )
+
+
 CALDAV_AGGREGATE_TOOLS = (
     ToolContribution(
         name="calendar_list_accounts",
@@ -947,6 +1623,21 @@ CALDAV_AGGREGATE_TOOLS = (
         actions=(_READ,),
         instance_argument=None,
         authorization_factory=_accounts_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="tasks_list_accounts",
+        description=(
+            "List active CalDAV accounts only when the user asks about task accounts or needs "
+            "to select an account before listing task lists."
+        ),
+        arguments_model=TaskListAccountsArguments,
+        handler=calendar_list_accounts,
+        label="Aufgabenkonten auflisten",
+        icon="account_circle",
+        actions=(_TASKS_READ,),
+        instance_argument=None,
+        authorization_factory=_task_accounts_permission,
         releases_private_data=True,
     ),
 )
@@ -1022,6 +1713,86 @@ CALDAV_SHARED_TOOLS = (
         authorization_factory=_delete_permission,
         releases_private_data=True,
     ),
+    ToolContribution(
+        name="tasks_list_lists",
+        description="List VTODO task lists in one CalDAV account before selecting a task list.",
+        arguments_model=TaskIntegrationArguments,
+        handler=tasks_list_lists,
+        label="Aufgabenlisten auflisten",
+        icon="checklist",
+        actions=(_TASKS_READ,),
+        instance_argument="integration_id",
+        authorization_factory=_task_lists_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="tasks_query",
+        description=(
+            "Read tasks from one CalDAV task list. Completed tasks are excluded unless "
+            "include_completed is true."
+        ),
+        arguments_model=TaskQueryArguments,
+        handler=tasks_query,
+        label="Aufgaben lesen",
+        icon="task_alt",
+        actions=(_TASKS_READ,),
+        instance_argument="integration_id",
+        resource_argument="task_list_key",
+        authorization_factory=_tasks_query_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="tasks_create",
+        description="Create one CalDAV task with a title and optional note and due date or time.",
+        arguments_model=TaskCreateArguments,
+        handler=tasks_create,
+        label="Aufgabe erstellen",
+        icon="add_task",
+        actions=(_TASKS_WRITE,),
+        instance_argument="integration_id",
+        resource_argument="task_list_key",
+        authorization_factory=_task_create_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="tasks_update",
+        description="Update supported fields of one previously returned CalDAV task.",
+        arguments_model=TaskUpdateArguments,
+        handler=tasks_update,
+        label="Aufgabe ändern",
+        icon="edit_note",
+        actions=(_TASKS_WRITE,),
+        instance_argument="integration_id",
+        resource_argument="task_list_key",
+        authorization_factory=_task_update_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="tasks_set_completed",
+        description="Mark one previously returned CalDAV task as completed or open.",
+        arguments_model=TaskSetCompletedArguments,
+        handler=tasks_set_completed,
+        label="Aufgabenstatus ändern",
+        icon="task_alt",
+        actions=(_TASKS_WRITE,),
+        instance_argument="integration_id",
+        resource_argument="task_list_key",
+        authorization_factory=_task_completed_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="tasks_delete",
+        description="Delete one previously returned CalDAV task.",
+        arguments_model=TaskDeleteArguments,
+        handler=tasks_delete,
+        label="Aufgabe löschen",
+        icon="delete_outline",
+        actions=(_TASKS_DELETE,),
+        instance_argument="integration_id",
+        resource_argument="task_list_key",
+        authorization_factory=_task_delete_permission,
+        releases_private_data=True,
+    ),
 )
 
 CALDAV_ADAPTER = IntegrationAdapterDefinition(
@@ -1029,7 +1800,14 @@ CALDAV_ADAPTER = IntegrationAdapterDefinition(
     adapter_type="caldav",
     config_model=CalDavConfig,
     contribution_factory=lambda _instance: IntegrationContributions(),
-    resource_actions=(_READ, _WRITE, _DELETE),
+    resource_actions=(
+        _READ,
+        _WRITE,
+        _DELETE,
+        _TASKS_READ,
+        _TASKS_WRITE,
+        _TASKS_DELETE,
+    ),
     resource_loader=load_caldav_resources,
     shared_tools=CALDAV_AGGREGATE_TOOLS + CALDAV_SHARED_TOOLS,
 )

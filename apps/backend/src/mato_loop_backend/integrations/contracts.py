@@ -18,6 +18,8 @@ class IntegrationResource:
     label: str
     hard_unavailable_capabilities: frozenset[str] = frozenset()
     binding: object | None = field(default=None, repr=False, compare=False)
+    applicable_capabilities: frozenset[str] | None = None
+    group_key: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -25,6 +27,12 @@ class IntegrationResource:
             "hard_unavailable_capabilities",
             frozenset(self.hard_unavailable_capabilities),
         )
+        if self.applicable_capabilities is not None:
+            object.__setattr__(
+                self,
+                "applicable_capabilities",
+                frozenset(self.applicable_capabilities),
+            )
 
 
 ResourceLoader = Callable[
@@ -107,6 +115,10 @@ class IntegrationAdapterDefinition:
         capabilities = {action.capability for action in self.resource_actions}
         if any(
             not resource.hard_unavailable_capabilities <= capabilities
+            or (
+                resource.applicable_capabilities is not None
+                and not resource.applicable_capabilities <= capabilities
+            )
             for resource in resources
         ):
             raise ValueError("resource capabilities must be declared by the adapter")

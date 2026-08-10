@@ -67,6 +67,12 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'memory_collection') {
     return { label: 'Memory-Sammlung', value: approval?.resourceDisplay || 'Eigene Memories' }
   }
+  if (approval?.resourceType === 'skill_collection') {
+    return {
+      label: 'Skill-Sammlung',
+      value: approval?.resourceDisplay ? `„${approval.resourceDisplay}“` : 'Persönliche Skills'
+    }
+  }
   return { label: 'Angeforderter Scope', value: scope || 'Nicht angegeben' }
 }
 
@@ -117,9 +123,13 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'session.search': { label: 'Sessions durchsuchen', icon: 'manage_search' },
     'memory.read': { label: 'Memories lesen', icon: 'psychology' },
     'memory.write': { label: 'Memory speichern', icon: 'save' },
+    'skills.write': { label: 'Skills erstellen', icon: 'auto_awesome' },
     'calendar.read': { label: 'Kalender lesen', icon: 'event' },
     'calendar.write': { label: 'Kalender ändern', icon: 'edit_calendar' },
     'calendar.delete': { label: 'Kalendereintrag löschen', icon: 'event_busy' },
+    'tasks.read': { label: 'Aufgaben lesen', icon: 'checklist' },
+    'tasks.write': { label: 'Aufgaben ändern', icon: 'edit_note' },
+    'tasks.delete': { label: 'Aufgaben löschen', icon: 'delete_outline' },
     'knowledge.read': { label: 'Wissensdatenbank lesen', icon: 'menu_book' },
     'knowledge.write': { label: 'Wissensdatenbank ändern', icon: 'edit_note' },
     'knowledge.delete': { label: 'Wissenseintrag löschen', icon: 'delete_sweep' },

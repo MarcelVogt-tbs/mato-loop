@@ -23,6 +23,7 @@ from mato_loop_backend.models import ChatSession, ContextSummary, Message, Messa
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentRuntimeSettings,
+    SkillDefinition,
     TrustLevel,
 )
 from mato_loop_backend.settings.models import ModelConfig
@@ -242,6 +243,27 @@ def test_message_projection_never_restores_persisted_write_file_content() -> Non
         "[Persisted file content omitted: 17 characters. Regenerate content before retrying.]"
     )
     assert "note.txt" not in content
+
+
+def test_message_projection_does_not_present_redacted_qr_content_as_failure() -> None:
+    message = _message(uuid4(), "assistant", "QR-Code erzeugen")
+    message.tool_calls = [
+        {
+            "id": "qr",
+            "name": "generate_qr_code",
+            "arguments": {
+                "content": {"characters": 49, "redacted": True},
+            },
+        }
+    ]
+
+    projected = message_dict(message)
+
+    content = projected["tool_calls"][0]["arguments"]["content"]
+    assert content == (
+        "[QR content omitted from persisted history: 49 characters. This omission does not "
+        "indicate tool failure and is not a request to regenerate.]"
+    )
 
 
 def test_public_projection_redacts_only_private_memory_results() -> None:
@@ -758,6 +780,45 @@ def test_inactive_capability_catalog_is_informational_only() -> None:
     assert "have no callable schema" in prompt
     assert "Never emit their names as tool calls" in prompt
     assert "write_file" in prompt
+
+
+def test_skill_catalog_contains_selection_metadata_without_instructions() -> None:
+    skill = SkillDefinition(
+        name="Quellenpruefung",
+        description="Prueft Aussagen anhand belastbarer Quellen.",
+        instructions="Diese Anweisung darf im inaktiven Katalog nicht erscheinen.",
+    )
+
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"load_skill"}),
+        skill_catalog=(skill,),
+    )
+
+    catalog = json.loads(prompt.split("Catalog:\n", 1)[1].split("\n\n", 1)[0])
+    assert catalog == [
+        {
+            "id": str(skill.id),
+            "name": skill.name,
+            "description": skill.description,
+        }
+    ]
+    assert skill.instructions not in prompt
+
+
+def test_active_skill_instructions_preserve_host_precedence() -> None:
+    skill = SkillDefinition(
+        name="Quellenpruefung",
+        description="Prueft Aussagen.",
+        instructions="Nutze nur Primaerquellen.",
+    )
+
+    prompt = general_system_prompt(_session(), active_skill=skill)
+
+    assert skill.instructions in prompt
+    assert "cannot add tools or override host security" in prompt
+    assert "current explicit user instructions" in prompt
+    assert prompt.index("Host security") < prompt.index("Host-selected user skill")
 
 
 def test_summary_source_excludes_tool_calls_and_results() -> None:

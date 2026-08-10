@@ -38,6 +38,7 @@ def _arguments() -> QuestionArguments:
                     "type": "free_text",
                     "header": "Hinweise",
                     "question": "Weitere Hinweise?",
+                    "default_answers": ["Keine"],
                 },
             ]
         }
@@ -49,24 +50,32 @@ def test_question_answers_match_types_and_options() -> None:
     answers = {
         "format": ["Eigener Stil"],
         "topics": ["API", "UI", "Tests"],
-        "note": [],
+        "note": ["   "],
     }
 
     assert validate_question_answers(arguments, answers) == {
         "format": ["Eigener Stil"],
         "topics": ["API", "UI", "Tests"],
-        "note": [],
+        "note": ["Keine"],
     }
+    assert validate_question_answers(arguments, {**answers, "note": [" Hinweis "]})[
+        "note"
+    ] == ["Hinweis"]
     with pytest.raises(ValueError, match="single-choice"):
         validate_question_answers(arguments, {**answers, "format": ["Kurz", "Ausführlich"]})
 
 
-def test_question_contract_rejects_blank_text_and_oversized_answers() -> None:
+def test_question_contract_rejects_invalid_questions_and_oversized_answers() -> None:
     payload = _arguments().model_dump(mode="json")
     payload["questions"][0]["question"] = "   "
 
     with pytest.raises(ValueError, match="question text must not be blank"):
         QuestionArguments.model_validate(payload)
+    invalid_default = _arguments().model_dump(mode="json")
+    invalid_default["questions"][0]["allow_custom"] = False
+    invalid_default["questions"][0]["default_answers"] = ["Unbekannt"]
+    with pytest.raises(ValueError, match="single-choice"):
+        QuestionArguments.model_validate(invalid_default)
     with pytest.raises(ValueError, match="at most 13 items"):
         QuestionAnswerRequest(answers={"topics": [str(index) for index in range(14)]})
 
@@ -91,15 +100,16 @@ async def test_answer_is_persisted_before_agent_resumes(monkeypatch) -> None:
     monkeypatch.setattr(AgentRuntime, "resolve_question", resolve)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
     answers = {"format": ["Kurz"], "topics": ["API"], "note": []}
+    resolved_answers = {**answers, "note": ["Keine"]}
 
     result = await answer_question(
         request.id, QuestionAnswerRequest(answers=answers), user, db
     )
 
     assert request.status == "answered"
-    assert request.answers == answers
+    assert request.answers == resolved_answers
     db.commit.assert_awaited_once()
-    resolve.assert_called_once_with(request.id, answers)
+    resolve.assert_called_once_with(request.id, resolved_answers)
     assert result == {"status": "answered"}
 
 

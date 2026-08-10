@@ -37,6 +37,7 @@ from mato_loop_backend.models import Credential
 from mato_loop_backend.security import read_credential, require_user
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
+    DefaultTaskListSettings,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -126,6 +127,13 @@ class IntegrationAccessRequest(BaseModel):
         max_length=500,
         validation_alias=AliasChoices("defaultResourceKey", "default_resource_key"),
     )
+    default_task_list_key: str | None = Field(
+        default=None,
+        max_length=500,
+        validation_alias=AliasChoices(
+            "defaultTaskListKey", "default_task_list_key"
+        ),
+    )
 
 
 def _provider_payload(provider: IntegrationInstance) -> dict:
@@ -206,6 +214,13 @@ async def _integration_resources(
             or not isinstance(resource.label, str)
             or not 1 <= len(resource.label) <= 160
             or resource.label != resource.label.strip()
+            or (
+                resource.group_key is not None
+                and (
+                    not isinstance(resource.group_key, str)
+                    or _RESOURCE_KEY.fullmatch(resource.group_key) is None
+                )
+            )
             or resource.key in keys
         ):
             raise ApiError(502, "integration.resourceDiscoveryFailed")
@@ -227,6 +242,14 @@ def _access_payload(
     if not resource_actions:
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
     capabilities = {action.capability for action in resource_actions}
+
+    def applicable_capabilities(resource: IntegrationResource) -> set[str]:
+        return (
+            set(resource.applicable_capabilities)
+            if resource.applicable_capabilities is not None
+            else capabilities
+        )
+
     actions = [
         {
             "capability": action.capability,
@@ -259,16 +282,18 @@ def _access_payload(
         "resources": [
             {
                 "key": resource.key,
+                "groupKey": resource.group_key,
                 "label": resource.label.strip(),
                 "hardUnavailableCapabilities": sorted(
                     resource.hard_unavailable_capabilities
                 ),
+                "applicableCapabilities": sorted(applicable_capabilities(resource)),
                 "policies": {
                     capability: policy.value
                     for capability, policy in resource_policies.get(
                         resource.key, {}
                     ).items()
-                    if capability in capabilities
+                    if capability in applicable_capabilities(resource)
                 },
                 "effectivePolicies": {
                     action.capability: resolve_tool_execution_policy(
@@ -283,6 +308,7 @@ def _access_payload(
                         ),
                     ).policy.value
                     for action in resource_actions
+                    if action.capability in applicable_capabilities(resource)
                 },
             }
             for resource in resources
@@ -295,6 +321,17 @@ def _access_payload(
             if default_calendar is not None
             and default_calendar.integration_id == instance.id
             and any(resource.key == default_calendar.calendar_key for resource in resources)
+            else None
+        )
+        default_task_list = tools.default_task_list
+        payload["defaultTaskListKey"] = (
+            default_task_list.task_list_key
+            if default_task_list is not None
+            and default_task_list.integration_id == instance.id
+            and any(
+                resource.key == default_task_list.task_list_key
+                for resource in resources
+            )
             else None
         )
     return payload
@@ -580,25 +617,52 @@ async def update_integration_access(
     if not resource_actions:
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
     resource_keys = {resource.key for resource in resources}
+    resources_by_key = {resource.key: resource for resource in resources}
     capabilities = {action.capability for action in resource_actions}
     actions = {action.capability: action for action in resource_actions}
     if set(payload.resources) - resource_keys:
         raise ApiError(422, "validation.invalidChoice", field="resources")
     if any(set(policies) - capabilities for policies in payload.resources.values()):
         raise ApiError(422, "validation.invalidChoice", field="resources")
+    if any(
+        resource_key in resources_by_key
+        and resources_by_key[resource_key].applicable_capabilities is not None
+        and not set(policies)
+        <= resources_by_key[resource_key].applicable_capabilities
+        for resource_key, policies in payload.resources.items()
+    ):
+        raise ApiError(422, "validation.invalidChoice", field="resources")
     if payload.policies is not None and set(payload.policies) - capabilities:
         raise ApiError(422, "validation.invalidChoice", field="policies")
     default_resource_changed = "default_resource_key" in payload.model_fields_set
-    if default_resource_changed and (
+    default_task_list_changed = "default_task_list_key" in payload.model_fields_set
+    if (default_resource_changed or default_task_list_changed) and (
         instance.integration_type != "calendar" or instance.adapter_type != "caldav"
     ):
-        raise ApiError(422, "validation.invalidChoice", field="default_resource_key")
+        field = (
+            "default_resource_key"
+            if default_resource_changed
+            else "default_task_list_key"
+        )
+        raise ApiError(422, "validation.invalidChoice", field=field)
     if (
         default_resource_changed
         and payload.default_resource_key is not None
-        and payload.default_resource_key not in resource_keys
+        and (
+            payload.default_resource_key not in resource_keys
+            or not payload.default_resource_key.startswith("calendar:")
+        )
     ):
         raise ApiError(422, "validation.invalidChoice", field="default_resource_key")
+    if (
+        default_task_list_changed
+        and payload.default_task_list_key is not None
+        and (
+            payload.default_task_list_key not in resource_keys
+            or not payload.default_task_list_key.startswith("tasklist:")
+        )
+    ):
+        raise ApiError(422, "validation.invalidChoice", field="default_task_list_key")
     if payload.policies is not None and any(
         policy not in actions[capability].allowed_policies
         for capability, policy in payload.policies.items()
@@ -651,6 +715,17 @@ async def update_integration_access(
             and tools.default_calendar.integration_id == integration_id
         ):
             tools.default_calendar = None
+    if default_task_list_changed:
+        if payload.default_task_list_key is not None:
+            tools.default_task_list = DefaultTaskListSettings(
+                integration_id=integration_id,
+                task_list_key=payload.default_task_list_key,
+            )
+        elif (
+            tools.default_task_list is not None
+            and tools.default_task_list.integration_id == integration_id
+        ):
+            tools.default_task_list = None
     await SettingsStore.save(db, tools)
     await db.commit()
     return _access_payload(current, resources, tools)

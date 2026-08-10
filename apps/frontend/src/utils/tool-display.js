@@ -14,6 +14,8 @@ const TOOL_DISPLAY = {
   move_path: { label: 'Pfad verschieben', icon: 'drive_file_move' },
   web_search: { label: 'Im Web suchen', icon: 'travel_explore' },
   webfetch: { label: 'Webseite abrufen', icon: 'language' },
+  generate_qr_code: { label: 'QR-Code erzeugen', icon: 'qr_code_2' },
+  read_qr_code: { label: 'QR-Code lesen', icon: 'qr_code_scanner' },
   generate_image: { label: 'Bild erzeugen', icon: 'image' },
   edit_image: { label: 'Bild bearbeiten', icon: 'auto_fix_high' },
   generate_speech: { label: 'Sprache erzeugen', icon: 'record_voice_over' },
@@ -26,6 +28,13 @@ const TOOL_DISPLAY = {
   calendar_create_event: { label: 'Termin erstellen', icon: 'event_available' },
   calendar_update_event: { label: 'Termin ändern', icon: 'edit_calendar' },
   calendar_delete_event: { label: 'Termin löschen', icon: 'event_busy' },
+  tasks_list_accounts: { label: 'Aufgabenkonten auflisten', icon: 'account_circle' },
+  tasks_list_lists: { label: 'Aufgabenlisten auflisten', icon: 'checklist' },
+  tasks_query: { label: 'Aufgaben lesen', icon: 'task_alt' },
+  tasks_create: { label: 'Aufgabe erstellen', icon: 'add_task' },
+  tasks_update: { label: 'Aufgabe ändern', icon: 'edit_note' },
+  tasks_set_completed: { label: 'Aufgabenstatus ändern', icon: 'task_alt' },
+  tasks_delete: { label: 'Aufgabe löschen', icon: 'delete_outline' },
   session_read: { label: 'Session lesen', icon: 'forum' },
   session_tool_result_read: { label: 'Tool-Ergebnis lesen', icon: 'history' },
   session_browse: { label: 'Letzte Sessions anzeigen', icon: 'view_list' },
@@ -44,6 +53,22 @@ export function toolIdentity(name) {
   return TOOL_DISPLAY[name] || { label: 'Tool ausführen', icon: 'build' }
 }
 
+export function toolUsageSummary(items = []) {
+  const tools = new Map()
+  for (const item of items) {
+    const name = item?.tool?.name
+    if (!name) continue
+    const existing = tools.get(name)
+    if (existing) {
+      existing.count += 1
+      existing.active ||= Boolean(item.active)
+    } else {
+      tools.set(name, { name, ...toolIdentity(name), count: 1, active: Boolean(item.active) })
+    }
+  }
+  return [...tools.values()]
+}
+
 export function memoryWriteContent(tool) {
   if (tool?.name !== 'memory_write') return ''
   const content = tool?.arguments?.content
@@ -56,11 +81,16 @@ export function memoryWriteContent(tool) {
 
 export function toolSummary(tool) {
   const argumentsValue = tool?.arguments
-  if (!argumentsValue || typeof argumentsValue !== 'object') return tool?.name || ''
+  const fallback = TOOL_DISPLAY[tool?.name] ? '' : tool?.name || ''
+  if (!argumentsValue || typeof argumentsValue !== 'object') return fallback
   if (tool?.name === 'memory_retrieve' && argumentsValue.mode === 'browse') {
     return argumentsValue.cursor_id ? 'Memory-Übersicht fortsetzen' : 'Memory-Übersicht'
   }
   if (tool?.name === 'session_browse') return 'Letzte Sessions'
+  if (tool?.name === 'generate_qr_code') return 'QR-Code'
+  if (tool?.name === 'read_qr_code' && typeof argumentsValue.attachment_id === 'string') {
+    return `Bildanhang ${truncate(argumentsValue.attachment_id, 36)}`
+  }
   if (tool?.name === 'generate_speech' && typeof argumentsValue.text === 'string') {
     return truncate(argumentsValue.text)
   }
@@ -99,7 +129,7 @@ export function toolSummary(tool) {
   if (typeof argumentsValue.query === 'string') return truncate(argumentsValue.query)
   if (typeof argumentsValue.name === 'string') return truncate(argumentsValue.name)
   if (typeof argumentsValue.sessionName === 'string') return truncate(argumentsValue.sessionName)
-  return tool?.name || ''
+  return fallback
 }
 
 export function formatToolArguments(argumentsValue, toolName = null) {
@@ -113,6 +143,7 @@ export function formatToolArguments(argumentsValue, toolName = null) {
 
 function localizePlainToolResult(content, toolName) {
   const mediaResults = {
+    generate_qr_code: ['QR code generated.', 'QR-Code erzeugt.'],
     generate_image: ['Image generated.', 'Bild erzeugt.'],
     generate_speech: ['Speech generated.', 'Sprachaufnahme erzeugt.'],
     generate_audio: ['Audio generated.', 'Audio erzeugt.']

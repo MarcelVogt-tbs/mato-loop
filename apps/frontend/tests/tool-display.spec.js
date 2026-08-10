@@ -6,7 +6,8 @@ import {
   parseToolResult,
   toolIdentity,
   toolStatus,
-  toolSummary
+  toolSummary,
+  toolUsageSummary
 } from '../src/utils/tool-display'
 
 describe('tool display', () => {
@@ -14,6 +15,8 @@ describe('tool display', () => {
     expect(toolIdentity('read_file')).toEqual({ label: 'Datei lesen', icon: 'description' })
     expect(toolIdentity('provide_file')).toEqual({ label: 'Datei bereitstellen', icon: 'download' })
     expect(toolSummary({ name: 'read_file', arguments: { path: 'Projekte/plan.md' } })).toBe('Projekte/plan.md')
+    expect(toolSummary({ name: 'read_file', arguments: {} })).toBe('')
+    expect(toolSummary({ name: 'custom_tool', arguments: {} })).toBe('custom_tool')
     expect(toolIdentity('copy_path')).toEqual({ label: 'Pfad kopieren', icon: 'content_copy' })
     expect(toolIdentity('move_path')).toEqual({ label: 'Pfad verschieben', icon: 'drive_file_move' })
     expect(toolIdentity('update_agent_identity')).toEqual({ label: 'Persona ändern', icon: 'face' })
@@ -23,6 +26,23 @@ describe('tool display', () => {
       .toEqual({ label: 'Letzte Sessions anzeigen', icon: 'view_list' })
     expect(toolIdentity('calendar_query_events'))
       .toEqual({ label: 'Termine lesen', icon: 'event' })
+    expect([
+      'tasks_list_accounts',
+      'tasks_list_lists',
+      'tasks_query',
+      'tasks_create',
+      'tasks_update',
+      'tasks_set_completed',
+      'tasks_delete'
+    ].map((name) => toolIdentity(name))).toEqual([
+      { label: 'Aufgabenkonten auflisten', icon: 'account_circle' },
+      { label: 'Aufgabenlisten auflisten', icon: 'checklist' },
+      { label: 'Aufgaben lesen', icon: 'task_alt' },
+      { label: 'Aufgabe erstellen', icon: 'add_task' },
+      { label: 'Aufgabe ändern', icon: 'edit_note' },
+      { label: 'Aufgabenstatus ändern', icon: 'task_alt' },
+      { label: 'Aufgabe löschen', icon: 'delete_outline' }
+    ])
     expect(toolSummary({ name: 'session_browse', arguments: {} })).toBe('Letzte Sessions')
     expect(toolSummary({
       name: 'copy_path',
@@ -37,6 +57,17 @@ describe('tool display', () => {
       name: 'session_tool_result_read',
       arguments: { message_id: '550e8400-e29b-41d4-a716-446655440000', offset: 12000 }
     })).toBe('Nachricht 550e8400-e29b-41d4-a716-446655440000, ab Zeichen 12000')
+  })
+
+  it('groups tool usage by name while preserving first-use order', () => {
+    expect(toolUsageSummary([
+      { tool: { name: 'web_search' } },
+      { tool: { name: 'webfetch' }, active: true },
+      { tool: { name: 'web_search' }, active: true }
+    ])).toEqual([
+      { name: 'web_search', label: 'Im Web suchen', icon: 'travel_explore', count: 2, active: true },
+      { name: 'webfetch', label: 'Webseite abrufen', icon: 'language', count: 1, active: true }
+    ])
   })
 
   it('summarizes persona changes without rendering the complete instructions', () => {
@@ -59,6 +90,8 @@ describe('tool display', () => {
   })
 
   it('labels media tools and summarizes their relevant arguments', () => {
+    expect(toolIdentity('generate_qr_code')).toEqual({ label: 'QR-Code erzeugen', icon: 'qr_code_2' })
+    expect(toolIdentity('read_qr_code')).toEqual({ label: 'QR-Code lesen', icon: 'qr_code_scanner' })
     expect(toolIdentity('generate_image')).toEqual({ label: 'Bild erzeugen', icon: 'image' })
     expect(toolIdentity('edit_image')).toEqual({ label: 'Bild bearbeiten', icon: 'auto_fix_high' })
     expect(toolIdentity('generate_speech')).toEqual({ label: 'Sprache erzeugen', icon: 'record_voice_over' })
@@ -67,6 +100,14 @@ describe('tool display', () => {
     expect(toolIdentity('analyze_video')).toEqual({ label: 'Video analysieren', icon: 'video_file' })
     expect(toolSummary({ name: 'generate_image', arguments: { prompt: 'Ein ruhiger See' } }))
       .toBe('Ein ruhiger See')
+    expect(toolSummary({ name: 'generate_qr_code', arguments: { content: 'vertraulich' } }))
+      .toBe('QR-Code')
+    expect(toolSummary({
+      name: 'read_qr_code',
+      arguments: { attachment_id: '550e8400-e29b-41d4-a716-446655440000' }
+    })).toBe('Bildanhang 550e8400-e29b-41d4-a716-446655440000')
+    expect(formatToolArguments({ content: 'vertraulich' }, 'generate_qr_code'))
+      .not.toContain('vertraulich')
     expect(toolSummary({ name: 'edit_image', arguments: { prompt: 'Farben restaurieren' } }))
       .toBe('Farben restaurieren')
     expect(toolSummary({
@@ -84,6 +125,7 @@ describe('tool display', () => {
   })
 
   it('localizes plain host-controlled tool results', () => {
+    expect(parseToolResult('QR code generated.', 'generate_qr_code').text).toBe('QR-Code erzeugt.')
     expect(parseToolResult(
       'Image generated.\n\n[Image saved but not sent to the current text-only model.]',
       'generate_image'

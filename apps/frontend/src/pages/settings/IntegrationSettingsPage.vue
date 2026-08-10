@@ -154,7 +154,7 @@ function providerLabel(providerType) {
 }
 
 function typeLabel(integrationType) {
-  return { calendar: 'Kalender', knowledge: 'Wissensdatenbank' }[integrationType] || 'Websuche'
+  return { calendar: 'Kalender & Aufgaben', knowledge: 'Wissensdatenbank' }[integrationType] || 'Websuche'
 }
 
 function typeIcon(integrationType) {

@@ -42,14 +42,14 @@ describe('agent activity', () => {
       announcement: 'Modell analysiert die Anfrage'
     })
     expect(agentRunPresentation({ running: true, activity, streamReasoning: { text: 'Plan' } }))
-      .toEqual({ showActivity: false, announcement: 'Denkprozess' })
+      .toEqual({ showActivity: false, announcement: 'Überlegung' })
     expect(agentRunPresentation({ running: true, activity, streamContent: 'Antwort' }))
       .toEqual({ showActivity: false, announcement: 'Antwort wird erstellt' })
     expect(agentRunPresentation({
       running: true,
       activity: { phase: 'waiting_model', modelRequest: 2 },
       transcript: {
-        messages: [{ toolHistory: { items: [{ current: true, result: {} }] } }],
+        messages: [{ workHistory: { entries: [{ type: 'tool', current: true, result: {} }] } }],
         unmatchedApprovals: []
       }
     })).toEqual({
@@ -61,15 +61,15 @@ describe('agent activity', () => {
       activity: { phase: 'waiting_model', modelRequest: 2 },
       streamReasoning: { text: 'Ergebnisse prüfen' },
       transcript: {
-        messages: [{ toolHistory: { items: [{ current: true, result: {} }] } }],
+        messages: [{ workHistory: { entries: [{ type: 'tool', current: true, result: {} }] } }],
         unmatchedApprovals: []
       }
-    })).toEqual({ showActivity: false, announcement: 'Denkprozess' })
+    })).toEqual({ showActivity: false, announcement: 'Überlegung' })
     expect(agentRunPresentation({
       running: true,
       activity: { phase: 'processing_tool', tool: 'read_file' },
       transcript: {
-        messages: [{ toolHistory: { items: [{ active: true }] } }],
+        messages: [{ workHistory: { entries: [{ type: 'tool', active: true }] } }],
         unmatchedApprovals: []
       }
     })).toEqual({ showActivity: false, announcement: 'Tool wird ausgeführt: Datei lesen' })
@@ -77,7 +77,7 @@ describe('agent activity', () => {
       running: true,
       activity: { phase: 'preparing_tools' },
       transcript: {
-        messages: [{ toolHistory: { items: [{ current: true, result: null }] } }],
+        messages: [{ workHistory: { entries: [{ type: 'tool', current: true, result: null }] } }],
         unmatchedApprovals: []
       }
     })).toEqual({ showActivity: false, announcement: 'Tool-Aufrufe werden vorbereitet' })
@@ -85,10 +85,18 @@ describe('agent activity', () => {
       running: true,
       activity,
       transcript: {
-        messages: [{ toolHistory: { items: [{ approval: { title: 'Datei schreiben?' } }] } }],
+        messages: [{ workHistory: { entries: [{ type: 'tool', approval: { title: 'Datei schreiben?' } }] } }],
         unmatchedApprovals: []
       }
     })).toEqual({ showActivity: false, announcement: 'Freigabe erforderlich: Datei schreiben?' })
+    expect(agentRunPresentation({
+      running: true,
+      activity: { phase: 'waiting_model', modelRequest: 2 },
+      transcript: {
+        messages: [{ currentTurn: true, workHistory: { entries: [] } }],
+        unmatchedApprovals: []
+      }
+    })).toEqual({ showActivity: false, announcement: 'Modell wertet Tool-Ergebnisse aus' })
     expect(agentRunPresentation({ running: true, activity: { phase: 'finalizing' } }))
       .toEqual({ showActivity: false, announcement: 'Antwort wird abgeschlossen' })
     expect(agentRunPresentation({ running: false, activity })).toEqual({
@@ -101,6 +109,8 @@ describe('agent activity', () => {
     const startedAt = '2026-07-19T12:00:00.000Z'
     expect(formatActivityDuration(startedAt, Date.parse('2026-07-19T12:00:09.900Z'))).toBe('9 s')
     expect(formatActivityDuration(startedAt, Date.parse('2026-07-19T12:01:05.000Z'))).toBe('1 min 5 s')
+    expect(formatActivityDuration(startedAt, Date.parse('2026-07-19T14:05:00.000Z'))).toBe('2 h 5 min')
+    expect(formatActivityDuration(startedAt, Date.parse('2026-07-21T15:00:00.000Z'))).toBe('2 T 3 h')
     expect(formatActivityDuration(null)).toBe('0 s')
   })
 })

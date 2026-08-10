@@ -1,23 +1,32 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.agent.runtime as runtime_module
 import mato_loop_backend.agent.video_analysis as video_analysis
 from mato_loop_backend.agent.context import ContextManager, ContextProjection
+from mato_loop_backend.agent.permissions import PermissionDecision
 from mato_loop_backend.agent.runtime import (
     AgentRunError,
     AgentRuntime,
     _linked_research_source_ids,
     _VisibleResponse,
 )
-from mato_loop_backend.agent.tools import ToolFileAction, ToolResult, tool_registry
+from mato_loop_backend.agent.tools import (
+    ToolFileAction,
+    ToolRegistry,
+    ToolResult,
+    tool_registry,
+)
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentRuntimeSettings,
@@ -25,10 +34,13 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     MemorySettings,
     SettingsStore,
+    SkillDefinition,
+    SkillsSettings,
     ToolSettings,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig, TrustLevel
 from mato_loop_backend.video_processing import MediaInfo, VideoFrame
+from mato_loop_backend.workspace import RootFileService
 
 SOURCE_ID = "src-test"
 SOURCE_URL = "https://example.test/source"
@@ -68,6 +80,8 @@ async def _runtime_setup(
     vision_fallback_private: bool = False,
     tool_result: ToolResult | None = None,
     workspace_access: str = "read-only",
+    skills: SkillsSettings | None = None,
+    skill_creation_model: bool = False,
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -90,11 +104,17 @@ async def _runtime_setup(
         if vision_fallback
         else None
     )
+    builder_model = (
+        ModelConfig(provider_id=provider.id, model_id="skill-builder")
+        if skill_creation_model
+        else None
+    )
     ai_settings = AiSettings(
         providers=[provider],
-        models=[item for item in (model, vision_model) if item is not None],
+        models=[item for item in (model, vision_model, builder_model) if item is not None],
         default_model_id=model.id,
         vision_model_id=vision_model.id if vision_model is not None else None,
+        skill_creation_model_id=builder_model.id if builder_model is not None else None,
     )
     runtime_settings = AgentRuntimeSettings(
         max_steps=10,
@@ -123,6 +143,7 @@ async def _runtime_setup(
             AgentRuntimeSettings: runtime_settings,
             MemorySettings: MemorySettings(enabled=False),
             IntegrationSettings: IntegrationSettings(),
+            SkillsSettings: skills or SkillsSettings(),
             ToolSettings: ToolSettings(),
         }[settings_type]
 
@@ -173,6 +194,404 @@ def _assistant_messages(db) -> list[Message]:
         for call in db.add.call_args_list
         if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
     ]
+
+
+async def test_required_search_loads_matching_skill_before_search(monkeypatch) -> None:
+    skill = SkillDefinition(
+        name="Current research",
+        description="Use for current web research.",
+        instructions="Search official sources first.",
+    )
+    db, run, requests, projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="load-skill",
+                        name="load_skill",
+                        arguments={"skill_id": str(skill.id)},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[_search_call("search-after-skill", "Aktuelle Frage")],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content=f"Antwort {SOURCE_CITATION}", finish_reason="stop"),
+        ],
+        skills=SkillsSettings(skills=[skill]),
+    )
+
+    async def execute(call, context, bound_tool):
+        if call.name == "load_skill":
+            return await ToolRegistry._execute_definition(
+                tool_registry, call, context, bound_tool
+            )
+        return _search_result()
+
+    tool_registry._execute_definition.side_effect = execute
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert {tool["name"] for tool in requests[0]["tools"]} == {
+        "load_skill",
+        "web_search",
+    }
+    assert [tool["name"] for tool in requests[1]["tools"]] == ["web_search"]
+    assert skill.instructions not in projections[0]["system_prompt"]
+    assert skill.instructions in projections[1]["system_prompt"]
+
+
+async def test_stale_skill_loads_after_activation_are_not_executed_or_persisted(
+    monkeypatch,
+) -> None:
+    skill = SkillDefinition(
+        name="Current research",
+        description="Use for current web research.",
+        instructions="Search official sources first.",
+    )
+    stale = ToolCall(
+        id="stale-load",
+        name="load_skill",
+        arguments={"skill_id": str(skill.id)},
+    )
+    db, run, requests, _projections, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="initial-load",
+                        name="load_skill",
+                        arguments={"skill_id": str(skill.id)},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(tool_calls=[stale], finish_reason="tool_calls"),
+            ProviderResult(tool_calls=[stale], finish_reason="tool_calls"),
+            ProviderResult(tool_calls=[stale], finish_reason="tool_calls"),
+        ],
+        skills=SkillsSettings(skills=[skill]),
+    )
+
+    async def execute(call, context, bound_tool):
+        return await ToolRegistry._execute_definition(
+            tool_registry, call, context, bound_tool
+        )
+
+    tool_registry._execute_definition.side_effect = execute
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.requiredWebSearchMissing"
+    assert len(requests) == 4
+    tool_registry._execute_definition.assert_awaited_once()
+    persisted = [
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+    ]
+    assert [message.role for message in persisted] == ["assistant", "tool"]
+    assert "stale-load" not in str([message.tool_calls for message in persisted])
+    assert all(event.get("toolCallId") != "stale-load" for event in events)
+
+
+async def test_invalid_skill_loads_consume_required_search_retries(monkeypatch) -> None:
+    skill = SkillDefinition(
+        name="Current research",
+        description="Use for current web research.",
+        instructions="Search official sources first.",
+    )
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id=f"invalid-load-{index}",
+                        name="load_skill",
+                        arguments={"skill_id": str(uuid4())},
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+            for index in range(3)
+        ],
+        skills=SkillsSettings(skills=[skill]),
+    )
+
+    async def execute(call, context, bound_tool):
+        return await ToolRegistry._execute_definition(
+            tool_registry, call, context, bound_tool
+        )
+
+    tool_registry._execute_definition.side_effect = execute
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.requiredWebSearchMissing"
+    assert len(requests) == 3
+    assert tool_registry._execute_definition.await_count == 3
+
+
+async def test_load_skill_is_rejected_when_called_with_another_tool(monkeypatch) -> None:
+    skill = SkillDefinition(
+        name="Current research",
+        description="Use for current web research.",
+        instructions="Search official sources first.",
+    )
+    db, run, _requests, projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="load-skill",
+                        name="load_skill",
+                        arguments={"skill_id": str(skill.id)},
+                    ),
+                    _search_call("parallel-search", "Aktuelle Frage"),
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Ohne Skill fortgesetzt.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        skills=SkillsSettings(skills=[skill]),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    tool_messages = [
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message) and call.args[0].role == "tool"
+    ]
+    assert len(tool_messages) == 2
+    assert all("skill.loadMustBeExclusive" in item.content for item in tool_messages)
+    assert skill.instructions not in projections[1]["system_prompt"]
+    tool_registry._execute_definition.assert_not_awaited()
+
+
+async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
+    monkeypatch, tmp_path
+) -> None:
+    skills = SkillsSettings()
+    original_execute = ToolRegistry._execute_definition
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="build-skill",
+                        name="build_skill",
+                        arguments={
+                            "brief": "Create a reusable API validation workflow.",
+                            "name_hint": "API checks",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="invalid"),
+            ProviderResult(content="still invalid"),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="draft",
+                        name="return_skill_draft",
+                        arguments={
+                            "name": "API checks",
+                            "description": "Use when an API response must be validated.",
+                            "instructions": "Call the available API tool and validate its response.",
+                        },
+                    )
+                ]
+            ),
+            ProviderResult(content="Skill erstellt.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        skills=skills,
+        skill_creation_model=True,
+    )
+
+    async def execute(call, context, bound_tool):
+        return await original_execute(tool_registry, call, context, bound_tool)
+
+    tool_registry._execute_definition.side_effect = execute
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(run.session_id)
+    monkeypatch.setattr(
+        runtime_module,
+        "RootFileService",
+        lambda session_id, **kwargs: RootFileService(
+            session_id,
+            session_storage=storage,
+            workspace_home=tmp_path,
+            working_directory=kwargs.get("working_directory"),
+        ),
+    )
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        AgentRuntime,
+        "_authorize",
+        AsyncMock(return_value=PermissionDecision.ALLOW),
+    )
+    async def confirm_fallback(*_args, **_kwargs):
+        assert len(requests) == 3
+        return {"skillModelFallback": ["Sessionmodell verwenden"]}
+
+    request_question = AsyncMock(side_effect=confirm_fallback)
+    monkeypatch.setattr(AgentRuntime, "_request_question", request_question)
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["model"].model_id for request in requests] == [
+        "local-model",
+        "skill-builder",
+        "skill-builder",
+        "local-model",
+        "local-model",
+    ]
+    builder_request, repair_request, fallback_request = requests[1:4]
+    assert all(
+        [tool["name"] for tool in request["tools"]] == ["return_skill_draft"]
+        for request in (builder_request, repair_request, fallback_request)
+    )
+    assert [message["role"] for message in builder_request["messages"]] == [
+        "system",
+        "user",
+    ]
+    assert [message["role"] for message in repair_request["messages"]] == [
+        "system",
+        "user",
+        "user",
+    ]
+    assert repair_request["messages"][2]["content"].startswith(
+        "The output was invalid."
+    )
+    assert [message["role"] for message in fallback_request["messages"]] == [
+        "system",
+        "user",
+    ]
+    builder_payload = json.loads(builder_request["messages"][1]["content"])
+    assert builder_payload["currentRequest"] == "Aktuelle Frage"
+    assert builder_payload["brief"] == "Create a reusable API validation workflow."
+    assert builder_payload["nameHint"] == "API checks"
+    assert builder_payload["effectiveTools"] == requests[0]["tools"]
+    assert set(builder_payload) == {
+        "currentRequest",
+        "brief",
+        "nameHint",
+        "effectiveTools",
+    }
+    request_question.assert_awaited_once()
+    assert [skill.name for skill in skills.skills] == ["API checks"]
+    SettingsStore.save.assert_awaited_once()
+
+
+async def test_skill_builder_uses_only_one_structured_repair_across_fallback(
+    monkeypatch,
+) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="build-skill",
+                        name="build_skill",
+                        arguments={"brief": "Create an API workflow."},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="invalid"),
+            ProviderResult(content="still invalid"),
+            ProviderResult(content="fallback invalid"),
+            ProviderResult(content="Unbestätigte Antwort", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        skill_creation_model=True,
+    )
+    original_execute = ToolRegistry._execute_definition
+
+    async def execute(call, context, bound_tool):
+        return await original_execute(tool_registry, call, context, bound_tool)
+
+    tool_registry._execute_definition.side_effect = execute
+    monkeypatch.setattr(
+        AgentRuntime,
+        "_request_question",
+        AsyncMock(return_value={"skillModelFallback": ["Sessionmodell verwenden"]}),
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "skill.creationModelFailed"
+    assert [request["model"].model_id for request in requests] == [
+        "local-model",
+        "skill-builder",
+        "skill-builder",
+        "local-model",
+        "local-model",
+    ]
+    assert [message["role"] for message in requests[3]["messages"]] == [
+        "system",
+        "user",
+    ]
+
+
+async def test_failed_skill_builder_request_consumes_model_budget(monkeypatch) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [],
+        max_model_requests=2,
+        search_policy=WebSearchPolicy.AVAILABLE,
+        skill_creation_model=True,
+    )
+    main_result = ProviderResult(
+        tool_calls=[
+            ToolCall(
+                id="build-skill",
+                name="build_skill",
+                arguments={"brief": "Create an API workflow."},
+            )
+        ],
+        finish_reason="tool_calls",
+    )
+
+    async def complete(_db, **kwargs):
+        requests.append(kwargs)
+        if len(requests) == 1:
+            return main_result
+        raise RuntimeError("builder unavailable")
+
+    original_execute = ToolRegistry._execute_definition
+
+    async def execute(call, context, bound_tool):
+        return await original_execute(tool_registry, call, context, bound_tool)
+
+    monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
+    tool_registry._execute_definition.side_effect = execute
+    question = AsyncMock(
+        return_value={"skillModelFallback": ["Sessionmodell verwenden"]}
+    )
+    monkeypatch.setattr(AgentRuntime, "_request_question", question)
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.modelRequestLimitReached"
+    assert len(requests) == 2
+    question.assert_awaited_once()
 
 
 async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) -> None:

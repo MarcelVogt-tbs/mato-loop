@@ -7,8 +7,10 @@ from mato_loop_backend.integrations.caldav import CalDavConfig
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
+    DefaultTaskListSettings,
     IntegrationInstance,
     IntegrationSettings,
+    SkillDefinition,
     ToolExecutionPolicy,
     ToolSettings,
 )
@@ -29,6 +31,10 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         default_calendar=DefaultCalendarSettings(
             integration_id=account.id,
             calendar_key=f"calendar:{'a' * 32}",
+        ),
+        default_task_list=DefaultTaskListSettings(
+            integration_id=account.id,
+            task_list_key=f"tasklist:{'a' * 32}",
         ),
         generate_image={"policy": ToolExecutionPolicy.AUTO},
         transcribe_audio={"policy": ToolExecutionPolicy.AUTO},
@@ -77,15 +83,28 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
             Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,
         ),
         inactive_capability_groups=inactive,
+        skill_catalog=tuple(
+            SkillDefinition(
+                name=f"{index:02d}-" + "n" * 61,
+                description="d" * 240,
+                instructions="inactive instructions",
+            )
+            for index in range(20)
+        ),
+        active_skill=SkillDefinition(
+            name="a" * 64,
+            description="active",
+            instructions="i" * 8_000,
+        ),
     )
     schemas = effective.schemas()
     prompt_tokens = estimate_tokens(prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert len(schemas) == 22
-    # The guidance about unconfigured integrations names each tool, so installing
-    # an integration with many tools raises the prompt cost. BookStack adds 22
-    # knowledge tools on top of the existing calendar ones.
-    assert prompt_tokens <= 2_650, prompt_tokens
-    assert schema_tokens <= 4_400, schema_tokens
-    assert prompt_tokens + schema_tokens <= 7_000
+    assert len(schemas) == 33
+    assert {"load_skill", "build_skill"} <= {schema["name"] for schema in schemas}
+    build_skill = next(schema for schema in schemas if schema["name"] == "build_skill")
+    assert set(build_skill["parameters"]["properties"]) == {"brief", "name_hint"}
+    assert prompt_tokens <= 7_000, prompt_tokens
+    assert schema_tokens <= 5_900, schema_tokens
+    assert prompt_tokens + schema_tokens <= 13_000

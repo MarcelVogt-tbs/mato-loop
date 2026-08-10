@@ -56,45 +56,51 @@ export function buildChatTranscript(
           active
         }
       }),
-      toolHistory: null,
-      reasoningHistory: null
+      workHistory: null
     }))
 
   const groupedMessages = []
   let assistantSection = []
+  let turnStartedAt = null
 
   function flushAssistantSection() {
     if (!assistantSection.length) return
-    const toolItems = assistantSection.flatMap((message) => message.toolCalls)
-    const reasoningItems = assistantSection.flatMap((message) => message.reasoning ? [message.reasoning] : [])
+    const workEntries = assistantSection.flatMap((message) => [
+      ...(message.reasoning
+        ? [{ key: `reasoning-${message.id || message._sourceIndex}`, type: 'reasoning', reasoning: message.reasoning }]
+        : []),
+      ...(message.content && message.toolCalls.length
+        ? [{ key: `note-${message.id || message._sourceIndex}`, type: 'note', text: message.content }]
+        : []),
+      ...message.toolCalls.map((item) => ({ ...item, type: 'tool' }))
+    ])
+    const reasoningItems = workEntries
+      .filter((entry) => entry.type === 'reasoning')
+      .map((entry) => entry.reasoning)
     const carrier = assistantSection.find((message) => message.toolCalls.length || message.reasoning)
       || assistantSection[0]
-    const reasoningCarrier = [...assistantSection].reverse().find((message) => message.reasoning)
-      || carrier
-    if (toolItems.length) {
-      carrier.toolHistory = { id: `tool-history-${carrier.id}`, items: toolItems }
-    }
-    if (reasoningItems.length) {
+    const reversedSection = [...assistantSection].reverse()
+    const finalCreatedAt = reversedSection.find((message) => message.createdAt)?.createdAt || null
+    const currentTurn = running && assistantSection.some((message) => message._sourceIndex > lastUserIndex)
+    if (workEntries.length) {
       const durations = reasoningItems.map((item) => item.observedDurationMs).filter(Number.isFinite)
-      const tokens = reasoningItems.map((item) => item.reasoningTokens).filter(Number.isFinite)
-      reasoningCarrier.reasoningHistory = {
-        kind: reasoningItems.every((item) => item.kind === 'summary') ? 'summary' : 'content',
-        entries: reasoningItems,
+      carrier.workHistory = {
+        id: `work-history-${carrier.id}`,
+        entries: workEntries,
         observedDurationMs: durations.length ? durations.reduce((total, value) => total + value, 0) : null,
-        reasoningTokens: tokens.length ? tokens.reduce((total, value) => total + value, 0) : null
+        startedAt: turnStartedAt,
+        completedAt: currentTurn ? null : finalCreatedAt
       }
     }
     const trustLevels = assistantSection.map((message) => message.trustLevel)
     const effectiveTrust = trustLevels.includes('private')
       ? 'private'
       : trustLevels.includes('public') ? 'public' : null
-    const reversedSection = [...assistantSection].reverse()
-    const finalCreatedAt = reversedSection.find((message) => message.createdAt)?.createdAt || null
     const finalModelName = reversedSection.find((message) => message.modelName)?.modelName || null
     const hasContent = assistantSection.some((message) => Boolean(message.content))
-    const currentTurn = running && assistantSection.some((message) => message._sourceIndex > lastUserIndex)
 
     for (const message of assistantSection) {
+      if (message.toolCalls.length) message.content = ''
       message.toolCalls = []
       message.reasoning = null
       message.createdAt = null
@@ -106,8 +112,7 @@ export function buildChatTranscript(
       || message.content
       || message.generationStatus === 'interrupted'
       || message.attachments?.length
-      || message.toolHistory
-      || message.reasoningHistory
+      || message.workHistory
     ))
     if (visibleMessages.length) {
       visibleMessages[0].showAgentLabel = true
@@ -136,6 +141,7 @@ export function buildChatTranscript(
     flushAssistantSection()
     delete message._sourceIndex
     groupedMessages.push(message)
+    if (message.role === 'user') turnStartedAt = message.createdAt || null
   }
   flushAssistantSection()
 

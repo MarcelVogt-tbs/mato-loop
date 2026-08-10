@@ -191,6 +191,33 @@ describe('workspace store', () => {
     expect(workspace.rootIdentity).toBeNull()
   })
 
+  it('opens an approval draft in the editable session file editor', async () => {
+    api.get.mockResolvedValue({ data: { entries: [] } })
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a', workingDirectory: 'current' })
+
+    await workspace.openApprovalDraft({
+      root: 'session',
+      sessionId: 'session-a',
+      path: 'files/skill-draft.json',
+      filename: 'skill-draft.json',
+      sizeBytes: 128,
+      initialRevision: 'revision-1'
+    })
+
+    expect(workspace.scope).toBe('session')
+    expect(workspace.rootIdentity).toBeNull()
+    expect(workspace.open).toBe(true)
+    expect(workspace.editorActive).toBe(true)
+    expect(workspace.viewedEntry).toEqual({
+      kind: 'file', name: 'skill-draft.json', path: 'files/skill-draft.json', size: 128
+    })
+    expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
+      params: { path: '.', scope: 'session', session_id: 'session-a' },
+      suppressErrorToast: true
+    })
+  })
+
   it('keeps directory data and an inline error until retry succeeds', async () => {
     const error = { response: { data: { error: { code: 'workspace.directoryNotFound' } } } }
     api.get

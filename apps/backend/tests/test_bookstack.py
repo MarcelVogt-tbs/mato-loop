@@ -99,6 +99,8 @@ def _context(instance: IntegrationInstance, revision: str) -> SimpleNamespace:
             "binding_revision": revision,
         },
         integration_settings=IntegrationSettings(instances=[instance]),
+        tool_settings=ToolSettings(),
+        ask=AsyncMock(return_value=PermissionDecision.ALLOW),
     )
 
 
@@ -162,6 +164,21 @@ async def test_resource_loader_maps_books_to_policy_resources(monkeypatch) -> No
     assert resources[0].label == "Handbuch"
     assert resources[0].hard_unavailable_capabilities == frozenset()
     assert len(resources[1].label) == 160
+
+
+async def test_resource_loader_refuses_a_truncated_book_list(monkeypatch) -> None:
+    client = AsyncMock()
+    client.list_books.return_value = ((), True)
+    context = AsyncMock()
+    context.__aenter__.return_value = client
+    monkeypatch.setattr(bookstack_module, "BookStackClient", Mock(return_value=context))
+
+    with pytest.raises(BookStackError) as error:
+        await load_bookstack_resources(
+            _base(), {"token_id": "id", "token_secret": "secret"}
+        )
+
+    assert error.value.code == "bookstack.responseTooLarge"
 
 
 def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
@@ -553,15 +570,12 @@ async def test_update_shelf_treats_explicit_nulls_as_absent(monkeypatch) -> None
             }
         )
 
-async def test_update_page_returns_stored_markdown_for_verification(monkeypatch) -> None:
+async def test_update_page_reports_success_without_trusting_the_response(monkeypatch) -> None:
     instance = _base()
     revision = _revision(instance)
     token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
-    stored = _page(name="IP-Adressen", markdown="# IP-Adressen\n\nDHCP: 100-199\n")
-
     client = AsyncMock()
-    client.read_page.return_value = _page()
-    client.update_page.return_value = stored
+    client.update_page.return_value = None
     _bind_location_checks(client)
 
     @asynccontextmanager
@@ -580,41 +594,8 @@ async def test_update_page_returns_stored_markdown_for_verification(monkeypatch)
         _context(instance, revision),
     )
 
-    assert json.loads(result.content)["page"]["markdown"] == (
-        "# IP-Adressen\n\nDHCP: 100-199\n"
-    )
-
-
-async def test_update_page_reloads_when_bookstack_omits_markdown(monkeypatch) -> None:
-    instance = _base()
-    revision = _revision(instance)
-    token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
-
-    client = AsyncMock()
-    client.read_page.return_value = _page(markdown="# Aus BookStack\n")
-    client.update_page.return_value = _page()
-    _bind_location_checks(client)
-
-    @asynccontextmanager
-    async def selected_client(_integration_id, _context):
-        yield client, revision
-
-    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
-
-    result = await knowledge_update_page(
-        KnowledgeUpdatePageArguments(
-            integration_id=instance.id,
-            book_key="book:7",
-            page_token=token,
-            markdown="# Neu\n",
-        ),
-        _context(instance, revision),
-    )
-
-    # The membership check no longer loads content, so exactly one full read
-    # remains: the reload that fetches the stored markdown.
-    assert client.read_page.await_count == 1
-    assert json.loads(result.content)["page"]["markdown"] == "# Aus BookStack\n"
+    assert json.loads(result.content) == {"updated": True, "contentIsUntrusted": True}
+    client.read_page.assert_not_awaited()
 
 
 async def test_create_book_files_the_book_into_requested_shelves(monkeypatch) -> None:
@@ -851,6 +832,10 @@ async def test_shelf_update_adds_and_removes_without_dropping_other_books(
 
     monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
 
+    context = _context(instance, revision)
+    context.tool_settings.resource_labels = {
+        str(instance.id): {"book:9": "Alt", "book:13": "Geraete"}
+    }
     await knowledge_update_shelf(
         KnowledgeUpdateShelfArguments(
             integration_id=instance.id,
@@ -858,10 +843,17 @@ async def test_shelf_update_adds_and_removes_without_dropping_other_books(
             add_book_keys=["book:13"],
             remove_book_keys=["book:9"],
         ),
-        _context(instance, revision),
+        context,
     )
 
     assert client.update_shelf.await_args.kwargs["book_ids"] == (8, 13)
+    assert {
+        call.args[0].policy_resource_key for call in context.ask.await_args_list
+    } == {"book:9", "book:13"}
+    assert {call.args[0].resource_display for call in context.ask.await_args_list} == {
+        '"Alt" · Wissensdatenbank "Wiki"',
+        '"Geraete" · Wissensdatenbank "Wiki"',
+    }
 
 
 def test_shelf_update_rejects_replace_combined_with_incremental_changes() -> None:
@@ -913,6 +905,11 @@ def _download_context(instance: IntegrationInstance, revision: str) -> SimpleNam
     context.tool_settings = ToolSettings()
     context.allowed_private_origins = ()
     context.ask = AsyncMock(return_value=PermissionDecision.ALLOW)
+    context.db = AsyncMock()
+    context.db.scalar.return_value = Mock(
+        data=context.tool_settings.model_dump(mode="json")
+    )
+    context.model_id = None
     context.root_files = Mock()
     # Uploading a local file asks for filesystem.read, which builds a permission
     # scope from the root identity.
@@ -934,6 +931,7 @@ async def test_attachment_from_url_is_downloaded_and_uploaded(monkeypatch) -> No
 
     async def download_file(url, **_kwargs):
         assert url == "https://example.test/sheet.pdf"
+        await _kwargs["authorize_url"](url)
         return DownloadedFile(
             final_url=url,
             content_type="application/pdf",
@@ -998,7 +996,7 @@ async def test_failed_download_reports_the_underlying_reason(monkeypatch) -> Non
     client.create_file_attachment.assert_not_awaited()
 
 
-async def test_download_is_refused_when_web_access_is_disabled(monkeypatch) -> None:
+async def test_download_is_refused_when_current_web_access_is_disabled(monkeypatch) -> None:
     instance = _base()
     revision = _revision(instance)
     token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
@@ -1010,7 +1008,11 @@ async def test_download_is_refused_when_web_access_is_disabled(monkeypatch) -> N
 
     monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
     context = _download_context(instance, revision)
-    context.web_fetch_policy = WebFetchPolicy.DISABLED
+    context.db.scalar.return_value = Mock(
+        data=ToolSettings.model_validate(
+            {"webFetch": {"enabled": False}}
+        ).model_dump(mode="json")
+    )
     arguments = KnowledgeCreateAttachmentArguments(
         integration_id=instance.id,
         book_key="book:7",
@@ -1445,6 +1447,35 @@ async def test_page_update_rejects_markdown_for_tokens_without_a_revision(
     )
 
     assert result.is_error is True
+    assert json.loads(result.content)["error"]["code"] == "integration.staleReference"
+    client.update_page.assert_not_awaited()
+
+
+async def test_page_update_rejects_a_current_page_without_a_revision(
+    monkeypatch,
+) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
+    client = AsyncMock()
+    client.read_page_location.return_value = _page(updated_at=None)
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_update_page(
+        KnowledgeUpdatePageArguments(
+            integration_id=instance.id,
+            book_key="book:7",
+            page_token=token,
+            markdown="# Blind ueberschrieben\n",
+        ),
+        _context(instance, revision),
+    )
+
     assert json.loads(result.content)["error"]["code"] == "integration.staleReference"
     client.update_page.assert_not_awaited()
 

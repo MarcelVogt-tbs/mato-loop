@@ -16,6 +16,8 @@ from mato_loop_backend.agent.permissions import (
     session_browse_permission,
     session_permission,
     session_search_permission,
+    skill_load_permission,
+    skill_write_permission,
     webfetch_permission,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
@@ -194,6 +196,43 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
         ToolCall(id="delete", name="delete_path", arguments={}),
         request,
         root_files,
+    )
+
+    assert decision == PermissionDecision.DENY
+
+
+async def test_skill_policy_revocation_while_waiting_stops_loading(
+    tmp_path, monkeypatch
+) -> None:
+    session = _session(user_id=uuid4())
+    request = skill_load_permission(session.user_id, "Recherche")
+    settings_loads = 0
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        nonlocal settings_loads
+        if settings_type is IntegrationSettings:
+            return IntegrationSettings()
+        settings_loads += 1
+        return ToolSettings.model_validate(
+            {
+                "policies": {
+                    "skills.load": "ask" if settings_loads == 1 else "disabled"
+                }
+            }
+        )
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(
+        AgentRuntime, "_request_approval", AsyncMock(return_value="allow_once")
+    )
+
+    decision = await AgentRuntime._authorize(
+        _db_with_grants(),
+        AgentRun(id=uuid4(), session_id=session.id),
+        session,
+        ToolCall(id="load", name="load_skill", arguments={}),
+        request,
+        _root_files(tmp_path, session),
     )
 
     assert decision == PermissionDecision.DENY
@@ -752,6 +791,34 @@ async def test_agent_identity_session_grant_matches_exact_user(tmp_path) -> None
     )
     assert await PermissionPolicy.evaluate(
         _db_with_grants(grant), session, other_user, root_files
+    ) == PermissionDecision.ASK
+
+
+async def test_skill_collection_grant_matches_exact_user_and_capability(tmp_path) -> None:
+    session = _session(user_id=uuid4())
+    request = skill_load_permission(session.user_id, "Recherche")
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=request.capability,
+        resource_type=request.resource_type,
+        resource_scope=request.resource_scope,
+    )
+    root_files = _root_files(tmp_path, session)
+
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant), session, request, root_files
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant),
+        session,
+        skill_load_permission(uuid4(), "Fremd"),
+        root_files,
+    ) == PermissionDecision.ASK
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant),
+        session,
+        skill_write_permission(session.user_id, "Recherche"),
+        root_files,
     ) == PermissionDecision.ASK
 
 

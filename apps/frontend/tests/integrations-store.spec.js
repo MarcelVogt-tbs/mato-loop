@@ -200,6 +200,7 @@ describe('integration store', () => {
     const access = {
       integrationId: 'integration-id',
       defaultResourceKey: 'calendar:work',
+      defaultTaskListKey: null,
       actions: [
         {
           capability: 'calendar.read',
@@ -213,7 +214,9 @@ describe('integration store', () => {
       resources: [
         {
           key: 'calendar:work',
+          groupKey: 'work',
           label: 'Arbeit',
+          applicableCapabilities: ['calendar.read'],
           policies: { 'calendar.read': 'auto' },
           effectivePolicies: { 'calendar.read': 'auto' },
           hardUnavailableCapabilities: []
@@ -230,7 +233,8 @@ describe('integration store', () => {
       {
         policies: { 'calendar.read': 'auto' },
         resources: { 'calendar:work': { 'calendar.read': 'auto' } },
-        defaultResourceKey: 'calendar:work'
+        defaultResourceKey: 'calendar:work',
+        defaultTaskListKey: null
       }
     )
 
@@ -238,7 +242,8 @@ describe('integration store', () => {
     expect(api.put).toHaveBeenCalledWith('/integrations/integration-id/access', {
       policies: { 'calendar.read': 'auto' },
       resources: { 'calendar:work': { 'calendar.read': 'auto' } },
-      defaultResourceKey: 'calendar:work'
+      defaultResourceKey: 'calendar:work',
+      defaultTaskListKey: null
     })
     expect(store.accessByIntegration['integration-id']).toEqual(access)
   })

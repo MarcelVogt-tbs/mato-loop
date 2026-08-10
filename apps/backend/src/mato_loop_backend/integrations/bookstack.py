@@ -317,7 +317,7 @@ _BOOKSTACK_ERROR_CODES = {
     "bookstack.notFound": "integration.remoteNotFound",
     "bookstack.outcomeUnknown": "integration.outcomeUnknown",
     "bookstack.pageTooLarge": "integration.responseTooLarge",
-    "bookstack.permissionDenied": "integration.authenticationFailed",
+    "bookstack.permissionDenied": "integration.permissionDenied",
     "bookstack.rateLimited": "integration.rateLimited",
     "bookstack.redirectRejected": "integration.unavailable",
     "bookstack.responseTooLarge": "integration.responseTooLarge",
@@ -931,7 +931,7 @@ def _page_write_conflict(
     observed = getattr(token, "updated_at", None)
     if observed is None:
         return ToolResult.error("integration.staleReference", field="page_token")
-    if existing.updated_at is not None and existing.updated_at != observed:
+    if existing.updated_at is None or existing.updated_at != observed:
         return ToolResult.error("integration.staleReference", field="page_token")
     return None
 
@@ -958,23 +958,12 @@ async def knowledge_update_page(
             conflict = _page_write_conflict(token, existing, arguments.markdown)
             if conflict is not None:
                 return conflict
-            page = await client.update_page(
+            await client.update_page(
                 token.page_id,
                 name=arguments.name,
                 markdown=arguments.markdown,
             )
-            if not page.markdown:
-                page = await client.read_page(token.page_id)
-        return _result(
-            {
-                "page": {
-                    **_page_summary(
-                        page, arguments.integration_id, revision, arguments.book_key
-                    ),
-                    "markdown": page.markdown,
-                }
-            }
-        )
+        return _result({"updated": True})
     except ValueError:
         return _invalid("page_token")
     except BookStackError as exc:
@@ -1194,11 +1183,20 @@ async def knowledge_create_shelf(
     arguments: KnowledgeCreateShelfArguments, context: Any
 ) -> Any:
     try:
-        instance, _revision_value = _binding(context, arguments.integration_id)
+        instance, revision = _binding(context, arguments.integration_id)
         blocked = _disabled_book_keys(context, instance)
         refused = _refuse_blocked_books(arguments.book_keys, blocked, "book_keys")
         if refused is not None:
             return refused
+        denied = await _authorize_book_writes(
+            context,
+            instance,
+            revision,
+            set(arguments.book_keys or ()),
+            _operation_key("create-shelf-membership", arguments),
+        )
+        if denied is not None:
+            return denied
         async with _selected_client(arguments.integration_id, context) as (
             client,
             _revision,
@@ -1219,7 +1217,7 @@ async def knowledge_update_shelf(
     arguments: KnowledgeUpdateShelfArguments, context: Any
 ) -> Any:
     try:
-        instance, _revision_value = _binding(context, arguments.integration_id)
+        instance, revision = _binding(context, arguments.integration_id)
         blocked = _disabled_book_keys(context, instance)
         for keys, field in (
             (arguments.book_keys, "book_keys"),
@@ -1229,18 +1227,27 @@ async def knowledge_update_shelf(
             refused = _refuse_blocked_books(keys, blocked, field)
             if refused is not None:
                 return refused
-        async with _selected_client(arguments.integration_id, context) as (
-            client,
-            _revision,
-        ):
-            shelf_id = _shelf_id(arguments.shelf_key)
-            book_ids = _book_ids(arguments.book_keys)
-            if arguments.add_book_keys is not None or arguments.remove_book_keys is not None:
+        shelf_id = _shelf_id(arguments.shelf_key)
+        book_ids = _book_ids(arguments.book_keys)
+        membership_changes = any(
+            keys is not None
+            for keys in (
+                arguments.book_keys,
+                arguments.add_book_keys,
+                arguments.remove_book_keys,
+            )
+        )
+        current_ids: tuple[int, ...] = ()
+        if membership_changes:
+            async with _selected_client(arguments.integration_id, context) as (
+                client,
+                _revision,
+            ):
                 contents = await client.read_shelf(shelf_id)
+            current_ids = tuple(book.id for book in contents.books)
+            if arguments.add_book_keys is not None or arguments.remove_book_keys is not None:
                 removed = set(_book_ids(arguments.remove_book_keys) or ())
-                merged = [
-                    book.id for book in contents.books if book.id not in removed
-                ]
+                merged = [book_id for book_id in current_ids if book_id not in removed]
                 for book_id in _book_ids(arguments.add_book_keys) or ():
                     if book_id not in merged:
                         merged.append(book_id)
@@ -1248,15 +1255,28 @@ async def knowledge_update_shelf(
             elif book_ids is not None and blocked:
                 # A full replacement would silently drop books the agent is not
                 # allowed to see, so keep their membership untouched.
-                contents = await client.read_shelf(shelf_id)
                 retained = [
-                    book.id
-                    for book in contents.books
-                    if f"book:{book.id}" in blocked
+                    book_id
+                    for book_id in current_ids
+                    if f"book:{book_id}" in blocked
                 ]
                 book_ids = tuple(
                     list(book_ids) + [b for b in retained if b not in book_ids]
                 )
+            changed = set(current_ids) ^ set(book_ids or ())
+            denied = await _authorize_book_writes(
+                context,
+                instance,
+                revision,
+                {f"book:{book_id}" for book_id in changed},
+                _operation_key("update-shelf-membership", arguments),
+            )
+            if denied is not None:
+                return denied
+        async with _selected_client(arguments.integration_id, context) as (
+            client,
+            _revision,
+        ):
             shelf = await client.update_shelf(
                 shelf_id,
                 name=arguments.name,
@@ -1316,7 +1336,10 @@ async def _download_attachment_source(
         PermissionDecision,
         webfetch_permission,
     )
-    from mato_loop_backend.agent.tools import ToolResult
+    from mato_loop_backend.agent.tools import (
+        ToolResult,
+        _ensure_webfetch_binding_is_current,
+    )
     from mato_loop_backend.integrations.webfetch import (
         WebFetchError,
         download_file,
@@ -1324,6 +1347,10 @@ async def _download_attachment_source(
     )
     from mato_loop_backend.settings import WebFetchPolicy
 
+    try:
+        await _ensure_webfetch_binding_is_current(context)
+    except WebFetchError:
+        return ToolResult.error("tool.unavailable")
     policy = getattr(context, "web_fetch_policy", None)
     if policy in (None, WebFetchPolicy.DISABLED):
         return ToolResult.error("tool.unavailable")
@@ -1331,15 +1358,16 @@ async def _download_attachment_source(
     origins = tuple(getattr(context, "allowed_private_origins", ()) or ())
 
     async def authorize_url(target: str) -> None:
+        await _ensure_webfetch_binding_is_current(context)
         needs_approval = policy == WebFetchPolicy.ASK or (
             policy == WebFetchPolicy.AUTO_PUBLIC
-            and private_origin_is_allowed(target, origins)
+            and private_origin_is_allowed(target, context.allowed_private_origins)
         )
-        if not needs_approval:
-            return
-        decision = await context.ask(webfetch_permission(target))
-        if decision != PermissionDecision.ALLOW:
+        if needs_approval and await context.ask(
+            webfetch_permission(target)
+        ) != PermissionDecision.ALLOW:
             raise WebFetchError("permission.denied")
+        await _ensure_webfetch_binding_is_current(context)
 
     try:
         downloaded = await download_file(
@@ -1501,11 +1529,33 @@ async def knowledge_delete_shelf(
     arguments: KnowledgeShelfArguments, context: Any
 ) -> Any:
     try:
+        instance, revision = _binding(context, arguments.integration_id)
+        shelf_id = _shelf_id(arguments.shelf_key)
         async with _selected_client(arguments.integration_id, context) as (
             client,
             _revision,
         ):
-            await client.delete_shelf(_shelf_id(arguments.shelf_key))
+            contents = await client.read_shelf(shelf_id)
+        book_keys = {f"book:{book.id}" for book in contents.books}
+        refused = _refuse_blocked_books(
+            list(book_keys), _disabled_book_keys(context, instance), "shelf_key"
+        )
+        if refused is not None:
+            return refused
+        denied = await _authorize_book_writes(
+            context,
+            instance,
+            revision,
+            book_keys,
+            _operation_key("delete-shelf-membership", arguments),
+        )
+        if denied is not None:
+            return denied
+        async with _selected_client(arguments.integration_id, context) as (
+            client,
+            _revision,
+        ):
+            await client.delete_shelf(shelf_id)
         return _result({"deleted": True})
     except BookStackError as exc:
         return _error(exc)
@@ -1524,7 +1574,9 @@ async def load_bookstack_resources(
     async with BookStackClient(
         str(config.base_url), credential["token_id"], credential["token_secret"]
     ) as client:
-        books, _truncated = await client.list_books()
+        books, truncated = await client.list_books()
+    if truncated:
+        raise BookStackError("bookstack.responseTooLarge")
     return tuple(
         IntegrationResource(
             key=f"book:{book.id}",
@@ -1545,6 +1597,58 @@ def _operation_key(name: str, arguments: BaseModel) -> str:
     return f"{name}:{hashlib.sha256(material.encode()).hexdigest()}"
 
 
+def _display_text(value: str | None, limit: int = 180) -> str:
+    text = " ".join((value or "").split())
+    return f"{text[:limit]}..." if len(text) > limit else text
+
+
+def _resource_display(
+    instance: IntegrationInstance,
+    integration_id: UUID,
+    resource_key: str | None,
+    context: Any,
+) -> str:
+    account = f'Wissensdatenbank "{_display_text(instance.name)}"'
+    if resource_key is None:
+        return account
+    labels = getattr(getattr(context, "tool_settings", None), "resource_labels", {})
+    label = labels.get(str(integration_id), {}).get(resource_key)
+    book = f'"{_display_text(label)}"' if label else resource_key
+    return f"{book} · {account}"
+
+
+async def _authorize_book_writes(
+    context: Any,
+    instance: IntegrationInstance,
+    revision: str,
+    book_keys: set[str],
+    operation_key: str,
+) -> Any:
+    from mato_loop_backend.agent.permissions import (
+        PermissionDecision,
+        integration_operation_permission,
+    )
+    from mato_loop_backend.agent.tools import ToolResult
+
+    for book_key in sorted(book_keys):
+        request = integration_operation_permission(
+            capability="knowledge.write",
+            integration_id=instance.id,
+            binding_revision=revision,
+            operation_key=operation_key,
+            resource_key=book_key,
+            resource_display=_resource_display(
+                instance, instance.id, book_key, context
+            ),
+            title="Buchzuordnung ändern?",
+            summary="Der Agent möchte die Regalzuordnung dieses Buchs ändern.",
+            available_decisions=("allow_once", "deny"),
+        )
+        if await context.ask(request) != PermissionDecision.ALLOW:
+            return ToolResult.error("permission.denied")
+    return None
+
+
 def _permission(
     capability: str,
     operation_key: str,
@@ -1557,7 +1661,7 @@ def _permission(
 ) -> tuple[Any, ...]:
     from mato_loop_backend.agent.permissions import integration_operation_permission
 
-    _instance, revision = _binding(context, arguments.integration_id)
+    instance, revision = _binding(context, arguments.integration_id)
     resource_key = getattr(arguments, "book_key", None) if resource else None
     return (
         integration_operation_permission(
@@ -1566,7 +1670,9 @@ def _permission(
             binding_revision=revision,
             operation_key=operation_key,
             resource_key=resource_key,
-            resource_display=resource_key,
+            resource_display=_resource_display(
+                instance, arguments.integration_id, resource_key, context
+            ),
             title=title,
             summary=summary,
             available_decisions=(

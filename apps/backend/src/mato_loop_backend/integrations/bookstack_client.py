@@ -299,6 +299,7 @@ class BookStackClient:
         upload: tuple[str, bytes, str] | None = None,
         expected: set[int] = frozenset({200}),
         text_response: bool = False,
+        discard_response: bool = False,
     ) -> Any:
         url = self._url(path, params)
         headers = {"Authorization": self._authorization, "Accept": "application/json"}
@@ -334,6 +335,8 @@ class BookStackClient:
                     _STATUS_CODES.get(response.status_code, "unexpectedStatus"),
                     status_code=response.status_code,
                 )
+            if discard_response:
+                return None
             length = response.headers.get("content-length")
             if length is not None:
                 try:
@@ -503,7 +506,7 @@ class BookStackClient:
         *,
         name: str | None = None,
         markdown: str | None = None,
-    ) -> BookStackPage:
+    ) -> None:
         payload: dict[str, Any] = {}
         if name is not None:
             payload["name"] = name
@@ -511,10 +514,11 @@ class BookStackClient:
             payload["markdown"] = markdown
         if not payload:
             raise _error("invalidPage")
-        return _page(
-            await self._request(
-                "PUT", f"/pages/{_identifier(page_id)}", payload=payload
-            )
+        await self._request(
+            "PUT",
+            f"/pages/{_identifier(page_id)}",
+            payload=payload,
+            discard_response=True,
         )
 
     async def delete_page(self, page_id: int) -> None:

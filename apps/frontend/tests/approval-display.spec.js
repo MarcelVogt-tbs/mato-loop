@@ -22,6 +22,10 @@ describe('approval display', () => {
       resourceScope: '*',
       details: {}
     })).toEqual({ label: 'Session-Sammlung', value: 'Alle Sessions' })
+    expect(approvalResource({
+      resourceType: 'skill_collection',
+      resourceDisplay: 'API-Recherche'
+    })).toEqual({ label: 'Skill-Sammlung', value: '„API-Recherche“' })
   })
 
   it('shows cleaned URL approvals and readable session grants', () => {
@@ -71,6 +75,45 @@ describe('approval display', () => {
       label: 'Private Integrationsdaten freigeben',
       value: 'Aktuelle Session',
       icon: 'cloud_upload'
+    })
+  })
+
+  it('labels task grants', () => {
+    for (const [capability, label, icon] of [
+      ['tasks.read', 'Aufgaben lesen', 'checklist'],
+      ['tasks.write', 'Aufgaben ändern', 'edit_note'],
+      ['tasks.delete', 'Aufgaben löschen', 'delete_outline']
+    ]) {
+      expect(permissionGrantDisplay({
+        capability,
+        resourceType: 'integration_operation',
+        resourceDisplay: 'Aufgabenliste Arbeit'
+      })).toEqual({ label, value: 'Aufgabenliste Arbeit', icon })
+    }
+  })
+
+  it('labels knowledge grants', () => {
+    for (const [capability, label, icon] of [
+      ['knowledge.read', 'Wissensdatenbank lesen', 'menu_book'],
+      ['knowledge.write', 'Wissensdatenbank ändern', 'edit_note'],
+      ['knowledge.delete', 'Wissenseintrag löschen', 'delete_sweep']
+    ]) {
+      expect(permissionGrantDisplay({
+        capability,
+        resourceType: 'integration_operation',
+        resourceDisplay: '„Handbuch“ · Wissensdatenbank „Wiki“'
+      })).toEqual({ label, value: '„Handbuch“ · Wissensdatenbank „Wiki“', icon })
+    }
+  })
+
+  it('labels skill write grants', () => {
+    expect(permissionGrantDisplay({
+      capability: 'skills.write',
+      resourceType: 'skill_collection'
+    })).toEqual({
+      label: 'Skills erstellen',
+      value: 'Persönliche Skills',
+      icon: 'auto_awesome'
     })
   })
 

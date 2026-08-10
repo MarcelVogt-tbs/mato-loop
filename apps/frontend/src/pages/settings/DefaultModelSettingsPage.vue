@@ -61,6 +61,33 @@
       <q-separator />
 
       <q-card-section class="default-model-setting">
+        <q-avatar rounded color="indigo" text-color="white" icon="auto_awesome" />
+        <div class="default-model-setting__description">
+          <div class="text-subtitle1 text-weight-bold">Skill-Erstellung</div>
+          <div class="text-body2 app-muted">
+            Erstellt aus einer Session einen prüfbaren Skill-Entwurf.
+          </div>
+        </div>
+        <div>
+          <q-select
+            v-model="form.skillCreationModelId"
+            outlined
+            clearable
+            emit-value
+            map-options
+            options-dense
+            label="Modell für Skill-Erstellung"
+            :display-value="form.skillCreationModelId ? undefined : 'Sessionmodell verwenden'"
+            :options="providers.skillCreationModelOptions"
+            hint="Nur verfügbare Chatmodelle mit Tool-Unterstützung."
+            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+          />
+        </div>
+      </q-card-section>
+
+      <q-separator />
+
+      <q-card-section class="default-model-setting">
         <q-avatar rounded color="purple" text-color="white" icon="video_file" />
         <div class="default-model-setting__description">
           <div class="text-subtitle1 text-weight-bold">Videoanalyse</div>
@@ -282,7 +309,8 @@ const form = reactive({
   imageGenerationModelId: null,
   speechGenerationModelId: null,
   audioGenerationModelId: null,
-  audioTranscriptionModelId: null
+  audioTranscriptionModelId: null,
+  skillCreationModelId: null
 })
 const changed = computed(() => (
   form.defaultModelId !== providers.defaultModelId
@@ -291,6 +319,7 @@ const changed = computed(() => (
   || form.dreamingModelId !== providers.dreamingModelId
   || form.visionModelId !== providers.visionModelId
   || form.videoModelId !== providers.videoModelId
+  || form.skillCreationModelId !== providers.skillCreationModelId
   || mediaSettings.some((setting) => form[setting.field] !== providers[setting.field])
 ))
 
@@ -301,6 +330,7 @@ function assignForm() {
   form.dreamingModelId = providers.dreamingModelId
   form.visionModelId = providers.visionModelId
   form.videoModelId = providers.videoModelId
+  form.skillCreationModelId = providers.skillCreationModelId
   for (const setting of mediaSettings) form[setting.field] = providers[setting.field]
 }
 
