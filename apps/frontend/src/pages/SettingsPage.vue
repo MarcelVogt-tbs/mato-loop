@@ -1,6 +1,6 @@
 <template>
   <q-page class="app-page settings-page column no-wrap">
-    <AppPageHeader title="Einstellungen" subtitle="Persona, Provider, Agenten, Integrationen und Funktionen zentral verwalten." />
+    <AppPageHeader title="Einstellungen" subtitle="Persona, Provider, Computer, Integrationen, Freigaben und Funktionen zentral verwalten." />
 
     <q-tabs
       no-caps
@@ -15,7 +15,8 @@
       <q-route-tab icon="stars" label="Standardmodelle" :to="{ name: 'settings-default-models' }" />
       <q-route-tab icon="extension" label="Integrationen" :to="{ name: 'settings-integrations' }" />
       <q-route-tab icon="build" label="Tools" :to="{ name: 'settings-tools' }" />
-      <q-route-tab icon="computer" label="Ausführungsagenten" :to="{ name: 'settings-execution-agents' }" />
+      <q-route-tab icon="pending_actions" label="Freigaben" :to="{ name: 'settings-approvals' }" />
+      <q-route-tab icon="computer" label="Computer" :to="{ name: 'settings-execution-agents' }" />
       <q-route-tab icon="school" label="Skills" :to="{ name: 'settings-skills' }" />
       <q-route-tab icon="face" label="Persona" :to="{ name: 'settings-persona' }" />
       <q-route-tab icon="psychology" label="Memory" :to="{ name: 'settings-memory' }" />
@@ -68,11 +69,24 @@
             clickable
             v-ripple
             class="q-mb-xs"
+            :to="{ name: 'settings-approvals' }"
+            active-class="app-nav-item--active"
+          >
+            <q-item-section avatar><q-icon name="pending_actions" /></q-item-section>
+            <q-item-section>Freigaben</q-item-section>
+            <q-item-section v-if="approvals.pendingCount" side>
+              <q-badge color="warning" text-color="dark" :label="approvals.pendingCount" />
+            </q-item-section>
+          </q-item>
+          <q-item
+            clickable
+            v-ripple
+            class="q-mb-xs"
             :to="{ name: 'settings-execution-agents' }"
             active-class="app-nav-item--active"
           >
             <q-item-section avatar><q-icon name="computer" /></q-item-section>
-            <q-item-section>Ausführungsagenten</q-item-section>
+            <q-item-section>Computer</q-item-section>
           </q-item>
           <q-item
             clickable
@@ -118,6 +132,9 @@
 
 <script setup>
 import AppPageHeader from 'components/AppPageHeader.vue'
+import { useApprovalStore } from 'stores/approvals'
 
 defineOptions({ name: 'SettingsPage' })
+
+const approvals = useApprovalStore()
 </script>

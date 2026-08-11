@@ -255,12 +255,22 @@
             unelevated
             no-caps
             class="full-width app-user-menu-trigger"
-            aria-label="Benutzermenü öffnen"
+            :aria-label="userMenuLabel"
           >
             <div class="row no-wrap items-center full-width">
-              <q-avatar color="primary" text-color="white" size="36px">
-                {{ userInitials }}
-              </q-avatar>
+              <div class="relative-position">
+                <q-avatar color="primary" text-color="white" size="36px">
+                  {{ userInitials }}
+                </q-avatar>
+                <q-badge
+                  v-if="approvals.pendingCount"
+                  floating
+                  rounded
+                  color="warning"
+                  text-color="dark"
+                  :label="approvals.pendingCount"
+                />
+              </div>
               <div class="col ellipsis text-left text-body2 q-ml-md">
                 {{ auth.username || 'Benutzer' }}
               </div>
@@ -274,6 +284,19 @@
               class="app-user-popup app-action-menu"
             >
               <q-list padding>
+                <q-item
+                  clickable
+                  v-ripple
+                  :to="{ name: 'settings-approvals' }"
+                  v-close-popup
+                  @click="closeDrawerOnMobile"
+                >
+                  <q-item-section avatar><q-icon name="pending_actions" /></q-item-section>
+                  <q-item-section>Freigaben</q-item-section>
+                  <q-item-section v-if="approvals.pendingCount" side>
+                    <q-badge color="warning" text-color="dark" :label="approvals.pendingCount" />
+                  </q-item-section>
+                </q-item>
                 <q-item clickable v-ripple to="/settings" v-close-popup @click="closeDrawerOnMobile">
                   <q-item-section avatar><q-icon name="tune" /></q-item-section>
                   <q-item-section>Einstellungen</q-item-section>
@@ -461,6 +484,9 @@ const userInitials = computed(() => {
   const last = parts.length > 1 ? parts[parts.length - 1][0] : ''
   return `${first}${last}`.toUpperCase()
 })
+const userMenuLabel = computed(() => approvals.pendingCount
+  ? `Benutzermenü öffnen, ${approvals.pendingCount} offene Freigaben`
+  : 'Benutzermenü öffnen')
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
@@ -537,6 +563,7 @@ async function closeNavigation() {
 function refreshSessionsWhenVisible() {
   if (document.visibilityState !== 'visible') return
   void chat.refreshSessions().catch(() => {})
+  void approvals.fetchPending({ suppressErrorToast: true }).catch(() => {})
 }
 
 async function refreshActiveSessions() {
@@ -547,7 +574,10 @@ async function refreshActiveSessions() {
   ) return
   sessionActivityRefreshPending = true
   try {
-    await chat.refreshSessions({ suppressErrorToast: true })
+    await Promise.all([
+      chat.refreshSessions({ suppressErrorToast: true }),
+      approvals.fetchPending({ suppressErrorToast: true })
+    ])
   } catch {
     // The next interval reconciles transient background refresh failures.
   } finally {

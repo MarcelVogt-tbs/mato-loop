@@ -9,16 +9,44 @@ const TERMINAL_DECISION_ERRORS = new Set([
 ])
 
 export const useApprovalStore = defineStore('approvals', {
-  state: () => ({ pending: [], submittingId: null }),
+  state: () => ({
+    pending: [],
+    submittingId: null,
+    loading: false,
+    loaded: false,
+    loadFailed: false,
+    revision: 0
+  }),
   getters: {
+    pendingCount: (state) => state.pending.length,
     forSession: (state) => (sessionId) => state.pending.filter((item) => item.sessionId === sessionId)
   },
   actions: {
-    async fetchPending() {
-      this.pending = (await api.get('/approvals/pending')).data
+    async fetchPending(config = {}) {
+      const revision = ++this.revision
+      this.loading = true
+      this.loadFailed = false
+      try {
+        const { data } = Object.keys(config).length
+          ? await api.get('/approvals/pending', config)
+          : await api.get('/approvals/pending')
+        if (revision !== this.revision || !Array.isArray(data)) return
+        this.pending = data
+        this.loaded = true
+      } catch (error) {
+        if (revision === this.revision) this.loadFailed = true
+        throw error
+      } finally {
+        if (revision === this.revision) this.loading = false
+      }
     },
     add(approval) {
-      if (!this.pending.some((item) => item.id === approval.id)) this.pending.push(approval)
+      if (this.pending.some((item) => item.id === approval.id)) return
+      this.revision += 1
+      this.pending.push(approval)
+      this.loading = false
+      this.loaded = true
+      this.loadFailed = false
     },
     async decide(id, decision, expectedRevision) {
       this.submittingId = id
@@ -29,7 +57,9 @@ export const useApprovalStore = defineStore('approvals', {
             ? { expected_revision: expectedRevision }
             : {})
         })
+        this.revision += 1
         this.pending = this.pending.filter((item) => item.id !== id)
+        this.loading = false
       } catch (error) {
         if (TERMINAL_DECISION_ERRORS.has(errorDescriptor(error)?.code)) {
           await this.fetchPending()

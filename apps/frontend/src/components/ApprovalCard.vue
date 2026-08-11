@@ -27,7 +27,7 @@
         <div class="text-caption app-muted q-mt-md">Anweisungen</div>
         <pre class="approval-details q-mt-xs">{{ skillPreview.instructions }}</pre>
         <q-btn
-          v-if="draftFile"
+          v-if="draftFile && showDraftAction"
           outline
           no-caps
           color="primary"
@@ -108,7 +108,10 @@ import { useWorkspaceStore } from 'stores/workspace'
 
 defineOptions({ name: 'ApprovalCard' })
 
-const props = defineProps({ approval: { type: Object, required: true } })
+const props = defineProps({
+  approval: { type: Object, required: true },
+  showDraftAction: { type: Boolean, default: true }
+})
 const emit = defineEmits(['open-approval-draft'])
 const approvals = useApprovalStore()
 const chat = useChatStore()

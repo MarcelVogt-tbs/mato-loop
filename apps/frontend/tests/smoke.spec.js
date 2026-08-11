@@ -15,6 +15,7 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-persona',
       'settings-integrations',
       'settings-tools',
+      'settings-approvals',
       'settings-execution-agents',
       'settings-skills',
       'settings-memory'

@@ -36,18 +36,23 @@ async def pending_approvals(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[dict]:
-    items = list(
-        (
-            await db.scalars(
-                select(ApprovalRequest)
-                .join(ChatSession, ChatSession.id == ApprovalRequest.session_id)
-                .where(ApprovalRequest.status == "pending")
-                .where(ChatSession.user_id == user.id)
-                .order_by(ApprovalRequest.created_at)
-            )
-        ).all()
-    )
-    return [approval_payload(item) for item in items]
+    rows = (
+        await db.execute(
+            select(ApprovalRequest, ChatSession)
+            .join(ChatSession, ChatSession.id == ApprovalRequest.session_id)
+            .where(ApprovalRequest.status == "pending")
+            .where(ChatSession.user_id == user.id)
+            .order_by(ApprovalRequest.created_at)
+        )
+    ).all()
+    return [
+        {
+            **approval_payload(approval),
+            "requestType": "agent_action",
+            "sourceSession": {"id": str(session.id), "title": session.title},
+        }
+        for approval, session in rows
+    ]
 
 
 @router.post("/{approval_id}/decisions")

@@ -49,6 +49,11 @@ const routes = [
             component: () => import('pages/settings/ToolSettingsPage.vue')
           },
           {
+            path: 'approvals',
+            name: 'settings-approvals',
+            component: () => import('pages/settings/ApprovalSettingsPage.vue')
+          },
+          {
             path: 'execution-agents',
             name: 'settings-execution-agents',
             component: () => import('pages/settings/ExecutionAgentSettingsPage.vue')

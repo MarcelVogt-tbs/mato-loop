@@ -27,6 +27,31 @@ describe('inline approvals', () => {
     })
   })
 
+  it('loads pending approvals with request options and exposes their count', async () => {
+    api.get.mockResolvedValue({ data: [{ id: 'approval-1' }] })
+    const approvals = useApprovalStore()
+
+    await approvals.fetchPending({ suppressErrorToast: true })
+
+    expect(api.get).toHaveBeenCalledWith('/approvals/pending', { suppressErrorToast: true })
+    expect(approvals.pendingCount).toBe(1)
+    expect(approvals.loaded).toBe(true)
+    expect(approvals.loadFailed).toBe(false)
+  })
+
+  it('does not overwrite an approval added while pending approvals load', async () => {
+    let resolveRequest
+    api.get.mockReturnValue(new Promise((resolve) => { resolveRequest = resolve }))
+    const approvals = useApprovalStore()
+    const request = approvals.fetchPending()
+
+    approvals.add({ id: 'approval-new', sessionId: 'session-1' })
+    resolveRequest({ data: [] })
+    await request
+
+    expect(approvals.pending).toEqual([{ id: 'approval-new', sessionId: 'session-1' }])
+  })
+
   it('sends the expected draft revision only for allow decisions', async () => {
     api.post.mockResolvedValue({ data: { status: 'approved' } })
     const approvals = useApprovalStore()
