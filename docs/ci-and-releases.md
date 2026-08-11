@@ -32,12 +32,13 @@ Pull requests run the complete test and production-image build path, but registr
 Jobs require a self-hosted Forgejo Runner registered with the `ubuntu-latest` label and running on `linux/amd64`. The runner needs:
 
 - a Docker daemon available to job containers, commonly through `/var/run/docker.sock` or an isolated Docker service
-- Bash, Python 3.11 or newer, Git, and the Docker Compose plugin
+- Bash, Python 3.11 or newer, Git, and permission to install the checked toolchains and system packages
 - permission to build, tag, inspect, and push OCI images
-- outbound access to the Forgejo instance, GitHub for the SHA-pinned checkout action, base-image registries, and the Forgejo container registry
+- outbound access to Forgejo, GitHub, Node.js, PyPI, Yarn/npm package sources, base-image registries, and the Forgejo container registry
 - enough CPU, memory, and disk for the backend/frontend image and Execution Agent image to build concurrently
 - a current Git client and normal TLS trust for the configured endpoints
 - Forgejo Actions task-queue concurrency enabled so publication workflows with the same group are serialized
+- an empty runner `[container].network` setting so the migration job can reach its `db` service by hostname
 
 Docker socket access is effectively root access to the runner host. Pull request builds execute repository code and Dockerfiles even though they receive no secrets. Run untrusted pull requests only on ephemeral, isolated runners with no production mounts, credentials, internal-network privileges, or reusable trusted-job workspace. Do not colocate this runner with a MatoLoop production deployment.
 
