@@ -1335,8 +1335,10 @@ export const useChatStore = defineStore('chat', {
         this.streamModelName = null
         this.clearActivity()
         this.setSessionRunStatus(sessionId, null)
-        this.refreshSession(sessionId)
-        this.refreshSessions()
+        if (!this.historyActionPending) {
+          void this.refreshSession(sessionId).catch(() => {})
+          void this.refreshSessions().catch(() => {})
+        }
         useApprovalStore().fetchPending()
         void useQuestionStore().fetchPending().catch(() => {})
         void useAgentIdentityStore().fetchIdentity({ suppressErrorToast: true }).catch(() => {})

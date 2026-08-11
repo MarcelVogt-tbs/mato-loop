@@ -45,15 +45,25 @@ async def test_undo_removes_user_message_suffix_and_returns_draft(monkeypatch) -
 async def test_undo_cancels_active_run_before_locking_session(monkeypatch) -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
-    run = AgentRun(id=uuid4(), session_id=session.id, status="running")
+    run_id = uuid4()
+    events = []
+
+    class ActiveRun:
+        @property
+        def id(self):
+            events.append("run_id")
+            return run_id
+
+    run = ActiveRun()
     db = AsyncMock(spec=AsyncSession)
+    db.rollback.side_effect = lambda: events.append("rollback")
     monkeypatch.setattr(ChatHistoryService, "_owned_session", AsyncMock(return_value=session))
     monkeypatch.setattr(
         ChatHistoryService,
         "_active_run",
         AsyncMock(side_effect=[run, None, None]),
     )
-    cancel = AsyncMock(return_value=True)
+    cancel = AsyncMock(side_effect=lambda _run_id: events.append("cancel"))
     monkeypatch.setattr(AgentRuntime, "cancel_and_wait", cancel)
 
     result = await ChatHistoryService._lock_after_cancelling_active_run(
@@ -61,7 +71,8 @@ async def test_undo_cancels_active_run_before_locking_session(monkeypatch) -> No
     )
 
     assert result is session
-    cancel.assert_awaited_once_with(run.id)
+    cancel.assert_awaited_once_with(run_id)
+    assert events[:3] == ["run_id", "rollback", "cancel"]
     assert db.rollback.await_count == 2
 
 

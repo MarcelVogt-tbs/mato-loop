@@ -1331,6 +1331,43 @@ describe('chat drafts', () => {
     expect(chat.activeDraft).toBe('Noch einmal bearbeiten')
   })
 
+  it('undoes the first user message while its run is active', async () => {
+    global.EventSource = EventSourceMock
+    let resolveUndo
+    api.get.mockResolvedValue({ data: [] })
+    api.post.mockImplementation((url) => url.endsWith('/undo')
+      ? new Promise((resolve) => { resolveUndo = resolve })
+      : Promise.resolve({ data: {} }))
+    const chat = useChatStore()
+    const message = { id: 'user-1', role: 'user', content: 'Noch einmal', attachments: [] }
+    chat.sessions = [{ id: 'session-1', title: 'Test', activeRunStatus: 'running' }]
+    chat.current = { id: 'session-1', title: 'Test', messages: [message] }
+    chat.selectedSessionId = 'session-1'
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+
+    const undoing = chat.undoUserMessage(message)
+    await vi.waitFor(() => expect(resolveUndo).toBeTypeOf('function'))
+    const source = EventSourceMock.instances[0]
+    source.emit('message.interrupted', {
+      message: {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: 'Teilantwort',
+        generationStatus: 'interrupted'
+      }
+    })
+    source.emit('run.cancelled', { runId: 'run-1' })
+
+    expect(api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(false)
+    resolveUndo({ data: { sessionDeleted: true, draft: { content: 'Noch einmal' } } })
+    await undoing
+
+    expect(chat.current).toBeNull()
+    expect(chat.running).toBe(false)
+    expect(chat.activeDraft).toBe('Noch einmal')
+    expect(api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(false)
+  })
+
   it('restores persisted attachments before undoing the message', async () => {
     const sessionId = '11111111-1111-4111-8111-111111111111'
     const messageId = '22222222-2222-4222-8222-222222222222'

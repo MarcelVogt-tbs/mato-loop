@@ -93,8 +93,9 @@ class ChatHistoryService:
             await cls._owned_session(db, session_id, user_id, for_update=False)
             active_run = await cls._active_run(db, session_id)
             if active_run is not None:
+                run_id = active_run.id
                 await db.rollback()
-                await AgentRuntime.cancel_and_wait(active_run.id)
+                await AgentRuntime.cancel_and_wait(run_id)
                 continue
 
             await db.rollback()
