@@ -281,8 +281,12 @@ def general_system_prompt(
     web_search_required: bool = False,
     web_search_completed: bool = False,
     web_search_retry: int = 0,
+    response_repair_required: bool = False,
     memory_write_pending: bool = False,
     memory_write_outcome: str | None = None,
+    tool_calls_used: int = 0,
+    tool_call_limit: int | None = None,
+    tool_budget_exhausted: bool = False,
     research_tool_calls_used: int = 0,
     research_tool_call_limit: int | None = None,
     research_tools_exhausted: bool = False,
@@ -334,6 +338,19 @@ def general_system_prompt(
             "Never emit their names as tool calls. Mention how to enable one only when relevant:\n- "
             + "\n- ".join(inactive_capability_groups)
         )
+    if tool_call_limit is not None and (offered_tool_names or tool_budget_exhausted):
+        remaining = max(0, tool_call_limit - tool_calls_used)
+        if tool_budget_exhausted:
+            parts.append(
+                "Tool budget exhausted. No tools are available. Finalize from confirmed results "
+                "and explicitly state any requested actions that were not completed."
+            )
+        else:
+            parts.append(
+                f"Tool budget: {tool_calls_used}/{tool_call_limit} calls used, {remaining} remaining. "
+                "Each call in a parallel batch consumes one call. Prioritize required actions and "
+                "never emit more calls than remain."
+            )
     if "question" in offered_tool_names:
         parts.append(
             "Missing-information contract: When the user's requested action lacks required "
@@ -517,6 +534,11 @@ def general_system_prompt(
         )
     parts.extend(tool_instructions)
     if "build_skill" in offered_tool_names:
+        if "question" in offered_tool_names:
+            parts.append(
+                "Before build_skill, use question once for gaps in purpose, inputs, outputs, "
+                "workflow, tools, constraints, or edge cases; skip it when complete."
+            )
         parts.append(
             "Use build_skill only after an explicit request in the latest user message to create a "
             "reusable skill. Delegate a compact brief and optional name hint; do not write the final "
@@ -610,6 +632,11 @@ def general_system_prompt(
             "Current-turn research results are present. Before finalizing, cite every used result by "
             "copying its exact title and URL into [title](URL), or use [hostname](URL) when no title "
             "exists. A researched answer without these links is not final."
+        )
+    if response_repair_required:
+        parts.append(
+            "The previous model turn returned neither assistant text nor a tool call. Continue the "
+            "latest user request now with either a valid tool call or a non-empty final answer."
         )
     if web_search_required and not web_search_completed:
         instruction = "Mandatory web research is active and pending. "

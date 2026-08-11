@@ -817,6 +817,20 @@ def test_skill_catalog_contains_selection_metadata_without_instructions() -> Non
     assert skill.instructions not in prompt
 
 
+def test_skill_build_prompt_collects_only_relevant_missing_details() -> None:
+    with_question = general_system_prompt(
+        _session(), offered_tool_names=frozenset({"question", "build_skill"})
+    )
+    without_question = general_system_prompt(
+        _session(), offered_tool_names=frozenset({"build_skill"})
+    )
+
+    assert "use question once for gaps" in with_question
+    assert "purpose, inputs, outputs, workflow, tools, constraints" in with_question
+    assert "skip it when complete" in with_question
+    assert "use question once for gaps" not in without_question
+
+
 def test_active_skill_instructions_preserve_host_precedence() -> None:
     skill = SkillDefinition(
         name="Quellenpruefung",

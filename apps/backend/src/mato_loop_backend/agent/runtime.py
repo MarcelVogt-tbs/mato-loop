@@ -147,6 +147,7 @@ RUN_PHASES = {
 }
 REQUIRED_WEB_SEARCH_RETRIES = 2
 REQUIRED_MEMORY_WRITE_RETRIES = 3
+EMPTY_RESPONSE_RETRIES = 1
 MEMORY_WRITE_OUTCOME_PRIORITY = {"denied": 0, "duplicate": 1, "stored": 2}
 AUTOMATIC_MEMORY_MAX_ITEMS = 3
 AUTOMATIC_MEMORY_MAX_CHARACTERS = 2_500
@@ -1338,6 +1339,7 @@ class AgentRuntime:
         model_requests = 0
         required_search_completed = False
         required_search_retries = 0
+        empty_response_retries = 0
         memory_write_pending = False
         memory_write_retries = 0
         memory_write_outcome: str | None = None
@@ -1363,7 +1365,13 @@ class AgentRuntime:
         memory_overview_items: list[MemoryRecord] = []
 
         step = 0
-        while step < runtime_settings.max_steps:
+        while step < runtime_settings.max_steps or (
+            step == runtime_settings.max_steps
+            and (
+                tool_calls_used >= runtime_settings.max_tool_calls
+                or empty_response_retries > 0
+            )
+        ):
             step += 1
             context_started_at = time.monotonic()
             await _publish_run_phase(run.id, "preparing_context")
@@ -1670,6 +1678,9 @@ class AgentRuntime:
                     ai_settings,
                     active_model_id=model.id,
                 )
+            tool_budget_exhausted = (
+                tool_calls_used >= runtime_settings.max_tool_calls
+            )
             inactive_capability_groups = tool_registry.inactive_capability_groups(
                 integration_settings,
                 frozenset(effective_toolset.tools if effective_toolset else ())
@@ -1685,6 +1696,8 @@ class AgentRuntime:
                 tool_settings=tool_settings,
                 execution_operations=execution_operations,
             )
+            if tool_budget_exhausted and effective_toolset is not None:
+                effective_toolset = effective_toolset.only()
             mutating_tool_names = {
                 name
                 for name, tool in (effective_toolset.tools.items() if effective_toolset else ())
@@ -1709,15 +1722,21 @@ class AgentRuntime:
                 web_search_required=required_search,
                 web_search_completed=required_search_completed,
                 web_search_retry=required_search_retries,
+                response_repair_required=empty_response_retries > 0,
                 memory_write_pending=memory_write_pending,
                 memory_write_outcome=memory_write_outcome,
+                tool_calls_used=tool_calls_used,
+                tool_call_limit=(runtime_settings.max_tool_calls if model.supports_tools else None),
+                tool_budget_exhausted=tool_budget_exhausted,
                 research_tool_calls_used=research_tool_calls_used,
                 research_tool_call_limit=(
                     runtime_settings.max_research_tool_calls
                     if chat_session.web_search_policy != WebSearchPolicy.DISABLED
                     else None
                 ),
-                research_tools_exhausted=research_budget_exhausted,
+                research_tools_exhausted=(
+                    research_budget_exhausted or tool_budget_exhausted
+                ),
                 current_datetime=turn_datetime,
                 offered_tool_names=frozenset(
                     effective_toolset.tools if effective_toolset else ()
@@ -1737,6 +1756,12 @@ class AgentRuntime:
             if model_requests >= runtime_settings.max_model_requests:
                 raise AgentRunError("agent.modelRequestLimitReached")
             schemas = effective_toolset.schemas() if effective_toolset else []
+            if tool_budget_exhausted:
+                if search_pending or memory_write_pending:
+                    raise AgentRunError("agent.toolCallLimitReached")
+                if unresolved_mutation_errors:
+                    tool_name = next(reversed(unresolved_mutation_errors))
+                    raise AgentRunError(unresolved_mutation_errors[tool_name])
             if search_pending and not any(
                 schema["name"] == "web_search" for schema in schemas
             ):
@@ -1938,6 +1963,9 @@ class AgentRuntime:
                 )
                 for call in result.tool_calls
             ]
+            tool_batch_exceeds_budget = len(normalized_calls) > max(
+                0, runtime_settings.max_tool_calls - tool_calls_used
+            )
             if search_pending and (
                 not normalized_calls
                 or any(call.name not in offered_tool_names for call in normalized_calls)
@@ -1957,6 +1985,8 @@ class AgentRuntime:
                 if memory_write_retries > REQUIRED_MEMORY_WRITE_RETRIES:
                     raise AgentRunError("agent.requiredMemoryWriteMissing")
                 continue
+            if tool_batch_exceeds_budget:
+                raise AgentRunError("agent.toolCallLimitReached")
             serialized_calls = [
                 {
                     "id": call.id,
@@ -1970,6 +2000,16 @@ class AgentRuntime:
             if not normalized_calls and unresolved_mutation_errors:
                 tool_name = next(reversed(unresolved_mutation_errors))
                 raise AgentRunError(unresolved_mutation_errors[tool_name])
+            assistant_content = canonical_assistant_content(result.content)
+            if not assistant_content.strip() and visible_response.content.strip():
+                assistant_content = canonical_assistant_content(visible_response.content)
+            if not normalized_calls and not assistant_content.strip():
+                if empty_response_retries >= EMPTY_RESPONSE_RETRIES:
+                    raise AgentRunError("agent.emptyResponse")
+                empty_response_retries += 1
+                logger.warning("Agent run %s received an empty model response; retrying", run.id)
+                continue
+            empty_response_retries = 0
             starts_memory_workflow = any(
                 call.name == "memory_write"
                 or (
@@ -2026,7 +2066,6 @@ class AgentRuntime:
                         kind=streamed_reasoning_state["kind"],
                     )
                 )
-            assistant_content = canonical_assistant_content(result.content)
             public_research = None
             if not normalized_calls:
                 public_research = _research_snapshot(
@@ -2169,14 +2208,14 @@ class AgentRuntime:
                     or research_tool_calls_used
                     < runtime_settings.max_research_tool_calls
                 )
+                if within_tool_call_budget:
+                    tool_calls_used += 1
                 if exclusive_error_code is not None:
                     tool_result_content = json.dumps(
                         error_payload(exclusive_error_code), ensure_ascii=False
                     )
                     metadata = {"errorCode": exclusive_error_code}
-                elif within_tool_call_budget:
-                    tool_calls_used += 1
-                if exclusive_error_code is None and (
+                if (
                     within_tool_call_budget
                     and is_research_call
                     and within_research_budget

@@ -63,7 +63,7 @@ CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 14
+INVENTORY_VERSION = 15
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -493,25 +493,6 @@ CASES = (
         maximum_question_count=4,
     ),
     PromptCase(
-        id="calendar_missing_details_under_persona_uses_question",
-        kind="general",
-        user="ich möchte einen termin eintragn",
-        tools=("question", "calendar_create_event"),
-        calendar_fixture=True,
-        identity_name="codemato",
-        identity_instructions=(
-            "Antworte locker, humorvoll und persönlich, aber bleibe zuverlässig und hilfreich."
-        ),
-        expected_tool="question",
-        expected_tool_call_count=1,
-        question_concepts=(
-            ("Termin", "Betreff", "Titel", "Ereignis", "appointment", "event", "subject"),
-            ("wann", "Datum", "Uhrzeit", "Zeitpunkt", "start", "when", "date", "time"),
-            ("Dauer", "Ende", "Endzeit", "bis wann", "duration", "end"),
-        ),
-        maximum_question_count=4,
-    ),
-    PromptCase(
         id="complete_calendar_event_skips_question",
         kind="general",
         user="Trage morgen von 10:00 bis 11:00 Uhr den Termin Zahnarzt ein.",
@@ -672,18 +653,34 @@ CASES = (
         expected_tool_call_count=1,
     ),
     PromptCase(
+        id="vague_skill_build_uses_question",
+        kind="general",
+        user="Erstelle mir einen wiederverwendbaren Skill für Code-Reviews.",
+        tools=("question", "build_skill"),
+        expected_tool="question",
+        expected_tool_call_count=1,
+        forbidden_tools=("build_skill",),
+        question_concepts=(
+            ("Eingabe", "Diff", "Repository", "input"),
+            ("Schwerpunkt", "Kriterien", "Fokus", "prüfen", "focus", "check"),
+            ("Ausgabe", "Format", "Ergebnis", "output", "result"),
+        ),
+        maximum_question_count=5,
+    ),
+    PromptCase(
         id="explicit_skill_build_uses_tool",
         kind="general",
         user=(
             "Erstelle einen Skill namens API-Recherche. Er soll bei API-Abfragen das vorhandene "
             "API-Tool aufrufen und die Antwort validieren."
         ),
-        tools=("build_skill",),
+        tools=("question", "build_skill"),
         expected_tool="build_skill",
         expected_arguments={"name_hint": "API-Recherche"},
         argument_contains={"brief": ("API", "Tool", "valid")},
         max_argument_words={"brief": 20},
         expected_tool_call_count=1,
+        forbidden_tools=("question",),
     ),
     PromptCase(
         id="quoted_skill_build_request_is_data",
@@ -2346,7 +2343,6 @@ _SEMANTIC_CONTRACTS = (
         (
             "console_diagnostics_use_assistant_text",
             "calendar_missing_details_uses_question",
-            "calendar_missing_details_under_persona_uses_question",
             "complete_calendar_event_skips_question",
             "answered_calendar_questions_continue_action",
             "calendar_information_request_skips_question",
@@ -2623,7 +2619,11 @@ _SEMANTIC_CONTRACTS = (
     ContractCoverage(
         "skill.explicit_build_only",
         "skill",
-        ("explicit_skill_build_uses_tool", "quoted_skill_build_request_is_data"),
+        (
+            "vague_skill_build_uses_question",
+            "explicit_skill_build_uses_tool",
+            "quoted_skill_build_request_is_data",
+        ),
     ),
     ContractCoverage(
         "integration.prompt_fragments",

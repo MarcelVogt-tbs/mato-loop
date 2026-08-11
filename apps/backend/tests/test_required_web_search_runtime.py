@@ -72,6 +72,7 @@ async def _runtime_setup(
     monkeypatch,
     results: list[ProviderResult],
     *,
+    max_steps: int = 10,
     max_tool_calls: int = 20,
     max_research_tool_calls: int = 8,
     max_model_requests: int = 10,
@@ -83,6 +84,7 @@ async def _runtime_setup(
     workspace_access: str = "read-only",
     skills: SkillsSettings | None = None,
     skill_creation_model: bool = False,
+    streamed_contents: list[str | None] | None = None,
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -118,7 +120,7 @@ async def _runtime_setup(
         skill_creation_model_id=builder_model.id if builder_model is not None else None,
     )
     runtime_settings = AgentRuntimeSettings(
-        max_steps=10,
+        max_steps=max_steps,
         max_model_requests=max_model_requests,
         max_tool_calls=max_tool_calls,
         max_research_tool_calls=max_research_tool_calls,
@@ -163,12 +165,16 @@ async def _runtime_setup(
 
     requests = []
     queue = list(results)
+    streamed_queue = list(streamed_contents) if streamed_contents is not None else None
 
     async def complete(_db, **kwargs):
         requests.append(kwargs)
         result = queue.pop(0)
-        if result.content and kwargs.get("on_delta"):
-            await kwargs["on_delta"](result.content)
+        streamed_content = (
+            streamed_queue.pop(0) if streamed_queue is not None else result.content
+        )
+        if streamed_content and kwargs.get("on_delta"):
+            await kwargs["on_delta"](streamed_content)
         return result
 
     events = []
@@ -933,6 +939,96 @@ async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypa
     ]
 
 
+async def test_empty_response_after_search_is_repaired(monkeypatch) -> None:
+    answer = f"Belegte Antwort {SOURCE_CITATION}"
+    db, run, requests, projections, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[_search_call("search-1", "Aktuelle Frage")],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="", finish_reason="stop"),
+            ProviderResult(content=answer, finish_reason="stop"),
+        ],
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 3
+    assert "previous model turn returned neither" not in projections[1]["system_prompt"]
+    assert "previous model turn returned neither" in projections[2]["system_prompt"]
+    final_messages = [message for message in _assistant_messages(db) if not message.tool_calls]
+    assert [message.content for message in final_messages] == [answer]
+    assert any(event.get("delta") == answer for event in events)
+
+
+async def test_empty_response_repair_can_cross_the_step_limit(monkeypatch) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(content="", finish_reason="stop"),
+            ProviderResult(content="Reparierte Antwort", finish_reason="stop"),
+        ],
+        max_steps=1,
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 2
+    assert _assistant_messages(db)[0].content == "Reparierte Antwort"
+
+
+async def test_repeated_empty_response_fails_without_persisting_it(monkeypatch) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[_search_call("search-1", "Aktuelle Frage")],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="", finish_reason="stop"),
+            ProviderResult(content="", finish_reason="stop"),
+        ],
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.emptyResponse"
+    assert len(requests) == 3
+    assert not [message for message in _assistant_messages(db) if not message.tool_calls]
+
+
+async def test_streamed_text_is_persisted_when_final_result_is_empty(monkeypatch) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="", finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        streamed_contents=["Gestreamte Antwort"],
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 1
+    assert _assistant_messages(db)[0].content == "Gestreamte Antwort"
+
+
+async def test_empty_output_at_length_limit_is_not_repaired(monkeypatch) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="", finish_reason="length")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.outputLimitReached"
+    assert len(requests) == 1
+
+
 async def test_empty_required_search_satisfies_the_gate(monkeypatch) -> None:
     db, run, requests, _, events = await _runtime_setup(
         monkeypatch,
@@ -1167,7 +1263,60 @@ async def test_tool_call_limit_applies_after_required_gate(monkeypatch) -> None:
 
     assert exc_info.value.code == "agent.toolCallLimitReached"
     assert len(requests) == 2
+    assert requests[1]["tools"] == []
     assert tool_registry._execute_definition.await_count == 1
+
+
+async def test_exact_tool_call_limit_allows_tool_free_final_response(monkeypatch) -> None:
+    answer = f"Abschluss aus bestätigten Ergebnissen {SOURCE_CITATION}"
+    db, run, requests, projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[_search_call("search-1", "Aktuelle Frage")],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content=answer, finish_reason="stop"),
+        ],
+        max_steps=1,
+        max_tool_calls=1,
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 2
+    assert requests[1]["tools"] == []
+    assert "Tool budget: 0/1 calls used, 1 remaining" in projections[0]["system_prompt"]
+    assert "Tool budget exhausted. No tools are available." in projections[1][
+        "system_prompt"
+    ]
+    assert _assistant_messages(db)[-1].content == answer
+
+
+async def test_oversized_tool_batch_executes_nothing(monkeypatch) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    _search_call("search-1", "Erste Frage"),
+                    _search_call("search-2", "Zweite Frage"),
+                ],
+                finish_reason="tool_calls",
+            )
+        ],
+        max_tool_calls=1,
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.toolCallLimitReached"
+    assert len(requests) == 1
+    assert not _assistant_messages(db)
+    tool_registry._execute_definition.assert_not_awaited()
 
 
 async def test_required_search_stops_after_two_semantic_retries(monkeypatch) -> None:

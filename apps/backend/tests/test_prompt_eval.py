@@ -50,7 +50,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 14
+    assert INVENTORY_VERSION == 15
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -221,14 +221,29 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     assert [tool["name"] for tool in skill_tools] == ["load_skill"]
     assert str(prompt_eval.SKILL_ID) in skill_messages[0]["content"]
 
-    build_messages, build_tools = build_case(_case("explicit_skill_build_uses_tool"))
-    assert [tool["name"] for tool in build_tools] == ["build_skill"]
+    build_messages, build_tools = build_case(_case("vague_skill_build_uses_question"))
+    assert [tool["name"] for tool in build_tools] == ["question", "build_skill"]
+    assert "use question once for gaps" in build_messages[0]["content"]
     assert "Delegate a compact brief" in build_messages[0]["content"]
-    assert build_tools[0]["parameters"]["required"] == ["brief"]
+    assert build_tools[1]["parameters"]["required"] == ["brief"]
 
 
 def test_skill_build_case_checks_compact_brief_not_generated_draft() -> None:
-    case = _case("explicit_skill_build_uses_tool")
+    case = replace(
+        _case("vague_skill_build_uses_question"),
+        id="explicit_skill_build_uses_tool",
+        user=(
+            "Erstelle einen Skill namens API-Recherche. Er soll bei API-Abfragen das vorhandene "
+            "API-Tool aufrufen und die Antwort validieren."
+        ),
+        expected_tool="build_skill",
+        expected_arguments={"name_hint": "API-Recherche"},
+        argument_contains={"brief": ("API", "Tool", "valid")},
+        max_argument_words={"brief": 20},
+        forbidden_tools=("question",),
+        question_concepts=(),
+        maximum_question_count=None,
+    )
 
     assert case.argument_contains == {"brief": ("API", "Tool", "valid")}
     assert case.expected_arguments == {"name_hint": "API-Recherche"}
@@ -242,6 +257,113 @@ def test_skill_build_case_checks_compact_brief_not_generated_draft() -> None:
                     {
                         "brief": "Check API requests with the Tool and validate responses.",
                         "name_hint": "API-Recherche",
+                    },
+                )
+            ]
+        ),
+    ) == []
+
+
+def test_skill_build_cases_clarify_once_then_use_the_answers() -> None:
+    vague = _case("vague_skill_build_uses_question")
+    questions = {
+        "questions": [
+            {
+                "id": "input",
+                "type": "free_text",
+                "header": "Eingabe",
+                "question": "Ist die Eingabe ein Diff oder ein Repository?",
+            },
+            {
+                "id": "focus",
+                "type": "free_text",
+                "header": "Prüfkriterien",
+                "question": "Welche Schwerpunkte soll das Review prüfen?",
+            },
+            {
+                "id": "output",
+                "type": "free_text",
+                "header": "Ausgabe",
+                "question": "Welches Format soll das Ergebnis haben?",
+            },
+        ]
+    }
+    assert evaluate(
+        vague,
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    "skill-question",
+                    "question",
+                    questions,
+                )
+            ]
+        ),
+    ) == []
+
+    answer_result = json.dumps(
+        {
+            "answers": [
+                {
+                    "questionId": "input",
+                    "question": "Ist die Eingabe ein Diff oder ein Repository?",
+                    "answers": ["A Git diff with file paths."],
+                    "answered": True,
+                },
+                {
+                    "questionId": "focus",
+                    "question": "Welche Schwerpunkte soll das Review prüfen?",
+                    "answers": [
+                        "Correctness, security issues, and missing tests; ignore style."
+                    ],
+                    "answered": True,
+                },
+                {
+                    "questionId": "output",
+                    "question": "Welches Format soll das Ergebnis haben?",
+                    "answers": ["Findings ordered by severity with file path and line."],
+                    "answered": True,
+                },
+            ]
+        }
+    )
+    answered = replace(
+        vague,
+        id="answered_skill_questions_continue_build",
+        continuation=prompt_eval._exchange("question", questions, answer_result),
+        expected_tool="build_skill",
+        expected_arguments={},
+        argument_contains={
+            "brief": (
+                "Git diff",
+                "security",
+                "missing tests",
+                "severity",
+                "file path",
+                "line",
+            )
+        },
+        max_argument_words={"brief": 60},
+        forbidden_tools=("question",),
+        question_concepts=(),
+        maximum_question_count=None,
+    )
+    messages, _tools = build_case(answered)
+    assert [message["role"] for message in messages[-3:]] == ["user", "assistant", "tool"]
+    assert "security issues" in messages[-1]["content"]
+    assert evaluate(
+        answered,
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    "skill-build",
+                    "build_skill",
+                    {
+                        "brief": (
+                            "Review a Git diff with file paths for correctness, security issues, "
+                            "and missing tests while ignoring style. Return findings ordered by "
+                            "severity with file path and line."
+                        )
                     },
                 )
             ]
