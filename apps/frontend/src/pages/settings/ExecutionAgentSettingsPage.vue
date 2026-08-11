@@ -2,16 +2,16 @@
   <section>
     <header class="settings-section-header">
       <div>
-        <h2 class="text-h6 text-weight-bold q-my-none">Ausführungsagenten</h2>
+        <h2 class="text-h6 text-weight-bold q-my-none">Computer</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
           Lokale Arbeitsbereiche und Ausführungsfunktionen mit MatoLoop verbinden.
         </p>
       </div>
-      <q-btn color="primary" unelevated no-caps icon="add" label="Agent hinzufügen" @click="openCreate" />
+      <q-btn color="primary" unelevated no-caps icon="add" label="Computer hinzufügen" @click="openCreate" />
     </header>
 
     <q-banner v-if="agents.loadFailed" rounded class="app-surface-tonal q-mb-md">
-      Die Ausführungsagenten konnten nicht geladen werden.
+      Die Computer konnten nicht geladen werden.
       <template #action>
         <q-btn flat no-caps color="primary" label="Erneut laden" @click="load" />
       </template>
@@ -24,24 +24,27 @@
             <q-avatar color="grey-7" text-color="white" icon="computer" />
           </q-item-section>
           <q-item-section>
-            <q-item-label>Noch kein Ausführungsagent eingerichtet</q-item-label>
-            <q-item-label caption>Füge einen Agent hinzu und verbinde ihn mit dem einmalig angezeigten Token.</q-item-label>
+            <q-item-label>Noch kein Computer eingerichtet</q-item-label>
+            <q-item-label caption>Füge einen Computer hinzu und verbinde ihn mit dem einmalig angezeigten Token.</q-item-label>
           </q-item-section>
         </q-item>
 
         <q-item v-for="agent in agents.items" :key="agent.id" class="execution-agent-item q-py-md">
           <q-item-section avatar top>
-            <q-avatar :color="agent.connected ? 'positive' : 'grey-7'" text-color="white" icon="computer" />
+            <q-avatar :color="statusColor(agent)" :text-color="statusTextColor(agent)" :icon="statusIcon(agent)" />
           </q-item-section>
           <q-item-section>
             <div class="row items-center q-gutter-sm">
               <q-item-label class="text-weight-medium">{{ agent.name }}</q-item-label>
-              <q-chip dense :color="agent.connected ? 'positive' : 'grey-7'" text-color="white">
-                {{ agent.connected ? 'Online' : 'Offline' }}
+              <q-chip dense :color="statusColor(agent)" :text-color="statusTextColor(agent)">
+                {{ statusLabel(agent) }}
               </q-chip>
             </div>
             <q-item-label caption>
-              {{ agent.platform || 'Plattform unbekannt' }} · Protokoll {{ agent.protocolVersion }} · Revision {{ agent.revision }}
+              {{ agent.platform || 'Noch keine Verbindung' }}<template v-if="agent.protocolVersion !== null"> · Protokoll {{ agent.protocolVersion }}</template> · Revision {{ agent.revision }}
+            </q-item-label>
+            <q-item-label v-if="agent.pairingState === 'pending' && agent.pairingTokenExpiresAt" caption>
+              Kopplungstoken gültig bis: {{ formatExpiry(agent.pairingTokenExpiresAt) }}
             </q-item-label>
             <q-item-label v-if="agent.lastSeenAt" caption>
               Zuletzt gesehen: {{ formatAbsoluteDateTime(agent.lastSeenAt) }}
@@ -73,15 +76,39 @@
                 <q-tooltip>Umbenennen</q-tooltip>
               </q-btn>
               <q-btn
+                v-if="agent.pairingState === 'unpaired' || agent.pairingState === 'pending'"
+                flat
+                round
+                dense
+                color="primary"
+                icon="key"
+                :aria-label="`Neuen Kopplungstoken für ${agent.name} erstellen`"
+                @click="openPairingToken(agent)"
+              >
+                <q-tooltip>Neuen Kopplungstoken erstellen</q-tooltip>
+              </q-btn>
+              <q-btn
+                v-if="agent.pairingState === 'paired'"
                 flat
                 round
                 dense
                 color="negative"
                 icon="link_off"
-                :aria-label="`${agent.name} widerrufen`"
+                :aria-label="`${agent.name} entkoppeln`"
+                @click="unpair(agent)"
+              >
+                <q-tooltip>Computer entkoppeln</q-tooltip>
+              </q-btn>
+              <q-btn
+                flat
+                round
+                dense
+                color="negative"
+                icon="delete_outline"
+                :aria-label="`${agent.name} entfernen`"
                 @click="revoke(agent)"
               >
-                <q-tooltip>Zugriff widerrufen</q-tooltip>
+                <q-tooltip>Computer entfernen</q-tooltip>
               </q-btn>
             </div>
           </q-item-section>
@@ -90,11 +117,11 @@
       <q-inner-loading :showing="agents.loading" />
     </q-card>
 
-    <q-dialog v-model="nameDialogOpen" :persistent="saving">
+    <q-dialog v-model="nameDialogOpen" :maximized="$q.screen.lt.sm" :persistent="saving">
       <q-card class="execution-agent-dialog">
         <q-form @submit.prevent="saveName">
           <q-card-section>
-            <div class="text-h6">{{ selectedAgent ? 'Agent umbenennen' : 'Agent hinzufügen' }}</div>
+            <div class="text-h6">{{ selectedAgent ? 'Computer umbenennen' : 'Computer hinzufügen' }}</div>
           </q-card-section>
           <q-card-section class="q-pt-none">
             <q-input
@@ -106,6 +133,15 @@
               lazy-rules
               :rules="[requiredRule]"
             />
+            <q-select
+              v-if="!selectedAgent"
+              v-model="pairingDurationSeconds"
+              outlined
+              emit-value
+              map-options
+              :options="pairingDurationOptions"
+              label="Gültigkeitsdauer des Kopplungstokens"
+            />
           </q-card-section>
           <q-card-actions align="right" class="q-pa-md q-pt-none">
             <q-btn v-close-popup flat no-caps label="Abbrechen" :disable="saving" />
@@ -115,28 +151,56 @@
       </q-card>
     </q-dialog>
 
-    <q-dialog v-model="tokenDialogOpen" persistent>
+    <q-dialog v-model="pairingDialogOpen" :maximized="$q.screen.lt.sm" :persistent="saving">
+      <q-card class="execution-agent-dialog">
+        <q-form @submit.prevent="createPairingToken">
+          <q-card-section>
+            <div class="text-h6">Neuen Kopplungstoken erstellen</div>
+            <q-banner v-if="pairingAgent?.pairingState === 'pending'" rounded class="app-surface-tonal q-mt-md">
+              Der bisherige Kopplungstoken wird sofort ungültig.
+            </q-banner>
+          </q-card-section>
+          <q-card-section class="q-pt-none">
+            <q-select
+              v-model="pairingDurationSeconds"
+              outlined
+              emit-value
+              map-options
+              :options="pairingDurationOptions"
+              label="Gültigkeitsdauer des Kopplungstokens"
+            />
+          </q-card-section>
+          <q-card-actions align="right" class="q-pa-md q-pt-none">
+            <q-btn v-close-popup flat no-caps label="Abbrechen" :disable="saving" />
+            <q-btn unelevated no-caps color="primary" label="Token erstellen" type="submit" :loading="saving" />
+          </q-card-actions>
+        </q-form>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="tokenDialogOpen" persistent :maximized="$q.screen.lt.sm" @hide="pairingResult = null">
       <q-card class="execution-agent-dialog">
         <q-card-section>
-          <div class="text-h6">Agent verbinden</div>
+          <div class="text-h6">Kopplungstoken</div>
           <q-banner rounded class="app-surface-tonal q-mt-md">
-            Das Token wird nur jetzt angezeigt. Bewahre es sicher auf und teile es nicht.
+            Dieser Kopplungstoken wird nur einmal angezeigt. Bewahre ihn sicher auf und teile ihn nicht.
           </q-banner>
         </q-card-section>
         <q-card-section class="q-pt-none q-gutter-y-md">
-          <q-input :model-value="createdAgent?.agent?.id" readonly outlined label="Agent-ID">
+          <q-input :model-value="pairingResult?.agent?.id" readonly outlined label="Computer-ID">
             <template #append>
-              <q-btn flat round dense icon="content_copy" aria-label="Agent-ID kopieren" @click="copy(createdAgent?.agent?.id, 'Agent-ID')" />
+              <q-btn flat round dense icon="content_copy" aria-label="Computer-ID kopieren" @click="copy(pairingResult?.agent?.id, 'Computer-ID')" />
             </template>
           </q-input>
-          <q-input :model-value="createdAgent?.websocketUrl" readonly outlined label="WebSocket-Adresse">
+          <q-input :model-value="pairingResult?.websocketUrl" readonly outlined label="WebSocket-Adresse">
             <template #append>
-              <q-btn flat round dense icon="content_copy" aria-label="WebSocket-Adresse kopieren" @click="copy(createdAgent?.websocketUrl, 'WebSocket-Adresse')" />
+              <q-btn flat round dense icon="content_copy" aria-label="WebSocket-Adresse kopieren" @click="copy(pairingResult?.websocketUrl, 'WebSocket-Adresse')" />
             </template>
           </q-input>
-          <q-input :model-value="createdAgent?.token" readonly outlined type="textarea" autogrow label="Einmaliges Token">
+          <q-input :model-value="formatExpiry(pairingResult?.pairingTokenExpiresAt)" readonly outlined label="Gültig bis" />
+          <q-input :model-value="pairingResult?.pairingToken" readonly outlined type="textarea" autogrow label="Kopplungstoken">
             <template #append>
-              <q-btn flat round dense icon="content_copy" aria-label="Token kopieren" @click="copy(createdAgent?.token, 'Token')" />
+              <q-btn flat round dense icon="content_copy" aria-label="Kopplungstoken kopieren" @click="copy(pairingResult?.pairingToken, 'Kopplungstoken')" />
             </template>
           </q-input>
         </q-card-section>
@@ -150,7 +214,7 @@
 
 <script setup>
 import { copyToClipboard, useQuasar } from 'quasar'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 import { useExecutionAgentStore } from 'stores/execution-agents'
@@ -175,22 +239,55 @@ const operationLabels = {
   'process.exec': 'Prozesse ausführen',
   'shell.run': 'Shell-Befehle ausführen'
 }
+const pairingDurationChoices = [
+  { label: '30 Minuten', value: 1800 },
+  { label: '1 Stunde', value: 3600 },
+  { label: '4 Stunden', value: 14_400 },
+  { label: '12 Stunden', value: 43_200 },
+  { label: '24 Stunden', value: 86_400 }
+]
+const expiryFormatter = new Intl.DateTimeFormat('de-DE', {
+  day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short'
+})
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const agents = useExecutionAgentStore()
 const nameDialogOpen = ref(false)
+const pairingDialogOpen = ref(false)
 const tokenDialogOpen = ref(false)
 const selectedAgent = ref(null)
-const createdAgent = ref(null)
+const pairingAgent = ref(null)
+const pairingResult = ref(null)
+const pairingDurationSeconds = ref(null)
 const name = ref('')
 const saving = ref(false)
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Name erforderlich.'
 const operationLabel = (operation) => operationLabels[operation] || operation
+const pairingDurationOptions = computed(() => pairingDurationChoices.filter((option) => (
+  option.value <= (agents.pairingPolicy?.maximumDurationSeconds || 0)
+)))
 
-function openCreate() {
+async function openCreate() {
+  try {
+    const policy = await agents.fetchPairingPolicy()
+    pairingDurationSeconds.value = policy.defaultDurationSeconds
+  } catch {
+    return
+  }
   selectedAgent.value = null
   name.value = ''
   nameDialogOpen.value = true
+}
+
+async function openPairingToken(agent) {
+  try {
+    const policy = await agents.fetchPairingPolicy()
+    pairingDurationSeconds.value = policy.defaultDurationSeconds
+  } catch {
+    return
+  }
+  pairingAgent.value = agent
+  pairingDialogOpen.value = true
 }
 
 function openRename(agent) {
@@ -206,9 +303,9 @@ async function saveName() {
   try {
     if (selectedAgent.value) {
       await agents.rename(selectedAgent.value.id, value)
-      $q.notify({ type: 'positive', message: 'Agent umbenannt' })
+      $q.notify({ type: 'positive', message: 'Computer umbenannt' })
     } else {
-      createdAgent.value = await agents.create(value)
+      pairingResult.value = await agents.create(value, pairingDurationSeconds.value)
       tokenDialogOpen.value = true
     }
     nameDialogOpen.value = false
@@ -217,15 +314,38 @@ async function saveName() {
   }
 }
 
+async function createPairingToken() {
+  if (!pairingAgent.value || saving.value) return
+  saving.value = true
+  try {
+    pairingResult.value = await agents.createPairingToken(pairingAgent.value.id, pairingDurationSeconds.value)
+    pairingDialogOpen.value = false
+    tokenDialogOpen.value = true
+  } finally {
+    saving.value = false
+  }
+}
+
+async function unpair(agent) {
+  const accepted = await confirm(
+    `„${agent.name}“ entkoppeln? Der Computer wird sofort getrennt und muss für eine neue Verbindung erneut gekoppelt werden.`,
+    'Computer entkoppeln',
+    { okLabel: 'Entkoppeln', okColor: 'negative' }
+  )
+  if (!accepted) return
+  await agents.unpair(agent.id)
+  $q.notify({ type: 'positive', message: 'Computer entkoppelt' })
+}
+
 async function revoke(agent) {
   const accepted = await confirm(
-    `Zugriff für „${agent.name}“ widerrufen? Der Agent wird sofort getrennt.`,
-    'Agent widerrufen',
-    { okLabel: 'Widerrufen', okColor: 'negative' }
+    `„${agent.name}“ entfernen? Der Zugriff wird sofort widerrufen und der Computer aus der Liste entfernt.`,
+    'Computer entfernen',
+    { okLabel: 'Entfernen', okColor: 'negative' }
   )
   if (!accepted) return
   await agents.revoke(agent.id)
-  $q.notify({ type: 'positive', message: 'Agent widerrufen' })
+  $q.notify({ type: 'positive', message: 'Computer entfernt' })
 }
 
 async function copy(value, label) {
@@ -240,7 +360,35 @@ async function copy(value, label) {
 
 function closeTokenDialog() {
   tokenDialogOpen.value = false
-  createdAgent.value = null
+  pairingResult.value = null
+}
+
+function formatExpiry(value) {
+  const date = value ? new Date(value) : null
+  return date && !Number.isNaN(date.getTime()) ? expiryFormatter.format(date) : ''
+}
+
+function statusLabel(agent) {
+  if (agent.pairingState === 'unpaired') return 'Nicht gekoppelt'
+  if (agent.pairingState === 'pending') return 'Kopplung ausstehend'
+  return agent.connected ? 'Gekoppelt' : 'Offline'
+}
+
+function statusColor(agent) {
+  if (agent.pairingState === 'pending') return 'warning'
+  if (agent.pairingState === 'unpaired') return 'blue-grey-8'
+  if (agent.pairingState === 'paired' && agent.connected) return 'green-9'
+  return 'grey-8'
+}
+
+function statusTextColor(agent) {
+  return agent.pairingState === 'pending' ? 'black' : 'white'
+}
+
+function statusIcon(agent) {
+  if (agent.pairingState === 'unpaired') return 'link_off'
+  if (agent.pairingState === 'pending') return 'hourglass_top'
+  return agent.connected ? 'computer' : 'cloud_off'
 }
 
 async function load(config = null) {
@@ -253,6 +401,7 @@ async function load(config = null) {
 
 onMounted(() => {
   agents.startPolling()
+  void agents.fetchPairingPolicy().catch(() => {})
 })
 onBeforeUnmount(() => agents.stopPolling())
 </script>

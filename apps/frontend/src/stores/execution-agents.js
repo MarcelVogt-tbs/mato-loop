@@ -9,6 +9,7 @@ const READ_ONLY_OPERATIONS = new Set([
 ])
 const POLL_INTERVAL_MS = 10_000
 let fetchPromise = null
+let pairingPolicyPromise = null
 let pollTimer = null
 let pollConsumers = 0
 
@@ -27,6 +28,7 @@ export function absoluteWebsocketUrl(value, location = globalThis.location) {
 export const useExecutionAgentStore = defineStore('execution-agents', {
   state: () => ({
     items: [],
+    pairingPolicy: null,
     loading: false,
     loaded: false,
     loadFailed: false
@@ -72,6 +74,17 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
         fetchPromise = null
       }
     },
+    async fetchPairingPolicy() {
+      if (this.pairingPolicy) return this.pairingPolicy
+      if (!pairingPolicyPromise) pairingPolicyPromise = api.get('/execution-agents/pairing-policy')
+      try {
+        const { data } = await pairingPolicyPromise
+        this.pairingPolicy = data
+        return data
+      } finally {
+        pairingPolicyPromise = null
+      }
+    },
     startPolling() {
       pollConsumers += 1
       if (pollTimer) return
@@ -89,8 +102,8 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
       globalThis.clearInterval(pollTimer)
       pollTimer = null
     },
-    async create(name) {
-      const { data } = await api.post('/execution-agents', { name })
+    async create(name, pairingTokenDurationSeconds) {
+      const { data } = await api.post('/execution-agents', { name, pairingTokenDurationSeconds })
       this.items = [...this.items.filter((item) => item.id !== data.agent.id), data.agent]
       this.loaded = true
       return { ...data, websocketUrl: absoluteWebsocketUrl(data.websocketUrl) }
@@ -99,6 +112,17 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
       const { data } = await api.patch(`/execution-agents/${id}`, { name })
       const updated = data.agent || data
       this.items = this.items.map((agent) => agent.id === id ? { ...agent, ...updated } : agent)
+      return updated
+    },
+    async createPairingToken(id, pairingTokenDurationSeconds) {
+      const { data } = await api.post(`/execution-agents/${id}/pairing-token`, { pairingTokenDurationSeconds })
+      this.items = this.items.map((agent) => agent.id === id ? data.agent : agent)
+      return { ...data, websocketUrl: absoluteWebsocketUrl(data.websocketUrl) }
+    },
+    async unpair(id) {
+      const { data } = await api.delete(`/execution-agents/${id}/pairing`)
+      const updated = data.agent || data
+      this.items = this.items.map((agent) => agent.id === id ? updated : agent)
       return updated
     },
     async revoke(id) {

@@ -72,6 +72,7 @@ class ExecutionAgent:
     def __init__(
         self,
         config: AgentConfig,
+        access_key: str,
         *,
         transfer_client: TransferClient | None = None,
     ) -> None:
@@ -82,8 +83,9 @@ class ExecutionAgent:
         self.transfer = transfer_client or TransferClient(
             max_bytes=config.max_transfer_bytes,
             backend_url=config.backend_url,
-            registration_token=config.token.get_secret_value(),
+            access_key=access_key,
         )
+        self._access_key = access_key
         operations = set(ARGUMENT_MODELS)
         if not self.process.executables:
             operations.remove("process.exec")
@@ -311,7 +313,7 @@ class ExecutionAgent:
     async def _connect_once(self) -> None:
         async with websockets.connect(
             self.config.backend_url,
-            additional_headers={"Authorization": f"Bearer {self.config.token.get_secret_value()}"},
+            additional_headers={"Authorization": f"Bearer {self._access_key}"},
             max_size=self.config.max_message_bytes,
             ping_interval=20,
             ping_timeout=20,

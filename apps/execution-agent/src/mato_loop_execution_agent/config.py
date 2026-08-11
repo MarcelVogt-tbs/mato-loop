@@ -33,7 +33,7 @@ class AgentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     backend_url: str = Field(alias="backendUrl", min_length=1)
-    token: SecretStr
+    token: SecretStr | None = Field(default=None, min_length=1, max_length=4096)
     agent_id: str = Field(
         alias="agentId",
         pattern=UUID_PATTERN,
@@ -129,10 +129,9 @@ class AgentConfig(BaseModel):
         data = json.loads(path.read_text(encoding="utf-8"))
         overrides = {
             "backendUrl": os.getenv("MATO_EXECUTION_AGENT_BACKEND_URL"),
-            "token": os.getenv("MATO_EXECUTION_AGENT_TOKEN"),
             "agentId": os.getenv("MATO_EXECUTION_AGENT_ID"),
             "name": os.getenv("MATO_EXECUTION_AGENT_NAME"),
         }
-        data.update({key: value for key, value in overrides.items() if value is not None})
+        data.update({key: value for key, value in overrides.items() if value})
         # JSON mode accepts native JSON path strings while strict mode still rejects coercion.
         return cls.model_validate_json(json.dumps(data))

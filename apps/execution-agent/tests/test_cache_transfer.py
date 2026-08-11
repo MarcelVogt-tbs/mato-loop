@@ -14,7 +14,7 @@ from mato_loop_execution_agent.transfer import TransferClient
 from mato_loop_execution_agent.workspace import AgentError
 
 BACKEND_URL = "ws://backend/api/execution-agents/connect"
-REGISTRATION_TOKEN = "registration-token"
+ACCESS_KEY = "durable-access-key"
 TICKET_ID = "0a01092c-13d6-49fd-b62c-e2b98deed2bb"
 
 
@@ -22,7 +22,7 @@ def transfer_client(http: httpx.AsyncClient) -> TransferClient:
     return TransferClient(
         max_bytes=1024,
         backend_url=BACKEND_URL,
-        registration_token=REGISTRATION_TOKEN,
+        access_key=ACCESS_KEY,
         client=http,
     )
 
@@ -51,7 +51,7 @@ class CacheTransferTests(unittest.IsolatedAsyncioTestCase):
             size=len(content),
             sha256=digest,
         )
-        self.assertEqual(received["authorization"], f"Bearer {REGISTRATION_TOKEN}")
+        self.assertEqual(received["authorization"], f"Bearer {ACCESS_KEY}")
         self.assertEqual(received["ticket"], "upload-token")
         self.assertEqual(received["body"], content)
         self.assertTrue(received["digest"].startswith("sha-256="))
@@ -64,7 +64,7 @@ class CacheTransferTests(unittest.IsolatedAsyncioTestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             nonlocal calls
             calls += 1
-            self.assertEqual(request.headers["Authorization"], f"Bearer {REGISTRATION_TOKEN}")
+            self.assertEqual(request.headers["Authorization"], f"Bearer {ACCESS_KEY}")
             self.assertEqual(request.headers["X-Mato-Transfer-Token"], "download-token")
             return httpx.Response(200, content=content)
 

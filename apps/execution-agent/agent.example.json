@@ -1,6 +1,5 @@
 {
   "backendUrl": "ws://backend:6020/api/execution-agents/connect",
-  "token": "replace-with-the-token-from-matoloop",
   "agentId": "00000000-0000-4000-8000-000000000001",
   "name": "Docker Agent",
   "roots": [

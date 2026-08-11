@@ -92,3 +92,18 @@ def test_image_limit_error_has_controlled_fallback() -> None:
             "params": {"maxImages": 4},
         }
     )
+
+
+def test_execution_agent_pairing_errors_have_controlled_fallbacks() -> None:
+    assert (
+        describe_error("executionAgent.alreadyPaired").message
+        == "The execution agent is already paired."
+    )
+    assert (
+        describe_error("executionAgent.pairingTokenInvalid").message
+        == "The execution agent pairing token is invalid."
+    )
+    assert (
+        describe_error("executionAgent.pairingTokenExpired").message
+        == "The execution agent pairing token has expired."
+    )

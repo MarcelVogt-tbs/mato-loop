@@ -157,6 +157,16 @@ class TransferTicketStore:
         if ticket is not None:
             self._close(ticket)
 
+    def revoke_owner(self, owner_id: UUID) -> None:
+        with self._lock:
+            tickets = [
+                self._tickets.pop(ticket_id)
+                for ticket_id, ticket in list(self._tickets.items())
+                if ticket.owner_id == owner_id
+            ]
+        for ticket in tickets:
+            self._close(ticket)
+
     async def receive(
         self,
         ticket: TransferTicket,

@@ -47,7 +47,6 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                     json.dumps(
                         {
                             "backendUrl": (f"ws://127.0.0.1:{port}/api/execution-agents/connect"),
-                            "token": "agent-secret",
                             "agentId": AGENT_ID,
                             "name": "Agent",
                             "roots": [{"id": ROOT_ID, "label": "Root", "path": str(base)}],
@@ -59,7 +58,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                 )
                 with patch.dict(os.environ, {}, clear=True):
                     configuration = AgentConfig.load(config_path)
-                await ExecutionAgent(configuration)._connect_once()
+                await ExecutionAgent(configuration, "agent-secret")._connect_once()
 
             self.assertEqual(received["authorization"], "Bearer agent-secret")
             self.assertEqual(received["hello"]["type"], "hello")
@@ -79,7 +78,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                     "allowInsecure": True,
                 }
             )
-            agent = ExecutionAgent(configuration)
+            agent = ExecutionAgent(configuration, "secret")
             started = threading.Event()
             release = threading.Event()
 
@@ -134,11 +133,11 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             values["roots"] = [{"id": ROOT_ID, "label": "Root", "path": base}]
             values["processExecutables"] = {"missing": base / "missing"}
             with self.assertRaises(ValueError):
-                ExecutionAgent(AgentConfig.model_validate(values))
+                ExecutionAgent(AgentConfig.model_validate(values), "secret")
 
             values["processExecutables"] = {"shell": Path("/bin/sh")}
             values["shellExecutable"] = Path("/bin/sh")
-            agent = ExecutionAgent(AgentConfig.model_validate(values))
+            agent = ExecutionAgent(AgentConfig.model_validate(values), "secret")
             self.assertTrue(agent.process.executables["shell"].is_file())
             self.assertEqual(agent.process.executables["shell"], Path("/bin/sh").resolve())
             self.assertIn("process.exec", agent.operations)

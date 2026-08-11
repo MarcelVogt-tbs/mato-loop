@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,6 +12,20 @@ from mato_loop_backend.db.base import Base
 
 class ExecutionAgent(Base):
     __tablename__ = "execution_agents"
+    __table_args__ = (
+        CheckConstraint(
+            "(registration_token_hash IS NULL) = (registration_expires_at IS NULL)",
+            name="registration_complete",
+        ),
+        CheckConstraint(
+            "(token_hash IS NULL) = (token_is_legacy IS NULL)",
+            name="durable_token_classified",
+        ),
+        CheckConstraint(
+            "token_hash IS NULL OR registration_token_hash IS NULL",
+            name="credential_state_exclusive",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(
@@ -19,7 +33,14 @@ class ExecutionAgent(Base):
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     platform: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    token_is_legacy: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    registration_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    registration_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     protocol_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     operations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     revision: Mapped[int] = mapped_column(

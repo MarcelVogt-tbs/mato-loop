@@ -205,8 +205,8 @@
                         outlined
                         :dense="$q.screen.gt.xs"
                         options-dense
-                        label="Ausführungsagent"
-                        hint="Der Agent wird für den nächsten Lauf verwendet."
+                        label="Computer"
+                        hint="Der Computer wird für den nächsten Lauf verwendet."
                         persistent-hint
                         popup-content-class="app-menu-popup"
                         :disable="interactionDisabled"
@@ -235,7 +235,7 @@
                         :dense="$q.screen.gt.xs"
                         options-dense
                         label="Arbeitsbereich"
-                        hint="Der Agent gibt verfügbare Arbeitsbereiche vor."
+                        hint="Der Computer gibt verfügbare Arbeitsbereiche vor."
                         persistent-hint
                         popup-content-class="app-menu-popup"
                         :disable="interactionDisabled || !selectedExecutionAgent"
@@ -452,17 +452,21 @@ const selectedExecutionAgent = computed(() => (
 ))
 const executionAgentOptions = computed(() => {
   const options = [
-    { label: 'Kein Ausführungsagent', value: null, connected: null, caption: 'Nur Backend-Funktionen verwenden' },
+    { label: 'Kein Computer', value: null, connected: null, caption: 'Nur Backend-Funktionen verwenden' },
     ...executionAgents.items.map((agent) => ({
       label: agent.name,
       value: agent.id,
       connected: agent.connected,
-      caption: agent.connected ? agent.platform : 'Offline'
+      caption: agent.pairingState === 'pending'
+        ? 'Kopplung ausstehend'
+        : agent.pairingState === 'unpaired'
+          ? 'Nicht gekoppelt'
+          : agent.connected ? agent.platform : 'Offline'
     }))
   ]
   if (props.session?.preferredExecutionAgentId && !selectedExecutionAgent.value) {
     options.push({
-      label: 'Nicht verfügbarer Agent',
+      label: 'Nicht verfügbarer Computer',
       value: props.session.preferredExecutionAgentId,
       connected: false,
       caption: 'Nicht mehr eingerichtet'
@@ -499,10 +503,12 @@ const agentModes = computed(() => agentModeDefinitions.map((mode) => ({
     ))
 })))
 const executionAgentMessage = computed(() => {
-  if (executionAgents.loadFailed) return 'Der Status der Ausführungsagenten konnte nicht geladen werden.'
-  if (!props.session?.preferredExecutionAgentId) return 'Ohne Ausführungsagent stehen keine lokalen Arbeitsbereiche zur Verfügung.'
-  if (!selectedExecutionAgent.value) return 'Der ausgewählte Agent ist nicht mehr eingerichtet.'
-  if (!selectedExecutionAgent.value.connected) return 'Der ausgewählte Agent ist offline. Es erfolgt kein automatischer Wechsel.'
+  if (executionAgents.loadFailed) return 'Der Status der Computer konnte nicht geladen werden.'
+  if (!props.session?.preferredExecutionAgentId) return 'Ohne Computer stehen keine lokalen Arbeitsbereiche zur Verfügung.'
+  if (!selectedExecutionAgent.value) return 'Der ausgewählte Computer ist nicht mehr eingerichtet.'
+  if (selectedExecutionAgent.value.pairingState === 'pending') return 'Die Kopplung des ausgewählten Computers steht noch aus.'
+  if (selectedExecutionAgent.value.pairingState === 'unpaired') return 'Der ausgewählte Computer ist nicht gekoppelt.'
+  if (!selectedExecutionAgent.value.connected) return 'Der ausgewählte Computer ist offline. Es erfolgt kein automatischer Wechsel.'
   if (!props.session?.preferredRootId) return 'Wähle einen Arbeitsbereich für lokale Dateioperationen aus.'
   if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
   return ''

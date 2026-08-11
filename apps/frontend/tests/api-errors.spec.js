@@ -79,6 +79,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'agent.researchSourcesInvalid' } })).toBe(
       'Die recherchierte Antwort konnte nicht ausreichend mit aktuellen Quellen belegt werden.'
     )
+    expect(apiErrorMessage({ error: { code: 'agent.emptyResponse' } })).toBe(
+      'Das Modell hat auch nach einem erneuten Versuch keine verwertbare Antwort geliefert.'
+    )
     expect(apiErrorMessage({ error: { code: 'memory.dreamingModelUnavailable' } })).toBe(
       'Für Dreaming ist kein verfügbares Modell eingerichtet.'
     )
@@ -139,9 +142,12 @@ describe('API error messages', () => {
 
   it('translates execution, process and transfer errors without unsafe retry advice', () => {
     const codes = [
+      'executionAgent.alreadyPaired',
       'executionAgent.notFound',
       'executionAgent.operationUnavailable',
       'executionAgent.outcomeUnknown',
+      'executionAgent.pairingTokenExpired',
+      'executionAgent.pairingTokenInvalid',
       'executionAgent.protocolError',
       'executionAgent.replaced',
       'executionAgent.requestTooLarge',

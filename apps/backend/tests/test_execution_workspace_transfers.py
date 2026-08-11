@@ -65,6 +65,24 @@ async def test_transfer_tickets_are_owned_single_use_and_verify_streams() -> Non
     assert upload.actual_sha256 == digest
 
 
+def test_transfer_tickets_can_be_revoked_by_owner() -> None:
+    owner = uuid4()
+    other = uuid4()
+    data = BytesIO(b"pending")
+    digest = hashlib.sha256(b"pending").hexdigest()
+    store = TransferTicketStore()
+    owned, ticket = store.create_download(owner, data, size=7, sha256=digest)
+    retained, _ = store.create_upload(other, size=0)
+
+    store.revoke_owner(owner)
+
+    assert data.closed is True
+    with pytest.raises(TransferError, match="invalidTicket"):
+        store.claim(owned.ticket_id, owned.token, "download", owner_id=owner)
+    assert store.claim(retained.ticket_id, retained.token, "upload", owner_id=other)
+    assert ticket.owner_id == owner
+
+
 async def test_transfer_http_requires_agent_and_ticket_credentials() -> None:
     owner = uuid4()
     other = uuid4()

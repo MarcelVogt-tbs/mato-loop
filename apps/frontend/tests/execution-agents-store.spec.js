@@ -12,6 +12,7 @@ import { absoluteWebsocketUrl, useExecutionAgentStore } from '../src/stores/exec
 const agent = {
   id: 'agent-1',
   name: 'Arbeitsplatz',
+  pairingState: 'paired',
   connected: true,
   operations: [
     'workspace.export',
@@ -86,6 +87,19 @@ describe('execution agent store', () => {
     )).toBe('ws://localhost:10020/api/execution-agents/connect')
   })
 
+  it('loads the pairing policy only once', async () => {
+    const policy = { defaultDurationSeconds: 1800, maximumDurationSeconds: 86_400 }
+    api.get.mockResolvedValue({ data: policy })
+    const store = useExecutionAgentStore()
+
+    await store.fetchPairingPolicy()
+    await store.fetchPairingPolicy()
+
+    expect(api.get).toHaveBeenCalledTimes(1)
+    expect(api.get).toHaveBeenCalledWith('/execution-agents/pairing-policy')
+    expect(store.pairingPolicy).toEqual(policy)
+  })
+
   it('shares polling and keeps refreshes non-blocking after the first load', async () => {
     vi.useFakeTimers()
     api.get.mockResolvedValue({ data: { items: [agent] } })
@@ -104,21 +118,57 @@ describe('execution agent store', () => {
     store.stopPolling()
   })
 
-  it('creates, renames and revokes an agent without reloading the list', async () => {
-    api.post.mockResolvedValue({
-      data: { agent, token: 'once', websocketUrl: 'wss://example.test/agents' }
-    })
+  it('creates and rotates pairing tokens, renames and unpairs without storing secrets', async () => {
+    const pendingAgent = { ...agent, connected: false, pairingState: 'pending' }
+    const unpairedAgent = { ...pendingAgent, pairingState: 'unpaired' }
+    api.post
+      .mockResolvedValueOnce({
+        data: {
+          agent: pendingAgent,
+          pairingToken: 'create-once',
+          pairingTokenExpiresAt: '2026-08-11T12:30:00Z',
+          websocketUrl: 'wss://example.test/agents'
+        }
+      })
+      .mockResolvedValueOnce({
+        data: {
+          agent: pendingAgent,
+          pairingToken: 'rotate-once',
+          pairingTokenExpiresAt: '2026-08-11T12:30:00Z',
+          websocketUrl: '/api/execution-agents/connect'
+        }
+      })
     api.patch.mockResolvedValue({ data: { ...agent, name: 'Notebook' } })
-    api.delete.mockResolvedValue({})
+    api.delete.mockResolvedValue({ data: unpairedAgent })
     const store = useExecutionAgentStore()
 
-    const created = await store.create('Arbeitsplatz')
+    const created = await store.create('Arbeitsplatz', 1800)
+    const rotated = await store.createPairingToken('agent-1', 3600)
     await store.rename('agent-1', 'Notebook')
+    await store.unpair('agent-1')
+
+    expect(created.pairingToken).toBe('create-once')
+    expect(rotated.pairingToken).toBe('rotate-once')
+    expect(api.post).toHaveBeenNthCalledWith(1, '/execution-agents', {
+      name: 'Arbeitsplatz',
+      pairingTokenDurationSeconds: 1800
+    })
+    expect(api.post).toHaveBeenNthCalledWith(2, '/execution-agents/agent-1/pairing-token', {
+      pairingTokenDurationSeconds: 3600
+    })
+    expect(api.patch).toHaveBeenCalledWith('/execution-agents/agent-1', { name: 'Notebook' })
+    expect(api.delete).toHaveBeenCalledWith('/execution-agents/agent-1/pairing')
+    expect(store.items).toEqual([unpairedAgent])
+    expect(store.items[0]).not.toHaveProperty('pairingToken')
+  })
+
+  it('revokes an agent and removes it from the list', async () => {
+    api.delete.mockResolvedValue({})
+    const store = useExecutionAgentStore()
+    store.items = [agent]
+
     await store.revoke('agent-1')
 
-    expect(created.token).toBe('once')
-    expect(api.post).toHaveBeenCalledWith('/execution-agents', { name: 'Arbeitsplatz' })
-    expect(api.patch).toHaveBeenCalledWith('/execution-agents/agent-1', { name: 'Notebook' })
     expect(api.delete).toHaveBeenCalledWith('/execution-agents/agent-1')
     expect(store.items).toEqual([])
   })

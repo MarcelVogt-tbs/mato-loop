@@ -21,7 +21,7 @@ class TransferClient:
         *,
         max_bytes: int,
         backend_url: str,
-        registration_token: str,
+        access_key: str,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.max_bytes = max_bytes
@@ -30,7 +30,7 @@ class TransferClient:
         self._origin = (scheme, backend.hostname, backend.port)
         prefix = backend.path[: -len("/execution-agents/connect")]
         self._path_prefix = f"{prefix}/workspace/transfers/"
-        self._registration_token = registration_token
+        self._access_key = access_key
         self._client = client
         self._owns_client = client is None
 
@@ -56,7 +56,7 @@ class TransferClient:
 
     def _headers(self, ticket: str) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self._registration_token}",
+            "Authorization": f"Bearer {self._access_key}",
             "X-Mato-Transfer-Token": ticket,
         }
 

@@ -88,7 +88,8 @@ services:
     environment:
       MATO_EXECUTION_AGENT_BACKEND_URL: ws://mato-loop:6020/api/execution-agents/connect
       MATO_EXECUTION_AGENT_ID: ${MATO_EXECUTION_AGENT_ID:-00000000-0000-4000-8000-000000000001}
-      MATO_EXECUTION_AGENT_TOKEN: ${MATO_EXECUTION_AGENT_TOKEN:-replace-with-the-token-from-matoloop}
+      MATO_EXECUTION_AGENT_PAIRING_TOKEN: ${MATO_EXECUTION_AGENT_PAIRING_TOKEN:-}
+      MATO_EXECUTION_AGENT_TOKEN: ${MATO_EXECUTION_AGENT_TOKEN:-}
       MATO_EXECUTION_AGENT_NAME: ${MATO_EXECUTION_AGENT_NAME:-Docker Agent}
     volumes:
       - ${MATO_EXECUTION_AGENT_CONFIG:-./apps/execution-agent/agent.example.json}:/config/agent.json:ro

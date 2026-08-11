@@ -10,6 +10,7 @@ _GENERIC_MESSAGE = "The action failed."
 
 _MESSAGES = {
     "agent.backendRestarted": "The agent run was interrupted by a backend restart.",
+    "agent.emptyResponse": "The model returned no usable response.",
     "agent.failed": "The agent run failed.",
     "agent.requiredWebSearchFailed": "The required web search failed.",
     "agent.requiredWebSearchMissing": "The model did not perform the required web search.",
@@ -21,9 +22,12 @@ _MESSAGES = {
     "agent.toolCallLimitReached": "The agent reached the maximum number of tool calls.",
     "attachment.tooLarge": "The attachment is too large.",
     "executionAgent.notFound": "The execution agent was not found.",
+    "executionAgent.alreadyPaired": "The execution agent is already paired.",
     "executionAgent.operationUnavailable": "The execution agent does not support this operation.",
     "executionAgent.outcomeUnknown": "The execution agent disconnected after the operation was sent. Its outcome is unknown.",
     "executionAgent.protocolError": "The execution agent sent an invalid protocol message.",
+    "executionAgent.pairingTokenExpired": "The execution agent pairing token has expired.",
+    "executionAgent.pairingTokenInvalid": "The execution agent pairing token is invalid.",
     "executionAgent.replaced": "The execution agent connection was replaced.",
     "executionAgent.requestTooLarge": "The execution agent request is too large.",
     "executionAgent.responseTooLarge": "The execution agent response is too large.",
