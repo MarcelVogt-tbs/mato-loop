@@ -1,0 +1,17 @@
+{
+  "backendUrl": "wss://mato.example/api/execution-agents/connect",
+  "agentId": "00000000-0000-4000-8000-000000000001",
+  "name": "Linux Agent",
+  "roots": [
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "label": "Workspace",
+      "path": "/home/mato/workspace"
+    }
+  ],
+  "dataDir": "/home/mato/.local/share/mato-loop-execution-agent",
+  "processExecutables": {
+    "python": "/usr/bin/python3"
+  },
+  "shellExecutable": "/bin/sh"
+}

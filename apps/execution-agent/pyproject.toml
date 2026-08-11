@@ -14,6 +14,7 @@ dependencies = [
 mato-loop-execution-agent = "mato_loop_execution_agent.__main__:main"
 
 [dependency-groups]
+build = ["pyinstaller>=6.11,<7"]
 dev = ["ruff>=0.14.11,<0.15"]
 
 [build-system]

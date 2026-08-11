@@ -11,7 +11,7 @@ ${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop
 ${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop-execution-agent
 ```
 
-Both images currently target `linux/amd64` only. There is no multi-architecture manifest and no native Execution Agent archive yet.
+Both images currently target `linux/amd64` only. Successful `develop` pushes also provide a native Linux amd64 Execution Agent archive as a seven-day Forgejo workflow artifact. There is no multi-architecture manifest or stable native release archive yet.
 
 The tag policy deliberately limits mutable artifact storage:
 
@@ -19,11 +19,13 @@ The tag policy deliberately limits mutable artifact storage:
 | --- | --- | --- | --- |
 | Pull request | Full checks and tests | Both images | Never |
 | Feature branch push | Checks and tests only | No | Never |
-| `develop` push | Full checks and tests | Both images | Mutable `develop` |
+| `develop` push | Full checks and tests | Both images and native agent | Mutable `develop` images and seven-day workflow artifact |
 | `main` push | Full checks and tests | No | Never; release tags only |
 | Release `vX.Y.Z` | Full checks and tests | Both images | `vX.Y.Z`, `X.Y.Z`, `latest` |
 
-Feature branches therefore consume runner cache only, `develop` retains one named moving tag, and releases retain fixed version tags. Forgejo registry retention and unreferenced-blob cleanup remain instance-administrator responsibilities.
+Feature branches therefore consume runner cache only, `develop` retains one named moving image tag plus short-lived native artifacts, and releases retain fixed version tags. Forgejo registry retention and unreferenced-blob cleanup remain instance-administrator responsibilities.
+
+The native archive is named `mato-loop-execution-agent-linux-amd64-develop-<commit>.tar.gz` and includes the executable, README, a capability-enabled example configuration, and build metadata. Its adjacent `.sha256` file verifies the download. The workflow builds in a digest-pinned Ubuntu 22.04 amd64 container, so the executable targets glibc 2.35 or newer and does not support musl-based distributions. A Git tag is not required; select the successful `develop` workflow run in Forgejo Actions and download its artifact. Stable releases do not include a native archive yet.
 
 Pull requests run the complete test and production-image build path, but registry login, publication, and release creation are disabled. Repository secrets must not be passed to pull request jobs. This applies to same-repository and fork pull requests.
 
@@ -69,7 +71,7 @@ Protect `develop`, `main`, and `v*` tags so only trusted maintainers can modify 
 
 ## Release Process
 
-Releases originate from `develop` and fast-forward release-only `main`. Start one explicitly from a clean, current `develop` checkout:
+`develop` is the default branch. Releases originate there and fast-forward release-only `main`. Start one explicitly from a clean, current `develop` checkout:
 
 ```bash
 ./scripts/release.sh X.Y.Z
