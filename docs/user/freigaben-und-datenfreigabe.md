@@ -10,6 +10,11 @@ Wenn eine Aktion nicht automatisch erlaubt ist, pausiert der Agent und zeigt ein
 - zu speichernden Memory-Inhalt
 - technische Details
 
+Alle offenen Freigabeanfragen finden Sie außerdem unter **Einstellungen > Freigaben**.
+Die globale Liste zeigt die Ursprungssession und erlaubt dieselben Entscheidungen wie die
+Karte im Chat. Über den Session-Link können Sie den vollständigen Gesprächskontext öffnen.
+Das Badge am Benutzermenü zeigt die Anzahl der aktuell offenen Anfragen.
+
 ## Entscheidungen
 
 | Entscheidung | Wirkung |
@@ -18,7 +23,9 @@ Wenn eine Aktion nicht automatisch erlaubt ist, pausiert der Agent und zeigt ein
 | Einmal erlauben | Gilt nur für diese konkrete Aktion |
 | Für Session erlauben | Erstellt eine widerrufbare Freigabe für passende Aktionen dieser Session |
 
-Offene Session-Freigaben finden Sie im Datei-Explorer. Dort können Sie dauerhaft für die Session erteilte Grants widerrufen.
+Dauerhaft für eine Session erteilte Grants finden Sie weiterhin im Datei-Explorer. Dort
+können Sie diese widerrufen. Sie sind keine offenen Freigabeanfragen und erscheinen daher
+nicht in der globalen Pending-Liste.
 
 ## Vertrauenslevel und Datenfreigabe
 

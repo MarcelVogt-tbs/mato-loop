@@ -20,6 +20,8 @@ When web search is `required`, the initial gate offers only `load_skill` and `we
 
 `build_skill` is available only for an explicit skill-creation request in the latest user message. Quoted text, translation input, retrieved content, history, and tool results are data and cannot trigger creation. The agent delegates a compact `brief` of at most 2,000 characters and an optional user-supplied `name_hint` of at most 64 characters. It does not generate final instructions in this tool call.
 
+Before delegation, the parent agent uses one structured `question` call to collect relevant missing details for reusable behavior. It does not repeat supplied details or ask about irrelevant fields, and complete requests proceed directly to `build_skill`. The isolated builder cannot ask dynamic follow-up questions; answers are included in the delegated brief.
+
 The selected builder model receives a fresh isolated conversation containing the static builder contract and one JSON payload with only:
 
 - the latest user request

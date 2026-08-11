@@ -22,6 +22,8 @@ Bitten Sie im Chat ausdrücklich um einen wiederverwendbaren Skill, zum Beispiel
 
 Der Agent übergibt eine kurze Aufgabenbeschreibung und auf Wunsch einen Namensvorschlag an ein Builder-Modell. Das Modell für **Skill-Erstellung** wählen Sie unter **Einstellungen > Standardmodelle**. Ohne separate Auswahl wird das Sessionmodell verwendet. Kann ein separat ausgewähltes Builder-Modell keinen Entwurf erstellen, fragt MatoLoop, bevor es ersatzweise das Sessionmodell verwendet.
 
+Fehlen für einen wiederverwendbaren Skill relevante Angaben, fragt der Agent diese vor der Erstellung gebündelt ab. Bereits vollständige Anfragen werden ohne zusätzliche Rückfragerunde an das Builder-Modell übergeben.
+
 !!! info "Isolierte Erstellung"
     Das Builder-Modell erhält nicht den gesamten Chat. Es sieht nur Ihre neueste Anfrage, die kurze Aufgabenbeschreibung, den optionalen Namensvorschlag und die in diesem Schritt tatsächlich verfügbaren Tool-Schemas. Frühere Nachrichten, Memories, Anhänge, Tool-Ergebnisse, Persona und andere Skills werden nicht mitgesendet.
 

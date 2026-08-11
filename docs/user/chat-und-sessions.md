@@ -15,13 +15,13 @@ Für jede Session können Sie festlegen:
 | Agent-Modus **Schreiben** | Bietet zusätzlich Dateiänderungen an |
 | Memory | Voll, nur lesen oder deaktiviert |
 | Websuche | Erzwingen, verfügbar oder deaktiviert |
-| Ausführungsagent | Optionaler verbundener Agent für lokale Funktionen |
-| Arbeitsbereich | Vom Ausführungsagenten gemeldete Wurzel |
+| Computer | Optional verbundener Computer für lokale Funktionen |
+| Arbeitsbereich | Vom Computer gemeldete Wurzel |
 | Arbeitsordner | Optionaler relativer Unterordner im Arbeitsbereich |
 
 Der Agent-Modus beschränkt den Agenten. Direkte Dateiaktionen, die Sie selbst im Explorer ausführen, richten sich nach den dort geltenden Grenzen.
 
-Die Ausführungsagent-, Arbeitsbereich- und Arbeitsordnerauswahl ist eine veränderbare Session-Vorgabe. Beim Start eines Laufs speichert MatoLoop davon eine unveränderliche Momentaufnahme. Änderungen gelten erst für den nächsten Lauf. Ist kein Agent gewählt oder der gewählte Agent offline, bleiben Chat und Backend-Tools verfügbar; Workspace-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Agenten und wiederholt keine fehlgeschlagene lokale Operation automatisch.
+Die Auswahl von Computer, Arbeitsbereich und Arbeitsordner ist eine veränderbare Session-Vorgabe. Beim Start eines Laufs speichert MatoLoop davon eine unveränderliche Momentaufnahme. Änderungen gelten erst für den nächsten Lauf. Ist kein Computer gewählt oder der gewählte Computer offline, bleiben Chat und Backend-Tools verfügbar; Workspace-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Computer und wiederholt keine fehlgeschlagene lokale Operation automatisch.
 
 ## Laufende Antworten
 
@@ -40,4 +40,4 @@ Reasoning-Zusammenfassungen werden nur angezeigt, wenn das Modell sie liefert un
 
 ## Darstellung
 
-Assistant-Antworten unterstützen Markdown, Tabellen, Aufgabenlisten, Codeblöcke mit Syntaxhervorhebung, mathematische Ausdrücke und Mermaid-Diagramme. Der gemeinsame Umschalter **Vorschau / Quelltext** wechselt die gesamte Nachricht. Mermaid-Diagramme erscheinen in der Vorschau ohne eigenen Rahmen direkt zwischen dem übrigen Markdown; fertige Diagramme lassen sich über die Vergrößerungsaktion im gemeinsamen Bildviewer öffnen. Während ein Diagramm entsteht, zeigt die Vorschau den Erstellhinweis; der Quelltextmodus zeigt die vollständig wachsende Antwort. Die Mermaid-Quelle bleibt Bestandteil der Chatnachricht und erzeugt keine zusätzliche Session-Datei. Externe Links öffnen sicher in einem neuen Tab. Externe Bilder werden erst nach Ihrer Zustimmung für den jeweiligen Ursprung geladen.
+Assistant-Antworten unterstützen Markdown, Tabellen, Aufgabenlisten, Codeblöcke mit Syntaxhervorhebung, mathematische Ausdrücke und Mermaid-Diagramme. Codeblöcke lassen sich über ihre Aktionen herunterladen oder kopieren. Mermaid-Diagramme erscheinen ohne eigenen Rahmen direkt zwischen dem übrigen Markdown; fertige Diagramme lassen sich als SVG herunterladen, als Quelltext kopieren oder unabhängig von ihrer Breite im gemeinsamen Bildviewer vergrößern. Während ein Diagramm entsteht, erscheint ein Erstellhinweis. Die Mermaid-Quelle bleibt Bestandteil der Chatnachricht und erzeugt keine zusätzliche Session-Datei. Externe Links öffnen sicher in einem neuen Tab. Externe Bilder werden erst nach Ihrer Zustimmung für den jeweiligen Ursprung geladen.

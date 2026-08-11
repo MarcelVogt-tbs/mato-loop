@@ -31,9 +31,9 @@ Welche Tools tatsächlich erscheinen, hängt zusätzlich von Agent-Modus, Sessio
 
 ## Lokale Funktionen
 
-Arbeitsbereiche, Prozesse, Shell-Befehle und statisch dafür vorgesehene lokale Integrationen laufen auf dem für die Session gewählten Ausführungsagenten. Eine lokale Integration erscheint nur, wenn sie diesem Agenten zugeordnet ist, der Agent verbunden ist und die fest eingebaute Operation meldet. Ohne passenden Agenten bleiben Chat, Websuche und andere Backend-Funktionen verfügbar. Es gibt keinen automatischen Wechsel, Backend-Fallback oder Wiederholungsversuch.
+Arbeitsbereiche, Prozesse, Shell-Befehle und statisch dafür vorgesehene lokale Integrationen laufen auf dem für die Session gewählten Computer. Eine lokale Integration erscheint nur, wenn sie diesem Computer zugeordnet ist, der Computer verbunden ist und die fest eingebaute Operation meldet. Ohne passenden Computer bleiben Chat, Websuche und andere Backend-Funktionen verfügbar. Es gibt keinen automatischen Wechsel, Backend-Fallback oder Wiederholungsversuch.
 
-`process.exec` kann nur administrativ konfigurierte Programm-Aliase starten. `shell.run` steht nur mit einer konfigurierten Shell zur Verfügung. Beide Funktionen laufen im gewählten Arbeitsordner, aber ohne Betriebssystem-Sandbox: Der Prozess kann grundsätzlich auf weitere Dateien und Netzwerkdienste des Agenten zugreifen. Deshalb zeigt MatoLoop bei jedem Aufruf eine Warnung und bietet ausschließlich **Einmal erlauben** oder **Ablehnen** an.
+`process.exec` kann nur administrativ konfigurierte Programm-Aliase starten. `shell.run` steht nur mit einer konfigurierten Shell zur Verfügung. Beide Funktionen laufen im gewählten Arbeitsordner, aber ohne Betriebssystem-Sandbox: Der Prozess kann grundsätzlich auf weitere Dateien und Netzwerkdienste des Computers zugreifen. Deshalb zeigt MatoLoop bei jedem Aufruf eine Warnung und bietet ausschließlich **Einmal erlauben** oder **Ablehnen** an.
 
 ## SearXNG integrieren
 
