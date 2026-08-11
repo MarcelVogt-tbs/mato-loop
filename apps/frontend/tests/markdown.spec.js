@@ -13,6 +13,8 @@ import {
 import { markdownPrintRequest } from '../src/utils/markdown-print'
 import {
   MAX_MERMAID_CACHE_ENTRIES,
+  MAX_MERMAID_SOURCE_LENGTH,
+  mermaidErrorMessage,
   renderMermaid,
   sanitizeMermaidSvg,
   validateMermaidSource
@@ -77,7 +79,9 @@ describe('assistant markdown rendering', () => {
     expect(root.querySelector('input[type="checkbox"]')?.disabled).toBe(true)
     expect(root.querySelector('pre code')?.classList.contains('hljs')).toBe(true)
     expect(root.querySelector('.hljs-keyword')?.textContent).toBe('const')
-    expect(root.querySelector('[data-markdown-code]')?.getAttribute('aria-label')).toBe('Codeblock kopieren')
+    expect(root.querySelector('.chat-markdown__source-download')?.getAttribute('aria-label')).toBe('Codeblock herunterladen')
+    expect(root.querySelector('.chat-markdown__source-copy')?.getAttribute('aria-label')).toBe('Codeblock kopieren')
+    expect(root.querySelectorAll('[data-markdown-code]')).toHaveLength(2)
     expect(codeBlocks).toEqual(['const answer = 42\n'])
     expect(html).not.toContain('data-markdown-code="const answer')
   })
@@ -100,22 +104,28 @@ describe('assistant markdown rendering', () => {
   it('keeps multiple code block sources separate from rendered markup', () => {
     const { root, codeBlocks, html } = renderedDom('```txt\nerster Block\n```\n\n```\nzweiter Block\n```')
 
-    expect([...root.querySelectorAll('[data-markdown-code]')].map((button) => button.dataset.markdownCode)).toEqual(['0', '1'])
+    expect([...root.querySelectorAll('.chat-markdown__source-copy')].map((button) => button.dataset.markdownCode)).toEqual(['0', '1'])
+    expect([...root.querySelectorAll('.chat-markdown__source-download')].map((button) => button.dataset.markdownCode)).toEqual(['0', '1'])
     expect(codeBlocks).toEqual(['erster Block\n', 'zweiter Block\n'])
     expect(html).not.toContain('erster Block"')
     expect(html).not.toContain('zweiter Block"')
   })
 
-  it('collects completed Mermaid fences without exposing their source in attributes', () => {
+  it('renders all completed Mermaid actions without exposing source in attributes', () => {
     const source = 'flowchart LR\n  A["<script>alert(1)</script>"] --> B\n'
     const { root, codeBlocks, html, mermaidBlocks } = renderedDom(`\`\`\`mermaid\n${source}\`\`\``)
 
     expect(root.querySelector('[data-markdown-mermaid]')?.dataset.markdownMermaid).toBe('0')
-    expect(root.querySelector('.chat-markdown__mermaid-block button, .chat-markdown__mermaid-block pre')).toBeNull()
+    expect(root.querySelector('.chat-markdown__mermaid-download')?.getAttribute('aria-label')).toBe('Mermaid-Diagramm herunterladen')
+    expect(root.querySelector('.chat-markdown__source-copy')?.getAttribute('aria-label')).toBe('Mermaid-Quelltext kopieren')
+    expect(root.querySelector('.chat-markdown__mermaid-fullscreen')?.getAttribute('aria-label')).toBe('Diagramm im Vollbild öffnen')
+    expect(root.querySelectorAll('.chat-markdown__mermaid-block button')).toHaveLength(3)
+    expect(root.querySelector('.chat-markdown__mermaid-block pre')).toBeNull()
     expect(root.querySelector('script')).toBeNull()
-    expect(codeBlocks).toEqual([])
+    expect(codeBlocks).toEqual([source])
     expect(mermaidBlocks).toEqual([source])
     expect(html).not.toContain('data-markdown-mermaid="flowchart')
+    expect(html).not.toContain('data-markdown-code="flowchart')
   })
 
   it('shows only progress for unfinished Mermaid fences in preview mode', () => {
@@ -330,9 +340,26 @@ describe('assistant markdown rendering', () => {
 })
 
 describe('Mermaid safety', () => {
-  it('rejects oversized and content-controlled Mermaid configuration', () => {
-    expect(() => validateMermaidSource('%%{init: {"securityLevel": "loose"}}%%\ngraph LR\nA-->B')).toThrow()
-    expect(() => validateMermaidSource('---\nconfig:\n  securityLevel: loose\n---\ngraph LR\nA-->B')).toThrow()
+  it('reports controlled reasons for rejected Mermaid source', () => {
+    const capture = (operation) => {
+      try {
+        operation()
+      } catch (error) {
+        return error
+      }
+      throw new Error('Expected Mermaid validation to fail')
+    }
+    const directive = capture(() => validateMermaidSource('%%{init: {"securityLevel": "loose"}}%%\ngraph LR\nA-->B'))
+    const frontmatter = capture(() => validateMermaidSource('---\nconfig:\n  securityLevel: loose\n---\ngraph LR\nA-->B'))
+    const oversized = capture(() => validateMermaidSource('x'.repeat(MAX_MERMAID_SOURCE_LENGTH + 1)))
+
+    expect(directive.code).toBe('mermaid.configurationForbidden')
+    expect(frontmatter.code).toBe('mermaid.configurationForbidden')
+    expect(oversized.code).toBe('mermaid.tooLarge')
+    expect(mermaidErrorMessage(oversized)).toContain('zu groß')
+    expect(mermaidErrorMessage(new Error('sensitive parser detail'))).toBe(
+      'Das Diagramm ist syntaktisch ungültig oder zu komplex.'
+    )
     expect(validateMermaidSource('graph LR\nA-->B')).toBe('graph LR\nA-->B')
   })
 

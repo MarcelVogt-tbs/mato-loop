@@ -1,48 +1,12 @@
 <template>
   <div class="markdown-viewer">
-    <div v-if="showViewerControls" class="markdown-viewer__actions">
-      <q-tabs
-        :model-value="viewerMode"
-        no-caps
-        dense
-        shrink
-        active-color="primary"
-        indicator-color="transparent"
-        active-class="markdown-viewer__mode-tab--active"
-        aria-label="Markdown-Ansicht"
-        @update:model-value="setViewerMode"
-      >
-        <q-tab class="markdown-viewer__mode-tab" name="preview" icon="visibility" aria-label="Vorschau" :ripple="false">
-          <q-tooltip>Vorschau</q-tooltip>
-        </q-tab>
-        <q-tab class="markdown-viewer__mode-tab" name="source" icon="code" aria-label="Quelltext" :ripple="false">
-          <q-tooltip>Quelltext</q-tooltip>
-        </q-tab>
-      </q-tabs>
-      <q-btn
-        class="markdown-viewer__copy"
-        flat
-        dense
-        icon="content_copy"
-        aria-label="Markdown kopieren"
-        @click="copySource"
-      >
-        <q-tooltip>Markdown kopieren</q-tooltip>
-      </q-btn>
-    </div>
     <div
-      v-if="viewerMode === 'preview'"
       ref="contentRoot"
       class="chat-markdown"
       @click="handleClick"
       @error.capture="handleImageError"
       v-html="rendered.html"
     />
-    <div v-else class="chat-markdown">
-      <div class="chat-markdown__code-block">
-        <pre><code>{{ content }}</code></pre>
-      </div>
-    </div>
 
     <q-dialog v-model="mermaidDialog" maximized transition-show="fade" transition-hide="fade" @hide="clearMermaidImage">
       <q-card v-if="mermaidImage" class="app-file-dialog">
@@ -61,12 +25,12 @@
 import 'katex/dist/katex.min.css'
 
 import { copyToClipboard, useQuasar } from 'quasar'
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import ImageViewerPanel from 'components/ImageViewerPanel.vue'
 import { renderMarkdown } from 'src/utils/markdown'
 import { verifyExternalImage } from 'src/utils/image-verification'
-import { renderMermaid } from 'src/utils/mermaid'
+import { mermaidErrorMessage, renderMermaid } from 'src/utils/mermaid'
 
 defineOptions({ name: 'MessageContent' })
 
@@ -82,10 +46,6 @@ const props = defineProps({
   interactive: {
     type: Boolean,
     default: true
-  },
-  viewerControls: {
-    type: Boolean,
-    default: undefined
   },
   forceLight: Boolean,
   streaming: Boolean,
@@ -104,10 +64,8 @@ const contentRoot = ref(null)
 const rendered = ref({ codeBlocks: [], html: '', externalImages: [], mermaidBlocks: [] })
 const imageStates = ref({})
 const verificationTasks = new Map()
-const viewerMode = ref('preview')
 const mermaidDialog = ref(false)
 const mermaidImage = ref(null)
-const showViewerControls = computed(() => props.viewerControls ?? props.interactive)
 let renderFrame = null
 let renderVersion = 0
 let mermaidObjectUrl = ''
@@ -147,20 +105,11 @@ async function hydrateMermaid(version) {
       if (diagram && !diagram.hasAttribute('aria-label') && !diagram.hasAttribute('aria-labelledby')) {
         diagram.setAttribute('aria-label', 'Mermaid-Diagramm')
       }
-      if (diagram && showViewerControls.value && !props.streaming) {
-        const button = document.createElement('button')
-        button.type = 'button'
-        button.className = 'chat-markdown__mermaid-fullscreen material-icons'
-        button.setAttribute('aria-label', 'Diagramm im Vollbild öffnen')
-        button.title = 'Im Vollbild öffnen'
-        button.textContent = 'fullscreen'
-        placeholder.appendChild(button)
-      }
-    } catch {
+    } catch (reason) {
       if (version !== renderVersion || !placeholder.isConnected) return
       const error = document.createElement('div')
       error.className = 'chat-markdown__mermaid-error'
-      error.textContent = 'Das Diagramm konnte nicht dargestellt werden.'
+      error.textContent = mermaidErrorMessage(reason)
       placeholder.replaceChildren(error)
       placeholder.removeAttribute('aria-live')
       placeholder.setAttribute('role', 'alert')
@@ -169,18 +118,7 @@ async function hydrateMermaid(version) {
   if (version === renderVersion) emit('rendered')
 }
 
-function setViewerMode(value) {
-  if (!['preview', 'source'].includes(value) || value === viewerMode.value) return
-  viewerMode.value = value
-}
-
 function scheduleRender() {
-  if (viewerMode.value !== 'preview') {
-    renderVersion += 1
-    if (renderFrame !== null) window.cancelAnimationFrame(renderFrame)
-    renderFrame = null
-    return
-  }
   if (!props.streaming) {
     if (renderFrame !== null) window.cancelAnimationFrame(renderFrame)
     renderContent()
@@ -230,20 +168,38 @@ function syncImageVerifications() {
 async function handleClick(event) {
   const mermaidButton = event.target.closest?.('.chat-markdown__mermaid-fullscreen')
   if (mermaidButton && event.currentTarget.contains(mermaidButton)) {
-    const diagram = mermaidButton.closest('[data-markdown-mermaid]')?.querySelector('svg')
+    const diagram = mermaidButton.closest('.chat-markdown__mermaid-block')?.querySelector('svg')
     if (diagram) openMermaidImage(diagram.outerHTML)
     return
   }
 
-  const codeButton = event.target.closest?.('[data-markdown-code]')
-  if (codeButton && event.currentTarget.contains(codeButton)) {
-    const code = rendered.value.codeBlocks[Number(codeButton.dataset.markdownCode)]
+  const mermaidDownload = event.target.closest?.('.chat-markdown__mermaid-download')
+  if (mermaidDownload && event.currentTarget.contains(mermaidDownload)) {
+    const diagram = mermaidDownload.closest('.chat-markdown__mermaid-block')?.querySelector('svg')
+    if (diagram) downloadFile(diagram.outerHTML, 'image/svg+xml;charset=utf-8', 'Mermaid-Diagramm.svg')
+    return
+  }
+
+  const sourceDownload = event.target.closest?.('.chat-markdown__source-download')
+  if (sourceDownload && event.currentTarget.contains(sourceDownload)) {
+    const code = rendered.value.codeBlocks[Number(sourceDownload.dataset.markdownCode)]
+    if (typeof code === 'string') downloadFile(code, 'text/plain;charset=utf-8', 'Codeblock.txt')
+    return
+  }
+
+  const copyButton = event.target.closest?.('.chat-markdown__source-copy')
+  if (copyButton && event.currentTarget.contains(copyButton)) {
+    const code = rendered.value.codeBlocks[Number(copyButton.dataset.markdownCode)]
     if (typeof code !== 'string') return
+    const mermaid = Boolean(copyButton.closest('.chat-markdown__mermaid-block'))
     try {
       await copyToClipboard(code)
-      $q.notify({ type: 'positive', message: 'Code kopiert' })
+      $q.notify({ type: 'positive', message: mermaid ? 'Mermaid-Quelltext kopiert' : 'Code kopiert' })
     } catch {
-      $q.notify({ type: 'negative', message: 'Code konnte nicht kopiert werden' })
+      $q.notify({
+        type: 'negative',
+        message: mermaid ? 'Mermaid-Quelltext konnte nicht kopiert werden' : 'Code konnte nicht kopiert werden'
+      })
     }
     return
   }
@@ -254,6 +210,17 @@ async function handleClick(event) {
   if (!image?.origin) return
   if (!props.trustedImageOrigins.includes(image.origin)) emit('trust-image-origin', image.origin)
   verifyImage(image)
+}
+
+function downloadFile(content, type, name) {
+  const url = URL.createObjectURL(new Blob([content], { type }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = name
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }
 
 function openMermaidImage(svg) {
@@ -267,15 +234,6 @@ function clearMermaidImage() {
   if (mermaidObjectUrl) URL.revokeObjectURL(mermaidObjectUrl)
   mermaidObjectUrl = ''
   mermaidImage.value = null
-}
-
-async function copySource() {
-  try {
-    await copyToClipboard(props.content)
-    $q.notify({ type: 'positive', message: 'Quelltext kopiert' })
-  } catch {
-    $q.notify({ type: 'negative', message: 'Quelltext konnte nicht kopiert werden' })
-  }
 }
 
 function handleImageError(event) {
@@ -294,8 +252,7 @@ watch(
     props.researchSources,
     props.streaming,
     props.trustedImageOrigins,
-    $q.dark.isActive,
-    viewerMode.value
+    $q.dark.isActive
   ],
   scheduleRender,
   { immediate: true }

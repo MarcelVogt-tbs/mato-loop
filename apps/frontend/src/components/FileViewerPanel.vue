@@ -154,8 +154,6 @@
         class="file-viewer__markdown"
         :content="preview.content"
         :allow-images="false"
-        :interactive="false"
-        viewer-controls
       />
       <pre v-else-if="preview.kind === 'text'" class="file-viewer__text">{{ preview.content }}</pre>
       <div v-else class="fit column flex-center text-center q-pa-xl">

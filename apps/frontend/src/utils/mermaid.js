@@ -39,6 +39,24 @@ let renderQueue = Promise.resolve()
 let renderId = 0
 const renderCache = new Map()
 
+function mermaidError(code) {
+  return Object.assign(new Error(code), { code })
+}
+
+export function mermaidErrorMessage(error) {
+  if (error?.code === 'mermaid.empty') return 'Das Diagramm enthält keinen Mermaid-Quelltext.'
+  if (error?.code === 'mermaid.tooLarge') {
+    return 'Das Diagramm ist zu groß und muss in mehrere Diagramme aufgeteilt werden.'
+  }
+  if (error?.code === 'mermaid.configurationForbidden') {
+    return 'Das Diagramm enthält nicht erlaubte Mermaid-Konfiguration.'
+  }
+  if (error?.code === 'mermaid.unavailable') {
+    return 'Der Diagramm-Renderer konnte nicht geladen werden.'
+  }
+  return 'Das Diagramm ist syntaktisch ungültig oder zu komplex.'
+}
+
 function removeCssAtRule(css, rule) {
   let result = String(css || '')
   let position = result.toLowerCase().indexOf(rule)
@@ -65,10 +83,10 @@ function inertCss(value) {
 
 export function validateMermaidSource(source) {
   const value = String(source || '')
-  if (!value.trim()) throw new Error('Mermaid source is empty')
-  if (value.length > MAX_MERMAID_SOURCE_LENGTH) throw new Error('Mermaid source is too large')
+  if (!value.trim()) throw mermaidError('mermaid.empty')
+  if (value.length > MAX_MERMAID_SOURCE_LENGTH) throw mermaidError('mermaid.tooLarge')
   if (/^\s*---(?:\r?\n|$)/.test(value) || value.includes('%%{')) {
-    throw new Error('Mermaid configuration directives are not allowed')
+    throw mermaidError('mermaid.configurationForbidden')
   }
   return value
 }
@@ -117,21 +135,30 @@ export function sanitizeMermaidSvg(value) {
 
 async function render(source, dark) {
   const content = validateMermaidSource(source)
-  mermaidPromise ||= import('mermaid').then((module) => module.default)
-  const mermaid = await mermaidPromise
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    htmlLabels: false,
-    logLevel: 'fatal',
-    maxEdges: 300,
-    maxTextSize: MAX_MERMAID_SOURCE_LENGTH,
-    suppressErrorRendering: true,
-    theme: 'base',
-    themeVariables: dark ? DARK_THEME : LIGHT_THEME
-  })
-  const result = await mermaid.render(`matoloop-mermaid-${++renderId}`, content)
-  return sanitizeMermaidSvg(result.svg)
+  let mermaid
+  try {
+    mermaidPromise ||= import('mermaid').then((module) => module.default)
+    mermaid = await mermaidPromise
+  } catch {
+    throw mermaidError('mermaid.unavailable')
+  }
+  try {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      htmlLabels: false,
+      logLevel: 'fatal',
+      maxEdges: 300,
+      maxTextSize: MAX_MERMAID_SOURCE_LENGTH,
+      suppressErrorRendering: true,
+      theme: 'base',
+      themeVariables: dark ? DARK_THEME : LIGHT_THEME
+    })
+    const result = await mermaid.render(`matoloop-mermaid-${++renderId}`, content)
+    return sanitizeMermaidSvg(result.svg)
+  } catch {
+    throw mermaidError('mermaid.invalid')
+  }
 }
 
 export function renderMermaid(source, { dark = false } = {}) {

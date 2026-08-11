@@ -257,7 +257,18 @@ function configureRenderRules() {
           </div>
         </div>`
       }
+      let actions = ''
+      if (env.interactive && !env.streaming) {
+        const codeIndex = String(env.codeBlocks.length)
+        env.codeBlocks.push(token.content)
+        actions = `<div class="chat-markdown__block-actions">
+          <button type="button" class="chat-markdown__block-action chat-markdown__mermaid-download material-icons" aria-label="Mermaid-Diagramm herunterladen" title="Diagramm herunterladen">download</button>
+          <button type="button" class="chat-markdown__block-action chat-markdown__source-copy material-icons" data-markdown-code="${codeIndex}" aria-label="Mermaid-Quelltext kopieren" title="Quelltext kopieren">content_copy</button>
+          <button type="button" class="chat-markdown__block-action chat-markdown__mermaid-fullscreen material-icons" aria-label="Diagramm im Vollbild öffnen" title="Im Vollbild öffnen">fullscreen</button>
+        </div>`
+      }
       return `<div class="chat-markdown__mermaid-block">
+        ${actions}
         <div class="chat-markdown__mermaid-output" data-markdown-mermaid="${mermaidIndex}" role="status" aria-live="polite">
           <span class="chat-markdown__mermaid-status">Diagramm wird erstellt …</span>
         </div>
@@ -267,7 +278,10 @@ function configureRenderRules() {
     const codeIndex = String(env.codeBlocks.length)
     env.codeBlocks.push(token.content)
     return `<div class="chat-markdown__code-block">
-      <button type="button" class="chat-markdown__code-copy" data-markdown-code="${codeIndex}" aria-label="Codeblock kopieren">Kopieren</button>
+      <div class="chat-markdown__block-actions">
+        <button type="button" class="chat-markdown__block-action chat-markdown__source-download material-icons" data-markdown-code="${codeIndex}" aria-label="Codeblock herunterladen" title="Codeblock herunterladen">download</button>
+        <button type="button" class="chat-markdown__block-action chat-markdown__source-copy material-icons" data-markdown-code="${codeIndex}" aria-label="Codeblock kopieren" title="Codeblock kopieren">content_copy</button>
+      </div>
       ${highlightedCode(token.content, token.info)}
     </div>`
   }
