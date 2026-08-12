@@ -30,7 +30,7 @@ export function agentActivityLabel(activity) {
       && activity.providerAttempt >= 2
       && activity.providerAttempt <= activity.providerAttemptTotal
     ) {
-      return `Provider-Anfrage wird wiederholt (${activity.providerAttempt}/${activity.providerAttemptTotal})`
+      return `Provider-Anfrage: Versuch ${activity.providerAttempt} von ${activity.providerAttemptTotal}`
     }
     return activity.modelRequest > 1
       ? 'Modell wertet Tool-Ergebnisse aus'

@@ -982,8 +982,13 @@ async def test_transient_errors_use_increasing_delays_and_report_attempts(
             ProviderResult(content="OK"),
         ]
     )
-    sleep = AsyncMock()
-    on_retry = AsyncMock()
+    events = []
+    sleep = AsyncMock(side_effect=lambda delay: events.append(("sleep", delay)))
+    on_retry = AsyncMock(
+        side_effect=lambda attempt, _total, _status, _code: events.append(
+            ("retry", attempt)
+        )
+    )
     monkeypatch.setattr(service_module.asyncio, "sleep", sleep)
 
     result = await _with_retries(operation, on_retry=on_retry)
@@ -991,7 +996,11 @@ async def test_transient_errors_use_increasing_delays_and_report_attempts(
     assert result.content == "OK"
     assert operation.await_count == 3
     assert [item.args for item in sleep.await_args_list] == [(2.0,), (5.0,)]
-    assert [item.args for item in on_retry.await_args_list] == [(2, 3), (3, 3)]
+    assert [item.args for item in on_retry.await_args_list] == [
+        (2, 3, 503, "provider.unavailable"),
+        (3, 3, 503, "provider.unavailable"),
+    ]
+    assert events == [("sleep", 2.0), ("retry", 2), ("sleep", 5.0), ("retry", 3)]
 
 
 async def test_non_transient_error_is_not_retried() -> None:

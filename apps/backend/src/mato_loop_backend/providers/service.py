@@ -330,13 +330,15 @@ def _direct_provider_media(
 async def _with_retries(
     operation: Callable[[], Awaitable[ProviderResult]],
     can_retry: Callable[[], bool] | None = None,
-    on_retry: Callable[[int, int], Awaitable[None]] | None = None,
+    on_retry: Callable[[int, int, int | None, str], Awaitable[None]] | None = None,
 ) -> ProviderResult:
     total_attempts = len(_RETRY_DELAYS) + 1
     for attempt in range(total_attempts):
         try:
             return await operation()
         except ProviderError as exc:
+            status_code = exc.status_code
+            error_code = exc.public_code
             transient = exc.status_code == 429 or (
                 exc.status_code is not None and exc.status_code >= 500
             )
@@ -352,14 +354,14 @@ async def _with_retries(
                 else _RETRY_DELAYS[attempt]
             )
         except httpx.RequestError as exc:
+            status_code = None
+            error_code = "provider.unavailable"
             if attempt == len(_RETRY_DELAYS) or (can_retry and not can_retry()):
                 raise ProviderError(
                     "Provider network request failed", code="provider.unavailable"
                 ) from exc
             delay = _RETRY_DELAYS[attempt]
         next_attempt = attempt + 2
-        if on_retry:
-            await on_retry(next_attempt, total_attempts)
         delay = min(delay, 30.0)
         logger.info(
             "Retrying transient provider request (attempt %s/%s in %.1f seconds)",
@@ -368,6 +370,8 @@ async def _with_retries(
             delay,
         )
         await asyncio.sleep(delay)
+        if on_retry:
+            await on_retry(next_attempt, total_attempts, status_code, error_code)
     raise ProviderError("Provider request failed", code="provider.requestFailed")
 
 
@@ -434,7 +438,7 @@ class ProviderService:
         tool_choice: Literal["auto", "required", "none"] = "auto",
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning: ReasoningDeltaCallback | None = None,
-        on_retry: Callable[[int, int], Awaitable[None]] | None = None,
+        on_retry: Callable[[int, int, int | None, str], Awaitable[None]] | None = None,
         timeout: float = 300,
         max_output_tokens: int | None = None,
         target_trust_level: TrustLevel | None = None,

@@ -228,7 +228,7 @@ async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None
 
     await AgentRuntime._execute_loop(db, run)
     events.clear()
-    await requests[0]["on_retry"](2, 3)
+    await requests[0]["on_retry"](2, 3, 503, "provider.requestFailed")
 
     started_at = events[0].pop("startedAt")
     assert isinstance(started_at, str)

@@ -17,7 +17,7 @@ describe('agent activity', () => {
       .toBe('Modell wertet Tool-Ergebnisse aus')
     expect(agentActivityLabel({
       phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
-    })).toBe('Provider-Anfrage wird wiederholt (2/3)')
+    })).toBe('Provider-Anfrage: Versuch 2 von 3')
     expect(agentActivityLabel({ phase: 'streaming' })).toBe('Antwort wird erstellt')
   })
 

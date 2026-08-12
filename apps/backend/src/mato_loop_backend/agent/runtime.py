@@ -1913,8 +1913,18 @@ class AgentRuntime:
             async def on_provider_retry(
                 attempt: int,
                 total: int,
+                status_code: int | None,
+                error_code: str,
                 model_request: int = model_request,
             ) -> None:
+                logger.info(
+                    "Agent run %s retrying provider request (attempt %s/%s, status %s, code %s)",
+                    run.id,
+                    attempt,
+                    total,
+                    status_code,
+                    error_code,
+                )
                 await _publish_run_phase(
                     run.id,
                     "waiting_model",
