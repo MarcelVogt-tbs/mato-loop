@@ -7,6 +7,7 @@
           :model-value="draft"
           borderless
           autogrow
+          autofocus
           type="textarea"
           rows="1"
           class="chat-composer__input"
