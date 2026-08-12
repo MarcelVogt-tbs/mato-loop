@@ -10,6 +10,7 @@
       <template #before>
         <div class="chat-page__pane column no-wrap full-height">
     <q-scroll-area
+      id="chat-scroll-area"
       ref="scrollArea"
       class="chat-page__content col"
       :aria-busy="chat.loading ? 'true' : 'false'"
@@ -54,16 +55,24 @@
           />
         </div>
 
-        <div v-else class="chat-transcript q-pa-md">
-          <div
-            v-for="message in transcript.messages"
-            :key="message.id"
-            :class="[
-              'chat-message',
-              `chat-message--${message.role}`,
-              { 'chat-message--turn-continues': message.continuesAssistantTurn }
-            ]"
-          >
+        <q-virtual-scroll
+          v-else
+          :key="chat.current.id"
+          ref="virtualScroll"
+          class="chat-transcript q-pa-md"
+          :items="transcript.messages"
+          scroll-target="#chat-scroll-area > .scroll"
+          :virtual-scroll-item-size="96"
+        >
+          <template #default="{ item: message }">
+            <div
+              :key="message.id"
+              :class="[
+                'chat-message',
+                `chat-message--${message.role}`,
+                { 'chat-message--turn-continues': message.continuesAssistantTurn }
+              ]"
+            >
             <div v-if="message.role === 'user' || message.showAgentLabel" class="chat-message__label">
               <span>{{ message.role === 'user' ? 'Du' : identity.displayName }}</span>
             </div>
@@ -85,7 +94,7 @@
                 :history="message.workHistory"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
                 :activity="chat.activity"
-                :process-outputs="chat.processOutputs"
+                :process-outputs="message.currentTurn ? chat.processOutputs : emptyProcessOutputs"
                 :running="chat.running && message.currentTurn"
                 :expanded="auth.preferences.thinkingExpanded"
                 :class="{
@@ -103,6 +112,7 @@
                 :content="message.content"
                 :research-sources="message.research?.linkedSources || []"
                 :trusted-image-origins="trustedImageOrigins"
+                @rendered="scheduleVirtualScrollRefresh"
                 @trust-image-origin="trustImageOrigin"
               />
               <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
@@ -195,11 +205,13 @@
                 <q-tooltip>Erneut versuchen</q-tooltip>
               </q-btn>
             </div>
-          </div>
-          <div
-            v-if="chat.streamContent || (chat.streamReasoning && !hasCurrentWorkHistory)"
-            class="chat-message chat-message--assistant"
-          >
+            </div>
+          </template>
+          <template #after>
+            <div
+              v-if="chat.streamContent || (chat.streamReasoning && !hasCurrentWorkHistory)"
+              class="chat-message chat-message--assistant"
+            >
             <div v-if="!hasCurrentAssistantTurn" class="chat-message__label">
               <span>{{ identity.displayName }}</span>
             </div>
@@ -227,16 +239,17 @@
                 {{ chat.streamModelName }}
               </span>
             </div>
-          </div>
-          <ApprovalCard
-            v-for="approval in transcript.unmatchedApprovals"
-            :key="approval.id"
-            :approval="approval"
-            class="q-mt-md"
-            @open-approval-draft="openApprovalDraft"
-          />
-          <AgentActivity v-if="runPresentation.showActivity" :activity="chat.activity" />
-        </div>
+            </div>
+            <ApprovalCard
+              v-for="approval in transcript.unmatchedApprovals"
+              :key="approval.id"
+              :approval="approval"
+              class="q-mt-md"
+              @open-approval-draft="openApprovalDraft"
+            />
+            <AgentActivity v-if="runPresentation.showActivity" :activity="chat.activity" />
+          </template>
+        </q-virtual-scroll>
       </div>
     </q-scroll-area>
 
@@ -383,6 +396,7 @@ const toolSettings = useToolSettingsStore()
 const workspace = useWorkspaceStore()
 const scrollArea = ref(null)
 const scrollContent = ref(null)
+const virtualScroll = ref(null)
 const composer = ref(null)
 const trustedImageOriginsBySession = ref(new Map())
 const followingBottom = ref(true)
@@ -391,6 +405,7 @@ const messageActionId = ref(null)
 const announcedRunStatus = ref('')
 const bottomThreshold = 64
 const emptyWorkHistory = { entries: [], observedDurationMs: null }
+const emptyProcessOutputs = {}
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
 ))
@@ -402,6 +417,8 @@ let userScrollTimer = null
 let messageTimestampTimer = null
 let runAnnouncementTimer = null
 let touchActive = false
+let virtualScrollRefreshFrame = null
+let virtualScrollRefreshTimer = null
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
 const sessionQuestions = computed(() => chat.current ? questions.forSession(chat.current.id) : [])
 const activeQuestion = computed(() => sessionQuestions.value[0] || null)
@@ -412,7 +429,6 @@ const transcript = computed(() => buildChatTranscript(
     running: chat.running,
     toolExecutionActive: chat.activity.phase === 'processing_tool',
     activeToolCallId: chat.activity.toolCallId,
-    processOutputs: chat.processOutputs,
     questions: sessionQuestions.value
   }
 ))
@@ -645,6 +661,20 @@ function addAttachmentFiles(files, done) {
 
 function updateThinkingExpanded(expanded) {
   auth.setThinkingExpanded(expanded).catch(() => {})
+  scheduleVirtualScrollRefresh(200)
+}
+
+function scheduleVirtualScrollRefresh(delay = 0) {
+  if (delay) {
+    clearTimeout(virtualScrollRefreshTimer)
+    virtualScrollRefreshTimer = window.setTimeout(scheduleVirtualScrollRefresh, delay)
+    return
+  }
+  if (virtualScrollRefreshFrame !== null) return
+  virtualScrollRefreshFrame = window.requestAnimationFrame(() => {
+    virtualScrollRefreshFrame = null
+    virtualScroll.value?.refresh(-1)
+  })
 }
 
 function updateFollowState() {
@@ -793,6 +823,8 @@ onBeforeUnmount(() => {
   executionAgents.stopPolling()
   clearTimeout(runAnnouncementTimer)
   clearTimeout(userScrollTimer)
+  clearTimeout(virtualScrollRefreshTimer)
+  if (virtualScrollRefreshFrame !== null) window.cancelAnimationFrame(virtualScrollRefreshFrame)
   cancelFollowScroll()
 })
 </script>
