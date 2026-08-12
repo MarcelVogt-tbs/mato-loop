@@ -363,6 +363,8 @@ def _responses_body(
             body["parallel_tool_calls"] = True
     if request.reasoning_summary:
         body["reasoning"] = {"summary": "auto"}
+    if request.prompt_cache_key:
+        body["prompt_cache_key"] = request.prompt_cache_key
     body["include"] = ["reasoning.encrypted_content"]
     if extra_body:
         body.update(extra_body)
@@ -392,6 +394,10 @@ def _normalize_usage(raw_usage: Any) -> dict[str, int]:
     )
     if isinstance(input_details, dict) and isinstance(input_details.get("cached_tokens"), int):
         usage["cached_input_tokens"] = input_details["cached_tokens"]
+    if isinstance(input_details, dict) and isinstance(
+        input_details.get("cache_write_tokens"), int
+    ):
+        usage["cache_write_input_tokens"] = input_details["cache_write_tokens"]
     return usage
 
 

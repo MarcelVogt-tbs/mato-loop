@@ -71,7 +71,10 @@ def test_chat_result_exposes_explicit_reasoning_and_usage() -> None:
             "usage": {
                 "prompt_tokens": 10,
                 "completion_tokens": 8,
-                "prompt_tokens_details": {"cached_tokens": 7},
+                "prompt_tokens_details": {
+                    "cached_tokens": 7,
+                    "cache_write_tokens": 3,
+                },
                 "completion_tokens_details": {"reasoning_tokens": 5},
             },
         }
@@ -82,6 +85,7 @@ def test_chat_result_exposes_explicit_reasoning_and_usage() -> None:
     assert result.reasoning.text == "Optionen verglichen."
     assert result.reasoning.reasoning_tokens == 5
     assert result.usage["cached_input_tokens"] == 7
+    assert result.usage["cache_write_input_tokens"] == 3
 
 
 def test_chat_result_preserves_private_reasoning_details_separately() -> None:

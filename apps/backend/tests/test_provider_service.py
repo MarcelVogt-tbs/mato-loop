@@ -105,6 +105,7 @@ async def test_complete_passes_model_capabilities_and_explicit_timeout(monkeypat
         tools=[{"name": "read_file", "parameters": {}}],
         tool_choice="required",
         timeout=12,
+        prompt_cache_key="ignored-for-chat-completions",
     )
 
     request = captured["request"]
@@ -115,6 +116,7 @@ async def test_complete_passes_model_capabilities_and_explicit_timeout(monkeypat
     assert request.temperature == 0.4
     assert request.timeout == 12
     assert request.tool_choice == "required"
+    assert request.prompt_cache_key is None
     assert result.provider_data["continuation_scope"]["providerId"] == str(provider.id)
 
 
@@ -396,6 +398,7 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
         messages=[{"role": "user", "content": "Test"}],
         tools=[{"name": "read_file", "parameters": {}}],
         max_output_tokens=1_024,
+        prompt_cache_key="session-1",
     )
 
     request = captured["request"]
@@ -405,10 +408,12 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
     assert request.temperature is None
     assert request.tools == [{"name": "read_file", "parameters": {}}]
     assert request.supports_parallel_tool_calls is True
+    assert request.prompt_cache_key == "session-1"
     assert "extra_body" not in captured
     assert "max_output_tokens" not in captured["body"]
     assert "temperature" not in captured["body"]
     assert "text" not in captured["body"]
+    assert captured["body"]["prompt_cache_key"] == "session-1"
 
 
 async def test_complete_does_not_touch_attachment_storage_without_image_capability(

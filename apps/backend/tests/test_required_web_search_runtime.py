@@ -882,6 +882,7 @@ async def test_available_can_answer_without_research(monkeypatch) -> None:
 
     assert len(requests) == 1
     assert requests[0]["tool_choice"] == "auto"
+    assert requests[0]["prompt_cache_key"] == str(run.session_id)
     assert any(event.get("delta") == answer for event in events)
     final = _assistant_messages(db)[0]
     assert final.provider_data["_matoloop"]["research"] == {

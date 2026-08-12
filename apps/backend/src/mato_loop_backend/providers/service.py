@@ -445,6 +445,7 @@ class ProviderService:
         pseudonymization_enabled: bool | None = None,
         image_inputs: list[ProviderImageInput] | None = None,
         media_inputs: list[ProviderMediaInput] | None = None,
+        prompt_cache_key: str | None = None,
     ) -> ProviderResult:
         if model.provider_id != provider.id:
             raise ProviderError(
@@ -544,6 +545,7 @@ class ProviderService:
             temperature=None if is_codex else _temperature_option(model.config),
             timeout=timeout,
             reasoning_summary=is_codex or model.reasoning_summary,
+            prompt_cache_key=prompt_cache_key if is_codex else None,
             continuation_scope=continuation_scope,
             media=media,
         )

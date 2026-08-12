@@ -194,6 +194,7 @@ class ProviderRequest:
     temperature: float | None = None
     timeout: float = 300
     reasoning_summary: bool = False
+    prompt_cache_key: str | None = None
     continuation_scope: dict[str, str | None] = field(default_factory=dict)
     media: list[ProviderMedia] = field(default_factory=list)
 

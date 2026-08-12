@@ -217,6 +217,18 @@ def test_payloads_convert_model_options_for_each_protocol() -> None:
     assert chat_body["stream"] is responses_body["stream"] is False
 
 
+def test_responses_payload_forwards_optional_prompt_cache_key() -> None:
+    request = ProviderRequest(
+        model="gpt-5.6",
+        messages=[],
+        prompt_cache_key="session-1",
+    )
+
+    assert _responses_body(request)["prompt_cache_key"] == "session-1"
+    request.prompt_cache_key = None
+    assert "prompt_cache_key" not in _responses_body(request)
+
+
 def test_chat_stream_can_request_usage() -> None:
     request = ProviderRequest(
         model="local-model",

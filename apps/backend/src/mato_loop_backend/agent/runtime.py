@@ -1960,6 +1960,7 @@ class AgentRuntime:
                 timeout=runtime_settings.request_timeout_seconds,
                 target_trust_level=model_trust_level,
                 pseudonymization_enabled=run_pseudonymization_enabled,
+                prompt_cache_key=str(chat_session.id),
             )
             provider_duration_ms = max(
                 0, round((time.monotonic() - provider_started_at) * 1_000)
