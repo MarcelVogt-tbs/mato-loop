@@ -135,7 +135,6 @@ services:
       - mato-loop
 
   execution-agent:
-    profiles: ["execution-agent"]
     image: mato-loop-execution-agent-dev
     build:
       context: ./apps/execution-agent
@@ -145,16 +144,16 @@ services:
       UV_PROJECT_ENVIRONMENT: /opt/mato-loop/execution-agent/venv
       UV_CACHE_DIR: /opt/mato-loop/execution-agent/uv-cache
       MATO_EXECUTION_AGENT_BACKEND_URL: ws://backend:${MATO_LOOP_BIND_BACKEND_PORT:-6020}/api/execution-agents/connect
-      MATO_EXECUTION_AGENT_ID: ${MATO_EXECUTION_AGENT_ID:-00000000-0000-4000-8000-000000000001}
+      MATO_EXECUTION_AGENT_ID: ${MATO_EXECUTION_AGENT_ID:-}
       MATO_EXECUTION_AGENT_PAIRING_TOKEN: ${MATO_EXECUTION_AGENT_PAIRING_TOKEN:-}
       MATO_EXECUTION_AGENT_TOKEN: ${MATO_EXECUTION_AGENT_TOKEN:-}
       MATO_EXECUTION_AGENT_NAME: ${MATO_EXECUTION_AGENT_NAME:-Docker Agent}
     volumes:
       - .:/source
-      - ${MATO_EXECUTION_AGENT_CONFIG:-./apps/execution-agent/agent.example.json}:/config/agent.json:ro
+      - ${MATO_EXECUTION_AGENT_CONFIG:-./apps/execution-agent/config.json}:/config/config.json:ro
       - ${MATO_EXECUTION_AGENT_WORKSPACE:-./data/home}:/workspace
       - execution_agent_data:/data
-      - execution_agent_uv_data:/opt/mato-loop/execution-agent
+      - execution_agent_dependency_data:/opt/mato-loop/execution-agent
     depends_on:
       backend:
         condition: service_healthy
@@ -163,7 +162,7 @@ services:
       [
         "sh",
         "-c",
-        "uv sync --frozen && exec uv run --no-sync mato-loop-execution-agent run --config /config/agent.json",
+        "uv sync --frozen && exec uv run --no-sync mato-loop-execution-agent run",
       ]
     networks:
       - mato-loop
@@ -176,7 +175,7 @@ volumes:
   frontend_node_modules:
   frontend_yarn_cache:
   execution_agent_data:
-  execution_agent_uv_data:
+  execution_agent_dependency_data:
 
 networks:
   mato-loop:

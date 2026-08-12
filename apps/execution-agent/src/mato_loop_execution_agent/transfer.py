@@ -60,6 +60,9 @@ class TransferClient:
             "X-Mato-Transfer-Token": ticket,
         }
 
+    def set_access_key(self, access_key: str) -> None:
+        self._access_key = access_key
+
     async def __aenter__(self) -> TransferClient:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=60, trust_env=False, follow_redirects=False)

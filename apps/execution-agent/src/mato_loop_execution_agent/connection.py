@@ -76,6 +76,8 @@ class ExecutionAgent:
         *,
         transfer_client: TransferClient | None = None,
     ) -> None:
+        if config.backend_url is None or config.agent_id is None:
+            raise ValueError("Execution agent connection is not configured")
         self.config = config
         self.workspace = Workspace(config)
         self.cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
@@ -294,12 +296,17 @@ class ExecutionAgent:
             return await _run_mutation(lambda: {"removed": self.cache.clear()})
         raise AgentError("operation.unsupported", "Operation is not supported")
 
-    async def run_forever(self) -> None:
+    async def run_forever(
+        self, access_key_loader: Callable[[], Awaitable[str]] | None = None
+    ) -> None:
         self.cache.evict()
         delay = 1.0
         async with self.transfer:
             while True:
                 try:
+                    if access_key_loader is not None:
+                        self._access_key = await access_key_loader()
+                        self.transfer.set_access_key(self._access_key)
                     await self._connect_once()
                     delay = 1.0
                     await asyncio.sleep(delay)

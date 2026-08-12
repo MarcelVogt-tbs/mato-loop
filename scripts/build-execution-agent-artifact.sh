@@ -39,7 +39,7 @@ uv run --no-sync pyinstaller \
 mkdir -p "$TEMP_DIR/$NAME" "$OUTPUT_DIR"
 install -m 755 "$TEMP_DIR/dist/mato-loop-execution-agent" "$TEMP_DIR/$NAME/"
 install -m 644 README.md "$TEMP_DIR/$NAME/"
-install -m 644 agent.native.example.json "$TEMP_DIR/$NAME/agent.example.json"
+install -m 644 config.example.json "$TEMP_DIR/$NAME/"
 printf 'version=%s\nrevision=%s\nplatform=linux-amd64\nlibc=%s\n' \
     "$(<"$ROOT/VERSION")" "$(git -C "$ROOT" rev-parse HEAD)" "$LIBC" > "$TEMP_DIR/$NAME/BUILD"
 tar -C "$TEMP_DIR" -czf "$OUTPUT_DIR/$NAME.tar.gz" "$NAME"

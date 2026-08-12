@@ -87,7 +87,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             http = client(handler)
-            access_key = await resolve_credential(
+            credential = await resolve_credential(
                 data_dir=base,
                 backend_url=BACKEND_URL,
                 agent_id=AGENT_ID,
@@ -99,9 +99,12 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(received["authorization"], "Bearer pairing-secret")
             self.assertEqual(received["body"]["agentId"], AGENT_ID)
             self.assertEqual(
-                received["body"]["accessKeyHash"], hashlib.sha256(access_key.encode()).hexdigest()
+                received["body"]["accessKeyHash"],
+                hashlib.sha256(credential.access_key.encode()).hexdigest(),
             )
-            self.assertEqual(saved["accessKey"], access_key)
+            self.assertEqual(saved["accessKey"], credential.access_key)
+            self.assertEqual(credential.backend_url, BACKEND_URL)
+            self.assertEqual(credential.agent_id, AGENT_ID)
             self.assertNotIn("pending", saved)
             self.assertNotIn("pairing-secret", json.dumps(saved))
             self.assertEqual(stat.S_IMODE((base / "agent-state").stat().st_mode), 0o700)
@@ -111,6 +114,14 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 stat.S_IMODE((base / "agent-state" / "credential.lock").stat().st_mode), 0o600
             )
+            restored = await resolve_credential(
+                data_dir=base,
+                backend_url=None,
+                agent_id=None,
+                pairing_token=None,
+                client=http,
+            )
+            self.assertEqual(restored, credential)
             with self.assertRaises(CredentialError):
                 await resolve_credential(
                     data_dir=base,
@@ -148,14 +159,14 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(204)
 
             retry = client(success)
-            access_key = await resolve_credential(
+            credential = await resolve_credential(
                 data_dir=base,
                 backend_url=BACKEND_URL,
                 agent_id=AGENT_ID,
                 pairing_token="ignored-new-token",
                 client=retry,
             )
-            self.assertEqual(access_key, pending_key)
+            self.assertEqual(credential.access_key, pending_key)
             self.assertEqual(received["authorization"], "Bearer first-token")
             self.assertEqual(received["hash"], hashlib.sha256(pending_key.encode()).hexdigest())
             await retry.aclose()
@@ -195,7 +206,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             paired = client(lambda _: httpx.Response(204))
-            old_key = await resolve_credential(
+            old_credential = await resolve_credential(
                 data_dir=base,
                 backend_url=BACKEND_URL,
                 agent_id=AGENT_ID,
@@ -213,7 +224,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                     pairing_token="original-token",
                     client=unused,
                 ),
-                old_key,
+                old_credential,
             )
             await unused.aclose()
 
@@ -226,20 +237,20 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                     pairing_token="invalid-new-token",
                     client=rejected,
                 )
-            self.assertEqual(state(base)["accessKey"], old_key)
+            self.assertEqual(state(base)["accessKey"], old_credential.access_key)
             self.assertNotIn("pending", state(base))
             await rejected.aclose()
 
             rotated = client(lambda _: httpx.Response(204))
-            new_key = await resolve_credential(
+            new_credential = await resolve_credential(
                 data_dir=base,
                 backend_url=BACKEND_URL,
                 agent_id=AGENT_ID,
                 pairing_token="valid-new-token",
                 client=rotated,
             )
-            self.assertNotEqual(new_key, old_key)
-            self.assertEqual(state(base)["accessKey"], new_key)
+            self.assertNotEqual(new_credential.access_key, old_credential.access_key)
+            self.assertEqual(state(base)["accessKey"], new_credential.access_key)
             self.assertEqual(
                 state(base)["lastPairingTokenHash"],
                 hashlib.sha256(b"valid-new-token").hexdigest(),

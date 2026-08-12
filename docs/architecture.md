@@ -215,13 +215,14 @@ The development stack uses named volumes:
 ```text
 app_data -> /data
 db_data  -> /var/lib/postgresql/data
+execution_agent_data -> /data in the Execution Agent
 ```
 
 Additional named volumes hold Python and frontend dependencies. The repository is mounted at `/workspace` for HMR.
 
-The optional `execution-agent` Compose profile adds `execution_agent_data` for its durable credential state and disposable cache, and mounts `MATO_EXECUTION_AGENT_WORKSPACE` at `/workspace`. Its agent ID and one-time pairing token come from `MATO_EXECUTION_AGENT_ID` and `MATO_EXECUTION_AGENT_PAIRING_TOKEN`; `MATO_EXECUTION_AGENT_CONFIG` selects the host JSON configuration. After pairing, the token can be removed because the agent stores its generated credential under `/data/agent-state`. The backend data volume is not mounted into the agent.
+The standard Compose stacks start the Execution Agent and mount `MATO_EXECUTION_AGENT_WORKSPACE` at `/workspace`. `MATO_EXECUTION_AGENT_CONFIG` selects the runtime JSON configuration mounted as `/config/config.json`; connection values are not runtime settings. Interactive pairing asks for the backend WebSocket URL, computer ID, and one-time token. Non-interactive pairing requires the complete `MATO_EXECUTION_AGENT_BACKEND_URL`, `MATO_EXECUTION_AGENT_ID`, and `MATO_EXECUTION_AGENT_PAIRING_TOKEN` set. The agent waits while unpaired and stores the URL, ID, and generated credential under `/data/agent-state`. The backend data volume is not mounted into the agent.
 
-The base production stack uses two bind mounts; the optional Execution Agent adds its configured workspace and configuration mounts:
+The production stack uses two application bind mounts and adds the configured Execution Agent workspace and configuration mounts. `docker-compose.no-agent.yaml` is the standalone production alternative without the agent service or its settings:
 
 ```text
 ./data -> /data

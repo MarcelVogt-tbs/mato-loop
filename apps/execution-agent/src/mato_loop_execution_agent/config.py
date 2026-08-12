@@ -29,12 +29,43 @@ class RootConfig(BaseModel):
         return value
 
 
+class ConnectionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+    backend_url: str = Field(alias="backendUrl", min_length=1)
+    agent_id: str = Field(alias="agentId", pattern=UUID_PATTERN)
+    allow_insecure: bool = Field(default=False, alias="allowInsecure")
+
+    @field_validator("backend_url")
+    @classmethod
+    def websocket_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"ws", "wss"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path.endswith("/execution-agents/connect")
+        ):
+            raise ValueError("backendUrl must use ws:// or wss://")
+        return value
+
+    @model_validator(mode="after")
+    def secure_transport(self) -> Self:
+        if not self.allow_insecure and self.backend_url.startswith("ws://"):
+            raise ValueError("ws:// requires allowInsecure")
+        return self
+
+
 class AgentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    backend_url: str = Field(alias="backendUrl", min_length=1)
+    backend_url: str | None = Field(default=None, alias="backendUrl", min_length=1)
     token: SecretStr | None = Field(default=None, min_length=1, max_length=4096)
-    agent_id: str = Field(
+    agent_id: str | None = Field(
+        default=None,
         alias="agentId",
         pattern=UUID_PATTERN,
     )
@@ -60,22 +91,6 @@ class AgentConfig(BaseModel):
         default=60.0, alias="defaultTimeoutSeconds", gt=0, le=3600
     )
 
-    @field_validator("backend_url")
-    @classmethod
-    def websocket_url(cls, value: str) -> str:
-        parsed = urlsplit(value)
-        if (
-            parsed.scheme not in {"ws", "wss"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-            or not parsed.path.endswith("/execution-agents/connect")
-        ):
-            raise ValueError("backendUrl must use ws:// or wss://")
-        return value
-
     @field_validator("data_dir")
     @classmethod
     def absolute_data_dir(cls, value: Path) -> Path:
@@ -99,10 +114,16 @@ class AgentConfig(BaseModel):
 
     @model_validator(mode="after")
     def unique_roots(self) -> Self:
+        if (self.backend_url is None) != (self.agent_id is None):
+            raise ValueError("backendUrl and agentId must be configured together")
+        if self.backend_url is not None and self.agent_id is not None:
+            ConnectionConfig(
+                backendUrl=self.backend_url,
+                agentId=self.agent_id,
+                allowInsecure=self.allow_insecure,
+            )
         if len({root.id for root in self.roots}) != len(self.roots):
             raise ValueError("root IDs must be unique")
-        if not self.allow_insecure and self.backend_url.startswith("ws://"):
-            raise ValueError("ws:// requires allowInsecure")
         physical_roots: list[tuple[Path, tuple[int, int]]] = []
         for root in self.roots:
             try:
@@ -128,8 +149,6 @@ class AgentConfig(BaseModel):
     def load(cls, path: Path) -> Self:
         data = json.loads(path.read_text(encoding="utf-8"))
         overrides = {
-            "backendUrl": os.getenv("MATO_EXECUTION_AGENT_BACKEND_URL"),
-            "agentId": os.getenv("MATO_EXECUTION_AGENT_ID"),
             "name": os.getenv("MATO_EXECUTION_AGENT_NAME"),
         }
         data.update({key: value for key, value in overrides.items() if value})

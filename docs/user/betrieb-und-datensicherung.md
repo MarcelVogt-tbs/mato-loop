@@ -22,16 +22,26 @@ Setzen Sie bei einem Betrieb über HTTPS ausdrücklich `MATO_LOOP_SECURE_COOKIES
 
 MatoLoop kann mehrere Computer verwalten. Öffnen Sie **Einstellungen > Computer**, wählen Sie **Computer hinzufügen**, vergeben Sie einen Namen und wählen Sie die Gültigkeit des Kopplungstokens zwischen 30 Minuten und 24 Stunden. Der Dialog zeigt Computer-ID, WebSocket-Adresse und das nur einmal sichtbare Token. Der Computer erzeugt damit beim ersten Start einen eigenen dauerhaften Zugangsschlüssel. Ein abgelaufenes oder verlorenes Kopplungstoken kann in der Übersicht ersetzt werden. Ein bereits gekoppelter Computer muss vor einer erneuten Kopplung ausdrücklich entkoppelt werden.
 
-Für den vorbereiteten Compose-Computer setzen Sie mindestens:
+Der Arbeitsbereich kann vor dem Start angepasst werden:
 
 ```env
-MATO_EXECUTION_AGENT_ID=<Computer-ID aus MatoLoop>
-MATO_EXECUTION_AGENT_PAIRING_TOKEN=<einmalig angezeigtes Kopplungstoken>
 MATO_EXECUTION_AGENT_WORKSPACE=./data/home
-MATO_EXECUTION_AGENT_CONFIG=./apps/execution-agent/agent.example.json
 ```
 
-Starten Sie anschließend das optionale Profil `execution-agent`, zum Beispiel mit `docker compose --profile execution-agent up -d`. In der Entwicklungsumgebung kann `COMPOSE_PROFILES=execution-agent ./scripts/dev.sh up -d` verwendet werden. `MATO_EXECUTION_AGENT_WORKSPACE` wird als `/workspace` eingebunden; `MATO_EXECUTION_AGENT_CONFIG` bestimmt Arbeitsbereichs-IDs, Cachegrenzen, erlaubte Programm-Aliase und die optionale Shell. Der Computer verbindet sich ausgehend mit dem Backend und speichert seinen dauerhaften Zugang unter `/data/agent-state`. Nach erfolgreicher Kopplung kann `MATO_EXECUTION_AGENT_PAIRING_TOKEN` entfernt werden. Linux und Docker sind derzeit die getesteten Umgebungen.
+Der normale Produktions- und Entwicklungsstack startet den Computer automatisch. Solange er ungekoppelt ist, wartet er auf die einmalige Kopplung. Führen Sie diese im laufenden Produktionscontainer aus:
+
+```bash
+docker compose exec execution-agent mato-loop-execution-agent pair
+```
+
+In der Entwicklungsumgebung lautet der Befehl:
+
+```bash
+docker compose -f docker-compose.dev.yaml exec execution-agent \
+  uv run --no-sync mato-loop-execution-agent pair
+```
+
+Der Dialog fragt die Backend-WebSocket-Adresse, die Computer-ID und das verdeckt eingegebene Kopplungstoken ab. Bereits gesetzte Werte werden als Vorgabe angeboten. Für eine automatische Kopplung müssen `MATO_EXECUTION_AGENT_BACKEND_URL`, `MATO_EXECUTION_AGENT_ID` und `MATO_EXECUTION_AGENT_PAIRING_TOKEN` vollständig im Container gesetzt sein. Compose stellt seine interne Backend-Adresse bereits bereit; Betreiber setzen deshalb noch ID und Token. Unvollständige Verbindungsvariablen starten keine automatische Kopplung. Entfernen Sie das Token nach erfolgreicher Kopplung aus der Umgebung. `MATO_EXECUTION_AGENT_WORKSPACE` wird als `/workspace` eingebunden. Ohne `MATO_EXECUTION_AGENT_CONFIG` verwendet Compose `./apps/execution-agent/config.json`; eine abweichende Datei bestimmt Name, Arbeitsbereichs-IDs, Cachegrenzen, erlaubte Programm-Aliase und die optionale Shell. URL, ID und dauerhafter Zugang liegen im Named Volume `execution_agent_data` unter `/data/agent-state`. Verwenden Sie `docker compose -f docker-compose.no-agent.yaml up -d --remove-orphans` für den eigenständigen Produktionsstack ohne Computer. Linux und Docker sind derzeit die getesteten Umgebungen.
 
 !!! warning "Prozess- und Shell-Zugriff"
     Der Compose-Computer aktiviert mit der Beispielkonfiguration Prozess- und Shell-Funktionen. Sie besitzen keine Betriebssystem-Sandbox. Der Arbeitsordner begrenzt nicht den Datei- oder Netzwerkzugriff eines gestarteten Prozesses. MatoLoop erlaubt deshalb pro Aufruf nur **Einmal erlauben** oder **Ablehnen**.
@@ -60,7 +70,7 @@ Sichern Sie Datenbank und Datenverzeichnis vor einem Update gemeinsam. Datenbank
 
 ### Veröffentlichtes Image verwenden
 
-Die Compose-Datei kann MatoLoop und den optionalen Computer weiterhin lokal bauen. Für veröffentlichte Images setzen Sie stattdessen beide Image-Adressen mit einem festen, gleichen Versions-Tag:
+Die normale Compose-Datei kann MatoLoop und den Computer weiterhin lokal bauen. Für veröffentlichte Images setzen Sie stattdessen beide Image-Adressen mit einem festen, gleichen Versions-Tag:
 
 ```env
 MATO_LOOP_IMAGE=git.example/owner/mato-loop:1.2.3
@@ -70,8 +80,8 @@ MATO_LOOP_EXECUTION_AGENT_IMAGE=git.example/owner/mato-loop-execution-agent:1.2.
 Melden Sie Docker bei einer privaten Registry an. Laden Sie die Images anschließend ausdrücklich und erstellen Sie die Container neu:
 
 ```bash
-docker compose --profile execution-agent pull
-docker compose --profile execution-agent up -d
+docker compose pull
+docker compose up -d
 ```
 
 Die veröffentlichten Images unterstützen derzeit nur `linux/amd64`. Erfolgreiche `develop`-Läufe stellen zusätzlich sieben Tage lang ein natives Computer-Archiv für Linux amd64 mit glibc 2.35 oder neuer bereit. Stabile Releases enthalten noch kein natives Archiv. Eine Installation oder Aktualisierung auf Ihrem Server erfolgt nicht automatisch.

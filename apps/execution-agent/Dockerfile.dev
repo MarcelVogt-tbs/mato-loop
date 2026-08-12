@@ -4,14 +4,15 @@ ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 RUN groupadd --gid ${AGENT_GID} agent \
     && useradd --create-home --uid ${AGENT_UID} --gid ${AGENT_GID} agent \
-    && mkdir -p /data /workspace /opt/mato-loop/execution-agent \
+    && mkdir -p /data /workspace /opt/mato-loop/execution-agent/venv /opt/mato-loop/execution-agent/uv-cache \
     && chown -R agent:agent /data /workspace /opt/mato-loop \
     && mv /usr/local/bin/uv /usr/local/bin/uv-real
 COPY --chmod=755 docker/uv /usr/local/bin/uv
-ENV RUFF_CACHE_DIR=/home/agent/.cache/ruff
+ENV RUFF_CACHE_DIR=/home/agent/.cache/ruff \
+    MATO_EXECUTION_AGENT_CONFIG=/config/config.json
 
 WORKDIR /source/apps/execution-agent
 
 USER ${AGENT_UID}:${AGENT_GID}
 
-CMD ["uv", "run", "mato-loop-execution-agent", "run", "--config", "/config/agent.json"]
+CMD ["uv", "run", "mato-loop-execution-agent", "run"]

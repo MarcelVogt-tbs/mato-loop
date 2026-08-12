@@ -11,8 +11,9 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN uv sync --frozen --no-dev
 
-ENV PATH=/app/.venv/bin:$PATH
+ENV PATH=/app/.venv/bin:$PATH \
+    MATO_EXECUTION_AGENT_CONFIG=/config/config.json
 
 USER ${AGENT_UID}:${AGENT_GID}
 ENTRYPOINT ["mato-loop-execution-agent"]
-CMD ["run", "--config", "/config/agent.json"]
+CMD ["run"]

@@ -5,7 +5,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import websockets
 
@@ -21,6 +21,20 @@ REQUEST_ID = "bbc46aa8-698d-4554-92c2-1cd5c6cc33a6"
 
 
 class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
+    def test_runtime_config_does_not_require_connection_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            configuration = AgentConfig.model_validate(
+                {
+                    "name": "Agent",
+                    "roots": [{"id": ROOT_ID, "label": "Root", "path": base}],
+                    "dataDir": base / "data",
+                }
+            )
+
+        self.assertIsNone(configuration.backend_url)
+        self.assertIsNone(configuration.agent_id)
+
     async def test_loads_json_paths_and_authenticates_outbound_socket(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -109,6 +123,38 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(task.done())
             release.set()
             self.assertEqual((await task)["path"], "file.txt")
+
+    async def test_connection_retry_reloads_rotated_access_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            configuration = AgentConfig.model_validate(
+                {
+                    "backendUrl": "ws://localhost/api/execution-agents/connect",
+                    "agentId": AGENT_ID,
+                    "name": "Agent",
+                    "roots": [{"id": ROOT_ID, "label": "Root", "path": base}],
+                    "dataDir": base / "data",
+                    "allowInsecure": True,
+                }
+            )
+            agent = ExecutionAgent(configuration, "old-key")
+            loader = AsyncMock(side_effect=["new-key", "rotated-key"])
+            with (
+                patch.object(
+                    agent,
+                    "_connect_once",
+                    new=AsyncMock(side_effect=[RuntimeError(), asyncio.CancelledError()]),
+                ),
+                patch(
+                    "mato_loop_execution_agent.connection.asyncio.sleep",
+                    new=AsyncMock(),
+                ),
+                self.assertRaises(asyncio.CancelledError),
+            ):
+                await agent.run_forever(loader)
+
+            self.assertEqual(agent._access_key, "rotated-key")
+            self.assertEqual(agent.transfer._access_key, "rotated-key")
 
     def test_rejects_overlapping_roots_and_invalid_executables(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -20,7 +20,7 @@ Beim Anlegen synchronisiert MatoLoop die verfügbaren Modelle. Eine erneute Sync
 
 ## 4. Computer optional verbinden
 
-Für reinen Chat ist kein Computer erforderlich. Für lokale Arbeitsbereiche, Prozesse oder lokale Integrationen öffnen Sie **Einstellungen > Computer**, fügen einen Computer hinzu und übernehmen Computer-ID sowie das nur einmal angezeigte Kopplungstoken. Der optionale Compose-Computer verwendet `MATO_EXECUTION_AGENT_ID`, `MATO_EXECUTION_AGENT_PAIRING_TOKEN`, `MATO_EXECUTION_AGENT_WORKSPACE` und `MATO_EXECUTION_AGENT_CONFIG` im Profil `execution-agent`. Nach erfolgreicher Kopplung kann das Kopplungstoken entfernt werden. Ausführliche Hinweise stehen unter [Betrieb und Datensicherung](betrieb-und-datensicherung.md#optionalen-computer-einrichten).
+Für reinen Chat ist kein Computer erforderlich. Für lokale Arbeitsbereiche, Prozesse oder lokale Integrationen öffnen Sie **Einstellungen > Computer** und fügen einen Computer hinzu. Der normale Compose-Stack startet den Computer ungekoppelt. Führen Sie anschließend dessen interaktiven Befehl `pair` aus und geben Sie Backend-Adresse, Computer-ID sowie das nur einmal angezeigte Kopplungstoken ein. Für automatisierte Starts müssen alle drei Verbindungswerte als Umgebungsvariablen vorliegen. Ausführliche Hinweise stehen unter [Betrieb und Datensicherung](betrieb-und-datensicherung.md#optionalen-computer-einrichten).
 
 ## 5. Erste Session starten
 

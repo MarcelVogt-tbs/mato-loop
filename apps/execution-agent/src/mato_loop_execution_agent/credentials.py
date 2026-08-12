@@ -7,6 +7,7 @@ import os
 import secrets
 import stat
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlsplit, urlunsplit
@@ -21,12 +22,23 @@ class CredentialError(Exception):
     pass
 
 
+class NotPairedError(CredentialError):
+    pass
+
+
 class PairingTemporaryError(CredentialError):
     pass
 
 
 class PairingPermanentError(CredentialError):
     pass
+
+
+@dataclass(frozen=True)
+class ResolvedCredential:
+    backend_url: str
+    agent_id: str
+    access_key: str
 
 
 class PendingCredential(BaseModel):
@@ -287,19 +299,28 @@ async def _pair(
 async def resolve_credential(
     *,
     data_dir: Path,
-    backend_url: str,
-    agent_id: str,
+    backend_url: str | None,
+    agent_id: str | None,
     pairing_token: str | None,
     client: httpx.AsyncClient | None = None,
-) -> str:
+) -> ResolvedCredential:
     with CredentialStore(data_dir) as store:
         state = store.load()
-        if state is not None and (state.backend_url != backend_url or state.agent_id != agent_id):
-            raise CredentialError("Execution agent credential belongs to different configuration")
+        if state is not None:
+            if (backend_url is not None and state.backend_url != backend_url) or (
+                agent_id is not None and state.agent_id != agent_id
+            ):
+                raise CredentialError(
+                    "Execution agent credential belongs to different configuration"
+                )
+            backend_url = state.backend_url
+            agent_id = state.agent_id
 
         if state is None:
             if pairing_token is None:
-                raise CredentialError("Execution agent has not been paired")
+                raise NotPairedError("Execution agent has not been paired")
+            if backend_url is None or agent_id is None:
+                raise CredentialError("Execution agent connection settings are incomplete")
             state = CredentialState(
                 version=1,
                 backendUrl=backend_url,
@@ -313,7 +334,11 @@ async def resolve_credential(
             if pairing_token is None or _token_hash(pairing_token) == state.last_pairing_token_hash:
                 if state.access_key is None:
                     raise CredentialError("Execution agent credential state is invalid")
-                return state.access_key.get_secret_value()
+                return ResolvedCredential(
+                    backend_url=state.backend_url,
+                    agent_id=state.agent_id,
+                    access_key=state.access_key.get_secret_value(),
+                )
             state.pending = PendingCredential(
                 accessKey=secrets.token_urlsafe(48), pairingToken=pairing_token
             )
@@ -325,7 +350,7 @@ async def resolve_credential(
         http = client or httpx.AsyncClient(trust_env=False, follow_redirects=False)
         try:
             try:
-                status = await _pair(backend_url, agent_id, state.pending, http)
+                status = await _pair(state.backend_url, state.agent_id, state.pending, http)
             except httpx.HTTPError:
                 raise PairingTemporaryError(
                     "Execution agent pairing is temporarily unavailable"
@@ -341,7 +366,11 @@ async def resolve_credential(
             state.last_pairing_token_hash = token_hash
             state.pending = None
             store.save(state)
-            return access_key
+            return ResolvedCredential(
+                backend_url=state.backend_url,
+                agent_id=state.agent_id,
+                access_key=access_key,
+            )
         if 500 <= status < 600:
             raise PairingTemporaryError("Execution agent pairing is temporarily unavailable")
 

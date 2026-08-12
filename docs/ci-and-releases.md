@@ -94,9 +94,11 @@ It then creates the matching Forgejo Release. Release notes are the Forgejo comm
 `docker-compose.yaml` keeps local builds and adds optional image names. With no overrides, build locally:
 
 ```bash
-docker compose --profile execution-agent build
-docker compose --profile execution-agent up -d
+docker compose build
+docker compose up -d
 ```
+
+Use `docker compose -f docker-compose.no-agent.yaml up -d --remove-orphans` for a standalone production stack without an Execution Agent. `--remove-orphans` also removes an agent container left by an earlier standard-stack deployment.
 
 To consume published images, set fixed tags and pull before recreating containers:
 
@@ -106,8 +108,8 @@ MATO_LOOP_EXECUTION_AGENT_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPAC
 ```
 
 ```bash
-docker compose --profile execution-agent pull
-docker compose --profile execution-agent up -d
+docker compose pull
+docker compose up -d
 ```
 
 Use the same version for the backend and Execution Agent. `latest` is convenient for discovery but is not a reproducible deployment reference.

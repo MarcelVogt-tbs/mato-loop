@@ -100,7 +100,7 @@ The following command deletes containers and all development volumes, including 
 
 ## Production Preparation
 
-`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and an optional Execution Agent profile. With no image variables set, `docker compose build` builds MatoLoop locally; `docker compose --profile execution-agent build` includes the Execution Agent. Set `MATO_LOOP_IMAGE` and `MATO_LOOP_EXECUTION_AGENT_IMAGE` to consume published images instead. Published images currently target `linux/amd64` only.
+`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and an Execution Agent. With no image variables set, `docker compose build` builds MatoLoop and the agent locally. `docker-compose.no-agent.yaml` is the standalone production stack without the agent; use `--remove-orphans` when switching an existing deployment to it. Set `MATO_LOOP_IMAGE` and `MATO_LOOP_EXECUTION_AGENT_IMAGE` to consume published images instead. Published images currently target `linux/amd64` only.
 
 The prepared production setup uses `./data:/data` and `./db:/var/lib/postgresql/data` bind mounts. Before production use, define and verify TLS, secure cookies, credentials, backups, and restoration for the target environment.
 

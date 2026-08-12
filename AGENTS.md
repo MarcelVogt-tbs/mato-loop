@@ -15,8 +15,9 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - `apps/backend`: FastAPI, Pydantic, SQLAlchemy, Alembic, provider adapters, and agent runtime.
 - `apps/frontend`: Vue 3, Quasar, Pinia, and Vue Router.
 - `docs`: architecture and operations decisions.
-- `docker-compose.dev.yaml`: local development environment with separate frontend and backend services.
-- `docker-compose.yaml`: prepared production stack.
+- `docker-compose.dev.yaml`: local development environment with separate frontend, backend, and Execution Agent services.
+- `docker-compose.yaml`: prepared production stack with an Execution Agent.
+- `docker-compose.no-agent.yaml`: standalone prepared production stack without an Execution Agent.
 - `scripts/dev.sh`: unified entry point for development, checks, tests, and migrations.
 - `docs/ci-and-releases.md`: Forgejo runner, branch, image, and release contract.
 
@@ -37,8 +38,8 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 
 - Use only `docker-compose.dev.yaml` through `./scripts/dev.sh` for development work.
 - Start the prepared production stack only when explicitly requested.
-- The development stack consists of `db`, `backend`, and `frontend`.
-- Persistent development data lives in the `db_data` and `app_data` named volumes.
+- The development stack consists of `db`, `embedding`, `backend`, `frontend`, and `execution-agent`.
+- Persistent development data lives in the `db_data`, `app_data`, and `execution_agent_data` named volumes.
 - Python and frontend dependencies also live in named volumes.
 - The repository bind mount at `/workspace` exists only for HMR and live code changes.
 - `./scripts/dev.sh reset-storage` deletes persistent development data and must never be run incidentally.
