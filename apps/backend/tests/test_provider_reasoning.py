@@ -18,6 +18,15 @@ from mato_loop_backend.providers.reasoning import (
 )
 
 
+class _OpenAfterTerminalEvent(httpx.AsyncByteStream):
+    def __init__(self, body: str) -> None:
+        self.body = body.encode()
+
+    async def __aiter__(self):
+        yield self.body
+        raise AssertionError("provider stream was read after its terminal event")
+
+
 def test_tagged_reasoning_is_separated_from_answer() -> None:
     assert split_tagged_reasoning("<think>Prüfen und vergleichen.</think>Fertige Antwort", final=True) == (
         "Fertige Antwort",
@@ -231,6 +240,28 @@ async def test_chat_stream_routes_tagged_reasoning_separately(monkeypatch) -> No
     assert result.reasoning.text == "Planen"
 
 
+async def test_chat_stream_stops_at_done_without_waiting_for_eof(monkeypatch) -> None:
+    stream = _OpenAfterTerminalEvent(
+        'data: {"choices":[{"delta":{"content":"Antwort"},"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, stream=stream))
+    monkeypatch.setattr(
+        "mato_loop_backend.providers.openai_compatible.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    result = await chat_completions(
+        base_url="https://provider.test/v1",
+        api_key=None,
+        request=ProviderRequest(model="local", messages=[]),
+        on_delta=None,
+    )
+
+    assert result.content == "Antwort"
+
+
 async def test_responses_stream_routes_summary_separately(monkeypatch) -> None:
     events = [
         {"type": "response.reasoning_summary_text.delta", "delta": "Kurz "},
@@ -273,6 +304,43 @@ async def test_responses_stream_routes_summary_separately(monkeypatch) -> None:
     assert result.content == "Antwort"
     assert result.reasoning is not None
     assert result.reasoning.text == "Kurz begründet."
+
+
+async def test_responses_stream_stops_at_completed_without_waiting_for_eof(
+    monkeypatch,
+) -> None:
+    event = {
+        "type": "response.completed",
+        "response": {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Antwort"}],
+                }
+            ],
+        },
+    }
+    stream = _OpenAfterTerminalEvent(
+        'data: {"type":"response.output_text.delta","delta":"Antwort"}\n\n'
+        f"data: {json.dumps(event)}\n\n"
+    )
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, stream=stream))
+    monkeypatch.setattr(
+        "mato_loop_backend.providers.openai_compatible.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    result = await responses_api(
+        url="https://provider.test/v1/responses",
+        headers={},
+        request=ProviderRequest(model="reasoning", messages=[]),
+        on_delta=None,
+    )
+
+    assert result.content == "Antwort"
+    assert result.finish_reason == "stop"
 
 
 async def test_responses_stream_separates_summary_parts(monkeypatch) -> None:

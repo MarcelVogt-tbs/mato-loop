@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -28,9 +29,6 @@ from mato_loop_backend.providers.reasoning import (
 from mato_loop_backend.settings.models import ModelCapability, ModelInputModality
 
 logger = logging.getLogger(__name__)
-
-_SAFE_RESPONSE_ERROR_CODES = {"rate_limit_exceeded", "server_error"}
-
 
 class DiscoveredModel(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -108,7 +106,9 @@ async def _sse_events(response: httpx.Response) -> AsyncIterator[dict[str, Any]]
         if not line.startswith("data:"):
             continue
         data = line[5:].strip()
-        if not data or data == "[DONE]":
+        if data == "[DONE]":
+            return
+        if not data:
             continue
         try:
             event = json.loads(data)
@@ -548,14 +548,18 @@ def _responses_finish_reason(data: dict[str, Any]) -> str | None:
 def _failed_response_error(data: dict[str, Any]) -> ProviderError:
     error = data.get("error")
     raw_code = error.get("code") if isinstance(error, dict) else None
-    provider_code = raw_code if raw_code in _SAFE_RESPONSE_ERROR_CODES else "unknown"
+    provider_code = (
+        raw_code
+        if isinstance(raw_code, str) and re.fullmatch(r"[a-z][a-z0-9_.-]{0,79}", raw_code)
+        else "unknown"
+    )
     logger.warning("Provider response failed with code %s", provider_code)
     return ProviderError(
         "Provider response failed",
-        status_code=429 if provider_code == "rate_limit_exceeded" else 503,
+        status_code=429 if raw_code == "rate_limit_exceeded" else 503,
         code=(
             "provider.rateLimited"
-            if provider_code == "rate_limit_exceeded"
+            if raw_code == "rate_limit_exceeded"
             else "provider.requestFailed"
         ),
     )
@@ -846,6 +850,7 @@ async def responses_api(
                     ]
                     if any(completed_summaries):
                         reasoning_parts = ["\n\n".join(item for item in completed_summaries if item)]
+                    break
 
     final_content, tagged_reasoning = splitter.finish()
     if final_content != "".join(content_parts):
