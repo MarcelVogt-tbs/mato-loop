@@ -22,7 +22,8 @@ export default configure(() => ({
     proxy: {
       '/api': {
         target: apiProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        ws: true
       },
       '/docs': {
         target: apiProxyTarget,
