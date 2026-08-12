@@ -51,13 +51,23 @@
         zurückholen.
       </q-banner>
       <q-expansion-item
-        v-if="technicalDetails"
+        v-if="technicalDetails.text"
         dense
         icon="data_object"
         label="Technische Details"
         class="q-mt-md"
       >
-        <pre class="approval-details">{{ technicalDetails }}</pre>
+        <pre class="approval-details">{{ showFullDetails ? technicalDetails.fullText : technicalDetails.text }}</pre>
+        <q-btn
+          v-if="technicalDetails.truncated"
+          flat
+          dense
+          no-caps
+          color="primary"
+          :label="showFullDetails ? 'Weniger anzeigen' : 'Vollständig anzeigen'"
+          class="q-mt-xs"
+          @click="showFullDetails = !showFullDetails"
+        />
       </q-expansion-item>
     </q-card-section>
 
@@ -100,8 +110,8 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { approvalResource, formatTechnicalDetails } from 'src/utils/approval-display'
-import { formatToolArguments, memoryWriteContent } from 'src/utils/tool-display'
+import { approvalResource, technicalDetailsDisplay } from 'src/utils/approval-display'
+import { memoryWriteContent, toolArgumentsDisplay } from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useWorkspaceStore } from 'stores/workspace'
@@ -117,6 +127,7 @@ const approvals = useApprovalStore()
 const chat = useChatStore()
 const workspace = useWorkspaceStore()
 const loadingDecision = ref(null)
+const showFullDetails = ref(false)
 const riskColor = computed(() => props.approval.riskLevel === 'high' ? 'negative' : 'warning')
 const riskLabel = computed(() => ({ high: 'Hoch', medium: 'Mittel', low: 'Niedrig' })[props.approval.riskLevel] || props.approval.riskLevel)
 const actionIcon = computed(() => {
@@ -153,8 +164,8 @@ const draftRevision = computed(() => draftFile.value
   ? workspace.filePreviews[draftFile.value.path]?.revision ?? draftFile.value.initialRevision
   : undefined)
 const technicalDetails = computed(() => memoryContent.value
-  ? formatToolArguments(approvalTool.value.arguments, approvalTool.value.name)
-  : formatTechnicalDetails(props.approval.details))
+  ? toolArgumentsDisplay(approvalTool.value.arguments, approvalTool.value.name)
+  : technicalDetailsDisplay(props.approval.details))
 
 function hasDecision(decision) {
   return props.approval.availableDecisions.includes(decision)

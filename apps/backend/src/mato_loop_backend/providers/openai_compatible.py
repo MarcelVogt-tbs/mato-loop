@@ -208,6 +208,8 @@ def _chat_body(request: ProviderRequest) -> dict[str, Any]:
         "messages": _chat_messages(request.messages, request.continuation_scope, request.media),
         "stream": request.stream,
     }
+    if request.stream and request.include_usage:
+        body["stream_options"] = {"include_usage": True}
     if request.max_output_tokens is not None:
         body["max_tokens"] = request.max_output_tokens
     if request.temperature is not None:
@@ -385,6 +387,11 @@ def _normalize_usage(raw_usage: Any) -> dict[str, int]:
     )
     if isinstance(output_details, dict) and isinstance(output_details.get("reasoning_tokens"), int):
         usage["reasoning_tokens"] = output_details["reasoning_tokens"]
+    input_details = raw_usage.get("input_tokens_details") or raw_usage.get(
+        "prompt_tokens_details"
+    )
+    if isinstance(input_details, dict) and isinstance(input_details.get("cached_tokens"), int):
+        usage["cached_input_tokens"] = input_details["cached_tokens"]
     return usage
 
 

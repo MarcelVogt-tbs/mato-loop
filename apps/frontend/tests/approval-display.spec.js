@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { approvalResource, formatTechnicalDetails, permissionGrantDisplay } from '../src/utils/approval-display'
+import {
+  approvalResource,
+  formatTechnicalDetails,
+  permissionGrantDisplay,
+  technicalDetailsDisplay
+} from '../src/utils/approval-display'
 
 describe('approval display', () => {
   it('keeps file scopes prominent and unchanged', () => {
@@ -130,5 +135,15 @@ describe('approval display', () => {
     expect(formatted).toContain('[Ausgeblendet]')
     expect(formatted).toContain('20 weitere Einträge')
     expect(formatted.length).toBeLessThanOrEqual(5040)
+  })
+
+  it('provides complete technical details without exposing sensitive values', () => {
+    const prompt = 'Ausführliche Bildbeschreibung. '.repeat(40)
+    const display = technicalDetailsDisplay({ prompt, token: 'secret' })
+
+    expect(display.truncated).toBe(true)
+    expect(display.text).toContain('[gekürzt]')
+    expect(JSON.parse(display.fullText)).toEqual({ prompt, token: '[Ausgeblendet]' })
+    expect(display.fullText).not.toContain('secret')
   })
 })

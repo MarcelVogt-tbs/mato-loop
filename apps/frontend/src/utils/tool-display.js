@@ -1,4 +1,4 @@
-import { formatTechnicalDetails } from 'src/utils/approval-display'
+import { technicalDetailsDisplay } from 'src/utils/approval-display'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
 import { cleanUrlForDisplay } from 'src/utils/webfetch'
 
@@ -136,13 +136,17 @@ export function toolSummary(tool) {
   return fallback
 }
 
-export function formatToolArguments(argumentsValue, toolName = null) {
+export function toolArgumentsDisplay(argumentsValue, toolName = null) {
   if (toolName === 'memory_write' && argumentsValue && typeof argumentsValue === 'object') {
     const metadata = { ...argumentsValue }
     delete metadata.content
-    return formatTechnicalDetails(metadata)
+    return technicalDetailsDisplay(metadata)
   }
-  return formatTechnicalDetails(argumentsValue)
+  return technicalDetailsDisplay(argumentsValue)
+}
+
+export function formatToolArguments(argumentsValue, toolName = null) {
+  return toolArgumentsDisplay(argumentsValue, toolName).text
 }
 
 function localizePlainToolResult(content, toolName) {
@@ -186,9 +190,9 @@ export function parseToolResult(content, toolName = null) {
         delete processMetadata.truncated
       }
     }
-    const processMetadataText = processMetadata && Object.keys(processMetadata).length
-      ? formatTechnicalDetails(processMetadata)
-      : ''
+    const processMetadataDisplay = processMetadata && Object.keys(processMetadata).length
+      ? technicalDetailsDisplay(processMetadata)
+      : null
     const memoryValue = toolName === 'memory_retrieve' && Array.isArray(value?.items)
       ? {
           mode: value.mode,
@@ -202,14 +206,19 @@ export function parseToolResult(content, toolName = null) {
             category: item.category,
             pinned: item.pinned,
             trustLevel: item.trustLevel,
-            memory: truncate(item.content, 500)
+            memory: item.content
           }))
         }
       : null
+    const display = memoryValue
+      ? technicalDetailsDisplay(memoryValue)
+      : processMetadata
+        ? processMetadataDisplay || { text: '', fullText: '', truncated: false }
+        : technicalDetailsDisplay(value)
     return {
-      text: memoryValue
-        ? JSON.stringify(memoryValue, null, 2)
-        : processMetadata ? processMetadataText : formatTechnicalDetails(value),
+      text: display.text,
+      fullText: display.fullText,
+      textTruncated: display.truncated,
       error,
       errorMessage: error ? apiErrorMessage(error, 'Die Tool-Aktion ist fehlgeschlagen.') : null,
       ...(hasProcessOutput
@@ -223,7 +232,13 @@ export function parseToolResult(content, toolName = null) {
   } catch {
     const localized = localizePlainToolResult(content, toolName)
     const text = localized.length > 5000 ? `${localized.slice(0, 5000)}\n... [Ergebnis gekürzt]` : localized
-    return { text, error: null, errorMessage: null }
+    return {
+      text,
+      fullText: localized,
+      textTruncated: text !== localized,
+      error: null,
+      errorMessage: null
+    }
   }
 }
 

@@ -188,6 +188,7 @@ class ProviderRequest:
     tools: list[dict[str, Any]] = field(default_factory=list)
     tool_choice: Literal["auto", "required", "none"] = "auto"
     stream: bool = True
+    include_usage: bool = False
     supports_parallel_tool_calls: bool = False
     max_output_tokens: int | None = None
     temperature: float | None = None

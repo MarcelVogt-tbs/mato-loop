@@ -33,7 +33,7 @@ def _response(
     headers: dict[str, str] | None = None,
     content_length: bool = True,
 ) -> bytes:
-    reasons = {200: "OK", 302: "Found", 404: "Not Found"}
+    reasons = {200: "OK", 202: "Accepted", 302: "Found", 404: "Not Found"}
     response_headers = dict(headers or {})
     if content_length:
         response_headers.setdefault("Content-Length", str(len(body)))
@@ -613,6 +613,25 @@ async def test_http_error_status_is_returned_without_reading_large_body() -> Non
 
     assert exc_info.value.code == "webfetch.requestFailed"
     assert exc_info.value.params == {"statusCode": 404}
+
+
+async def test_accepted_response_is_not_treated_as_fetched_evidence() -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(
+            b"<h1>Making sure you're not a bot!</h1>",
+            status=202,
+            headers={"Content-Type": "text/html"},
+        )
+
+    async with _server(responder) as port:
+        with pytest.raises(WebFetchError) as exc_info:
+            await fetch_web(
+                f"{_origin(port)}/challenge",
+                allowed_private_origins=(_origin(port),),
+            )
+
+    assert exc_info.value.code == "webfetch.requestFailed"
+    assert exc_info.value.params == {"statusCode": 202}
 
 
 async def test_dns_failures_have_a_stable_code(monkeypatch) -> None:

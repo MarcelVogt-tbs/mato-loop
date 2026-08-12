@@ -775,7 +775,7 @@ async def _follow_redirects(
             except (TypeError, ValueError) as exc:
                 raise _error("redirectInvalid") from exc
             continue
-        if not 200 <= response.status < 300:
+        if response.status == 202 or not 200 <= response.status < 300:
             raise _error("requestFailed", statusCode=response.status)
         return target, response, remaining
     raise _error("tooManyRedirects")

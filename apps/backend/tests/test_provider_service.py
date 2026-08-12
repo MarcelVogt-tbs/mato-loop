@@ -1285,6 +1285,29 @@ async def test_lemonade_complete_explicitly_uses_chat_completions(monkeypatch) -
     assert result.content == "OK"
     transport.assert_awaited_once()
     responses.assert_not_awaited()
+    assert transport.await_args.kwargs["request"].include_usage is True
+
+
+async def test_openai_compatible_stream_does_not_request_usage(monkeypatch) -> None:
+    provider = LlmProviderConfig(
+        name="OpenAI-compatible",
+        adapter_type="openai-compatible",
+        pseudonymization_enabled=False,
+        config={"base_url": "http://provider.test/v1"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="chat")
+    transport = AsyncMock(return_value=ProviderResult(content="OK"))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+
+    await ProviderService.complete(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        messages=[{"role": "user", "content": "Test"}],
+        tools=[],
+    )
+
+    assert transport.await_args.kwargs["request"].include_usage is False
 
 
 async def test_complete_rejects_unknown_adapter_before_transport(monkeypatch) -> None:

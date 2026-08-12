@@ -70,9 +70,19 @@
           <pre class="tool-call__details">{{ memoryContent }}</pre>
         </div>
 
-        <div v-if="argumentsText" class="tool-call__section" :class="{ 'q-mt-md': memoryContent }">
+        <div v-if="argumentsDisplay.text" class="tool-call__section" :class="{ 'q-mt-md': memoryContent }">
           <div class="tool-call__section-label">Argumente</div>
-          <pre class="tool-call__details">{{ argumentsText }}</pre>
+          <pre class="tool-call__details">{{ showFullArguments ? argumentsDisplay.fullText : argumentsDisplay.text }}</pre>
+          <q-btn
+            v-if="argumentsDisplay.truncated"
+            flat
+            dense
+            no-caps
+            color="primary"
+            :label="showFullArguments ? 'Weniger anzeigen' : 'Vollständig anzeigen'"
+            class="q-mt-xs"
+            @click="showFullArguments = !showFullArguments"
+          />
         </div>
 
         <q-banner v-if="resultData.error" dense rounded class="tool-call__error bg-negative text-white">
@@ -82,7 +92,17 @@
 
         <div v-if="resultData.text" class="tool-call__section q-mt-md">
           <div class="tool-call__section-label">Ergebnis</div>
-          <pre class="tool-call__details tool-call__result">{{ resultData.text }}</pre>
+          <pre class="tool-call__details tool-call__result">{{ showFullResult ? resultData.fullText : resultData.text }}</pre>
+          <q-btn
+            v-if="resultData.textTruncated"
+            flat
+            dense
+            no-caps
+            color="primary"
+            :label="showFullResult ? 'Weniger anzeigen' : 'Vollständig anzeigen'"
+            class="q-mt-xs"
+            @click="showFullResult = !showFullResult"
+          />
         </div>
 
         <div v-if="resultData.stdout" class="tool-call__section q-mt-md">
@@ -118,9 +138,9 @@ import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import { supportedAttachments, toolFileActions, toolFileAttachment } from 'src/utils/attachments'
 import {
-  formatToolArguments,
   memoryWriteContent,
   parseToolResult,
+  toolArgumentsDisplay,
   toolIdentity,
   toolSummary,
   toolStatus
@@ -142,7 +162,7 @@ const emit = defineEmits(['open-file'])
 const identity = computed(() => toolIdentity(props.tool.name))
 const summary = computed(() => toolSummary(props.tool))
 const memoryContent = computed(() => memoryWriteContent(props.tool))
-const argumentsText = computed(() => formatToolArguments(props.tool.arguments, props.tool.name))
+const argumentsDisplay = computed(() => toolArgumentsDisplay(props.tool.arguments, props.tool.name))
 const resultData = computed(() => ({
   ...parseToolResult(props.result?.content, props.tool.name),
   ...(props.processOutput || {})
@@ -157,6 +177,8 @@ const attachments = computed(() => {
 const fileActions = computed(() => toolFileActions(props.result))
 const status = computed(() => toolStatus(props))
 const expanded = ref(['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name))
+const showFullArguments = ref(false)
+const showFullResult = ref(false)
 watch(() => status.value.name, (name) => {
   if (['approval', 'question', 'failed', 'denied', 'interrupted'].includes(name)) expanded.value = true
 })

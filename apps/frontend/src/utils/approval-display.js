@@ -76,29 +76,30 @@ export function approvalResource(approval, sessions = []) {
   return { label: 'Angeforderter Scope', value: scope || 'Nicht angegeben' }
 }
 
-function sanitize(value, depth, seen, key = '') {
+function sanitize(value, depth, seen, key = '', truncate = true) {
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return value
   if (typeof value === 'string') {
-    if (URL_KEY.test(key)) return cleanUrlForDisplay(value, MAX_STRING_LENGTH)
-    return value.length > MAX_STRING_LENGTH
+    if (URL_KEY.test(key)) return cleanUrlForDisplay(value, truncate ? MAX_STRING_LENGTH : Infinity)
+    return truncate && value.length > MAX_STRING_LENGTH
       ? `${value.slice(0, MAX_STRING_LENGTH)}... [gekürzt]`
       : value
   }
   if (typeof value !== 'object') return String(value)
   if (seen.has(value)) return '[Zirkuläre Referenz]'
-  if (depth >= MAX_DEPTH) return '[Weitere Ebenen gekürzt]'
+  if (truncate && depth >= MAX_DEPTH) return '[Weitere Ebenen gekürzt]'
   seen.add(value)
   if (Array.isArray(value)) {
-    const items = value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitize(item, depth + 1, seen))
-    if (value.length > MAX_ARRAY_ITEMS) items.push(`[${value.length - MAX_ARRAY_ITEMS} weitere Einträge]`)
+    const items = (truncate ? value.slice(0, MAX_ARRAY_ITEMS) : value)
+      .map((item) => sanitize(item, depth + 1, seen, '', truncate))
+    if (truncate && value.length > MAX_ARRAY_ITEMS) items.push(`[${value.length - MAX_ARRAY_ITEMS} weitere Einträge]`)
     return items
   }
   const result = {}
   const entries = Object.entries(value)
-  for (const [key, item] of entries.slice(0, MAX_OBJECT_KEYS)) {
-    result[key] = REDACTED_KEY.test(key) ? '[Ausgeblendet]' : sanitize(item, depth + 1, seen, key)
+  for (const [key, item] of truncate ? entries.slice(0, MAX_OBJECT_KEYS) : entries) {
+    result[key] = REDACTED_KEY.test(key) ? '[Ausgeblendet]' : sanitize(item, depth + 1, seen, key, truncate)
   }
-  if (entries.length > MAX_OBJECT_KEYS) result._gekürzt = `${entries.length - MAX_OBJECT_KEYS} weitere Felder`
+  if (truncate && entries.length > MAX_OBJECT_KEYS) result._gekürzt = `${entries.length - MAX_OBJECT_KEYS} weitere Felder`
   return result
 }
 
@@ -142,10 +143,16 @@ export function permissionGrantDisplay(grant, sessions = []) {
   }
 }
 
-export function formatTechnicalDetails(details) {
-  if (details == null) return ''
+export function technicalDetailsDisplay(details) {
+  if (details == null) return { text: '', fullText: '', truncated: false }
   const formatted = JSON.stringify(sanitize(details, 0, new WeakSet()), null, 2)
-  return formatted.length > MAX_DETAILS_LENGTH
+  const text = formatted.length > MAX_DETAILS_LENGTH
     ? `${formatted.slice(0, MAX_DETAILS_LENGTH)}\n... [Details gekürzt]`
     : formatted
+  const fullText = JSON.stringify(sanitize(details, 0, new WeakSet(), '', false), null, 2)
+  return { text, fullText, truncated: text !== fullText }
+}
+
+export function formatTechnicalDetails(details) {
+  return technicalDetailsDisplay(details).text
 }

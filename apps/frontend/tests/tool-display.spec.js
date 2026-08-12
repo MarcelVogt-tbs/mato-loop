@@ -4,6 +4,7 @@ import {
   formatToolArguments,
   memoryWriteContent,
   parseToolResult,
+  toolArgumentsDisplay,
   toolIdentity,
   toolStatus,
   toolSummary,
@@ -158,6 +159,13 @@ describe('tool display', () => {
     expect(result.text).not.toContain('Ausgabe')
   })
 
+  it('does not duplicate process output when no metadata exists', () => {
+    const result = parseToolResult(JSON.stringify({ stdout: 'Ausgabe\n', stderr: '' }), 'process_exec')
+
+    expect(result.text).toBe('')
+    expect(result.stdout).toBe('Ausgabe\n')
+  })
+
   it('renders memory retrieval with its visible scope and contents', () => {
     expect(toolIdentity('memory_retrieve')).toEqual({ label: 'Memory abrufen', icon: 'psychology' })
     expect(toolSummary({
@@ -205,6 +213,24 @@ describe('tool display', () => {
     expect(formatted).toContain('plan.md')
     expect(formatted).not.toContain('vertraulich')
     expect(formatted).not.toContain('secret')
+  })
+
+  it('provides complete long arguments after a bounded preview', () => {
+    const prompt = 'EDIT Image 1. '.repeat(100)
+    const display = toolArgumentsDisplay({ prompt }, 'edit_image')
+
+    expect(display.truncated).toBe(true)
+    expect(display.text).toContain('[gekürzt]')
+    expect(JSON.parse(display.fullText).prompt).toBe(prompt)
+  })
+
+  it('provides complete long plain tool results after a bounded preview', () => {
+    const content = 'Ausgabe '.repeat(1000)
+    const result = parseToolResult(content)
+
+    expect(result.textTruncated).toBe(true)
+    expect(result.text).toContain('[Ergebnis gekürzt]')
+    expect(result.fullText).toBe(content)
   })
 
   it('translates structured tool errors and derives their status', () => {

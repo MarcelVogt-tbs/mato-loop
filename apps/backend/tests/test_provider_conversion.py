@@ -217,6 +217,21 @@ def test_payloads_convert_model_options_for_each_protocol() -> None:
     assert chat_body["stream"] is responses_body["stream"] is False
 
 
+def test_chat_stream_can_request_usage() -> None:
+    request = ProviderRequest(
+        model="local-model",
+        messages=[],
+        stream=True,
+        include_usage=True,
+    )
+
+    assert _chat_body(request)["stream_options"] == {"include_usage": True}
+
+    request.stream = False
+
+    assert "stream_options" not in _chat_body(request)
+
+
 def test_payloads_omit_tool_options_without_tools_or_capability() -> None:
     request = ProviderRequest(model="local-model", messages=[], tools=[])
 

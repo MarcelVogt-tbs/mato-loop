@@ -530,6 +530,9 @@ class ProviderService:
             tools=tools,
             tool_choice=tool_choice,
             stream=model.supports_streaming,
+            include_usage=(
+                provider.adapter_type == "lemonade" and model.supports_streaming
+            ),
             supports_parallel_tool_calls=(
                 model.supports_tools and model.supports_parallel_tool_calls
             ),
