@@ -60,10 +60,12 @@ TOOL_RESULT_MESSAGE_ID = UUID("70000000-0000-4000-8000-000000000001")
 ATTACHMENT_ID = UUID("80000000-0000-4000-8000-000000000001")
 ATTACHMENT_ID_2 = UUID("80000000-0000-4000-8000-000000000002")
 CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
+OPENSCAD_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000002")
+OPENSCAD_AGENT_ID = UUID("90000000-0000-4000-8000-000000000003")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 16
+INVENTORY_VERSION = 17
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -100,6 +102,7 @@ SOURCE_FILES = (
     "src/mato_loop_backend/agent/tools.py",
     "src/mato_loop_backend/error_contract.py",
     "src/mato_loop_backend/integrations/caldav.py",
+    "src/mato_loop_backend/integrations/openscad.py",
     "src/mato_loop_backend/memory/dreaming.py",
     "src/mato_loop_backend/memory/embeddings.py",
     "src/mato_loop_backend/privacy/pseudonymization.py",
@@ -202,6 +205,7 @@ class PromptCase:
     identity_name: str | None = None
     identity_instructions: str | None = None
     calendar_fixture: bool = False
+    openscad_fixture: bool = False
     question_concepts: tuple[tuple[str, ...], ...] = ()
     maximum_question_count: int | None = None
     memory_scope: dict[str, int] | None = None
@@ -574,6 +578,52 @@ CASES = (
         tools=("question", "calendar_create_event"),
         calendar_fixture=True,
         expected_no_tools=True,
+    ),
+    PromptCase(
+        id="openscad_model_writes_self_contained_source",
+        kind="general",
+        scope="quality",
+        user=(
+            "Erstelle einen druckbaren Abstandshalter mit 20 mm Außendurchmesser, "
+            "6 mm Bohrung und 10 mm Höhe als spacer.scad."
+        ),
+        tools=("question", "create_directory", "write_file", "render_openscad"),
+        workspace_access="read-write",
+        openscad_fixture=True,
+        continuation=_exchange(
+            "create_directory",
+            {"root": "session", "path": "files/abstandshalter"},
+            json.dumps(
+                {
+                    "root": "session",
+                    "path": "files/abstandshalter",
+                    "created": True,
+                }
+            ),
+        ),
+        expected_tool="write_file",
+        expected_tool_call_count=1,
+        expected_arguments={
+            "root": "session",
+            "path": "files/abstandshalter/spacer.scad",
+        },
+        argument_contains={
+            "content": ("20", "6", "10", "difference", "cylinder")
+        },
+        argument_contains_any={"content": ("translate", "center = true", "center=true")},
+        argument_excludes={
+            "content": (
+                "include <",
+                "use <",
+                "chamfer",
+                "fillet",
+                "corner_radius",
+                "diameter + eps",
+                "diameter/2 + eps",
+                "diameter / 2 + eps",
+            )
+        },
+        forbidden_tools=("question", "create_directory", "render_openscad"),
     ),
     PromptCase(
         id="readwrite_write_uses_tool",
@@ -2647,6 +2697,7 @@ _SEMANTIC_CONTRACTS = (
             "calendar_missing_details_uses_question",
             "complete_calendar_event_skips_question",
             "answered_calendar_questions_continue_action",
+            "openscad_model_writes_self_contained_source",
         ),
     ),
     ContractCoverage(
@@ -3068,22 +3119,20 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
         "update_agent_identity": "settings.agent_identity.update",
     }
     capabilities = {capability_by_tool[name] for name in case.tools if name in capability_by_tool}
-    integration_settings = IntegrationSettings()
+    instances: list[IntegrationInstance] = []
     tool_settings = None
     if case.calendar_fixture:
-        integration_settings = IntegrationSettings(
-            instances=[
-                IntegrationInstance(
-                    id=CALENDAR_INTEGRATION_ID,
-                    name="Kalender",
-                    integration_type="calendar",
-                    adapter_type="caldav",
-                    config={
-                        "base_url": "https://calendar.example.com",
-                        "username": "evaluator",
-                    },
-                )
-            ]
+        instances.append(
+            IntegrationInstance(
+                id=CALENDAR_INTEGRATION_ID,
+                name="Kalender",
+                integration_type="calendar",
+                adapter_type="caldav",
+                config={
+                    "base_url": "https://calendar.example.com",
+                    "username": "evaluator",
+                },
+            )
         )
         tool_settings = ToolSettings.model_validate(
             {
@@ -3093,6 +3142,20 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
                 }
             }
         )
+    if case.openscad_fixture:
+        instance = IntegrationInstance(
+            id=OPENSCAD_INTEGRATION_ID,
+            name="OpenSCAD",
+            integration_type="openscad",
+            adapter_type="openscad",
+            execution_agent_id=OPENSCAD_AGENT_ID,
+            config={"binary_path": "/usr/bin/openscad"},
+        )
+        instance._execution_operations = frozenset(
+            {"integration.openscad.render", "cache.export"}
+        )
+        instances.append(instance)
+    integration_settings = IntegrationSettings(instances=instances)
     return tool_registry.effective(
         integration_settings,
         case.workspace_access,

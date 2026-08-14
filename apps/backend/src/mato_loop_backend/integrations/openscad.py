@@ -93,9 +93,23 @@ class OpenScadConfig(_OpenScadModel):
 
 
 class OpenScadRenderArguments(_OpenScadModel):
-    root: Literal["session", "workspace"]
-    path: str = Field(min_length=1, max_length=1_000)
-    project_path: str | None = Field(default=None, min_length=1, max_length=1_000)
+    root: Literal["session", "workspace"] = Field(
+        description="Storage root containing the OpenSCAD project."
+    )
+    path: str = Field(
+        min_length=1,
+        max_length=1_000,
+        description="Root-relative path to the .scad entrypoint inside projectPath.",
+    )
+    project_path: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=1_000,
+        description=(
+            "Root-relative project directory containing the entrypoint and every relative "
+            "dependency. Pass it explicitly for new projects."
+        ),
+    )
 
     @field_validator("path")
     @classmethod
@@ -607,19 +621,38 @@ def _contributions(_instance: IntegrationInstance) -> IntegrationContributions:
         return IntegrationContributions()
     return IntegrationContributions(
         prompt_fragments=(
-            "Use render_openscad, not shell_run or process_exec, for every OpenSCAD render. A "
-            "render is complete only when render_openscad returns its validated binary STL and "
-            "preview attachments. Create or edit the .scad source yourself with file tools before "
-            "rendering. Use the "
-            "user's explicit safe filename and path. Append .scad only when the user omitted an "
-            "extension; otherwise choose a concise descriptive filename. Put new work in session "
-            "files by default, and use the workspace only when requested or when clearly editing an "
-            "existing workspace project. Preserve stated dimensions. If required dimensions are "
-            "missing, ask one grouped question; otherwise state reasonable assumptions. Read files "
-            "before modifying them and do not overwrite unrelated content. Render after every "
-            "material change. Inspect controlled diagnostics, STL triangle count, bounds and "
-            "dimensions, and all four views. Correct problems and rerender. Never claim success "
-            "before a successful render. In the final response, name the source file and STL file.",
+            "OpenSCAD file workflow:\n"
+            "- Use render_openscad, not shell_run or process_exec, for every render. Create or edit "
+            "the .scad source with file tools first; source in assistant text is not a file.\n"
+            "- Use the user's explicit safe path and exact .scad basename. The source entrypoint must "
+            "end in .scad. Append it when no extension was given; when another output extension was "
+            "given, use its stem.\n"
+            "- Unless the user chose a path, create each new model in its own concise directory under "
+            "session files. Reuse the exact root-relative directory returned by the file tool, including "
+            "the files/ prefix, and pass it as projectPath. Use workspace only when requested or when "
+            "editing an existing workspace project.\n"
+            "OpenSCAD source rules:\n"
+            "- Keep the project self-contained. Use OpenSCAD built-ins or relative use/include files "
+            "inside projectPath, never optional external libraries or network resources.\n"
+            "- Treat unspecified units as millimeters. Put key dimensions and any stated or assumed "
+            "fabrication clearances in named parameters and preserve stated dimensions.\n"
+            "- Implement only requested or functionally required geometry. Printable alone does not "
+            "authorize tolerances, chamfers, fillets, or other features. Do not define unused parameters.\n"
+            "- Create holes with the outer solid first and cutters after it inside difference(); a "
+            "separate top-level cutter adds material. For a Z through-cut, use the pattern "
+            "translate([0,0,-eps]) cylinder(h=height+2*eps, ...). Apply eps only to the cutter, never "
+            "to the outer solid or stated dimensions, and leave no cutter face coplanar with it.\n"
+            "- Avoid zero-thickness geometry, use moderate curve resolution, and make a single "
+            "printable part connected and closed. Check wall thickness and fit without altering stated "
+            "dimensions.\n"
+            "OpenSCAD validation:\n"
+            "- If required dimensions are missing, ask one grouped question; otherwise state reasonable "
+            "assumptions. Read files before modifying them and do not overwrite unrelated content.\n"
+            "- Render after every material change. A render is complete only when render_openscad "
+            "returns its validated binary STL and preview attachments. Inspect controlled diagnostics, "
+            "STL triangle count, bounds, dimensions, and every supplied view. Correct problems and "
+            "rerender. Never claim success before a successful render. In the final response, name the "
+            "source file and STL file.",
         )
     )
 

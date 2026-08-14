@@ -132,6 +132,10 @@ def test_openscad_adapter_requires_render_and_export_and_hides_cli_arguments() -
         "path",
         "projectPath",
     }
+    properties = tool.arguments_model.model_json_schema()["properties"]
+    assert "storage root" in properties["root"]["description"].casefold()
+    assert ".scad entrypoint" in properties["path"]["description"]
+    assert "every relative dependency" in properties["projectPath"]["description"]
 
     instance = _instance()
     instance._execution_operations = frozenset({"integration.openscad.render"})
@@ -184,13 +188,28 @@ def test_openscad_prompt_fragment_covers_the_source_render_verify_workflow() -> 
         "use render_openscad, not shell_run or process_exec",
         "validated binary stl and preview attachments",
         "file tools",
-        "append .scad only",
-        "session files by default",
+        "source in assistant text is not a file",
+        "exact .scad basename",
+        "source entrypoint must end in .scad",
+        "own concise directory under session files",
+        "pass it as projectpath",
+        "keep the project self-contained",
+        "relative use/include files",
+        "unspecified units as millimeters",
+        "named parameters",
+        "printable alone does not authorize",
+        "do not define unused parameters",
+        "inside difference()",
+        "avoid zero-thickness geometry",
+        "translate([0,0,-eps])",
+        "never to the outer solid or stated dimensions",
+        "leave no cutter face coplanar",
+        "connected and closed",
         "one grouped question",
         "read files before modifying",
         "render after every material change",
-        "stl triangle count, bounds and dimensions",
-        "all four views",
+        "stl triangle count, bounds, dimensions",
+        "every supplied view",
         "never claim success",
         "name the source file and stl file",
     ):
