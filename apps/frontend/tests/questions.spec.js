@@ -35,6 +35,17 @@ describe('agent questions', () => {
     expect(questions.pending).toEqual([])
   })
 
+  it('forwards request options while loading pending questions', async () => {
+    api.get.mockResolvedValue({ data: [] })
+    const questions = useQuestionStore()
+
+    await questions.fetchPending({ suppressErrorToast: true })
+
+    expect(api.get).toHaveBeenCalledWith('/questions/pending', { suppressErrorToast: true })
+    expect(questions.loaded).toBe(true)
+    expect(questions.loadFailed).toBe(false)
+  })
+
   it('keeps events received while pending questions are loading', async () => {
     let resolveFetch
     api.get.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve }))

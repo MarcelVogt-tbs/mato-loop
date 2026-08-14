@@ -38,6 +38,26 @@
             flat
             round
             dense
+            :icon="notifications.unreadCount || attentionCount ? 'notifications' : 'notifications_none'"
+            :aria-label="notificationBellLabel"
+            @click="openNotifications"
+          >
+            <q-badge
+              v-if="notificationBadgeCount"
+              floating
+              rounded
+              :color="attentionCount ? 'warning' : 'primary'"
+              :text-color="attentionCount ? 'dark' : 'white'"
+              :label="notificationBadgeLabel"
+              aria-hidden="true"
+            />
+            <q-tooltip>Benachrichtigungen</q-tooltip>
+          </q-btn>
+
+          <q-btn
+            flat
+            round
+            dense
             icon="menu"
             aria-label="Navigation schließen"
             @click="closeNavigation"
@@ -258,19 +278,9 @@
             :aria-label="userMenuLabel"
           >
             <div class="row no-wrap items-center full-width">
-              <div class="relative-position">
-                <q-avatar color="primary" text-color="white" size="36px">
-                  {{ userInitials }}
-                </q-avatar>
-                <q-badge
-                  v-if="approvals.pendingCount"
-                  floating
-                  rounded
-                  color="warning"
-                  text-color="dark"
-                  :label="approvals.pendingCount"
-                />
-              </div>
+              <q-avatar color="primary" text-color="white" size="36px">
+                {{ userInitials }}
+              </q-avatar>
               <div class="col ellipsis text-left text-body2 q-ml-md">
                 {{ auth.username || 'Benutzer' }}
               </div>
@@ -340,11 +350,21 @@
         round
         flat
         icon="menu"
-        aria-label="Navigation öffnen"
+        :aria-label="navigationLabel"
         aria-controls="app-navigation-drawer"
         :aria-expanded="drawerOpen"
         @click="openNavigation"
-      />
+      >
+        <q-badge
+          v-if="notificationBadgeCount"
+          floating
+          rounded
+          :color="attentionCount ? 'warning' : 'primary'"
+          :text-color="attentionCount ? 'dark' : 'white'"
+          :label="notificationBadgeLabel"
+          aria-hidden="true"
+        />
+      </q-btn>
       <q-space />
       <q-btn
         v-if="showFloatingWorkspace"
@@ -361,6 +381,11 @@
         <q-tooltip>Datei-Explorer öffnen</q-tooltip>
       </q-btn>
     </div>
+
+    <NotificationCenterDialog
+      v-model="notificationDialogOpen"
+      @navigated="closeDrawerOnMobile"
+    />
 
     <q-dialog v-model="renameDialogOpen">
       <q-card class="session-rename-dialog app-surface">
@@ -419,10 +444,12 @@ import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import AppLogo from 'components/AppLogo.vue'
 import FileExplorerPanel from 'components/FileExplorerPanel.vue'
+import NotificationCenterDialog from 'components/NotificationCenterDialog.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
+import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
@@ -443,6 +470,7 @@ const chat = useChatStore()
 const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()
 const approvals = useApprovalStore()
+const notifications = useInAppNotificationStore()
 const questions = useQuestionStore()
 const sessionInfiniteScroll = ref(null)
 const groupedSessions = computed(() => groupSessionsByRecency(chat.sessions))
@@ -459,6 +487,26 @@ const showFloatingWorkspace = computed(() => route.name === 'chat' && !workspace
 const showFloatingControls = computed(() => (
   showFloatingNavigation.value || showFloatingWorkspace.value
 ))
+const attentionCount = computed(() => approvals.pending.length + questions.pending.length)
+const notificationBadgeCount = computed(() => attentionCount.value || notifications.unreadCount)
+const notificationBadgeLabel = computed(() => notificationBadgeCount.value > 99
+  ? '99+'
+  : String(notificationBadgeCount.value || ''))
+const notificationBellLabel = computed(() => {
+  const parts = []
+  if (attentionCount.value) {
+    parts.push(`${attentionCount.value} ${attentionCount.value === 1 ? 'Aktion' : 'Aktionen'} erforderlich`)
+  }
+  if (notifications.unreadCount) {
+    parts.push(`${notifications.unreadCount} ungelesene ${notifications.unreadCount === 1 ? 'Benachrichtigung' : 'Benachrichtigungen'}`)
+  }
+  return parts.length ? `Benachrichtigungen öffnen, ${parts.join(', ')}` : 'Benachrichtigungen öffnen'
+})
+const navigationLabel = computed(() => {
+  if (!attentionCount.value && !notifications.unreadCount) return 'Navigation öffnen'
+  return `Navigation öffnen, ${notificationBellLabel.value.replace('Benachrichtigungen öffnen, ', '')}`
+})
+const notificationDialogOpen = ref(false)
 const renameDialogOpen = ref(false)
 const renameSessionId = ref(null)
 const renameTitle = ref('')
@@ -484,9 +532,7 @@ const userInitials = computed(() => {
   const last = parts.length > 1 ? parts[parts.length - 1][0] : ''
   return `${first}${last}`.toUpperCase()
 })
-const userMenuLabel = computed(() => approvals.pendingCount
-  ? `Benutzermenü öffnen, ${approvals.pendingCount} offene Freigaben`
-  : 'Benutzermenü öffnen')
+const userMenuLabel = computed(() => 'Benutzermenü öffnen')
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
@@ -554,6 +600,11 @@ function openNavigation() {
   drawerOpen.value = true
 }
 
+function openNotifications() {
+  if ($q.screen.lt.md) drawerOpen.value = false
+  notificationDialogOpen.value = true
+}
+
 async function closeNavigation() {
   drawerOpen.value = false
   await nextTick()
@@ -564,6 +615,8 @@ function refreshSessionsWhenVisible() {
   if (document.visibilityState !== 'visible') return
   void chat.refreshSessions().catch(() => {})
   void approvals.fetchPending({ suppressErrorToast: true }).catch(() => {})
+  void questions.fetchPending({ suppressErrorToast: true }).catch(() => {})
+  void notifications.fetchLatest({ suppressErrorToast: true }).catch(() => {})
 }
 
 async function refreshActiveSessions() {
@@ -665,6 +718,7 @@ onMounted(async () => {
     chat.fetchSessions(),
     approvals.fetchPending(),
     questions.fetchPending(),
+    notifications.fetchLatest({ suppressErrorToast: true }),
     identity.fetchIdentity()
   ])
   await nextTick()

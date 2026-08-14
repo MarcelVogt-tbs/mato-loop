@@ -9,25 +9,48 @@ const TERMINAL_ANSWER_ERRORS = new Set([
 ])
 
 export const useQuestionStore = defineStore('questions', {
-  state: () => ({ pending: [], submittingId: null, drafts: {}, revision: 0 }),
+  state: () => ({
+    pending: [],
+    submittingId: null,
+    drafts: {},
+    loading: false,
+    loaded: false,
+    loadFailed: false,
+    revision: 0
+  }),
   getters: {
     forSession: (state) => (sessionId) => state.pending.filter((item) => item.sessionId === sessionId)
   },
   actions: {
-    async fetchPending() {
+    async fetchPending(config = {}) {
       const revision = ++this.revision
-      const { data } = await api.get('/questions/pending')
-      if (revision !== this.revision || !Array.isArray(data)) return
-      this.pending = data
-      const pendingIds = new Set(this.pending.map((item) => item.id))
-      for (const id of Object.keys(this.drafts)) {
-        if (!pendingIds.has(id)) delete this.drafts[id]
+      this.loading = true
+      this.loadFailed = false
+      try {
+        const { data } = Object.keys(config).length
+          ? await api.get('/questions/pending', config)
+          : await api.get('/questions/pending')
+        if (revision !== this.revision || !Array.isArray(data)) return
+        this.pending = data
+        this.loaded = true
+        const pendingIds = new Set(this.pending.map((item) => item.id))
+        for (const id of Object.keys(this.drafts)) {
+          if (!pendingIds.has(id)) delete this.drafts[id]
+        }
+      } catch (error) {
+        if (revision === this.revision) this.loadFailed = true
+        throw error
+      } finally {
+        if (revision === this.revision) this.loading = false
       }
     },
     add(question) {
       if (this.pending.some((item) => item.id === question.id)) return
       this.revision += 1
       this.pending.push(question)
+      this.loading = false
+      this.loaded = true
+      this.loadFailed = false
     },
     ensureDraft(request) {
       if (!this.drafts[request.id]) {

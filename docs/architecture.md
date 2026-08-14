@@ -204,6 +204,12 @@ English fallback text comes only from the central backend catalog. Pydantic deta
 
 The frontend localizes codes centrally in `apps/frontend/src/utils/api-errors.js` and always prefers the German translation over `error.message`. An Axios interceptor displays API failures as negative Quasar toasts. Persistent agent failures appear as MatoLoop chat responses and do not create a duplicate domain toast. Unknown codes use a safe frontend fallback based on HTTP status. Other channels may use `error.message` directly or localize `error.code` and `error.params` themselves.
 
+## Notifications
+
+Persistent in-app notifications are owner-scoped records with a host-controlled kind, plain-text display snapshot, producer-supplied deduplication key, and monotonic read timestamp. Producers create them in the same transaction as their canonical source state; the notification service never commits. An optional typed session target becomes null when that session is deleted, so the historical notification remains without a dead link. Arbitrary URLs, generic source payloads, delivery state, retention, and external channels are not part of this record.
+
+The notification center is a combined attention view, not a second persistence layer for every event. Pending approvals and questions are read from their existing canonical tables and disappear when resolved. Durable informational notifications are listed separately and can be marked read individually or in bulk. Normal interactive chat responses and errors are not copied into notifications. Scheduled automation outcomes will be the first persistent producers.
+
 ## Frontend Interaction
 
 Quasar components form the primary UI layer. Pinia stores hold server state; components coordinate presentation and user action.

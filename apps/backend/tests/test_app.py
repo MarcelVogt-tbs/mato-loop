@@ -76,6 +76,14 @@ def test_workspace_file_update_requires_authentication() -> None:
     assert response.json()["error"]["code"] == "auth.notAuthenticated"
 
 
+def test_notifications_require_authentication() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/notifications")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "auth.notAuthenticated"
+
+
 def test_general_attachment_routes_replace_audio_only_routes() -> None:
     paths = app.openapi()["paths"]
 

@@ -107,3 +107,11 @@ def test_execution_agent_pairing_errors_have_controlled_fallbacks() -> None:
         describe_error("executionAgent.pairingTokenExpired").message
         == "The execution agent pairing token has expired."
     )
+
+
+def test_notification_errors_have_controlled_fallbacks() -> None:
+    assert describe_error("notification.notFound").message == "The notification was not found."
+    assert (
+        describe_error("notification.unknown").message
+        == "The notification request could not be completed."
+    )
