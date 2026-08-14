@@ -263,6 +263,7 @@ async def test_system_info_and_shell_inspection_use_selected_computer(tmp_path) 
         "shell.run",
     ]
     assert context.ask_handler.await_args_list[-1].args[0].force_ask is True
+    assert "Administratorrechten" in context.ask_handler.await_args_list[-1].args[0].summary
     assert [
         (item.label, item.value, item.format)
         for item in context.ask_handler.await_args_list[-1].args[0].display_items

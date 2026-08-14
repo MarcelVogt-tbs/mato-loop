@@ -216,7 +216,7 @@ class ProcessRunner:
         environment = {
             "HOME": cwd,
             "LANG": os.environ.get("LANG", "C.UTF-8"),
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         }
         started = time.monotonic()
         try:

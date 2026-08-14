@@ -2377,7 +2377,8 @@ def _process_permission(
     client = _workspace_client(context)
     warning = (
         "Shell-Befehle können Dateien verändern, Programme starten und auf Netzwerkdienste "
-        "zugreifen. Das Arbeitsverzeichnis begrenzt keinen Prozess als Betriebssystem-Sandbox."
+        "zugreifen. Je nach Agent werden sie mit Administratorrechten ausgeführt. Das "
+        "Arbeitsverzeichnis begrenzt keinen Prozess als Betriebssystem-Sandbox."
     )
     return PermissionRequest(
         capability="process.execute",

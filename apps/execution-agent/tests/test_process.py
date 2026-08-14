@@ -53,6 +53,23 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["exitCode"], 0)
             self.assertEqual(dict(chunks), {"stdout": "out", "stderr": "err"})
 
+            chunks.clear()
+            result = await runner.exec(
+                root_id=ROOT_ID,
+                revision=revision,
+                working_directory=str(root),
+                program=None,
+                args=[],
+                command='printf %s "$PATH"',
+                timeout=2,
+                stream=stream,
+            )
+            self.assertEqual(result["exitCode"], 0)
+            self.assertEqual(
+                dict(chunks)["stdout"],
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            )
+
             result = await runner.exec(
                 root_id=ROOT_ID,
                 revision=revision,

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+# Migrate credentials created by older non-root Docker images without touching workspace files.
+if [ "$(id -u)" = 0 ] && [ -d /data/agent-state ] && [ ! -L /data/agent-state ]; then
+    chown -Rh 0:0 /data/agent-state
+fi
+
+exec "$@"
