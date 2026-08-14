@@ -96,7 +96,6 @@
                 :activity="chat.activity"
                 :process-outputs="message.currentTurn ? chat.processOutputs : emptyProcessOutputs"
                 :running="chat.running && message.currentTurn"
-                :expanded="auth.preferences.thinkingExpanded"
                 :class="{
                   'q-mb-sm': message.content
                     || message.attachments?.length
@@ -104,7 +103,6 @@
                 }"
                 @open-file="openToolFile"
                 @open-approval-draft="openApprovalDraft"
-                @update:expanded="updateThinkingExpanded"
               />
               <MessageContent
                 v-if="message.content && message.role === 'assistant'"
@@ -222,9 +220,7 @@
               :activity="chat.activity"
               :process-outputs="chat.processOutputs"
               :running="chat.running"
-              :expanded="auth.preferences.thinkingExpanded"
               :class="{ 'q-mb-sm': chat.streamContent }"
-              @update:expanded="updateThinkingExpanded"
             />
             <MessageContent
               v-if="chat.streamContent"
@@ -360,7 +356,6 @@ import WorkHistoryPanel from 'components/WorkHistoryPanel.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
-import { useAuthStore } from 'stores/auth'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
@@ -386,7 +381,6 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
 const identity = useAgentIdentityStore()
-const auth = useAuthStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
 const executionAgents = useExecutionAgentStore()
@@ -657,11 +651,6 @@ function addAttachmentFiles(files, done) {
   const result = chat.addAttachmentFiles(files)
   if (result.error) $q.notify({ type: 'negative', message: result.error })
   done?.(result)
-}
-
-function updateThinkingExpanded(expanded) {
-  auth.setThinkingExpanded(expanded).catch(() => {})
-  scheduleVirtualScrollRefresh(200)
 }
 
 function scheduleVirtualScrollRefresh(delay = 0) {

@@ -18,10 +18,7 @@ export const useAuthStore = defineStore('auth', {
     statusLoaded: false,
     setupRequired: false,
     authenticated: false,
-    username: null,
-    preferences: { thinkingExpanded: false },
-    confirmedThinkingExpanded: false,
-    preferenceRevision: 0
+    username: null
   }),
   actions: {
     async fetchStatus() {
@@ -35,12 +32,7 @@ export const useAuthStore = defineStore('auth', {
         authenticated: this.authenticated,
         username: this.username
       })
-      if (data.authenticated) await this.fetchPreferences()
       return data
-    },
-    async fetchPreferences() {
-      this.preferences = (await api.get('/auth/preferences')).data
-      this.confirmedThinkingExpanded = this.preferences.thinkingExpanded
     },
     async setup(credentials) {
       const { data } = await api.post('/auth/setup', credentials)
@@ -52,7 +44,6 @@ export const useAuthStore = defineStore('auth', {
         authenticated: this.authenticated,
         username: this.username
       })
-      await this.fetchPreferences()
     },
     async login(credentials) {
       const { data } = await api.post('/auth/login', credentials)
@@ -63,7 +54,6 @@ export const useAuthStore = defineStore('auth', {
         authenticated: this.authenticated,
         username: this.username
       })
-      await this.fetchPreferences()
     },
     async logout() {
       await api.post('/auth/logout')
@@ -71,30 +61,6 @@ export const useAuthStore = defineStore('auth', {
       useAgentIdentityStore().resetIdentity()
       this.authenticated = false
       this.username = null
-      this.preferences = { thinkingExpanded: false }
-      this.confirmedThinkingExpanded = false
-    },
-    async setThinkingExpanded(expanded) {
-      const revision = ++this.preferenceRevision
-      this.preferences.thinkingExpanded = expanded
-      try {
-        const { data } = await api.patch('/auth/preferences', {
-          thinking_expanded: expanded
-        })
-        if (revision === this.preferenceRevision) {
-          this.preferences = data
-          this.confirmedThinkingExpanded = data.thinkingExpanded
-        }
-      } catch (error) {
-        if (revision === this.preferenceRevision) {
-          try {
-            await this.fetchPreferences()
-          } catch {
-            this.preferences.thinkingExpanded = this.confirmedThinkingExpanded
-          }
-        }
-        throw error
-      }
     }
   }
 })

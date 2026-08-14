@@ -4,8 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const { api } = vi.hoisted(() => ({
   api: {
     get: vi.fn(),
-    post: vi.fn(),
-    patch: vi.fn()
+    post: vi.fn()
   }
 }))
 
@@ -15,32 +14,23 @@ import { useAuthStore } from '../src/stores/auth'
 import { useAgentIdentityStore } from '../src/stores/agent-identity'
 import { useChatStore } from '../src/stores/chat'
 
-describe('auth preferences', () => {
+describe('auth store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
-  it('loads the device-independent preference after authentication', async () => {
-    api.get.mockImplementation((url) => Promise.resolve({ data: url === '/auth/status'
-      ? { setup_required: false, authenticated: true, username: 'viktor' }
-      : { thinkingExpanded: true } }))
+  it('loads authentication state without a separate preferences request', async () => {
+    api.get.mockResolvedValue({
+      data: { setup_required: false, authenticated: true, username: 'viktor' }
+    })
     const auth = useAuthStore()
 
     await auth.fetchStatus()
 
-    expect(auth.preferences.thinkingExpanded).toBe(true)
-    expect(api.get).toHaveBeenCalledWith('/auth/preferences')
-  })
-
-  it('rolls back the expansion state when persistence fails', async () => {
-    api.patch.mockRejectedValue(new Error('offline'))
-    api.get.mockResolvedValue({ data: { thinkingExpanded: false } })
-    const auth = useAuthStore()
-
-    await expect(auth.setThinkingExpanded(true)).rejects.toThrow('offline')
-
-    expect(auth.preferences.thinkingExpanded).toBe(false)
+    expect(auth.authenticated).toBe(true)
+    expect(api.get).toHaveBeenCalledOnce()
+    expect(api.get).toHaveBeenCalledWith('/auth/status')
   })
 
   it('clears all in-memory attachment drafts on logout', async () => {

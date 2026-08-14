@@ -1,138 +1,129 @@
 <template>
   <div class="work-history">
-    <q-expansion-item
-      :model-value="panelExpanded"
-      dense
-      class="work-history__panel"
-      header-class="work-history__header"
-      :duration="180"
-      @update:model-value="updateExpanded"
-    >
-      <template #header>
-        <q-item-section class="work-history__identity" :aria-label="headerAriaLabel">
-          <div class="work-history__title text-weight-medium">
-            <span v-if="activityDisplay" class="work-history__current">
-              <span class="work-history__status-dot" aria-hidden="true" />
-              <span class="work-history__current-label">{{ activityDisplay.label }}</span>
-            </span>
-            <span v-else>Verlauf</span>
-            <span v-if="toolUsage.length" class="work-history__tool-icons" aria-hidden="true">
+    <q-item dense class="work-history__header">
+      <q-item-section class="work-history__identity" :aria-label="headerAriaLabel">
+        <div class="work-history__title text-weight-medium">
+          <span v-if="activityDisplay" class="work-history__current">
+            <span class="work-history__status-dot" aria-hidden="true" />
+            <span class="work-history__current-label">{{ activityDisplay.label }}</span>
+          </span>
+          <span v-else>Aktivitäten</span>
+          <span v-if="toolUsage.length" class="work-history__tool-icons" aria-hidden="true">
+            <span
+              v-for="tool in toolUsage"
+              :key="tool.name"
+              class="work-history__tool-usage"
+            >
               <span
-                v-for="tool in toolUsage"
-                :key="tool.name"
-                class="work-history__tool-usage"
+                class="work-history__tool-icon flex flex-center"
+                :class="{ 'work-history__tool-icon--active': tool.active }"
               >
-                <span
-                  class="work-history__tool-icon flex flex-center"
-                  :class="{ 'work-history__tool-icon--active': tool.active }"
-                >
-                  <q-icon :name="tool.icon" size="15px" />
-                </span>
-                <span class="work-history__tool-count">×{{ tool.count }}</span>
-                <q-tooltip>
-                  {{ tool.label }} · {{ tool.count }} {{ tool.count === 1 ? 'Aufruf' : 'Aufrufe' }}{{ tool.active ? ' · aktiv' : '' }}
-                </q-tooltip>
+                <q-icon :name="tool.icon" size="15px" />
               </span>
+              <span class="work-history__tool-count">×{{ tool.count }}</span>
+              <q-tooltip>
+                {{ tool.label }} · {{ tool.count }} {{ tool.count === 1 ? 'Aufruf' : 'Aufrufe' }}{{ tool.active ? ' · aktiv' : '' }}
+              </q-tooltip>
             </span>
-          </div>
-          <q-item-label
-            v-if="activityDisplay?.summary"
-            caption
-            lines="1"
-            class="work-history__summary"
-          >
-            <span class="work-history__resource">{{ activityDisplay.summary }}</span>
-          </q-item-label>
-        </q-item-section>
-        <q-item-section side class="work-history__meta-section">
-          <div class="work-history__meta row items-center no-wrap q-gutter-xs">
-            <span v-if="totalDuration">
-              {{ totalDuration }}
-              <q-tooltip>Gesamtdauer bis zur Antwort</q-tooltip>
-            </span>
-            <span
-              v-if="errorItems.length"
-              class="work-history__message-count work-history__message-count--error row items-center no-wrap"
-              role="img"
-              :aria-label="errorLabel"
-            >
-              <q-icon name="error" size="17px" />
-              <span>{{ errorItems.length }}</span>
-            </span>
-            <span
-              v-if="warningItems.length"
-              class="work-history__message-count work-history__message-count--warning row items-center no-wrap"
-              role="img"
-              :aria-label="warningLabel"
-            >
-              <q-icon name="warning" size="17px" />
-              <span>{{ warningItems.length }}</span>
-            </span>
-          </div>
-        </q-item-section>
-      </template>
-
-      <div
-        class="work-history__timeline"
-        role="region"
-        aria-label="Verlauf der Antworterstellung"
-        tabindex="0"
-      >
-        <div class="work-history__entries">
-          <template v-for="entry in entries" :key="entry.key">
-            <div v-if="entry.type === 'reasoning'" class="work-history__reasoning">
-              <div class="work-history__marker flex flex-center">
-                <q-icon name="psychology_alt" size="16px" />
-              </div>
-              <div class="work-history__reasoning-main">
-                <div class="work-history__entry-header row items-center q-gutter-x-sm">
-                  <span class="text-weight-medium">{{ reasoningTitle(entry.reasoning) }}</span>
-                  <span v-if="entryDuration(entry.reasoning)" class="work-history__entry-meta">
-                    {{ entryDuration(entry.reasoning) }}
-                  </span>
-                  <span v-if="entry.reasoning.reasoningTokens" class="work-history__entry-meta">
-                    {{ entry.reasoning.reasoningTokens }} Tok.
-                  </span>
-                </div>
-                <div class="work-history__reasoning-text">
-                  <p
-                    v-for="(block, blockIndex) in entry.blocks"
-                    :key="blockIndex"
-                    class="work-history__reasoning-block"
-                  >
-                    <template v-for="(segment, segmentIndex) in block" :key="segmentIndex">
-                      <strong v-if="segment.strong">{{ segment.text }}</strong>
-                      <span v-else>{{ segment.text }}</span>
-                    </template>
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div v-else-if="entry.type === 'note'" class="work-history__note">
-              <div class="work-history__marker flex flex-center">
-                <q-icon name="chat_bubble_outline" size="15px" />
-              </div>
-              <div class="work-history__note-main">
-                <div class="work-history__entry-header text-weight-medium">Zwischenstand</div>
-                <div class="work-history__note-text">{{ entry.text }}</div>
-              </div>
-            </div>
-            <ToolCallItem
-              v-else
-              class="work-history__tool"
-              :tool="entry.tool"
-              :result="entry.result"
-              :approval="entry.approval"
-              :question="entry.question"
-              :process-output="entry.processOutput || processOutputs[entry.tool.id]"
-              :active="entry.active"
-              technical-only
-              @open-file="emit('open-file', $event)"
-            />
-          </template>
+          </span>
         </div>
+        <q-item-label
+          v-if="activityDisplay?.summary"
+          caption
+          lines="1"
+          class="work-history__summary"
+        >
+          <span class="work-history__resource">{{ activityDisplay.summary }}</span>
+        </q-item-label>
+      </q-item-section>
+      <q-item-section side class="work-history__meta-section">
+        <div class="work-history__meta row items-center no-wrap q-gutter-xs">
+          <span v-if="totalDuration">
+            {{ totalDuration }}
+            <q-tooltip>Gesamtdauer bis zur Antwort</q-tooltip>
+          </span>
+          <span
+            v-if="errorItems.length"
+            class="work-history__message-count work-history__message-count--error row items-center no-wrap"
+            role="img"
+            :aria-label="errorLabel"
+          >
+            <q-icon name="error" size="17px" />
+            <span>{{ errorItems.length }}</span>
+          </span>
+          <span
+            v-if="warningItems.length"
+            class="work-history__message-count work-history__message-count--warning row items-center no-wrap"
+            role="img"
+            :aria-label="warningLabel"
+          >
+            <q-icon name="warning" size="17px" />
+            <span>{{ warningItems.length }}</span>
+          </span>
+        </div>
+      </q-item-section>
+    </q-item>
+
+    <div
+      class="work-history__timeline"
+      role="region"
+      aria-label="Aktivitäten der Antworterstellung"
+      tabindex="0"
+    >
+      <div class="work-history__entries">
+        <template v-for="entry in entries" :key="entry.key">
+          <div v-if="entry.type === 'reasoning'" class="work-history__reasoning">
+            <div class="work-history__marker flex flex-center">
+              <q-icon name="psychology_alt" size="16px" />
+            </div>
+            <div class="work-history__reasoning-main">
+              <div class="work-history__entry-header row items-center q-gutter-x-sm">
+                <span class="text-weight-medium">{{ reasoningTitle(entry.reasoning) }}</span>
+                <span v-if="entryDuration(entry.reasoning)" class="work-history__entry-meta">
+                  {{ entryDuration(entry.reasoning) }}
+                </span>
+                <span v-if="entry.reasoning.reasoningTokens" class="work-history__entry-meta">
+                  {{ entry.reasoning.reasoningTokens }} Tok.
+                </span>
+              </div>
+              <div class="work-history__reasoning-text">
+                <p
+                  v-for="(block, blockIndex) in entry.blocks"
+                  :key="blockIndex"
+                  class="work-history__reasoning-block"
+                >
+                  <template v-for="(segment, segmentIndex) in block" :key="segmentIndex">
+                    <strong v-if="segment.strong">{{ segment.text }}</strong>
+                    <span v-else>{{ segment.text }}</span>
+                  </template>
+                </p>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="entry.type === 'note'" class="work-history__note">
+            <div class="work-history__marker flex flex-center">
+              <q-icon name="chat_bubble_outline" size="15px" />
+            </div>
+            <div class="work-history__note-main">
+              <div class="work-history__entry-header text-weight-medium">Zwischenstand</div>
+              <div class="work-history__note-text">{{ entry.text }}</div>
+            </div>
+          </div>
+          <ToolCallItem
+            v-else
+            class="work-history__tool"
+            :tool="entry.tool"
+            :result="entry.result"
+            :approval="entry.approval"
+            :question="entry.question"
+            :process-output="entry.processOutput || processOutputs[entry.tool.id]"
+            :active="entry.active"
+            technical-only
+            @open-file="emit('open-file', $event)"
+          />
+        </template>
       </div>
-    </q-expansion-item>
+    </div>
 
     <ApprovalCard
       v-for="item in approvalItems"
@@ -211,11 +202,9 @@ const props = defineProps({
   activity: { type: Object, default: null },
   reasoning: { type: Object, default: null },
   processOutputs: { type: Object, default: () => ({}) },
-  running: Boolean,
-  expanded: Boolean
+  running: Boolean
 })
-const emit = defineEmits(['open-file', 'open-approval-draft', 'update:expanded'])
-const panelExpanded = ref(props.expanded)
+const emit = defineEmits(['open-file', 'open-approval-draft'])
 const now = ref(Date.now())
 let timer = null
 const entries = computed(() => [
@@ -294,11 +283,6 @@ const outputs = computed(() => items.value.flatMap((item) => {
     ? [{ key: `output-${item.key}`, attachments, fileActions }]
     : []
 }))
-
-function updateExpanded(value) {
-  panelExpanded.value = value
-  emit('update:expanded', value)
-}
 
 function updateTimer(running) {
   clearInterval(timer)

@@ -19,7 +19,6 @@ from mato_loop_backend.security import (
     require_user,
     verify_password,
 )
-from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 router = APIRouter(prefix="/auth")
 config = get_runtime_config()
@@ -34,10 +33,6 @@ class AuthStatusResponse(BaseModel):
     setup_required: bool
     authenticated: bool
     username: str | None = None
-
-
-class UserPreferencesRequest(BaseModel):
-    thinking_expanded: bool
 
 
 def _set_cookie(response: Response, token: str, expires_at: datetime) -> None:
@@ -119,41 +114,3 @@ async def logout(
 @router.get("/me")
 async def me(user: Annotated[UserAccount, Depends(require_user)]) -> dict[str, str]:
     return {"username": user.username}
-
-
-@router.get("/preferences")
-async def user_preferences(
-    _user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict:
-    preferences = await SettingsStore.load(db, UserPreferences, user_id=_user.id)
-    return {
-        "thinkingExpanded": preferences.thinking_expanded,
-        "defaultExecutionAgentId": (
-            str(preferences.default_execution_agent_id)
-            if preferences.default_execution_agent_id
-            else None
-        ),
-    }
-
-
-@router.patch("/preferences")
-async def update_user_preferences(
-    payload: UserPreferencesRequest,
-    _user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict:
-    preferences = await SettingsStore.load(
-        db, UserPreferences, user_id=_user.id, for_update=True
-    )
-    preferences.thinking_expanded = payload.thinking_expanded
-    await SettingsStore.save(db, preferences, user_id=_user.id)
-    await db.commit()
-    return {
-        "thinkingExpanded": preferences.thinking_expanded,
-        "defaultExecutionAgentId": (
-            str(preferences.default_execution_agent_id)
-            if preferences.default_execution_agent_id
-            else None
-        ),
-    }

@@ -1452,19 +1452,10 @@ body.body--dark .app-floating-control--flat {
   min-width: 0;
 }
 
-.work-history__panel {
-  border-radius: 8px;
-  overflow: hidden;
-}
-
 .work-history__header {
   min-height: 44px;
   padding: 3px 2px;
   color: var(--app-muted);
-}
-
-.work-history__header:hover {
-  background: var(--app-hover);
 }
 
 .work-history__identity {

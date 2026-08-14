@@ -655,5 +655,4 @@ class UserPreferences(SettingsDocument):
 
     dark_mode: bool = False
     session_drawer_open: bool = True
-    thinking_expanded: bool = False
     default_execution_agent_id: UUID | None = None

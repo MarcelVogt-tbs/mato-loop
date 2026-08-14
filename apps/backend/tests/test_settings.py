@@ -5,12 +5,6 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.api.routes.auth import (
-    UserPreferencesRequest,
-    update_user_preferences,
-    user_preferences,
-)
-from mato_loop_backend.models import UserAccount
 from mato_loop_backend.settings import (
     DefaultTaskListSettings,
     IntegrationSettings,
@@ -139,8 +133,7 @@ def test_legacy_model_defaults_to_chat_capability() -> None:
     assert model.capabilities == {ModelCapability.CHAT}
 
 
-def test_user_preferences_default_to_collapsed_thinking() -> None:
-    assert UserPreferences().thinking_expanded is False
+def test_user_settings_are_user_scoped() -> None:
     assert UserPreferences.settings_scope == SettingsScope.USER
     assert MemorySettings.settings_scope == SettingsScope.USER
     assert MemorySettings().automatic_dreaming_enabled is False
@@ -339,26 +332,3 @@ async def test_user_settings_are_loaded_and_saved_for_the_same_user() -> None:
     record = db.add.call_args.args[0]
     assert record.key == "memory"
     assert record.user_id == user_id
-
-
-async def test_thinking_preference_is_read_and_persisted(monkeypatch) -> None:
-    preferences = UserPreferences()
-    load = AsyncMock(return_value=preferences)
-    save = AsyncMock()
-    monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(SettingsStore, "save", save)
-    db = AsyncMock(spec=AsyncSession)
-    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
-
-    assert await user_preferences(user, db) == {
-        "thinkingExpanded": False,
-        "defaultExecutionAgentId": None,
-    }
-    result = await update_user_preferences(
-        UserPreferencesRequest(thinking_expanded=True), user, db
-    )
-
-    assert result == {"thinkingExpanded": True, "defaultExecutionAgentId": None}
-    save.assert_awaited_once_with(db, preferences, user_id=user.id)
-    assert load.await_args_list[0].kwargs == {"user_id": user.id}
-    db.commit.assert_awaited_once()
