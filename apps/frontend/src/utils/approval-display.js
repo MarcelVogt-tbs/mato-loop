@@ -22,6 +22,18 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'path') {
     return { label: 'Datei oder Ordner', value: scope || 'Unbekannter Pfad' }
   }
+  if (approval?.resourceType === 'execution_directory') {
+    return {
+      label: 'Aktueller Ordner',
+      value: approval?.resourceDisplay || 'Ausgewählter Ordner'
+    }
+  }
+  if (approval?.resourceType === 'execution_agent') {
+    return {
+      label: 'Computer',
+      value: approval?.resourceDisplay || 'Ausgewählter Computer'
+    }
+  }
   if (approval?.resourceType === 'url') {
     const url = approval?.resourceDisplay
       || approval?.details?.arguments?.url
@@ -119,6 +131,9 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'filesystem.read': { label: 'Dateien lesen', icon: 'visibility' },
     'filesystem.write': { label: 'Dateien schreiben', icon: 'edit' },
     'filesystem.delete': { label: 'Dateien löschen', icon: 'delete_outline' },
+    'execution.directory': { label: 'Aktuellen Ordner wechseln', icon: 'drive_file_move' },
+    'system.info': { label: 'Systeminformationen lesen', icon: 'computer' },
+    'process.execute': { label: 'Befehl ausführen', icon: 'terminal' },
     'network.search': { label: 'Websuche verwenden', icon: 'travel_explore' },
     'session.read': { label: 'Session lesen', icon: 'forum' },
     'session.search': { label: 'Sessions durchsuchen', icon: 'manage_search' },
@@ -134,6 +149,10 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'knowledge.read': { label: 'Wissensdatenbank lesen', icon: 'menu_book' },
     'knowledge.write': { label: 'Wissensdatenbank ändern', icon: 'edit_note' },
     'knowledge.delete': { label: 'Wissenseintrag löschen', icon: 'delete_sweep' },
+    'git.read': { label: 'Git-Repository lesen', icon: 'account_tree' },
+    'git.stage': { label: 'Git-Änderungen vormerken', icon: 'add_task' },
+    'git.clone': { label: 'Git-Repository klonen', icon: 'account_tree' },
+    'git.commit': { label: 'Git-Commit erstellen', icon: 'commit' },
     'integration.private_data.release': { label: 'Private Integrationsdaten freigeben', icon: 'cloud_upload' }
   }[grant?.capability]
   return {

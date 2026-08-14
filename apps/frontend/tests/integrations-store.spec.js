@@ -59,6 +59,21 @@ const knowledgeResponse = {
   ]
 }
 
+const gitResponse = {
+  configured: true,
+  instances: [
+    {
+      id: 'git-id',
+      name: 'Projekte',
+      integrationType: 'git',
+      providerType: 'git',
+      executionAgentId: 'agent-1',
+      allowNetwork: false,
+      enabled: true
+    }
+  ]
+}
+
 describe('integration store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -194,6 +209,31 @@ describe('integration store', () => {
       name: 'Wiki',
       enabled: true
     })
+  })
+
+  it('loads and dispatches Git instance operations with the Git payload', async () => {
+    api.get.mockResolvedValue({ data: gitResponse })
+    api.post.mockResolvedValue({})
+    api.put.mockResolvedValue({})
+    api.delete.mockResolvedValue({})
+    const store = useIntegrationStore()
+    const payload = {
+      executionAgentId: 'agent-1',
+      config: { allowNetwork: false },
+      name: 'Projekte',
+      enabled: true
+    }
+
+    await store.fetchGit()
+    await store.createGit(payload)
+    await store.updateGit('git-id', payload)
+    await store.removeGit('git-id')
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/git')
+    expect(api.post).toHaveBeenCalledWith('/integrations/git', payload)
+    expect(api.put).toHaveBeenCalledWith('/integrations/git/git-id', payload)
+    expect(api.delete).toHaveBeenCalledWith('/integrations/git/git-id')
+    expect(store.git.instances).toEqual(gitResponse.instances)
   })
 
   it('loads and saves resource policies for one integration', async () => {

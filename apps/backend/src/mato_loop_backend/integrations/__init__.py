@@ -11,6 +11,7 @@ from mato_loop_backend.integrations.caldav import (
     load_caldav_resources,
 )
 from mato_loop_backend.integrations.evidence import evidence_source_id
+from mato_loop_backend.integrations.git import GitConfig
 from mato_loop_backend.integrations.registry import effective_execution_integration_settings
 from mato_loop_backend.integrations.search import (
     SearchIntegrationError,
@@ -25,6 +26,7 @@ from mato_loop_backend.integrations.search import (
 from mato_loop_backend.integrations.service import (
     BookStackIntegrationService,
     CalDavIntegrationService,
+    GitIntegrationService,
     IntegrationSettingsError,
     SearchIntegrationService,
 )
@@ -47,6 +49,8 @@ __all__ = [
     "BookStackIntegrationService",
     "CalDavConfig",
     "CalDavIntegrationService",
+    "GitConfig",
+    "GitIntegrationService",
     "IntegrationSettingsError",
     "PdfVisionHandler",
     "SearchIntegrationService",

@@ -56,7 +56,11 @@
               {{ typeLabel(integration.integrationType) }} ·
               {{ providerLabel(integration.providerType) }}
             </q-item-label>
-            <q-item-label caption lines="1">
+            <q-item-label v-if="integration.integrationType === 'git'" caption lines="1">
+              Computer: {{ executionAgentName(integration) }} ·
+              Netzwerkzugriff {{ gitAllowNetwork(integration) ? 'erlaubt' : 'gesperrt' }}
+            </q-item-label>
+            <q-item-label v-else caption lines="1">
               {{ integration.config.baseUrl }}{{ integration.config.username ? ` · ${integration.config.username}` : '' }}
             </q-item-label>
           </q-item-section>
@@ -74,6 +78,7 @@
                 :to="{ name: 'settings-integration-access', params: { integrationId: integration.id } }"
               />
               <q-btn
+                v-if="integration.integrationType !== 'git'"
                 flat
                 dense
                 no-caps
@@ -120,6 +125,7 @@ import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import IntegrationConfigDialog from 'components/IntegrationConfigDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 
 defineOptions({ name: 'IntegrationSettingsPage' })
@@ -128,6 +134,7 @@ const $q = useQuasar()
 const route = useRoute()
 const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
+const executionAgents = useExecutionAgentStore()
 const dialogOpen = ref(false)
 const selectedIntegration = ref(null)
 const testingId = ref(null)
@@ -135,8 +142,9 @@ const showAccessPage = computed(() => route.name === 'settings-integration-acces
 const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)
 const knowledgeBases = computed(() => integrations.knowledge.bases)
+const gitInstances = computed(() => integrations.git.instances)
 const configuredIntegrations = computed(
-  () => [...searchProviders.value, ...calendarAccounts.value, ...knowledgeBases.value]
+  () => [...searchProviders.value, ...calendarAccounts.value, ...knowledgeBases.value, ...gitInstances.value]
 )
 
 function openCreateDialog() {
@@ -150,15 +158,34 @@ function openEditDialog(integration) {
 }
 
 function providerLabel(providerType) {
-  return { searxng: 'SearXNG', caldav: 'CalDAV', bookstack: 'BookStack' }[providerType] || providerType
+  return { searxng: 'SearXNG', caldav: 'CalDAV', bookstack: 'BookStack', git: 'Git' }[providerType] || providerType
 }
 
 function typeLabel(integrationType) {
-  return { calendar: 'Kalender & Aufgaben', knowledge: 'Wissensdatenbank' }[integrationType] || 'Websuche'
+  return {
+    calendar: 'Kalender & Aufgaben',
+    knowledge: 'Wissensdatenbank',
+    git: 'Versionsverwaltung'
+  }[integrationType] || 'Websuche'
 }
 
 function typeIcon(integrationType) {
-  return { calendar: 'calendar_month', knowledge: 'menu_book' }[integrationType] || 'travel_explore'
+  return { calendar: 'calendar_month', knowledge: 'menu_book', git: 'account_tree' }[integrationType] || 'travel_explore'
+}
+
+function gitExecutionAgentId(integration) {
+  return integration.executionAgentId || integration.config?.executionAgentId || null
+}
+
+function executionAgentName(integration) {
+  return executionAgents.byId(gitExecutionAgentId(integration))?.name
+    || integration.executionAgentName
+    || integration.config?.executionAgentName
+    || 'Nicht verfügbarer Computer'
+}
+
+function gitAllowNetwork(integration) {
+  return integration.allowNetwork ?? integration.config?.allowNetwork ?? false
 }
 
 async function testIntegration(integration) {
@@ -184,6 +211,7 @@ async function removeIntegration(integration) {
   if (!confirmed) return
   if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
   else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
+  else if (integration.integrationType === 'git') await integrations.removeGit(integration.id)
   else await integrations.removeSearch(integration.id)
   $q.notify({ type: 'positive', message: 'Integration gelöscht' })
 }
@@ -193,7 +221,9 @@ async function reload() {
     await Promise.all([
       integrations.fetchSearch(),
       integrations.fetchCalendar(),
-      integrations.fetchKnowledge()
+      integrations.fetchKnowledge(),
+      integrations.fetchGit(),
+      executionAgents.fetchAll()
     ])
   } catch {
     // The central API interceptor displays the error as a toast.

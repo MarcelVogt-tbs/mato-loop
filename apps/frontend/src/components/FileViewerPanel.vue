@@ -234,7 +234,7 @@ const fileDetails = computed(() => {
 })
 const rootLabel = computed(() => {
   if (workspace.scope === 'session') return 'Session-Dateien'
-  return workspace.workingDirectory ? 'Workspace' : 'Agent-Home'
+  return workspace.workingDirectory ? 'Aktueller Ordner' : 'Computer'
 })
 const parentPath = computed(() => (
   props.entry?.path?.includes('/') ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) : '.'

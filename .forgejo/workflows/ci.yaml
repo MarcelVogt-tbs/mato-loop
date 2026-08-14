@@ -30,7 +30,7 @@ jobs:
         working-directory: apps/backend
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg poppler-utils
+          sudo apt-get install -y ffmpeg poppler-utils ripgrep
           python -m pip install uv==0.10.9
           uv sync --frozen --group docs
       - name: Check backend
@@ -81,6 +81,8 @@ jobs:
       - name: Install execution agent dependencies
         working-directory: apps/execution-agent
         run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ripgrep
           python -m pip install uv==0.10.9
           uv sync --frozen
       - name: Check execution agent

@@ -80,6 +80,7 @@ function defaultSessionOptions() {
     preferredExecutionAgentId: null,
     preferredRootId: null,
     workingDirectory: null,
+    currentDirectory: null,
     workspaceAccess: 'read-only',
     workspaceContext: null
   }
@@ -96,6 +97,7 @@ function optionsFromSession(session) {
     preferredExecutionAgentId: session.preferredExecutionAgentId,
     preferredRootId: session.preferredRootId,
     workingDirectory: session.workingDirectory,
+    currentDirectory: session.currentDirectory,
     workspaceAccess: session.workspaceAccess,
     workspaceContext: session.workspaceContext || null
   }
@@ -206,6 +208,7 @@ function loadDrafts() {
             : null,
           preferredRootId: typeof options.preferredRootId === 'string' ? options.preferredRootId : null,
           workingDirectory: typeof options.workingDirectory === 'string' ? options.workingDirectory : null,
+          currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
           workspaceAccess: options.workspaceAccess === 'read-write' ? 'read-write' : 'read-only',
           workspaceContext: null
         }
@@ -685,6 +688,7 @@ export const useChatStore = defineStore('chat', {
         preferred_execution_agent_id: 'preferredExecutionAgentId',
         preferred_root_id: 'preferredRootId',
         working_directory: 'workingDirectory',
+        current_directory: 'currentDirectory',
         workspace_access: 'workspaceAccess'
       }
       const normalizedPatch = { ...patch }
@@ -692,13 +696,17 @@ export const useChatStore = defineStore('chat', {
         Object.hasOwn(patch, 'preferred_execution_agent_id')
         && patch.preferred_execution_agent_id !== options.preferredExecutionAgentId
       ) {
-        normalizedPatch.preferred_root_id = null
-        normalizedPatch.working_directory = null
+        if (!Object.hasOwn(patch, 'preferred_root_id')) normalizedPatch.preferred_root_id = null
+        if (!Object.hasOwn(patch, 'working_directory')) normalizedPatch.working_directory = null
+        if (!Object.hasOwn(patch, 'current_directory')) normalizedPatch.current_directory = null
       } else if (
         Object.hasOwn(patch, 'preferred_root_id')
         && patch.preferred_root_id !== options.preferredRootId
       ) {
         normalizedPatch.working_directory = null
+        normalizedPatch.current_directory = null
+      } else if (Object.hasOwn(patch, 'working_directory')) {
+        normalizedPatch.current_directory = null
       }
       for (const [field, value] of Object.entries(normalizedPatch)) {
         if (fields[field]) options[fields[field]] = value
@@ -729,6 +737,8 @@ export const useChatStore = defineStore('chat', {
       const session = this.current
       if (!session) return
       const normalizedPatch = { ...patch }
+      delete normalizedPatch.current_directory
+      delete normalizedPatch.currentDirectory
       if (
         Object.hasOwn(patch, 'preferred_execution_agent_id')
         && patch.preferred_execution_agent_id !== session.preferredExecutionAgentId

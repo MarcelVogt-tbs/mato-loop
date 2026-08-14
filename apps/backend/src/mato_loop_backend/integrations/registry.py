@@ -13,6 +13,7 @@ from mato_loop_backend.integrations.contracts import (
     ToolContribution,
     ToolOptionContribution,
 )
+from mato_loop_backend.integrations.git import GIT_ADAPTER
 from mato_loop_backend.settings.models import IntegrationInstance, IntegrationSettings
 
 
@@ -47,6 +48,7 @@ _ADAPTERS = {
     ),
     ("calendar", "caldav"): CALDAV_ADAPTER,
     ("knowledge", "bookstack"): BOOKSTACK_ADAPTER,
+    ("git", "git"): GIT_ADAPTER,
 }
 
 

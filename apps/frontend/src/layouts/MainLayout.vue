@@ -136,8 +136,8 @@
                         class="session-title-tooltip"
                       >
                         <div>{{ session.title }}</div>
-                        <div v-if="session.workingDirectory" class="q-mt-xs text-grey-4">
-                          {{ session.workingDirectory }}
+                        <div v-if="session.currentDirectory || session.workingDirectory" class="q-mt-xs text-grey-4">
+                          {{ session.currentDirectory || session.workingDirectory }}
                         </div>
                       </q-tooltip>
                     </q-item-section>

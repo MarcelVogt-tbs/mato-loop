@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 from fastapi import WebSocket
@@ -32,6 +33,9 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 CANCEL_SEND_TIMEOUT_SECONDS = 1.0
 MAX_IGNORED_REQUESTS = 1_024
 _MUTATING_WORKSPACE_OPERATIONS = {
+    "integration.git.add",
+    "integration.git.clone",
+    "integration.git.commit",
     "workspace.copy",
     "workspace.delete",
     "workspace.export",
@@ -97,6 +101,28 @@ class ExecutionAgentConnectionManager:
     def snapshot(self, agent_id: UUID) -> tuple[frozenset[str], tuple] | None:
         connection = self._connections.get(agent_id)
         return (connection.operations, connection.roots) if connection else None
+
+    def transfer_url(self, agent_id: UUID, ticket_id: UUID) -> str:
+        connection = self._connections.get(agent_id)
+        if connection is None:
+            raise ExecutionAgentError("executionAgent.unavailable")
+        websocket_url = urlsplit(str(connection.websocket.url))
+        suffix = "/execution-agents/connect"
+        if not websocket_url.path.endswith(suffix):
+            raise ExecutionAgentError("executionAgent.protocolError")
+        path = (
+            websocket_url.path[: -len(suffix)]
+            + f"/workspace/transfers/{ticket_id}"
+        )
+        return urlunsplit(
+            (
+                "https" if websocket_url.scheme == "wss" else "http",
+                websocket_url.netloc,
+                path,
+                "",
+                "",
+            )
+        )
 
     async def register(self, hello: HelloMessage, websocket: WebSocket) -> None:
         async with self._lock:

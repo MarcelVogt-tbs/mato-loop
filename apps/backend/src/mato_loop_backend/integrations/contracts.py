@@ -65,6 +65,7 @@ class ToolContribution:
     releases_private_data: bool = False
     authorization_factory: Callable[[Any, Any], tuple[Any, ...]] | None = None
     execution_operation: str | None = None
+    execution_config_arguments: tuple[str, ...] = ()
     result_model: type[BaseModel] | None = None
 
 
@@ -142,7 +143,7 @@ class IntegrationAdapterDefinition:
             raise ValueError("agent integration operations must be unique and match their kind")
 
     def contributions(self, instance: IntegrationInstance) -> IntegrationContributions:
-        self.config_model.model_validate(instance.config)
+        config = self.config_model.model_validate(instance.config)
         contributions = self.contribution_factory(instance)
         if self.execution_location == "backend":
             return contributions
@@ -159,6 +160,11 @@ class IntegrationAdapterDefinition:
                     instance,
                     tool.execution_operation,
                     tool.result_model,
+                    {
+                        name: value
+                        for name, value in config.model_dump(mode="json", by_alias=True).items()
+                        if name in tool.execution_config_arguments
+                    },
                 ),
             )
             for tool in self.execution_tools

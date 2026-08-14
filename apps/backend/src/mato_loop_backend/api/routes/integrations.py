@@ -20,6 +20,7 @@ from mato_loop_backend.integrations import (
     CALDAV_CREDENTIAL_KIND,
     BookStackIntegrationService,
     CalDavIntegrationService,
+    GitIntegrationService,
     IntegrationSettingsError,
     SearchIntegrationError,
     SearchIntegrationService,
@@ -33,7 +34,7 @@ from mato_loop_backend.integrations.bookstack_client import BookStackError
 from mato_loop_backend.integrations.caldav_client import CalDavError
 from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.registry import integration_adapter
-from mato_loop_backend.models import Credential
+from mato_loop_backend.models import Credential, UserAccount
 from mato_loop_backend.security import read_credential, require_user
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
@@ -115,6 +116,26 @@ class KnowledgeIntegrationRequest(BaseModel):
 class KnowledgeIntegrationCreateRequest(KnowledgeIntegrationRequest):
     token_id: str = Field(min_length=1, max_length=10_000)
     token_secret: str = Field(min_length=1, max_length=10_000)
+
+
+class GitIntegrationConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    allow_network: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("allow_network", "allowNetwork"),
+    )
+
+
+class GitIntegrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    execution_agent_id: UUID = Field(
+        validation_alias=AliasChoices("execution_agent_id", "executionAgentId")
+    )
+    name: str = Field(default="Git", min_length=1, max_length=160)
+    config: GitIntegrationConfigRequest = Field(default_factory=GitIntegrationConfigRequest)
+    enabled: bool = True
 
 
 class IntegrationAccessRequest(BaseModel):
@@ -375,11 +396,113 @@ def knowledge_settings_payload(settings: IntegrationSettings) -> dict:
     }
 
 
+def git_settings_payload(settings: IntegrationSettings) -> dict:
+    integrations = [
+        instance
+        for instance in settings.instances
+        if instance.integration_type == "git" and instance.adapter_type == "git"
+    ]
+    return {
+        "configured": bool(integrations),
+        "instances": [
+            {
+                "id": str(instance.id),
+                "name": instance.name,
+                "integrationType": "git",
+                "providerType": "git",
+                "executionLocation": "agent",
+                "executionKind": "git",
+                "executionAgentId": str(instance.execution_agent_id),
+                "enabled": instance.enabled,
+                "hasCredential": False,
+                "config": {
+                    "allowNetwork": bool(instance.config.get("allow_network", False))
+                },
+            }
+            for instance in integrations
+        ],
+    }
+
+
 @router.get("/search")
 async def get_search_integrations(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     return search_settings_payload(await SettingsStore.load(db, IntegrationSettings))
+
+
+@router.get("/git")
+async def get_git_integrations(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await SettingsStore.load(db, IntegrationSettings)
+    try:
+        await GitIntegrationService.check_ownership(db, settings, user_id=user.id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+    return git_settings_payload(settings)
+
+
+@router.post("/git", status_code=status.HTTP_201_CREATED)
+async def create_git_integration(
+    payload: GitIntegrationRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    try:
+        settings = await GitIntegrationService.create(
+            db,
+            user_id=user.id,
+            execution_agent_id=payload.execution_agent_id,
+            name=payload.name,
+            allow_network=payload.config.allow_network,
+            enabled=payload.enabled,
+        )
+    except IntegrationSettingsError as exc:
+        status_code = 409 if exc.code == "git.alreadyConfigured" else 404
+        raise ApiError(status_code, exc.code, field="executionAgentId") from exc
+    return git_settings_payload(settings)
+
+
+@router.put("/git/{integration_id}")
+async def update_git_integration(
+    integration_id: UUID,
+    payload: GitIntegrationRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    try:
+        settings = await GitIntegrationService.update(
+            db,
+            integration_id,
+            user_id=user.id,
+            execution_agent_id=payload.execution_agent_id,
+            name=payload.name,
+            allow_network=payload.config.allow_network,
+            enabled=payload.enabled,
+        )
+    except IntegrationSettingsError as exc:
+        status_code = (
+            409
+            if exc.code in {"git.alreadyConfigured", "integration.changed"}
+            else 404
+        )
+        field = "executionAgentId" if exc.code != "integration.notFound" else None
+        raise ApiError(status_code, exc.code, field=field) from exc
+    return git_settings_payload(settings)
+
+
+@router.delete("/git/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_git_integration(
+    integration_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    try:
+        await GitIntegrationService.delete(db, integration_id, user_id=user.id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(409 if exc.code == "integration.changed" else 404, exc.code) from exc
 
 
 @router.get("/calendar")

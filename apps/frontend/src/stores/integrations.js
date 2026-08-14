@@ -19,11 +19,17 @@ const emptyKnowledge = () => ({
   bases: []
 })
 
+const emptyGit = () => ({
+  configured: false,
+  instances: []
+})
+
 export const useIntegrationStore = defineStore('integrations', {
   state: () => ({
     search: emptySearch(),
     calendar: emptyCalendar(),
     knowledge: emptyKnowledge(),
+    git: emptyGit(),
     accessByIntegration: {},
     loading: false,
     loaded: false,
@@ -123,6 +129,32 @@ export const useIntegrationStore = defineStore('integrations', {
     },
     async testKnowledge(id) {
       return (await api.post(`/integrations/knowledge/bases/${id}/test`)).data
+    },
+    async fetchGit() {
+      this.loading = true
+      this.loadFailed = false
+      try {
+        this.git = (await api.get('/integrations/git')).data
+        this.loaded = true
+      } catch (error) {
+        this.loadFailed = true
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+    async createGit(payload) {
+      await api.post('/integrations/git', payload)
+      await this.fetchGit()
+    },
+    async updateGit(id, payload) {
+      await api.put(`/integrations/git/${id}`, payload)
+      await this.fetchGit()
+    },
+    async removeGit(id) {
+      await api.delete(`/integrations/git/${id}`)
+      delete this.accessByIntegration[id]
+      await this.fetchGit()
     },
     async fetchAccess(id) {
       const { data } = await api.get(`/integrations/${id}/access`)

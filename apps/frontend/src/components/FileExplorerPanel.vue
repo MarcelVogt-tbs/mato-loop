@@ -30,24 +30,24 @@
         <q-menu anchor="bottom right" self="top right" class="app-action-menu">
           <q-list padding class="file-toolbar-menu">
             <q-item
-              v-if="!workspace.rootIdentity && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('workspace.list')"
+              v-if="legacyExecutionAgent && !workspace.rootIdentity && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('workspace.list')"
               clickable
               v-ripple
               v-close-popup
               @click="setWorkdir"
             >
               <q-item-section avatar><q-icon name="home_work" /></q-item-section>
-              <q-item-section>Als Arbeitsordner verwenden</q-item-section>
+              <q-item-section>Als aktuellen Ordner verwenden</q-item-section>
             </q-item>
             <q-item
-              v-if="workspace.scope === 'filesystem' && chat.activeContext?.workingDirectory"
+              v-if="legacyExecutionAgent && workspace.scope === 'filesystem' && chat.activeContext?.workingDirectory"
               clickable
               v-ripple
               v-close-popup
               @click="chat.updateActive({ working_directory: null })"
             >
               <q-item-section avatar><q-icon name="link_off" /></q-item-section>
-              <q-item-section>Arbeitsordner entfernen</q-item-section>
+              <q-item-section>Aktuellen Ordner entfernen</q-item-section>
             </q-item>
             <q-item v-if="chat.current" clickable v-ripple v-close-popup @click="openPermissionsDialog">
               <q-item-section avatar><q-icon name="verified_user" /></q-item-section>
@@ -365,6 +365,7 @@ import {
   MAX_WORKSPACE_UPLOAD_BYTES,
   MAX_WORKSPACE_UPLOADS,
   supportsWorkspaceOperation,
+  workspaceContextKey,
   withFileSuffix,
   useWorkspaceStore
 } from 'stores/workspace'
@@ -407,9 +408,13 @@ const selectedEntry = computed(() => {
   return Object.values(workspace.entries).flat().find((item) => item.path === workspace.selectedPath)
 })
 const selectedIsDirectory = computed(() => selectedEntry.value?.kind === 'directory')
+const legacyExecutionAgent = computed(() => {
+  const agent = executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
+  return Boolean(agent && agent.protocolVersion < 2)
+})
 const hasOverflowActions = computed(() => Boolean(
-  (workspace.scope === 'filesystem' && selectedIsDirectory.value)
-  || chat.activeContext?.workingDirectory
+  (legacyExecutionAgent.value && workspace.scope === 'filesystem' && selectedIsDirectory.value)
+  || (legacyExecutionAgent.value && chat.activeContext?.workingDirectory)
   || chat.current
 ))
 const targetDirectory = computed(() => {
@@ -436,12 +441,12 @@ const canRename = computed(() => Boolean(
 ))
 const rootLabel = computed(() => {
   if (workspace.scope === 'session') return 'Session-Dateien'
-  return workspace.workingDirectory ? 'Workspace' : 'Agent-Home'
+  return workspace.workingDirectory ? 'Aktueller Ordner' : 'Computer'
 })
 const scopeOptions = computed(() => [
   { label: 'Session', value: 'session', disable: !chat.current },
   {
-    label: 'Dateisystem',
+    label: 'Computer',
     value: 'filesystem',
     disable: !supportsWorkspaceOperation(workspace.workspaceContext, 'workspace.list')
   }
@@ -455,8 +460,8 @@ const scopeDescription = computed(() => {
   if (workspace.scope === 'session') return 'Session-Dateien · nur „files“ ist veränderbar'
   if (!workspace.operationAvailable('workspace.list')) return 'Der ausgewählte Arbeitsbereich ist nicht verfügbar.'
   return workspace.workingDirectory
-    ? `Arbeitsordner · ${workspace.workingDirectory}`
-    : 'Agent-Home · noch kein Arbeitsordner ausgewählt'
+    ? `Aktueller Ordner · ${chat.activeContext?.currentDirectory || workspace.workingDirectory}`
+    : 'Computer · noch kein aktueller Ordner ausgewählt'
 })
 const selectedParentPath = computed(() => parentPath(workspace.selectedPath))
 const selectedBreadcrumbs = computed(() => [
@@ -734,19 +739,19 @@ async function revoke(grant) {
 }
 
 watch(
-  () => [
-    chat.selectedSessionId || null,
-    chat.current?.id || null,
-    chat.current?.workingDirectory || null,
-    chat.activeContext?.workingDirectory || null,
-    activeWorkspaceContext.value
+  [
+    () => chat.selectedSessionId || null,
+    () => chat.current?.id || null,
+    () => chat.current?.workingDirectory || null,
+    () => chat.activeContext?.workingDirectory || null,
+    () => workspaceContextKey(activeWorkspaceContext.value)
   ],
-  ([selectedSessionId, currentSessionId, currentWorkingDirectory, draftWorkingDirectory, workspaceContext]) => {
+  ([selectedSessionId, currentSessionId, currentWorkingDirectory, draftWorkingDirectory]) => {
     const sessionId = selectedSessionId || currentSessionId
     const workingDirectory = currentSessionId === sessionId
       ? currentWorkingDirectory
       : sessionId ? null : draftWorkingDirectory
-    workspace.configure({ sessionId, workingDirectory, workspaceContext })
+    workspace.configure({ sessionId, workingDirectory, workspaceContext: activeWorkspaceContext.value })
     workspace.load('.')
     if (permissionsDialogOpen.value) loadPermissions()
   },

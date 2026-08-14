@@ -71,10 +71,13 @@ class AgentConfig(BaseModel):
     )
     name: str = Field(min_length=1, max_length=128)
     roots: list[RootConfig] = Field(min_length=1, max_length=32)
+    home_directory: Path | None = Field(default=None, alias="homeDirectory")
     data_dir: Path = Field(alias="dataDir")
     allow_insecure: bool = Field(default=False, alias="allowInsecure")
     process_executables: dict[str, Path] = Field(default_factory=dict, alias="processExecutables")
     shell_executable: Path | None = Field(default=None, alias="shellExecutable")
+    git_executable: Path | None = Field(default=None, alias="gitExecutable")
+    allow_network: bool = Field(default=False, alias="allowNetwork")
     max_message_bytes: int = Field(
         default=1024 * 1024, alias="maxMessageBytes", ge=1024, le=1024 * 1024
     )
@@ -91,11 +94,11 @@ class AgentConfig(BaseModel):
         default=60.0, alias="defaultTimeoutSeconds", gt=0, le=3600
     )
 
-    @field_validator("data_dir")
+    @field_validator("data_dir", "home_directory")
     @classmethod
-    def absolute_data_dir(cls, value: Path) -> Path:
-        if not value.is_absolute():
-            raise ValueError("dataDir must be absolute")
+    def absolute_directory(cls, value: Path | None) -> Path | None:
+        if value is not None and not value.is_absolute():
+            raise ValueError("directory paths must be absolute")
         return value
 
     @field_validator("process_executables")
@@ -105,11 +108,11 @@ class AgentConfig(BaseModel):
             raise ValueError("process executable aliases must be non-empty and paths absolute")
         return value
 
-    @field_validator("shell_executable")
+    @field_validator("shell_executable", "git_executable")
     @classmethod
-    def absolute_shell(cls, value: Path | None) -> Path | None:
+    def absolute_optional_executable(cls, value: Path | None) -> Path | None:
         if value is not None and not value.is_absolute():
-            raise ValueError("shellExecutable must be absolute")
+            raise ValueError("executable paths must be absolute")
         return value
 
     @model_validator(mode="after")
@@ -143,6 +146,19 @@ class AgentConfig(BaseModel):
                 ):
                     raise ValueError("workspace roots must not overlap")
             physical_roots.append((canonical, identity))
+        if self.home_directory is not None:
+            try:
+                home = self.home_directory.resolve(strict=True)
+                metadata = home.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise ValueError("homeDirectory is unavailable") from exc
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or not os.access(home, os.R_OK | os.X_OK)
+                or not any(home == root.path or root.path in home.parents for root in self.roots)
+            ):
+                raise ValueError("homeDirectory must be an accessible directory within a root")
+            self.home_directory = home
         return self
 
     @classmethod

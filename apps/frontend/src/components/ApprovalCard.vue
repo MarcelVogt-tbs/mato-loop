@@ -132,6 +132,10 @@ const riskColor = computed(() => props.approval.riskLevel === 'high' ? 'negative
 const riskLabel = computed(() => ({ high: 'Hoch', medium: 'Mittel', low: 'Niedrig' })[props.approval.riskLevel] || props.approval.riskLevel)
 const actionIcon = computed(() => {
   if (props.approval.capability?.startsWith('filesystem')) return 'folder_managed'
+  if (props.approval.capability === 'execution.directory') return 'drive_file_move'
+  if (props.approval.capability === 'system.info') return 'computer'
+  if (props.approval.capability === 'process.execute') return 'terminal'
+  if (props.approval.capability?.startsWith('git.')) return 'account_tree'
   if (props.approval.capability === 'skills.load') return 'school'
   if (props.approval.capability === 'skills.write' || props.approval.actionKind === 'build_skill') return 'auto_awesome'
   if (props.approval.capability === 'integration.private_data.release') return 'cloud_upload'

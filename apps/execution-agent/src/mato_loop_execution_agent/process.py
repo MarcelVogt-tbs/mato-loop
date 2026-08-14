@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
+import shlex
 import signal
 import stat
 import time
@@ -44,8 +47,10 @@ class ProcessRunner:
         return canonical
 
     def _cwd(self, root_id: str, revision: str, working_directory: str) -> tuple[str, int]:
-        self.workspace._root(root_id, revision)
-        parts = _parts(working_directory)
+        resolved = self.workspace.resolve_directory(
+            working_directory, root_id=root_id, revision=revision
+        )
+        parts = _parts(resolved["relativePath"])
         with self.workspace._root_fd(root_id, revision) as root_fd:
             directory_fd = self.workspace._open_dir(root_fd, parts)
             try:
@@ -54,6 +59,129 @@ class ProcessRunner:
             except BaseException:
                 os.close(directory_fd)
                 raise
+
+    def inspect_shell(
+        self, command: str, current_directory: str, root_id: str, revision: str
+    ) -> dict:
+        current = self.workspace.resolve_directory(
+            current_directory, root_id=root_id, revision=revision
+        )["path"]
+        if any(
+            character in command
+            for character in ("$", "`", "\n", "\r", "*", "?", "[", "{", "}", "~")
+        ):
+            return {"targets": [], "analysisComplete": False}
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&")
+        lexer.whitespace_split = True
+        try:
+            tokens = list(lexer)
+        except ValueError:
+            return {"targets": [], "analysisComplete": False}
+        if not tokens or any(token in {";", "|", "||", "&", "&&", "(", ")"} for token in tokens):
+            return {"targets": [], "analysisComplete": False}
+
+        targets = []
+
+        def add(path: str, kind: str, *, must_exist: bool) -> bool:
+            try:
+                target = self.workspace.resolve_path_target(path, current, must_exist=must_exist)
+            except AgentError as exc:
+                if exc.code == "path.outsideRoots":
+                    raise
+                return False
+            target["kind"] = "directory" if target.pop("targetKind", None) == "directory" else kind
+            targets.append(target)
+            return True
+
+        executable = tokens[0]
+        if executable in {".", "source"}:
+            if len(tokens) < 2 or not add(tokens[1], "source", must_exist=True):
+                return {"targets": targets, "analysisComplete": False}
+            index = 2
+        else:
+            resolved_executable = self._trusted_executable(executable, current)
+            if resolved_executable is None:
+                return {"targets": [], "analysisComplete": False}
+            if "/" in executable and self._is_within_roots(resolved_executable):
+                if not add(executable, "executable", must_exist=True):
+                    return {"targets": targets, "analysisComplete": False}
+            index = 1
+            executable_name = resolved_executable.name
+            if executable_name in {
+                "bash",
+                "dash",
+                "node",
+                "perl",
+                "python",
+                "python3",
+                "ruby",
+                "sh",
+            } or executable_name.startswith("python"):
+                while index < len(tokens) and tokens[index].startswith("-"):
+                    if tokens[index] in {"-c", "--command"}:
+                        return {"targets": targets, "analysisComplete": False}
+                    index += 1
+                if index < len(tokens) and tokens[index] not in {"<", ">", ">>"}:
+                    if not add(tokens[index], "script", must_exist=True):
+                        return {"targets": targets, "analysisComplete": False}
+                    index += 1
+
+        while index < len(tokens):
+            token = tokens[index]
+            if (
+                token.isdigit()
+                and index + 1 < len(tokens)
+                and tokens[index + 1] in {"<", ">", ">>"}
+            ):
+                index += 1
+                token = tokens[index]
+            if token in {"<", ">", ">>"}:
+                if index + 1 >= len(tokens) or not add(
+                    tokens[index + 1],
+                    "input" if token == "<" else "output",
+                    must_exist=token == "<",
+                ):
+                    return {"targets": targets, "analysisComplete": False}
+                index += 2
+                continue
+            if token in {"<<", "<<<", "<>", ">&", "<&"}:
+                return {"targets": targets, "analysisComplete": False}
+            if "/" in token and not add(token, "path", must_exist=True):
+                return {"targets": targets, "analysisComplete": False}
+            index += 1
+        result = {"targets": targets, "analysisComplete": True}
+        result["inspectionRevision"] = self._inspection_revision(result)
+        return result
+
+    @staticmethod
+    def _inspection_revision(result: dict) -> str:
+        return hashlib.sha256(
+            json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    def _trusted_executable(self, executable: str, current_directory: str) -> Path | None:
+        if executable in self.executables:
+            return self.executables[executable]
+        if "/" in executable:
+            candidates = [Path(current_directory) / executable]
+        else:
+            candidates = [
+                Path(directory) / executable for directory in ("/usr/local/bin", "/usr/bin", "/bin")
+            ]
+        for candidate in candidates:
+            try:
+                resolved = self._resolve_executable(candidate)
+            except AgentError:
+                continue
+            if "/" not in executable or self._is_within_roots(resolved):
+                return resolved
+        return None
+
+    def _is_within_roots(self, path: Path) -> bool:
+        return any(
+            path == root.config.path or root.config.path in path.parents
+            for root in self.workspace.roots.values()
+        )
 
     async def exec(
         self,
@@ -66,6 +194,7 @@ class ProcessRunner:
         command: str | None,
         timeout: float | None,
         stream: StreamCallback,
+        expected_inspection_revision: str | None = None,
     ) -> dict:
         if command is None:
             executable_path = self.executables.get(program or "")
@@ -75,6 +204,13 @@ class ProcessRunner:
         else:
             if self.shell is None:
                 raise AgentError("process.notAllowed", "Shell execution is disabled")
+            if expected_inspection_revision is not None:
+                inspection = self.inspect_shell(command, working_directory, root_id, revision)
+                actual_revision = inspection.get("inspectionRevision") or self._inspection_revision(
+                    inspection
+                )
+                if actual_revision != expected_inspection_revision:
+                    raise AgentError("process.inspectionChanged", "Shell inspection changed")
             argv = [os.fspath(self.shell), "-c", command]
         cwd, cwd_fd = self._cwd(root_id, revision, working_directory)
         environment = {

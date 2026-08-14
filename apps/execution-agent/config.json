@@ -7,8 +7,11 @@
       "path": "/workspace"
     }
   ],
+  "homeDirectory": "/workspace",
   "dataDir": "/data",
   "allowInsecure": true,
+  "gitExecutable": "/usr/bin/git",
+  "allowNetwork": false,
   "processExecutables": {
     "python": "/usr/local/bin/python"
   },

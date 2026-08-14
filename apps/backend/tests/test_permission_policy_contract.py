@@ -9,6 +9,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionPolicy,
     PermissionRequest,
     agent_identity_permission,
+    execution_directory_permission,
     integration_operation_permission,
     media_permission,
     memory_write_permission,
@@ -106,6 +107,37 @@ def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -
     )
     assert not PermissionPolicy.grant_matches(
         grant, _path_request(root_files, "docs-other/readme.md", root="workspace"), root_files
+    )
+
+
+def test_execution_directory_grant_matches_only_same_root_subtree(tmp_path) -> None:
+    session = _session()
+    root_files = _root_files(tmp_path, session)
+    agent_id = uuid4()
+    root_id = uuid4()
+    granted = execution_directory_permission(
+        agent_id, "/home/user/project", root_id, "a" * 64
+    )
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=granted.capability,
+        resource_type=granted.resource_type,
+        resource_scope=granted.resource_scope,
+    )
+
+    assert PermissionPolicy.grant_matches(
+        grant,
+        execution_directory_permission(
+            agent_id, "/home/user/project/src", root_id, "a" * 64
+        ),
+        root_files,
+    )
+    assert not PermissionPolicy.grant_matches(
+        grant,
+        execution_directory_permission(
+            agent_id, "/home/user/project-other", root_id, "a" * 64
+        ),
+        root_files,
     )
     assert not PermissionPolicy.grant_matches(
         grant, _path_request(root_files, "docs/readme.md", root="session"), root_files

@@ -63,7 +63,7 @@ CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 15
+INVENTORY_VERSION = 16
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -232,8 +232,9 @@ _ERROR_DENIED = json.dumps(
     {"error": {"code": "permission.denied", "message": "Permission was denied."}}
 )
 VIDEO_EVAL_TOOLS = (
-    "list_directory",
-    "read_file",
+    "read",
+    "glob",
+    "grep",
     "provide_file",
     "web_search",
     "webfetch",
@@ -452,16 +453,16 @@ CASES = (
         id="workspace_read_uses_exact_root",
         kind="general",
         user="Lies bitte die Datei README.md im aktuellen Arbeitsverzeichnis.",
-        tools=("list_directory", "read_file"),
+        tools=("read", "glob", "grep"),
         working_directory="/data/home/project",
-        expected_tool="read_file",
+        expected_tool="read",
         expected_arguments={"root": "workspace", "path": "README.md"},
     ),
     PromptCase(
         id="readonly_write_requests_mode_change",
         kind="general",
         user='Erstelle im Arbeitsverzeichnis die Datei note.txt mit dem exakten Inhalt "Hallo".',
-        tools=("read_file", "write_file"),
+        tools=("read", "write_file"),
         working_directory="/data/home/project",
         expected_no_tools=True,
         content_contains=("Agent-Modus", "Schreiben"),
@@ -578,7 +579,7 @@ CASES = (
         id="readwrite_write_uses_tool",
         kind="general",
         user='Erstelle im Arbeitsverzeichnis die Datei note.txt mit dem exakten Inhalt "Hallo".',
-        tools=("read_file", "write_file"),
+        tools=("read", "write_file"),
         workspace_access="read-write",
         working_directory="/data/home/project",
         expected_tool="write_file",
@@ -821,12 +822,25 @@ CASES = (
     ),
     # Remaining built-in tool schemas and key field contracts.
     PromptCase(
-        id="list_directory_uses_session_root",
+        id="glob_uses_session_root_and_path",
         kind="general",
-        user="Liste den Inhalt des Session-Ordners files auf.",
-        tools=("list_directory",),
-        expected_tool="list_directory",
-        expected_arguments={"root": "session", "path": "files"},
+        user="Finde alle Markdown-Dateien im Session-Ordner files.",
+        tools=("glob",),
+        expected_tool="glob",
+        expected_arguments={"root": "session", "path": "files", "pattern": "*.md"},
+    ),
+    PromptCase(
+        id="grep_uses_session_root_path_and_include",
+        kind="general",
+        user="Suche im Session-Ordner files in Markdown-Dateien nach dem Wort Aurora.",
+        tools=("grep",),
+        expected_tool="grep",
+        expected_arguments={
+            "root": "session",
+            "path": "files",
+            "pattern": "Aurora",
+            "include": "*.md",
+        },
     ),
     PromptCase(
         id="provide_file_creates_download",
@@ -1673,7 +1687,7 @@ CASES = (
         id="missing_workspace_is_not_invented",
         kind="general",
         user="Liste den Inhalt des Workspace auf. Sage klar, wenn keiner ausgewählt ist.",
-        tools=("list_directory",),
+        tools=("read",),
         expected_no_tools=True,
         requires_negative_outcome=True,
         forbidden_success_terms=("Workspace ist ausgewählt", "Workspace ist verfügbar"),
@@ -1960,8 +1974,8 @@ CASES = (
         id="managed_session_attachment_is_read_without_root_prefix",
         kind="general",
         user="Lies die verwaltete Session-Datei attachments/report.txt.",
-        tools=("read_file",),
-        expected_tool="read_file",
+        tools=("read",),
+        expected_tool="read",
         expected_arguments={"root": "session", "path": "attachments/report.txt"},
     ),
     PromptCase(
@@ -1972,8 +1986,8 @@ CASES = (
             "file report.pdf, kind document, MIME application/pdf, path attachments/report.pdf, "
             "derivative derived/report/content.txt]"
         ),
-        tools=("read_file",),
-        expected_tool="read_file",
+        tools=("read",),
+        expected_tool="read",
         expected_arguments={"root": "session", "path": "derived/report/content.txt"},
     ),
     # Memory exclusion, retrieval, browse, cursor, overview, and status branches.
@@ -2127,13 +2141,13 @@ CASES = (
         id="missing_tool_result_marker_does_not_claim_success",
         kind="general",
         user="Berichte wahrheitsgemäß, ob die Datei erstellt wurde.",
-        tools=("read_file", "list_directory"),
+        tools=("read", "glob"),
         continuation=_exchange(
             "write_file",
             {"root": "session", "path": "files/note.txt", "content": "Hallo"},
             json.dumps(error_payload("tool.executionInterrupted")),
         ),
-        expected_tools=("read_file", "list_directory"),
+        expected_tools=("read", "glob"),
         requires_uncertainty=True,
         forbidden_success_terms=("erstellt",),
     ),
@@ -2458,7 +2472,8 @@ _SEMANTIC_CONTRACTS = (
         "budget",
         ("duplicate_successful_research_is_not_repeated",),
     ),
-    ContractCoverage("file.list_directory", "file", ("list_directory_uses_session_root",)),
+    ContractCoverage("file.glob", "file", ("glob_uses_session_root_and_path",)),
+    ContractCoverage("file.grep", "file", ("grep_uses_session_root_path_and_include",)),
     ContractCoverage("file.read", "file", ("workspace_read_uses_exact_root",)),
     ContractCoverage("file.provide", "file", ("provide_file_creates_download",)),
     ContractCoverage("file.write", "file", ("readwrite_write_uses_tool",)),

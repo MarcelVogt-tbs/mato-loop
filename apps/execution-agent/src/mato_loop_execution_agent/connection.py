@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import platform
+import shutil
+import sys
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
@@ -12,6 +15,7 @@ from pydantic import ValidationError
 
 from .cache import SessionCache
 from .config import AgentConfig
+from .git import GIT_OPERATIONS, GitRunner
 from .process import ProcessRunner
 from .protocol import (
     ARGUMENT_MODELS,
@@ -23,6 +27,14 @@ from .protocol import (
     Error,
     Event,
     ExportArguments,
+    GitAddArguments,
+    GitCloneArguments,
+    GitCommitArguments,
+    GitDiffArguments,
+    GitLogArguments,
+    GitStatusArguments,
+    GlobArguments,
+    GrepArguments,
     Hello,
     ImportArguments,
     ListArguments,
@@ -31,15 +43,19 @@ from .protocol import (
     ReadArguments,
     RenameArguments,
     Request,
+    ResolveDirectoryArguments,
     Response,
     RootDescriptor,
     ShellArguments,
+    ShellInspectArguments,
     StatArguments,
+    SystemInfoArguments,
     Welcome,
     WriteArguments,
     parse_inbound,
     validate_arguments,
 )
+from .search import WorkspaceSearch
 from .transfer import TransferClient
 from .workspace import AgentError, Workspace
 
@@ -82,6 +98,8 @@ class ExecutionAgent:
         self.workspace = Workspace(config)
         self.cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
         self.process = ProcessRunner(config, self.workspace)
+        self.git = GitRunner(config, self.workspace)
+        self.search = WorkspaceSearch(self.workspace)
         self.transfer = transfer_client or TransferClient(
             max_bytes=config.max_transfer_bytes,
             backend_url=config.backend_url,
@@ -93,16 +111,69 @@ class ExecutionAgent:
             operations.remove("process.exec")
         if self.process.shell is None:
             operations.remove("shell.run")
+        if self.search.executable is None:
+            operations -= {"workspace.glob", "workspace.grep"}
+        if self.git.executable is None:
+            operations -= GIT_OPERATIONS
         self.operations = sorted(operations)
 
     def hello(self) -> Hello:
+        home = (
+            self.workspace.resolve_directory(os.fspath(self.config.home_directory))
+            if self.config.home_directory is not None
+            else {}
+        )
         return Hello(
             agentId=self.config.agent_id,
             name=self.config.name,
             platform=platform.system().lower(),
             operations=self.operations,
             roots=[RootDescriptor.model_validate(root) for root in self.workspace.descriptors()],
+            homeDirectory=home.get("path"),
+            homeRootId=home.get("rootId"),
+            homeRootRevision=home.get("rootRevision"),
+            homeRelativeDirectory=home.get("relativePath"),
         )
+
+    def system_info(self, current_directory: str | None) -> dict[str, Any]:
+        try:
+            from importlib.metadata import version
+
+            agent_version = version("mato-loop-execution-agent")
+        except Exception:
+            agent_version = "0.1.0"
+        result: dict[str, Any] = {
+            "agentVersion": agent_version,
+            "platform": sys.platform[:80],
+            "operatingSystem": platform.system()[:80],
+            "kernel": platform.release()[:160],
+            "architecture": platform.machine()[:80],
+            "logicalCpuCount": os.cpu_count(),
+        }
+        if sys.platform.startswith("linux"):
+            try:
+                values = {}
+                with open("/proc/meminfo", encoding="ascii") as handle:
+                    for line in handle:
+                        name, value = line.split(":", 1)
+                        if name in {"MemTotal", "MemAvailable"}:
+                            values[name] = int(value.split()[0]) * 1024
+                if values.keys() >= {"MemTotal", "MemAvailable"}:
+                    result["memory"] = {
+                        "totalBytes": values["MemTotal"],
+                        "availableBytes": values["MemAvailable"],
+                    }
+            except (OSError, ValueError, IndexError):
+                pass
+        if current_directory is not None:
+            directory = self.workspace.resolve_directory(current_directory)
+            usage = shutil.disk_usage(directory["path"])
+            result["disk"] = {
+                "totalBytes": usage.total,
+                "availableBytes": usage.free,
+                **directory,
+            }
+        return result
 
     async def dispatch(
         self, request: Request, stream=None, *, backend_id: str | None = None
@@ -111,6 +182,13 @@ class ExecutionAgent:
             arguments = validate_arguments(request)
         except (ValidationError, ValueError) as exc:
             raise AgentError("request.invalid", "Invalid operation arguments") from exc
+
+        if isinstance(arguments, SystemInfoArguments):
+            return await asyncio.to_thread(self.system_info, arguments.current_directory)
+        if isinstance(arguments, ResolveDirectoryArguments):
+            return await asyncio.to_thread(
+                self.workspace.resolve_directory, arguments.path, arguments.current_directory
+            )
 
         if isinstance(arguments, StatArguments):
             return await asyncio.to_thread(
@@ -140,6 +218,23 @@ class ExecutionAgent:
                 arguments.offset,
                 arguments.limit,
                 arguments.max_line_length,
+            )
+        if isinstance(arguments, GlobArguments):
+            return await self.search.glob(
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.working_directory,
+                arguments.path,
+                arguments.pattern,
+            )
+        if isinstance(arguments, GrepArguments):
+            return await self.search.grep(
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.working_directory,
+                arguments.path,
+                arguments.pattern,
+                arguments.include,
             )
         if isinstance(arguments, WriteArguments):
             return await _run_mutation(
@@ -268,7 +363,7 @@ class ExecutionAgent:
             return await self.process.exec(
                 root_id=arguments.root_id,
                 revision=arguments.root_revision,
-                working_directory=arguments.working_directory,
+                working_directory=arguments.current_directory,
                 program=arguments.program,
                 args=arguments.args,
                 command=None,
@@ -284,12 +379,73 @@ class ExecutionAgent:
             return await self.process.exec(
                 root_id=arguments.root_id,
                 revision=arguments.root_revision,
-                working_directory=arguments.working_directory,
+                working_directory=arguments.current_directory,
                 program=None,
                 args=[],
                 command=arguments.command,
                 timeout=arguments.timeout_seconds,
                 stream=stream,
+                expected_inspection_revision=arguments.expected_inspection_revision,
+            )
+        if isinstance(arguments, ShellInspectArguments):
+            result = await asyncio.to_thread(
+                self.process.inspect_shell,
+                arguments.command,
+                arguments.current_directory,
+                arguments.root_id,
+                arguments.root_revision,
+            )
+            result.setdefault("inspectionRevision", self.process._inspection_revision(result))
+            return result
+        if isinstance(arguments, GitCloneArguments):
+            return await _defer_cancellation(
+                self.git.clone(
+                    arguments.root_id,
+                    arguments.root_revision,
+                    arguments.current_directory,
+                    arguments.source,
+                    arguments.destination,
+                    arguments.allow_network,
+                )
+            )
+        if isinstance(arguments, GitStatusArguments):
+            return await self.git.status(
+                arguments.root_id, arguments.root_revision, arguments.current_directory
+            )
+        if isinstance(arguments, GitDiffArguments):
+            return await self.git.diff(
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.current_directory,
+                arguments.staged,
+                arguments.paths,
+            )
+        if isinstance(arguments, GitLogArguments):
+            return await self.git.log(
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.current_directory,
+                arguments.limit,
+                arguments.paths,
+            )
+        if isinstance(arguments, GitAddArguments):
+            return await _defer_cancellation(
+                self.git.add(
+                    arguments.root_id,
+                    arguments.root_revision,
+                    arguments.current_directory,
+                    arguments.paths,
+                )
+            )
+        if isinstance(arguments, GitCommitArguments):
+            return await _defer_cancellation(
+                self.git.commit(
+                    arguments.root_id,
+                    arguments.root_revision,
+                    arguments.current_directory,
+                    arguments.message,
+                    arguments.expected_index_tree,
+                )
             )
         # CacheClearArguments has no fields and is intentionally last.
         if request.operation == "cache.clear":

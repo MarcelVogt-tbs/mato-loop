@@ -172,10 +172,11 @@ def test_transfer_url_uses_the_agent_connection_origin(monkeypatch) -> None:
         )
     )
 
-    spec = workspace_route._transfer_spec(request, agent_id, uuid4(), "secret")
+    ticket_id = uuid4()
+    spec = workspace_route._transfer_spec(request, agent_id, ticket_id, "secret")
 
     assert spec == {
-        "url": "https://backend.internal/api/workspace/transfers/ticket",
+        "url": f"https://backend.internal/api/workspace/transfers/{ticket_id}",
         "token": "secret",
     }
 

@@ -125,9 +125,16 @@ async def me(user: Annotated[UserAccount, Depends(require_user)]) -> dict[str, s
 async def user_preferences(
     _user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict[str, bool]:
+) -> dict:
     preferences = await SettingsStore.load(db, UserPreferences, user_id=_user.id)
-    return {"thinkingExpanded": preferences.thinking_expanded}
+    return {
+        "thinkingExpanded": preferences.thinking_expanded,
+        "defaultExecutionAgentId": (
+            str(preferences.default_execution_agent_id)
+            if preferences.default_execution_agent_id
+            else None
+        ),
+    }
 
 
 @router.patch("/preferences")
@@ -135,11 +142,18 @@ async def update_user_preferences(
     payload: UserPreferencesRequest,
     _user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict[str, bool]:
+) -> dict:
     preferences = await SettingsStore.load(
         db, UserPreferences, user_id=_user.id, for_update=True
     )
     preferences.thinking_expanded = payload.thinking_expanded
     await SettingsStore.save(db, preferences, user_id=_user.id)
     await db.commit()
-    return {"thinkingExpanded": preferences.thinking_expanded}
+    return {
+        "thinkingExpanded": preferences.thinking_expanded,
+        "defaultExecutionAgentId": (
+            str(preferences.default_execution_agent_id)
+            if preferences.default_execution_agent_id
+            else None
+        ),
+    }

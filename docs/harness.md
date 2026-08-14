@@ -65,6 +65,7 @@ Resource policies are global installation settings. They are not approval-derive
 A permission consists of a capability and typed resource matcher. Security decisions never depend on free-form display strings, prefix comparisons, or tool names. Matchers have unique types and validated fields such as canonical path, session ID, or defined session-search scope.
 
 - Path matchers contain explicit `session` or `workspace` root and compare relative paths component by component inside the host-bound root; string-prefix matching is forbidden.
+- Computer directory matchers use canonical `{agentId,path,rootId,rootRevision}` JSON and compare absolute paths component by component. They bound directory entry independently from file or process policy; string-prefix matching is forbidden.
 - Session matchers compare UUIDs and distinguish the current session from an explicitly named other session.
 - Session-search matchers represent browse and search as one collection resource. A grant to read one session does not allow either discovery operation.
 - URL matchers use the SHA-256 hash of the complete canonical URL. Display metadata is persisted separately without query values.
@@ -74,7 +75,7 @@ A permission consists of a capability and typed resource matcher. Security decis
 
 Private integration data uses a separate session release. Sensitive integration tools require `integration.private_data.release` before a public model can receive a result. Successful use marks the session conservatively; later public requests recheck the revocable session grant before context projection and provider transport. This is deliberately a session-level boundary, not field-level taint tracking.
 
-For `read_file` and `list_directory`, the host resolves the root before permission checks. `root=session` is always bound to the current session; `root=workspace` is bound only to the selected working directory and is unavailable otherwise. Agent file tools never follow symlinks. In the session root, `attachments`, `generated`, `downloads`, and `derived` are readable and may be copy sources, but are immutable; only `files` permits mutations.
+For the Shared Tools `read`, `glob`, and `grep`, the host resolves the root before permission checks. `root=session` is always bound to the current session; `root=workspace` is bound only to the selected working directory and is unavailable otherwise. File tools never follow symlinks. In the session root, `attachments`, `generated`, `downloads`, and `derived` are readable and may be copy sources, but are immutable; only `files` permits mutations.
 
 For `webfetch`, effective model policy evaluates every initial URL and redirect before DNS or HTTP. `ask` requests approval for every URL, `auto_public` automatically allows public targets and asks for allowlisted private origins, and `auto_allowed` automatically allows both classes. Network classification after permission remains immutable host policy. No grant can open a private origin not on the allowlist, link-local address, or metadata address.
 
@@ -143,7 +144,7 @@ The following independent cases are automated when their symbols are introduced.
 | `FILE-01` | Read-only session with working directory | Agent reads within it | Access occurs without approval. |
 | `FILE-02` | Session without workspace | Agent uses `root=workspace` | Call returns `file.workspaceNotSelected`; approval cannot create binding. |
 | `FILE-03` | Symlink inside file root | Agent reads, copies, or moves through it | Permission and execution reject `file.symlinkForbidden`. |
-| `FILE-04` | Multiline or large UTF-8 file | `read_file` receives `offset` and `limit` | Result contains exact numbered slice and continuation hint. |
+| `FILE-04` | Multiline or large UTF-8 file | `read` receives `offset` and `limit` | Result contains exact numbered slice and continuation hint. |
 | `FILE-05` | File under a host-managed session asset directory | Agent copies it to `session:files` or workspace | Copy is allowed; write, move, and delete at source remain blocked. |
 | `WEBFETCH-01` | Global `ask` policy | Model requests URL | No DNS or HTTP occurs before approval. |
 | `WEBFETCH-02` | `auto_public` and public target | Model fetches URL | Target is SSRF-validated and fetched without approval. |

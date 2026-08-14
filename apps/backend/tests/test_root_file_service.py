@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from mato_loop_backend.filesystem_search import RootFileSearch
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.workspace import (
     MAX_EDITABLE_TEXT_BYTES,
@@ -82,6 +83,81 @@ def test_root_file_service_lists_pages_and_reads_utf8(tmp_path: Path) -> None:
     assert [entry.name for entry in second.entries] == ["c.txt"]
     assert second.has_more is False
     assert read.content == "2: zweite Zeile"
+
+
+async def test_root_file_search_glob_and_grep_respect_subtree_hidden_and_ignore(
+    tmp_path: Path,
+) -> None:
+    service, session_root, _ = make_service(tmp_path)
+    files = session_root / "files"
+    docs = files / "docs"
+    docs.mkdir()
+    (docs / "guide.md").write_text("Aurora\n", encoding="utf-8")
+    (docs / "other.txt").write_text("Aurora\n", encoding="utf-8")
+    (docs / ".hidden.md").write_text("Aurora hidden\n", encoding="utf-8")
+    (docs / "ignored.md").write_text("Aurora ignored\n", encoding="utf-8")
+    (docs / ".ignore").write_text("ignored.md\n", encoding="utf-8")
+    search = RootFileSearch(service)
+
+    globbed = await search.glob(FileRoot.SESSION, "files/docs", "*.md")
+    grepped = await search.grep(FileRoot.SESSION, "files/docs", "Aurora", None)
+    markdown = await search.grep(
+        FileRoot.SESSION, "files/docs", "Aurora", "*.md"
+    )
+
+    assert globbed == {
+        "paths": ["files/docs/guide.md", "files/docs/ignored.md"],
+        "truncated": False,
+    }
+    assert [(match["path"], match["line"]) for match in grepped["matches"]] == [
+        ("files/docs/.hidden.md", 1),
+        ("files/docs/guide.md", 1),
+        ("files/docs/other.txt", 1),
+    ]
+    assert {match["path"] for match in markdown["matches"]} == {
+        "files/docs/.hidden.md",
+        "files/docs/guide.md",
+        "files/docs/ignored.md",
+    }
+
+
+async def test_root_file_search_rejects_invalid_regex_and_limits_results(
+    tmp_path: Path,
+) -> None:
+    service, session_root, _ = make_service(tmp_path)
+    files = session_root / "files"
+    for index in range(101):
+        (files / f"{index:03}.txt").write_text("match\n", encoding="utf-8")
+    search = RootFileSearch(service)
+
+    globbed = await search.glob(FileRoot.SESSION, "files", "*.txt")
+    grepped = await search.grep(FileRoot.SESSION, "files", "match", None)
+
+    assert len(globbed["paths"]) == 100 and globbed["truncated"] is True
+    assert len(grepped["matches"]) == 100 and grepped["truncated"] is True
+    with pytest.raises(RootFileError) as exc_info:
+        await search.grep(FileRoot.SESSION, "files", "[", None)
+    assert exc_info.value.code == "tool.invalidArguments"
+
+
+async def test_root_file_search_never_traverses_symlinks(tmp_path: Path) -> None:
+    service, session_root, _ = make_service(tmp_path)
+    outside = tmp_path / "outside-search"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret\n", encoding="utf-8")
+    (session_root / "files" / "link").symlink_to(outside, target_is_directory=True)
+    search = RootFileSearch(service)
+
+    with pytest.raises(RootFileError) as parent_search:
+        await search.glob(FileRoot.SESSION, "files", "*.txt")
+    assert parent_search.value.code == "tool.executionFailed"
+    assert await search.grep(FileRoot.SESSION, "files", "secret", None) == {
+        "matches": [],
+        "truncated": False,
+    }
+    with pytest.raises(RootFileError) as exc_info:
+        await search.glob(FileRoot.SESSION, "files/link", "*.txt")
+    assert exc_info.value.code == "file.symlinkForbidden"
 
 
 def test_root_file_service_exposes_five_flat_session_directories(tmp_path: Path) -> None:

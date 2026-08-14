@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Annotated, BinaryIO
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Header, Query, Request, UploadFile, status
@@ -640,23 +640,12 @@ async def _agent_stat(context: _FileContext, path: str) -> dict:
 def _transfer_spec(
     request: Request, agent_id: UUID, ticket_id: UUID, token: str
 ) -> dict[str, str]:
-    connection = execution_agent_connections._connections.get(agent_id)
-    if connection is None:
-        raise ApiError(503, "executionAgent.unavailable")
-    websocket_url = urlsplit(str(connection.websocket.url))
-    route_path = request.url_for("workspace_transfer", ticket_id=str(ticket_id)).path
-    return {
-        "url": urlunsplit(
-            (
-                "https" if websocket_url.scheme == "wss" else "http",
-                websocket_url.netloc,
-                route_path,
-                "",
-                "",
-            )
-        ),
-        "token": token,
-    }
+    del request
+    try:
+        url = execution_agent_connections.transfer_url(agent_id, ticket_id)
+    except ExecutionAgentError as exc:
+        raise ApiError(503, exc.code) from exc
+    return {"url": url, "token": token}
 
 
 def _bearer_token(authorization: str | None) -> str:

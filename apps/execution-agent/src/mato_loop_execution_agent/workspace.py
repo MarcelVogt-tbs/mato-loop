@@ -137,6 +137,118 @@ class Workspace:
             for root in self.roots.values()
         ]
 
+    def resolve_directory(
+        self,
+        path: str,
+        current_directory: str | None = None,
+        root_id: str | None = None,
+        revision: str | None = None,
+    ) -> dict[str, str | int]:
+        if (
+            not path
+            or "\0" in path
+            or (current_directory is not None and "\0" in current_directory)
+        ):
+            raise AgentError("path.invalid", "Invalid directory path")
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            if current_directory is None or not Path(current_directory).is_absolute():
+                raise AgentError(
+                    "path.invalid", "Relative paths require an absolute current directory"
+                )
+            candidate = Path(current_directory) / candidate
+        candidate = Path(os.path.abspath(candidate))
+
+        matching = []
+        for root in self.roots.values():
+            try:
+                relative = candidate.relative_to(root.config.path)
+            except ValueError:
+                continue
+            matching.append((root, relative))
+        if len(matching) != 1:
+            raise AgentError("path.outsideRoots", "Directory is outside configured roots")
+        root, relative = matching[0]
+        if root_id is not None or revision is not None:
+            if root_id is None or revision is None:
+                raise AgentError("request.invalid", "Root ID and revision must be paired")
+            expected = self._root(root_id, revision)
+            if expected.config.id != root.config.id:
+                raise AgentError("root.mismatch", "Directory does not belong to the supplied root")
+
+        parts = relative.parts
+        with self._root_fd(root.config.id, root.revision) as root_fd:
+            directory_fd = self._open_dir(root_fd, parts)
+            os.close(directory_fd)
+        relative_path = _path(parts)
+        if len(relative_path) > 1000:
+            raise AgentError("path.invalid", "Directory path is too long")
+        return {
+            "path": os.fspath(root.config.path / relative),
+            "rootId": root.config.id,
+            "rootRevision": root.revision,
+            "relativePath": relative_path,
+        }
+
+    def resolve_path_target(
+        self, path: str, current_directory: str, *, must_exist: bool
+    ) -> dict[str, str | int]:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = Path(current_directory) / candidate
+        candidate = Path(os.path.abspath(candidate))
+        if must_exist and candidate.is_dir():
+            result = self.resolve_directory(os.fspath(candidate))
+            metadata = candidate.stat()
+            return {
+                **result,
+                "targetKind": "directory",
+                "device": metadata.st_dev,
+                "inode": metadata.st_ino,
+                "mode": metadata.st_mode,
+                "size": metadata.st_size,
+                "modifiedNs": metadata.st_mtime_ns,
+                "changedNs": metadata.st_ctime_ns,
+            }
+        parent = self.resolve_directory(os.fspath(candidate.parent))
+        if candidate.name in {"", ".", ".."}:
+            raise AgentError("path.invalid", "Invalid path target")
+        canonical = Path(parent["path"]) / candidate.name
+        metadata = None
+        try:
+            metadata = canonical.stat(follow_symlinks=False)
+        except FileNotFoundError as exc:
+            if must_exist:
+                raise AgentError("path.notFound", "Path target is unavailable") from exc
+        except OSError as exc:
+            raise AgentError("path.notFound", "Path target is unavailable") from exc
+        else:
+            if stat.S_ISLNK(metadata.st_mode):
+                raise AgentError("path.notFound", "Path target is unavailable")
+        relative = PurePosixPath(parent["relativePath"])
+        parent_parts = () if str(relative) == "." else relative.parts
+        relative_path = _path((*parent_parts, candidate.name))
+        if len(relative_path) > 1000:
+            raise AgentError("path.invalid", "Path target is too long")
+        result: dict[str, str | int] = {
+            "path": os.fspath(canonical),
+            "rootId": parent["rootId"],
+            "rootRevision": parent["rootRevision"],
+            "relativePath": relative_path,
+        }
+        if metadata is not None:
+            result.update(
+                {
+                    "device": metadata.st_dev,
+                    "inode": metadata.st_ino,
+                    "mode": metadata.st_mode,
+                    "size": metadata.st_size,
+                    "modifiedNs": metadata.st_mtime_ns,
+                    "changedNs": metadata.st_ctime_ns,
+                }
+            )
+        return result
+
     def _root(self, root_id: str, revision: str) -> RootState:
         root = self.roots.get(root_id)
         if root is None:

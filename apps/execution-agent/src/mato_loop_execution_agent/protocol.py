@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 UUID_PATTERN = (
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
@@ -22,17 +22,41 @@ class RootDescriptor(StrictModel):
 
 class Hello(StrictModel):
     type: Literal["hello"] = "hello"
-    protocol_version: Literal[1] = Field(default=1, alias="protocolVersion")
+    protocol_version: Literal[2] = Field(default=2, alias="protocolVersion")
     agent_id: str = Field(alias="agentId", pattern=UUID_PATTERN)
     name: str = Field(min_length=1, max_length=160)
     platform: str = Field(min_length=1, max_length=80)
     operations: list[str] = Field(max_length=64)
     roots: list[RootDescriptor] = Field(max_length=64)
+    home_directory: str | None = Field(default=None, alias="homeDirectory")
+    home_root_id: str | None = Field(default=None, alias="homeRootId", pattern=UUID_PATTERN)
+    home_root_revision: str | None = Field(
+        default=None, alias="homeRootRevision", pattern=r"^[0-9a-f]{64}$"
+    )
+    home_relative_directory: str | None = Field(
+        default=None, alias="homeRelativeDirectory", max_length=1000
+    )
+
+    @model_validator(mode="after")
+    def consistent_home(self):
+        if (
+            len(
+                {
+                    self.home_directory is None,
+                    self.home_root_id is None,
+                    self.home_root_revision is None,
+                    self.home_relative_directory is None,
+                }
+            )
+            != 1
+        ):
+            raise ValueError("home metadata must be provided together")
+        return self
 
 
 class Welcome(StrictModel):
     type: Literal["welcome"]
-    protocol_version: Literal[1] = Field(alias="protocolVersion")
+    protocol_version: Literal[2] = Field(alias="protocolVersion")
     agent_id: str = Field(alias="agentId", pattern=UUID_PATTERN)
 
 
@@ -103,6 +127,17 @@ class ReadArguments(PathArguments):
     max_line_length: int = Field(default=2000, alias="maxLineLength", ge=1, le=10_000)
 
 
+class GlobArguments(RootArguments):
+    pattern: str = Field(min_length=1, max_length=1000, pattern=r"^[^\x00]+$")
+    path: str = "."
+
+
+class GrepArguments(RootArguments):
+    pattern: str = Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")
+    path: str = "."
+    include: str | None = Field(default=None, min_length=1, max_length=1000, pattern=r"^[^\x00]+$")
+
+
 class WriteArguments(PathArguments):
     content: str
     expected_sha256: str | None = Field(
@@ -152,15 +187,93 @@ class ExportArguments(PathArguments):
     )
 
 
-class ProcessArguments(RootArguments):
+class HostDirectoryArguments(StrictModel):
+    root_id: str = Field(alias="rootId", pattern=UUID_PATTERN)
+    root_revision: str = Field(alias="rootRevision", pattern=r"^[0-9a-f]{64}$")
+    current_directory: str = Field(alias="currentDirectory", min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def absolute_current_directory(self):
+        if not self.current_directory.startswith("/"):
+            raise ValueError("currentDirectory must be absolute")
+        return self
+
+
+class ProcessArguments(HostDirectoryArguments):
     program: str = Field(min_length=1, max_length=128)
     args: list[str] = Field(default_factory=list, max_length=256)
     timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
 
 
-class ShellArguments(RootArguments):
+class ShellArguments(HostDirectoryArguments):
     command: str = Field(min_length=1, max_length=256 * 1024)
     timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
+    expected_inspection_revision: str | None = Field(
+        default=None, alias="expectedInspectionRevision", pattern=r"^[0-9a-f]{64}$"
+    )
+
+
+class ResolveDirectoryArguments(StrictModel):
+    path: str = Field(min_length=1, max_length=4096)
+    current_directory: str | None = Field(
+        default=None, alias="currentDirectory", min_length=1, max_length=4096
+    )
+
+    @model_validator(mode="after")
+    def absolute_base(self):
+        if self.current_directory is not None and not self.current_directory.startswith("/"):
+            raise ValueError("currentDirectory must be absolute")
+        if not self.path.startswith("/") and self.current_directory is None:
+            raise ValueError("relative path requires currentDirectory")
+        return self
+
+
+class SystemInfoArguments(StrictModel):
+    current_directory: str | None = Field(
+        default=None, alias="currentDirectory", min_length=1, max_length=4096
+    )
+
+    @model_validator(mode="after")
+    def absolute_base(self):
+        if self.current_directory is not None and not self.current_directory.startswith("/"):
+            raise ValueError("currentDirectory must be absolute")
+        return self
+
+
+class ShellInspectArguments(HostDirectoryArguments):
+    command: str = Field(min_length=1, max_length=256 * 1024)
+
+
+GitPath = Annotated[str, Field(min_length=1, max_length=1000, pattern=r"^[^\x00]+$")]
+
+
+class GitCloneArguments(HostDirectoryArguments):
+    source: str = Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")
+    destination: str = Field(min_length=1, max_length=1000, pattern=r"^[^\x00]+$")
+    allow_network: bool = Field(default=False, alias="allowNetwork")
+
+
+class GitStatusArguments(HostDirectoryArguments):
+    pass
+
+
+class GitDiffArguments(HostDirectoryArguments):
+    staged: bool = False
+    paths: list[GitPath] = Field(default_factory=list, max_length=100)
+
+
+class GitLogArguments(HostDirectoryArguments):
+    limit: int = Field(default=20, ge=1, le=100)
+    paths: list[GitPath] = Field(default_factory=list, max_length=100)
+
+
+class GitAddArguments(HostDirectoryArguments):
+    paths: list[GitPath] = Field(min_length=1, max_length=100)
+
+
+class GitCommitArguments(HostDirectoryArguments):
+    message: str = Field(min_length=1, max_length=10_000, pattern=r"^[^\x00]+$")
+    expected_index_tree: str = Field(alias="expectedIndexTree", pattern=r"^[0-9a-f]{64}$")
 
 
 class ArtifactDescriptor(StrictModel):
@@ -188,9 +301,13 @@ class CacheClearArguments(StrictModel):
 
 
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
+    "system.info": SystemInfoArguments,
+    "filesystem.resolve": ResolveDirectoryArguments,
     "workspace.stat": StatArguments,
     "workspace.list": ListArguments,
     "workspace.read": ReadArguments,
+    "workspace.glob": GlobArguments,
+    "workspace.grep": GrepArguments,
     "workspace.write": WriteArguments,
     "workspace.mkdir": MkdirArguments,
     "workspace.rename": RenameArguments,
@@ -201,6 +318,13 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "workspace.export": ExportArguments,
     "process.exec": ProcessArguments,
     "shell.run": ShellArguments,
+    "shell.inspect": ShellInspectArguments,
+    "integration.git.clone": GitCloneArguments,
+    "integration.git.status": GitStatusArguments,
+    "integration.git.diff": GitDiffArguments,
+    "integration.git.log": GitLogArguments,
+    "integration.git.add": GitAddArguments,
+    "integration.git.commit": GitCommitArguments,
     "cache.ensure": CacheEnsureArguments,
     "cache.store": CacheStoreArguments,
     "cache.clear": CacheClearArguments,

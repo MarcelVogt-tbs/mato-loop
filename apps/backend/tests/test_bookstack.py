@@ -49,6 +49,7 @@ from mato_loop_backend.integrations.bookstack import (
     load_bookstack_resources,
 )
 from mato_loop_backend.integrations.bookstack_client import (
+    MAX_ATTACHMENT_BYTES,
     BookStackAttachment,
     BookStackBook,
     BookStackBookContents,
@@ -910,6 +911,7 @@ def _download_context(instance: IntegrationInstance, revision: str) -> SimpleNam
         data=context.tool_settings.model_dump(mode="json")
     )
     context.model_id = None
+    context.execution_client = None
     context.root_files = Mock()
     # Uploading a local file asks for filesystem.read, which builds a permission
     # scope from the root identity.
@@ -1086,7 +1088,7 @@ async def test_missing_local_file_reports_file_not_found(monkeypatch) -> None:
         book_key="book:7",
         page_token=token,
         name="Fehlt",
-        root="workspace",
+        root="session",
         path="missing.pdf",
     )
 
@@ -1095,6 +1097,47 @@ async def test_missing_local_file_reports_file_not_found(monkeypatch) -> None:
     assert result.is_error is True
     assert json.loads(result.content)["error"]["code"] == "file.fileNotFound"
     client.create_file_attachment.assert_not_awaited()
+
+
+async def test_attachment_from_workspace_uses_execution_client(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    token = bookstack_module._page_token(_page(), instance.id, revision, "book:7")
+    client = AsyncMock()
+    _bind_location_checks(client)
+    client.create_file_attachment.return_value = _attachment(name="Notiz", extension="md")
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+    context = _download_context(instance, revision)
+    context.root_files.normalize_relative_path.return_value = "notes/notiz.md"
+    context.execution_client = SimpleNamespace(
+        agent_id=uuid4(),
+        root_id=uuid4(),
+        root_revision="a" * 64,
+        working_directory="project",
+        current_directory=None,
+        read_bytes=AsyncMock(return_value=b"# Notiz"),
+    )
+    arguments = KnowledgeCreateAttachmentArguments(
+        integration_id=instance.id,
+        book_key="book:7",
+        page_token=token,
+        name="Notiz",
+        root="workspace",
+        path="notes/notiz.md",
+    )
+
+    result = await knowledge_create_attachment(arguments, context)
+
+    assert not result.is_error
+    context.execution_client.read_bytes.assert_awaited_once_with(
+        "notes/notiz.md", limit=MAX_ATTACHMENT_BYTES
+    )
+    context.root_files.read_bytes.assert_not_called()
 
 
 async def test_link_attachment_skips_any_download(monkeypatch) -> None:

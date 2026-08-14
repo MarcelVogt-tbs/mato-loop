@@ -133,7 +133,7 @@ The authenticated application uses the full viewport without a global top bar. B
 
 A new session is created server-side only with its first message and appears in the sidebar afterward. Unsent text remains separately per session in browser-local storage.
 
-- `read-only`: only `list_directory` and `read_file` are offered for session storage and an optional workspace.
+- `read-only`: only shared read operations (`read`, `glob`, `grep`, and file export) are offered for session storage and an optional computer workspace.
 - `read-write`: write, create, delete, copy, and move are also available. Only `files` is mutable in session storage; `attachments`, `generated`, `downloads`, and `derived` remain read-only and may only be read or used as copy sources.
 - File tools use an explicit `root` field with `session` or `workspace`. Without a selected working directory, only `root=workspace` is unavailable.
 - `Einmal erlauben`: applies only to the current action.

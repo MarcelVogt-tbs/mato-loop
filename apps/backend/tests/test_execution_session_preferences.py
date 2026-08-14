@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
     SessionUpdateRequest,
@@ -33,6 +33,7 @@ def _agent_and_root(user_id=None):
         name="Desktop",
         token_hash="a" * 64,
         revision=7,
+        protocol_version=2,
         operations=["workspace.list", "workspace.read", "workspace.write"],
     )
     root = ExecutionAgentRoot(
@@ -81,7 +82,7 @@ async def test_preferences_validate_owned_root_and_normalized_relative_workdir()
         await _validate_execution_preferences(
             db, user_id, agent.id, root.id, "projects/mato-loop"
         )
-        == "projects/mato-loop"
+        == ("projects/mato-loop", None, root.id, root.revision)
     )
     with pytest.raises(ApiError) as exc_info:
         await _validate_execution_preferences(
@@ -199,7 +200,7 @@ async def test_start_persists_live_executor_snapshot(monkeypatch) -> None:
     assert run.execution_operations == ["workspace.read", "workspace.write"]
 
 
-async def test_start_rejects_disconnected_executor_before_persisting(monkeypatch) -> None:
+async def test_start_keeps_disconnected_executor_without_live_operations(monkeypatch) -> None:
     user_id = uuid4()
     agent, root = _agent_and_root(user_id)
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
@@ -225,8 +226,10 @@ async def test_start_rejects_disconnected_executor_before_persisting(monkeypatch
     )
     monkeypatch.setattr(execution_agent_connections, "snapshot", lambda _agent_id: None)
 
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime.start(db, session, "Work")
+    monkeypatch.setattr(EpisodeIndexService, "enqueue", AsyncMock())
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", lambda _run: None)
 
-    assert exc_info.value.code == "executionAgent.unavailable"
-    db.add_all.assert_not_called()
+    run = await AgentRuntime.start(db, session, "Work")
+
+    assert run.execution_agent_id == agent.id
+    assert run.execution_operations == []

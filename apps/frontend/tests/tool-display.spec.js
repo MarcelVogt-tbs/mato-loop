@@ -14,9 +14,23 @@ import {
 describe('tool display', () => {
   it('uses readable labels and concise resource summaries', () => {
     expect(toolIdentity('read_file')).toEqual({ label: 'Datei lesen', icon: 'description' })
+    expect(toolIdentity('read')).toEqual({ label: 'Datei lesen', icon: 'description' })
+    expect(toolIdentity('glob')).toEqual({ label: 'Dateien suchen', icon: 'folder_open' })
+    expect(toolIdentity('grep')).toEqual({ label: 'Dateiinhalte durchsuchen', icon: 'manage_search' })
+    expect(toolIdentity('list_directory')).toEqual({ label: 'Ordner auflisten', icon: 'folder_open' })
     expect(toolIdentity('provide_file')).toEqual({ label: 'Datei bereitstellen', icon: 'download' })
     expect(toolSummary({ name: 'read_file', arguments: { path: 'Projekte/plan.md' } })).toBe('Projekte/plan.md')
     expect(toolSummary({ name: 'read_file', arguments: {} })).toBe('')
+    expect(toolSummary({ name: 'read', arguments: { root: 'workspace', path: 'Projekte/plan.md' } }))
+      .toBe('workspace:Projekte/plan.md')
+    expect(toolSummary({
+      name: 'glob',
+      arguments: { root: 'workspace', path: 'src', pattern: '**/*.vue' }
+    })).toBe('workspace:src · **/*.vue')
+    expect(toolSummary({
+      name: 'grep',
+      arguments: { root: 'session', path: 'files', pattern: 'TODO|FIXME' }
+    })).toBe('session:files · TODO|FIXME')
     expect(toolSummary({ name: 'custom_tool', arguments: {} })).toBe('custom_tool')
     expect(toolIdentity('copy_path')).toEqual({ label: 'Pfad kopieren', icon: 'content_copy' })
     expect(toolIdentity('move_path')).toEqual({ label: 'Pfad verschieben', icon: 'drive_file_move' })
@@ -69,6 +83,38 @@ describe('tool display', () => {
       { name: 'web_search', label: 'Im Web suchen', icon: 'travel_explore', count: 2, active: true },
       { name: 'webfetch', label: 'Webseite abrufen', icon: 'language', count: 1, active: true }
     ])
+  })
+
+  it('labels and summarizes Git tools in German', () => {
+    expect([
+      'git_clone',
+      'git_status',
+      'git_diff',
+      'git_log',
+      'git_add',
+      'git_commit'
+    ].map((name) => toolIdentity(name).label)).toEqual([
+      'Git-Repository klonen',
+      'Git-Status anzeigen',
+      'Git-Änderungen anzeigen',
+      'Git-Verlauf anzeigen',
+      'Git-Änderungen vormerken',
+      'Git-Commit erstellen'
+    ])
+    expect(toolSummary({
+      name: 'git_clone',
+      arguments: {
+        repository_url: 'https://user:secret@example.com/team/project.git?token=secret',
+        destination: 'project'
+      }
+    })).toBe('https://example.com/team/project.git?… -> project')
+    expect(toolSummary({ name: 'git_status', arguments: { path: 'project' } })).toBe('project')
+    expect(toolSummary({ name: 'git_diff', arguments: { repository_path: 'project' } })).toBe('project')
+    expect(toolSummary({ name: 'git_log', arguments: { repositoryPath: 'project' } })).toBe('project')
+    expect(toolSummary({ name: 'git_add', arguments: { paths: ['src/app.js', 'README.md'] } }))
+      .toBe('src/app.js, README.md')
+    expect(toolSummary({ name: 'git_commit', arguments: { message: 'Git-Anzeige ergänzen' } }))
+      .toBe('Git-Anzeige ergänzen')
   })
 
   it('summarizes persona changes without rendering the complete instructions', () => {
@@ -134,6 +180,10 @@ describe('tool display', () => {
     expect(parseToolResult(
       '2: two\n\n[More lines are available. Continue with offset=3.]',
       'read_file'
+    ).text).toContain('[Weitere Zeilen verfügbar. Mit offset=3 weiterlesen.]')
+    expect(parseToolResult(
+      '2: two\n\n[More lines are available. Continue with offset=3.]',
+      'read'
     ).text).toContain('[Weitere Zeilen verfügbar. Mit offset=3 weiterlesen.]')
     expect(parseToolResult(
       '1: [More lines are available. Continue with offset=3.]',

@@ -51,6 +51,14 @@
             </q-item-label>
 
             <div class="q-mt-sm">
+              <div class="text-caption app-muted">Home-Verzeichnis</div>
+              <div class="text-body2">{{ agent.homeDirectory || 'Nicht konfiguriert' }}</div>
+              <div class="text-caption app-muted">
+                Stammt aus der lokalen Agent-Konfiguration und ist der initiale aktuelle Ordner für neue oder manuell zugewiesene Sessions.
+              </div>
+            </div>
+
+            <div class="q-mt-sm">
               <div class="text-caption app-muted">Arbeitsbereiche</div>
               <div v-if="agent.roots?.length" class="row q-gutter-xs q-mt-xs">
                 <q-chip v-for="root in agent.roots" :key="root.id" dense outline icon="folder">
@@ -72,8 +80,8 @@
           </q-item-section>
           <q-item-section side top class="execution-agent-item__actions">
             <div class="row items-center no-wrap q-gutter-xs">
-              <q-btn flat round dense icon="edit" :aria-label="`${agent.name} umbenennen`" @click="openRename(agent)">
-                <q-tooltip>Umbenennen</q-tooltip>
+              <q-btn flat round dense icon="edit" :aria-label="`${agent.name} bearbeiten`" @click="openEdit(agent)">
+                <q-tooltip>Bearbeiten</q-tooltip>
               </q-btn>
               <q-btn
                 v-if="agent.pairingState === 'unpaired' || agent.pairingState === 'pending'"
@@ -117,39 +125,11 @@
       <q-inner-loading :showing="agents.loading" />
     </q-card>
 
-    <q-dialog v-model="nameDialogOpen" :maximized="$q.screen.lt.sm" :persistent="saving">
-      <q-card class="execution-agent-dialog">
-        <q-form @submit.prevent="saveName">
-          <q-card-section>
-            <div class="text-h6">{{ selectedAgent ? 'Computer umbenennen' : 'Computer hinzufügen' }}</div>
-          </q-card-section>
-          <q-card-section class="q-pt-none">
-            <q-input
-              v-model="name"
-              autofocus
-              outlined
-              label="Name"
-              maxlength="120"
-              lazy-rules
-              :rules="[requiredRule]"
-            />
-            <q-select
-              v-if="!selectedAgent"
-              v-model="pairingDurationSeconds"
-              outlined
-              emit-value
-              map-options
-              :options="pairingDurationOptions"
-              label="Gültigkeitsdauer des Kopplungstokens"
-            />
-          </q-card-section>
-          <q-card-actions align="right" class="q-pa-md q-pt-none">
-            <q-btn v-close-popup flat no-caps label="Abbrechen" :disable="saving" />
-            <q-btn unelevated no-caps color="primary" label="Speichern" type="submit" :loading="saving" />
-          </q-card-actions>
-        </q-form>
-      </q-card>
-    </q-dialog>
+    <ExecutionAgentConfigDialog
+      v-model="configDialogOpen"
+      :agent="selectedAgent"
+      @created="showPairingToken"
+    />
 
     <q-dialog v-model="pairingDialogOpen" :maximized="$q.screen.lt.sm" :persistent="saving">
       <q-card class="execution-agent-dialog">
@@ -215,6 +195,7 @@
 <script setup>
 import { copyToClipboard, useQuasar } from 'quasar'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import ExecutionAgentConfigDialog from 'components/ExecutionAgentConfigDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 import { useExecutionAgentStore } from 'stores/execution-agents'
@@ -225,11 +206,14 @@ const operationLabels = {
   'cache.clear': 'Cache leeren',
   'cache.ensure': 'Datei im Cache bereitstellen',
   'cache.store': 'Datei im Cache speichern',
+  'filesystem.resolve': 'Verzeichnis auflösen',
   'workspace.copy': 'Pfade kopieren',
   'workspace.delete': 'Pfade löschen',
   'workspace.export': 'Dateien exportieren',
   'workspace.import': 'Dateien importieren',
   'workspace.list': 'Ordner auflisten',
+  'workspace.glob': 'Dateien suchen',
+  'workspace.grep': 'Dateiinhalte durchsuchen',
   'workspace.mkdir': 'Ordner erstellen',
   'workspace.move': 'Pfade verschieben',
   'workspace.read': 'Dateien lesen',
@@ -237,7 +221,9 @@ const operationLabels = {
   'workspace.stat': 'Dateiinformationen lesen',
   'workspace.write': 'Dateien bearbeiten',
   'process.exec': 'Prozesse ausführen',
-  'shell.run': 'Shell-Befehle ausführen'
+  'shell.run': 'Shell-Befehle ausführen',
+  'shell.inspect': 'Shell-Konfiguration prüfen',
+  'system.info': 'Systeminformationen lesen'
 }
 const pairingDurationChoices = [
   { label: '30 Minuten', value: 1800 },
@@ -252,31 +238,21 @@ const expiryFormatter = new Intl.DateTimeFormat('de-DE', {
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const agents = useExecutionAgentStore()
-const nameDialogOpen = ref(false)
+const configDialogOpen = ref(false)
 const pairingDialogOpen = ref(false)
 const tokenDialogOpen = ref(false)
 const selectedAgent = ref(null)
 const pairingAgent = ref(null)
 const pairingResult = ref(null)
 const pairingDurationSeconds = ref(null)
-const name = ref('')
 const saving = ref(false)
-const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Name erforderlich.'
 const operationLabel = (operation) => operationLabels[operation] || operation
 const pairingDurationOptions = computed(() => pairingDurationChoices.filter((option) => (
   option.value <= (agents.pairingPolicy?.maximumDurationSeconds || 0)
 )))
-
-async function openCreate() {
-  try {
-    const policy = await agents.fetchPairingPolicy()
-    pairingDurationSeconds.value = policy.defaultDurationSeconds
-  } catch {
-    return
-  }
+function openCreate() {
   selectedAgent.value = null
-  name.value = ''
-  nameDialogOpen.value = true
+  configDialogOpen.value = true
 }
 
 async function openPairingToken(agent) {
@@ -290,28 +266,14 @@ async function openPairingToken(agent) {
   pairingDialogOpen.value = true
 }
 
-function openRename(agent) {
+function openEdit(agent) {
   selectedAgent.value = agent
-  name.value = agent.name
-  nameDialogOpen.value = true
+  configDialogOpen.value = true
 }
 
-async function saveName() {
-  const value = name.value.trim()
-  if (!value || saving.value) return
-  saving.value = true
-  try {
-    if (selectedAgent.value) {
-      await agents.rename(selectedAgent.value.id, value)
-      $q.notify({ type: 'positive', message: 'Computer umbenannt' })
-    } else {
-      pairingResult.value = await agents.create(value, pairingDurationSeconds.value)
-      tokenDialogOpen.value = true
-    }
-    nameDialogOpen.value = false
-  } finally {
-    saving.value = false
-  }
+function showPairingToken(result) {
+  pairingResult.value = result
+  tokenDialogOpen.value = true
 }
 
 async function createPairingToken() {
@@ -371,7 +333,7 @@ function formatExpiry(value) {
 function statusLabel(agent) {
   if (agent.pairingState === 'unpaired') return 'Nicht gekoppelt'
   if (agent.pairingState === 'pending') return 'Kopplung ausstehend'
-  return agent.connected ? 'Gekoppelt' : 'Offline'
+  return agent.connected ? 'Verbunden' : 'Offline'
 }
 
 function statusColor(agent) {

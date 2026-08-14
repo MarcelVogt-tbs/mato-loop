@@ -770,7 +770,7 @@ def test_session_tool_result_prompt_only_appears_when_the_tool_is_offered() -> N
 def test_inactive_capability_catalog_is_informational_only() -> None:
     prompt = general_system_prompt(
         _session(),
-        offered_tool_names=frozenset({"read_file"}),
+        offered_tool_names=frozenset({"read"}),
         inactive_capability_groups=(
             'File mutation [write_file]: switch "Agent-Modus" from "Lesen" to "Schreiben".',
         ),
@@ -791,6 +791,21 @@ def test_general_system_prompt_exposes_mermaid_rendering() -> None:
     assert "never add a diagram only as decoration" in prompt
     assert "fenced `mermaid` block" in prompt
     assert "Never wrap the complete response in a `markdown` code fence" in prompt
+
+
+def test_general_system_prompt_reports_selected_offline_computer() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        execution_agent_name="Laptop",
+        execution_agent_platform="linux",
+        execution_agent_connected=False,
+        current_directory="/home/user/project",
+    )
+
+    assert '"name": "Laptop"' in prompt
+    assert '"status": "offline"' in prompt
+    assert '"currentDirectory": "/home/user/project"' in prompt
+    assert "No live computer operations are available." in prompt
 
 
 def test_skill_catalog_contains_selection_metadata_without_instructions() -> None:
@@ -962,7 +977,7 @@ def test_general_system_prompt_contains_bounded_agent_identity() -> None:
 def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
     prompt = general_system_prompt(
         _session(),
-        offered_tool_names=frozenset({"list_directory", "read_file", "provide_file"}),
+        offered_tool_names=frozenset({"read", "glob", "grep", "provide_file"}),
     )
 
     assert "Workspace mode: read-only" in prompt
@@ -974,8 +989,8 @@ def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
     assert "managed read-only assets" in prompt
     assert "only files/... is writable" in prompt
     assert "exact new destination" in prompt
-    assert "approval cannot create a workspace root" in prompt
-    assert "A path or read_file output is not a download" in prompt
+    assert "file approval cannot create one" in prompt
+    assert "A path or read output is not a download" in prompt
     assert "provide_file only for another existing file" in prompt
     assert "use the host download card" in prompt
 
@@ -983,7 +998,7 @@ def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
 def test_read_only_prompt_keeps_media_tools_available() -> None:
     prompt = general_system_prompt(
         _session(),
-        offered_tool_names=frozenset({"read_file", "edit_image"}),
+        offered_tool_names=frozenset({"read", "edit_image"}),
     )
 
     assert "Workspace mode: read-only" in prompt
@@ -996,7 +1011,7 @@ def test_read_write_system_prompt_does_not_request_a_mode_switch() -> None:
 
     prompt = general_system_prompt(
         session,
-        offered_tool_names=frozenset({"read_file", "write_file"}),
+        offered_tool_names=frozenset({"read", "write_file"}),
     )
 
     assert "Workspace mode: read-only" not in prompt

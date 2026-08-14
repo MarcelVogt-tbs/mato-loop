@@ -75,7 +75,7 @@ export function supportsWorkspaceOperation(context, operation) {
   return operations ? operations.includes(operation) : true
 }
 
-function contextKey(context) {
+export function workspaceContextKey(context) {
   return JSON.stringify([
     context?.executionAgentId || null,
     context?.rootId || null,
@@ -143,7 +143,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       ) this.scope = 'session'
       const changed = this.sessionId !== sessionId
         || this.workingDirectory !== workingDirectory
-        || contextKey(this.workspaceContext) !== contextKey(workspaceContext)
+        || workspaceContextKey(this.workspaceContext) !== workspaceContextKey(workspaceContext)
       this.sessionId = sessionId
       this.workingDirectory = workingDirectory
       this.workspaceContext = workspaceContext

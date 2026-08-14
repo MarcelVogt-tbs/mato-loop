@@ -41,17 +41,82 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_arguments(request)
 
+        shell = Request.model_validate(
+            {
+                "type": "request",
+                "id": REQUEST_ID,
+                "operation": "shell.run",
+                "arguments": {
+                    "rootId": "4d0a316f-5fb5-4ec5-a5c4-04aed66c5e6d",
+                    "rootRevision": "a" * 64,
+                    "currentDirectory": "/workspace",
+                    "command": "pwd",
+                    "expectedInspectionRevision": "b" * 64,
+                },
+            }
+        )
+        self.assertEqual(validate_arguments(shell).expected_inspection_revision, "b" * 64)
+
     def test_protocol_version_is_fixed(self) -> None:
         with self.assertRaises(ValidationError):
             parse_inbound(
                 json.dumps(
                     {
                         "type": "welcome",
-                        "protocolVersion": 2,
+                        "protocolVersion": 1,
                         "agentId": "2ea504cc-e3c6-4e0d-aa05-080328100fe8",
                     }
                 )
             )
+
+    def test_host_directory_operations_require_absolute_strict_arguments(self) -> None:
+        request = Request.model_validate(
+            {
+                "type": "request",
+                "id": REQUEST_ID,
+                "operation": "process.exec",
+                "arguments": {
+                    "rootId": "4d0a316f-5fb5-4ec5-a5c4-04aed66c5e6d",
+                    "rootRevision": "a" * 64,
+                    "currentDirectory": "/workspace",
+                    "program": "python",
+                },
+            }
+        )
+        self.assertEqual(validate_arguments(request).current_directory, "/workspace")
+        request.arguments["currentDirectory"] = "."
+        with self.assertRaises(ValidationError):
+            validate_arguments(request)
+
+    def test_search_arguments_are_strict(self) -> None:
+        base = {
+            "type": "request",
+            "id": REQUEST_ID,
+            "arguments": {
+                "rootId": "4d0a316f-5fb5-4ec5-a5c4-04aed66c5e6d",
+                "rootRevision": "a" * 64,
+                "workingDirectory": ".",
+                "path": ".",
+                "pattern": "*.py",
+            },
+        }
+        glob = Request.model_validate({**base, "operation": "workspace.glob"})
+        self.assertEqual(validate_arguments(glob).pattern, "*.py")
+
+        grep = Request.model_validate(
+            {
+                **base,
+                "operation": "workspace.grep",
+                "arguments": {**base["arguments"], "include": "*.py"},
+            }
+        )
+        self.assertEqual(validate_arguments(grep).include, "*.py")
+        grep.arguments["include"] = 1
+        with self.assertRaises(ValidationError):
+            validate_arguments(grep)
+        glob.arguments["limit"] = 10
+        with self.assertRaises(ValidationError):
+            validate_arguments(glob)
 
 
 if __name__ == "__main__":

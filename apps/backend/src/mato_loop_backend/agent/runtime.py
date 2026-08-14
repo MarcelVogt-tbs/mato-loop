@@ -67,7 +67,12 @@ from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import ErrorDescriptor, describe_error, error_payload
 from mato_loop_backend.events import run_events
-from mato_loop_backend.execution import ExecutionClient, execution_agent_connections
+from mato_loop_backend.execution import (
+    DirectoryResult,
+    ExecutionClient,
+    ExecutionClientError,
+    execution_agent_connections,
+)
 from mato_loop_backend.integrations import (
     SearchIntegrationError,
     WebFetchError,
@@ -950,6 +955,10 @@ class AgentRuntime:
         )
         execution_agent = None
         execution_root = None
+        execution_root_id = None
+        execution_root_revision = None
+        current_directory = chat_session.current_directory
+        effective_working_directory = chat_session.working_directory
         execution_operations: list[str] = []
         if chat_session.preferred_execution_agent_id is None:
             if chat_session.preferred_root_id is not None or chat_session.working_directory is not None:
@@ -967,9 +976,26 @@ class AgentRuntime:
             snapshot = execution_agent_connections.snapshot(
                 chat_session.preferred_execution_agent_id
             )
-            if execution_agent is None or snapshot is None:
+            if execution_agent is None:
                 raise AgentRunError("executionAgent.unavailable")
-            if chat_session.preferred_root_id is not None:
+            if snapshot is not None and current_directory is not None:
+                try:
+                    directory = await ExecutionClient(
+                        execution_agent.id, None, None, None, snapshot[0]
+                    ).request(
+                        "filesystem.resolve",
+                        {"path": current_directory},
+                        DirectoryResult,
+                    )
+                except ExecutionClientError:
+                    snapshot = None
+                else:
+                    assert isinstance(directory, DirectoryResult)
+                    current_directory = directory.path
+                    execution_root_id = directory.root_id
+                    execution_root_revision = directory.root_revision
+                    effective_working_directory = directory.relative_path
+            elif snapshot is not None and chat_session.preferred_root_id is not None:
                 execution_root = next(
                     (
                         root
@@ -987,10 +1013,25 @@ class AgentRuntime:
                     or live_root is None
                     or live_root.revision != execution_root.revision
                 ):
-                    raise AgentRunError("executionAgent.unavailable")
+                    snapshot = None
+                else:
+                    execution_root_id = execution_root.id
+                    execution_root_revision = execution_root.revision
             elif chat_session.working_directory is not None:
-                raise AgentRunError("executionAgent.unavailable")
-            execution_operations = sorted(snapshot[0])
+                snapshot = None
+            execution_operations = sorted(snapshot[0]) if snapshot is not None else []
+            if current_directory is None and execution_root_id is None:
+                execution_operations = [
+                    operation
+                    for operation in execution_operations
+                    if operation in {"system.info", "filesystem.resolve"}
+                ]
+            elif current_directory is None:
+                execution_operations = [
+                    operation
+                    for operation in execution_operations
+                    if operation not in {"process.exec", "shell.inspect", "shell.run"}
+                ]
         message = Message(
             session_id=chat_session.id,
             role="user",
@@ -1006,9 +1047,10 @@ class AgentRuntime:
             pseudonymization_enabled=pseudonymization_enabled,
             execution_agent_id=(execution_agent.id if execution_agent else None),
             execution_agent_revision=(execution_agent.revision if execution_agent else None),
-            execution_root_id=(execution_root.id if execution_root else None),
-            execution_root_revision=(execution_root.revision if execution_root else None),
-            working_directory_snapshot=chat_session.working_directory,
+            execution_root_id=execution_root_id,
+            execution_root_revision=execution_root_revision,
+            working_directory_snapshot=effective_working_directory,
+            current_directory_snapshot=current_directory,
             execution_operations=execution_operations,
         )
         db.add_all([message, run])
@@ -1095,6 +1137,74 @@ class AgentRuntime:
             raise AgentRunError("session.modelUnavailable")
         if not model.supports_tools:
             raise AgentRunError("session.modelToolsUnavailable")
+        snapshot = (
+            execution_agent_connections.snapshot(failed_run.execution_agent_id)
+            if failed_run.execution_agent_id is not None
+            else None
+        )
+        root_id = None
+        root_revision = None
+        current_directory = chat_session.current_directory
+        working_directory = failed_run.working_directory_snapshot
+        execution_agent = (
+            await db.get(ExecutionAgent, failed_run.execution_agent_id)
+            if failed_run.execution_agent_id is not None
+            else None
+        )
+        if snapshot is not None and current_directory is not None:
+            try:
+                directory = await ExecutionClient(
+                    failed_run.execution_agent_id,
+                    None,
+                    None,
+                    None,
+                    snapshot[0],
+                ).request(
+                    "filesystem.resolve",
+                    {"path": current_directory},
+                    DirectoryResult,
+                )
+            except ExecutionClientError:
+                snapshot = None
+            else:
+                assert isinstance(directory, DirectoryResult)
+                current_directory = directory.path
+                root_id = directory.root_id
+                root_revision = directory.root_revision
+                working_directory = directory.relative_path
+        elif (
+            snapshot is not None
+            and failed_run.execution_root_id is not None
+            and execution_agent is not None
+        ):
+            live_root = next(
+                (
+                    item
+                    for item in snapshot[1]
+                    if item.id == failed_run.execution_root_id
+                    and item.revision == failed_run.execution_root_revision
+                ),
+                None,
+            )
+            if live_root is not None:
+                root_id = failed_run.execution_root_id
+                root_revision = failed_run.execution_root_revision
+            else:
+                snapshot = None
+        if current_directory is None and root_id is None and snapshot is not None:
+            snapshot = (
+                frozenset({"system.info", "filesystem.resolve"}) & snapshot[0],
+                snapshot[1],
+            )
+        elif current_directory is None and snapshot is not None:
+            snapshot = (
+                frozenset(
+                    operation
+                    for operation in snapshot[0]
+                    if operation not in {"process.exec", "shell.inspect", "shell.run"}
+                ),
+                snapshot[1],
+            )
         run = AgentRun(
             session_id=chat_session.id,
             status="queued",
@@ -1104,10 +1214,11 @@ class AgentRuntime:
             pseudonymization_enabled=failed_run.pseudonymization_enabled,
             execution_agent_id=failed_run.execution_agent_id,
             execution_agent_revision=failed_run.execution_agent_revision,
-            execution_root_id=failed_run.execution_root_id,
-            execution_root_revision=failed_run.execution_root_revision,
-            working_directory_snapshot=failed_run.working_directory_snapshot,
-            execution_operations=list(failed_run.execution_operations or []),
+            execution_root_id=root_id,
+            execution_root_revision=root_revision,
+            working_directory_snapshot=working_directory,
+            current_directory_snapshot=current_directory,
+            execution_operations=sorted(snapshot[0]) if snapshot is not None else [],
         )
         db.add(run)
         commit_task: asyncio.Task[None] | None = None
@@ -1304,6 +1415,13 @@ class AgentRuntime:
             db, SkillsSettings, user_id=chat_session.user_id
         )
         skill_state = RunSkillState.from_settings(skills_settings)
+        selected_execution_agent = (
+            await db.get(ExecutionAgent, run.execution_agent_id)
+            if run.execution_agent_id is not None
+            else None
+        )
+        if not isinstance(selected_execution_agent, ExecutionAgent):
+            selected_execution_agent = None
         if not ai_settings.enabled:
             raise AgentRunError("provider.disabled")
         model_id = run.model_config_id or chat_session.model_config_id or ai_settings.default_model_id
@@ -1627,10 +1745,9 @@ class AgentRuntime:
                     run.execution_root_revision,
                     run.working_directory_snapshot or ".",
                     frozenset(run.execution_operations or []),
+                    run.current_directory_snapshot,
                 )
                 if run.execution_agent_id is not None
-                and run.execution_root_id is not None
-                and run.execution_root_revision is not None
                 else None
             )
             execution_operations = (
@@ -1752,6 +1869,18 @@ class AgentRuntime:
                     else ()
                 ),
                 active_skill=skill_state.active,
+                execution_agent_name=(
+                    selected_execution_agent.name if selected_execution_agent else None
+                ),
+                execution_agent_platform=(
+                    selected_execution_agent.platform if selected_execution_agent else None
+                ),
+                execution_agent_connected=(
+                    execution_agent_connections.is_connected(run.execution_agent_id)
+                    if run.execution_agent_id is not None
+                    else False
+                ),
+                current_directory=run.current_directory_snapshot,
             )
             if model_requests >= runtime_settings.max_model_requests:
                 raise AgentRunError("agent.modelRequestLimitReached")
@@ -3505,6 +3634,8 @@ class AgentRuntime:
         tool_settings = await SettingsStore.load(db, ToolSettings)
         integration_settings = await SettingsStore.load(db, IntegrationSettings)
         policy = _tool_policy(tool_settings, integration_settings, request)
+        if request.force_ask and policy == ToolExecutionPolicy.AUTO:
+            policy = ToolExecutionPolicy.ASK
         decision = await PermissionPolicy.evaluate(
             db, chat_session, request, root_files, policy
         )

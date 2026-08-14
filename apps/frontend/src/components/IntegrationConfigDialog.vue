@@ -49,12 +49,38 @@
               :rules="[requiredRule]"
             />
             <q-input
+              v-if="form.integration_type !== 'git'"
               v-model="form.base_url"
               outlined
               :label="baseUrlLabel"
               :placeholder="baseUrlPlaceholder"
               lazy-rules
               :rules="[requiredRule, urlRule]"
+            />
+            <q-select
+              v-if="form.integration_type === 'git'"
+              v-model="form.executionAgentId"
+              outlined
+              emit-value
+              map-options
+              label="Computer"
+              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+              :options="executionAgentOptions"
+              :loading="executionAgents.loading"
+              lazy-rules
+              :rules="[requiredRule]"
+            >
+              <template #no-option>
+                <q-item>
+                  <q-item-section class="app-muted">Kein Computer eingerichtet</q-item-section>
+                </q-item>
+              </template>
+            </q-select>
+            <q-toggle
+              v-if="form.integration_type === 'git'"
+              v-model="form.allowNetwork"
+              color="primary"
+              label="Netzwerkzugriff erlauben"
             />
             <q-input
               v-if="form.integration_type === 'calendar'"
@@ -117,6 +143,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 
 defineOptions({ name: 'IntegrationConfigDialog' })
@@ -129,17 +156,20 @@ const emit = defineEmits(['update:modelValue'])
 
 const $q = useQuasar()
 const integrations = useIntegrationStore()
+const executionAgents = useExecutionAgentStore()
 const formRef = ref(null)
 const saving = ref(false)
 const integrationTypes = [
   { label: 'Websuche', value: 'search' },
   { label: 'Kalender & Aufgaben', value: 'calendar' },
-  { label: 'Wissensdatenbank', value: 'knowledge' }
+  { label: 'Wissensdatenbank', value: 'knowledge' },
+  { label: 'Versionsverwaltung', value: 'git' }
 ]
 const PROVIDER_DEFAULTS = {
   search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
   calendar: { provider: 'caldav', label: 'CalDAV', placeholder: 'https://calendar.example.com' },
-  knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' }
+  knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
+  git: { provider: 'git', label: 'Git', placeholder: '' }
 }
 const providerTypes = computed(() => {
   const preset = PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search
@@ -152,6 +182,13 @@ const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
 )
 const requiresHttps = computed(() => form.integration_type !== 'search')
+const executionAgentOptions = computed(() => {
+  const options = executionAgents.items.map((agent) => ({ label: agent.name, value: agent.id }))
+  if (form.executionAgentId && !executionAgents.byId(form.executionAgentId)) {
+    options.unshift({ label: 'Nicht verfügbarer Computer', value: form.executionAgentId })
+  }
+  return options
+})
 const form = reactive(defaultForm())
 const isEditing = computed(() => Boolean(props.integration))
 
@@ -165,6 +202,8 @@ function defaultForm() {
     password: '',
     token_id: '',
     token_secret: '',
+    executionAgentId: null,
+    allowNetwork: false,
     enabled: true
   }
 }
@@ -173,6 +212,15 @@ function selectIntegrationType(type) {
   const preset = PROVIDER_DEFAULTS[type] || PROVIDER_DEFAULTS.search
   form.provider_type = preset.provider
   form.name = preset.label
+  if (type === 'git') void fetchComputers()
+}
+
+async function fetchComputers() {
+  try {
+    await executionAgents.fetchAll()
+  } catch {
+    // The central API interceptor displays the error as a toast.
+  }
 }
 
 function requiredRule(value) {
@@ -207,6 +255,19 @@ async function save() {
   if (!await formRef.value?.validate()) return
   saving.value = true
   try {
+    if (form.integration_type === 'git') {
+      const payload = {
+        executionAgentId: form.executionAgentId,
+        config: { allowNetwork: form.allowNetwork },
+        name: form.name.trim(),
+        enabled: form.enabled
+      }
+      if (props.integration) await integrations.updateGit(props.integration.id, payload)
+      else await integrations.createGit(payload)
+      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
+      close()
+      return
+    }
     const payload = {
       integration_type: form.integration_type,
       provider_type: form.provider_type,
@@ -248,7 +309,14 @@ watch(() => props.modelValue, (open) => {
     password: '',
     token_id: '',
     token_secret: '',
+    executionAgentId: props.integration.executionAgentId
+      || props.integration.config?.executionAgentId
+      || null,
+    allowNetwork: props.integration.allowNetwork
+      ?? props.integration.config?.allowNetwork
+      ?? false,
     enabled: props.integration.enabled
   } : {})
+  if (form.integration_type === 'git') void fetchComputers()
 })
 </script>

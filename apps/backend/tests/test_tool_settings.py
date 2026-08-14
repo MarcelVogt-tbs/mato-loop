@@ -103,9 +103,13 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "skills.load": "auto",
         "skills.write": "ask",
         "settings.agent_identity.update": "ask",
+        "system.info": "auto",
+        "execution.directory": "auto",
+        "process.execute": "ask",
     }
     assert [group["id"] for group in result["groups"]] == [
         "filesystem",
+        "process",
         "web",
         "media",
         "sessions",

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 import mato_loop_backend.integrations.registry as integration_registry
 from mato_loop_backend.execution import manager as execution_manager
-from mato_loop_backend.execution.protocol import ResponseMessage
+from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     ToolContribution,
@@ -105,17 +105,14 @@ def test_agent_tools_require_the_run_agent_and_advertised_operation(monkeypatch)
     ]
 
 
-async def test_agent_tool_delegates_validated_arguments_and_builds_tool_result(
-    monkeypatch,
-) -> None:
+async def test_agent_tool_delegates_validated_arguments_and_builds_tool_result() -> None:
     adapter = _adapter()
     instance = _instance()
-    response = ResponseMessage.model_validate(
-        {"type": "response", "id": uuid4(), "ok": True, "result": {"answer": 4}}
+    client = SimpleNamespace(
+        agent_id=instance.execution_agent_id,
+        request=AsyncMock(return_value=_Result(answer=4)),
     )
-    request = AsyncMock(return_value=response)
-    monkeypatch.setattr(execution_manager.execution_agent_connections, "request", request)
-    context = SimpleNamespace(db=AsyncMock(), run_id=uuid4())
+    context = SimpleNamespace(db=AsyncMock(), run_id=uuid4(), execution_client=client)
     context.db.get.return_value = SimpleNamespace(
         execution_agent_id=instance.execution_agent_id,
         execution_operations=["integration.example.run"],
@@ -125,25 +122,22 @@ async def test_agent_tool_delegates_validated_arguments_and_builds_tool_result(
     assert contribution.handler is not None
     result = await contribution.handler(_Arguments(value=3), context)
 
-    request.assert_awaited_once_with(
-        instance.execution_agent_id,
+    client.request.assert_awaited_once_with(
         "integration.example.run",
         {"value": 3},
+        _Result,
     )
     assert json.loads(result.content) == {"answer": 4}
     assert result.is_error is False
 
 
-@pytest.mark.parametrize("result_payload", [None, {}, {"answer": "invalid"}])
-async def test_agent_tool_rejects_invalid_success_results(
-    monkeypatch, result_payload
-) -> None:
+async def test_agent_tool_maps_execution_client_errors() -> None:
     instance = _instance()
-    request = AsyncMock(
-        return_value=SimpleNamespace(ok=True, result=result_payload, error=None)
+    client = SimpleNamespace(
+        agent_id=instance.execution_agent_id,
+        request=AsyncMock(side_effect=ExecutionClientError("executionAgent.protocolError")),
     )
-    monkeypatch.setattr(execution_manager.execution_agent_connections, "request", request)
-    context = SimpleNamespace(db=AsyncMock(), run_id=uuid4())
+    context = SimpleNamespace(db=AsyncMock(), run_id=uuid4(), execution_client=client)
     context.db.get.return_value = SimpleNamespace(
         execution_agent_id=instance.execution_agent_id,
         execution_operations=["integration.example.run"],
@@ -153,7 +147,7 @@ async def test_agent_tool_rejects_invalid_success_results(
 
     result = await handler(_Arguments(value=3), context)
 
-    assert result.metadata == {"errorCode": "tool.executionFailed"}
+    assert result.metadata == {"errorCode": "executionAgent.protocolError"}
 
 
 @pytest.mark.parametrize("matching_agent,operations", [(False, ["integration.example.run"]), (True, [])])
@@ -162,8 +156,7 @@ async def test_agent_tool_rechecks_the_persisted_run_snapshot(
 ) -> None:
     instance = _instance()
     request = AsyncMock()
-    monkeypatch.setattr(execution_manager.execution_agent_connections, "request", request)
-    context = SimpleNamespace(db=AsyncMock(), run_id=uuid4())
+    context = SimpleNamespace(db=AsyncMock(), run_id=uuid4(), execution_client=None)
     context.db.get.return_value = SimpleNamespace(
         execution_agent_id=instance.execution_agent_id if matching_agent else uuid4(),
         execution_operations=operations,

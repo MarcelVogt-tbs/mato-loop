@@ -33,6 +33,30 @@ describe('approval display', () => {
     })).toEqual({ label: 'Skill-Sammlung', value: '„API-Recherche“' })
   })
 
+  it('describes execution resources and capabilities', () => {
+    expect(approvalResource({
+      resourceType: 'execution_directory',
+      resourceScope: 'opaque',
+      resourceDisplay: '/home/user/projekt'
+    })).toEqual({ label: 'Aktueller Ordner', value: '/home/user/projekt' })
+    expect(approvalResource({
+      resourceType: 'execution_agent',
+      resourceDisplay: 'Notebook'
+    })).toEqual({ label: 'Computer', value: 'Notebook' })
+
+    for (const [capability, label, icon] of [
+      ['execution.directory', 'Aktuellen Ordner wechseln', 'drive_file_move'],
+      ['system.info', 'Systeminformationen lesen', 'computer'],
+      ['process.execute', 'Befehl ausführen', 'terminal']
+    ]) {
+      expect(permissionGrantDisplay({
+        capability,
+        resourceType: 'execution_agent',
+        resourceDisplay: 'Notebook'
+      })).toEqual({ label, value: 'Notebook', icon })
+    }
+  })
+
   it('shows cleaned URL approvals and readable session grants', () => {
     const approval = {
       resourceType: 'url',
@@ -108,6 +132,21 @@ describe('approval display', () => {
         resourceType: 'integration_operation',
         resourceDisplay: '„Handbuch“ · Wissensdatenbank „Wiki“'
       })).toEqual({ label, value: '„Handbuch“ · Wissensdatenbank „Wiki“', icon })
+    }
+  })
+
+  it('labels Git grants', () => {
+    for (const [capability, label, icon] of [
+      ['git.read', 'Git-Repository lesen', 'account_tree'],
+      ['git.stage', 'Git-Änderungen vormerken', 'add_task'],
+      ['git.clone', 'Git-Repository klonen', 'account_tree'],
+      ['git.commit', 'Git-Commit erstellen', 'commit']
+    ]) {
+      expect(permissionGrantDisplay({
+        capability,
+        resourceType: 'integration_operation',
+        resourceDisplay: 'Repository „MatoLoop“'
+      })).toEqual({ label, value: 'Repository „MatoLoop“', icon })
     }
   })
 

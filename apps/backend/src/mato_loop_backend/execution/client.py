@@ -13,6 +13,7 @@ from mato_loop_backend.execution.manager import (
     execution_agent_connections,
 )
 from mato_loop_backend.execution.protocol import EventMessage
+from mato_loop_backend.execution.transfers import transfer_tickets
 
 
 class ExecutionResult(BaseModel):
@@ -72,6 +73,28 @@ class WorkspaceReadResult(ExecutionResult):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class WorkspaceGlobResult(ExecutionResult):
+    paths: list[str] = Field(max_length=100)
+    truncated: bool
+
+    _validate_paths = field_validator("paths")(
+        lambda values: [_relative_path(value) for value in values]
+    )
+
+
+class WorkspaceGrepMatch(ExecutionResult):
+    path: str
+    line: int = Field(ge=1)
+    text: str = Field(max_length=2_000)
+
+    _validate_path = field_validator("path")(_relative_path)
+
+
+class WorkspaceGrepResult(ExecutionResult):
+    matches: list[WorkspaceGrepMatch] = Field(max_length=100)
+    truncated: bool
+
+
 class WorkspacePathResult(ExecutionResult):
     path: str
 
@@ -79,6 +102,11 @@ class WorkspacePathResult(ExecutionResult):
 
 
 class WorkspaceWriteResult(WorkspacePathResult):
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: int = Field(ge=0)
+
+
+class WorkspaceExportResult(ExecutionResult):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size: int = Field(ge=0)
 
@@ -103,6 +131,57 @@ class ProcessResult(ExecutionResult):
     stderr_truncated: bool
 
 
+class DirectoryResult(ExecutionResult):
+    path: str
+    root_id: UUID
+    root_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    relative_path: str = Field(max_length=1_000)
+
+    @field_validator("root_id", mode="before")
+    @classmethod
+    def parse_root_id(cls, value: Any) -> Any:
+        return UUID(value) if isinstance(value, str) else value
+
+    _validate_relative_path = field_validator("relative_path")(_relative_path)
+
+    @field_validator("path")
+    @classmethod
+    def absolute_path(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("path must be absolute")
+        return value
+
+
+class SystemInfoResult(ExecutionResult):
+    agent_version: str
+    platform: str
+    operating_system: str
+    kernel: str
+    architecture: str
+    logical_cpu_count: int | None
+    memory: dict[str, int] | None = None
+    disk: dict[str, Any] | None = None
+
+
+class ShellTarget(ExecutionResult):
+    path: str
+    root_id: UUID
+    root_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    relative_path: str = Field(max_length=1_000)
+    kind: str
+
+    @field_validator("root_id", mode="before")
+    @classmethod
+    def parse_root_id(cls, value: Any) -> Any:
+        return UUID(value) if isinstance(value, str) else value
+
+
+class ShellInspectResult(ExecutionResult):
+    targets: list[ShellTarget]
+    analysis_complete: bool
+    inspection_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ExecutionClientError(Exception):
     def __init__(self, code: str) -> None:
         super().__init__(code)
@@ -113,6 +192,25 @@ _REMOTE_ERROR_CODES = {
     "file.changed": "file.changed",
     "file.invalidEncoding": "file.invalidEncoding",
     "file.tooLarge": "file.tooLarge",
+    "git.addFailed": "git.operationFailed",
+    "git.cloneFailed": "git.cloneFailed",
+    "git.commitFailed": "git.operationFailed",
+    "git.diffFailed": "git.operationFailed",
+    "git.failed": "git.operationFailed",
+    "git.indexChanged": "git.conflict",
+    "git.indexInvalid": "git.invalidRepository",
+    "git.invalidDestination": "file.invalidDestination",
+    "git.invalidOutput": "executionAgent.protocolError",
+    "git.invalidSource": "git.invalidRepository",
+    "git.logFailed": "git.operationFailed",
+    "git.networkAddressDenied": "git.networkDisabled",
+    "git.networkDenied": "git.networkDisabled",
+    "git.notRepository": "git.notRepository",
+    "git.outcomeUnknown": "executionAgent.outcomeUnknown",
+    "git.startFailed": "git.operationFailed",
+    "git.statusFailed": "git.operationFailed",
+    "git.timedOut": "git.operationFailed",
+    "git.unsafeRepository": "git.invalidRepository",
     "operation.failed": "tool.executionFailed",
     "operation.tooLarge": "file.operationTooLarge",
     "path.exists": "file.pathAlreadyExists",
@@ -122,9 +220,11 @@ _REMOTE_ERROR_CODES = {
     "path.notEmpty": "file.directoryNotEmpty",
     "path.notFile": "file.notAFile",
     "path.notFound": "file.pathNotFound",
+    "path.outsideRoots": "file.invalidPath",
     "path.rootMutation": "file.rootMutationForbidden",
     "path.unsupportedType": "file.unsupportedType",
     "process.notAllowed": "process.notAllowed",
+    "process.inspectionChanged": "process.inspectionChanged",
     "process.outputTooLarge": "process.outputTooLarge",
     "process.startFailed": "process.startFailed",
     "process.timedOut": "process.timedOut",
@@ -155,10 +255,11 @@ _MANAGER_ERROR_CODES = frozenset(
 @dataclass(slots=True)
 class ExecutionClient:
     agent_id: UUID
-    root_id: UUID
-    root_revision: str
-    working_directory: str
+    root_id: UUID | None
+    root_revision: str | None
+    working_directory: str | None
     operations: frozenset[str]
+    current_directory: str | None = None
     cancellation_deferred: bool = field(default=False, init=False)
 
     def supports(self, operation: str) -> bool:
@@ -166,6 +267,43 @@ class ExecutionClient:
 
     def _mark_cancellation_deferred(self) -> None:
         self.cancellation_deferred = True
+
+    async def read_bytes(self, path: str, *, limit: int) -> bytes:
+        stat_result = await self.request(
+            "workspace.stat", {"path": path}, WorkspaceStatResult
+        )
+        assert isinstance(stat_result, WorkspaceStatResult)
+        if stat_result.kind != "file":
+            raise ExecutionClientError("file.notAFile")
+        if stat_result.size is None or stat_result.size > limit:
+            raise ExecutionClientError("file.tooLarge")
+        grant, ticket = transfer_tickets.create_upload(
+            self.agent_id, size=stat_result.size
+        )
+        try:
+            result = await self.request(
+                "workspace.export",
+                {
+                    "path": path,
+                    "transfer": {
+                        "url": execution_agent_connections.transfer_url(
+                            self.agent_id, grant.ticket_id
+                        ),
+                        "token": grant.token,
+                    },
+                },
+                WorkspaceExportResult,
+            )
+            assert isinstance(result, WorkspaceExportResult)
+            if (
+                result.size != ticket.actual_size
+                or result.sha256 != ticket.actual_sha256
+                or ticket.content is None
+            ):
+                raise ExecutionClientError("executionAgent.protocolError")
+            return ticket.content.read(limit + 1)
+        finally:
+            transfer_tickets.revoke(grant.ticket_id)
 
     async def request(
         self,
@@ -178,15 +316,36 @@ class ExecutionClient:
     ) -> ExecutionResult:
         if not self.supports(operation):
             raise ExecutionClientError("executionAgent.operationUnavailable")
+        root_arguments: dict[str, str] = {}
+        if operation.startswith("workspace."):
+            if self.root_id is None or self.root_revision is None:
+                raise ExecutionClientError("file.workspaceNotSelected")
+            root_arguments = {
+                "rootId": str(self.root_id),
+                "rootRevision": self.root_revision,
+                "workingDirectory": self.working_directory or ".",
+            }
+        elif operation in {"process.exec", "shell.run", "shell.inspect"} or operation.startswith(
+            "integration."
+        ):
+            if (
+                self.root_id is None
+                or self.root_revision is None
+                or self.current_directory is None
+            ):
+                raise ExecutionClientError("file.workspaceNotSelected")
+            root_arguments = {
+                "rootId": str(self.root_id),
+                "rootRevision": self.root_revision,
+                "currentDirectory": self.current_directory,
+            }
         try:
             response = await execution_agent_connections.request(
                 self.agent_id,
                 operation,
                 {
                     **arguments,
-                    "rootId": str(self.root_id),
-                    "rootRevision": self.root_revision,
-                    "workingDirectory": self.working_directory,
+                    **root_arguments,
                 },
                 timeout=timeout,
                 on_event=on_event,
@@ -220,10 +379,16 @@ class ExecutionClient:
 
 
 __all__ = [
+    "DirectoryResult",
     "ExecutionClient",
     "ExecutionClientError",
     "ProcessResult",
+    "ShellInspectResult",
+    "SystemInfoResult",
     "WorkspaceDeleteResult",
+    "WorkspaceExportResult",
+    "WorkspaceGlobResult",
+    "WorkspaceGrepResult",
     "WorkspaceListResult",
     "WorkspacePathResult",
     "WorkspaceReadResult",

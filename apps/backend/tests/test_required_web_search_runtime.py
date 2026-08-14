@@ -912,7 +912,7 @@ async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypa
     assert [request["tool_choice"] for request in requests] == ["required", "auto"]
     assert [tool["name"] for tool in requests[0]["tools"]] == ["web_search"]
     assert {tool["name"] for tool in requests[1]["tools"]} >= {
-        "read_file",
+        "read",
         "web_search",
     }
     assert "Mandatory web research is active" in projections[0]["system_prompt"]
@@ -1249,7 +1249,7 @@ async def test_tool_call_limit_applies_after_required_gate(monkeypatch) -> None:
                 tool_calls=[
                     ToolCall(
                         id="read-1",
-                        name="read_file",
+                        name="read",
                         arguments={"root": "session", "path": "files/info.txt"},
                     )
                 ],

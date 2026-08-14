@@ -53,7 +53,7 @@
     <q-separator />
 
     <q-card-section class="question-dock__body" :class="{ 'question-dock__body--minimized': draft.minimized }">
-      <div :id="questionLabelId" ref="questionHeading" class="text-body1 text-weight-bold" tabindex="-1">
+      <div :id="questionLabelId" ref="questionHeading" class="text-body1 text-weight-bold no-outline" tabindex="-1">
         {{ current.question }}
       </div>
 

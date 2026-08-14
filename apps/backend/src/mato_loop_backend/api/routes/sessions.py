@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.agent import AgentRuntime
+from mato_loop_backend.agent.permissions import execution_directory_scope
 from mato_loop_backend.agent.runtime import AgentRunError
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.attachments import (
@@ -34,7 +35,12 @@ from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
-from mato_loop_backend.execution import execution_agent_connections
+from mato_loop_backend.execution import (
+    DirectoryResult,
+    ExecutionClient,
+    ExecutionClientError,
+    execution_agent_connections,
+)
 from mato_loop_backend.integrations import WebFetchError, canonicalize_url
 from mato_loop_backend.memory import effective_memory
 from mato_loop_backend.message_content import canonical_assistant_content
@@ -45,6 +51,7 @@ from mato_loop_backend.models import (
     MemoryMode,
     Message,
     MessageAttachment,
+    PermissionGrant,
     TitleGenerationStatus,
     UserAccount,
     WebSearchPolicy,
@@ -55,6 +62,7 @@ from mato_loop_backend.settings import (
     AiSettings,
     MemorySettings,
     SettingsStore,
+    UserPreferences,
 )
 from mato_loop_backend.settings.models import (
     ModelAvailability,
@@ -308,6 +316,82 @@ class SessionUpdateRequest(BaseModel):
     workspace_access: str | None = Field(default=None, pattern="^(read-only|read-write)$")
 
 
+async def _execution_home(
+    db: AsyncSession, agent: ExecutionAgent
+) -> tuple[UUID | None, str | None, str | None, str | None]:
+    if (
+        agent.home_directory is None
+        or agent.home_root_id is None
+        or agent.home_root_revision is None
+    ):
+        return None, None, None, None
+    relative = agent.home_relative_directory
+    snapshot = execution_agent_connections.snapshot(agent.id)
+    if snapshot is not None and "filesystem.resolve" in snapshot[0]:
+        try:
+            result = await ExecutionClient(
+                agent.id, None, None, None, snapshot[0]
+            ).request(
+                "filesystem.resolve",
+                {"path": agent.home_directory},
+                DirectoryResult,
+            )
+        except ExecutionClientError:
+            pass
+        else:
+            assert isinstance(result, DirectoryResult)
+            if (
+                result.path == agent.home_directory
+                and result.root_id == agent.home_root_id
+                and result.root_revision == agent.home_root_revision
+            ):
+                relative = result.relative_path
+                agent.home_relative_directory = relative
+                await db.flush()
+    if relative is None:
+        return None, None, None, None
+    return (
+        agent.home_root_id,
+        agent.home_root_revision,
+        agent.home_directory,
+        relative,
+    )
+
+
+async def _add_directory_grant(
+    db: AsyncSession,
+    session_id: UUID,
+    agent_id: UUID | None,
+    root_id: UUID | None,
+    root_revision: str | None,
+    path: str | None,
+) -> None:
+    if any(value is None for value in (agent_id, root_id, root_revision, path)):
+        return
+    assert agent_id is not None
+    assert root_id is not None
+    assert root_revision is not None
+    assert path is not None
+    scope = execution_directory_scope(agent_id, path, root_id, root_revision)
+    existing = await db.scalar(
+        select(PermissionGrant.id).where(
+            PermissionGrant.session_id == session_id,
+            PermissionGrant.capability == "execution.directory",
+            PermissionGrant.resource_type == "execution_directory",
+            PermissionGrant.resource_scope == scope,
+        )
+    )
+    if existing is None:
+        db.add(
+            PermissionGrant(
+                session_id=session_id,
+                capability="execution.directory",
+                resource_type="execution_directory",
+                resource_scope=scope,
+            )
+        )
+
+
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=200_000)
 
@@ -322,13 +406,13 @@ async def _validate_execution_preferences(
     agent_id: UUID | None,
     root_id: UUID | None,
     working_directory: str | None,
-) -> str | None:
+) -> tuple[str | None, str | None, UUID | None, str | None]:
     if agent_id is None:
         if root_id is not None:
             raise ApiError(400, "validation.invalid", field="preferredRootId")
         if working_directory is not None:
             raise ApiError(400, "session.invalidWorkingDirectory", field="workingDirectory")
-        return None
+        return None, None, None, None
     agent = await db.scalar(
         select(ExecutionAgent)
         .options(selectinload(ExecutionAgent.roots))
@@ -338,10 +422,17 @@ async def _validate_execution_preferences(
         raise ApiError(404, "executionAgent.notFound", field="preferredExecutionAgentId")
     if agent.revoked_at is not None:
         raise ApiError(409, "executionAgent.revoked", field="preferredExecutionAgentId")
+    home_root_id, home_revision, home_directory, home_relative = await _execution_home(db, agent)
+    if root_id is None and working_directory is None:
+        return home_relative, home_directory, home_root_id, home_revision
     if root_id is not None and not any(root.id == root_id for root in agent.roots):
         raise ApiError(400, "validation.invalid", field="preferredRootId")
+    if working_directory is None and root_id == home_root_id:
+        return home_relative, home_directory, home_root_id, home_revision
     if working_directory is None:
-        return None
+        return None, None, root_id, next(
+            (root.revision for root in agent.roots if root.id == root_id), None
+        )
     if root_id is None:
         raise ApiError(400, "session.invalidWorkingDirectory", field="workingDirectory")
     try:
@@ -350,7 +441,13 @@ async def _validate_execution_preferences(
         raise ApiError(400, "session.invalidWorkingDirectory", field="workingDirectory") from exc
     if normalized != working_directory:
         raise ApiError(400, "session.invalidWorkingDirectory", field="workingDirectory")
-    return normalized
+    revision = next(root.revision for root in agent.roots if root.id == root_id)
+    current_directory = (
+        home_directory
+        if root_id == home_root_id and normalized == home_relative
+        else None
+    )
+    return normalized, current_directory, root_id, revision
 
 
 def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
@@ -434,6 +531,7 @@ def session_payload(
         ),
         "preferredRootId": str(item.preferred_root_id) if item.preferred_root_id else None,
         "workingDirectory": item.working_directory,
+        "currentDirectory": item.current_directory,
         "workspaceAccess": item.workspace_access,
         "workspaceContext": workspace_context
         or {
@@ -505,7 +603,7 @@ async def _workspace_context(db: AsyncSession, item: ChatSession) -> dict[str, A
         "connected": False,
         "operations": [],
     }
-    if agent_id is None or root_id is None:
+    if agent_id is None:
         return context
     agent = await db.scalar(
         select(ExecutionAgent)
@@ -519,17 +617,22 @@ async def _workspace_context(db: AsyncSession, item: ChatSession) -> dict[str, A
     snapshot = execution_agent_connections.snapshot(agent_id)
     if agent is None or snapshot is None:
         return context
-    root = next((root for root in agent.roots if root.id == root_id), None)
-    live_root = next((root for root in snapshot[1] if root.id == root_id), None)
-    if root is None or live_root is None or live_root.revision != root.revision:
-        return context
     operations = snapshot[0]
+    if root_id is not None:
+        root = next((root for root in agent.roots if root.id == root_id), None)
+        live_root = next((root for root in snapshot[1] if root.id == root_id), None)
+        if root is None or live_root is None or live_root.revision != root.revision:
+            operations = operations & {"system.info", "filesystem.resolve"}
+    else:
+        operations = operations & {"system.info", "filesystem.resolve"}
     if item.workspace_access == "read-only":
         operations = operations & {
             "workspace.list",
             "workspace.read",
             "workspace.stat",
             "workspace.export",
+            "workspace.glob",
+            "workspace.grep",
         }
     return {**context, "connected": True, "operations": sorted(operations)}
 
@@ -812,7 +915,7 @@ async def _create_session(
         raise ApiError(409, "session.modelUnavailable", field="modelId")
     if not _model_supports_tools(ai, model_id):
         raise ApiError(409, "session.modelToolsUnavailable", field="modelId")
-    working_directory = await _validate_execution_preferences(
+    working_directory, current_directory, root_id, root_revision = await _validate_execution_preferences(
         db,
         user.id,
         payload.preferred_execution_agent_id,
@@ -828,11 +931,20 @@ async def _create_session(
         memory_mode=payload.memory_mode.value,
         web_search_policy=payload.web_search_policy.value,
         preferred_execution_agent_id=payload.preferred_execution_agent_id,
-        preferred_root_id=payload.preferred_root_id,
+        preferred_root_id=root_id,
         working_directory=working_directory,
+        current_directory=current_directory,
         workspace_access=payload.workspace_access,
     )
     db.add(item)
+    await _add_directory_grant(
+        db,
+        item.id,
+        payload.preferred_execution_agent_id,
+        root_id,
+        root_revision,
+        current_directory,
+    )
     await db.flush()
     session_storage = SessionStorage()
     try:
@@ -902,6 +1014,7 @@ async def session_defaults(
 ) -> dict:
     ai = await SettingsStore.load(db, AiSettings)
     memory = await SettingsStore.load(db, MemorySettings, user_id=user.id)
+    preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
     selected_model_id = model_id or ai.default_model_id
     model = (
         _model_for_session(ai, selected_model_id)
@@ -912,6 +1025,24 @@ async def session_defaults(
     state = effective_memory(
         default_session, memory, _provider_for_session(ai, model), model
     )
+    preferred_agent_id = preferences.default_execution_agent_id
+    preferred_root_id = None
+    working_directory = None
+    current_directory = None
+    if preferred_agent_id is not None:
+        agent = await db.scalar(
+            select(ExecutionAgent)
+            .options(selectinload(ExecutionAgent.roots))
+            .where(
+                ExecutionAgent.id == preferred_agent_id,
+                ExecutionAgent.user_id == user.id,
+                ExecutionAgent.revoked_at.is_(None),
+            )
+        )
+        if agent is not None:
+            preferred_root_id, _revision, current_directory, working_directory = (
+                await _execution_home(db, agent)
+            )
     return {
         "modelId": str(selected_model_id) if selected_model_id else None,
         "modelAvailable": bool(model and model.supports_tools),
@@ -929,7 +1060,10 @@ async def session_defaults(
         "memoryToolsAvailable": state.tools_enabled,
         "memoryUnavailableReason": state.unavailable_reason,
         "webSearchPolicy": WebSearchPolicy.AVAILABLE.value,
-        "workingDirectory": None,
+        "preferredExecutionAgentId": str(preferred_agent_id) if preferred_agent_id else None,
+        "preferredRootId": str(preferred_root_id) if preferred_root_id else None,
+        "workingDirectory": working_directory,
+        "currentDirectory": current_directory,
         "workspaceAccess": "read-only",
     }
 
@@ -1058,11 +1192,21 @@ async def update_session(
             if "working_directory" in fields
             else item.working_directory
         )
-        item.working_directory = await _validate_execution_preferences(
+        selected_new_agent = (
+            "preferred_execution_agent_id" in fields
+            and agent_id != item.preferred_execution_agent_id
+        )
+        if selected_new_agent:
+            root_id = payload.preferred_root_id if "preferred_root_id" in fields else None
+            working_directory = payload.working_directory if "working_directory" in fields else None
+        item.working_directory, item.current_directory, root_id, root_revision = await _validate_execution_preferences(
             db, user.id, agent_id, root_id, working_directory
         )
         item.preferred_execution_agent_id = agent_id
         item.preferred_root_id = root_id
+        await _add_directory_grant(
+            db, item.id, agent_id, root_id, root_revision, item.current_directory
+        )
     if "workspace_access" in fields and payload.workspace_access is not None:
         item.workspace_access = payload.workspace_access
     await db.flush()

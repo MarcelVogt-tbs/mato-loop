@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MAX_MESSAGE_BYTES = 1_048_576
 MAX_REQUEST_BYTES = 262_144
 MAX_EVENT_BYTES = 65_536
@@ -16,11 +16,22 @@ SUPPORTED_OPERATIONS = frozenset(
         "cache.clear",
         "cache.ensure",
         "cache.store",
+        "filesystem.resolve",
+        "integration.git.add",
+        "integration.git.clone",
+        "integration.git.commit",
+        "integration.git.diff",
+        "integration.git.log",
+        "integration.git.status",
         "process.exec",
         "shell.run",
+        "shell.inspect",
+        "system.info",
         "workspace.copy",
         "workspace.delete",
         "workspace.export",
+        "workspace.glob",
+        "workspace.grep",
         "workspace.import",
         "workspace.list",
         "workspace.mkdir",
@@ -56,12 +67,16 @@ class RootSnapshot(WireModel):
 
 class HelloMessage(WireModel):
     type: Literal["hello"]
-    protocol_version: Literal[1]
+    protocol_version: Literal[2]
     agent_id: UUID
     name: str = Field(min_length=1, max_length=160)
     platform: str = Field(min_length=1, max_length=120)
     operations: Annotated[list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$", max_length=80)]], Field(max_length=64)]
     roots: Annotated[list[RootSnapshot], Field(max_length=64)]
+    home_directory: str | None = Field(default=None, max_length=4096)
+    home_root_id: UUID | None = None
+    home_root_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    home_relative_directory: str | None = Field(default=None, max_length=1000)
 
     @model_validator(mode="after")
     def unique_snapshots(self) -> HelloMessage:
@@ -69,12 +84,28 @@ class HelloMessage(WireModel):
             raise ValueError("operations must be unique")
         if len(self.roots) != len({root.id for root in self.roots}):
             raise ValueError("roots must be unique")
+        if len(
+            {
+                self.home_directory is None,
+                self.home_root_id is None,
+                self.home_root_revision is None,
+                self.home_relative_directory is None,
+            }
+        ) != 1:
+            raise ValueError("home metadata must be provided together")
+        if self.home_root_id is not None and not any(
+            root.id == self.home_root_id and root.revision == self.home_root_revision
+            for root in self.roots
+        ):
+            raise ValueError("home root must match an advertised root")
+        if self.home_directory is not None and not self.home_directory.startswith("/"):
+            raise ValueError("home directory must be absolute")
         return self
 
 
 class WelcomeMessage(WireModel):
     type: Literal["welcome"] = "welcome"
-    protocol_version: Literal[1] = PROTOCOL_VERSION
+    protocol_version: Literal[2] = PROTOCOL_VERSION
     agent_id: UUID
 
 

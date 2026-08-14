@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from mato_loop_backend.settings.models import IntegrationInstance
 
@@ -11,16 +11,14 @@ def execution_tool_handler(
     instance: IntegrationInstance,
     operation: str | None,
     result_model: type[BaseModel] | None,
+    host_arguments: dict[str, Any],
 ):
     if instance.execution_agent_id is None or operation is None or result_model is None:
         raise ValueError("invalid agent integration binding")
 
     async def execute(arguments: Any, context: Any):
         from mato_loop_backend.agent.tools import ToolResult
-        from mato_loop_backend.execution.manager import (
-            ExecutionAgentError,
-            execution_agent_connections,
-        )
+        from mato_loop_backend.execution.client import ExecutionClientError
         from mato_loop_backend.models.runtime import AgentRun
 
         run = await context.db.get(AgentRun, context.run_id)
@@ -30,25 +28,21 @@ def execution_tool_handler(
             or operation not in frozenset(run.execution_operations or [])
         ):
             return ToolResult.error("tool.unavailable")
+        client = context.execution_client
+        if client is None or client.agent_id != instance.execution_agent_id:
+            return ToolResult.error("tool.unavailable")
 
         try:
-            response = await execution_agent_connections.request(
-                instance.execution_agent_id,
+            result = await client.request(
                 operation,
-                arguments.model_dump(mode="json", by_alias=True),
+                {
+                    **arguments.model_dump(mode="json", by_alias=True),
+                    **host_arguments,
+                },
+                result_model,
             )
-        except ExecutionAgentError as exc:
+        except ExecutionClientError as exc:
             return ToolResult.error(exc.code)
-        if not response.ok:
-            return ToolResult.error(
-                "tool.invalidArguments"
-                if response.error is not None and response.error.code == "request.invalid"
-                else "tool.executionFailed"
-            )
-        try:
-            result = result_model.model_validate(getattr(response, "result", None))
-        except ValidationError:
-            return ToolResult.error("tool.executionFailed")
         return ToolResult.json(result.model_dump(mode="json", by_alias=True))
 
     return execute

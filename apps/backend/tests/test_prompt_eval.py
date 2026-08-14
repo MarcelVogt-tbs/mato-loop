@@ -50,7 +50,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 15
+    assert INVENTORY_VERSION == 16
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -83,7 +83,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 128
+    assert 80 <= len(CASES) <= 130
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -563,7 +563,7 @@ def test_general_cases_place_summaries_history_and_current_turns_in_production_o
     interrupted, interrupted_tools = build_case(
         _case("missing_tool_result_marker_does_not_claim_success")
     )
-    assert {tool["name"] for tool in interrupted_tools} == {"read_file", "list_directory"}
+    assert {tool["name"] for tool in interrupted_tools} == {"read", "glob"}
     assert "outcome is unknown" in interrupted[-1]["content"]
 
     current_turn, _tools = build_case(_case("successful_tool_result_allows_confirmation"))
@@ -578,17 +578,17 @@ def test_general_cases_place_summaries_history_and_current_turns_in_production_o
 def test_evaluate_checks_expected_tool_arguments_and_paths() -> None:
     case = _case("workspace_read_uses_exact_root")
     valid = ProviderResult(
-        tool_calls=[ToolCall("1", "read_file", {"root": "workspace", "path": "README.md"})]
+        tool_calls=[ToolCall("1", "read", {"root": "workspace", "path": "README.md"})]
     )
     invalid = ProviderResult(
-        tool_calls=[ToolCall("1", "read_file", {"root": "session", "path": "README.md"})]
+        tool_calls=[ToolCall("1", "read", {"root": "session", "path": "README.md"})]
     )
     absolute = ProviderResult(
-        tool_calls=[ToolCall("1", "read_file", {"root": "workspace", "path": "/README.md"})]
+        tool_calls=[ToolCall("1", "read", {"root": "workspace", "path": "/README.md"})]
     )
 
     assert evaluate(case, valid) == []
-    assert "read_file.root expected 'workspace', got 'session'" in evaluate(case, invalid)
+    assert "read.root expected 'workspace', got 'session'" in evaluate(case, invalid)
     assert any("invalid relative path" in failure for failure in evaluate(case, absolute))
 
 
@@ -948,7 +948,7 @@ def test_missing_tool_result_requires_structured_verification() -> None:
             tool_calls=[
                 ToolCall(
                     "verify-file",
-                    "read_file",
+                    "read",
                     {"root": "session", "path": "files/note.txt"},
                 )
             ]
@@ -1139,11 +1139,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 121
-    assert payload["contractCount"] == 249
-    assert "Cases: 128" in report
-    assert "Semantic contracts: 121" in report
-    assert "All inventory rows: 249" in report
+    assert payload["semanticContractCount"] == 122
+    assert payload["contractCount"] == 251
+    assert "Cases: 129" in report
+    assert "Semantic contracts: 122" in report
+    assert "All inventory rows: 251" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

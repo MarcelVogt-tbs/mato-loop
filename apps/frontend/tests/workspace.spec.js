@@ -17,6 +17,7 @@ import {
   DEFAULT_WORKSPACE_SPLIT_RATIO,
   MAX_WORKSPACE_SPLIT_RATIO,
   MIN_WORKSPACE_SPLIT_RATIO,
+  workspaceContextKey,
   withFileSuffix,
   useWorkspaceStore
 } from '../src/stores/workspace'
@@ -41,6 +42,20 @@ describe('workspace store', () => {
   afterEach(() => {
     if (originalLocalStorage) globalThis.localStorage = originalLocalStorage
     else delete globalThis.localStorage
+  })
+
+  it('compares workspace contexts by value', () => {
+    const context = {
+      executionAgentId: 'agent-1',
+      rootId: 'root-1',
+      connected: true,
+      operations: ['workspace.list', 'workspace.read']
+    }
+
+    expect(workspaceContextKey({ ...context, operations: [...context.operations] }))
+      .toBe(workspaceContextKey(context))
+    expect(workspaceContextKey({ ...context, connected: false }))
+      .not.toBe(workspaceContextKey(context))
   })
 
   it('loads and persists a validated split ratio', () => {

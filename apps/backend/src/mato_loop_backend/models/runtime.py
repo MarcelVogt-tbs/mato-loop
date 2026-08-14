@@ -165,6 +165,7 @@ class ChatSession(Base):
     )
     preferred_root_id: Mapped[UUID | None] = mapped_column(nullable=True)
     working_directory: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    current_directory: Mapped[str | None] = mapped_column(String(4096), nullable=True)
     workspace_access: Mapped[str] = mapped_column(String(20), nullable=False, default="read-only")
     private_integration_data_used: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
@@ -413,6 +414,7 @@ class AgentRun(Base):
     execution_root_id: Mapped[UUID | None] = mapped_column(nullable=True)
     execution_root_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
     working_directory_snapshot: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    current_directory_snapshot: Mapped[str | None] = mapped_column(String(4096), nullable=True)
     execution_operations: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )

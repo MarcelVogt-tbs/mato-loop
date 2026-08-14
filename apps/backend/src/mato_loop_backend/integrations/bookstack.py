@@ -1392,36 +1392,38 @@ async def _local_attachment_source(
     import mimetypes
     from pathlib import PurePosixPath
 
-    from mato_loop_backend.agent.permissions import PermissionDecision, path_permission
-    from mato_loop_backend.agent.tools import ToolResult
+    from mato_loop_backend.agent.tools import ToolResult, _allow, _filesystem_permission
     from mato_loop_backend.workspace import RootFileError
 
     try:
         normalized = context.root_files.normalize_relative_path(path)
     except (RootFileError, ValueError, OSError):
         return ToolResult.error("file.fileNotFound", field="path")
-    # Reading a local file for an upload is still a file read, so it must pass
-    # the same permission gate as read_file instead of inheriting the broader
-    # knowledge.write approval.
     try:
-        request = path_permission(
-            root_files=context.root_files,
+        request = _filesystem_permission(
+            context,
             root=root,
+            path=normalized,
             capability="filesystem.read",
-            relative_path=normalized,
-            action_kind="read_file",
+            action_kind="read",
             action_label="Datei lesen",
         )
     except (RootFileError, ValueError, OSError):
         return ToolResult.error("file.fileNotFound", field="path")
-    if await context.ask(request) != PermissionDecision.ALLOW:
+    if not await _allow(context, request):
         return ToolResult.error("permission.denied", field="path")
     try:
-        data = await asyncio.to_thread(
-            context.root_files.read_bytes,
-            root,
-            normalized,
-            limit=MAX_ATTACHMENT_BYTES,
+        data = (
+            await context.execution_client.read_bytes(
+                normalized, limit=MAX_ATTACHMENT_BYTES
+            )
+            if root == "workspace"
+            else await asyncio.to_thread(
+                context.root_files.read_bytes,
+                root,
+                normalized,
+                limit=MAX_ATTACHMENT_BYTES,
+            )
         )
     except RootFileError as exc:
         return ToolResult.error(exc.code, field="path")

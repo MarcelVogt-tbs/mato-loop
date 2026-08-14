@@ -2,7 +2,10 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d
 
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
-RUN groupadd --gid ${AGENT_GID} agent \
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y git ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid ${AGENT_GID} agent \
     && useradd --create-home --uid ${AGENT_UID} --gid ${AGENT_GID} agent \
     && mkdir -p /data /workspace \
     && chown agent:agent /data /workspace

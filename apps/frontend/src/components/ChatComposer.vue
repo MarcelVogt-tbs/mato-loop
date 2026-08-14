@@ -113,8 +113,8 @@
                 </q-item-section>
               </q-item>
             </template>
-            <q-tooltip v-if="!session?.workingDirectory">
-              Ohne Workdir erfordert jeder Dateizugriff eine Freigabe.
+            <q-tooltip>
+              {{ session?.currentDirectory ? `Aktueller Ordner: ${session.currentDirectory}` : 'Kein aktueller Ordner ausgewählt.' }}
             </q-tooltip>
           </q-select>
           <q-select
@@ -227,7 +227,20 @@
                         </template>
                       </q-select>
 
+                      <q-input
+                        :model-value="session?.currentDirectory"
+                        readonly
+                        outlined
+                        :dense="$q.screen.gt.xs"
+                        label="Aktueller Ordner"
+                        :hint="session?.currentDirectory ? 'Vom Computer für diese Session gemeldet.' : 'Kein aktueller Ordner ausgewählt.'"
+                        persistent-hint
+                      >
+                        <template #prepend><q-icon name="folder_open" /></template>
+                      </q-input>
+
                       <q-select
+                        v-if="legacyExecutionAgent"
                         :model-value="session?.preferredRootId"
                         :options="rootOptions"
                         emit-value
@@ -246,6 +259,7 @@
                       </q-select>
 
                       <q-input
+                        v-if="legacyExecutionAgent"
                         :model-value="session?.workingDirectory"
                         outlined
                         :dense="$q.screen.gt.xs"
@@ -451,6 +465,9 @@ const executionAgents = useExecutionAgentStore()
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(props.session?.preferredExecutionAgentId)
 ))
+const legacyExecutionAgent = computed(() => (
+  selectedExecutionAgent.value && selectedExecutionAgent.value.protocolVersion < 2
+))
 const executionAgentOptions = computed(() => {
   const options = [
     { label: 'Kein Computer', value: null, connected: null, caption: 'Nur Backend-Funktionen verwenden' },
@@ -510,6 +527,9 @@ const executionAgentMessage = computed(() => {
   if (selectedExecutionAgent.value.pairingState === 'pending') return 'Die Kopplung des ausgewählten Computers steht noch aus.'
   if (selectedExecutionAgent.value.pairingState === 'unpaired') return 'Der ausgewählte Computer ist nicht gekoppelt.'
   if (!selectedExecutionAgent.value.connected) return 'Der ausgewählte Computer ist offline. Es erfolgt kein automatischer Wechsel.'
+  if (selectedExecutionAgent.value.protocolVersion >= 2 && !props.session?.currentDirectory) {
+    return 'Kein aktueller Ordner verfügbar. Bis zu einem Wechsel mit „Verzeichnis wechseln“ stehen nur Systeminformationen zur Verfügung.'
+  }
   if (!props.session?.preferredRootId) return 'Wähle einen Arbeitsbereich für lokale Dateioperationen aus.'
   if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
   return ''
@@ -644,8 +664,14 @@ function update(patch) {
   if (props.session) emit('update', patch)
 }
 
-function selectExecutionAgent(value) {
-  update({ preferred_execution_agent_id: value })
+async function selectExecutionAgent(value) {
+  const agent = executionAgents.byId(value)
+  await chat.updateActive({
+    preferred_execution_agent_id: value,
+    preferred_root_id: agent?.homeRootId || null,
+    working_directory: agent?.homeRelativeDirectory || null,
+    current_directory: agent?.homeDirectory || null
+  })
 }
 
 function selectRoot(value) {

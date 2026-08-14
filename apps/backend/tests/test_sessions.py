@@ -42,7 +42,13 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.settings import AiSettings, MemorySettings, SettingsStore, TrustLevel
+from mato_loop_backend.settings import (
+    AiSettings,
+    MemorySettings,
+    SettingsStore,
+    TrustLevel,
+    UserPreferences,
+)
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelAvailability,
@@ -276,7 +282,11 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     memory_settings = MemorySettings()
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return ai_settings if settings_type is AiSettings else memory_settings
+        if settings_type is AiSettings:
+            return ai_settings
+        if settings_type is UserPreferences:
+            return UserPreferences()
+        return memory_settings
 
     run = AgentRun(
         id=uuid4(),
@@ -338,7 +348,11 @@ async def test_session_defaults_report_effective_memory_state(monkeypatch) -> No
     memory_settings = MemorySettings(enabled=False)
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return ai_settings if settings_type is AiSettings else memory_settings
+        if settings_type is AiSettings:
+            return ai_settings
+        if settings_type is UserPreferences:
+            return UserPreferences()
+        return memory_settings
 
     monkeypatch.setattr(SettingsStore, "load", load_settings)
 
@@ -348,6 +362,7 @@ async def test_session_defaults_report_effective_memory_state(monkeypatch) -> No
     assert result["effectiveMemoryMode"] == "disabled"
     assert result["memoryToolsAvailable"] is False
     assert result["memoryUnavailableReason"] == "memory.disabled"
+    assert result["preferredExecutionAgentId"] is None
     assert "trustLevel" not in result
 
 

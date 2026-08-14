@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
-  api: { delete: vi.fn(), get: vi.fn(), patch: vi.fn(), post: vi.fn() }
+  api: { delete: vi.fn(), get: vi.fn(), patch: vi.fn(), post: vi.fn(), put: vi.fn() }
 }))
 
 vi.mock('src/boot/axios', () => ({ api }))
@@ -33,12 +33,13 @@ describe('execution agent store', () => {
   afterEach(() => vi.useRealTimers())
 
   it('loads agents and derives the selected workspace context', async () => {
-    api.get.mockResolvedValue({ data: { items: [agent] } })
+    api.get.mockResolvedValue({ data: { items: [agent], defaultExecutionAgentId: 'agent-1' } })
     const store = useExecutionAgentStore()
 
     await store.fetchAll()
 
     expect(api.get).toHaveBeenCalledWith('/execution-agents')
+    expect(store.defaultExecutionAgentId).toBe('agent-1')
     expect(store.workspaceContextFor({
       preferredExecutionAgentId: 'agent-1',
       preferredRootId: 'root-1'
@@ -73,6 +74,23 @@ describe('execution agent store', () => {
     })).toMatchObject({
       connected: true,
       operations: ['workspace.export', 'workspace.list', 'workspace.read']
+    })
+  })
+
+  it('keeps v2 system operations available without a home directory', () => {
+    const store = useExecutionAgentStore()
+    store.items = [{
+      ...agent,
+      protocolVersion: 2,
+      roots: [],
+      operations: ['system.info', 'filesystem.resolve', 'process.exec']
+    }]
+
+    expect(store.workspaceContextFor({ preferredExecutionAgentId: 'agent-1' })).toEqual({
+      executionAgentId: 'agent-1',
+      rootId: null,
+      connected: true,
+      operations: ['system.info', 'filesystem.resolve']
     })
   })
 
@@ -141,6 +159,7 @@ describe('execution agent store', () => {
     api.patch.mockResolvedValue({ data: { ...agent, name: 'Notebook' } })
     api.delete.mockResolvedValue({ data: unpairedAgent })
     const store = useExecutionAgentStore()
+    store.defaultExecutionAgentId = 'agent-1'
 
     const created = await store.create('Arbeitsplatz', 1800)
     const rotated = await store.createPairingToken('agent-1', 3600)
@@ -160,16 +179,68 @@ describe('execution agent store', () => {
     expect(api.delete).toHaveBeenCalledWith('/execution-agents/agent-1/pairing')
     expect(store.items).toEqual([unpairedAgent])
     expect(store.items[0]).not.toHaveProperty('pairingToken')
+    expect(store.defaultExecutionAgentId).toBeNull()
   })
 
   it('revokes an agent and removes it from the list', async () => {
     api.delete.mockResolvedValue({})
     const store = useExecutionAgentStore()
     store.items = [agent]
+    store.defaultExecutionAgentId = 'agent-1'
 
     await store.revoke('agent-1')
 
     expect(api.delete).toHaveBeenCalledWith('/execution-agents/agent-1')
     expect(store.items).toEqual([])
+    expect(store.defaultExecutionAgentId).toBeNull()
+  })
+
+  it('sets, replaces and clears the optional default computer', async () => {
+    api.put
+      .mockResolvedValueOnce({ data: { defaultExecutionAgentId: 'agent-1' } })
+      .mockResolvedValueOnce({ data: { defaultExecutionAgentId: 'agent-2' } })
+      .mockResolvedValueOnce({ data: { defaultExecutionAgentId: null } })
+    const store = useExecutionAgentStore()
+
+    await store.setDefault('agent-1')
+    await store.setDefault('agent-2')
+    await store.setDefault(null)
+
+    expect(api.put).toHaveBeenNthCalledWith(1, '/execution-agents/default', {
+      defaultExecutionAgentId: 'agent-1'
+    })
+    expect(api.put).toHaveBeenNthCalledWith(2, '/execution-agents/default', {
+      defaultExecutionAgentId: 'agent-2'
+    })
+    expect(api.put).toHaveBeenNthCalledWith(3, '/execution-agents/default', {
+      defaultExecutionAgentId: null
+    })
+    expect(store.defaultExecutionAgentId).toBeNull()
+  })
+
+  it('sets a validated computer home directory', async () => {
+    api.put.mockResolvedValue({ data: { ...agent, homeDirectory: '/workspace' } })
+    const store = useExecutionAgentStore()
+    store.items = [agent]
+
+    await store.setHome('agent-1', '/workspace')
+
+    expect(api.put).toHaveBeenCalledWith('/execution-agents/agent-1/home', {
+      homeDirectory: '/workspace'
+    })
+    expect(store.items[0].homeDirectory).toBe('/workspace')
+  })
+
+  it('removes a computer home directory', async () => {
+    api.put.mockResolvedValue({ data: { ...agent, homeDirectory: null } })
+    const store = useExecutionAgentStore()
+    store.items = [{ ...agent, homeDirectory: '/workspace' }]
+
+    await store.setHome('agent-1', null)
+
+    expect(api.put).toHaveBeenCalledWith('/execution-agents/agent-1/home', {
+      homeDirectory: null
+    })
+    expect(store.items[0].homeDirectory).toBeNull()
   })
 })

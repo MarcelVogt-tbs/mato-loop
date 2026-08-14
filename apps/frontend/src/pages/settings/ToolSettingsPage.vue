@@ -89,6 +89,15 @@
               </div>
             </div>
 
+            <q-banner
+              v-if="tool.actions?.some((action) => action.capability === 'process.execute') && form.policies['process.execute'] === 'auto'"
+              rounded
+              class="tool-settings-detail app-surface-tonal"
+            >
+              <template #avatar><q-icon name="warning_amber" color="warning" /></template>
+              Befehle werden ohne einzelne Freigabe mit den Rechten des Betriebssystembenutzers des Computers ausgeführt.
+            </q-banner>
+
             <div v-if="tool.name === 'web_search'" class="tool-settings-detail q-gutter-md">
               <q-select
                 v-model="form.webSearch.primaryProvider"
@@ -326,8 +335,13 @@ const mediaTools = [
 ]
 const mediaToolsByName = Object.fromEntries(mediaTools.map((item) => [item.name, item]))
 const TOOL_DESCRIPTIONS = {
-  list_directory: 'Listet Dateien und Unterordner eines Verzeichnisses auf.',
-  read_file: 'Liest Textdateien aus Session oder Workspace.',
+  get_system_info: 'Liest grundlegende Informationen zum ausgewählten Computer.',
+  change_directory: 'Wechselt den persistenten aktuellen Ordner der Session.',
+  process_exec: 'Führt ein lokal konfiguriertes Programm mit Argumenten aus.',
+  shell_run: 'Führt einen Shell-Befehl im aktuellen Ordner aus.',
+  read: 'Liest Dateien aus einem erlaubten Bereich.',
+  glob: 'Sucht Dateien anhand eines Pfadmusters.',
+  grep: 'Durchsucht Dateiinhalte nach einem Muster.',
   write_file: 'Erstellt oder ersetzt Textdateien.',
   create_directory: 'Legt ein neues Verzeichnis an.',
   delete_path: 'Löscht Dateien oder Verzeichnisse.',
@@ -384,7 +398,13 @@ const TOOL_DESCRIPTIONS = {
   knowledge_list_attachments: 'Listet die Anhänge einer zuvor gelesenen Seite auf.',
   knowledge_create_attachment:
     'Hängt eine Datei oder einen Link an eine Seite: Download aus dem Internet, Datei aus Session- oder Workspace-Speicher oder reiner Verweis.',
-  knowledge_delete_attachment: 'Löscht einen zuvor aufgelisteten Anhang einer Seite.'
+  knowledge_delete_attachment: 'Löscht einen zuvor aufgelisteten Anhang einer Seite.',
+  git_clone: 'Klont ein Git-Repository auf den zugewiesenen Computer.',
+  git_status: 'Zeigt den Zustand des Git-Arbeitsverzeichnisses an.',
+  git_diff: 'Zeigt Änderungen im Git-Arbeitsverzeichnis an.',
+  git_log: 'Zeigt den Commit-Verlauf eines Git-Repositorys an.',
+  git_add: 'Merkt Änderungen für den nächsten Git-Commit vor.',
+  git_commit: 'Erstellt einen Git-Commit aus den vorgemerkten Änderungen.'
 }
 const form = reactive({
   policies: {},

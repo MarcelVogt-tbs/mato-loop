@@ -710,6 +710,9 @@ class RootFileService:
     def normalize_relative_path(self, relative_path: str) -> str:
         return self._relative_path(self._parts(relative_path))
 
+    def path_parts(self, relative_path: str) -> tuple[str, ...]:
+        return self._parts(relative_path)
+
     def root_identity(self, root: FileRoot | str) -> str:
         selected_root = self._selected_root(root)
         self._root_path(selected_root)
@@ -924,6 +927,23 @@ class RootFileService:
     def resolve(self, root: FileRoot | str, relative_path: str) -> Path:
         parts = self._parts(relative_path)
         return self._ensure_no_symlinks(self._root_path(root), parts)
+
+    def path_kind(self, root: FileRoot | str, relative_path: str) -> str:
+        metadata = self._metadata(self.resolve(root, relative_path))
+        if stat.S_ISDIR(metadata.st_mode):
+            return "directory"
+        if stat.S_ISREG(metadata.st_mode):
+            return "file"
+        raise RootFileError("file.unsupportedType", "Unsupported file type")
+
+    @contextmanager
+    def open_directory_descriptor(
+        self, root: FileRoot | str, relative_path: str
+    ) -> Iterator[int]:
+        parts = self._parts(relative_path)
+        anchor, anchored_parts = self._anchored_parts(root, parts)
+        with _directory_descriptor(anchor, anchored_parts, RootFileError) as descriptor:
+            yield descriptor
 
     def _resolve_destination(self, root: FileRoot | str, relative_path: str) -> Path:
         parts = self._parts(relative_path)

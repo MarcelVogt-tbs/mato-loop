@@ -37,8 +37,10 @@ from mato_loop_backend.agent.context import (
 )
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
+    PermissionPolicy,
     PermissionRequest,
     agent_identity_permission,
+    execution_directory_permission,
     media_permission,
     memory_read_permission,
     memory_write_permission,
@@ -49,6 +51,7 @@ from mato_loop_backend.agent.permissions import (
     session_search_permission,
     skill_load_permission,
     skill_write_permission,
+    system_info_permission,
     web_search_permission,
     webfetch_permission,
 )
@@ -65,16 +68,22 @@ from mato_loop_backend.attachments import AttachmentError, AttachmentService
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
+    DirectoryResult,
     ExecutionClient,
     ExecutionClientError,
     ProcessResult,
+    ShellInspectResult,
+    SystemInfoResult,
     WorkspaceDeleteResult,
+    WorkspaceGlobResult,
+    WorkspaceGrepResult,
     WorkspaceListResult,
     WorkspacePathResult,
     WorkspaceReadResult,
     WorkspaceStatResult,
     WorkspaceWriteResult,
 )
+from mato_loop_backend.filesystem_search import RootFileSearch
 from mato_loop_backend.integrations import (
     PdfVisionHandler,
     SearchIntegrationError,
@@ -97,6 +106,7 @@ from mato_loop_backend.integrations.registry import (
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
 from mato_loop_backend.memory.service import MemoryService, memory_reference_timestamps
 from mato_loop_backend.models import (
+    AgentRun,
     ChatSession,
     Credential,
     MemoryCategory,
@@ -300,6 +310,7 @@ class ToolDefinition:
     description: str
     arguments_model: type[BaseModel]
     handler: Callable[[Any, ToolContext], Awaitable[ToolResult]]
+    tool_type: Literal["backend", "computer", "shared"] = "backend"
     write: bool = False
     requires_search: bool = False
     requires_webfetch: bool = False
@@ -467,6 +478,7 @@ class ToolRegistry:
             description=contribution.description,
             arguments_model=contribution.arguments_model,
             handler=contribution.handler,
+            tool_type="computer" if contribution.execution_operation else "backend",
             write=contribution.write,
             requires_search=contribution.requires_search,
             requires_webfetch=contribution.requires_webfetch,
@@ -835,6 +847,13 @@ class ToolRegistry:
         definitions, sources, _prompt_fragments = self._combined_definitions(
             integration_settings
         )
+        definitions.update(self._operation_definitions)
+        sources.update(
+            {
+                name: ("builtin", None, None, ())
+                for name in self._operation_definitions
+            }
+        )
         tools_by_group: dict[str, list[dict[str, Any]]] = {}
         for definition in definitions.values():
             source_type, source_id, _source_revision, _integration_revisions = sources[
@@ -862,6 +881,7 @@ class ToolRegistry:
                     "name": definition.name,
                     "label": definition.label or definition.name,
                     "icon": definition.icon,
+                    "toolType": definition.tool_type,
                     "source": {"type": source_type, "id": source_id},
                     "actions": actions,
                 }
@@ -1302,18 +1322,24 @@ def validate_question_answers(
     return validated
 
 
-class ListDirectoryArguments(ToolArguments):
-    root: Literal["session", "workspace"]
-    path: str = Field(default=".", max_length=1_000)
-    offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=100, ge=1, le=1_000)
-
-
-class ReadFileArguments(ToolArguments):
+class ReadArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
     offset: int = Field(default=1, ge=1)
-    limit: int = Field(default=2_000, ge=1, le=2_000)
+    limit: int = Field(default=1_000, ge=1, le=1_000)
+
+
+class GlobArguments(ToolArguments):
+    root: Literal["session", "workspace"]
+    pattern: str = Field(min_length=1, max_length=1_000, pattern=r"^[^\x00]+$")
+    path: str = Field(default=".", max_length=1_000)
+
+
+class GrepArguments(GlobArguments):
+    pattern: str = Field(min_length=1, max_length=4_096, pattern=r"^[^\x00]+$")
+    include: str | None = Field(
+        default=None, min_length=1, max_length=1_000, pattern=r"^[^\x00]+$"
+    )
 
 
 class ProvideFileArguments(ToolArguments):
@@ -1362,6 +1388,14 @@ class ProcessExecArguments(ToolArguments):
 
 class ShellRunArguments(ToolArguments):
     command: str = Field(min_length=1, max_length=256 * 1024)
+
+
+class SystemInfoArguments(ToolArguments):
+    pass
+
+
+class ChangeDirectoryArguments(ToolArguments):
+    path: str = Field(min_length=1, max_length=4096)
 
 
 class WebSearchArguments(ToolArguments):
@@ -1649,6 +1683,22 @@ class LoadSkillArguments(ToolArguments):
 
 
 async def _allow(context: ToolContext, request: PermissionRequest) -> bool:
+    client = context.execution_client
+    if (
+        request.resource_type == "execution_root_path"
+        and client is not None
+        and client.current_directory is not None
+        and client.root_id is not None
+        and client.root_revision is not None
+        and not await _directory_allowed(
+            context,
+            client.current_directory,
+            client.root_id,
+            client.root_revision,
+            ask=True,
+        )
+    ):
+        return False
     return await context.ask(request) == PermissionDecision.ALLOW
 
 
@@ -1702,6 +1752,85 @@ def _workspace_client(context: ToolContext) -> ExecutionClient:
     return context.execution_client
 
 
+async def _directory_allowed(
+    context: ToolContext,
+    path: str,
+    root_id: UUID,
+    root_revision: str,
+    *,
+    ask: bool,
+    changes_directory: bool = False,
+) -> bool:
+    request = execution_directory_permission(
+        _workspace_client(context).agent_id,
+        path,
+        root_id,
+        root_revision,
+        action_kind=("change_directory" if changes_directory else "use_directory"),
+    )
+    return await _allow(context, request) if ask else await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files
+    ) == PermissionDecision.ALLOW
+
+
+async def _get_system_info(
+    _arguments: SystemInfoArguments, context: ToolContext
+) -> ToolResult:
+    client = _workspace_client(context)
+    if not await _allow(context, system_info_permission(client.agent_id)):
+        return ToolResult.error("permission.denied")
+    result = await client.request(
+        "system.info",
+        {"currentDirectory": client.current_directory} if client.current_directory else {},
+        SystemInfoResult,
+    )
+    return ToolResult.json(result.model_dump(mode="json", by_alias=True))
+
+
+async def _change_directory(
+    arguments: ChangeDirectoryArguments, context: ToolContext
+) -> ToolResult:
+    client = _workspace_client(context)
+    result = await client.request(
+        "filesystem.resolve",
+        {
+            "path": arguments.path,
+            **(
+                {"currentDirectory": client.current_directory}
+                if client.current_directory is not None
+                else {}
+            ),
+        },
+        DirectoryResult,
+    )
+    assert isinstance(result, DirectoryResult)
+    if not await _directory_allowed(
+        context,
+        result.path,
+        result.root_id,
+        result.root_revision,
+        ask=True,
+        changes_directory=True,
+    ):
+        return ToolResult.error("permission.denied")
+    context.session.current_directory = result.path
+    context.session.preferred_root_id = result.root_id
+    context.session.working_directory = result.relative_path
+    run = await context.db.get(AgentRun, context.run_id)
+    if run is None:
+        return ToolResult.error("tool.unavailable")
+    run.current_directory_snapshot = result.path
+    run.execution_root_id = result.root_id
+    run.execution_root_revision = result.root_revision
+    run.working_directory_snapshot = result.relative_path
+    client.current_directory = result.path
+    client.root_id = result.root_id
+    client.root_revision = result.root_revision
+    client.working_directory = result.relative_path
+    await context.db.flush()
+    return ToolResult.json({"currentDirectory": result.path})
+
+
 def _require_workspace_path(actual: str, expected: str) -> None:
     if actual != expected:
         raise ExecutionClientError("executionAgent.protocolError")
@@ -1712,6 +1841,8 @@ async def _workspace_request(
     operation: str,
     arguments: dict[str, Any],
     result_model: type[WorkspaceDeleteResult]
+    | type[WorkspaceGlobResult]
+    | type[WorkspaceGrepResult]
     | type[WorkspaceListResult]
     | type[WorkspacePathResult]
     | type[WorkspaceReadResult]
@@ -1721,68 +1852,70 @@ async def _workspace_request(
     return await _workspace_client(context).request(operation, arguments, result_model)
 
 
-async def _list_directory(
-    arguments: ListDirectoryArguments, context: ToolContext
-) -> ToolResult:
+async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     request = _filesystem_permission(
         context,
         root=arguments.root,
         path=arguments.path,
         capability="filesystem.read",
-        action_kind="list_directory",
-        action_label="Ordner anzeigen",
+        action_kind="read",
+        action_label="Pfad lesen",
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
+    kind: str
     if arguments.root == "workspace":
-        result = await _workspace_request(
+        stat_result = await _workspace_request(
             context,
-            "workspace.list",
-            {
-                "path": context.root_files.normalize_relative_path(arguments.path),
-                "offset": arguments.offset,
-                "limit": arguments.limit,
-            },
-            WorkspaceListResult,
+            "workspace.stat",
+            {"path": context.root_files.normalize_relative_path(arguments.path)},
+            WorkspaceStatResult,
         )
+        kind = stat_result.kind
     else:
-        result = context.root_files.list_directory(
-            arguments.root,
-            arguments.path,
-            offset=arguments.offset,
-            limit=arguments.limit,
-        )
-    return ToolResult.json(
-        {
-            "root": arguments.root,
-            "path": arguments.path,
-            "entries": [
+        kind = context.root_files.path_kind(arguments.root, arguments.path)
+    if kind == "directory":
+        if arguments.root == "workspace":
+            result = await _workspace_request(
+                context,
+                "workspace.list",
                 {
-                    "name": entry.name,
-                    "path": entry.path,
-                    "kind": entry.kind,
-                    "size": entry.size,
-                    "modifiedAt": entry.modified_at,
-                }
-                for entry in result.entries
-            ],
-            "hasMore": result.has_more,
-            "nextOffset": result.next_offset,
-        }
-    )
-
-
-async def _read_file(arguments: ReadFileArguments, context: ToolContext) -> ToolResult:
-    request = _filesystem_permission(
-        context,
-        root=arguments.root,
-        path=arguments.path,
-        capability="filesystem.read",
-        action_kind="read_file",
-        action_label="Datei lesen",
-    )
-    if not await _allow(context, request):
-        return ToolResult.error("permission.denied")
+                    "path": context.root_files.normalize_relative_path(arguments.path),
+                    "offset": arguments.offset - 1,
+                    "limit": arguments.limit,
+                },
+                WorkspaceListResult,
+            )
+        else:
+            result = context.root_files.list_directory(
+                arguments.root,
+                arguments.path,
+                offset=arguments.offset - 1,
+                limit=arguments.limit,
+            )
+        return ToolResult.json(
+            {
+                "root": arguments.root,
+                "path": arguments.path,
+                "entries": [
+                    {
+                        "name": entry.name,
+                        "path": entry.path,
+                        "kind": entry.kind,
+                        "size": entry.size,
+                        "modifiedAt": entry.modified_at,
+                    }
+                    for entry in result.entries
+                ],
+                "hasMore": result.has_more,
+                "nextOffset": (
+                    result.next_offset + 1 if result.next_offset is not None else None
+                ),
+                "limit": arguments.limit,
+            }
+        )
+    if kind != "file":
+        return ToolResult.error("file.unsupportedType")
     if arguments.root == "workspace":
         result = await _workspace_request(
             context,
@@ -1826,6 +1959,65 @@ async def _read_file(arguments: ReadFileArguments, context: ToolContext) -> Tool
             "truncatedLines": list(result.truncated_lines),
         },
     )
+
+
+async def _glob(arguments: GlobArguments, context: ToolContext) -> ToolResult:
+    request = _filesystem_permission(
+        context,
+        root=arguments.root,
+        path=arguments.path,
+        capability="filesystem.read",
+        action_kind="glob",
+        action_label="Dateien suchen",
+    )
+    if not await _allow(context, request):
+        return ToolResult.error("permission.denied")
+    if arguments.root == "workspace":
+        result = await _workspace_request(
+            context,
+            "workspace.glob",
+            {
+                "path": context.root_files.normalize_relative_path(arguments.path),
+                "pattern": arguments.pattern,
+            },
+            WorkspaceGlobResult,
+        )
+        payload = result.model_dump(mode="json", by_alias=True)
+    else:
+        payload = await RootFileSearch(context.root_files).glob(
+            arguments.root, arguments.path, arguments.pattern
+        )
+    return ToolResult.json({"root": arguments.root, "path": arguments.path, **payload})
+
+
+async def _grep(arguments: GrepArguments, context: ToolContext) -> ToolResult:
+    request = _filesystem_permission(
+        context,
+        root=arguments.root,
+        path=arguments.path,
+        capability="filesystem.read",
+        action_kind="grep",
+        action_label="Dateiinhalte durchsuchen",
+    )
+    if not await _allow(context, request):
+        return ToolResult.error("permission.denied")
+    if arguments.root == "workspace":
+        result = await _workspace_request(
+            context,
+            "workspace.grep",
+            {
+                "path": context.root_files.normalize_relative_path(arguments.path),
+                "pattern": arguments.pattern,
+                **({"include": arguments.include} if arguments.include is not None else {}),
+            },
+            WorkspaceGrepResult,
+        )
+        payload = result.model_dump(mode="json", by_alias=True)
+    else:
+        payload = await RootFileSearch(context.root_files).grep(
+            arguments.root, arguments.path, arguments.pattern, arguments.include
+        )
+    return ToolResult.json({"root": arguments.root, "path": arguments.path, **payload})
 
 
 async def _provide_file(
@@ -2204,7 +2396,7 @@ def _process_permission(
         risk_level="high",
         title="Shell-Befehl ausführen?" if shell else "Prozess ausführen?",
         summary=warning,
-        resource_display=f"workspace:{client.working_directory}",
+        resource_display=client.current_directory or "Ausgewählter Computer",
         approval_details={"warning": warning},
         available_decisions=("allow_once", "deny"),
     )
@@ -2213,8 +2405,28 @@ def _process_permission(
 async def _execute_process(
     context: ToolContext, operation: str, arguments: dict[str, Any]
 ) -> ToolResult:
+    client = _workspace_client(context)
+    if (
+        client.current_directory is None
+        or client.root_id is None
+        or client.root_revision is None
+        or not await _directory_allowed(
+            context,
+            client.current_directory,
+            client.root_id,
+            client.root_revision,
+            ask=True,
+        )
+    ):
+        return ToolResult.error("permission.denied")
     if not await _allow(context, _process_permission(context, shell=operation == "shell.run")):
         return ToolResult.error("permission.denied")
+    return await _run_process(context, operation, arguments)
+
+
+async def _run_process(
+    context: ToolContext, operation: str, arguments: dict[str, Any]
+) -> ToolResult:
     output = {"stdout": "", "stderr": ""}
 
     async def publish(event: Any) -> None:
@@ -2256,7 +2468,47 @@ async def _process_exec(
 
 
 async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> ToolResult:
-    return await _execute_process(context, "shell.run", {"command": arguments.command})
+    client = _workspace_client(context)
+    if (
+        client.current_directory is None
+        or client.root_id is None
+        or client.root_revision is None
+        or not await _directory_allowed(
+            context,
+            client.current_directory,
+            client.root_id,
+            client.root_revision,
+            ask=True,
+        )
+    ):
+        return ToolResult.error("permission.denied")
+    inspection = await client.request(
+        "shell.inspect", {"command": arguments.command}, ShellInspectResult
+    )
+    assert isinstance(inspection, ShellInspectResult)
+    process_permission = _process_permission(context, shell=True)
+    if inspection.analysis_complete:
+        for target in inspection.targets:
+            if not await _directory_allowed(
+                context,
+                target.path if target.kind == "directory" else os.path.dirname(target.path),
+                target.root_id,
+                target.root_revision,
+                ask=True,
+            ):
+                return ToolResult.error("permission.denied")
+    else:
+        process_permission = replace(process_permission, force_ask=True)
+    if not await _allow(context, process_permission):
+        return ToolResult.error("permission.denied")
+    return await _run_process(
+        context,
+        "shell.run",
+        {
+            "command": arguments.command,
+            "expectedInspectionRevision": inspection.inspection_revision,
+        },
+    )
 
 
 async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> ToolResult:
@@ -3181,7 +3433,13 @@ async def _analyze_video(
             raise VideoAnalysisError("attachment.tooLarge")
         return data
 
-    data = await asyncio.to_thread(read_video)
+    data = (
+        await _workspace_client(context).read_bytes(
+            normalized_path, limit=MAX_VIDEO_BYTES
+        )
+        if arguments.root == FileRoot.WORKSPACE.value
+        else await asyncio.to_thread(read_video)
+    )
     digest = hashlib.sha256(data).hexdigest()
     if attachment is not None and (
         attachment.size_bytes != len(data) or attachment.sha256 != digest
@@ -3805,9 +4063,16 @@ _PROCESS_EXECUTE = ToolAction(
     "process.execute",
     "Prozesse ausführen",
     ToolExecutionPolicy.ASK,
-    configurable=False,
-    allowed_policies=(ToolExecutionPolicy.ASK,),
     mutates=True,
+)
+_SYSTEM_INFO = ToolAction(
+    "system.info", "Systeminformationen", ToolExecutionPolicy.AUTO
+)
+_CHANGE_DIRECTORY = ToolAction(
+    "execution.directory",
+    "Verzeichnis wechseln",
+    ToolExecutionPolicy.AUTO,
+    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO),
 )
 
 
@@ -3833,23 +4098,36 @@ tool_registry = ToolRegistry(
             icon="help_outline",
         ),
         ToolDefinition(
-            "list_directory",
-            "List one directory in an explicit file root with offset pagination.",
-            ListDirectoryArguments,
-            _list_directory,
+            "read",
+            "Read a file or directory in an explicit root. Files return numbered UTF-8 lines; directories return entries. Continue with offset and limit.",
+            ReadArguments,
+            _read,
+            tool_type="shared",
             group="filesystem",
-            label="Ordner auflisten",
+            label="Pfad lesen",
+            icon="description",
+            actions=(_FILESYSTEM_READ,),
+        ),
+        ToolDefinition(
+            "glob",
+            "Find files recursively by glob pattern under a path in an explicit root. Returns at most 100 paths.",
+            GlobArguments,
+            _glob,
+            tool_type="shared",
+            group="filesystem",
+            label="Dateien suchen",
             icon="folder_open",
             actions=(_FILESYSTEM_READ,),
         ),
         ToolDefinition(
-            "read_file",
-            "Read numbered lines from one UTF-8 text file. Continue large files with offset and limit.",
-            ReadFileArguments,
-            _read_file,
+            "grep",
+            "Search UTF-8 file contents recursively with a regular expression and optional include glob. Returns at most 100 matches.",
+            GrepArguments,
+            _grep,
+            tool_type="shared",
             group="filesystem",
-            label="Datei lesen",
-            icon="description",
+            label="Dateiinhalte durchsuchen",
+            icon="manage_search",
             actions=(_FILESYSTEM_READ,),
         ),
         ToolDefinition(
@@ -3857,6 +4135,7 @@ tool_registry = ToolRegistry(
             "Expose one existing regular file as a chat download without reading or copying it.",
             ProvideFileArguments,
             _provide_file,
+            tool_type="shared",
             group="filesystem",
             label="Datei bereitstellen",
             icon="download",
@@ -3867,6 +4146,7 @@ tool_registry = ToolRegistry(
             "Create or replace one UTF-8 text file; its parent directory must exist.",
             WriteFileArguments,
             _write_file,
+            tool_type="shared",
             write=True,
             group="filesystem",
             label="Datei schreiben",
@@ -3878,6 +4158,7 @@ tool_registry = ToolRegistry(
             "Create exactly one directory; its parent must exist.",
             CreateDirectoryArguments,
             _create_directory,
+            tool_type="shared",
             write=True,
             group="filesystem",
             label="Ordner erstellen",
@@ -3889,6 +4170,7 @@ tool_registry = ToolRegistry(
             "Delete one path. Non-empty directories require recursive=true.",
             DeletePathArguments,
             _delete_path,
+            tool_type="shared",
             write=True,
             group="filesystem",
             label="Pfad löschen",
@@ -3900,6 +4182,7 @@ tool_registry = ToolRegistry(
             "Copy a file or directory to an exact new destination path; never overwrite.",
             CopyPathArguments,
             _copy_path,
+            tool_type="shared",
             write=True,
             group="filesystem",
             label="Pfad kopieren",
@@ -3911,6 +4194,7 @@ tool_registry = ToolRegistry(
             "Move a file or directory to an exact new destination path; never overwrite.",
             MovePathArguments,
             _move_path,
+            tool_type="shared",
             write=True,
             group="filesystem",
             label="Pfad verschieben",
@@ -4187,11 +4471,37 @@ tool_registry = ToolRegistry(
     ],
     operation_definitions=[
         ToolDefinition(
+            "get_system_info",
+            "Get bounded basic information about the selected computer. This does not require a current directory.",
+            SystemInfoArguments,
+            _get_system_info,
+            tool_type="computer",
+            required_operation="system.info",
+            group="process",
+            label="Systeminformationen",
+            icon="computer",
+            actions=(_SYSTEM_INFO,),
+        ),
+        ToolDefinition(
+            "change_directory",
+            "Resolve a directory on the selected computer and make it the persistent current directory. "
+            "Use this instead of shell cd; shell cd applies only to that shell call.",
+            ChangeDirectoryArguments,
+            _change_directory,
+            tool_type="computer",
+            required_operation="filesystem.resolve",
+            group="process",
+            label="Verzeichnis wechseln",
+            icon="drive_file_move",
+            actions=(_CHANGE_DIRECTORY,),
+        ),
+        ToolDefinition(
             "process_exec",
-            "Run one configured program alias with an argument array in the selected workspace. "
+            "Run one configured program alias with an argument array in the current computer directory. "
             "The program is host-configured; never pass an executable path.",
             ProcessExecArguments,
             _process_exec,
+            tool_type="computer",
             write=True,
             required_operation="process.exec",
             group="process",
@@ -4201,9 +4511,11 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "shell_run",
-            "Run one command with the host-configured shell in the selected workspace.",
+            "Run one command directly with the host-configured shell in the current directory. "
+            "This is not an operating-system sandbox; shell cd applies only to this call.",
             ShellRunArguments,
             _shell_run,
+            tool_type="computer",
             write=True,
             required_operation="shell.run",
             group="process",
@@ -4262,8 +4574,9 @@ def permission_for(
             return None
     path_value = arguments.get("path")
     capability = {
-        "list_directory": "filesystem.read",
-        "read_file": "filesystem.read",
+        "read": "filesystem.read",
+        "glob": "filesystem.read",
+        "grep": "filesystem.read",
         "provide_file": "filesystem.read",
         "write_file": "filesystem.write",
         "create_directory": "filesystem.write",
@@ -4275,8 +4588,9 @@ def permission_for(
         root = FileRoot(arguments.get("root"))
         relative_path = str(path_value or ".")
         action = {
-            "list_directory": "Ordner anzeigen",
-            "read_file": "Datei lesen",
+            "read": "Pfad lesen",
+            "glob": "Dateien suchen",
+            "grep": "Dateiinhalte durchsuchen",
             "provide_file": "Datei bereitstellen",
             "write_file": "Datei schreiben",
             "create_directory": "Ordner erstellen",

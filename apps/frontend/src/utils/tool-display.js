@@ -4,6 +4,9 @@ import { cleanUrlForDisplay } from 'src/utils/webfetch'
 
 const TOOL_DISPLAY = {
   question: { label: 'Rückfrage stellen', icon: 'help_outline' },
+  read: { label: 'Datei lesen', icon: 'description' },
+  glob: { label: 'Dateien suchen', icon: 'folder_open' },
+  grep: { label: 'Dateiinhalte durchsuchen', icon: 'manage_search' },
   list_directory: { label: 'Ordner auflisten', icon: 'folder_open' },
   read_file: { label: 'Datei lesen', icon: 'description' },
   provide_file: { label: 'Datei bereitstellen', icon: 'download' },
@@ -45,7 +48,13 @@ const TOOL_DISPLAY = {
   process_exec: { label: 'Prozess ausführen', icon: 'terminal' },
   'process.exec': { label: 'Prozess ausführen', icon: 'terminal' },
   shell_run: { label: 'Shell-Befehl ausführen', icon: 'terminal' },
-  'shell.run': { label: 'Shell-Befehl ausführen', icon: 'terminal' }
+  'shell.run': { label: 'Shell-Befehl ausführen', icon: 'terminal' },
+  git_clone: { label: 'Git-Repository klonen', icon: 'account_tree' },
+  git_status: { label: 'Git-Status anzeigen', icon: 'fact_check' },
+  git_diff: { label: 'Git-Änderungen anzeigen', icon: 'difference' },
+  git_log: { label: 'Git-Verlauf anzeigen', icon: 'history' },
+  git_add: { label: 'Git-Änderungen vormerken', icon: 'add_task' },
+  git_commit: { label: 'Git-Commit erstellen', icon: 'commit' }
 }
 
 function truncate(value, maxLength = 140) {
@@ -91,6 +100,22 @@ export function toolSummary(tool) {
     return argumentsValue.cursor_id ? 'Memory-Übersicht fortsetzen' : 'Memory-Übersicht'
   }
   if (tool?.name === 'session_browse') return 'Letzte Sessions'
+  if (tool?.name === 'git_clone') {
+    const url = argumentsValue.repository_url || argumentsValue.url
+    const destination = argumentsValue.destination || argumentsValue.target_path || argumentsValue.path
+    return truncate([url ? cleanUrlForDisplay(url) : '', destination].filter(Boolean).join(' -> '))
+  }
+  if (tool?.name === 'git_add' && Array.isArray(argumentsValue.paths)) {
+    return truncate(argumentsValue.paths.join(', '))
+  }
+  if (tool?.name === 'git_commit' && typeof argumentsValue.message === 'string') {
+    return truncate(argumentsValue.message)
+  }
+  if (['git_status', 'git_diff', 'git_log'].includes(tool?.name)) {
+    return truncate(
+      argumentsValue.repository_path || argumentsValue.repositoryPath || argumentsValue.path || ''
+    )
+  }
   if (tool?.name === 'generate_qr_code') return 'QR-Code'
   if (tool?.name === 'read_qr_code' && typeof argumentsValue.attachment_id === 'string') {
     return `Bildanhang ${truncate(argumentsValue.attachment_id, 36)}`
@@ -115,6 +140,13 @@ export function toolSummary(tool) {
     const offset = Number(argumentsValue.offset) || 0
     const suffix = offset > 0 ? `, ab Zeichen ${offset}` : ''
     return `Nachricht ${truncate(argumentsValue.message_id, 36)}${suffix}`
+  }
+  if (['read', 'glob', 'grep'].includes(tool?.name)) {
+    const location = [argumentsValue.root, argumentsValue.path]
+      .filter((value) => typeof value === 'string' && value)
+      .join(':')
+    const pattern = typeof argumentsValue.pattern === 'string' ? argumentsValue.pattern : ''
+    return truncate([location, pattern].filter(Boolean).join(' · '))
   }
   if (tool?.name === 'memory_write') return truncate(memoryWriteContent(tool))
   if (tool?.name === 'update_agent_identity') {
@@ -160,7 +192,7 @@ function localizePlainToolResult(content, toolName) {
   let text = mediaResult && content.startsWith(mediaResult[0])
     ? `${mediaResult[1]}${content.slice(mediaResult[0].length)}`
     : content
-  if (toolName === 'read_file') {
+  if (['read', 'read_file'].includes(toolName)) {
     text = text
       .replace(/\n\n\[Lines ([\d, ]+) were truncated after 2000 characters\.\](?=\n|$)/,
         '\n\n[Zeilen $1 wurden nach 2000 Zeichen gekürzt.]')

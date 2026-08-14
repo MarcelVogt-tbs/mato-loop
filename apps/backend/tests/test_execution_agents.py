@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import execution_agents as execution_agents_route
 from mato_loop_backend.api.routes.execution_agents import (
+    DefaultExecutionAgentRequest,
+    ExecutionAgentHomeRequest,
     ExecutionAgentRequest,
     PairExecutionAgentRequest,
     PairingTokenRequest,
@@ -23,11 +25,14 @@ from mato_loop_backend.api.routes.execution_agents import (
     create_execution_agent_pairing_token,
     execution_agent_pairing_policy,
     pair_execution_agent,
+    set_default_execution_agent,
+    set_execution_agent_home,
     unpair_execution_agent,
 )
 from mato_loop_backend.execution import HelloMessage
 from mato_loop_backend.models import ExecutionAgent, ExecutionAgentRoot, UserAccount
 from mato_loop_backend.security import hash_token
+from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 
 def _user() -> UserAccount:
@@ -55,6 +60,23 @@ def _agent(**values) -> ExecutionAgent:
         "updated_at": now,
     }
     return ExecutionAgent(**(defaults | values))
+
+
+def test_payload_exposes_advertised_home() -> None:
+    root_id = uuid4()
+    agent = _agent(
+        home_directory="/home/user",
+        home_root_id=root_id,
+        home_root_revision="a" * 64,
+        home_relative_directory="user",
+    )
+
+    payload = _agent_payload(agent)
+
+    assert payload["homeDirectory"] == "/home/user"
+    assert payload["homeRootId"] == str(root_id)
+    assert payload["homeRootRevision"] == "a" * 64
+    assert payload["homeRelativeDirectory"] == "user"
 
 
 class _SessionContext:
@@ -128,6 +150,60 @@ async def test_create_returns_hash_only_pending_pairing_envelope() -> None:
     assert stored.registration_token_hash == hash_token(result["pairingToken"])
     assert result["pairingTokenExpiresAt"] == stored.registration_expires_at
     assert response_headers.headers["cache-control"] == "no-store"
+    db.commit.assert_awaited_once()
+
+
+async def test_home_override_is_resolved_by_the_connected_agent(monkeypatch) -> None:
+    user = _user()
+    root_id = uuid4()
+    agent = _agent(user_id=user.id, token_hash="a" * 64, token_is_legacy=False)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    monkeypatch.setattr(
+        execution_agents_route.execution_agent_connections,
+        "snapshot",
+        lambda _agent_id: (frozenset({"filesystem.resolve"}), ()),
+    )
+    request = AsyncMock()
+    request.return_value = execution_agents_route.DirectoryResult(
+        path="/workspace/project",
+        root_id=root_id,
+        root_revision="b" * 64,
+        relative_path="project",
+    )
+    monkeypatch.setattr(execution_agents_route.ExecutionClient, "request", request)
+
+    result = await set_execution_agent_home(
+        agent.id,
+        ExecutionAgentHomeRequest(homeDirectory="/workspace/project"),
+        user,
+        db,
+    )
+
+    assert result["homeDirectory"] == "/workspace/project"
+    assert agent.home_override is True
+    request.assert_awaited_once()
+
+
+async def test_home_override_can_be_cleared_while_offline() -> None:
+    user = _user()
+    agent = _agent(
+        user_id=user.id,
+        home_directory="/workspace",
+        home_root_id=uuid4(),
+        home_root_revision="a" * 64,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    previous_updated_at = agent.updated_at
+
+    result = await set_execution_agent_home(
+        agent.id, ExecutionAgentHomeRequest(homeDirectory=None), user, db
+    )
+
+    assert result["homeDirectory"] is None
+    assert agent.home_override is True
+    assert agent.updated_at > previous_updated_at
     db.commit.assert_awaited_once()
 
 
@@ -344,6 +420,10 @@ async def test_unpair_is_idempotent_and_revokes_live_capabilities(monkeypatch) -
     )
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = agent
+    preferences = UserPreferences(default_execution_agent_id=agent.id)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=preferences))
+    save_preferences = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save_preferences)
     calls = []
     db.commit.side_effect = lambda: calls.append("commit")
     close = AsyncMock(side_effect=lambda _agent_id: calls.append("close"))
@@ -359,10 +439,32 @@ async def test_unpair_is_idempotent_and_revokes_live_capabilities(monkeypatch) -
     assert agent.token_is_legacy is None
     assert agent.registration_token_hash is None
     assert agent.revision == 5
+    assert preferences.default_execution_agent_id is None
+    save_preferences.assert_awaited_once_with(db, preferences, user_id=user.id)
     assert calls == ["commit", "close", "tickets"]
 
     await unpair_execution_agent(agent.id, user, db)
     assert agent.revision == 5
+
+
+async def test_default_execution_agent_can_be_set_and_cleared(monkeypatch) -> None:
+    user = _user()
+    agent = _agent(user_id=user.id, token_hash="a" * 64, token_is_legacy=False)
+    preferences = UserPreferences()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=preferences))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+
+    result = await set_default_execution_agent(
+        DefaultExecutionAgentRequest(defaultExecutionAgentId=agent.id), user, db
+    )
+    assert result == {"defaultExecutionAgentId": str(agent.id)}
+
+    result = await set_default_execution_agent(
+        DefaultExecutionAgentRequest(defaultExecutionAgentId=None), user, db
+    )
+    assert result == {"defaultExecutionAgentId": None}
 
 
 async def test_unpair_cleanup_completes_when_request_is_cancelled(monkeypatch) -> None:
@@ -370,6 +472,9 @@ async def test_unpair_cleanup_completes_when_request_is_cancelled(monkeypatch) -
     agent = _agent(user_id=user.id, token_hash="e" * 64, token_is_legacy=False)
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = agent
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=UserPreferences())
+    )
     commit_started = asyncio.Event()
     allow_commit = asyncio.Event()
     calls = []
@@ -453,7 +558,7 @@ async def test_ws_snapshot_rejects_stale_authenticated_hash(monkeypatch) -> None
     hello = HelloMessage.model_validate(
         {
             "type": "hello",
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "agentId": agent_id,
             "name": "Desktop",
             "platform": "linux",

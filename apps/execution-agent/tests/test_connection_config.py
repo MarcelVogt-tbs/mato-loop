@@ -48,7 +48,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                     json.dumps(
                         {
                             "type": "welcome",
-                            "protocolVersion": 1,
+                            "protocolVersion": 2,
                             "agentId": AGENT_ID,
                         }
                     )
@@ -76,6 +76,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(received["authorization"], "Bearer agent-secret")
             self.assertEqual(received["hello"]["type"], "hello")
+            self.assertEqual(received["hello"]["protocolVersion"], 2)
             self.assertEqual(received["hello"]["roots"][0]["id"], ROOT_ID)
 
     async def test_mutation_cancellation_waits_for_actual_outcome(self) -> None:
@@ -188,6 +189,90 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(agent.process.executables["shell"], Path("/bin/sh").resolve())
             self.assertIn("process.exec", agent.operations)
             self.assertIn("shell.run", agent.operations)
+
+    async def test_home_resolution_system_info_and_directory_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "root"
+            home = root / "home"
+            home.mkdir(parents=True)
+            configuration = AgentConfig.model_validate(
+                {
+                    "backendUrl": "ws://localhost/api/execution-agents/connect",
+                    "agentId": AGENT_ID,
+                    "name": "Agent",
+                    "roots": [{"id": ROOT_ID, "label": "Root", "path": root}],
+                    "homeDirectory": home / ".." / "home",
+                    "dataDir": base / "data",
+                    "allowInsecure": True,
+                }
+            )
+            agent = ExecutionAgent(configuration, "secret")
+            revision = agent.workspace.roots[ROOT_ID].revision
+            hello = agent.hello()
+            self.assertEqual(hello.home_directory, str(home))
+            self.assertEqual(hello.home_root_id, ROOT_ID)
+            self.assertEqual(hello.home_root_revision, revision)
+            self.assertEqual(hello.home_relative_directory, "home")
+            self.assertIn("shell.inspect", agent.operations)
+
+            resolved = await agent.dispatch(
+                Request.model_validate(
+                    {
+                        "type": "request",
+                        "id": REQUEST_ID,
+                        "operation": "filesystem.resolve",
+                        "arguments": {"path": "home", "currentDirectory": str(root)},
+                    }
+                )
+            )
+            self.assertEqual(
+                resolved,
+                {
+                    "path": str(home),
+                    "rootId": ROOT_ID,
+                    "rootRevision": revision,
+                    "relativePath": "home",
+                },
+            )
+
+            info = await agent.dispatch(
+                Request.model_validate(
+                    {
+                        "type": "request",
+                        "id": "3c907129-f296-456c-bd43-79daca5e61bd",
+                        "operation": "system.info",
+                        "arguments": {"currentDirectory": str(home)},
+                    }
+                )
+            )
+            self.assertGreater(info["logicalCpuCount"], 0)
+            self.assertEqual(info["disk"]["rootId"], ROOT_ID)
+            self.assertNotIn("environment", info)
+            self.assertNotIn("network", info)
+            self.assertNotIn("processes", info)
+
+            outside = base / "outside"
+            outside.mkdir()
+            (root / "escape").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(AgentError):
+                agent.workspace.resolve_directory(str(root / "escape"))
+
+    def test_home_directory_must_be_accessible_within_a_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "root"
+            outside = base / "outside"
+            root.mkdir()
+            outside.mkdir()
+            values = {
+                "name": "Agent",
+                "roots": [{"id": ROOT_ID, "label": "Root", "path": root}],
+                "homeDirectory": outside,
+                "dataDir": base / "data",
+            }
+            with self.assertRaises(ValueError):
+                AgentConfig.model_validate(values)
 
     def test_complete_response_serialization_is_bounded(self) -> None:
         response = Response(id=REQUEST_ID, ok=True, result={"content": "x" * 1024 * 1024})

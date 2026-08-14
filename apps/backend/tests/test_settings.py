@@ -350,12 +350,15 @@ async def test_thinking_preference_is_read_and_persisted(monkeypatch) -> None:
     db = AsyncMock(spec=AsyncSession)
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
 
-    assert await user_preferences(user, db) == {"thinkingExpanded": False}
+    assert await user_preferences(user, db) == {
+        "thinkingExpanded": False,
+        "defaultExecutionAgentId": None,
+    }
     result = await update_user_preferences(
         UserPreferencesRequest(thinking_expanded=True), user, db
     )
 
-    assert result == {"thinkingExpanded": True}
+    assert result == {"thinkingExpanded": True, "defaultExecutionAgentId": None}
     save.assert_awaited_once_with(db, preferences, user_id=user.id)
     assert load.await_args_list[0].kwargs == {"user_id": user.id}
     db.commit.assert_awaited_once()

@@ -7,24 +7,26 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.permissions import PermissionDecision, PermissionPolicy
-from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.tools import ToolContext, tool_registry
-from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, decide_approval
-from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
+    DirectoryResult,
     ExecutionClient,
     ExecutionClientError,
     ProcessResult,
+    ShellInspectResult,
+    SystemInfoResult,
     WorkspaceDeleteResult,
+    WorkspaceGlobResult,
+    WorkspaceGrepResult,
     WorkspaceListResult,
     WorkspacePathResult,
     WorkspaceReadResult,
     WorkspaceStatResult,
     WorkspaceWriteResult,
 )
+from mato_loop_backend.execution.client import WorkspaceGrepMatch
 from mato_loop_backend.execution.protocol import EventMessage, ResponseMessage
-from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant, UserAccount
+from mato_loop_backend.models import ChatSession, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     IntegrationSettings,
@@ -40,6 +42,7 @@ class FakeExecutionClient:
         self.root_id = uuid4()
         self.root_revision = "a" * 64
         self.working_directory = "project"
+        self.current_directory = "/workspace/project"
         self.operations = frozenset(operations)
         self.responses = responses
         self.requests = []
@@ -55,7 +58,8 @@ class FakeExecutionClient:
                     type="event", id=uuid4(), event="stdout", data="streamed\n"
                 )
             )
-        return self.responses[operation]
+        response = self.responses[operation]
+        return response(arguments) if callable(response) else response
 
 
 def _context(tmp_path, call, client, *, decision=PermissionDecision.ALLOW):
@@ -115,7 +119,7 @@ async def test_execution_client_adds_only_snapshot_root_and_sanitizes_agent_erro
     agent_id = uuid4()
     root_id = uuid4()
     client = ExecutionClient(
-        agent_id, root_id, "a" * 64, "project", frozenset({"workspace.read"})
+        agent_id, root_id, "a" * 64, "project", frozenset({"workspace.read"}), "/workspace/project"
     )
     request = AsyncMock(
         return_value=ResponseMessage.model_validate(
@@ -168,6 +172,99 @@ async def test_execution_client_adds_only_snapshot_root_and_sanitizes_agent_erro
     assert "secret" not in str(exc_info.value)
 
 
+async def test_execution_client_supports_root_independent_operations(monkeypatch) -> None:
+    agent_id = uuid4()
+    client = ExecutionClient(
+        agent_id,
+        None,
+        None,
+        None,
+        frozenset({"system.info", "filesystem.resolve"}),
+    )
+    request = AsyncMock()
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.request", request
+    )
+    request.return_value = ResponseMessage.model_validate(
+        {
+            "type": "response",
+            "id": uuid4(),
+            "ok": True,
+            "result": {
+                "agentVersion": "1",
+                "platform": "linux",
+                "operatingSystem": "Linux",
+                "kernel": "6",
+                "architecture": "x86_64",
+                "logicalCpuCount": 4,
+            },
+        }
+    )
+    await client.request("system.info", {}, SystemInfoResult)
+    assert request.await_args.args[:3] == (agent_id, "system.info", {})
+
+    request.return_value = ResponseMessage.model_validate(
+        {
+            "type": "response",
+            "id": uuid4(),
+            "ok": True,
+            "result": {
+                "path": "/workspace",
+                    "rootId": str(uuid4()),
+                "rootRevision": "a" * 64,
+                "relativePath": ".",
+            },
+        }
+    )
+    result = await client.request(
+        "filesystem.resolve", {"path": "/workspace"}, DirectoryResult
+    )
+    assert result.path == "/workspace"
+
+
+async def test_system_info_and_shell_inspection_use_selected_computer(tmp_path) -> None:
+    system_call = ToolCall("system", "get_system_info", {})
+    client = FakeExecutionClient(
+        {
+            "system.info": SystemInfoResult(
+                agent_version="1",
+                platform="linux",
+                operating_system="Linux",
+                kernel="6",
+                architecture="x86_64",
+                logical_cpu_count=4,
+            ),
+            "shell.inspect": ShellInspectResult(
+                targets=[], analysis_complete=False, inspection_revision="c" * 64
+            ),
+            "shell.run": ProcessResult(
+                exit_code=0,
+                timed_out=False,
+                duration_ms=1,
+                stdout_bytes=0,
+                stderr_bytes=0,
+                stdout_truncated=False,
+                stderr_truncated=False,
+            ),
+        },
+        {"system.info", "shell.inspect", "shell.run"},
+    )
+    context = _context(tmp_path, system_call, client)
+
+    info = await _tools(client.operations).execute(system_call, context)
+    context.tool_call = ToolCall("shell", "shell_run", {"command": "pwd"})
+    shell = await _tools(client.operations).execute(context.tool_call, context)
+
+    assert json.loads(info.content)["operatingSystem"] == "Linux"
+    assert not shell.is_error
+    assert [request[0] for request in client.requests] == [
+        "system.info",
+        "shell.inspect",
+        "shell.run",
+    ]
+    assert context.ask_handler.await_args_list[-1].args[0].force_ask is True
+
+
 async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -> None:
     call = ToolCall("write-1", "write_file", {"root": "workspace", "path": "a.txt", "content": "x"})
     client = FakeExecutionClient(
@@ -182,6 +279,7 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
         {"workspace.write", "workspace.stat"},
     )
     context = _context(tmp_path, call, client)
+    context.ask_handler = AsyncMock(return_value=PermissionDecision.ALLOW)
 
     written = await _tools(client.operations).execute(call, context)
     assert json.loads(written.content) == {"root": "workspace", "written": "a.txt"}
@@ -194,6 +292,7 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
     assert client.requests == [
         ("workspace.write", {"path": "a.txt", "content": "x"})
     ]
+    assert context.ask_handler.await_count == 2
 
     provide = ToolCall(
         "provide-1", "provide_file", {"root": "workspace", "path": "a.txt"}
@@ -210,12 +309,13 @@ async def test_execution_workspace_grants_match_only_same_snapshot_descendants(
     tmp_path,
 ) -> None:
     call = ToolCall(
-        "read-1", "read_file", {"root": "workspace", "path": "docs"}
+        "read-1", "read", {"root": "workspace", "path": "docs"}
     )
-    client = FakeExecutionClient({}, {"workspace.read"})
+    client = FakeExecutionClient({}, {"workspace.stat", "workspace.read"})
+    client.current_directory = None
     context = _context(tmp_path, call, client, decision=PermissionDecision.DENY)
     await _tools(client.operations).execute(call, context)
-    granted_request = context.ask_handler.await_args.args[0]
+    granted_request = context.ask_handler.await_args_list[-1].args[0]
     grant = PermissionGrant(
         session_id=context.session.id,
         capability=granted_request.capability,
@@ -276,8 +376,11 @@ async def test_execution_workspace_grants_match_only_same_snapshot_descendants(
 
 async def test_all_workspace_model_operations_use_the_execution_client(tmp_path) -> None:
     operations = {
+        "workspace.stat",
         "workspace.list",
         "workspace.read",
+        "workspace.glob",
+        "workspace.grep",
         "workspace.mkdir",
         "workspace.delete",
         "workspace.copy",
@@ -285,6 +388,12 @@ async def test_all_workspace_model_operations_use_the_execution_client(tmp_path)
     }
     client = FakeExecutionClient(
         {
+            "workspace.stat": lambda arguments: WorkspaceStatResult(
+                path=arguments["path"],
+                kind="directory" if arguments["path"] == "." else "file",
+                size=None if arguments["path"] == "." else 1,
+                modified_at=1.0,
+            ),
             "workspace.list": WorkspaceListResult(
                 entries=[], has_more=False, next_offset=None
             ),
@@ -296,6 +405,13 @@ async def test_all_workspace_model_operations_use_the_execution_client(tmp_path)
                 truncated_lines=[],
                 sha256="a" * 64,
             ),
+            "workspace.glob": WorkspaceGlobResult(
+                paths=["a.txt"], truncated=False
+            ),
+            "workspace.grep": WorkspaceGrepResult(
+                matches=[WorkspaceGrepMatch(path="a.txt", line=1, text="x")],
+                truncated=False,
+            ),
             "workspace.mkdir": WorkspacePathResult(path="new"),
             "workspace.delete": WorkspaceDeleteResult(),
             "workspace.copy": WorkspacePathResult(path="copy.txt"),
@@ -304,8 +420,10 @@ async def test_all_workspace_model_operations_use_the_execution_client(tmp_path)
         operations,
     )
     calls = [
-        ToolCall("list", "list_directory", {"root": "workspace", "path": "."}),
-        ToolCall("read", "read_file", {"root": "workspace", "path": "a.txt"}),
+        ToolCall("list", "read", {"root": "workspace", "path": "."}),
+        ToolCall("read", "read", {"root": "workspace", "path": "a.txt"}),
+        ToolCall("glob", "glob", {"root": "workspace", "pattern": "*.txt"}),
+        ToolCall("grep", "grep", {"root": "workspace", "pattern": "x"}),
         ToolCall("mkdir", "create_directory", {"root": "workspace", "path": "new"}),
         ToolCall("delete", "delete_path", {"root": "workspace", "path": "old"}),
         ToolCall(
@@ -337,16 +455,22 @@ async def test_all_workspace_model_operations_use_the_execution_client(tmp_path)
         assert not result.is_error
 
     assert [operation for operation, _ in client.requests] == [
+        "workspace.stat",
         "workspace.list",
+        "workspace.stat",
         "workspace.read",
+        "workspace.glob",
+        "workspace.grep",
         "workspace.mkdir",
         "workspace.delete",
         "workspace.copy",
+        "workspace.stat",
         "workspace.move",
+        "workspace.stat",
     ]
 
 
-async def test_process_requires_one_time_dangerous_approval_and_persists_streams(
+async def test_process_uses_current_directory_and_persists_streams(
     tmp_path, monkeypatch
 ) -> None:
     call = ToolCall("process-1", "process_exec", {"program": "git", "args": ["status"]})
@@ -391,58 +515,23 @@ async def test_process_requires_one_time_dangerous_approval_and_persists_streams
     assert payload["exitCode"] == 0
 
 
-async def test_process_approval_cannot_persist_a_session_grant(
-    tmp_path, monkeypatch
-) -> None:
-    call = ToolCall("process-2", "shell_run", {"command": "pwd"})
-    client = FakeExecutionClient({}, {"shell.run"})
-    context = _context(tmp_path, call, client, decision=PermissionDecision.DENY)
+async def test_process_approval_cannot_persist_a_policy_grant(tmp_path) -> None:
+    call = ToolCall("process-2", "process_exec", {"program": "git", "args": ["status"]})
+    client = FakeExecutionClient(
+        {
+            "process.exec": ProcessResult(
+                exit_code=0,
+                timed_out=False,
+                duration_ms=1,
+                stdout_bytes=0,
+                stderr_bytes=0,
+                stdout_truncated=False,
+                stderr_truncated=False,
+            )
+        },
+        {"process.exec"},
+    )
+    context = _context(tmp_path, call, client)
     await _tools(client.operations).execute(call, context)
     permission = context.ask_handler.await_args.args[0]
-    approval = ApprovalRequest(
-        id=uuid4(),
-        session_id=context.session.id,
-        run_id=context.run_id,
-        action_kind=permission.action_kind,
-        risk_level=permission.risk_level,
-        title=permission.title,
-        summary=permission.summary,
-        capability=permission.capability,
-        resource_type=permission.resource_type,
-        resource_scope=permission.resource_scope,
-        payload={},
-        available_decisions=list(permission.available_decisions),
-        status="pending",
-    )
-    user = UserAccount(
-        id=context.session.user_id, username="test", password_hash="hash"
-    )
-    db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [approval, context.session]
-
-    with pytest.raises(ApiError) as exc_info:
-        await decide_approval(
-            approval.id,
-            ApprovalDecisionRequest(decision="allow_session"),
-            user,
-            db,
-        )
-    assert exc_info.value.code == "approval.decisionUnavailable"
-    db.add.assert_not_called()
-
-    db.reset_mock()
-    db.get.side_effect = [approval, context.session]
-    monkeypatch.setattr(
-        AgentRuntime, "claim_approval_resolution", Mock(return_value=True)
-    )
-    monkeypatch.setattr(
-        AgentRuntime, "resolve_approval", Mock(return_value=True)
-    )
-    monkeypatch.setattr(run_events, "publish", AsyncMock())
-    await decide_approval(
-        approval.id,
-        ApprovalDecisionRequest(decision="allow_once"),
-        user,
-        db,
-    )
-    db.add.assert_not_called()
+    assert permission.available_decisions == ("allow_once", "deny")

@@ -25,7 +25,10 @@ from sqlalchemy.orm import selectinload
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import AsyncSessionFactory, get_db_session
 from mato_loop_backend.execution import (
+    DirectoryResult,
     ExecutionAgentError,
+    ExecutionClient,
+    ExecutionClientError,
     HelloMessage,
     WelcomeMessage,
     execution_agent_connections,
@@ -34,6 +37,7 @@ from mato_loop_backend.execution import (
 from mato_loop_backend.execution.protocol import MAX_MESSAGE_BYTES, SUPPORTED_OPERATIONS
 from mato_loop_backend.models import ExecutionAgent, ExecutionAgentRoot, UserAccount
 from mato_loop_backend.security import hash_token, require_user
+from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 router = APIRouter(prefix="/execution-agents")
 PAIRING_DURATION_DEFAULT_SECONDS = 1800
@@ -87,6 +91,24 @@ class PairExecutionAgentRequest(ApiModel):
     access_key_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class DefaultExecutionAgentRequest(ApiModel):
+    default_execution_agent_id: UUID | None = None
+
+
+class ExecutionAgentHomeRequest(ApiModel):
+    home_directory: str | None = Field(default=None, max_length=4096)
+
+    @field_validator("home_directory")
+    @classmethod
+    def normalize_home_directory(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or not value.startswith("/"):
+            raise ValueError("home directory must be absolute")
+        return value
+
+
 def _valid_registration(agent: ExecutionAgent, now: datetime) -> bool:
     return (
         agent.revoked_at is None
@@ -108,6 +130,10 @@ def _agent_payload(agent: ExecutionAgent) -> dict:
         "revision": agent.revision,
         "protocolVersion": agent.protocol_version,
         "operations": agent.operations,
+        "homeDirectory": agent.home_directory,
+        "homeRootId": str(agent.home_root_id) if agent.home_root_id else None,
+        "homeRootRevision": agent.home_root_revision,
+        "homeRelativeDirectory": agent.home_relative_directory,
         "roots": [
             {"id": str(root.id), "label": root.label, "revision": root.revision}
             for root in agent.roots
@@ -265,7 +291,7 @@ async def pair_execution_agent(
 async def list_execution_agents(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict[str, list[dict]]:
+) -> dict:
     agents = list(
         (
             await db.scalars(
@@ -279,7 +305,85 @@ async def list_execution_agents(
             )
         ).all()
     )
-    return {"items": [_agent_payload(agent) for agent in agents]}
+    preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+    return {
+        "items": [_agent_payload(agent) for agent in agents],
+        "defaultExecutionAgentId": (
+            str(preferences.default_execution_agent_id)
+            if preferences.default_execution_agent_id
+            else None
+        ),
+    }
+
+
+@router.put("/default")
+async def set_default_execution_agent(
+    payload: DefaultExecutionAgentRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, str | None]:
+    if payload.default_execution_agent_id is not None:
+        agent = await _owned_agent(db, user.id, payload.default_execution_agent_id)
+        if agent.revoked_at is not None:
+            raise ApiError(status.HTTP_409_CONFLICT, "executionAgent.revoked")
+    preferences = await SettingsStore.load(
+        db, UserPreferences, user_id=user.id, for_update=True
+    )
+    preferences.default_execution_agent_id = payload.default_execution_agent_id
+    await SettingsStore.save(db, preferences, user_id=user.id)
+    await db.commit()
+    return {
+        "defaultExecutionAgentId": (
+            str(preferences.default_execution_agent_id)
+            if preferences.default_execution_agent_id
+            else None
+        )
+    }
+
+
+@router.put("/{agent_id}/home")
+async def set_execution_agent_home(
+    agent_id: UUID,
+    payload: ExecutionAgentHomeRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    agent = await _owned_agent(db, user.id, agent_id, for_update=True)
+    if agent.revoked_at is not None:
+        raise ApiError(status.HTTP_409_CONFLICT, "executionAgent.revoked")
+    if payload.home_directory is None:
+        agent.home_directory = None
+        agent.home_root_id = None
+        agent.home_root_revision = None
+        agent.home_relative_directory = None
+    else:
+        snapshot = execution_agent_connections.snapshot(agent.id)
+        if snapshot is None:
+            raise ApiError(status.HTTP_409_CONFLICT, "executionAgent.unavailable")
+        try:
+            result = await ExecutionClient(
+                agent.id, None, None, None, snapshot[0]
+            ).request(
+                "filesystem.resolve",
+                {"path": payload.home_directory},
+                DirectoryResult,
+            )
+        except ExecutionClientError as exc:
+            raise ApiError(
+                status.HTTP_400_BAD_REQUEST,
+                "executionAgent.homeDirectoryInvalid",
+                field="homeDirectory",
+            ) from exc
+        assert isinstance(result, DirectoryResult)
+        agent.home_directory = result.path
+        agent.home_root_id = result.root_id
+        agent.home_root_revision = result.root_revision
+        agent.home_relative_directory = result.relative_path
+    agent.home_override = True
+    agent.revision += 1
+    agent.updated_at = datetime.now(UTC)
+    await db.commit()
+    return _agent_payload(agent)
 
 
 @router.get("/{agent_id}")
@@ -342,6 +446,9 @@ async def unpair_execution_agent(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     agent = await _owned_agent(db, user.id, agent_id, for_update=True)
+    preferences = await SettingsStore.load(
+        db, UserPreferences, user_id=user.id, for_update=True
+    )
     changed = any(
         value is not None
         for value in (
@@ -358,6 +465,9 @@ async def unpair_execution_agent(
     if changed:
         agent.revision += 1
         agent.updated_at = datetime.now(UTC)
+    if preferences.default_execution_agent_id == agent.id:
+        preferences.default_execution_agent_id = None
+        await SettingsStore.save(db, preferences, user_id=user.id)
     await _commit_and_revoke_live_capabilities(db, agent.id)
     return _agent_payload(agent)
 
@@ -369,9 +479,15 @@ async def revoke_execution_agent(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
     agent = await _owned_agent(db, user.id, agent_id, for_update=True)
+    preferences = await SettingsStore.load(
+        db, UserPreferences, user_id=user.id, for_update=True
+    )
     if agent.revoked_at is None:
         agent.revoked_at = datetime.now(UTC)
         agent.revision += 1
+    if preferences.default_execution_agent_id == agent.id:
+        preferences.default_execution_agent_id = None
+        await SettingsStore.save(db, preferences, user_id=user.id)
     await _commit_and_revoke_live_capabilities(db, agent.id)
 
 
@@ -416,15 +532,27 @@ async def _register_snapshot(
             key=lambda item: str(item[0]),
         )
         new_roots = [(root.id, root.label, root.revision) for root in roots]
+        advertised_home_changed = not agent.home_override and (
+            agent.home_directory != hello.home_directory
+            or agent.home_root_id != hello.home_root_id
+            or agent.home_root_revision != hello.home_root_revision
+            or agent.home_relative_directory != hello.home_relative_directory
+        )
         changed = (
             agent.protocol_version != hello.protocol_version
             or agent.platform != hello.platform
             or agent.operations != operations
             or old_roots != new_roots
+            or advertised_home_changed
         )
         agent.protocol_version = hello.protocol_version
         agent.platform = hello.platform
         agent.operations = operations
+        if not agent.home_override:
+            agent.home_directory = hello.home_directory
+            agent.home_root_id = hello.home_root_id
+            agent.home_root_revision = hello.home_root_revision
+            agent.home_relative_directory = hello.home_relative_directory
         agent.last_connected_at = datetime.now(UTC)
         if changed:
             agent.revision += 1

@@ -29,7 +29,7 @@ def _hello(agent_id=None, *, operations=None) -> HelloMessage:
     return HelloMessage.model_validate(
         {
             "type": "hello",
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "agentId": agent_id or uuid4(),
             "name": "Test Agent",
             "platform": "linux",
@@ -43,7 +43,7 @@ def _hello(agent_id=None, *, operations=None) -> HelloMessage:
 
 
 def test_protocol_is_strict_and_requires_unique_snapshots() -> None:
-    payload = _hello().model_dump(mode="json", by_alias=True)
+    payload = _hello().model_dump(by_alias=True)
     payload["extra"] = True
     with pytest.raises(ValidationError):
         HelloMessage.model_validate(payload)
@@ -53,10 +53,31 @@ def test_protocol_is_strict_and_requires_unique_snapshots() -> None:
     with pytest.raises(ValidationError):
         HelloMessage.model_validate(payload)
 
+    payload = _hello().model_dump(by_alias=True)
+    payload["homeDirectory"] = "/workspace"
+    with pytest.raises(ValidationError):
+        HelloMessage.model_validate(payload)
+
+
+def test_protocol_accepts_complete_home_metadata() -> None:
+    payload = _hello().model_dump(by_alias=True)
+    root = payload["roots"][0]
+    payload.update(
+        homeDirectory="/workspace",
+        homeRootId=root["id"],
+        homeRootRevision=root["revision"],
+        homeRelativeDirectory=".",
+    )
+
+    hello = HelloMessage.model_validate(payload)
+
+    assert hello.home_directory == "/workspace"
 
 def test_supported_operations_match_the_execution_agent() -> None:
     assert SUPPORTED_OPERATIONS == {
         "workspace.stat",
+        "workspace.glob",
+        "workspace.grep",
         "workspace.list",
         "workspace.read",
         "workspace.write",
@@ -72,6 +93,15 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "cache.ensure",
         "cache.store",
         "cache.clear",
+        "system.info",
+        "filesystem.resolve",
+        "integration.git.add",
+        "integration.git.clone",
+        "integration.git.commit",
+        "integration.git.diff",
+        "integration.git.log",
+        "integration.git.status",
+        "shell.inspect",
     }
 
 
@@ -133,6 +163,9 @@ async def test_latest_connection_replaces_old_and_disconnects_are_classified() -
     assert disconnect_error_code("workspace.read", True) == "executionAgent.unavailable"
     assert disconnect_error_code("workspace.write", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("workspace.rename", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("integration.git.clone", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("integration.git.add", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("integration.git.commit", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("process.exec", True) == "process.outcomeUnknown"
 
 

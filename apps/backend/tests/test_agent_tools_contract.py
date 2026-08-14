@@ -2,6 +2,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
@@ -512,6 +513,7 @@ async def test_shared_tool_binds_two_instances_and_targets_selected_resource(
         },
     )
     context = _context(tmp_path, call)
+    context.db.scalar.return_value = None
 
     result = await effective.execute(call, context)
 
@@ -827,8 +829,9 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
     }
 
     for name in {
-        "list_directory",
-        "read_file",
+        "read",
+        "glob",
+        "grep",
         "provide_file",
         "write_file",
         "create_directory",
@@ -838,11 +841,12 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
         assert "root" in parameters["required"]
         assert parameters["properties"]["root"]["enum"] == ["session", "workspace"]
         assert "path" in parameters["properties"]
-    assert schemas["list_directory"]["parameters"]["properties"]["path"]["default"] == "."
-    assert schemas["list_directory"]["parameters"]["properties"]["offset"]["default"] == 0
-    assert schemas["list_directory"]["parameters"]["properties"]["limit"]["default"] == 100
-    assert schemas["read_file"]["parameters"]["properties"]["offset"]["default"] == 1
-    assert schemas["read_file"]["parameters"]["properties"]["limit"]["default"] == 2000
+    assert schemas["read"]["parameters"]["properties"]["offset"]["default"] == 1
+    assert schemas["read"]["parameters"]["properties"]["limit"]["default"] == 1000
+    assert schemas["glob"]["parameters"]["properties"]["path"]["default"] == "."
+    assert schemas["grep"]["parameters"]["properties"]["path"]["default"] == "."
+    assert "pattern" in schemas["glob"]["parameters"]["required"]
+    assert "pattern" in schemas["grep"]["parameters"]["required"]
     assert schemas["delete_path"]["parameters"]["properties"]["recursive"]["default"] is False
     for name in {"copy_path", "move_path"}:
         assert set(schemas[name]["parameters"]["required"]) == {
@@ -854,12 +858,13 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
         assert "exact new destination path" in schemas[name]["description"]
 
 
-async def test_read_only_mode_offers_only_read_file_tools_and_blocks_stale_mutations(
+async def test_read_only_mode_offers_only_read_tools_and_blocks_stale_mutations(
     tmp_path,
 ) -> None:
     file_tools = {
-        "list_directory",
-        "read_file",
+        "read",
+        "glob",
+        "grep",
         "provide_file",
         "write_file",
         "create_directory",
@@ -870,7 +875,7 @@ async def test_read_only_mode_offers_only_read_file_tools_and_blocks_stale_mutat
     offered = {
         item["name"] for item in tool_registry.schemas(IntegrationSettings(), "read-only")
     }
-    assert offered & file_tools == {"list_directory", "read_file", "provide_file"}
+    assert offered & file_tools == {"read", "glob", "grep", "provide_file"}
 
     call = ToolCall(
         id="stale",
@@ -885,6 +890,27 @@ async def test_read_only_mode_offers_only_read_file_tools_and_blocks_stale_mutat
     assert result.metadata == {"errorCode": "tool.writeDisabled"}
     context.root_files.write_file.assert_not_called()
 
+
+def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:
+    catalog = tool_registry.catalog(ToolSettings(), IntegrationSettings())
+    tools = {
+        tool["name"]: tool
+        for group in catalog
+        for tool in group["tools"]
+    }
+
+    assert tools["web_search"]["toolType"] == "backend"
+    assert tools["get_system_info"]["toolType"] == "computer"
+    assert tools["read"]["toolType"] == "shared"
+    assert {tool["toolType"] for tool in tools.values()} == {
+        "backend",
+        "computer",
+        "shared",
+    }
+    assert all(
+        "toolType" not in schema and "tool_type" not in schema
+        for schema in tool_registry.schemas(IntegrationSettings(), "read-write")
+    )
 
 async def test_effective_toolset_rejects_a_call_that_was_not_offered(tmp_path) -> None:
     effective = tool_registry.effective(IntegrationSettings(), "read-only")
@@ -1121,7 +1147,7 @@ async def test_web_search_rejects_an_invalid_provider_result(tmp_path, monkeypat
 async def test_missing_workspace_returns_structured_error_without_approval(tmp_path) -> None:
     call = ToolCall(
         id="read",
-        name="read_file",
+        name="read",
         arguments={"root": "workspace", "path": "notes.txt"},
     )
     context = _context(tmp_path, call)
@@ -2304,6 +2330,40 @@ def test_video_analysis_schema_uses_semantic_modes() -> None:
     assert legacy.analysis_mode == "fine_grained"
 
 
+async def test_workspace_video_uses_execution_client_bytes(tmp_path) -> None:
+    call = ToolCall(
+        id="video",
+        name="analyze_video",
+        arguments={"root": "workspace", "path": "video.mp4"},
+    )
+    context = _context(tmp_path, call)
+    context.session.working_directory = "project"
+    context.root_files.working_directory = "project"
+    context.execution_client = SimpleNamespace(
+        agent_id=uuid4(),
+        root_id=uuid4(),
+        root_revision="a" * 64,
+        working_directory="project",
+        current_directory=None,
+        read_bytes=AsyncMock(return_value=b"video"),
+    )
+    context.video_analysis_target = Mock(return_value="video-model")
+    context.video_analysis_handler = AsyncMock(return_value={"summary": "ok"})
+    context.tool_settings.analyze_video.policy = ToolExecutionPolicy.AUTO
+    context.root_files.open_file = Mock(side_effect=AssertionError("must not read locally"))
+    arguments = tool_registry._definitions["analyze_video"].arguments_model.model_validate(
+        call.arguments
+    )
+
+    result = await tools_module._analyze_video(arguments, context)
+
+    assert not result.is_error
+    context.execution_client.read_bytes.assert_awaited_once_with(
+        "video.mp4", limit=tools_module.MAX_VIDEO_BYTES
+    )
+    context.root_files.open_file.assert_not_called()
+
+
 def test_model_facing_fields_preserve_search_scope_and_persona_text() -> None:
     web_search = tool_registry._definitions["web_search"].schema()
     identity = tool_registry._definitions["update_agent_identity"].schema()
@@ -2380,18 +2440,18 @@ async def test_provide_file_supports_session_files(tmp_path) -> None:
     assert query["root_identity"] == [str(context.session.id)]
 
 
-async def test_read_file_does_not_read_after_denial(tmp_path) -> None:
+async def test_read_does_not_access_path_after_denial(tmp_path) -> None:
     (tmp_path / "notes.txt").write_text("secret", encoding="utf-8")
     call = ToolCall(
-        id="read", name="read_file", arguments={"root": "session", "path": "files/notes.txt"}
+        id="read", name="read", arguments={"root": "session", "path": "files/notes.txt"}
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
-    context.root_files.read_file = Mock(side_effect=AssertionError("must not read"))
+    context.root_files.path_kind = Mock(side_effect=AssertionError("must not inspect"))
 
     result = await tool_registry.execute(call, context)
 
     assert result.metadata == {"errorCode": "permission.denied"}
-    context.root_files.read_file.assert_not_called()
+    context.root_files.path_kind.assert_not_called()
 
 
 def test_webfetch_schema_has_the_expected_contract() -> None:
@@ -2691,7 +2751,7 @@ async def test_webfetch_returns_stable_integration_errors(tmp_path, monkeypatch)
 
 
 def test_permission_for_is_safe_for_webfetch_and_unknown_tools(tmp_path) -> None:
-    call = ToolCall(id="call", name="read_file", arguments={})
+    call = ToolCall(id="call", name="read", arguments={})
     root_files = _context(tmp_path, call).root_files
 
     assert permission_for(

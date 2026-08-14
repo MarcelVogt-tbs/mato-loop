@@ -25,6 +25,11 @@ class ExecutionAgent(Base):
             "token_hash IS NULL OR registration_token_hash IS NULL",
             name="credential_state_exclusive",
         ),
+        CheckConstraint(
+            "(home_directory IS NULL) = (home_root_id IS NULL) AND "
+            "(home_directory IS NULL) = (home_root_revision IS NULL)",
+            name="home_metadata_complete",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -43,6 +48,13 @@ class ExecutionAgent(Base):
     )
     protocol_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     operations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    home_directory: Mapped[str | None] = mapped_column(String(4096), nullable=True)
+    home_root_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    home_root_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    home_relative_directory: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    home_override: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )

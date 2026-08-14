@@ -5,6 +5,8 @@ const READ_ONLY_OPERATIONS = new Set([
   'workspace.export',
   'workspace.list',
   'workspace.read',
+  'workspace.glob',
+  'workspace.grep',
   'workspace.stat'
 ])
 const POLL_INTERVAL_MS = 10_000
@@ -28,6 +30,7 @@ export function absoluteWebsocketUrl(value, location = globalThis.location) {
 export const useExecutionAgentStore = defineStore('execution-agents', {
   state: () => ({
     items: [],
+    defaultExecutionAgentId: null,
     pairingPolicy: null,
     loading: false,
     loaded: false,
@@ -37,18 +40,26 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
     byId: (state) => (id) => state.items.find((agent) => agent.id === id) || null,
     workspaceContextFor: (state) => (preferences) => {
       const executionAgentId = preferences?.preferredExecutionAgentId || null
-      const rootId = preferences?.preferredRootId || null
       const agent = state.items.find((item) => item.id === executionAgentId)
+      const rootId = preferences?.preferredRootId || agent?.homeRootId || null
       const root = agent?.roots?.find((item) => item.id === rootId)
-      const operations = agent?.connected && root
-        ? (agent.operations || []).filter((operation) => (
-            preferences?.workspaceAccess !== 'read-only' || READ_ONLY_OPERATIONS.has(operation)
+      const availableOperations = root
+        ? agent?.operations || []
+        : (agent?.operations || []).filter((operation) => (
+            operation === 'system.info' || operation === 'filesystem.resolve'
+          ))
+      const connected = Boolean(agent?.connected && (root || agent?.protocolVersion >= 2))
+      const operations = connected
+        ? availableOperations.filter((operation) => (
+            preferences?.workspaceAccess !== 'read-only'
+            || !operation.startsWith('workspace.')
+            || READ_ONLY_OPERATIONS.has(operation)
           ))
         : []
       return {
         executionAgentId,
         rootId,
-        connected: Boolean(agent?.connected && root),
+        connected,
         operations
       }
     }
@@ -65,6 +76,7 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
       try {
         const { data } = await fetchPromise
         this.items = data.items
+        this.defaultExecutionAgentId = data.defaultExecutionAgentId || null
         this.loaded = true
       } catch (error) {
         this.loadFailed = true
@@ -114,6 +126,16 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
       this.items = this.items.map((agent) => agent.id === id ? { ...agent, ...updated } : agent)
       return updated
     },
+    async setDefault(defaultExecutionAgentId) {
+      const { data } = await api.put('/execution-agents/default', { defaultExecutionAgentId })
+      this.defaultExecutionAgentId = data.defaultExecutionAgentId || null
+      return this.defaultExecutionAgentId
+    },
+    async setHome(id, homeDirectory) {
+      const { data } = await api.put(`/execution-agents/${id}/home`, { homeDirectory })
+      this.items = this.items.map((agent) => agent.id === id ? { ...agent, ...data } : agent)
+      return data
+    },
     async createPairingToken(id, pairingTokenDurationSeconds) {
       const { data } = await api.post(`/execution-agents/${id}/pairing-token`, { pairingTokenDurationSeconds })
       this.items = this.items.map((agent) => agent.id === id ? data.agent : agent)
@@ -123,11 +145,13 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
       const { data } = await api.delete(`/execution-agents/${id}/pairing`)
       const updated = data.agent || data
       this.items = this.items.map((agent) => agent.id === id ? updated : agent)
+      if (this.defaultExecutionAgentId === id) this.defaultExecutionAgentId = null
       return updated
     },
     async revoke(id) {
       await api.delete(`/execution-agents/${id}`)
       this.items = this.items.filter((agent) => agent.id !== id)
+      if (this.defaultExecutionAgentId === id) this.defaultExecutionAgentId = null
     }
   }
 })

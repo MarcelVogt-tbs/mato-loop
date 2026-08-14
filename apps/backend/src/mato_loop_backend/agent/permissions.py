@@ -39,6 +39,7 @@ class PermissionRequest:
     policy_resource_key: str | None = None
     policy_hard_unavailable_capabilities: frozenset[str] = frozenset()
     approval_details: dict[str, Any] | None = None
+    force_ask: bool = False
     available_decisions: tuple[str, ...] = (
         "allow_once",
         "allow_session",
@@ -211,6 +212,69 @@ def path_permission(
             f"Der Agent möchte {selected_root.value}:{normalized_path} verwenden."
         ),
         resource_display=f"{selected_root.value}:{normalized_path}",
+    )
+
+
+def execution_directory_scope(
+    agent_id: UUID, path: str, root_id: UUID, root_revision: str
+) -> str:
+    parsed = PurePosixPath(path)
+    if (
+        not parsed.is_absolute()
+        or str(parsed) != path
+        or "\\" in path
+        or (path != "/" and any(part in {"", ".", ".."} for part in path.split("/")[1:]))
+        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in path)
+        or re.fullmatch(r"[0-9a-f]{64}", root_revision) is None
+    ):
+        raise ValueError("invalid execution directory")
+    return json.dumps(
+        {
+            "agentId": str(agent_id),
+            "path": path,
+            "rootId": str(root_id),
+            "rootRevision": root_revision,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def execution_directory_permission(
+    agent_id: UUID,
+    path: str,
+    root_id: UUID,
+    root_revision: str,
+    *,
+    action_kind: str = "change_directory",
+    title: str = "Verzeichnis verwenden?",
+    summary: str | None = None,
+) -> PermissionRequest:
+    return PermissionRequest(
+        capability="execution.directory",
+        resource_type="execution_directory",
+        resource_scope=execution_directory_scope(agent_id, path, root_id, root_revision),
+        action_kind=action_kind,
+        risk_level="medium",
+        title=title,
+        summary=summary or f"Der Agent möchte das Verzeichnis {path} verwenden.",
+        resource_display=path,
+        use_integration_policy=False,
+        available_decisions=("allow_session", "deny"),
+    )
+
+
+def system_info_permission(agent_id: UUID) -> PermissionRequest:
+    return PermissionRequest(
+        capability="system.info",
+        resource_type="execution_agent",
+        resource_scope=str(agent_id),
+        action_kind="get_system_info",
+        risk_level="low",
+        title="Systeminformationen lesen?",
+        summary="Der Agent möchte grundlegende Informationen des ausgewählten Computers lesen.",
+        resource_display="Ausgewählter Computer",
     )
 
 
@@ -498,6 +562,28 @@ def _execution_root_path_scope(
         return None
 
 
+def _execution_directory_scope(
+    resource_scope: str,
+) -> tuple[UUID, UUID, str, PurePosixPath] | None:
+    try:
+        value = json.loads(resource_scope)
+        if set(value) != {"agentId", "path", "rootId", "rootRevision"}:
+            return None
+        agent_id = UUID(value["agentId"])
+        root_id = UUID(value["rootId"])
+        path = value["path"]
+        revision = value["rootRevision"]
+        canonical = execution_directory_scope(agent_id, path, root_id, revision)
+        return (
+            agent_id,
+            root_id,
+            revision,
+            PurePosixPath(path),
+        ) if canonical == resource_scope else None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _path_is_within(resource: PurePosixPath, scope: PurePosixPath) -> bool:
     return resource == scope or scope == PurePosixPath(".") or scope in resource.parents
 
@@ -521,6 +607,28 @@ class PermissionPolicy:
                     )
             except ValueError:
                 return PermissionDecision.DENY
+
+        if request.resource_type == "execution_directory":
+            if _execution_directory_scope(request.resource_scope) is None:
+                return PermissionDecision.DENY
+            if policy == ToolExecutionPolicy.DISABLED:
+                return PermissionDecision.DENY
+            grants = list(
+                (
+                    await db.scalars(
+                        select(PermissionGrant).where(
+                            PermissionGrant.session_id == chat_session.id,
+                            PermissionGrant.capability == request.capability,
+                            PermissionGrant.resource_type == request.resource_type,
+                        )
+                    )
+                ).all()
+            )
+            return (
+                PermissionDecision.ALLOW
+                if any(PermissionPolicy.grant_matches(item, request, root_files) for item in grants)
+                else PermissionDecision.ASK
+            )
 
         if request.resource_type in {"root_path", "execution_root_path"}:
             scope = (
@@ -617,7 +725,21 @@ class PermissionPolicy:
             return resource[:4] == granted[:4] and _path_is_within(
                 resource[4], granted[4]
             )
+        if request.resource_type == "execution_directory":
+            resource = _execution_directory_scope(request.resource_scope)
+            granted = _execution_directory_scope(grant.resource_scope)
+            return bool(
+                resource
+                and granted
+                and resource[:3] == granted[:3]
+                and _path_is_within(resource[3], granted[3])
+            )
         if request.resource_type == "session":
+            try:
+                return UUID(request.resource_scope) == UUID(grant.resource_scope)
+            except ValueError:
+                return False
+        if request.resource_type == "execution_agent":
             try:
                 return UUID(request.resource_scope) == UUID(grant.resource_scope)
             except ValueError:

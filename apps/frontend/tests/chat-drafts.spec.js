@@ -180,11 +180,13 @@ describe('chat drafts', () => {
     await chat.updateActive({ preferred_execution_agent_id: 'agent-1' })
     await chat.updateActive({ preferred_root_id: 'root-1' })
     await chat.updateActive({ working_directory: 'projekt' })
+    await chat.updateActive({ current_directory: '/home/user/projekt' })
     expect(JSON.parse(window.localStorage.getItem('matoLoopChatDrafts')).newSession.options)
       .toMatchObject({
         preferredExecutionAgentId: 'agent-1',
         preferredRootId: 'root-1',
-        workingDirectory: 'projekt'
+        workingDirectory: 'projekt',
+        currentDirectory: '/home/user/projekt'
       })
     await chat.startSession('Lokal ausführen')
 
@@ -193,6 +195,8 @@ describe('chat drafts', () => {
       preferred_root_id: 'root-1',
       working_directory: 'projekt'
     }))
+    expect(api.post.mock.calls[0][1]).not.toHaveProperty('currentDirectory')
+    expect(api.post.mock.calls[0][1]).not.toHaveProperty('current_directory')
     const stored = JSON.parse(window.localStorage.getItem('matoLoopChatDrafts'))
     expect(stored.newSession.options.preferredExecutionAgentId).toBeNull()
   })
@@ -202,7 +206,8 @@ describe('chat drafts', () => {
     Object.assign(chat.activeContext, {
       preferredExecutionAgentId: 'agent-old',
       preferredRootId: 'root-old',
-      workingDirectory: 'projekt'
+      workingDirectory: 'projekt',
+      currentDirectory: '/home/user/projekt'
     })
 
     await chat.updateActive({ preferred_execution_agent_id: 'agent-new' })
@@ -210,7 +215,26 @@ describe('chat drafts', () => {
     expect(chat.activeContext).toMatchObject({
       preferredExecutionAgentId: 'agent-new',
       preferredRootId: null,
-      workingDirectory: null
+      workingDirectory: null,
+      currentDirectory: null
+    })
+  })
+
+  it('keeps explicitly supplied home fields when the executor changes', async () => {
+    const chat = useChatStore()
+
+    await chat.updateActive({
+      preferred_execution_agent_id: 'agent-new',
+      preferred_root_id: 'root-new',
+      working_directory: 'home',
+      current_directory: '/workspace/home'
+    })
+
+    expect(chat.activeContext).toMatchObject({
+      preferredExecutionAgentId: 'agent-new',
+      preferredRootId: 'root-new',
+      workingDirectory: 'home',
+      currentDirectory: '/workspace/home'
     })
   })
 
@@ -220,7 +244,8 @@ describe('chat drafts', () => {
         id: 'session-1',
         preferredExecutionAgentId: 'agent-new',
         preferredRootId: null,
-        workingDirectory: null
+        workingDirectory: null,
+        currentDirectory: '/home/new'
       }
     })
     const chat = useChatStore()
@@ -228,7 +253,8 @@ describe('chat drafts', () => {
       id: 'session-1',
       preferredExecutionAgentId: 'agent-old',
       preferredRootId: 'root-old',
-      workingDirectory: 'projekt'
+      workingDirectory: 'projekt',
+      currentDirectory: '/home/old/projekt'
     }
     chat.selectedSessionId = 'session-1'
 
@@ -239,6 +265,44 @@ describe('chat drafts', () => {
       preferred_root_id: null,
       working_directory: null
     })
+    expect(chat.current.currentDirectory).toBe('/home/new')
+  })
+
+  it('persists server-derived current directories without sending them in updates', async () => {
+    const chat = useChatStore()
+
+    await chat.updateActive({ current_directory: '/home/user' })
+
+    expect(chat.activeContext.currentDirectory).toBe('/home/user')
+    expect(JSON.parse(window.localStorage.getItem('matoLoopChatDrafts')).newSession.options)
+      .toMatchObject({ currentDirectory: '/home/user' })
+
+    api.patch.mockResolvedValue({ data: { id: 'session-1', currentDirectory: '/srv/project' } })
+    chat.current = { id: 'session-1', currentDirectory: '/srv' }
+    chat.selectedSessionId = 'session-1'
+    await chat.updateActive({ current_directory: '/should-not-be-sent', title: 'Test' })
+
+    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', { title: 'Test' })
+    expect(chat.current.currentDirectory).toBe('/srv/project')
+  })
+
+  it('applies and persists the backend default current directory', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        modelId: 'model-1',
+        preferredExecutionAgentId: 'agent-1',
+        preferredRootId: 'root-1',
+        workingDirectory: 'user',
+        currentDirectory: '/home/user'
+      }
+    })
+    const chat = useChatStore()
+
+    await chat.fetchDefaults()
+
+    expect(chat.activeContext.currentDirectory).toBe('/home/user')
+    expect(JSON.parse(window.localStorage.getItem('matoLoopChatDrafts')).newSession.options)
+      .toMatchObject({ currentDirectory: '/home/user' })
   })
 
   it('does not start a run while a persisted session setting is being saved', async () => {
