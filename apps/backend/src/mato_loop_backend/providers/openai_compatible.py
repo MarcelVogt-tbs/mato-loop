@@ -135,9 +135,21 @@ def _media_marker(item: ProviderMedia) -> str:
     return "[Image attachment unavailable]"
 
 
-def _chat_media_message(media: list[ProviderMedia]) -> dict[str, Any]:
+def _media_context_marker(source_role: str) -> str:
+    if source_role == "tool":
+        return (
+            "[Tool-result media for internal inspection. It belongs to the preceding tool "
+            "result and is not a new user message or upload. Inspect it and correct the result "
+            "if needed before replying.]"
+        )
+    return "[Session image]"
+
+
+def _chat_media_message(
+    media: list[ProviderMedia], *, source_role: str
+) -> dict[str, Any]:
     content: list[dict[str, Any]] = [
-        {"type": "text", "text": "[Session image]"}
+        {"type": "text", "text": _media_context_marker(source_role)}
     ]
     for item in media:
         if item.modality == "video" and item.data_url:
@@ -195,10 +207,15 @@ def _chat_messages(
                 pending_tool_media.append(message_media)
             next_is_tool = index + 1 < len(messages) and messages[index + 1]["role"] == "tool"
             if not next_is_tool:
-                converted.extend(_chat_media_message(items) for items in pending_tool_media)
+                converted.extend(
+                    _chat_media_message(items, source_role="tool")
+                    for items in pending_tool_media
+                )
                 pending_tool_media.clear()
         elif message_media:
-            converted.append(_chat_media_message(message_media))
+            converted.append(
+                _chat_media_message(message_media, source_role=message["role"])
+            )
     return converted
 
 
@@ -237,9 +254,9 @@ def _responses_input(
     grouped_media = _media_by_message(media or [])
     pending_tool_media: list[list[ProviderMedia]] = []
 
-    def append_media(values: list[ProviderMedia]) -> None:
+    def append_media(values: list[ProviderMedia], *, source_role: str) -> None:
         content: list[dict[str, Any]] = [
-            {"type": "input_text", "text": "[Session image]"}
+            {"type": "input_text", "text": _media_context_marker(source_role)}
         ]
         for item in values:
             if item.data_url:
@@ -296,10 +313,10 @@ def _responses_input(
             next_is_tool = index + 1 < len(messages) and messages[index + 1]["role"] == "tool"
             if not next_is_tool:
                 for values in pending_tool_media:
-                    append_media(values)
+                    append_media(values, source_role="tool")
                 pending_tool_media.clear()
         elif message_media:
-            append_media(message_media)
+            append_media(message_media, source_role=role)
     return "\n\n".join(instructions), items
 
 

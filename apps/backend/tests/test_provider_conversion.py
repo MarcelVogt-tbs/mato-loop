@@ -84,8 +84,13 @@ def test_media_follows_complete_parallel_tool_result_block_for_both_protocols() 
     _, responses = _responses_input(messages, media=media)
 
     assert [item["role"] for item in chat] == ["assistant", "tool", "tool", "user"]
+    tool_media_marker = (
+        "[Tool-result media for internal inspection. It belongs to the preceding tool result "
+        "and is not a new user message or upload. Inspect it and correct the result if needed "
+        "before replying.]"
+    )
     assert chat[-1]["content"] == [
-        {"type": "text", "text": "[Session image]"},
+        {"type": "text", "text": tool_media_marker},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
@@ -104,7 +109,7 @@ def test_media_follows_complete_parallel_tool_result_block_for_both_protocols() 
     }
     assert responses[-1]["content"][0] == {
         "type": "input_text",
-        "text": "[Session image]",
+        "text": tool_media_marker,
     }
 
 
@@ -148,6 +153,7 @@ def test_chat_messages_serialize_vllm_audio_and_video_parts() -> None:
 
     content = _chat_body(request)["messages"][-1]["content"]
 
+    assert content[0] == {"type": "text", "text": "[Session image]"}
     assert content[1] == {
         "type": "video_url",
         "video_url": {"url": "data:video/mp4;base64,dmlkZW8="},
