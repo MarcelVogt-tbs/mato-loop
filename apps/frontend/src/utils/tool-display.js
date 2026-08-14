@@ -92,6 +92,11 @@ export function memoryWriteContent(tool) {
     : content.preview
 }
 
+export function shellCommand(tool) {
+  if (!['shell_run', 'shell.run'].includes(tool?.name)) return ''
+  return typeof tool?.arguments?.command === 'string' ? tool.arguments.command : ''
+}
+
 export function toolSummary(tool) {
   const argumentsValue = tool?.arguments
   const fallback = TOOL_DISPLAY[tool?.name] ? '' : tool?.name || ''

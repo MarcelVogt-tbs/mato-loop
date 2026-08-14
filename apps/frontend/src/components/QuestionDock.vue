@@ -137,6 +137,7 @@
 
         <q-input
           v-else
+          ref="freeTextInput"
           :model-value="currentAnswers[0] || ''"
           outlined
           autogrow
@@ -200,6 +201,7 @@ const questions = useQuestionStore()
 const draft = questions.ensureDraft(props.request)
 const optionsElement = ref(null)
 const customInput = ref(null)
+const freeTextInput = ref(null)
 const questionHeading = ref(null)
 const current = computed(() => props.request.questions[draft.index])
 const currentAnswers = computed(() => draft.answers[current.value.id] || [])
@@ -224,7 +226,11 @@ function singleTabIndex(label) {
 
 function jump(index) {
   draft.index = Math.max(0, Math.min(props.request.questions.length - 1, index))
-  void nextTick(() => questionHeading.value?.focus())
+  focusCurrentQuestion()
+}
+
+function focusCurrentQuestion() {
+  void nextTick(() => (freeTextInput.value || questionHeading.value)?.focus())
 }
 
 function back() {
@@ -346,5 +352,5 @@ function handleKeydown(event) {
   controls[nextIndex]?.click()
 }
 
-onMounted(() => questionHeading.value?.focus())
+onMounted(focusCurrentQuestion)
 </script>

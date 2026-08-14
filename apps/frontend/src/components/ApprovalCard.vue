@@ -16,6 +16,10 @@
         <div class="text-caption app-muted">{{ resource.label }}</div>
         <code>{{ resource.value }}</code>
       </div>
+      <div v-if="shellCommandText" class="approval-resource q-mt-md">
+        <div class="text-caption app-muted">Shell-Befehl</div>
+        <pre class="approval-details q-mt-xs">{{ shellCommandText }}</pre>
+      </div>
       <div v-if="memoryContent" class="approval-resource q-mt-md">
         <div class="text-caption app-muted">Memory-Inhalt</div>
         <pre class="approval-details q-mt-xs">{{ memoryContent }}</pre>
@@ -111,7 +115,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { approvalResource, technicalDetailsDisplay } from 'src/utils/approval-display'
-import { memoryWriteContent, toolArgumentsDisplay } from 'src/utils/tool-display'
+import { memoryWriteContent, shellCommand, toolArgumentsDisplay } from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useWorkspaceStore } from 'stores/workspace'
@@ -149,6 +153,7 @@ const approvalTool = computed(() => ({
   name: props.approval.details?.tool,
   arguments: props.approval.details?.arguments
 }))
+const shellCommandText = computed(() => shellCommand(approvalTool.value))
 const memoryContent = computed(() => memoryWriteContent(approvalTool.value))
 const skillPreview = computed(() => props.approval.actionKind === 'build_skill'
   ? props.approval.details?.skillPreview

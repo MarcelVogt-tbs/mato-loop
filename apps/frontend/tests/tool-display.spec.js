@@ -4,6 +4,7 @@ import {
   formatToolArguments,
   memoryWriteContent,
   parseToolResult,
+  shellCommand,
   toolArgumentsDisplay,
   toolIdentity,
   toolStatus,
@@ -12,6 +13,14 @@ import {
 } from '../src/utils/tool-display'
 
 describe('tool display', () => {
+  it('shows shell commands exactly as requested', () => {
+    const command = 'set -e\nprintf "%s\\n" "hello world"'
+
+    expect(shellCommand({ name: 'shell_run', arguments: { command } })).toBe(command)
+    expect(shellCommand({ name: 'shell.run', arguments: { command } })).toBe(command)
+    expect(shellCommand({ name: 'process_exec', arguments: { command } })).toBe('')
+  })
+
   it('uses readable labels and concise resource summaries', () => {
     expect(toolIdentity('read_file')).toEqual({ label: 'Datei lesen', icon: 'description' })
     expect(toolIdentity('read')).toEqual({ label: 'Datei lesen', icon: 'description' })
