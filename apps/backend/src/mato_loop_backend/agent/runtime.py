@@ -3748,6 +3748,14 @@ class AgentRuntime:
                 ),
                 "policyResourceKey": permission.policy_resource_key,
                 **(permission.approval_details or {}),
+                "displayItems": [
+                    {
+                        "label": item.label,
+                        "value": list(item.value) if isinstance(item.value, tuple) else item.value,
+                        "format": item.format,
+                    }
+                    for item in permission.display_items
+                ],
             },
             available_decisions=list(permission.available_decisions),
         )

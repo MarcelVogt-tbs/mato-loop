@@ -7,6 +7,7 @@ import {
   shellCommand,
   toolArgumentsDisplay,
   toolIdentity,
+  toolPresentation,
   toolStatus,
   toolSummary,
   toolUsageSummary
@@ -19,6 +20,44 @@ describe('tool display', () => {
     expect(shellCommand({ name: 'shell_run', arguments: { command } })).toBe(command)
     expect(shellCommand({ name: 'shell.run', arguments: { command } })).toBe(command)
     expect(shellCommand({ name: 'process_exec', arguments: { command } })).toBe('')
+    expect(toolPresentation({ name: 'shell_run', arguments: { command } })).toEqual({
+      summary: 'set -e printf "%s\\n" "hello world"',
+      items: [{ label: 'Shell-Befehl', value: command, format: 'code' }]
+    })
+  })
+
+  it('presents process arguments without rebuilding a shell command', () => {
+    expect(toolPresentation({
+      name: 'process_exec',
+      arguments: { program: 'git', args: ['commit', '-m', 'hello world'] }
+    })).toEqual({
+      summary: 'git · commit, -m, hello world',
+      items: [
+        { label: 'Programm', value: 'git', format: 'code' },
+        { label: 'Parameter', value: ['commit', '-m', 'hello world'], format: 'list' }
+      ]
+    })
+  })
+
+  it('uses resolved approval display items for CalDAV tasks', () => {
+    const tool = {
+      name: 'tasks_update',
+      arguments: { task_token: '[Redacted]', title: 'Neuer Titel' }
+    }
+    const displayItems = [
+      { label: 'Aktion', value: 'Aufgabe ändern', format: 'text' },
+      { label: 'Aufgabe', value: 'Bericht abgeben', format: 'text' },
+      { label: 'Änderungen', value: ['Titel: Neuer Titel'], format: 'list' }
+    ]
+
+    expect(toolPresentation(tool, displayItems)).toEqual({
+      summary: 'Aufgabe ändern',
+      items: displayItems
+    })
+    expect(toolPresentation(tool).items).toEqual([
+      { label: 'Aktion', value: 'Aufgabe ändern', format: 'text' },
+      { label: 'Änderungen', value: ['Titel: Neuer Titel'], format: 'list' }
+    ])
   })
 
   it('uses readable labels and concise resource summaries', () => {

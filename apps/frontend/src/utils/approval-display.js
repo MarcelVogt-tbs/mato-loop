@@ -19,8 +19,11 @@ function detailName(details, keys) {
 
 export function approvalResource(approval, sessions = []) {
   const scope = String(approval?.resourceScope || '')
-  if (approval?.resourceType === 'path') {
-    return { label: 'Datei oder Ordner', value: scope || 'Unbekannter Pfad' }
+  if (['path', 'root_path', 'execution_root_path'].includes(approval?.resourceType)) {
+    return {
+      label: 'Datei oder Ordner',
+      value: approval?.resourceDisplay || scope || 'Unbekannter Pfad'
+    }
   }
   if (approval?.resourceType === 'execution_directory') {
     return {
@@ -31,6 +34,12 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'execution_agent') {
     return {
       label: 'Computer',
+      value: approval?.resourceDisplay || 'Ausgewählter Computer'
+    }
+  }
+  if (approval?.resourceType === 'execution_workspace') {
+    return {
+      label: 'Arbeitsverzeichnis',
       value: approval?.resourceDisplay || 'Ausgewählter Computer'
     }
   }
@@ -85,7 +94,10 @@ export function approvalResource(approval, sessions = []) {
       value: approval?.resourceDisplay ? `„${approval.resourceDisplay}“` : 'Persönliche Skills'
     }
   }
-  return { label: 'Angeforderter Scope', value: scope || 'Nicht angegeben' }
+  return {
+    label: 'Angeforderte Ressource',
+    value: approval?.resourceDisplay || scope || 'Nicht angegeben'
+  }
 }
 
 function sanitize(value, depth, seen, key = '', truncate = true) {

@@ -43,6 +43,16 @@ describe('approval display', () => {
       resourceType: 'execution_agent',
       resourceDisplay: 'Notebook'
     })).toEqual({ label: 'Computer', value: 'Notebook' })
+    expect(approvalResource({
+      resourceType: 'execution_workspace',
+      resourceScope: '{opaque}',
+      resourceDisplay: '/home/user/projekt'
+    })).toEqual({ label: 'Arbeitsverzeichnis', value: '/home/user/projekt' })
+    expect(approvalResource({
+      resourceType: 'root_path',
+      resourceScope: '{opaque}',
+      resourceDisplay: 'session:plan.md'
+    })).toEqual({ label: 'Datei oder Ordner', value: 'session:plan.md' })
 
     for (const [capability, label, icon] of [
       ['execution.directory', 'Aktuellen Ordner wechseln', 'drive_file_move'],

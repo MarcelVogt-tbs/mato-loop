@@ -214,6 +214,8 @@ The notification center is a combined attention view, not a second persistence l
 
 Quasar components form the primary UI layer. Pinia stores hold server state; components coordinate presentation and user action.
 
+Permission requests persist optional structured display items alongside their authorization snapshot. The backend supplies resolved domain values that cannot be reconstructed safely from sanitized tool arguments, while the frontend uses one presentation path for approval cards and ordinary tool history. Raw arguments remain available only as secondary technical details.
+
 Destructive actions use `useConfirm` or `v-confirm`. More complex input and approval decisions use Quasar dialogs. Success messages appear at the initiating UI point; API failures are notified centrally only.
 
 Unsent chat text is a browser-local draft and never reaches the backend. Drafts are separate for the new session and each persisted session. A new session, first message, and first agent run are persisted together only on send, so navigation has no empty sessions.

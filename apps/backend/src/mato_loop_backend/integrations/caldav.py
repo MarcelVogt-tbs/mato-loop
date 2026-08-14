@@ -1403,6 +1403,7 @@ def _task_permission(
     summary: str,
     resource: bool = False,
     use_integration_policy: bool = True,
+    display_items: tuple[Any, ...] = (),
 ) -> tuple[Any, ...]:
     from mato_loop_backend.agent.permissions import integration_operation_permission
 
@@ -1425,6 +1426,7 @@ def _task_permission(
             use_integration_policy=use_integration_policy,
             title=title,
             summary=summary,
+            display_items=display_items,
             available_decisions=(
                 ("allow_once", "allow_session", "deny")
                 if capability == "tasks.read"
@@ -1445,6 +1447,14 @@ def _task_reference(task: _TaskToken) -> str:
     return f'die Aufgabe "{title}"{due}'
 
 
+def _task_due_display(value: date | datetime | None) -> str:
+    if isinstance(value, datetime):
+        return f"{value:%d.%m.%Y, %H:%M} Uhr{_format_offset(value)}"
+    if isinstance(value, date):
+        return f"{value:%d.%m.%Y}"
+    return "Keine Fälligkeit"
+
+
 def _task_for_permission(
     arguments: TaskUpdateArguments | TaskSetCompletedArguments | TaskDeleteArguments,
     context: Any,
@@ -1462,6 +1472,8 @@ def _task_for_permission(
 def _task_lists_permission(
     arguments: TaskIntegrationArguments, context: Any
 ) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
     return _task_permission(
         "tasks.read",
         "list-task-lists",
@@ -1470,12 +1482,15 @@ def _task_lists_permission(
         title="Aufgabenlisten auflisten?",
         summary="Der Agent möchte Namen und Kennungen der verfügbaren Aufgabenlisten lesen.",
         use_integration_policy=False,
+        display_items=(PermissionDisplayItem("Aktion", "Aufgabenlisten auflisten"),),
     )
 
 
 def _tasks_query_permission(
     arguments: TaskQueryArguments, context: Any
 ) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
     completed = " einschließlich erledigter Aufgaben" if arguments.include_completed else ""
     return _task_permission(
         "tasks.read",
@@ -1485,12 +1500,24 @@ def _tasks_query_permission(
         title="Aufgaben lesen?",
         summary=f"Der Agent möchte bis zu {arguments.limit} Aufgaben{completed} lesen.",
         resource=True,
+        display_items=(
+            PermissionDisplayItem("Aktion", "Aufgaben lesen"),
+            PermissionDisplayItem("Anzahl", f"Bis zu {arguments.limit}"),
+            PermissionDisplayItem(
+                "Status",
+                "Offene und erledigte Aufgaben"
+                if arguments.include_completed
+                else "Nur offene Aufgaben",
+            ),
+        ),
     )
 
 
 def _task_create_permission(
     arguments: TaskCreateArguments, context: Any
 ) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
     summary = f'Der Agent möchte die Aufgabe "{_display_text(arguments.title)}" erstellen.'
     if arguments.description:
         summary += f' Notiz: "{_display_text(arguments.description, 240)}".'
@@ -1502,22 +1529,52 @@ def _task_create_permission(
         title="Aufgabe erstellen?",
         summary=summary,
         resource=True,
+        display_items=(
+            PermissionDisplayItem("Aktion", "Aufgabe erstellen"),
+            PermissionDisplayItem("Aufgabe", _display_text(arguments.title)),
+            PermissionDisplayItem("Fälligkeit", _task_due_display(arguments.due)),
+            *(
+                (
+                    PermissionDisplayItem(
+                        "Notiz", _display_text(arguments.description, 1_000)
+                    ),
+                )
+                if arguments.description
+                else ()
+            ),
+        ),
     )
 
 
 def _task_update_permission(
     arguments: TaskUpdateArguments, context: Any
 ) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
+    display_items: tuple[Any, ...] = ()
     try:
         task = _task_for_permission(arguments, context)
         changes = []
         if "title" in arguments.model_fields_set:
-            changes.append(f'Titel auf "{_display_text(arguments.title)}" ändern')
+            changes.append(f'Titel: "{_display_text(arguments.title)}"')
         if "description" in arguments.model_fields_set:
-            changes.append("Notiz ändern" if arguments.description else "Notiz entfernen")
+            changes.append(
+                f'Notiz: "{_display_text(arguments.description, 240)}"'
+                if arguments.description
+                else "Notiz entfernen"
+            )
         if "due" in arguments.model_fields_set:
-            changes.append("Fälligkeit ändern" if arguments.due else "Fälligkeit entfernen")
+            changes.append(
+                f"Fälligkeit: {_task_due_display(arguments.due)}"
+                if arguments.due
+                else "Fälligkeit entfernen"
+            )
         summary = f"Der Agent möchte {_task_reference(task)} ändern: {'; '.join(changes)}."
+        display_items = (
+            PermissionDisplayItem("Aktion", "Aufgabe ändern"),
+            PermissionDisplayItem("Aufgabe", _display_text(task.title) or "Ohne Titel"),
+            PermissionDisplayItem("Änderungen", tuple(changes), format="list"),
+        )
     except ValueError:
         summary = "Der Agent möchte eine Aufgabe in dieser Aufgabenliste ändern."
     return _task_permission(
@@ -1528,17 +1585,28 @@ def _task_update_permission(
         title="Aufgabe ändern?",
         summary=summary,
         resource=True,
+        display_items=display_items,
     )
 
 
 def _task_completed_permission(
     arguments: TaskSetCompletedArguments, context: Any
 ) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
+    display_items: tuple[Any, ...] = ()
     try:
         task = _task_for_permission(arguments, context)
         summary = (
             f"Der Agent möchte {_task_reference(task)} als "
             f"{'erledigt' if arguments.completed else 'offen'} markieren."
+        )
+        display_items = (
+            PermissionDisplayItem("Aktion", "Aufgabenstatus ändern"),
+            PermissionDisplayItem("Aufgabe", _display_text(task.title) or "Ohne Titel"),
+            PermissionDisplayItem(
+                "Neuer Status", "Erledigt" if arguments.completed else "Offen"
+            ),
         )
     except ValueError:
         summary = "Der Agent möchte den Status einer Aufgabe ändern."
@@ -1550,14 +1618,23 @@ def _task_completed_permission(
         title="Aufgabenstatus ändern?",
         summary=summary,
         resource=True,
+        display_items=display_items,
     )
 
 
 def _task_delete_permission(
     arguments: TaskDeleteArguments, context: Any
 ) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
+    display_items: tuple[Any, ...] = ()
     try:
-        summary = f"Der Agent möchte {_task_reference(_task_for_permission(arguments, context))} löschen."
+        task = _task_for_permission(arguments, context)
+        summary = f"Der Agent möchte {_task_reference(task)} löschen."
+        display_items = (
+            PermissionDisplayItem("Aktion", "Aufgabe löschen"),
+            PermissionDisplayItem("Aufgabe", _display_text(task.title) or "Ohne Titel"),
+        )
     except ValueError:
         summary = "Der Agent möchte eine Aufgabe aus dieser Aufgabenliste löschen."
     return _task_permission(
@@ -1568,6 +1645,7 @@ def _task_delete_permission(
         title="Aufgabe löschen?",
         summary=summary,
         resource=True,
+        display_items=display_items,
     )
 
 
@@ -1593,7 +1671,10 @@ def _accounts_permission(
 def _task_accounts_permission(
     _arguments: TaskListAccountsArguments, _context: Any
 ) -> tuple[Any, ...]:
-    from mato_loop_backend.agent.permissions import PermissionRequest
+    from mato_loop_backend.agent.permissions import (
+        PermissionDisplayItem,
+        PermissionRequest,
+    )
 
     return (
         PermissionRequest(
@@ -1605,6 +1686,7 @@ def _task_accounts_permission(
             title="Aufgabenkonten auflisten?",
             summary="Der Agent möchte die konfigurierten CalDAV-Konten für Aufgaben lesen.",
             resource_display="Konfigurierte CalDAV-Konten",
+            display_items=(PermissionDisplayItem("Aktion", "Aufgabenkonten auflisten"),),
         ),
     )
 

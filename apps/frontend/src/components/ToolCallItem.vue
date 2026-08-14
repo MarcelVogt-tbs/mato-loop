@@ -65,13 +65,14 @@
       </template>
 
       <div class="tool-call__body">
-        <div v-if="memoryContent" class="tool-call__section">
-          <div class="tool-call__section-label">Memory-Inhalt</div>
-          <pre class="tool-call__details">{{ memoryContent }}</pre>
-        </div>
+        <ToolPresentation v-if="!approval && presentation.items.length" :items="presentation.items" />
 
-        <div v-if="argumentsDisplay.text" class="tool-call__section" :class="{ 'q-mt-md': memoryContent }">
-          <div class="tool-call__section-label">Argumente</div>
+        <div
+          v-if="argumentsDisplay.text"
+          class="tool-call__section"
+          :class="{ 'q-mt-md': !approval && presentation.items.length }"
+        >
+          <div class="tool-call__section-label">Technische Argumente</div>
           <pre class="tool-call__details">{{ showFullArguments ? argumentsDisplay.fullText : argumentsDisplay.text }}</pre>
           <q-btn
             v-if="argumentsDisplay.truncated"
@@ -136,13 +137,13 @@
 import { computed, ref, watch } from 'vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
+import ToolPresentation from 'components/ToolPresentation.vue'
 import { supportedAttachments, toolFileActions, toolFileAttachment } from 'src/utils/attachments'
 import {
-  memoryWriteContent,
   parseToolResult,
   toolArgumentsDisplay,
   toolIdentity,
-  toolSummary,
+  toolPresentation,
   toolStatus
 } from 'src/utils/tool-display'
 
@@ -160,8 +161,11 @@ const props = defineProps({
 const emit = defineEmits(['open-file'])
 
 const identity = computed(() => toolIdentity(props.tool.name))
-const summary = computed(() => toolSummary(props.tool))
-const memoryContent = computed(() => memoryWriteContent(props.tool))
+const presentation = computed(() => toolPresentation(
+  props.tool,
+  props.approval?.details?.displayItems
+))
+const summary = computed(() => presentation.value.summary)
 const argumentsDisplay = computed(() => toolArgumentsDisplay(props.tool.arguments, props.tool.name))
 const resultData = computed(() => ({
   ...parseToolResult(props.result?.content, props.tool.name),

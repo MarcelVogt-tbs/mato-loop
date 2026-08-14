@@ -37,6 +37,7 @@ from mato_loop_backend.agent.context import (
 )
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
+    PermissionDisplayItem,
     PermissionPolicy,
     PermissionRequest,
     agent_identity_permission,
@@ -2371,7 +2372,7 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
 
 
 def _process_permission(
-    context: ToolContext, *, shell: bool
+    context: ToolContext, arguments: dict[str, Any], *, shell: bool
 ) -> PermissionRequest:
     client = _workspace_client(context)
     warning = (
@@ -2398,6 +2399,26 @@ def _process_permission(
         summary=warning,
         resource_display=client.current_directory or "Ausgewählter Computer",
         approval_details={"warning": warning},
+        display_items=(
+            (
+                PermissionDisplayItem(
+                    label="Shell-Befehl",
+                    value=str(arguments["command"]),
+                    format="code",
+                ),
+            )
+            if shell
+            else (
+                PermissionDisplayItem(
+                    label="Programm", value=str(arguments["program"]), format="code"
+                ),
+                PermissionDisplayItem(
+                    label="Parameter",
+                    value=tuple(str(value) for value in arguments.get("args", [])),
+                    format="list",
+                ),
+            )
+        ),
         available_decisions=("allow_once", "deny"),
     )
 
@@ -2419,7 +2440,10 @@ async def _execute_process(
         )
     ):
         return ToolResult.error("permission.denied")
-    if not await _allow(context, _process_permission(context, shell=operation == "shell.run")):
+    if not await _allow(
+        context,
+        _process_permission(context, arguments, shell=operation == "shell.run"),
+    ):
         return ToolResult.error("permission.denied")
     return await _run_process(context, operation, arguments)
 
@@ -2486,7 +2510,9 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         "shell.inspect", {"command": arguments.command}, ShellInspectResult
     )
     assert isinstance(inspection, ShellInspectResult)
-    process_permission = _process_permission(context, shell=True)
+    process_permission = _process_permission(
+        context, {"command": arguments.command}, shell=True
+    )
     if inspection.analysis_complete:
         for target in inspection.targets:
             if not await _directory_allowed(

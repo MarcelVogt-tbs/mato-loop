@@ -649,6 +649,25 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
         ),
         context,
     )[0]
+    update = tools["tasks_update"].authorization_factory(
+        caldav_module.TaskUpdateArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=token,
+            title="Bericht versenden",
+            due=None,
+        ),
+        context,
+    )[0]
+    completed = tools["tasks_set_completed"].authorization_factory(
+        caldav_module.TaskSetCompletedArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=token,
+            completed=True,
+        ),
+        context,
+    )[0]
     delete = tools["tasks_delete"].authorization_factory(
         caldav_module.TaskDeleteArguments(
             integration_id=account.id,
@@ -676,10 +695,32 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
     assert query.available_decisions == ("allow_once", "allow_session", "deny")
     assert create.capability == "tasks.write"
     assert delete.capability == "tasks.delete"
-    for permission in (create, delete):
+    for permission in (create, update, completed, delete):
         assert json.loads(permission.resource_scope)["resourceKey"] == key
         assert permission.policy_resource_key == key
         assert permission.available_decisions == ("allow_once", "deny")
+    assert [(item.label, item.value) for item in create.display_items] == [
+        ("Aktion", "Aufgabe erstellen"),
+        ("Aufgabe", "Bericht abgeben"),
+        ("Fälligkeit", "Keine Fälligkeit"),
+    ]
+    assert [(item.label, item.value) for item in update.display_items] == [
+        ("Aktion", "Aufgabe ändern"),
+        ("Aufgabe", "Bericht abgeben"),
+        (
+            "Änderungen",
+            ('Titel: "Bericht versenden"', "Fälligkeit entfernen"),
+        ),
+    ]
+    assert [(item.label, item.value) for item in completed.display_items] == [
+        ("Aktion", "Aufgabenstatus ändern"),
+        ("Aufgabe", "Bericht abgeben"),
+        ("Neuer Status", "Erledigt"),
+    ]
+    assert [(item.label, item.value) for item in delete.display_items] == [
+        ("Aktion", "Aufgabe löschen"),
+        ("Aufgabe", "Bericht abgeben"),
+    ]
 
 
 async def test_account_list_uses_only_bound_active_caldav_snapshot() -> None:

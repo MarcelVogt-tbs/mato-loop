@@ -263,6 +263,10 @@ async def test_system_info_and_shell_inspection_use_selected_computer(tmp_path) 
         "shell.run",
     ]
     assert context.ask_handler.await_args_list[-1].args[0].force_ask is True
+    assert [
+        (item.label, item.value, item.format)
+        for item in context.ask_handler.await_args_list[-1].args[0].display_items
+    ] == [("Shell-Befehl", "pwd", "code")]
 
 
 async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -> None:
@@ -498,6 +502,12 @@ async def test_process_uses_current_directory_and_persists_streams(
     assert permission.risk_level == "high"
     assert permission.available_decisions == ("allow_once", "deny")
     assert "Betriebssystem-Sandbox" in permission.summary
+    assert [
+        (item.label, item.value, item.format) for item in permission.display_items
+    ] == [
+        ("Programm", "git", "code"),
+        ("Parameter", ("status",), "list"),
+    ]
     assert client.requests == [
         ("process.exec", {"program": "git", "args": ["status"]})
     ]

@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -25,6 +25,13 @@ class PermissionDecision(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class PermissionDisplayItem:
+    label: str
+    value: str | tuple[str, ...]
+    format: Literal["text", "code", "list"] = "text"
+
+
+@dataclass(frozen=True, slots=True)
 class PermissionRequest:
     capability: str
     resource_type: str
@@ -39,6 +46,7 @@ class PermissionRequest:
     policy_resource_key: str | None = None
     policy_hard_unavailable_capabilities: frozenset[str] = frozenset()
     approval_details: dict[str, Any] | None = None
+    display_items: tuple[PermissionDisplayItem, ...] = ()
     force_ask: bool = False
     available_decisions: tuple[str, ...] = (
         "allow_once",
@@ -106,6 +114,7 @@ def integration_operation_permission(
     use_integration_policy: bool = True,
     action_kind: str = "integration_operation",
     risk_level: str = "medium",
+    display_items: tuple[PermissionDisplayItem, ...] = (),
     available_decisions: tuple[str, ...] = (
         "allow_once",
         "allow_session",
@@ -129,6 +138,7 @@ def integration_operation_permission(
         use_integration_policy=use_integration_policy,
         policy_integration_id=integration_id if use_integration_policy else None,
         policy_resource_key=resource_key,
+        display_items=display_items,
         available_decisions=available_decisions,
     )
 

@@ -16,14 +16,7 @@
         <div class="text-caption app-muted">{{ resource.label }}</div>
         <code>{{ resource.value }}</code>
       </div>
-      <div v-if="shellCommandText" class="approval-resource q-mt-md">
-        <div class="text-caption app-muted">Shell-Befehl</div>
-        <pre class="approval-details q-mt-xs">{{ shellCommandText }}</pre>
-      </div>
-      <div v-if="memoryContent" class="approval-resource q-mt-md">
-        <div class="text-caption app-muted">Memory-Inhalt</div>
-        <pre class="approval-details q-mt-xs">{{ memoryContent }}</pre>
-      </div>
+      <ToolPresentation v-if="presentation.items.length" :items="presentation.items" class="q-mt-md" />
       <div v-if="skillPreview" class="approval-resource q-mt-md">
         <div class="text-caption app-muted">Skill-Vorschau</div>
         <div class="text-subtitle1 text-weight-bold q-mt-xs">{{ skillPreview.name }}</div>
@@ -114,8 +107,9 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import ToolPresentation from 'components/ToolPresentation.vue'
 import { approvalResource, technicalDetailsDisplay } from 'src/utils/approval-display'
-import { memoryWriteContent, shellCommand, toolArgumentsDisplay } from 'src/utils/tool-display'
+import { toolArgumentsDisplay, toolPresentation } from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useWorkspaceStore } from 'stores/workspace'
@@ -153,8 +147,10 @@ const approvalTool = computed(() => ({
   name: props.approval.details?.tool,
   arguments: props.approval.details?.arguments
 }))
-const shellCommandText = computed(() => shellCommand(approvalTool.value))
-const memoryContent = computed(() => memoryWriteContent(approvalTool.value))
+const presentation = computed(() => toolPresentation(
+  approvalTool.value,
+  props.approval.details?.displayItems
+))
 const skillPreview = computed(() => props.approval.actionKind === 'build_skill'
   ? props.approval.details?.skillPreview
   : null)
@@ -172,9 +168,14 @@ const matchingDraftDirty = computed(() => Boolean(
 const draftRevision = computed(() => draftFile.value
   ? workspace.filePreviews[draftFile.value.path]?.revision ?? draftFile.value.initialRevision
   : undefined)
-const technicalDetails = computed(() => memoryContent.value
-  ? toolArgumentsDisplay(approvalTool.value.arguments, approvalTool.value.name)
-  : technicalDetailsDisplay(props.approval.details))
+const technicalDetails = computed(() => {
+  if (approvalTool.value.name === 'memory_write') {
+    return toolArgumentsDisplay(approvalTool.value.arguments, approvalTool.value.name)
+  }
+  const details = { ...props.approval.details }
+  delete details.displayItems
+  return technicalDetailsDisplay(details)
+})
 
 function hasDecision(decision) {
   return props.approval.availableDecisions.includes(decision)

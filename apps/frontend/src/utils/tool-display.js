@@ -97,6 +97,101 @@ export function shellCommand(tool) {
   return typeof tool?.arguments?.command === 'string' ? tool.arguments.command : ''
 }
 
+function taskDisplayItems(tool) {
+  const args = tool?.arguments || {}
+  const has = (key) => Object.prototype.hasOwnProperty.call(args, key)
+  if (tool?.name === 'tasks_query') {
+    return [
+      { label: 'Aktion', value: 'Aufgaben lesen', format: 'text' },
+      { label: 'Anzahl', value: `Bis zu ${args.limit || 100}`, format: 'text' },
+      {
+        label: 'Status',
+        value: args.include_completed ? 'Offene und erledigte Aufgaben' : 'Nur offene Aufgaben',
+        format: 'text'
+      }
+    ]
+  }
+  if (tool?.name === 'tasks_create') {
+    return [
+      { label: 'Aktion', value: 'Aufgabe erstellen', format: 'text' },
+      ...(typeof args.title === 'string'
+        ? [{ label: 'Aufgabe', value: args.title, format: 'text' }]
+        : []),
+      { label: 'Fälligkeit', value: args.due || 'Keine Fälligkeit', format: 'text' },
+      ...(typeof args.description === 'string' && args.description
+        ? [{ label: 'Notiz', value: args.description, format: 'text' }]
+        : [])
+    ]
+  }
+  if (tool?.name === 'tasks_update') {
+    const changes = [
+      ...(has('title') ? [`Titel: ${args.title}`] : []),
+      ...(has('description') ? [args.description ? `Notiz: ${args.description}` : 'Notiz entfernen'] : []),
+      ...(has('due') ? [args.due ? `Fälligkeit: ${args.due}` : 'Fälligkeit entfernen'] : [])
+    ]
+    return [
+      { label: 'Aktion', value: 'Aufgabe ändern', format: 'text' },
+      ...(changes.length ? [{ label: 'Änderungen', value: changes, format: 'list' }] : [])
+    ]
+  }
+  if (tool?.name === 'tasks_set_completed') {
+    return [
+      { label: 'Aktion', value: 'Aufgabenstatus ändern', format: 'text' },
+      { label: 'Neuer Status', value: args.completed ? 'Erledigt' : 'Offen', format: 'text' }
+    ]
+  }
+  if (tool?.name === 'tasks_delete') {
+    return [{ label: 'Aktion', value: 'Aufgabe löschen', format: 'text' }]
+  }
+  return []
+}
+
+function normalizeDisplayItems(items) {
+  if (!Array.isArray(items)) return []
+  return items.flatMap((item) => {
+    if (!item || typeof item.label !== 'string' || !['text', 'code', 'list'].includes(item.format)) return []
+    const value = item.format === 'list'
+      ? Array.isArray(item.value) ? item.value.map(String) : []
+      : typeof item.value === 'string' ? item.value : ''
+    return item.format === 'list' || value.length
+      ? [{ label: item.label, value, format: item.format }]
+      : []
+  })
+}
+
+export function toolPresentation(tool, displayItems = []) {
+  const suppliedItems = normalizeDisplayItems(displayItems)
+  if (suppliedItems.length) return { summary: toolSummary(tool), items: suppliedItems }
+
+  const command = shellCommand(tool)
+  if (command) {
+    return {
+      summary: toolSummary(tool),
+      items: [{ label: 'Shell-Befehl', value: command, format: 'code' }]
+    }
+  }
+  if (['process_exec', 'process.exec'].includes(tool?.name)) {
+    const args = tool?.arguments || {}
+    return {
+      summary: toolSummary(tool),
+      items: [
+        ...(typeof args.program === 'string'
+          ? [{ label: 'Programm', value: args.program, format: 'code' }]
+          : []),
+        { label: 'Parameter', value: Array.isArray(args.args) ? args.args.map(String) : [], format: 'list' }
+      ]
+    }
+  }
+  const memory = memoryWriteContent(tool)
+  if (memory) {
+    return {
+      summary: toolSummary(tool),
+      items: [{ label: 'Memory-Inhalt', value: memory, format: 'code' }]
+    }
+  }
+  return { summary: toolSummary(tool), items: taskDisplayItems(tool) }
+}
+
 export function toolSummary(tool) {
   const argumentsValue = tool?.arguments
   const fallback = TOOL_DISPLAY[tool?.name] ? '' : tool?.name || ''
@@ -105,6 +200,22 @@ export function toolSummary(tool) {
     return argumentsValue.cursor_id ? 'Memory-Übersicht fortsetzen' : 'Memory-Übersicht'
   }
   if (tool?.name === 'session_browse') return 'Letzte Sessions'
+  if (['shell_run', 'shell.run'].includes(tool?.name)) {
+    return truncate(argumentsValue.command)
+  }
+  if (['process_exec', 'process.exec'].includes(tool?.name)) {
+    const program = typeof argumentsValue.program === 'string' ? argumentsValue.program : ''
+    const args = Array.isArray(argumentsValue.args) ? argumentsValue.args.join(', ') : ''
+    return truncate([program, args].filter(Boolean).join(' · '))
+  }
+  if (tool?.name === 'tasks_create' && typeof argumentsValue.title === 'string') {
+    return truncate(argumentsValue.title)
+  }
+  if (tool?.name === 'tasks_update') return 'Aufgabe ändern'
+  if (tool?.name === 'tasks_set_completed') {
+    return argumentsValue.completed ? 'Als erledigt markieren' : 'Als offen markieren'
+  }
+  if (tool?.name === 'tasks_delete') return 'Aufgabe löschen'
   if (tool?.name === 'git_clone') {
     const url = argumentsValue.repository_url || argumentsValue.url
     const destination = argumentsValue.destination || argumentsValue.target_path || argumentsValue.path
