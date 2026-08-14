@@ -1,5 +1,6 @@
 import hashlib
 import json
+import struct
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -13,9 +14,11 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import workspace as workspace_route
 from mato_loop_backend.api.routes.workspace import (
     FileScope,
+    OpenScadFileRenderRequest,
     RenameEntryRequest,
     UpdateFileRequest,
 )
+from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.workspace import FileRoot, RootFileService, WorkspaceService
@@ -23,6 +26,38 @@ from mato_loop_backend.workspace import FileRoot, RootFileService, WorkspaceServ
 
 def _user() -> UserAccount:
     return UserAccount(id=uuid4(), username="test", password_hash="hash")
+
+
+def test_openscad_render_request_accepts_frontend_revision_alias() -> None:
+    request = OpenScadFileRenderRequest.model_validate(
+        {"path": "model.scad", "expectedRevision": "a" * 64}
+    )
+    assert request.expected_revision == "a" * 64
+
+
+@pytest.mark.parametrize(
+    ("code", "status_code"),
+    [
+        ("file.changed", 409),
+        ("file.pathNotFound", 404),
+        ("file.operationTooLarge", 413),
+        ("openscad.renderFailed", 422),
+        ("executionAgent.timeout", 504),
+        ("executionAgent.protocolError", 502),
+        ("executionAgent.unavailable", 503),
+    ],
+)
+def test_openscad_render_maps_status_without_exposing_diagnostics(
+    code: str, status_code: int
+) -> None:
+    error = workspace_route._openscad_render_api_error(
+        ExecutionClientError(
+            code,
+            {"diagnostics": "private diagnostic", "diagnosticsTruncated": False},
+        )
+    )
+    assert error.status_code == status_code
+    assert error.params is None
 
 
 async def test_file_context_hides_foreign_sessions() -> None:
@@ -166,6 +201,43 @@ async def test_preview_returns_markdown_and_only_validated_image_content(
     assert image.media_type == "image/png"
     assert image.headers["x-content-type-options"] == "nosniff"
     assert image.headers["cache-control"] == "private, no-store"
+
+
+async def test_preview_classifies_editable_scad_and_serves_validated_stl(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceService(tmp_path)
+    scad = b"cube([1, 2, 3]);\n"
+    stl = bytes(80) + struct.pack("<I", 1) + struct.pack("<12fH", *(0.0,) * 12, 0)
+    ascii_stl = b"solid model\nendsolid model\n"
+    (tmp_path / "model.scad").write_bytes(scad)
+    (tmp_path / "model.stl").write_bytes(stl)
+    (tmp_path / "ascii.stl").write_bytes(ascii_stl)
+    context = workspace_route._FileContext(workspace=workspace)
+
+    async def file_context(*_args, **_kwargs):
+        return context
+
+    monkeypatch.setattr(workspace_route, "_file_context", file_context)
+    user = _user()
+    db = AsyncMock(spec=AsyncSession)
+
+    scad_preview = await workspace_route.preview_file(user, db, "model.scad")
+    stl_preview = await workspace_route.preview_file(user, db, "model.stl")
+    ascii_preview = await workspace_route.preview_file(user, db, "ascii.stl")
+    content = await workspace_route.preview_image(user, db, "model.stl")
+
+    assert scad_preview == {
+        "kind": "openscad",
+        "content": scad.decode(),
+        "encoding": "utf-8",
+        "revision": hashlib.sha256(scad).hexdigest(),
+    }
+    assert stl_preview == {"kind": "stl"}
+    assert ascii_preview == {"kind": "none", "reason": "unsupported"}
+    assert content.media_type == "model/stl"
+    assert content.body == stl
+    assert content.headers["cache-control"] == "private, no-store"
 
 
 async def test_preview_serves_static_svg_with_restrictive_headers(

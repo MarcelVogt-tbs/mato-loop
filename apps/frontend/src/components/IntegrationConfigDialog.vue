@@ -7,7 +7,7 @@
   >
     <q-card class="integration-dialog app-surface column">
       <q-card-section class="row items-start no-wrap q-gutter-md">
-        <q-avatar color="primary" text-color="white" icon="extension" />
+        <q-avatar color="primary" text-color="white" :icon="dialogIcon" />
         <div class="col">
           <div class="text-h6">{{ isEditing ? `${integration.name} bearbeiten` : 'Integration hinzufügen' }}</div>
           <div class="text-body2 app-muted">
@@ -49,7 +49,7 @@
               :rules="[requiredRule]"
             />
             <q-input
-              v-if="form.integration_type !== 'git'"
+              v-if="!['git', 'openscad'].includes(form.integration_type)"
               v-model="form.base_url"
               outlined
               :label="baseUrlLabel"
@@ -57,31 +57,70 @@
               lazy-rules
               :rules="[requiredRule, urlRule]"
             />
-            <q-select
-              v-if="form.integration_type === 'git'"
-              v-model="form.executionAgentId"
-              outlined
-              emit-value
-              map-options
-              label="Computer"
-              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-              :options="executionAgentOptions"
-              :loading="executionAgents.loading"
-              lazy-rules
-              :rules="[requiredRule]"
-            >
-              <template #no-option>
-                <q-item>
-                  <q-item-section class="app-muted">Kein Computer eingerichtet</q-item-section>
-                </q-item>
-              </template>
-            </q-select>
+            <div v-if="['git', 'openscad'].includes(form.integration_type)" class="row items-start q-col-gutter-sm">
+              <q-select
+                v-model="form.executionAgentId"
+                class="col"
+                outlined
+                emit-value
+                map-options
+                label="Computer"
+                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                :options="executionAgentOptions"
+                :loading="executionAgents.loading"
+                lazy-rules
+                :rules="[requiredRule]"
+                @update:model-value="invalidateDiscovery"
+              >
+                <template #no-option>
+                  <q-item>
+                    <q-item-section class="app-muted">Kein Computer eingerichtet</q-item-section>
+                  </q-item>
+                </template>
+              </q-select>
+              <div v-if="form.integration_type === 'openscad'" class="col-auto q-pt-sm">
+                <q-btn
+                  outline
+                  dense
+                  no-caps
+                  color="primary"
+                  icon="search"
+                  label="Erkennen"
+                  :disable="!form.executionAgentId"
+                  :loading="discovering"
+                  @click="discoverOpenScad"
+                />
+              </div>
+            </div>
             <q-toggle
               v-if="form.integration_type === 'git'"
               v-model="form.allowNetwork"
               color="primary"
               label="Netzwerkzugriff erlauben"
             />
+            <q-input
+              v-if="form.integration_type === 'openscad'"
+              v-model="form.binaryPath"
+              outlined
+              label="Binary-Pfad"
+              hint="Absoluter Pfad zur OpenSCAD-Binärdatei."
+              lazy-rules
+              :rules="[requiredRule, absolutePathRule]"
+            />
+            <q-banner
+              v-if="form.integration_type === 'openscad' && discovery"
+              dense
+              rounded
+              class="app-surface-tonal"
+              role="status"
+              aria-live="polite"
+            >
+              <div class="text-weight-medium">{{ discoveryStatus }}</div>
+              <div v-if="discovery.version" class="text-caption q-mt-xs">Version: {{ discovery.version }}</div>
+              <div class="text-caption">
+                Headless-Vorschau {{ discovery.headlessPreview ? 'verfügbar' : 'nicht verfügbar' }}
+              </div>
+            </q-banner>
             <q-input
               v-if="form.integration_type === 'calendar'"
               v-model="form.username"
@@ -163,13 +202,15 @@ const integrationTypes = [
   { label: 'Websuche', value: 'search' },
   { label: 'Kalender & Aufgaben', value: 'calendar' },
   { label: 'Wissensdatenbank', value: 'knowledge' },
-  { label: 'Versionsverwaltung', value: 'git' }
+  { label: 'Versionsverwaltung', value: 'git' },
+  { label: '3D-Modellierung', value: 'openscad' }
 ]
 const PROVIDER_DEFAULTS = {
   search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
   calendar: { provider: 'caldav', label: 'CalDAV', placeholder: 'https://calendar.example.com' },
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
-  git: { provider: 'git', label: 'Git', placeholder: '' }
+  git: { provider: 'git', label: 'Git', placeholder: '' },
+  openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' }
 }
 const providerTypes = computed(() => {
   const preset = PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search
@@ -182,6 +223,7 @@ const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
 )
 const requiresHttps = computed(() => form.integration_type !== 'search')
+const dialogIcon = computed(() => form.integration_type === 'openscad' ? 'view_in_ar' : 'extension')
 const executionAgentOptions = computed(() => {
   const options = executionAgents.items.map((agent) => ({ label: agent.name, value: agent.id }))
   if (form.executionAgentId && !executionAgents.byId(form.executionAgentId)) {
@@ -191,6 +233,14 @@ const executionAgentOptions = computed(() => {
 })
 const form = reactive(defaultForm())
 const isEditing = computed(() => Boolean(props.integration))
+const discovering = ref(false)
+const discovery = ref(null)
+let discoveryVersion = 0
+const discoveryStatus = computed(() => {
+  const availability = discovery.value?.availability ?? discovery.value?.available
+  const available = availability === true || availability === 'available'
+  return available ? 'OpenSCAD wurde gefunden.' : 'OpenSCAD wurde nicht gefunden.'
+})
 
 function defaultForm() {
   return {
@@ -204,6 +254,7 @@ function defaultForm() {
     token_secret: '',
     executionAgentId: null,
     allowNetwork: false,
+    binaryPath: '/usr/bin/openscad',
     enabled: true
   }
 }
@@ -212,7 +263,8 @@ function selectIntegrationType(type) {
   const preset = PROVIDER_DEFAULTS[type] || PROVIDER_DEFAULTS.search
   form.provider_type = preset.provider
   form.name = preset.label
-  if (type === 'git') void fetchComputers()
+  invalidateDiscovery()
+  if (['git', 'openscad'].includes(type)) void fetchComputers()
 }
 
 async function fetchComputers() {
@@ -225,6 +277,39 @@ async function fetchComputers() {
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
+}
+
+function absolutePathRule(value) {
+  return String(value || '').trim().startsWith('/') || 'Bitte gib einen absoluten Pfad ein.'
+}
+
+async function discoverOpenScad() {
+  if (!form.executionAgentId || discovering.value) return
+  const version = ++discoveryVersion
+  const executionAgentId = form.executionAgentId
+  discovering.value = true
+  try {
+    const result = await integrations.discoverOpenScad(executionAgentId)
+    if (
+      version !== discoveryVersion
+      || !props.modelValue
+      || form.integration_type !== 'openscad'
+      || form.executionAgentId !== executionAgentId
+    ) return
+    discovery.value = result
+    const path = result?.executablePath
+    if (path) form.binaryPath = path
+  } catch {
+    if (version === discoveryVersion) discovery.value = null
+  } finally {
+    if (version === discoveryVersion) discovering.value = false
+  }
+}
+
+function invalidateDiscovery() {
+  discoveryVersion += 1
+  discovering.value = false
+  discovery.value = null
 }
 
 function tokenPairRule() {
@@ -268,6 +353,19 @@ async function save() {
       close()
       return
     }
+    if (form.integration_type === 'openscad') {
+      const payload = {
+        executionAgentId: form.executionAgentId,
+        name: form.name.trim(),
+        config: { binaryPath: form.binaryPath.trim() },
+        enabled: form.enabled
+      }
+      if (props.integration) await integrations.updateOpenScad(props.integration.id, payload)
+      else await integrations.createOpenScad(payload)
+      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
+      close()
+      return
+    }
     const payload = {
       integration_type: form.integration_type,
       provider_type: form.provider_type,
@@ -295,10 +393,12 @@ async function save() {
 }
 
 function close() {
+  invalidateDiscovery()
   emit('update:modelValue', false)
 }
 
-watch(() => props.modelValue, (open) => {
+watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
+  invalidateDiscovery()
   if (!open) return
   Object.assign(form, defaultForm(), props.integration ? {
     integration_type: props.integration.integrationType,
@@ -315,8 +415,9 @@ watch(() => props.modelValue, (open) => {
     allowNetwork: props.integration.allowNetwork
       ?? props.integration.config?.allowNetwork
       ?? false,
+    binaryPath: props.integration.config?.binaryPath || '/usr/bin/openscad',
     enabled: props.integration.enabled
   } : {})
-  if (form.integration_type === 'git') void fetchComputers()
+  if (['git', 'openscad'].includes(form.integration_type)) void fetchComputers()
 })
 </script>

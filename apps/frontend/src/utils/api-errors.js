@@ -4,6 +4,7 @@ const fieldLabels = {
   allowedPrivateOrigins: 'Die Liste privater Origins',
   base_url: 'Die Basis-URL',
   baseUrl: 'Die Basis-URL',
+  binaryPath: 'Der Binary-Pfad',
   category: 'Die Kategorie',
   content: 'Die Nachricht',
   description: 'Die Beschreibung',
@@ -52,6 +53,7 @@ const messages = {
   'agent.emptyResponse': () => 'Das Modell hat auch nach einem erneuten Versuch keine verwertbare Antwort geliefert.',
   'agent.modelRequestLimitReached': () => 'Der Agent hat die maximale Anzahl an Modellaufrufen erreicht.',
   'agent.requiredMemoryWriteMissing': () => 'Das Modell hat den begonnenen Memory-Schreibvorgang auch nach mehreren Versuchen nicht abgeschlossen.',
+  'agent.requiredOpenScadRenderMissing': () => 'Das Modell hat die erzeugte OpenSCAD-Datei auch nach mehreren Versuchen nicht gerendert.',
   'agent.requiredWebSearchFailed': () => 'Die verpflichtende Websuche ist wiederholt fehlgeschlagen.',
   'agent.requiredWebSearchMissing': () => 'Das Modell hat die verpflichtende Websuche auch nach mehreren Versuchen nicht ausgeführt.',
   'agent.requiredWebSearchUnsupported': () => 'Das ausgewählte Modell kann die verpflichtende Websuche nicht ausführen.',
@@ -77,6 +79,11 @@ const messages = {
   'attachment.sessionQuotaExceeded': () => 'Das Speicherlimit für Dateien dieser Session ist erreicht.',
   'attachment.tooLarge': () => 'Der Dateianhang ist zu groß.',
   'attachment.unsupportedType': () => 'Dieser Dateityp kann nicht verarbeitet werden.',
+  'cache.exportFailed': () => 'Die erzeugte Datei konnte nicht exportiert werden.',
+  'cache.invalidContent': () => 'Die zwischengespeicherte Datei ist ungültig.',
+  'cache.invalidDescriptor': () => 'Die Beschreibung der erzeugten Datei ist ungültig.',
+  'cache.invalidPath': () => 'Der Pfad zum Zwischenspeicher ist nicht verfügbar.',
+  'cache.notFound': () => 'Die erzeugte Datei ist nicht mehr verfügbar.',
   'executionAgent.alreadyPaired': () => 'Der Computer ist bereits gekoppelt. Entkopple ihn zuerst.',
   'executionAgent.homeDirectoryInvalid': () => 'Das Home-Verzeichnis ist ungültig, nicht verfügbar oder liegt außerhalb der lokal freigegebenen Bereiche.',
   'executionAgent.notFound': () => 'Der Computer wurde nicht gefunden.',
@@ -202,6 +209,19 @@ const messages = {
   'oauth.exchangeFailed': () => 'Die ChatGPT-Anmeldung konnte nicht abgeschlossen werden.',
   'oauth.loginExpired': () => 'Der ChatGPT-Einmalcode ist abgelaufen. Bitte starte die Anmeldung erneut.',
   'oauth.loginNotFound': () => 'Die ChatGPT-Anmeldung wurde nicht gefunden. Bitte starte sie erneut.',
+  'openscad.alreadyConfigured': () => 'OpenSCAD ist für diesen Computer bereits konfiguriert.',
+  'openscad.invalidArtifact': () => 'OpenSCAD hat keine gültige Modelldatei erzeugt.',
+  'openscad.invalidArchive': () => 'Das OpenSCAD-Projektarchiv ist ungültig.',
+  'openscad.invalidExecutable': () => 'Der OpenSCAD-Binary-Pfad ist ungültig oder nicht ausführbar.',
+  'openscad.notConfigured': () => 'OpenSCAD ist für diesen Computer nicht konfiguriert.',
+  'openscad.notFound': () => 'OpenSCAD wurde auf diesem Computer nicht gefunden.',
+  'openscad.previewFailed': () => 'OpenSCAD konnte die Vorschaubilder nicht erzeugen.',
+  'openscad.previewUnavailable': () => 'Diese OpenSCAD-Installation unterstützt keine Headless-Vorschau.',
+  'openscad.projectTooLarge': () => 'Das OpenSCAD-Projekt überschreitet die zulässigen Größenlimits.',
+  'openscad.renderFailed': () => 'Das OpenSCAD-Modell konnte nicht gerendert werden.',
+  'openscad.testFailed': () => 'Die OpenSCAD-Installation konnte nicht erfolgreich getestet werden.',
+  'openscad.unavailable': () => 'OpenSCAD ist auf dem ausgewählten Computer nicht verfügbar.',
+  'openscad.unsafeProject': () => 'Das OpenSCAD-Projekt enthält einen unsicheren Dateieintrag.',
   'provider.authenticationFailed': () => 'Der Provider hat die Zugangsdaten abgelehnt.',
   'provider.configurationInvalid': () => 'Die Provider-Konfiguration ist unvollständig.',
   'provider.configurationChanged': () => 'Die Provider-Konfiguration wurde während der Modellerkennung geändert. Bitte aktualisiere erneut.',
@@ -356,6 +376,18 @@ const statusMessages = {
 export function errorDescriptor(source) {
   const value = source?.response?.data?.error ?? source?.error ?? source
   return value && typeof value === 'object' && typeof value.code === 'string' ? value : null
+}
+
+export async function decodeBlobApiError(source) {
+  const data = source?.response?.data
+  if (typeof Blob === 'undefined' || !(data instanceof Blob)) return source
+  try {
+    const parsed = JSON.parse(await data.text())
+    if (errorDescriptor(parsed)) source.response.data = parsed
+  } catch {
+    // Non-JSON binary responses keep the original safe status fallback.
+  }
+  return source
 }
 
 export function apiErrorMessage(source, fallback) {

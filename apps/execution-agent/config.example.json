@@ -10,7 +10,7 @@
   "homeDirectory": "/home/mato/workspace",
   "dataDir": "/home/mato/.local/share/mato-loop-execution-agent",
   "gitExecutable": "/usr/bin/git",
-  "allowNetwork": false,
+  "allowNetwork": true,
   "processExecutables": {
     "python": "/usr/bin/python3"
   },

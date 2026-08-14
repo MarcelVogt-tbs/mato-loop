@@ -2474,6 +2474,7 @@ body.body--dark .file-viewer .app-muted {
   }
 
   .file-viewer__edit .q-btn__content .block,
+  .file-viewer__view-toggle .q-btn__content .block,
   .file-upload-action .q-btn__content .block {
     display: none;
   }
@@ -2492,6 +2493,7 @@ body.body--dark .file-viewer .app-muted {
   }
 
   .attachment-preview__actions .q-btn,
+  .file-attachment .q-btn,
   .work-history__file-output .q-btn,
   .tool-call__file-actions .q-btn {
     min-width: 44px;
@@ -2639,6 +2641,12 @@ body.body--dark .file-viewer .app-muted {
   border-radius: 10px;
   background: var(--app-surface-tonal);
   overflow-wrap: anywhere;
+}
+
+.approval-resource .tool-call__details {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .approval-details {

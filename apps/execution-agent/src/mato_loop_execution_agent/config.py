@@ -77,7 +77,8 @@ class AgentConfig(BaseModel):
     process_executables: dict[str, Path] = Field(default_factory=dict, alias="processExecutables")
     shell_executable: Path | None = Field(default=None, alias="shellExecutable")
     git_executable: Path | None = Field(default=None, alias="gitExecutable")
-    allow_network: bool = Field(default=False, alias="allowNetwork")
+    openscad_executable: Path | None = Field(default=None, alias="openscadExecutable")
+    allow_network: bool = Field(default=True, alias="allowNetwork")
     max_message_bytes: int = Field(
         default=1024 * 1024, alias="maxMessageBytes", ge=1024, le=1024 * 1024
     )
@@ -108,7 +109,7 @@ class AgentConfig(BaseModel):
             raise ValueError("process executable aliases must be non-empty and paths absolute")
         return value
 
-    @field_validator("shell_executable", "git_executable")
+    @field_validator("shell_executable", "git_executable", "openscad_executable")
     @classmethod
     def absolute_optional_executable(cls, value: Path | None) -> Path | None:
         if value is not None and not value.is_absolute():

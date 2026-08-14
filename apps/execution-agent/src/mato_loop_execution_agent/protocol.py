@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 PROTOCOL_VERSION = 2
 UUID_PATTERN = (
@@ -74,7 +75,7 @@ class Cancel(StrictModel):
 
 class Error(StrictModel):
     code: str = Field(pattern=r"^[a-z][A-Za-z]*(?:\.[a-z][A-Za-z]*)+$", max_length=120)
-    params: dict[str, Any] | None = Field(default=None, max_length=20)
+    params: dict[str, str | bool | int | float] | None = Field(default=None, max_length=20)
 
 
 class Response(StrictModel):
@@ -280,11 +281,30 @@ class ArtifactDescriptor(StrictModel):
     artifact_id: str = Field(alias="artifactId", min_length=1, max_length=128)
     backend_id: str = Field(alias="backendId", min_length=1, max_length=128)
     session_id: str = Field(alias="sessionId", min_length=1, max_length=128)
-    path: str
+    path: str = Field(min_length=1, max_length=1000, pattern=r"^[^\x00\\]+$")
     filename: str = Field(min_length=1, max_length=255)
     size: int = Field(ge=0)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     content_type: str = Field(alias="contentType", min_length=1, max_length=255)
+
+    @field_validator("path")
+    @classmethod
+    def relative_path(cls, value: str) -> str:
+        parsed = PurePosixPath(value)
+        if (
+            parsed.is_absolute()
+            or any(part in {"", ".", ".."} for part in value.split("/"))
+            or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+        ):
+            raise ValueError("artifact path must be a normalized relative POSIX path")
+        return value
+
+    @field_validator("filename")
+    @classmethod
+    def plain_filename(cls, value: str) -> str:
+        if value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+            raise ValueError("artifact filename must be plain")
+        return value
 
 
 class CacheEnsureArguments(StrictModel):
@@ -298,6 +318,105 @@ class CacheStoreArguments(PathArguments):
 
 class CacheClearArguments(StrictModel):
     pass
+
+
+class CacheExportArguments(StrictModel):
+    artifact: ArtifactDescriptor
+    transfer: TransferSpec
+
+
+class OpenScadDiscoverArguments(StrictModel):
+    pass
+
+
+class OpenScadTestArguments(StrictModel):
+    executable_path: str = Field(
+        alias="executablePath", min_length=1, max_length=4096, pattern=r"^[^\x00]+$"
+    )
+
+    @field_validator("executable_path")
+    @classmethod
+    def absolute_executable(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("executablePath must be absolute")
+        return value
+
+
+class OpenScadWorkspaceSource(StrictModel):
+    type: Literal["workspace"]
+    path: str = Field(min_length=1, max_length=1000, pattern=r"^[^\x00\\]+$")
+
+    @field_validator("path")
+    @classmethod
+    def relative_path(cls, value: str) -> str:
+        if value == ".":
+            return value
+        parsed = PurePosixPath(value)
+        if (
+            parsed.is_absolute()
+            or any(part in {"", ".", ".."} for part in value.split("/"))
+            or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+        ):
+            raise ValueError("workspace source must be a normalized relative POSIX path")
+        return value
+
+
+class OpenScadArchiveSource(StrictModel):
+    type: Literal["archive"]
+    artifact: ArtifactDescriptor
+    transfer: TransferSpec
+
+
+OpenScadSource = Annotated[
+    OpenScadWorkspaceSource | OpenScadArchiveSource, Field(discriminator="type")
+]
+
+
+class OpenScadRenderArguments(StrictModel):
+    root_id: str | None = Field(default=None, alias="rootId", pattern=UUID_PATTERN)
+    root_revision: str | None = Field(default=None, alias="rootRevision", pattern=r"^[0-9a-f]{64}$")
+    current_directory: str | None = Field(
+        default=None, alias="currentDirectory", min_length=1, max_length=4096
+    )
+    executable_path: str = Field(
+        alias="executablePath", min_length=1, max_length=4096, pattern=r"^[^\x00]+$"
+    )
+    session_id: str = Field(
+        alias="sessionId", min_length=1, max_length=128, pattern=r"^[^/\\\x00]+$"
+    )
+    entrypoint: str = Field(min_length=1, max_length=1000, pattern=r"^[^\x00\\]+$")
+    source: OpenScadSource
+
+    @field_validator("executable_path")
+    @classmethod
+    def absolute_executable(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("executablePath must be absolute")
+        return value
+
+    @field_validator("entrypoint")
+    @classmethod
+    def relative_entrypoint(cls, value: str) -> str:
+        parsed = PurePosixPath(value)
+        if (
+            parsed.is_absolute()
+            or any(part in {"", ".", ".."} for part in value.split("/"))
+            or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+        ):
+            raise ValueError("entrypoint must be a normalized relative POSIX path")
+        return value
+
+    @model_validator(mode="after")
+    def source_location(self):
+        host_values = (self.root_id, self.root_revision, self.current_directory)
+        if isinstance(self.source, OpenScadWorkspaceSource):
+            if any(value is None for value in host_values):
+                raise ValueError("workspace source requires host directory metadata")
+            if not self.current_directory.startswith("/"):
+                raise ValueError("currentDirectory must be absolute")
+        elif any(value is not None for value in host_values):
+            raise ValueError("archive source must not include host directory metadata")
+        return self
 
 
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
@@ -327,7 +446,11 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "integration.git.commit": GitCommitArguments,
     "cache.ensure": CacheEnsureArguments,
     "cache.store": CacheStoreArguments,
+    "cache.export": CacheExportArguments,
     "cache.clear": CacheClearArguments,
+    "integration.openscad.discover": OpenScadDiscoverArguments,
+    "integration.openscad.test": OpenScadTestArguments,
+    "integration.openscad.render": OpenScadRenderArguments,
 }
 
 INBOUND_ADAPTER = TypeAdapter(Welcome | Request | Cancel)

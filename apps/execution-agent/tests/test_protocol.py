@@ -118,6 +118,53 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_arguments(glob)
 
+    def test_openscad_archive_is_rootless_and_workspace_requires_a_root(self) -> None:
+        base = {
+            "type": "request",
+            "id": REQUEST_ID,
+            "operation": "integration.openscad.render",
+            "arguments": {
+                "executablePath": "/usr/bin/openscad",
+                "sessionId": "session",
+                "entrypoint": "main.scad",
+            },
+        }
+        archive = Request.model_validate(
+            {
+                **base,
+                "arguments": {
+                    **base["arguments"],
+                    "source": {
+                        "type": "archive",
+                        "artifact": {
+                            "artifactId": "project",
+                            "backendId": "backend",
+                            "sessionId": "session",
+                            "path": "project.zip",
+                            "filename": "project.zip",
+                            "size": 1,
+                            "sha256": "a" * 64,
+                            "contentType": "application/zip",
+                        },
+                        "transfer": {"url": "https://backend/project", "token": "token"},
+                    },
+                },
+            }
+        )
+        self.assertIsNone(validate_arguments(archive).root_id)
+
+        workspace = Request.model_validate(
+            {
+                **base,
+                "arguments": {
+                    **base["arguments"],
+                    "source": {"type": "workspace", "path": "."},
+                },
+            }
+        )
+        with self.assertRaises(ValidationError):
+            validate_arguments(workspace)
+
 
 if __name__ == "__main__":
     unittest.main()

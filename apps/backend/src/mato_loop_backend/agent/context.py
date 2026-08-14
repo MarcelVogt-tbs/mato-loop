@@ -282,6 +282,7 @@ def general_system_prompt(
     web_search_completed: bool = False,
     web_search_retry: int = 0,
     response_repair_required: bool = False,
+    openscad_render_pending: bool = False,
     memory_write_pending: bool = False,
     memory_write_outcome: str | None = None,
     tool_calls_used: int = 0,
@@ -528,6 +529,11 @@ def general_system_prompt(
         parts.append(
             "Git tools use repository paths relative to the selected computer directory. Inspect "
             "status and diff before mutations. git_commit commits staged changes only and never stages files."
+        )
+    if openscad_render_pending:
+        runtime_parts.append(
+            "OpenSCAD source was generated but has not been rendered successfully. Call "
+            "render_openscad before answering. If rendering fails, correct the source and rerender."
         )
     if memory_write_pending:
         runtime_parts.append(

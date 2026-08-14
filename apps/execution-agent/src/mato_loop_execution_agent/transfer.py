@@ -6,7 +6,7 @@ import hashlib
 import os
 import stat
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import httpx
@@ -27,23 +27,23 @@ class TransferClient:
         self.max_bytes = max_bytes
         backend = urlsplit(backend_url)
         scheme = "https" if backend.scheme == "wss" else "http"
-        self._origin = (scheme, backend.hostname, backend.port)
+        self._origin = (scheme, backend.netloc)
         prefix = backend.path[: -len("/execution-agents/connect")]
         self._path_prefix = f"{prefix}/workspace/transfers/"
         self._access_key = access_key
         self._client = client
         self._owns_client = client is None
 
-    def _validate_url(self, url: str) -> None:
+    def _validated_url(self, url: str) -> str:
         parsed = urlsplit(url)
-        origin = (parsed.scheme, parsed.hostname, parsed.port)
         ticket = parsed.path.removeprefix(self._path_prefix)
         try:
             valid_ticket = str(UUID(ticket)) == ticket.lower()
         except ValueError:
             valid_ticket = False
         if (
-            origin != self._origin
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
             or parsed.username is not None
             or parsed.password is not None
             or parsed.query
@@ -53,6 +53,7 @@ class TransferClient:
             or not valid_ticket
         ):
             raise AgentError("transfer.invalidUrl", "Transfer URL is outside the backend route")
+        return urlunsplit((*self._origin, parsed.path, "", ""))
 
     def _headers(self, ticket: str) -> dict[str, str]:
         return {
@@ -86,7 +87,7 @@ class TransferClient:
         expected_size: int,
         expected_sha256: str,
     ) -> Path:
-        self._validate_url(transfer.url)
+        url = self._validated_url(transfer.url)
         if expected_size > self.max_bytes:
             raise AgentError("transfer.tooLarge", "Transfer exceeds the configured limit")
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -99,7 +100,7 @@ class TransferClient:
         try:
             async with self.client.stream(
                 "GET",
-                transfer.url,
+                url,
                 headers=self._headers(transfer.token),
             ) as response:
                 if response.status_code != 200:
@@ -132,7 +133,7 @@ class TransferClient:
         size: int,
         sha256: str,
     ) -> None:
-        self._validate_url(transfer.url)
+        url = self._validated_url(transfer.url)
         if size > self.max_bytes:
             raise AgentError("transfer.tooLarge", "Transfer exceeds the configured limit")
 
@@ -152,7 +153,7 @@ class TransferClient:
 
         try:
             response = await self.client.put(
-                transfer.url,
+                url,
                 headers={
                     **self._headers(transfer.token),
                     "Content-Length": str(size),

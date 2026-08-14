@@ -90,6 +90,16 @@ Every operation uses the run's immutable root snapshot and current absolute dire
 
 These controls are an application boundary, not an operating-system sandbox. A hard network or filesystem boundary still requires container, namespace, firewall, or equivalent host policy around the Execution Agent.
 
+## OpenSCAD
+
+OpenSCAD is an agent-bound computer integration. One instance selects one owned Execution Agent and the canonical OpenSCAD executable discovered and validated when that agent starts. The model does not submit executable paths, camera values, environment variables, or arbitrary OpenSCAD arguments. It creates or edits `.scad` source with the normal file tools, preserves an explicit user filename when safe, and otherwise chooses a descriptive filename. New projects default to writable session files unless the user requests a workspace or an existing workspace project is being changed.
+
+After each material source change, the model renders the exact entrypoint and project directory. One render produces a binary STL plus fixed isometric, front, right, and top PNG views. The backend validates every descriptor, byte count, digest, PNG, and STL before persisting the files as tool artifacts. It derives the STL triangle count, bounds, and dimensions for text-only inspection. Image-capable models also receive the four previews and are instructed to correct the source and render again when diagnostics or geometry reveal a problem. A final response may claim completion only after a successful render and names both source and STL output.
+
+Session projects cross the backend boundary as bounded ZIP archives; workspace projects are copied through no-follow directory descriptors. The agent extracts or copies them into a private staging directory. OpenSCAD then runs inside bubblewrap with no network and no access to the agent workspace, data directory, configuration, or other host paths. Only the staged project, output directory, private temporary paths, and required read-only runtime files are visible. The executable path must still match the canonical device and inode recorded at agent startup. Rendered artifacts live in the disposable, size-bounded agent cache until the backend exports them through owner-bound one-use transfer tickets.
+
+The file browser keeps `.scad` editable as UTF-8 source and offers an explicit 3D view when a matching integration is connected. Binary STL files use a client-side interactive viewer with fixed byte and triangle limits, orbit, pan, zoom, and standard camera positions. Oversized models remain downloadable instead of being parsed in the browser.
+
 ## Web Search
 
 For the model, `web_search` exposes only the `query` field. The host selects primary and fallback providers from `ToolSettings.web_search`; model arguments cannot override this choice. The no-key metasearch is always present in the tool-provider catalog as `no_key`, but it is not an integration. Every active SearXNG instance adds `searxng:<uuid>`. Display names are labels only; renaming does not change the stable tool identifier.

@@ -163,6 +163,21 @@ export function toolPresentation(tool, displayItems = []) {
   const suppliedItems = normalizeDisplayItems(displayItems)
   if (suppliedItems.length) return { summary: toolSummary(tool), items: suppliedItems }
 
+  if (tool?.name === 'git_clone') {
+    const source = tool.arguments?.source || tool.arguments?.repository_url || tool.arguments?.url
+    const isUrl = /^https?:\/\//i.test(source)
+    return {
+      summary: toolSummary(tool),
+      items: typeof source === 'string' && source
+        ? [{
+            label: isUrl ? 'Repository-URL' : 'Repository-Quelle',
+            value: isUrl ? cleanUrlForDisplay(source) : source,
+            format: 'code'
+          }]
+        : []
+    }
+  }
+
   const command = shellCommand(tool)
   if (command) {
     return {
@@ -217,7 +232,7 @@ export function toolSummary(tool) {
   }
   if (tool?.name === 'tasks_delete') return 'Aufgabe löschen'
   if (tool?.name === 'git_clone') {
-    const url = argumentsValue.repository_url || argumentsValue.url
+    const url = argumentsValue.source || argumentsValue.repository_url || argumentsValue.url
     const destination = argumentsValue.destination || argumentsValue.target_path || argumentsValue.path
     return truncate([url ? cleanUrlForDisplay(url) : '', destination].filter(Boolean).join(' -> '))
   }

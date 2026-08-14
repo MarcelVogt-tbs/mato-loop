@@ -5071,6 +5071,7 @@ __metadata:
     prettier: "npm:3.5.3"
     quasar: "npm:2.18.2"
     sass: "npm:1.89.2"
+    three: "npm:0.180.0"
     vitest: "npm:3.2.4"
     vue: "npm:3.5.13"
     vue-router: "npm:4.5.0"
@@ -6917,6 +6918,13 @@ __metadata:
   version: 0.2.0
   resolution: "text-table@npm:0.2.0"
   checksum: 10c0/02805740c12851ea5982686810702e2f14369a5f4c5c40a836821e3eefc65ffeec3131ba324692a37608294b0fd8c1e55a2dd571ffed4909822787668ddbee5c
+  languageName: node
+  linkType: hard
+
+"three@npm:0.180.0":
+  version: 0.180.0
+  resolution: "three@npm:0.180.0"
+  checksum: 10c0/2b5954b3e0946676cd606f126b1fbbe337ab6e72ae5a25b3eadbf1b8c502c17f21d851b9f5fe035edd48736306e339f143b5ee9cd4e91a2e614681abacef08de
   languageName: node
   linkType: hard
 

@@ -198,6 +198,13 @@ export function supportedAttachments(attachments) {
   })
 }
 
+export function toolOutputAttachments(tool, attachments) {
+  const supported = supportedAttachments(attachments)
+  return tool?.name === 'render_openscad'
+    ? supported.filter((attachment) => attachment.kind !== 'image')
+    : supported
+}
+
 export function audioMimeTypeSupported(value) {
   const mimeType = typeof value === 'string'
     ? value.split(';', 1)[0].trim().toLowerCase()
@@ -221,6 +228,7 @@ export function attachmentIcon(attachment) {
   if (attachment?.kind === 'audio') return 'audio_file'
   if (attachment?.kind === 'video') return 'video_file'
   const mimeType = String(attachment?.mimeType || '')
+  if (mimeType === 'model/stl' || attachment?.filename?.toLocaleLowerCase().endsWith('.stl')) return 'view_in_ar'
   if (mimeType === 'application/pdf') return 'picture_as_pdf'
   if (attachment?.kind === 'text' || mimeType.startsWith('text/')) return 'description'
   if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'table_view'

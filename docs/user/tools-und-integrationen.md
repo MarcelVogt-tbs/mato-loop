@@ -26,6 +26,7 @@ MatoLoop bündelt Werkzeuge für:
 - Persona
 - Kalender und Aufgaben
 - Wissensdatenbank (BookStack)
+- 3D-Modellierung (OpenSCAD)
 
 Welche Tools tatsächlich erscheinen, hängt zusätzlich von Agent-Modus, Session-Einstellungen, Modellfähigkeiten und konfigurierten Standardmodellen ab.
 
@@ -80,6 +81,16 @@ Beim Bearbeiten wird eine Seite immer vollständig ersetzt. Der Agent liest sie 
 Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**.
 
 Suche, Bücherliste und Regale sind keine einzeln freigebbaren Ressourcen. Sperren Sie ein Buch jedoch über **Nicht erlaubt**, verschwindet es trotzdem aus der Suche und aus der Bücherliste, und der Agent kann es auch nicht mehr einem Regal zuordnen oder daraus entfernen. Ersetzt er die Bücher eines Regals vollständig, bleiben gesperrte Bücher unangetastet, statt stillschweigend herauszufallen. Ein gelöschtes Regal löscht die enthaltenen Bücher nicht. Kann das API-Token mehr als 500 Bücher sehen, wird die Ressourcenverwaltung abgelehnt, statt Richtlinien für nicht geladene Bücher zu übersehen. Anhänge folgen der Richtlinie des Buches, zu dem die Seite gehört; das Hochladen einer lokalen Datei verlangt zusätzlich dieselbe Freigabe wie ein direkter Dateizugriff. Berechtigungen des verwendeten API-Tokens in BookStack bleiben zusätzlich wirksam: Was das Token dort nicht darf, kann MatoLoop nicht freigeben.
+
+## OpenSCAD integrieren
+
+Der vorbereitete Docker-Computer enthält OpenSCAD bereits. Legen Sie unter **Einstellungen > Integrationen** eine OpenSCAD-Integration an, wählen Sie den Computer und verwenden Sie **Erkennen**, um den dort geprüften Binary-Pfad zu übernehmen. Ein eigener nativer Execution Agent benötigt OpenSCAD, Xvfb und Bubblewrap. Der Verbindungstest ist nur erfolgreich, wenn auch das isolierte Headless-Rendering verfügbar ist.
+
+Beschreiben Sie im Chat das gewünschte Modell mit seinen notwendigen Abmessungen und Randbedingungen. Wenn Sie einen Dateinamen nennen, verwendet der Agent diesen und ergänzt bei fehlender Endung `.scad`. Ohne Vorgabe wählt er einen kurzen beschreibenden Namen. Neue Dateien werden standardmäßig unter den Session-Dateien angelegt; einen Workspace verwendet der Agent auf ausdrücklichen Wunsch oder beim Bearbeiten eines dort vorhandenen Projekts.
+
+Der Agent erzeugt den OpenSCAD-Quelltext selbst, rendert ihn und prüft Diagnosen, Abmessungen sowie Ansichten von schräg vorne, vorne, rechts und oben. Erkennt er ein Problem, korrigiert er den Quelltext und rendert erneut. Nach erfolgreichem Abschluss stehen die `.scad`-Quelldatei, die STL-Datei und vier Vorschaubilder zur Verfügung. Im Dateiexplorer können Sie `.scad` zwischen Quelltext und 3D-Ansicht umschalten. STL-Dateien lassen sich drehen, verschieben, zoomen und aus festen Perspektiven betrachten.
+
+Vor dem Rendern gelten weiterhin die Datei- und CAD-Freigaben. OpenSCAD läuft ohne Netzwerk in einer isolierten Umgebung, die nur die bereitgestellten Projektdateien und das Ausgabeziel sieht. Sehr große Projekte oder STL-Dateien werden abgelehnt beziehungsweise nur als Download angeboten.
 
 ## Webfetch konfigurieren
 

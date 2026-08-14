@@ -15,6 +15,7 @@ SUPPORTED_OPERATIONS = frozenset(
     {
         "cache.clear",
         "cache.ensure",
+        "cache.export",
         "cache.store",
         "filesystem.resolve",
         "integration.git.add",
@@ -23,6 +24,9 @@ SUPPORTED_OPERATIONS = frozenset(
         "integration.git.diff",
         "integration.git.log",
         "integration.git.status",
+        "integration.openscad.discover",
+        "integration.openscad.render",
+        "integration.openscad.test",
         "process.exec",
         "shell.run",
         "shell.inspect",

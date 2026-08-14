@@ -8,6 +8,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import BinaryIO
 from uuid import uuid4
 
 from .protocol import ArtifactDescriptor, TransferSpec
@@ -151,6 +152,32 @@ class SessionCache:
                     pass
             self._evict_unlocked()
         return {"size": size, "sha256": artifact.sha256}
+
+    @contextmanager
+    def open_export(self, artifact: ArtifactDescriptor) -> Iterator[tuple[BinaryIO, int, str]]:
+        with self._lock, self._parent_fd(artifact, create=False) as (parent, name):
+            try:
+                descriptor = os.open(
+                    name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent
+                )
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise OSError
+            except FileNotFoundError as exc:
+                raise AgentError("cache.notFound", "Cached artifact is unavailable") from exc
+            except OSError as exc:
+                if "descriptor" in locals():
+                    os.close(descriptor)
+                raise AgentError("cache.invalidPath", "Cached artifact is unavailable") from exc
+        handle = os.fdopen(descriptor, "rb")
+        try:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            if metadata.st_size != artifact.size or digest != artifact.sha256:
+                raise AgentError("cache.invalidContent", "Cached artifact failed validation")
+            handle.seek(0)
+            yield handle, metadata.st_size, digest
+        finally:
+            handle.close()
 
     def evict(self) -> int:
         with self._lock:

@@ -152,6 +152,7 @@ RUN_PHASES = {
 }
 REQUIRED_WEB_SEARCH_RETRIES = 2
 REQUIRED_MEMORY_WRITE_RETRIES = 3
+REQUIRED_OPENSCAD_RENDER_RETRIES = 2
 EMPTY_RESPONSE_RETRIES = 1
 MEMORY_WRITE_OUTCOME_PRIORITY = {"denied": 0, "duplicate": 1, "stored": 2}
 AUTOMATIC_MEMORY_MAX_ITEMS = 3
@@ -173,6 +174,9 @@ Return exactly one return_skill_draft tool call with name, description, and comp
 _HTML_COMMENT_PATTERN = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
 _INLINE_CODE_PATTERN = re.compile(r"(`+).*?\1", re.DOTALL)
 _BARE_HTTP_URL_PATTERN = re.compile(r"https?://[^\s<]+", re.IGNORECASE)
+_OPENSCAD_FENCE_PATTERN = re.compile(
+    r"```(?:openscad|scad)\s*\n.*?```", re.IGNORECASE | re.DOTALL
+)
 _FENCE_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 _FENCE_CLOSE_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*(?:\r?\n)?$")
 _TEX_DISPLAY_PATTERN = re.compile(r"\$\$.*?\$\$|\\\[.*?\\\]", re.DOTALL)
@@ -1024,7 +1028,13 @@ class AgentRuntime:
                 execution_operations = [
                     operation
                     for operation in execution_operations
-                    if operation in {"system.info", "filesystem.resolve"}
+                    if operation
+                    in {
+                        "system.info",
+                        "filesystem.resolve",
+                        "integration.openscad.render",
+                        "cache.export",
+                    }
                 ]
             elif current_directory is None:
                 execution_operations = [
@@ -1458,6 +1468,8 @@ class AgentRuntime:
         required_search_completed = False
         required_search_retries = 0
         empty_response_retries = 0
+        openscad_render_pending = False
+        openscad_render_retries = 0
         memory_write_pending = False
         memory_write_retries = 0
         memory_write_outcome: str | None = None
@@ -1488,6 +1500,7 @@ class AgentRuntime:
             and (
                 tool_calls_used >= runtime_settings.max_tool_calls
                 or empty_response_retries > 0
+                or openscad_render_pending
             )
         ):
             step += 1
@@ -1840,6 +1853,7 @@ class AgentRuntime:
                 web_search_completed=required_search_completed,
                 web_search_retry=required_search_retries,
                 response_repair_required=empty_response_retries > 0,
+                openscad_render_pending=openscad_render_pending,
                 memory_write_pending=memory_write_pending,
                 memory_write_outcome=memory_write_outcome,
                 tool_calls_used=tool_calls_used,
@@ -1899,6 +1913,10 @@ class AgentRuntime:
                 schema["name"] == "memory_write" for schema in schemas
             ):
                 raise AgentRunError("agent.requiredMemoryWriteMissing")
+            if openscad_render_pending and not any(
+                schema["name"] == "render_openscad" for schema in schemas
+            ):
+                raise AgentRunError("agent.requiredOpenScadRenderMissing")
             offered_tool_names = {schema["name"] for schema in schemas}
 
             async def summarize(
@@ -1964,7 +1982,10 @@ class AgentRuntime:
 
             mutation_repair_pending = bool(unresolved_mutation_errors)
             hold_response = (
-                search_pending or memory_write_pending or mutation_repair_pending
+                search_pending
+                or memory_write_pending
+                or openscad_render_pending
+                or mutation_repair_pending
             )
             visible_response.reset()
             provider_started_at = time.monotonic()
@@ -2080,7 +2101,7 @@ class AgentRuntime:
                 tools=schemas,
                 tool_choice=(
                     "required"
-                    if search_pending or memory_write_pending
+                    if search_pending or memory_write_pending or openscad_render_pending
                     else "auto"
                 ),
                 on_delta=on_delta,
@@ -2143,6 +2164,18 @@ class AgentRuntime:
             assistant_content = canonical_assistant_content(result.content)
             if not assistant_content.strip() and visible_response.content.strip():
                 assistant_content = canonical_assistant_content(visible_response.content)
+            if not normalized_calls and (
+                openscad_render_pending
+                or (
+                    "render_openscad" in offered_tool_names
+                    and _OPENSCAD_FENCE_PATTERN.search(assistant_content)
+                )
+            ):
+                openscad_render_pending = True
+                openscad_render_retries += 1
+                if openscad_render_retries > REQUIRED_OPENSCAD_RENDER_RETRIES:
+                    raise AgentRunError("agent.requiredOpenScadRenderMissing")
+                continue
             if not normalized_calls and not assistant_content.strip():
                 if empty_response_retries >= EMPTY_RESPONSE_RETRIES:
                     raise AgentRunError("agent.emptyResponse")
@@ -2160,7 +2193,12 @@ class AgentRuntime:
             )
             hide_tool_round = (
                 search_pending and bool(normalized_calls)
-            ) or memory_write_pending or starts_memory_workflow or mutation_repair_pending
+            ) or (
+                memory_write_pending
+                or openscad_render_pending
+                or starts_memory_workflow
+                or mutation_repair_pending
+            )
             provider_data = _safe_provider_data(result.provider_data, normalized_calls)
             if hide_tool_round:
                 provider_data = _hidden_tool_round_provider_data(provider_data)
@@ -3131,6 +3169,16 @@ class AgentRuntime:
                 if execution_client is not None and execution_client.cancellation_deferred:
                     raise asyncio.CancelledError
                 error_code = metadata.get("errorCode")
+                if not isinstance(error_code, str):
+                    if call.name == "render_openscad":
+                        openscad_render_pending = False
+                        openscad_render_retries = 0
+                    elif (
+                        call.name == "write_file"
+                        and isinstance(call.arguments.get("path"), str)
+                        and call.arguments["path"].casefold().endswith(".scad")
+                    ):
+                        openscad_render_pending = True
                 if call.name in mutating_tool_names:
                     if isinstance(error_code, str) and error_code != "permission.denied":
                         mutation_results[call.name] = error_code
@@ -3171,7 +3219,10 @@ class AgentRuntime:
                 elif isinstance(error_code, str):
                     failed_tool_call_signatures.add(call_signature)
                 else:
-                    failed_tool_call_signatures.discard(call_signature)
+                    if call.name == "change_directory" or call.name in mutating_tool_names:
+                        failed_tool_call_signatures.clear()
+                    else:
+                        failed_tool_call_signatures.discard(call_signature)
                     if call.name in {"web_search", "webfetch"}:
                         research_used = True
                         _add_research_sources(

@@ -128,15 +128,10 @@
     </div>
 
     <div v-if="files.length" class="file-attachment-list">
-      <component
+      <article
         v-for="attachment in files"
         :key="attachment.id"
-        :is="attachment.safeUrl ? 'a' : 'article'"
         class="file-attachment app-surface"
-        :class="{ 'file-attachment--download': attachment.safeUrl }"
-        :href="attachment.safeUrl || undefined"
-        :download="attachment.safeUrl ? attachment.filename || 'datei' : undefined"
-        :aria-label="attachment.safeUrl ? `${attachment.filename || 'Datei'} herunterladen` : undefined"
       >
         <div class="file-attachment__icon">
           <q-icon :name="attachmentIcon(attachment)" size="25px" />
@@ -145,17 +140,40 @@
           <div class="text-weight-medium ellipsis">{{ attachment.filename || 'Dateianhang' }}</div>
           <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
         </div>
-        <q-icon v-if="attachment.safeUrl" name="download" size="24px" aria-hidden="true" />
+        <q-btn
+          v-if="attachment.safeUrl && isStl(attachment)"
+          flat
+          dense
+          no-caps
+          color="primary"
+          icon="view_in_ar"
+          label="Ansehen"
+          :aria-label="`${attachment.filename || '3D-Modell'} ansehen`"
+          @click="openAttachment(attachment)"
+        />
+        <q-btn
+          v-if="attachment.safeUrl"
+          flat
+          round
+          dense
+          icon="download"
+          :href="attachment.safeUrl"
+          :download="attachment.filename || 'datei'"
+          :aria-label="`${attachment.filename || 'Datei'} herunterladen`"
+        >
+          <q-tooltip>Herunterladen</q-tooltip>
+        </q-btn>
         <q-icon v-else name="link_off" class="app-muted" size="20px">
           <q-tooltip>Keine sichere interne Downloadadresse verfügbar</q-tooltip>
         </q-icon>
-      </component>
+      </article>
     </div>
 
     <q-dialog v-model="attachmentDialog" maximized transition-show="fade" transition-hide="fade" @hide="selectedAttachment = null">
       <q-card v-if="selectedAttachment" class="app-file-dialog">
         <FileViewerPanel
-          :image="{ url: selectedAttachment.safeUrl, name: selectedAttachment.filename || 'Bild' }"
+          :image="selectedAttachment.kind === 'image' ? { url: selectedAttachment.safeUrl, name: selectedAttachment.filename || 'Bild' } : null"
+          :model="isStl(selectedAttachment) ? { url: selectedAttachment.safeUrl, name: selectedAttachment.filename || '3D-Modell' } : null"
           fullscreen
           @close="attachmentDialog = false"
           @toggle-fullscreen="attachmentDialog = false"
@@ -198,6 +216,11 @@ function openAttachment(attachment) {
   if (!attachment.safeUrl || loadErrors[attachment.id]) return
   selectedAttachment.value = attachment
   attachmentDialog.value = true
+}
+
+function isStl(attachment) {
+  return attachment?.mimeType === 'model/stl'
+    || attachment?.filename?.toLocaleLowerCase().endsWith('.stl')
 }
 
 </script>

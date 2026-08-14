@@ -16,10 +16,21 @@
     @keydown.esc="handleEscape"
   >
     <q-toolbar class="file-viewer__toolbar q-px-md">
-      <q-btn class="file-icon-action" flat round dense icon="arrow_back" aria-label="Zur Dateiliste" @click="emit('back')">
+      <q-btn v-if="entry" class="file-icon-action" flat round dense icon="arrow_back" aria-label="Zur Dateiliste" @click="emit('back')">
         <q-tooltip>Zur Dateiliste</q-tooltip>
       </q-btn>
       <q-toolbar-title id="file-viewer-title" class="text-subtitle1 text-weight-bold ellipsis">{{ viewerName }}</q-toolbar-title>
+      <q-btn-toggle
+        v-if="preview.kind === 'openscad'"
+        class="file-viewer__view-toggle"
+        :model-value="workspace.editorActive ? 'source' : openScadView"
+        unelevated
+        no-caps
+        toggle-color="primary"
+        :options="openScadViewOptions"
+        aria-label="OpenSCAD-Ansicht wählen"
+        @update:model-value="setOpenScadView"
+      />
       <q-btn
         v-if="editable && !workspace.editorActive"
         ref="editButton"
@@ -81,7 +92,7 @@
         <q-tooltip>Explorer schließen</q-tooltip>
       </q-btn>
     </q-toolbar>
-    <div class="file-viewer__path q-px-md q-pb-sm">
+    <div v-if="entry" class="file-viewer__path q-px-md q-pb-sm">
       <div class="row items-center no-wrap">
         <q-btn class="file-icon-action q-mr-xs" flat round dense icon="arrow_upward" aria-label="Zum übergeordneten Ordner" @click="emit('navigate', parentPath)">
           <q-tooltip>Zum übergeordneten Ordner</q-tooltip>
@@ -155,7 +166,23 @@
         :content="preview.content"
         :allow-images="false"
       />
-      <pre v-else-if="preview.kind === 'text'" class="file-viewer__text">{{ preview.content }}</pre>
+      <pre v-else-if="preview.kind === 'text' || (preview.kind === 'openscad' && openScadView === 'source')" class="file-viewer__text">{{ preview.content }}</pre>
+      <template v-else-if="preview.kind === 'openscad' && openScadView === 'model'">
+        <div v-if="renderingOpenScad" class="fit flex flex-center" aria-live="polite">
+          <div class="column items-center q-gutter-sm">
+            <q-spinner color="primary" size="36px" />
+            <span>OpenSCAD-Modell wird gerendert …</span>
+          </div>
+        </div>
+        <div v-else-if="openScadError" class="fit column flex-center text-center q-pa-xl" role="alert">
+          <q-icon name="view_in_ar" size="64px" class="app-muted q-mb-md" />
+          <div class="text-subtitle1">OpenSCAD-Modell konnte nicht gerendert werden</div>
+          <div class="app-muted q-mt-xs">{{ openScadErrorMessage }}</div>
+          <q-btn class="q-mt-lg" color="primary" no-caps label="Erneut versuchen" @click="renderOpenScad" />
+        </div>
+        <StlViewerPanel v-else-if="openScadUrl" :src="openScadUrl" />
+      </template>
+      <StlViewerPanel v-else-if="preview.kind === 'stl'" :src="stlUrl" />
       <div v-else class="fit column flex-center text-center q-pa-xl">
         <q-icon name="draft" size="64px" class="app-muted q-mb-md" />
         <div class="text-subtitle1">Keine Vorschau verfügbar</div>
@@ -172,6 +199,7 @@ import { useQuasar } from 'quasar'
 import { useRouter } from 'vue-router'
 import ImageViewerPanel from 'components/ImageViewerPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
+import StlViewerPanel from 'components/StlViewerPanel.vue'
 import WorkspaceFileEditor from 'components/WorkspaceFileEditor.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
@@ -182,6 +210,7 @@ defineOptions({ name: 'FileViewerPanel' })
 const props = defineProps({
   entry: { type: Object, default: null },
   image: { type: Object, default: null },
+  model: { type: Object, default: null },
   fullscreen: Boolean,
   fullscreenToggle: Boolean
 })
@@ -201,9 +230,16 @@ const saveError = ref(null)
 const conflictLoadError = ref(null)
 const preview = ref({ kind: 'none', reason: 'unsupported' })
 const loadedImageUrl = ref('')
+const openScadView = ref('source')
+const renderingOpenScad = ref(false)
+const openScadError = ref(null)
+const openScadUrl = ref('')
+let renderController
+let renderVersion = 0
 let previewVersion = 0
 const directImage = computed(() => props.image?.url ? props.image : null)
-const viewerName = computed(() => props.entry?.name || '')
+const directModel = computed(() => props.model?.url ? props.model : null)
+const viewerName = computed(() => props.entry?.name || directModel.value?.name || '')
 const draft = computed({
   get: () => workspace.editorDraft ?? '',
   set: (value) => workspace.updateEditorDraft(value, preview.value.content)
@@ -212,11 +248,31 @@ const imageUrl = computed(() => props.entry?.path ? workspace.fileUrl('content',
 const editable = computed(() => (
   props.entry?.path
   && !workspace.rootIdentity
-  && ['text', 'markdown'].includes(preview.value.kind)
+  && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
   && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
   && workspace.operationAvailable('workspace.write')
 ))
-const canDownload = computed(() => workspace.operationAvailable('workspace.export'))
+const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('workspace.export'))
+const stlUrl = computed(() => directModel.value?.url
+  || (props.entry?.path ? workspace.fileUrl('content', props.entry.path) : ''))
+const openScadViewOptions = computed(() => [
+  {
+    label: $q.screen.gt.xs ? 'Quelltext' : undefined,
+    icon: 'code',
+    value: 'source',
+    attrs: { 'aria-label': 'OpenSCAD-Quelltext anzeigen' }
+  },
+  {
+    label: $q.screen.gt.xs ? '3D' : undefined,
+    icon: 'view_in_ar',
+    value: 'model',
+    disable: workspace.editorDirty,
+    attrs: {
+      'aria-label': 'OpenSCAD-3D-Modell anzeigen',
+      title: workspace.editorDirty ? 'Speichere zuerst die Änderungen.' : undefined
+    }
+  }
+])
 const printUrl = computed(() => {
   if (!props.entry?.path || preview.value.kind !== 'markdown') return undefined
   return router.resolve({
@@ -249,6 +305,7 @@ const breadcrumbs = computed(() => [
 const loadErrorMessage = computed(() => apiErrorMessage(loadError.value, 'Die Vorschau konnte nicht geladen werden.'))
 const saveErrorMessage = computed(() => apiErrorMessage(saveError.value, 'Die Datei konnte nicht gespeichert werden.'))
 const conflictLoadErrorMessage = computed(() => apiErrorMessage(conflictLoadError.value, 'Die aktuelle Revision konnte nicht geladen werden.'))
+const openScadErrorMessage = computed(() => apiErrorMessage(openScadError.value, 'Das OpenSCAD-Modell konnte nicht gerendert werden.'))
 const saveConflict = computed(() => errorDescriptor(saveError.value)?.code === 'file.changed')
 const unavailableMessage = computed(() => ({
   invalidImage: 'Die Bilddatei ist beschädigt oder ungültig.',
@@ -259,8 +316,16 @@ const unavailableMessage = computed(() => ({
 
 async function loadPreview() {
   const version = ++previewVersion
+  clearOpenScadRender()
+  openScadView.value = 'source'
   preview.value = { kind: 'none', reason: 'unsupported' }
   loadError.value = null
+  if (directModel.value) {
+    preview.value = { kind: 'stl' }
+    await nextTick()
+    viewerRoot.value?.focus()
+    return
+  }
   if (!props.entry?.path) return
   loading.value = true
   await nextTick()
@@ -281,7 +346,53 @@ async function loadPreview() {
 
 function startEditing() {
   saveError.value = null
+  openScadView.value = 'source'
   workspace.startEdit(preview.value.content)
+}
+
+async function setOpenScadView(view) {
+  if (view === 'model' && workspace.editorDirty) {
+    $q.notify({ type: 'warning', message: 'Speichere zuerst die Änderungen am Quelltext.' })
+    return
+  }
+  if (workspace.editorActive) workspace.discardEdit()
+  openScadView.value = view
+  if (view === 'model') await renderOpenScad()
+  else clearOpenScadRender()
+}
+
+async function renderOpenScad() {
+  if (!props.entry?.path || renderingOpenScad.value || workspace.editorDirty) return
+  clearOpenScadRender()
+  const version = ++renderVersion
+  renderingOpenScad.value = true
+  openScadError.value = null
+  renderController = new AbortController()
+  try {
+    const blob = await workspace.renderOpenScad(
+      props.entry.path,
+      preview.value.revision,
+      renderController.signal
+    )
+    if (!blob || version !== renderVersion || openScadView.value !== 'model') return
+    openScadUrl.value = URL.createObjectURL(blob)
+  } catch (error) {
+    if (error?.name !== 'CanceledError' && error?.name !== 'AbortError' && version === renderVersion) {
+      openScadError.value = error
+    }
+  } finally {
+    if (version === renderVersion) renderingOpenScad.value = false
+  }
+}
+
+function clearOpenScadRender() {
+  renderVersion += 1
+  renderController?.abort()
+  renderController = null
+  renderingOpenScad.value = false
+  openScadError.value = null
+  if (openScadUrl.value) URL.revokeObjectURL(openScadUrl.value)
+  openScadUrl.value = ''
 }
 
 async function focusEditButton() {
@@ -346,7 +457,16 @@ function warnBeforeUnload(event) {
 }
 
 function download() {
-  workspace.download(props.entry.path)
+  if (!directModel.value) {
+    workspace.download(props.entry.path)
+    return
+  }
+  const anchor = document.createElement('a')
+  anchor.href = directModel.value.url
+  anchor.download = directModel.value.name || 'modell.stl'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
 }
 
 function handleEscape() {
@@ -367,10 +487,12 @@ function imageLoaded() {
 watch(
   [
     () => props.entry?.path,
+    () => directModel.value?.url,
     () => workspace.scope,
     () => workspace.sessionId,
     () => workspace.workingDirectory,
     () => workspace.rootIdentity,
+    () => workspace.toolContext,
     () => workspace.workspaceContext
   ],
   loadPreview,
@@ -378,5 +500,9 @@ watch(
 )
 
 onMounted(() => window.addEventListener('beforeunload', warnBeforeUnload))
-onBeforeUnmount(() => window.removeEventListener('beforeunload', warnBeforeUnload))
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', warnBeforeUnload)
+  previewVersion += 1
+  clearOpenScadRender()
+})
 </script>

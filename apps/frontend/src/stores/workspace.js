@@ -99,6 +99,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     workingDirectory: null,
     workspaceContext: null,
     rootIdentity: null,
+    toolContext: null,
     entries: {},
     hasMore: {},
     loading: {},
@@ -173,6 +174,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorDraft = null
       this.filter = ''
       this.rootIdentity = null
+      this.toolContext = null
     },
     openToolFile(action) {
       if (
@@ -181,10 +183,24 @@ export const useWorkspaceStore = defineStore('workspace', {
         || !action.rootIdentity
         || !action.path
         || !action.filename
+        || (action.root === 'workspace' && (
+          !action.executionAgentId
+          || !action.rootId
+          || !action.rootRevision
+          || !action.workingDirectory
+        ))
       ) return
       this.scope = action.root === 'session' ? 'session' : 'filesystem'
       this.reset()
       this.rootIdentity = action.rootIdentity
+      this.toolContext = action.root === 'workspace'
+        ? {
+          executionAgentId: action.executionAgentId,
+          rootId: action.rootId,
+          rootRevision: action.rootRevision,
+          workingDirectory: action.workingDirectory
+        }
+        : null
       this.selectedPath = action.path
       this.viewedEntry = {
         kind: 'file',
@@ -263,6 +279,14 @@ export const useWorkspaceStore = defineStore('workspace', {
           : {}),
         ...(!this.sessionId && this.workingDirectory
           ? { working_directory: this.workingDirectory }
+          : {}),
+        ...(this.rootIdentity && this.scope === 'filesystem' && this.toolContext
+          ? {
+              execution_agent_id: this.toolContext.executionAgentId,
+              root_id: this.toolContext.rootId,
+              root_revision: this.toolContext.rootRevision,
+              working_directory: this.toolContext.workingDirectory
+            }
           : {}),
         ...extra
       }
@@ -466,6 +490,21 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
       this.editorDirty = false
       return data
+    },
+    async renderOpenScad(path, expectedRevision, signal) {
+      if (!this.operationAvailable('workspace.read')) return null
+      const { data, headers } = await api.post('/workspace/files/openscad/render', {
+        path,
+        expectedRevision
+      }, {
+        params: this.readRequestParams(),
+        responseType: 'blob',
+        signal,
+        suppressErrorToast: true
+      })
+      return data instanceof Blob
+        ? data
+        : new Blob([data], { type: headers?.['content-type'] || 'model/stl' })
     },
     download(path) {
       if (!this.operationAvailable('workspace.export')) return

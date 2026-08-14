@@ -138,7 +138,7 @@ import { computed, ref, watch } from 'vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
-import { supportedAttachments, toolFileActions, toolFileAttachment } from 'src/utils/attachments'
+import { toolFileActions, toolFileAttachment, toolOutputAttachments } from 'src/utils/attachments'
 import {
   parseToolResult,
   toolArgumentsDisplay,
@@ -173,7 +173,7 @@ const resultData = computed(() => ({
 }))
 const attachments = computed(() => {
   const providedFile = toolFileAttachment(props.tool, props.result)
-  return supportedAttachments([
+  return toolOutputAttachments(props.tool, [
     ...(props.result?.attachments || []),
     ...(providedFile ? [providedFile] : [])
   ])

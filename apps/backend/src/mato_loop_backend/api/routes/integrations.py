@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.tools import (
@@ -15,6 +16,8 @@ from mato_loop_backend.agent.tools import (
 )
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.execution import ExecutionClient, ExecutionClientError
+from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.integrations import (
     BOOKSTACK_CREDENTIAL_KIND,
     CALDAV_CREDENTIAL_KIND,
@@ -22,6 +25,7 @@ from mato_loop_backend.integrations import (
     CalDavIntegrationService,
     GitIntegrationService,
     IntegrationSettingsError,
+    OpenScadIntegrationService,
     SearchIntegrationError,
     SearchIntegrationService,
     bookstack_error_code,
@@ -33,8 +37,13 @@ from mato_loop_backend.integrations import (
 from mato_loop_backend.integrations.bookstack_client import BookStackError
 from mato_loop_backend.integrations.caldav_client import CalDavError
 from mato_loop_backend.integrations.contracts import IntegrationResource
+from mato_loop_backend.integrations.openscad import (
+    OpenScadConfig,
+    OpenScadDiscoverResult,
+    OpenScadTestResult,
+)
 from mato_loop_backend.integrations.registry import integration_adapter
-from mato_loop_backend.models import Credential, UserAccount
+from mato_loop_backend.models import Credential, ExecutionAgent, UserAccount
 from mato_loop_backend.security import read_credential, require_user
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
@@ -136,6 +145,25 @@ class GitIntegrationRequest(BaseModel):
     name: str = Field(default="Git", min_length=1, max_length=160)
     config: GitIntegrationConfigRequest = Field(default_factory=GitIntegrationConfigRequest)
     enabled: bool = True
+
+
+class OpenScadIntegrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    execution_agent_id: UUID = Field(
+        validation_alias=AliasChoices("execution_agent_id", "executionAgentId")
+    )
+    name: str = Field(default="OpenSCAD", min_length=1, max_length=160)
+    config: OpenScadConfig
+    enabled: bool = True
+
+
+class OpenScadDiscoverRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    execution_agent_id: UUID = Field(
+        validation_alias=AliasChoices("execution_agent_id", "executionAgentId")
+    )
 
 
 class IntegrationAccessRequest(BaseModel):
@@ -424,6 +452,62 @@ def git_settings_payload(settings: IntegrationSettings) -> dict:
     }
 
 
+def openscad_settings_payload(
+    settings: IntegrationSettings, execution_agent_ids: set[UUID]
+) -> dict:
+    integrations = [
+        instance
+        for instance in settings.instances
+        if instance.integration_type == "openscad"
+        and instance.adapter_type == "openscad"
+        and instance.execution_agent_id in execution_agent_ids
+    ]
+    return {
+        "configured": bool(integrations),
+        "instances": [
+            {
+                "id": str(instance.id),
+                "name": instance.name,
+                "integrationType": "openscad",
+                "providerType": "openscad",
+                "executionLocation": "agent",
+                "executionKind": "openscad",
+                "executionAgentId": str(instance.execution_agent_id),
+                "enabled": instance.enabled,
+                "hasCredential": False,
+                "config": {
+                    "binaryPath": instance.config.get("binary_path"),
+                },
+            }
+            for instance in integrations
+        ],
+    }
+
+
+async def _owned_execution_agent_ids(db: AsyncSession, user_id: UUID) -> set[UUID]:
+    result = await db.scalars(
+        select(ExecutionAgent.id).where(
+            ExecutionAgent.user_id == user_id,
+            ExecutionAgent.revoked_at.is_(None),
+        )
+    )
+    return set(result.all())
+
+
+def _openscad_api_error(exc: ExecutionClientError) -> ApiError:
+    return ApiError(
+        503 if exc.code.startswith("executionAgent.") else 502,
+        exc.code,
+    )
+
+
+def _connected_client(agent_id: UUID) -> ExecutionClient:
+    snapshot = execution_agent_connections.snapshot(agent_id)
+    if snapshot is None:
+        raise ApiError(503, "executionAgent.unavailable")
+    return ExecutionClient(agent_id, None, None, None, snapshot[0])
+
+
 @router.get("/search")
 async def get_search_integrations(
     db: Annotated[AsyncSession, Depends(get_db_session)],
@@ -503,6 +587,134 @@ async def delete_git_integration(
         await GitIntegrationService.delete(db, integration_id, user_id=user.id)
     except IntegrationSettingsError as exc:
         raise ApiError(409 if exc.code == "integration.changed" else 404, exc.code) from exc
+
+
+@router.get("/openscad")
+async def get_openscad_integrations(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await SettingsStore.load(db, IntegrationSettings)
+    return openscad_settings_payload(
+        settings, await _owned_execution_agent_ids(db, user.id)
+    )
+
+
+@router.post("/openscad", status_code=status.HTTP_201_CREATED)
+async def create_openscad_integration(
+    payload: OpenScadIntegrationRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    try:
+        settings = await OpenScadIntegrationService.create(
+            db,
+            user_id=user.id,
+            execution_agent_id=payload.execution_agent_id,
+            name=payload.name,
+            binary_path=payload.config.binary_path,
+            enabled=payload.enabled,
+        )
+    except IntegrationSettingsError as exc:
+        status_code = 409 if exc.code == "openscad.alreadyConfigured" else 404
+        raise ApiError(status_code, exc.code, field="executionAgentId") from exc
+    return openscad_settings_payload(
+        settings, await _owned_execution_agent_ids(db, user.id)
+    )
+
+
+@router.put("/openscad/{integration_id}")
+async def update_openscad_integration(
+    integration_id: UUID,
+    payload: OpenScadIntegrationRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    try:
+        settings = await OpenScadIntegrationService.update(
+            db,
+            integration_id,
+            user_id=user.id,
+            execution_agent_id=payload.execution_agent_id,
+            name=payload.name,
+            binary_path=payload.config.binary_path,
+            enabled=payload.enabled,
+        )
+    except IntegrationSettingsError as exc:
+        status_code = (
+            409
+            if exc.code in {"openscad.alreadyConfigured", "integration.changed"}
+            else 404
+        )
+        field = "executionAgentId" if exc.code != "integration.notFound" else None
+        raise ApiError(status_code, exc.code, field=field) from exc
+    return openscad_settings_payload(
+        settings, await _owned_execution_agent_ids(db, user.id)
+    )
+
+
+@router.delete("/openscad/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_openscad_integration(
+    integration_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    try:
+        await OpenScadIntegrationService.delete(db, integration_id, user_id=user.id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(409 if exc.code == "integration.changed" else 404, exc.code) from exc
+
+
+@router.post("/openscad/discover")
+async def discover_openscad(
+    payload: OpenScadDiscoverRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    try:
+        await OpenScadIntegrationService._owned_agent(
+            db, user.id, payload.execution_agent_id, for_update=False
+        )
+        result = await _connected_client(payload.execution_agent_id).request(
+            "integration.openscad.discover", {}, OpenScadDiscoverResult
+        )
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code, field="executionAgentId") from exc
+    except ExecutionClientError as exc:
+        raise _openscad_api_error(exc) from exc
+    assert isinstance(result, OpenScadDiscoverResult)
+    return result.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+@router.post("/openscad/{integration_id}/test")
+async def test_openscad_integration(
+    integration_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await SettingsStore.load(db, IntegrationSettings)
+    instance = OpenScadIntegrationService._find(settings, integration_id)
+    if instance is None:
+        raise ApiError(404, "integration.notFound")
+    if instance.execution_agent_id is None:
+        raise ApiError(404, "executionAgent.notFound")
+    try:
+        await OpenScadIntegrationService._owned_agent(
+            db, user.id, instance.execution_agent_id, for_update=False
+        )
+        config = OpenScadConfig.model_validate(instance.config)
+        result = await _connected_client(instance.execution_agent_id).request(
+            "integration.openscad.test",
+            {"executablePath": config.binary_path},
+            OpenScadTestResult,
+        )
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+    except ExecutionClientError as exc:
+        logger.warning("OpenSCAD integration test failed: %s", exc.code)
+        raise _openscad_api_error(exc) from exc
+    assert isinstance(result, OpenScadTestResult)
+    return result.model_dump(mode="json", by_alias=True)
 
 
 @router.get("/calendar")

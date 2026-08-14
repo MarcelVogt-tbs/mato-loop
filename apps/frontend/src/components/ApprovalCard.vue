@@ -15,8 +15,13 @@
       <div class="approval-resource">
         <div class="text-caption app-muted">{{ resource.label }}</div>
         <code>{{ resource.value }}</code>
+        <ToolPresentation
+          v-if="presentation.items.length"
+          :items="presentation.items"
+          embedded
+          class="q-mt-md"
+        />
       </div>
-      <ToolPresentation v-if="presentation.items.length" :items="presentation.items" class="q-mt-md" />
       <div v-if="skillPreview" class="approval-resource q-mt-md">
         <div class="text-caption app-muted">Skill-Vorschau</div>
         <div class="text-subtitle1 text-weight-bold q-mt-xs">{{ skillPreview.name }}</div>

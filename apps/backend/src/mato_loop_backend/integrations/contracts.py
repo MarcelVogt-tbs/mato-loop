@@ -66,6 +66,7 @@ class ToolContribution:
     authorization_factory: Callable[[Any, Any], tuple[Any, ...]] | None = None
     execution_operation: str | None = None
     execution_config_arguments: tuple[str, ...] = ()
+    required_execution_operations: tuple[str, ...] = ()
     result_model: type[BaseModel] | None = None
 
 
@@ -141,6 +142,19 @@ class IntegrationAdapterDefinition:
             or len(operations) != len(set(operations))
         ):
             raise ValueError("agent integration operations must be unique and match their kind")
+        if any(
+            len(tool.required_execution_operations)
+            != len(set(tool.required_execution_operations))
+            or tool.execution_operation in tool.required_execution_operations
+            or any(
+                len(operation) > 64
+                or re.fullmatch(r"[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+", operation)
+                is None
+                for operation in tool.required_execution_operations
+            )
+            for tool in self.execution_tools
+        ):
+            raise ValueError("required agent operations must be unique protocol operations")
 
     def contributions(self, instance: IntegrationInstance) -> IntegrationContributions:
         config = self.config_model.model_validate(instance.config)
@@ -156,7 +170,8 @@ class IntegrationAdapterDefinition:
         tools = tuple(
             replace(
                 tool,
-                handler=execution_tool_handler(
+                handler=tool.handler
+                or execution_tool_handler(
                     instance,
                     tool.execution_operation,
                     tool.result_model,
@@ -165,11 +180,16 @@ class IntegrationAdapterDefinition:
                         for name, value in config.model_dump(mode="json", by_alias=True).items()
                         if name in tool.execution_config_arguments
                     },
+                    tool.required_execution_operations,
                 ),
             )
             for tool in self.execution_tools
             if instance._execution_operations is None
-            or tool.execution_operation in instance._execution_operations
+            or {
+                tool.execution_operation,
+                *tool.required_execution_operations,
+            }
+            <= instance._execution_operations
         )
         return IntegrationContributions(
             tools=(*contributions.tools, *tools),

@@ -1,0 +1,581 @@
+import hashlib
+import io
+import json
+import os
+import shutil
+import struct
+import sys
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+from uuid import uuid4
+
+import httpx
+from pydantic import ValidationError
+
+from mato_loop_execution_agent.config import AgentConfig
+from mato_loop_execution_agent.connection import ExecutionAgent
+from mato_loop_execution_agent.openscad import OpenScadRunner
+from mato_loop_execution_agent.protocol import ArtifactDescriptor, Request, validate_arguments
+from mato_loop_execution_agent.transfer import TransferClient
+from mato_loop_execution_agent.workspace import AgentError
+
+AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
+ROOT_ID = "4d0a316f-5fb5-4ec5-a5c4-04aed66c5e6d"
+TICKET_ID = "0a01092c-13d6-49fd-b62c-e2b98deed2bb"
+
+
+def _write_fake_binaries(directory: Path) -> tuple[Path, Path, Path]:
+    openscad = directory / "openscad"
+    openscad.write_text(
+        f"""#!{sys.executable}
+import json
+import pathlib
+import struct
+import sys
+
+pathlib.Path(__file__).with_name("calls.jsonl").open("a").write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1:] == ["--version"]:
+    print("OpenSCAD version 2021.01")
+    raise SystemExit(0)
+output = pathlib.Path(sys.argv[sys.argv.index("-o") + 1])
+source = pathlib.Path(sys.argv[-1])
+content = source.read_text()
+if "FAIL_RENDER" in content:
+    print(f"\\x1b[31mfailed {{source}}\\x1b[0m", file=sys.stderr)
+    raise SystemExit(2)
+if "cube(" not in content:
+    raise SystemExit(2)
+if output.suffix == ".png":
+    output.write_bytes(b"\\x89PNG\\r\\n\\x1a\\npreview")
+else:
+    output.write_bytes(bytes(80) + struct.pack("<I", 1) + bytes(50))
+print("rendered")
+""",
+        encoding="utf-8",
+    )
+    openscad.chmod(0o755)
+
+    xvfb = directory / "xvfb-run"
+    xvfb.write_text(
+        f"""#!{sys.executable}
+import os
+import sys
+
+arguments = sys.argv[1:]
+if arguments and arguments[0] == "-a":
+    arguments = arguments[1:]
+os.execv(arguments[0], arguments)
+""",
+        encoding="utf-8",
+    )
+    xvfb.chmod(0o755)
+
+    bwrap = directory / "bwrap"
+    bwrap.write_text(
+        f"""#!{sys.executable}
+import json
+import os
+import pathlib
+import sys
+
+arguments = sys.argv[1:]
+log = pathlib.Path(__file__).with_name("sandbox-calls.jsonl")
+log.open("a").write(json.dumps(arguments) + "\\n")
+mounts = {{}}
+working_directory = None
+index = 0
+while arguments[index] != "--":
+    option = arguments[index]
+    if option in {{"--ro-bind", "--bind"}}:
+        mounts[arguments[index + 2]] = arguments[index + 1]
+        index += 3
+    elif option == "--chdir":
+        working_directory = arguments[index + 1]
+        index += 2
+    elif option == "--setenv":
+        index += 3
+    elif option in {{"--proc", "--dev", "--tmpfs", "--dir", "--cap-drop"}}:
+        index += 2
+    else:
+        index += 1
+
+def translate(value):
+    for destination, source in sorted(mounts.items(), key=lambda item: len(item[0]), reverse=True):
+        if value == destination or value.startswith(destination + "/"):
+            return source + value[len(destination):]
+    return value
+
+command = [translate(value) for value in arguments[index + 1:]]
+if working_directory is not None:
+    os.chdir(translate(working_directory))
+os.execv(command[0], command)
+""",
+        encoding="utf-8",
+    )
+    bwrap.chmod(0o755)
+    return openscad, xvfb, bwrap
+
+
+def _configuration(
+    root: Path, openscad: Path, data_dir: Path | None = None, max_bytes: int = 1024 * 1024
+) -> AgentConfig:
+    return AgentConfig.model_validate(
+        {
+            "backendUrl": "ws://backend/api/execution-agents/connect",
+            "agentId": AGENT_ID,
+            "name": "Agent",
+            "roots": [{"id": ROOT_ID, "label": "Root", "path": root}],
+            "dataDir": data_dir or root / "data",
+            "allowInsecure": True,
+            "openscadExecutable": openscad,
+            "maxTransferBytes": max_bytes,
+            "maxSessionCacheBytes": max_bytes,
+        }
+    )
+
+
+def _request(operation: str, arguments: dict) -> Request:
+    return Request.model_validate(
+        {
+            "type": "request",
+            "id": str(uuid4()),
+            "operation": operation,
+            "arguments": arguments,
+        }
+    )
+
+
+class OpenScadTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(
+        shutil.which("openscad") and shutil.which("xvfb-run") and shutil.which("bwrap"),
+        "packaged OpenSCAD sandbox is unavailable",
+    )
+    async def test_packaged_openscad_renders_real_preview_and_stl(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            (project / "halterung.scad").write_text("cube([2, 3, 4]);\n", encoding="utf-8")
+            executable = Path(shutil.which("openscad") or "")
+            config = _configuration(root, executable, max_bytes=64 * 1024 * 1024)
+            agent = ExecutionAgent(config, "key")
+            revision = agent.workspace.roots[ROOT_ID].revision
+
+            try:
+                rendered = await agent.dispatch(
+                    _request(
+                        "integration.openscad.render",
+                        {
+                            "rootId": ROOT_ID,
+                            "rootRevision": revision,
+                            "currentDirectory": os.fspath(root),
+                            "executablePath": os.fspath(executable),
+                            "sessionId": "session",
+                            "entrypoint": "halterung.scad",
+                            "source": {"type": "workspace", "path": "project"},
+                        },
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            except AgentError as exc:
+                self.fail(f"Packaged OpenSCAD render failed: {exc.code} {exc.params}")
+
+            model = ArtifactDescriptor.model_validate(rendered["model"])
+            previews = [
+                ArtifactDescriptor.model_validate(item["artifact"]) for item in rendered["previews"]
+            ]
+            self.assertGreater(model.size, 84)
+            self.assertEqual(model.filename, "halterung.stl")
+            self.assertEqual(
+                [item["view"] for item in rendered["previews"]],
+                ["isometric", "front", "right", "top"],
+            )
+            self.assertEqual(
+                [preview.filename for preview in previews],
+                [
+                    "halterung-isometric.png",
+                    "halterung-front.png",
+                    "halterung-right.png",
+                    "halterung-top.png",
+                ],
+            )
+            for preview in previews:
+                self.assertEqual(agent.cache._path(preview).read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
+    async def test_discover_test_workspace_and_archive_render_and_cache_export(self) -> None:
+        uploaded = []
+        archive_buffer = io.BytesIO()
+        with zipfile.ZipFile(archive_buffer, "w") as archive:
+            archive.writestr("main.scad", "cube([2, 2, 2]);\n")
+        archive_content = archive_buffer.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, content=archive_content)
+            uploaded.append(request.content)
+            return httpx.Response(204)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "workspace"
+            root.mkdir()
+            data_dir = base / "data"
+            binaries = base / "bin"
+            binaries.mkdir()
+            openscad, _, bwrap = _write_fake_binaries(binaries)
+            project = root / "project"
+            project.mkdir()
+            (project / "halterung.scad").write_text("cube([1, 1, 1]);\n", encoding="utf-8")
+            http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            transfer = TransferClient(
+                max_bytes=1024 * 1024,
+                backend_url="ws://backend/api/execution-agents/connect",
+                access_key="key",
+                client=http,
+            )
+            with (
+                patch.dict(os.environ, {"PATH": os.fspath(binaries)}),
+                patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
+            ):
+                agent = ExecutionAgent(
+                    _configuration(root, openscad, data_dir), "key", transfer_client=transfer
+                )
+            self.assertEqual(agent.openscad.temp_root.parent, Path(tempfile.gettempdir()))
+            self.assertNotEqual(agent.openscad.temp_root.parent, data_dir)
+            revision = agent.workspace.roots[ROOT_ID].revision
+            host = {
+                "rootId": ROOT_ID,
+                "rootRevision": revision,
+                "currentDirectory": os.fspath(root),
+            }
+
+            self.assertIn("integration.openscad.test", agent.operations)
+            self.assertIn("integration.openscad.render", agent.operations)
+            discovered = await agent.dispatch(
+                _request("integration.openscad.discover", {}), backend_id=AGENT_ID
+            )
+            self.assertTrue(discovered["available"])
+            self.assertTrue(discovered["headlessPreview"])
+            self.assertTrue(
+                (
+                    await agent.dispatch(
+                        _request(
+                            "integration.openscad.test",
+                            {"executablePath": os.fspath(openscad)},
+                        ),
+                        backend_id=AGENT_ID,
+                    )
+                )["ok"]
+            )
+
+            rendered = await agent.dispatch(
+                _request(
+                    "integration.openscad.render",
+                    {
+                        **host,
+                        "executablePath": os.fspath(openscad),
+                        "sessionId": "session",
+                        "entrypoint": "halterung.scad",
+                        "source": {"type": "workspace", "path": "project"},
+                    },
+                ),
+                backend_id=AGENT_ID,
+            )
+            model = ArtifactDescriptor.model_validate(rendered["model"])
+            previews = [
+                ArtifactDescriptor.model_validate(item["artifact"]) for item in rendered["previews"]
+            ]
+            self.assertEqual(agent.cache._path(model).stat().st_size, 134)
+            self.assertEqual(model.filename, "halterung.stl")
+            self.assertEqual(
+                [preview.filename for preview in previews],
+                [
+                    "halterung-isometric.png",
+                    "halterung-front.png",
+                    "halterung-right.png",
+                    "halterung-top.png",
+                ],
+            )
+            self.assertIn("rendered", rendered["diagnostics"])
+            self.assertFalse(rendered["diagnosticsTruncated"])
+            for preview in previews:
+                self.assertEqual(agent.cache._path(preview).read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
+            (project / "failed.scad").write_text("FAIL_RENDER\n", encoding="utf-8")
+            with self.assertRaises(AgentError) as failure:
+                await agent.dispatch(
+                    _request(
+                        "integration.openscad.render",
+                        {
+                            **host,
+                            "executablePath": os.fspath(openscad),
+                            "sessionId": "session",
+                            "entrypoint": "failed.scad",
+                            "source": {"type": "workspace", "path": "project"},
+                        },
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            self.assertEqual(failure.exception.code, "openscad.renderFailed")
+            diagnostics = failure.exception.params["diagnostics"]
+            self.assertIn("failed <render>/project/failed.scad", diagnostics)
+            self.assertNotIn("\x1b", diagnostics)
+            self.assertNotIn(os.fspath(data_dir), diagnostics)
+
+            archive_descriptor = {
+                "artifactId": "project-archive",
+                "backendId": AGENT_ID,
+                "sessionId": "session",
+                "path": "projects/source.zip",
+                "filename": "source.zip",
+                "size": len(archive_content),
+                "sha256": hashlib.sha256(archive_content).hexdigest(),
+                "contentType": "application/zip",
+            }
+            archive_render = await agent.dispatch(
+                _request(
+                    "integration.openscad.render",
+                    {
+                        "executablePath": os.fspath(openscad),
+                        "sessionId": "session",
+                        "entrypoint": "main.scad",
+                        "source": {
+                            "type": "archive",
+                            "artifact": archive_descriptor,
+                            "transfer": {
+                                "url": f"http://backend/api/workspace/transfers/{TICKET_ID}",
+                                "token": "download",
+                            },
+                        },
+                    },
+                ),
+                backend_id=AGENT_ID,
+            )
+            self.assertEqual(archive_render["model"]["contentType"], "model/stl")
+
+            exported = await agent.dispatch(
+                _request(
+                    "cache.export",
+                    {
+                        "artifact": rendered["previews"][0]["artifact"],
+                        "transfer": {
+                            "url": f"http://backend/api/workspace/transfers/{TICKET_ID}",
+                            "token": "upload",
+                        },
+                    },
+                ),
+                backend_id=AGENT_ID,
+            )
+            self.assertEqual(exported["sha256"], previews[0].sha256)
+            self.assertEqual(uploaded, [agent.cache._path(previews[0]).read_bytes()])
+
+            calls = [
+                json.loads(line) for line in (binaries / "calls.jsonl").read_text().splitlines()
+            ]
+            self.assertTrue(any("--export-format=binstl" in call for call in calls))
+            preview_calls = [call for call in calls if "--imgsize=800,600" in call]
+            self.assertEqual(len(preview_calls), 8)
+            self.assertEqual(
+                {Path(call[call.index("-o") + 1]).stem for call in preview_calls},
+                {
+                    "halterung-isometric",
+                    "halterung-front",
+                    "halterung-right",
+                    "halterung-top",
+                    "main-isometric",
+                    "main-front",
+                    "main-right",
+                    "main-top",
+                },
+            )
+            self.assertTrue(all("--autocenter" in call for call in preview_calls))
+            self.assertTrue(all("--viewall" in call for call in preview_calls))
+            self.assertTrue(all("--projection=o" in call for call in preview_calls))
+            self.assertTrue(
+                all(any(arg.startswith("--camera=") for arg in call) for call in preview_calls)
+            )
+            all_sandbox_calls = [
+                json.loads(line)
+                for line in (binaries / "sandbox-calls.jsonl").read_text().splitlines()
+            ]
+            self.assertTrue(any("--imgsize=32,32" in call for call in all_sandbox_calls))
+            sandbox_calls = [call for call in all_sandbox_calls if "/project" in call]
+            for call in sandbox_calls:
+                self.assertIn("--unshare-all", call)
+                self.assertNotIn("--share-net", call)
+                binds = [
+                    (call[index + 1], call[index + 2])
+                    for index, value in enumerate(call)
+                    if value in {"--ro-bind", "--bind"}
+                ]
+                destinations = {destination for _, destination in binds}
+                self.assertIn("/project", destinations)
+                self.assertIn("/output", destinations)
+                self.assertNotIn(os.fspath(root), destinations)
+                self.assertNotIn(os.fspath(data_dir), destinations)
+                self.assertNotIn("/workspace", destinations)
+                self.assertNotIn("/data", destinations)
+                self.assertNotIn("/config", destinations)
+                for source, destination in binds:
+                    if source.startswith(os.fspath(data_dir)):
+                        self.assertIn(destination, {"/project", "/output"})
+            await http.aclose()
+
+    async def test_strict_contract_custom_validation_and_capability_omission(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binaries = root / "bin"
+            binaries.mkdir()
+            openscad, xvfb, bwrap = _write_fake_binaries(binaries)
+            config = _configuration(root, openscad)
+            with (
+                patch.object(OpenScadRunner, "_find_executable", return_value=None),
+                patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
+            ):
+                agent = ExecutionAgent(config, "key")
+            self.assertIn("integration.openscad.test", agent.operations)
+            self.assertNotIn("integration.openscad.render", agent.operations)
+            with self.assertRaises(AgentError) as missing_xvfb:
+                await agent.dispatch(
+                    _request(
+                        "integration.openscad.test",
+                        {"executablePath": os.fspath(openscad)},
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            self.assertEqual(missing_xvfb.exception.code, "openscad.headlessPreviewUnavailable")
+
+            with (
+                patch.object(OpenScadRunner, "_find_executable", return_value=xvfb),
+                patch.object(OpenScadRunner, "_find_bwrap", return_value=None),
+            ):
+                missing_bwrap_agent = ExecutionAgent(config, "key")
+            self.assertNotIn("integration.openscad.render", missing_bwrap_agent.operations)
+            with self.assertRaises(AgentError) as missing_bwrap:
+                await missing_bwrap_agent.dispatch(
+                    _request(
+                        "integration.openscad.test",
+                        {"executablePath": os.fspath(openscad)},
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            self.assertEqual(missing_bwrap.exception.code, "openscad.headlessPreviewUnavailable")
+
+            with (
+                patch.object(OpenScadRunner, "_find_executable", return_value=xvfb),
+                patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
+            ):
+                available = ExecutionAgent(config, "key")
+            broken_xvfb = binaries / "broken-xvfb-run"
+            broken_xvfb.write_text(f"#!{sys.executable}\nraise SystemExit(1)\n", encoding="utf-8")
+            broken_xvfb.chmod(0o755)
+            with (
+                patch.object(OpenScadRunner, "_find_executable", return_value=broken_xvfb),
+                patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
+            ):
+                broken_preview = ExecutionAgent(config, "key")
+            self.assertNotIn("integration.openscad.render", broken_preview.operations)
+            self.assertFalse(broken_preview.openscad.discover()["headlessPreview"])
+            with (
+                patch.object(OpenScadRunner, "_find_openscad", return_value=None),
+                patch.object(OpenScadRunner, "_find_executable", return_value=None),
+                patch.object(OpenScadRunner, "_find_bwrap", return_value=None),
+            ):
+                unavailable = ExecutionAgent(config, "key")
+            self.assertIn("integration.openscad.discover", unavailable.operations)
+            self.assertIn("integration.openscad.test", unavailable.operations)
+            self.assertNotIn("integration.openscad.render", unavailable.operations)
+            with self.assertRaises(AgentError) as missing_openscad:
+                await unavailable.dispatch(
+                    _request(
+                        "integration.openscad.test",
+                        {"executablePath": os.fspath(openscad)},
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            self.assertEqual(missing_openscad.exception.code, "openscad.unavailable")
+
+            request = _request(
+                "integration.openscad.render",
+                {
+                    "rootId": ROOT_ID,
+                    "rootRevision": "a" * 64,
+                    "currentDirectory": os.fspath(root),
+                    "executablePath": os.fspath(openscad),
+                    "sessionId": "session",
+                    "entrypoint": "main.scad",
+                    "source": {"type": "workspace", "unexpected": True},
+                },
+            )
+            with self.assertRaises(ValidationError):
+                validate_arguments(request)
+
+            invalid = binaries / "not-openscad"
+            invalid.write_text(f"#!{sys.executable}\n", encoding="utf-8")
+            invalid.chmod(0o755)
+            with self.assertRaises(ValueError):
+                ExecutionAgent(_configuration(root, invalid), "key")
+
+            alternate = binaries / "alternate-openscad"
+            shutil.copy(openscad, alternate)
+            alternate.chmod(0o755)
+            with self.assertRaises(AgentError) as untrusted:
+                await available.dispatch(
+                    _request(
+                        "integration.openscad.test",
+                        {"executablePath": os.fspath(alternate)},
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            self.assertEqual(untrusted.exception.code, "openscad.invalidExecutable")
+
+            replacement = binaries / "replacement-openscad"
+            shutil.copy(openscad, replacement)
+            replacement.chmod(0o755)
+            os.replace(replacement, openscad)
+            with self.assertRaises(AgentError) as changed:
+                await available.dispatch(
+                    _request(
+                        "integration.openscad.test",
+                        {"executablePath": os.fspath(openscad)},
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            self.assertEqual(changed.exception.code, "openscad.invalidExecutable")
+
+            values = _configuration(root, openscad).model_dump(by_alias=True)
+            values["openscadExecutable"] = Path("openscad")
+            with self.assertRaises(ValidationError):
+                AgentConfig.model_validate(values)
+
+            malformed_stl = root / "non-finite.stl"
+            triangle = struct.pack("<12fH", *(0.0,) * 9, float("nan"), 0.0, 0.0, 0)
+            malformed_stl.write_bytes(bytes(80) + struct.pack("<I", 1) + triangle)
+            with self.assertRaises(AgentError):
+                OpenScadRunner._validate_stl(malformed_stl)
+
+            unsafe_archive = root / "unsafe.zip"
+            with zipfile.ZipFile(unsafe_archive, "w") as archive:
+                link = zipfile.ZipInfo("link.scad")
+                link.create_system = 3
+                link.external_attr = 0o120777 << 16
+                archive.writestr(link, "main.scad")
+            destination = root / "extracted"
+            destination.mkdir()
+            with self.assertRaises(AgentError) as unsafe:
+                available.openscad._extract_archive(unsafe_archive, destination)
+            self.assertEqual(unsafe.exception.code, "openscad.unsafeProject")
+
+            traversal_archive = root / "traversal.zip"
+            with zipfile.ZipFile(traversal_archive, "w") as archive:
+                archive.writestr("../outside.scad", "cube(1);")
+            with self.assertRaises(AgentError) as traversal:
+                available.openscad._extract_archive(traversal_archive, destination)
+            self.assertEqual(traversal.exception.code, "openscad.unsafeProject")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -193,7 +193,7 @@ class ToolAttachment:
     data: bytes
     mime_type: str
     filename: str
-    kind: Literal["image", "audio"] = "image"
+    kind: Literal["image", "audio", "file"] = "image"
     duration_ms: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 

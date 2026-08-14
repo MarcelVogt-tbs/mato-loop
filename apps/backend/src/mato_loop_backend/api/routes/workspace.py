@@ -5,7 +5,9 @@ import base64
 import errno
 import hashlib
 import json
+import logging
 import re
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -16,7 +18,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Header, Query, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -32,15 +34,25 @@ from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import (
     MAX_TRANSFER_BYTES,
     ExecutionAgentError,
+    ExecutionClient,
+    ExecutionClientError,
     TransferError,
     execution_agent_connections,
     stage_file,
     stream_ticket,
     transfer_tickets,
 )
+from mato_loop_backend.integrations.openscad import (
+    OpenScadConfig,
+    OpenScadRenderArguments,
+    export_artifact,
+    render_project,
+    validate_binary_stl,
+)
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant, UserAccount
 from mato_loop_backend.safe_svg import MAX_SAFE_SVG_BYTES, validate_svg
 from mato_loop_backend.security import hash_token, require_user
+from mato_loop_backend.settings import IntegrationSettings, SettingsStore
 from mato_loop_backend.workspace import (
     MAX_EDITABLE_TEXT_BYTES,
     FileRoot,
@@ -54,9 +66,11 @@ from mato_loop_backend.workspace import (
 
 router = APIRouter(prefix="/workspace")
 _validate_svg = validate_svg
+logger = logging.getLogger(__name__)
 
 MAX_TEXT_PREVIEW_BYTES = MAX_EDITABLE_TEXT_BYTES
 _IMAGE_PREVIEW_BYTES = MAX_SAFE_SVG_BYTES
+_STL_PREVIEW_BYTES = MAX_FILE_ATTACHMENT_BYTES
 _IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 _MARKDOWN_SUFFIXES = {".md", ".markdown"}
 _FILE_RESPONSE_HEADERS = {
@@ -94,6 +108,17 @@ class UpdateFileRequest(BaseModel):
     path: str = Field(strict=True, min_length=1, max_length=1_200)
     content: str = Field(strict=True)
     expected_revision: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
+
+
+class OpenScadFileRenderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    path: str = Field(strict=True, min_length=1, max_length=1_200)
+    expected_revision: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        validation_alias=AliasChoices("expected_revision", "expectedRevision"),
+    )
 
 
 class CopyMoveEntryRequest(BaseModel):
@@ -344,7 +369,11 @@ def _context_error(exc: WorkspaceError | RootFileError) -> ApiError:
         "workspace.pathNotFound",
     }:
         return ApiError(404, exc.code)
-    if exc.code in {"file.tooLarge", "workspace.fileTooLarge"}:
+    if exc.code in {
+        "file.operationTooLarge",
+        "file.tooLarge",
+        "workspace.fileTooLarge",
+    }:
         return ApiError(413, exc.code)
     if exc.code == "file.sessionQuotaExceeded":
         return ApiError(507, exc.code)
@@ -595,7 +624,9 @@ async def _agent_request(
     except ExecutionAgentError as exc:
         raise _execution_error(exc.code, manager=True) from exc
     if not response.ok:
-        raise _execution_error(response.error.code if response.error else "")
+        error_code = response.error.code if response.error else ""
+        logger.warning("Execution agent operation %s failed: %s", operation, error_code)
+        raise _execution_error(error_code)
     if not isinstance(response.result, dict):
         raise ApiError(502, "executionAgent.protocolError")
     return response.result
@@ -1046,6 +1077,24 @@ async def preview_file(
     )
     suffix = PurePosixPath(path).suffix.casefold()
     try:
+        if suffix == ".stl":
+            if context.agent_id is not None:
+                if request is None:
+                    raise ApiError(500, "internal.unexpected")
+                handle, _, _ = await _agent_export(
+                    context, path, request, max_bytes=_STL_PREVIEW_BYTES
+                )
+                with handle:
+                    data = handle.read(_STL_PREVIEW_BYTES + 1)
+            else:
+                data = await asyncio.to_thread(
+                    _read_context, context, path, _STL_PREVIEW_BYTES
+                )
+            try:
+                await asyncio.to_thread(validate_binary_stl, data)
+            except ValueError:
+                return {"kind": "none", "reason": "unsupported"}
+            return {"kind": "stl"}
         if context.agent_id is not None and suffix not in {*_IMAGE_SUFFIXES, ".svg"}:
             if request is None:
                 raise ApiError(500, "internal.unexpected")
@@ -1053,7 +1102,11 @@ async def preview_file(
             if "\0" in content:
                 return {"kind": "none", "reason": "unsupported"}
             return {
-                "kind": "markdown" if suffix in _MARKDOWN_SUFFIXES else "text",
+                "kind": (
+                    "openscad"
+                    if suffix == ".scad"
+                    else "markdown" if suffix in _MARKDOWN_SUFFIXES else "text"
+                ),
                 "content": content,
                 "encoding": "utf-8",
                 "revision": revision,
@@ -1104,7 +1157,11 @@ async def preview_file(
     if "\0" in content:
         return {"kind": "none", "reason": "unsupported"}
     return {
-        "kind": "markdown" if suffix in _MARKDOWN_SUFFIXES else "text",
+        "kind": (
+            "openscad"
+            if suffix == ".scad"
+            else "markdown" if suffix in _MARKDOWN_SUFFIXES else "text"
+        ),
         "content": content,
         "encoding": "utf-8",
         "revision": hashlib.sha256(data).hexdigest(),
@@ -1241,20 +1298,25 @@ async def preview_image(
         root_id=root_id,
         root_revision=root_revision,
     )
+    suffix = PurePosixPath(path).suffix.casefold()
+    max_bytes = _STL_PREVIEW_BYTES if suffix == ".stl" else _IMAGE_PREVIEW_BYTES
     try:
         if context.agent_id is not None:
             if request is None:
                 raise ApiError(500, "internal.unexpected")
             handle, _, _ = await _agent_export(
-                context, path, request, max_bytes=_IMAGE_PREVIEW_BYTES
+                context, path, request, max_bytes=max_bytes
             )
             with handle:
-                data = handle.read(_IMAGE_PREVIEW_BYTES + 1)
+                data = handle.read(max_bytes + 1)
         else:
             data = await asyncio.to_thread(
-                _read_context, context, path, _IMAGE_PREVIEW_BYTES
+                _read_context, context, path, max_bytes
             )
-        if PurePosixPath(path).suffix.casefold() == ".svg":
+        if suffix == ".stl":
+            await asyncio.to_thread(validate_binary_stl, data)
+            mime_type = "model/stl"
+        elif suffix == ".svg":
             await asyncio.to_thread(_validate_svg, data)
             mime_type = "image/svg+xml"
         else:
@@ -1268,6 +1330,239 @@ async def preview_image(
         raise ApiError(415, "file.previewUnavailable") from exc
     headers = _SVG_RESPONSE_HEADERS if mime_type == "image/svg+xml" else _FILE_RESPONSE_HEADERS
     return Response(content=data, media_type=mime_type, headers=headers)
+
+
+async def _openscad_client(
+    db: AsyncSession,
+    user: UserAccount,
+    context: _FileContext,
+    session: ChatSession | None,
+) -> tuple[ExecutionClient, OpenScadConfig]:
+    if context.agent_id is not None:
+        agent_id = context.agent_id
+        root_id = context.agent_root_id
+        root_revision = context.agent_root_revision
+        working_directory = context.working_directory or "."
+    elif session is not None and session.preferred_execution_agent_id is not None:
+        if session.preferred_root_id is None:
+            raise ApiError(400, "file.workspaceNotSelected")
+        agent_context = await _agent_context(
+            db,
+            user,
+            session.preferred_execution_agent_id,
+            session.preferred_root_id,
+            session.working_directory,
+            None,
+            writable=False,
+        )
+        agent_id = agent_context.agent_id
+        root_id = agent_context.agent_root_id
+        root_revision = agent_context.agent_root_revision
+        working_directory = agent_context.working_directory or "."
+    else:
+        raise ApiError(409, "openscad.notConfigured")
+    assert agent_id is not None and root_id is not None and root_revision is not None
+
+    agent = await db.scalar(
+        select(ExecutionAgent).where(
+            ExecutionAgent.id == agent_id,
+            ExecutionAgent.user_id == user.id,
+            ExecutionAgent.revoked_at.is_(None),
+        )
+    )
+    if agent is None:
+        raise ApiError(404, "executionAgent.notFound")
+    current_directory = session.current_directory if session is not None else None
+    if (
+        current_directory is None
+        and agent.home_directory is not None
+        and agent.home_root_id == root_id
+        and agent.home_relative_directory is not None
+    ):
+        try:
+            relative = PurePosixPath(working_directory).relative_to(
+                PurePosixPath(agent.home_relative_directory)
+            )
+        except ValueError:
+            pass
+        else:
+            current_directory = (PurePosixPath(agent.home_directory) / relative).as_posix()
+    if current_directory is None or not current_directory.startswith("/"):
+        raise ApiError(400, "file.workspaceNotSelected")
+
+    snapshot = execution_agent_connections.snapshot(agent_id)
+    required = {"integration.openscad.render", "cache.export"}
+    if snapshot is None:
+        raise ApiError(503, "executionAgent.unavailable")
+    if not required <= snapshot[0]:
+        raise ApiError(503, "executionAgent.operationUnavailable")
+    settings = await SettingsStore.load(db, IntegrationSettings)
+    instance = next(
+        (
+            item
+            for item in settings.instances
+            if item.enabled
+            and item.integration_type == "openscad"
+            and item.adapter_type == "openscad"
+            and item.execution_agent_id == agent_id
+        ),
+        None,
+    )
+    if instance is None:
+        raise ApiError(409, "openscad.notConfigured")
+    try:
+        config = OpenScadConfig.model_validate(instance.config)
+    except ValueError as exc:
+        raise ApiError(409, "integration.invalidConfiguration") from exc
+    return (
+        ExecutionClient(
+            agent_id,
+            root_id,
+            root_revision,
+            working_directory,
+            snapshot[0],
+            current_directory,
+        ),
+        config,
+    )
+
+
+def _openscad_render_api_error(exc: ExecutionClientError) -> ApiError:
+    if exc.code in {
+        "file.changed",
+        "file.workspaceNotSelected",
+        "openscad.invalidExecutable",
+    }:
+        status_code = 409
+    elif exc.code in {"file.directoryNotFound", "file.pathNotFound"}:
+        status_code = 404
+    elif exc.code in {
+        "file.invalidPath",
+        "file.notAFile",
+        "file.unsupportedType",
+    }:
+        status_code = 400
+    elif exc.code in {
+        "file.operationTooLarge",
+        "file.tooLarge",
+        "openscad.projectTooLarge",
+        "executionAgent.requestTooLarge",
+    }:
+        status_code = 413
+    elif exc.code in {
+        "openscad.invalidArchive",
+        "openscad.previewFailed",
+        "openscad.renderFailed",
+        "openscad.unsafeProject",
+        "tool.invalidArguments",
+    }:
+        status_code = 422
+    elif exc.code == "executionAgent.timeout":
+        status_code = 504
+    elif exc.code in {
+        "executionAgent.protocolError",
+        "executionAgent.responseTooLarge",
+        "openscad.invalidArtifact",
+    } or exc.code.startswith("cache."):
+        status_code = 502
+    else:
+        status_code = 503
+    return ApiError(status_code, exc.code)
+
+
+@router.post("/files/openscad/render")
+async def render_openscad_file(
+    payload: OpenScadFileRenderRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: FileScope = FileScope.FILESYSTEM,
+    session_id: UUID | None = None,
+    working_directory: str | None = None,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
+    execution_agent_id: UUID | None = None,
+    root_id: UUID | None = None,
+    root_revision: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
+) -> Response:
+    context = await _file_context(
+        scope,
+        session_id,
+        user,
+        db,
+        working_directory=working_directory,
+        root_identity=root_identity,
+        execution_agent_id=execution_agent_id,
+        root_id=root_id,
+        root_revision=root_revision,
+    )
+    if payload.expected_revision is not None:
+        try:
+            if context.agent_id is not None:
+                result = await _agent_request(
+                    context,
+                    "workspace.read",
+                    {
+                        "path": _normalize_agent_path(payload.path),
+                        "offset": 1,
+                        "limit": 1,
+                        "maxLineLength": 1,
+                    },
+                )
+                revision = result.get("sha256")
+                if not isinstance(revision, str) or not _SHA256_RE.fullmatch(revision):
+                    raise ApiError(502, "executionAgent.protocolError")
+            else:
+                source = await asyncio.to_thread(
+                    _read_context, context, payload.path, MAX_TEXT_PREVIEW_BYTES
+                )
+                if len(source) > MAX_TEXT_PREVIEW_BYTES:
+                    raise ApiError(413, "file.tooLarge")
+                revision = hashlib.sha256(source).hexdigest()
+        except (RootFileError, WorkspaceError) as exc:
+            raise _context_error(exc) from exc
+        if revision != payload.expected_revision:
+            raise ApiError(409, "file.changed")
+    session = None
+    if session_id is not None:
+        candidate = await db.get(ChatSession, session_id)
+        if candidate is None or candidate.user_id != user.id:
+            raise ApiError(404, "session.notFound")
+        session = candidate
+    client, config = await _openscad_client(db, user, context, session)
+    try:
+        arguments = OpenScadRenderArguments(
+            root="session" if scope is FileScope.SESSION else "workspace",
+            path=payload.path,
+        )
+    except ValueError as exc:
+        raise ApiError(422, "validation.invalid", field="path") from exc
+    root_files = context.root_files or RootFileService(session_id or UUID(int=0))
+    try:
+        rendered = await render_project(
+            client,
+            executable_path=config.binary_path,
+            session_id=session_id or UUID(int=0),
+            arguments=arguments,
+            root_files=root_files,
+        )
+        data = await export_artifact(client, rendered.model)
+        await asyncio.to_thread(validate_binary_stl, data)
+    except ExecutionClientError as exc:
+        raise _openscad_render_api_error(exc) from exc
+    except (RootFileError, WorkspaceError) as exc:
+        raise _context_error(exc) from exc
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        raise ApiError(502, "openscad.invalidArtifact") from exc
+    return Response(
+        content=data,
+        media_type="model/stl",
+        headers={
+            **_FILE_RESPONSE_HEADERS,
+            "Content-Disposition": (
+                "inline; filename=\"model.stl\"; "
+                f"filename*=UTF-8''{quote(rendered.model.filename, safe='')}"
+            ),
+        },
+    )
 
 
 @router.get("/files/download")

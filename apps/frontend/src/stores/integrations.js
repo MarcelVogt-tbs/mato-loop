@@ -24,19 +24,27 @@ const emptyGit = () => ({
   instances: []
 })
 
+const emptyOpenScad = () => ({
+  configured: false,
+  instances: []
+})
+
 export const useIntegrationStore = defineStore('integrations', {
   state: () => ({
     search: emptySearch(),
     calendar: emptyCalendar(),
     knowledge: emptyKnowledge(),
     git: emptyGit(),
+    openscad: emptyOpenScad(),
     accessByIntegration: {},
+    pendingLoads: 0,
     loading: false,
     loaded: false,
     loadFailed: false
   }),
   actions: {
     async fetchSearch() {
+      this.pendingLoads += 1
       this.loading = true
       this.loadFailed = false
       try {
@@ -46,7 +54,8 @@ export const useIntegrationStore = defineStore('integrations', {
         this.loadFailed = true
         throw error
       } finally {
-        this.loading = false
+        this.pendingLoads -= 1
+        this.loading = this.pendingLoads > 0
       }
     },
     async createSearch(payload) {
@@ -66,6 +75,7 @@ export const useIntegrationStore = defineStore('integrations', {
       return (await api.post(`/integrations/search/providers/${id}/test`)).data
     },
     async fetchCalendar() {
+      this.pendingLoads += 1
       this.loading = true
       this.loadFailed = false
       try {
@@ -75,7 +85,8 @@ export const useIntegrationStore = defineStore('integrations', {
         this.loadFailed = true
         throw error
       } finally {
-        this.loading = false
+        this.pendingLoads -= 1
+        this.loading = this.pendingLoads > 0
       }
     },
     async createCalendar(payload) {
@@ -97,6 +108,7 @@ export const useIntegrationStore = defineStore('integrations', {
       return (await api.post(`/integrations/calendar/accounts/${id}/test`)).data
     },
     async fetchKnowledge() {
+      this.pendingLoads += 1
       this.loading = true
       this.loadFailed = false
       try {
@@ -106,7 +118,8 @@ export const useIntegrationStore = defineStore('integrations', {
         this.loadFailed = true
         throw error
       } finally {
-        this.loading = false
+        this.pendingLoads -= 1
+        this.loading = this.pendingLoads > 0
       }
     },
     async createKnowledge(payload) {
@@ -131,6 +144,7 @@ export const useIntegrationStore = defineStore('integrations', {
       return (await api.post(`/integrations/knowledge/bases/${id}/test`)).data
     },
     async fetchGit() {
+      this.pendingLoads += 1
       this.loading = true
       this.loadFailed = false
       try {
@@ -140,7 +154,8 @@ export const useIntegrationStore = defineStore('integrations', {
         this.loadFailed = true
         throw error
       } finally {
-        this.loading = false
+        this.pendingLoads -= 1
+        this.loading = this.pendingLoads > 0
       }
     },
     async createGit(payload) {
@@ -155,6 +170,39 @@ export const useIntegrationStore = defineStore('integrations', {
       await api.delete(`/integrations/git/${id}`)
       delete this.accessByIntegration[id]
       await this.fetchGit()
+    },
+    async fetchOpenScad() {
+      this.pendingLoads += 1
+      this.loading = true
+      this.loadFailed = false
+      try {
+        this.openscad = (await api.get('/integrations/openscad')).data
+        this.loaded = true
+      } catch (error) {
+        this.loadFailed = true
+        throw error
+      } finally {
+        this.pendingLoads -= 1
+        this.loading = this.pendingLoads > 0
+      }
+    },
+    async createOpenScad(payload) {
+      await api.post('/integrations/openscad', payload)
+      await this.fetchOpenScad()
+    },
+    async updateOpenScad(id, payload) {
+      await api.put(`/integrations/openscad/${id}`, payload)
+      await this.fetchOpenScad()
+    },
+    async removeOpenScad(id) {
+      await api.delete(`/integrations/openscad/${id}`)
+      await this.fetchOpenScad()
+    },
+    async discoverOpenScad(executionAgentId) {
+      return (await api.post('/integrations/openscad/discover', { executionAgentId })).data
+    },
+    async testOpenScad(id) {
+      return (await api.post(`/integrations/openscad/${id}/test`)).data
     },
     async fetchAccess(id) {
       const { data } = await api.get(`/integrations/${id}/access`)

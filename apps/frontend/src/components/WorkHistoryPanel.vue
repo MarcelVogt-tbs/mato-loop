@@ -191,7 +191,7 @@ import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ToolCallItem from 'components/ToolCallItem.vue'
 import {
-  supportedAttachments,
+  toolOutputAttachments,
   toolFileActions,
   toolFileAttachment
 } from 'src/utils/attachments'
@@ -285,7 +285,7 @@ const warningLabel = computed(() => (
 const entryDuration = (reasoning) => formatReasoningDuration(reasoning.observedDurationMs)
 const outputs = computed(() => items.value.flatMap((item) => {
   const providedFile = toolFileAttachment(item.tool, item.result)
-  const attachments = supportedAttachments([
+  const attachments = toolOutputAttachments(item.tool, [
     ...(item.result?.attachments || []),
     ...(providedFile ? [providedFile] : [])
   ])

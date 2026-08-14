@@ -183,9 +183,10 @@ class ShellInspectResult(ExecutionResult):
 
 
 class ExecutionClientError(Exception):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, params: dict[str, Any] | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.params = dict(params) if params is not None else None
 
 
 _REMOTE_ERROR_CODES = {
@@ -211,6 +212,25 @@ _REMOTE_ERROR_CODES = {
     "git.statusFailed": "git.operationFailed",
     "git.timedOut": "git.operationFailed",
     "git.unsafeRepository": "git.invalidRepository",
+    "cache.exportFailed": "cache.exportFailed",
+    "cache.invalidContent": "cache.invalidContent",
+    "cache.invalidDescriptor": "cache.invalidDescriptor",
+    "cache.invalidPath": "cache.invalidPath",
+    "cache.notFound": "cache.notFound",
+    "openscad.headlessPreviewUnavailable": "openscad.previewUnavailable",
+    "openscad.invalidExecutable": "openscad.invalidExecutable",
+    "openscad.invalidArchive": "openscad.invalidArchive",
+    "openscad.invalidOutput": "openscad.invalidArtifact",
+    "openscad.notFound": "openscad.notFound",
+    "openscad.previewFailed": "openscad.previewFailed",
+    "openscad.projectTooLarge": "openscad.projectTooLarge",
+    "openscad.renderFailed": "openscad.renderFailed",
+    "openscad.startFailed": "openscad.renderFailed",
+    "openscad.testFailed": "openscad.testFailed",
+    "openscad.timedOut": "openscad.renderFailed",
+    "openscad.unavailable": "openscad.unavailable",
+    "openscad.unsafeProject": "openscad.unsafeProject",
+    "openscad.versionFailed": "openscad.testFailed",
     "operation.failed": "tool.executionFailed",
     "operation.tooLarge": "file.operationTooLarge",
     "path.exists": "file.pathAlreadyExists",
@@ -325,8 +345,14 @@ class ExecutionClient:
                 "rootRevision": self.root_revision,
                 "workingDirectory": self.working_directory or ".",
             }
-        elif operation in {"process.exec", "shell.run", "shell.inspect"} or operation.startswith(
-            "integration."
+        elif operation in {"process.exec", "shell.run", "shell.inspect"} or (
+            operation.startswith("integration.")
+            and operation
+            not in {"integration.openscad.discover", "integration.openscad.test"}
+            and not (
+                operation == "integration.openscad.render"
+                and arguments.get("source", {}).get("type") == "archive"
+            )
         ):
             if (
                 self.root_id is None
@@ -370,7 +396,8 @@ class ExecutionClient:
                     code or "", "executionAgent.protocolError"
                 )
             raise ExecutionClientError(
-                mapped_code
+                mapped_code,
+                response.error.params if response.error is not None else None,
             )
         try:
             return result_model.model_validate(response.result)

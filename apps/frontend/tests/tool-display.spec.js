@@ -163,6 +163,28 @@ describe('tool display', () => {
       .toBe('src/app.js, README.md')
     expect(toolSummary({ name: 'git_commit', arguments: { message: 'Git-Anzeige ergänzen' } }))
       .toBe('Git-Anzeige ergänzen')
+    expect(toolPresentation({
+      name: 'git_clone',
+      arguments: {
+        source: 'https://user:secret@example.com/team/project.git?token=secret',
+        destination: 'project'
+      }
+    })).toEqual({
+      summary: 'https://example.com/team/project.git?… -> project',
+      items: [{
+        label: 'Repository-URL',
+        value: 'https://example.com/team/project.git?…',
+        format: 'code'
+      }]
+    })
+    expect(toolPresentation({
+      name: 'git_clone',
+      arguments: { source: '/home/user/repository', destination: 'project' }
+    }).items).toEqual([{
+      label: 'Repository-Quelle',
+      value: '/home/user/repository',
+      format: 'code'
+    }])
   })
 
   it('summarizes persona changes without rendering the complete instructions', () => {

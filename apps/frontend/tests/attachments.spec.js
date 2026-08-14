@@ -12,6 +12,7 @@ import {
   supportedAttachments,
   toolFileActions,
   toolFileAttachment,
+  toolOutputAttachments,
   videoAttachments,
   videoMimeTypeSupported
 } from '../src/utils/attachments'
@@ -143,6 +144,18 @@ describe('persisted attachments', () => {
     expect(attachmentIcon(attachments[3])).toBe('description')
     expect(attachmentIcon(attachments[4])).toBe('picture_as_pdf')
     expect(attachmentIcon(attachments[5])).toBe('folder_zip')
+  })
+
+  it('hides OpenSCAD previews only from the visible tool output', () => {
+    const attachments = [
+      { id: 'model', kind: 'file', mimeType: 'model/stl', url },
+      { id: 'preview', kind: 'image', mimeType: 'image/png', url }
+    ]
+
+    expect(toolOutputAttachments({ name: 'render_openscad' }, attachments))
+      .toEqual([expect.objectContaining({ id: 'model' })])
+    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(2)
+    expect(attachments).toHaveLength(2)
   })
 
   it('only enables the audio player when the browser accepts the MIME type', () => {

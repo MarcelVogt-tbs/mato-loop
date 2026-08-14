@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 import httpx
+from pydantic import ValidationError
 
 from mato_loop_execution_agent.cache import SessionCache
 from mato_loop_execution_agent.protocol import ArtifactDescriptor, TransferSpec
@@ -106,11 +107,29 @@ class CacheTransferTests(unittest.IsolatedAsyncioTestCase):
             )
             await http.aclose()
 
-    async def test_transfer_rejects_other_origins_and_paths(self) -> None:
-        http = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+    async def test_transfer_uses_paired_origin_and_rejects_invalid_paths(self) -> None:
+        requested = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested.append(str(request.url))
+            return httpx.Response(204)
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         transfer = transfer_client(http)
+        await transfer.upload(
+            TransferSpec(
+                url=f"http://127.0.0.1:6020/api/workspace/transfers/{TICKET_ID}",
+                token="ticket",
+            ),
+            io.BytesIO(),
+            size=0,
+            sha256=hashlib.sha256(b"").hexdigest(),
+        )
+        self.assertEqual(
+            requested,
+            [f"http://backend/api/workspace/transfers/{TICKET_ID}"],
+        )
         for url in (
-            f"http://other/api/workspace/transfers/{TICKET_ID}",
             f"http://backend/other/transfers/{TICKET_ID}",
             f"http://backend/api/workspace/transfers/{TICKET_ID}?token=leak",
         ):
@@ -126,20 +145,19 @@ class CacheTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_cache_rejects_root_artifacts_and_serializes_mutations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache = SessionCache(Path(temporary), max_bytes=1024)
-            invalid = ArtifactDescriptor.model_validate(
-                {
-                    "artifactId": "artifact",
-                    "backendId": "backend",
-                    "sessionId": "session",
-                    "path": ".",
-                    "filename": "root",
-                    "size": 0,
-                    "sha256": hashlib.sha256(b"").hexdigest(),
-                    "contentType": "application/octet-stream",
-                }
-            )
-            with self.assertRaises(AgentError):
-                cache.store(invalid, io.BytesIO())
+            with self.assertRaises(ValidationError):
+                ArtifactDescriptor.model_validate(
+                    {
+                        "artifactId": "artifact",
+                        "backendId": "backend",
+                        "sessionId": "session",
+                        "path": ".",
+                        "filename": "root",
+                        "size": 0,
+                        "sha256": hashlib.sha256(b"").hexdigest(),
+                        "contentType": "application/octet-stream",
+                    }
+                )
 
             active = 0
             maximum = 0

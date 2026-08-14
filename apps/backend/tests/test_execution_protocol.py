@@ -91,6 +91,7 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "process.exec",
         "shell.run",
         "cache.ensure",
+        "cache.export",
         "cache.store",
         "cache.clear",
         "system.info",
@@ -101,6 +102,9 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "integration.git.diff",
         "integration.git.log",
         "integration.git.status",
+        "integration.openscad.discover",
+        "integration.openscad.render",
+        "integration.openscad.test",
         "shell.inspect",
     }
 

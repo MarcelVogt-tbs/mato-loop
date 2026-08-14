@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { boot } from 'quasar/wrappers'
+import { decodeBlobApiError } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
 
 const api = axios.create({
@@ -9,9 +10,11 @@ const api = axios.create({
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (!axios.isCancel(error) && !error.config?.suppressErrorToast) notifyError(error)
-    return Promise.reject(error)
+  async (error) => {
+    if (axios.isCancel(error)) return Promise.reject(error)
+    const decoded = await decodeBlobApiError(error)
+    if (!decoded.config?.suppressErrorToast) notifyError(decoded)
+    return Promise.reject(decoded)
   }
 )
 

@@ -11,7 +11,8 @@
   "dataDir": "/data",
   "allowInsecure": true,
   "gitExecutable": "/usr/bin/git",
-  "allowNetwork": false,
+  "openscadExecutable": "/usr/bin/openscad",
+  "allowNetwork": true,
   "processExecutables": {
     "python": "/usr/local/bin/python"
   },

@@ -28,6 +28,7 @@ from mato_loop_backend.integrations.service import (
     CalDavIntegrationService,
     GitIntegrationService,
     IntegrationSettingsError,
+    OpenScadIntegrationService,
     SearchIntegrationService,
 )
 from mato_loop_backend.integrations.webfetch import (
@@ -51,6 +52,7 @@ __all__ = [
     "CalDavIntegrationService",
     "GitConfig",
     "GitIntegrationService",
+    "OpenScadIntegrationService",
     "IntegrationSettingsError",
     "PdfVisionHandler",
     "SearchIntegrationService",

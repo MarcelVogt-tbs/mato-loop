@@ -132,6 +132,7 @@ def _permission(
     *,
     title: str,
     summary: str,
+    display_items: tuple[Any, ...] = (),
     decisions: tuple[str, ...] = ("allow_once", "allow_session", "deny"),
 ) -> tuple[Any, ...]:
     from mato_loop_backend.agent.permissions import integration_operation_permission
@@ -153,6 +154,7 @@ def _permission(
         summary=summary,
         resource_display=getattr(arguments, "destination", None),
         action_kind=capability.replace(".", "_"),
+        display_items=display_items,
         available_decisions=decisions,
     )
     return (
@@ -186,12 +188,31 @@ def _stage_permission(arguments: BaseModel, context: Any) -> tuple[Any, ...]:
 
 
 def _clone_permission(arguments: BaseModel, context: Any) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+    from mato_loop_backend.integrations.webfetch import (
+        WebFetchError,
+        sanitize_url_for_display,
+    )
+
+    source = str(getattr(arguments, "source", ""))
+    is_url = source.lower().startswith(("http://", "https://"))
+    try:
+        source_display = sanitize_url_for_display(source) if is_url else source
+    except WebFetchError:
+        source_display = "Ungültige URL"
     return _permission(
         "git.clone",
         arguments,
         context,
         title="Git-Repository klonen?",
         summary="Der Agent möchte ein Git-Repository auf diesen Computer klonen.",
+        display_items=(
+            PermissionDisplayItem(
+                "Repository-URL" if is_url else "Repository-Quelle",
+                source_display,
+                format="code",
+            ),
+        ),
         decisions=("allow_once", "deny"),
     )
 
@@ -291,6 +312,7 @@ GIT_ADAPTER = IntegrationAdapterDefinition(
     integration_type="git",
     adapter_type="git",
     config_model=GitConfig,
+    resource_actions=(_READ, _STAGE, _CLONE, _COMMIT),
     execution_location="agent",
     execution_kind="git",
     execution_tools=GIT_TOOLS,

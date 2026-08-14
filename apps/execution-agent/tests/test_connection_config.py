@@ -11,7 +11,7 @@ import websockets
 
 from mato_loop_execution_agent.config import AgentConfig
 from mato_loop_execution_agent.connection import ExecutionAgent, serialize_message
-from mato_loop_execution_agent.protocol import Request, Response
+from mato_loop_execution_agent.protocol import Error, Request, Response
 from mato_loop_execution_agent.workspace import AgentError
 
 AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
@@ -34,6 +34,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(configuration.backend_url)
         self.assertIsNone(configuration.agent_id)
+        self.assertTrue(configuration.allow_network)
 
     async def test_loads_json_paths_and_authenticates_outbound_socket(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -278,6 +279,19 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
         response = Response(id=REQUEST_ID, ok=True, result={"content": "x" * 1024 * 1024})
         with self.assertRaises(AgentError):
             serialize_message(response)
+
+        error = Response(
+            id=REQUEST_ID,
+            ok=False,
+            error=Error(
+                code="openscad.renderFailed",
+                params={"diagnostics": "safe output", "diagnosticsTruncated": False},
+            ),
+        )
+        self.assertEqual(
+            json.loads(serialize_message(error))["error"]["params"]["diagnostics"],
+            "safe output",
+        )
 
 
 if __name__ == "__main__":

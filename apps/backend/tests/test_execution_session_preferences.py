@@ -200,6 +200,59 @@ async def test_start_persists_live_executor_snapshot(monkeypatch) -> None:
     assert run.execution_operations == ["workspace.read", "workspace.write"]
 
 
+async def test_start_keeps_archive_render_operations_without_a_workspace(monkeypatch) -> None:
+    user_id = uuid4()
+    agent, _root = _agent_and_root(user_id)
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="agent-model")
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user_id,
+        title="Test",
+        model_config_id=model.id,
+        preferred_execution_agent_id=agent.id,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(
+            return_value=AiSettings(
+                providers=[provider], models=[model], default_model_id=model.id
+            )
+        ),
+    )
+    monkeypatch.setattr(EpisodeIndexService, "enqueue", AsyncMock())
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", lambda _run: None)
+    monkeypatch.setattr(
+        execution_agent_connections,
+        "snapshot",
+        lambda _agent_id: (
+            frozenset(
+                {
+                    "workspace.read",
+                    "system.info",
+                    "filesystem.resolve",
+                    "integration.openscad.render",
+                    "cache.export",
+                }
+            ),
+            (),
+        ),
+    )
+
+    run = await AgentRuntime.start(db, session, "Create a cube")
+
+    assert run.execution_root_id is None
+    assert run.execution_operations == [
+        "cache.export",
+        "filesystem.resolve",
+        "integration.openscad.render",
+        "system.info",
+    ]
+
+
 async def test_start_keeps_disconnected_executor_without_live_operations(monkeypatch) -> None:
     user_id = uuid4()
     agent, root = _agent_and_root(user_id)

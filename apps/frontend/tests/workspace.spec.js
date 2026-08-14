@@ -232,6 +232,10 @@ describe('workspace store', () => {
       root: 'workspace',
       sessionId: 'session-a',
       rootIdentity: 'original',
+      rootId: 'original',
+      rootRevision: 'b'.repeat(64),
+      executionAgentId: 'original-agent',
+      workingDirectory: 'original-project',
       path: 'reports/result.txt',
       filename: 'result.txt',
       sizeBytes: 7
@@ -247,12 +251,20 @@ describe('workspace store', () => {
         path: '.',
         scope: 'filesystem',
         session_id: 'session-a',
+        execution_agent_id: 'original-agent',
+        root_id: 'original',
+        root_revision: 'b'.repeat(64),
+        working_directory: 'original-project',
         root_identity: 'original'
       },
       {
         path: 'reports/result.txt',
         scope: 'filesystem',
         session_id: 'session-a',
+        execution_agent_id: 'original-agent',
+        root_id: 'original',
+        root_revision: 'b'.repeat(64),
+        working_directory: 'original-project',
         root_identity: 'original'
       }
     ])
@@ -260,6 +272,49 @@ describe('workspace store', () => {
     await expect(workspace.createDirectory('.', 'blocked')).rejects.toThrow('Tool file contexts are read-only')
     workspace.show()
     expect(workspace.rootIdentity).toBeNull()
+  })
+
+  it('keeps the historical workspace context for tool-file reads', async () => {
+    api.get.mockResolvedValue({ data: { entries: [] } })
+    const workspace = useWorkspaceStore()
+    workspace.configure({
+      sessionId: 'session-a',
+      workingDirectory: 'current',
+      workspaceContext: { executionAgentId: 'current-agent', rootId: 'current-root' }
+    })
+
+    await workspace.openToolFile({
+      root: 'workspace',
+      sessionId: 'session-a',
+      rootIdentity: 'historical-root',
+      rootId: 'historical-root',
+      rootRevision: 'a'.repeat(64),
+      executionAgentId: 'historical-agent',
+      workingDirectory: 'original-project',
+      path: 'model.stl',
+      filename: 'model.stl',
+      sizeBytes: 84
+    })
+
+    expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
+      params: {
+        path: '.',
+        scope: 'filesystem',
+        session_id: 'session-a',
+        execution_agent_id: 'historical-agent',
+        root_id: 'historical-root',
+        working_directory: 'original-project',
+        root_revision: 'a'.repeat(64),
+        root_identity: 'historical-root'
+      },
+      suppressErrorToast: true
+    })
+    expect(workspace.fileUrl('content', 'model.stl')).toContain('execution_agent_id=historical-agent')
+    workspace.show()
+    expect(workspace.workingDirectory).toBe('current')
+    expect(workspace.workspaceContext).toEqual({
+      executionAgentId: 'current-agent', rootId: 'current-root'
+    })
   })
 
   it('opens an approval draft in the editable session file editor', async () => {
@@ -450,6 +505,8 @@ describe('workspace store', () => {
     expect(withFileSuffix('Notizen', '.txt')).toBe('Notizen.txt')
     expect(withFileSuffix('README.MD', '.md')).toBe('README.MD')
     expect(withFileSuffix('README.md', '.txt')).toBe('README.md.txt')
+    expect(withFileSuffix('modell', '.scad')).toBe('modell.scad')
+    expect(withFileSuffix('modell.scad', '.scad')).toBe('modell.scad')
   })
 
   it('keeps the active draft and dirty state in the workspace store', () => {
@@ -517,6 +574,33 @@ describe('workspace store', () => {
     expect(workspace.viewedEntry.size).toBe(6)
     expect(api.get).toHaveBeenCalledWith('/workspace/files/preview', {
       params: { path: 'notes.md', scope: 'filesystem' },
+      suppressErrorToast: true
+    })
+  })
+
+  it('requests OpenSCAD rendering with the latest revision and workspace context', async () => {
+    const model = new Blob(['stl'], { type: 'model/stl' })
+    api.post.mockResolvedValue({ data: model, headers: { 'content-type': 'model/stl' } })
+    const workspace = useWorkspaceStore()
+    workspace.configure({
+      workingDirectory: 'project',
+      workspaceContext: { executionAgentId: 'agent-1', rootId: 'root-1' }
+    })
+    const controller = new AbortController()
+
+    await expect(workspace.renderOpenScad('model.scad', 'revision-2', controller.signal)).resolves.toBe(model)
+
+    expect(api.post).toHaveBeenCalledWith('/workspace/files/openscad/render', {
+      path: 'model.scad', expectedRevision: 'revision-2'
+    }, {
+      params: {
+        scope: 'filesystem',
+        execution_agent_id: 'agent-1',
+        root_id: 'root-1',
+        working_directory: 'project'
+      },
+      responseType: 'blob',
+      signal: controller.signal,
       suppressErrorToast: true
     })
   })

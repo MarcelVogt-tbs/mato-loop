@@ -56,9 +56,12 @@
               {{ typeLabel(integration.integrationType) }} ·
               {{ providerLabel(integration.providerType) }}
             </q-item-label>
-            <q-item-label v-if="integration.integrationType === 'git'" caption lines="1">
+            <q-item-label v-if="['git', 'openscad'].includes(integration.integrationType)" caption lines="1">
               Computer: {{ executionAgentName(integration) }} ·
-              Netzwerkzugriff {{ gitAllowNetwork(integration) ? 'erlaubt' : 'gesperrt' }}
+              <template v-if="integration.integrationType === 'git'">
+                Netzwerkzugriff {{ gitAllowNetwork(integration) ? 'erlaubt' : 'gesperrt' }}
+              </template>
+              <template v-else>{{ integration.config.binaryPath }}</template>
             </q-item-label>
             <q-item-label v-else caption lines="1">
               {{ integration.config.baseUrl }}{{ integration.config.username ? ` · ${integration.config.username}` : '' }}
@@ -143,8 +146,15 @@ const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)
 const knowledgeBases = computed(() => integrations.knowledge.bases)
 const gitInstances = computed(() => integrations.git.instances)
+const openScadInstances = computed(() => integrations.openscad.instances)
 const configuredIntegrations = computed(
-  () => [...searchProviders.value, ...calendarAccounts.value, ...knowledgeBases.value, ...gitInstances.value]
+  () => [
+    ...searchProviders.value,
+    ...calendarAccounts.value,
+    ...knowledgeBases.value,
+    ...gitInstances.value,
+    ...openScadInstances.value
+  ]
 )
 
 function openCreateDialog() {
@@ -158,19 +168,24 @@ function openEditDialog(integration) {
 }
 
 function providerLabel(providerType) {
-  return { searxng: 'SearXNG', caldav: 'CalDAV', bookstack: 'BookStack', git: 'Git' }[providerType] || providerType
+  return {
+    searxng: 'SearXNG', caldav: 'CalDAV', bookstack: 'BookStack', git: 'Git', openscad: 'OpenSCAD'
+  }[providerType] || providerType
 }
 
 function typeLabel(integrationType) {
   return {
     calendar: 'Kalender & Aufgaben',
     knowledge: 'Wissensdatenbank',
-    git: 'Versionsverwaltung'
+    git: 'Versionsverwaltung',
+    openscad: '3D-Modellierung'
   }[integrationType] || 'Websuche'
 }
 
 function typeIcon(integrationType) {
-  return { calendar: 'calendar_month', knowledge: 'menu_book', git: 'account_tree' }[integrationType] || 'travel_explore'
+  return {
+    calendar: 'calendar_month', knowledge: 'menu_book', git: 'account_tree', openscad: 'view_in_ar'
+  }[integrationType] || 'travel_explore'
 }
 
 function gitExecutionAgentId(integration) {
@@ -191,9 +206,18 @@ function gitAllowNetwork(integration) {
 async function testIntegration(integration) {
   testingId.value = integration.id
   try {
-    if (integration.integrationType === 'calendar') await integrations.testCalendar(integration.id)
-    else if (integration.integrationType === 'knowledge') await integrations.testKnowledge(integration.id)
-    else await integrations.testSearch(integration.id)
+    let result
+    if (integration.integrationType === 'calendar') result = await integrations.testCalendar(integration.id)
+    else if (integration.integrationType === 'knowledge') result = await integrations.testKnowledge(integration.id)
+    else if (integration.integrationType === 'openscad') result = await integrations.testOpenScad(integration.id)
+    else result = await integrations.testSearch(integration.id)
+    if (integration.integrationType === 'openscad' && result?.headlessPreview === false) {
+      $q.notify({
+        type: 'warning',
+        message: 'OpenSCAD ist erreichbar, unterstützt aber keine Headless-Vorschau.'
+      })
+      return
+    }
     $q.notify({ type: 'positive', message: 'Verbindung erfolgreich' })
   } catch {
     // The central API interceptor displays the error as a toast.
@@ -212,6 +236,7 @@ async function removeIntegration(integration) {
   if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
   else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
   else if (integration.integrationType === 'git') await integrations.removeGit(integration.id)
+  else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)
   else await integrations.removeSearch(integration.id)
   $q.notify({ type: 'positive', message: 'Integration gelöscht' })
 }
@@ -223,6 +248,7 @@ async function reload() {
       integrations.fetchCalendar(),
       integrations.fetchKnowledge(),
       integrations.fetchGit(),
+      integrations.fetchOpenScad(),
       executionAgents.fetchAll()
     ])
   } catch {

@@ -18,9 +18,15 @@ from .config import AgentConfig, RootConfig
 
 
 class AgentError(Exception):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        params: dict[str, str | bool | int | float] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.params = params
 
 
 @dataclass(frozen=True, slots=True)

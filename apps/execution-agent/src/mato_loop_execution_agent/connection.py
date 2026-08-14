@@ -16,10 +16,12 @@ from pydantic import ValidationError
 from .cache import SessionCache
 from .config import AgentConfig
 from .git import GIT_OPERATIONS, GitRunner
+from .openscad import OpenScadRunner
 from .process import ProcessRunner
 from .protocol import (
     ARGUMENT_MODELS,
     CacheEnsureArguments,
+    CacheExportArguments,
     CacheStoreArguments,
     Cancel,
     CopyMoveArguments,
@@ -39,6 +41,9 @@ from .protocol import (
     ImportArguments,
     ListArguments,
     MkdirArguments,
+    OpenScadDiscoverArguments,
+    OpenScadRenderArguments,
+    OpenScadTestArguments,
     ProcessArguments,
     ReadArguments,
     RenameArguments,
@@ -105,6 +110,7 @@ class ExecutionAgent:
             backend_url=config.backend_url,
             access_key=access_key,
         )
+        self.openscad = OpenScadRunner(config, self.workspace, self.cache, self.transfer)
         self._access_key = access_key
         operations = set(ARGUMENT_MODELS)
         if not self.process.executables:
@@ -115,6 +121,8 @@ class ExecutionAgent:
             operations -= {"workspace.glob", "workspace.grep"}
         if self.git.executable is None:
             operations -= GIT_OPERATIONS
+        if not self.openscad.render_available:
+            operations.remove("integration.openscad.render")
         self.operations = sorted(operations)
 
     def hello(self) -> Hello:
@@ -189,6 +197,10 @@ class ExecutionAgent:
             return await asyncio.to_thread(
                 self.workspace.resolve_directory, arguments.path, arguments.current_directory
             )
+        if isinstance(arguments, OpenScadDiscoverArguments):
+            return self.openscad.discover()
+        if isinstance(arguments, OpenScadTestArguments):
+            return await self.openscad.test(arguments.executable_path)
 
         if isinstance(arguments, StatArguments):
             return await asyncio.to_thread(
@@ -340,6 +352,28 @@ class ExecutionAgent:
             return await _defer_cancellation(
                 self.cache.ensure(arguments.artifact, arguments.transfer, self.transfer)
             )
+        if isinstance(arguments, CacheExportArguments):
+            if arguments.artifact.backend_id != backend_id:
+                raise AgentError("cache.invalidDescriptor", "Artifact backend does not match")
+            export = self.cache.open_export(arguments.artifact)
+            handle, size, digest = await asyncio.to_thread(export.__enter__)
+            try:
+                try:
+                    await self.transfer.upload(
+                        arguments.transfer,
+                        handle,
+                        size=size,
+                        sha256=digest,
+                    )
+                except AgentError as exc:
+                    if exc.code.startswith("transfer."):
+                        raise AgentError(
+                            "cache.exportFailed", "Cached artifact upload failed"
+                        ) from exc
+                    raise
+            finally:
+                await asyncio.to_thread(export.__exit__, None, None, None)
+            return {"size": size, "sha256": digest}
         if isinstance(arguments, CacheStoreArguments):
             if arguments.artifact.backend_id != backend_id:
                 raise AgentError("cache.invalidDescriptor", "Artifact backend does not match")
@@ -397,6 +431,10 @@ class ExecutionAgent:
             )
             result.setdefault("inspectionRevision", self.process._inspection_revision(result))
             return result
+        if isinstance(arguments, OpenScadRenderArguments):
+            if backend_id is None:
+                raise AgentError("cache.invalidDescriptor", "Backend identity is unavailable")
+            return await self.openscad.render(arguments, backend_id)
         if isinstance(arguments, GitCloneArguments):
             return await _defer_cancellation(
                 self.git.clone(
@@ -523,7 +561,7 @@ class ExecutionAgent:
                         Response(
                             id=request.id,
                             ok=False,
-                            error=Error(code=exc.code),
+                            error=Error(code=exc.code, params=exc.params),
                         )
                     )
                 except Exception:

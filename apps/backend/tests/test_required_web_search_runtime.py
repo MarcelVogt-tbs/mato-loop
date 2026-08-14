@@ -32,6 +32,7 @@ from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentRuntimeSettings,
     AiSettings,
+    IntegrationInstance,
     IntegrationSettings,
     MemorySettings,
     SettingsStore,
@@ -85,6 +86,9 @@ async def _runtime_setup(
     skills: SkillsSettings | None = None,
     skill_creation_model: bool = False,
     streamed_contents: list[str | None] | None = None,
+    integration_settings: IntegrationSettings | None = None,
+    execution_agent_id=None,
+    execution_operations: tuple[str, ...] = (),
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -134,7 +138,13 @@ async def _runtime_setup(
         web_search_policy=search_policy.value,
         workspace_access=workspace_access,
     )
-    run = AgentRun(id=uuid4(), session_id=session.id, status="running")
+    run = AgentRun(
+        id=uuid4(),
+        session_id=session.id,
+        status="running",
+        execution_agent_id=execution_agent_id,
+        execution_operations=list(execution_operations),
+    )
     user = Message(id=uuid4(), session_id=session.id, role="user", content="Aktuelle Frage")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
@@ -145,7 +155,7 @@ async def _runtime_setup(
             AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
             MemorySettings: MemorySettings(enabled=False),
-            IntegrationSettings: IntegrationSettings(),
+            IntegrationSettings: integration_settings or IntegrationSettings(),
             SkillsSettings: skills or SkillsSettings(),
             ToolSettings: ToolSettings(),
         }[settings_type]
@@ -217,6 +227,70 @@ async def test_completed_response_persists_canonical_markdown(monkeypatch) -> No
     assert _assistant_messages(db)[0].content == expected
     completed = next(event for event in events if event.get("type") == "message.completed")
     assert completed["message"]["content"] == expected
+
+
+async def test_generated_openscad_source_requires_a_successful_render(monkeypatch) -> None:
+    agent_id = uuid4()
+    integration = IntegrationInstance(
+        name="OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
+        execution_agent_id=agent_id,
+        config={"binary_path": "/usr/bin/openscad"},
+    )
+    db, run, requests, projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(content="```scad\ncube(1);\n```", finish_reason="stop"),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="write",
+                        name="write_file",
+                        arguments={
+                            "root": "session",
+                            "path": "files/cube.scad",
+                            "content": "cube(1);\n",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="render",
+                        name="render_openscad",
+                        arguments={
+                            "root": "session",
+                            "path": "files/cube.scad",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Fertig gerendert.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        workspace_access="read-write",
+        integration_settings=IntegrationSettings(instances=[integration]),
+        execution_agent_id=agent_id,
+        execution_operations=("integration.openscad.render", "cache.export"),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["tool_choice"] for request in requests] == [
+        "auto",
+        "required",
+        "required",
+        "auto",
+    ]
+    assert "has not been rendered successfully" in projections[1]["system_prompt"]
+    assert not any(
+        "cube(1)" in message.content for message in _assistant_messages(db)
+    )
+    assert _assistant_messages(db)[-1].content == "Fertig gerendert."
 
 
 async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None:
@@ -1170,6 +1244,49 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
     assert "Schon erledigt." not in persisted
     assert persisted[-1] == "Die Datei wurde erstellt."
     assert [event.get("delta") for event in events].count("Die Datei wurde erstellt.") == 1
+
+
+async def test_directory_change_allows_retrying_a_failed_workspace_call(monkeypatch) -> None:
+    workspace_read = {"root": "workspace", "path": "README.md"}
+    db, run, _requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[ToolCall("read-failed", "read", workspace_read)],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        "change-directory",
+                        "change_directory",
+                        {"path": "/workspace/drastic-backup"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[ToolCall("read-retried", "read", workspace_read)],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Repository gelesen.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        execution_agent_id=uuid4(),
+        execution_operations=("filesystem.resolve",),
+    )
+    tool_registry._execute_definition.side_effect = [
+        ToolResult.error("file.notFound"),
+        ToolResult.json({"currentDirectory": "/workspace/drastic-backup"}),
+        ToolResult("README", {}),
+    ]
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [
+        call.args[0].name for call in tool_registry._execute_definition.await_args_list
+    ] == ["read", "change_directory", "read"]
+    assert _assistant_messages(db)[-1].content == "Repository gelesen."
 
 
 async def test_available_uses_the_shared_research_budget(monkeypatch) -> None:

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { apiErrorMessage, errorDescriptor } from '../src/utils/api-errors'
+import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
   it('translates stable domain error codes', () => {
@@ -28,6 +28,30 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'oauth.loginExpired' } })).toBe(
       'Der ChatGPT-Einmalcode ist abgelaufen. Bitte starte die Anmeldung erneut.'
     )
+    expect(apiErrorMessage({ error: { code: 'openscad.renderFailed' } })).toBe(
+      'Das OpenSCAD-Modell konnte nicht gerendert werden.'
+    )
+    for (const code of [
+      'cache.exportFailed',
+      'cache.invalidContent',
+      'cache.invalidDescriptor',
+      'cache.invalidPath',
+      'cache.notFound',
+      'openscad.alreadyConfigured',
+      'openscad.invalidArtifact',
+      'openscad.invalidArchive',
+      'openscad.invalidExecutable',
+      'openscad.notConfigured',
+      'openscad.notFound',
+      'openscad.previewFailed',
+      'openscad.previewUnavailable',
+      'openscad.projectTooLarge',
+      'openscad.testFailed',
+      'openscad.unavailable',
+      'openscad.unsafeProject'
+    ]) {
+      expect(apiErrorMessage({ error: { code } })).not.toBe('Die Aktion ist fehlgeschlagen.')
+    }
     expect(apiErrorMessage({ error: { code: 'workspace.invalidEncoding' } })).toBe(
       'Die Datei kann nur als UTF-8-Text gelesen werden.'
     )
@@ -214,5 +238,25 @@ describe('API error messages', () => {
     expect(apiErrorMessage({
       error: { code: 'future.unknown', message: 'Secret upstream details' }
     })).toBe('Die Aktion ist fehlgeschlagen.')
+  })
+
+  it('decodes structured blob errors before localizing them', async () => {
+    for (const [code, message] of [
+      [
+        'file.changed',
+        'Die Datei wurde seit dem Öffnen geändert. Öffne sie erneut und übernimm deine Änderungen in die aktuelle Version.'
+      ],
+      ['openscad.renderFailed', 'Das OpenSCAD-Modell konnte nicht gerendert werden.']
+    ]) {
+      const source = {
+        response: {
+          status: 409,
+          data: new Blob([JSON.stringify({ error: { code } })], { type: 'application/json' })
+        }
+      }
+      const decoded = await decodeBlobApiError(source)
+      expect(decoded).toBe(source)
+      expect(apiErrorMessage(decoded)).toBe(message)
+    }
   })
 })

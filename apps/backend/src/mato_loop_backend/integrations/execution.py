@@ -12,6 +12,7 @@ def execution_tool_handler(
     operation: str | None,
     result_model: type[BaseModel] | None,
     host_arguments: dict[str, Any],
+    required_operations: tuple[str, ...] = (),
 ):
     if instance.execution_agent_id is None or operation is None or result_model is None:
         raise ValueError("invalid agent integration binding")
@@ -25,7 +26,8 @@ def execution_tool_handler(
         if (
             run is None
             or run.execution_agent_id != instance.execution_agent_id
-            or operation not in frozenset(run.execution_operations or [])
+            or not {operation, *required_operations}
+            <= frozenset(run.execution_operations or [])
         ):
             return ToolResult.error("tool.unavailable")
         client = context.execution_client

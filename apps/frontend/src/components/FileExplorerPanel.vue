@@ -400,7 +400,8 @@ let typeahead = ''
 let typeaheadTimer = null
 const fileTypeOptions = [
   { label: 'Textdatei (.txt)', value: '.txt' },
-  { label: 'Markdown (.md)', value: '.md' }
+  { label: 'Markdown (.md)', value: '.md' },
+  { label: 'OpenSCAD (.scad)', value: '.scad' }
 ]
 const createFileName = computed(() => withFileSuffix(createName.value, createSuffix.value))
 const selectedEntry = computed(() => {

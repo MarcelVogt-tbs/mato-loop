@@ -24,7 +24,7 @@ from mato_loop_backend.execution import (
     WorkspaceStatResult,
     WorkspaceWriteResult,
 )
-from mato_loop_backend.execution.client import WorkspaceGrepMatch
+from mato_loop_backend.execution.client import ExecutionResult, WorkspaceGrepMatch
 from mato_loop_backend.execution.protocol import EventMessage, ResponseMessage
 from mato_loop_backend.models import ChatSession, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
@@ -169,6 +169,7 @@ async def test_execution_client_adds_only_snapshot_root_and_sanitizes_agent_erro
             "workspace.read", {"path": "README.md"}, WorkspaceReadResult
         )
     assert exc_info.value.code == "executionAgent.protocolError"
+    assert exc_info.value.params == {"secret": "value"}
     assert "secret" not in str(exc_info.value)
 
 
@@ -210,7 +211,7 @@ async def test_execution_client_supports_root_independent_operations(monkeypatch
             "ok": True,
             "result": {
                 "path": "/workspace",
-                    "rootId": str(uuid4()),
+                "rootId": str(uuid4()),
                 "rootRevision": "a" * 64,
                 "relativePath": ".",
             },
@@ -220,6 +221,41 @@ async def test_execution_client_supports_root_independent_operations(monkeypatch
         "filesystem.resolve", {"path": "/workspace"}, DirectoryResult
     )
     assert result.path == "/workspace"
+
+
+async def test_execution_client_sends_archive_render_without_workspace_metadata(
+    monkeypatch,
+) -> None:
+    agent_id = uuid4()
+    client = ExecutionClient(
+        agent_id,
+        None,
+        None,
+        None,
+        frozenset({"integration.openscad.render"}),
+    )
+    request = AsyncMock(
+        return_value=ResponseMessage.model_validate(
+            {
+                "type": "response",
+                "id": uuid4(),
+                "ok": True,
+                "result": {},
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.request", request
+    )
+    arguments = {"source": {"type": "archive"}}
+
+    await client.request("integration.openscad.render", arguments, ExecutionResult)
+
+    assert request.await_args.args[:3] == (
+        agent_id,
+        "integration.openscad.render",
+        arguments,
+    )
 
 
 async def test_system_info_and_shell_inspection_use_selected_computer(tmp_path) -> None:

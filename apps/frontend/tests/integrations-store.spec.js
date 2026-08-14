@@ -74,6 +74,20 @@ const gitResponse = {
   ]
 }
 
+const openScadResponse = {
+  configured: true,
+  instances: [{
+    id: 'openscad-id',
+    name: 'OpenSCAD',
+    integrationType: 'openscad',
+    providerType: 'openscad',
+    executionAgentId: 'agent-1',
+    enabled: true,
+    config: { binaryPath: '/usr/bin/openscad' },
+    executionLocation: 'agent'
+  }]
+}
+
 describe('integration store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -234,6 +248,64 @@ describe('integration store', () => {
     expect(api.put).toHaveBeenCalledWith('/integrations/git/git-id', payload)
     expect(api.delete).toHaveBeenCalledWith('/integrations/git/git-id')
     expect(store.git.instances).toEqual(gitResponse.instances)
+  })
+
+  it('loads and dispatches OpenSCAD CRUD, discovery and test operations', async () => {
+    api.get.mockResolvedValue({ data: openScadResponse })
+    api.post.mockImplementation((url) => Promise.resolve({
+      data: url.endsWith('/discover')
+        ? { available: true, executablePath: '/opt/openscad', version: '2025.01', headlessPreview: true }
+        : { status: 'ok' }
+    }))
+    api.put.mockResolvedValue({})
+    api.delete.mockResolvedValue({})
+    const store = useIntegrationStore()
+    const payload = {
+      executionAgentId: 'agent-1',
+      name: 'OpenSCAD',
+      config: { binaryPath: '/usr/bin/openscad' },
+      enabled: true
+    }
+
+    await store.fetchOpenScad()
+    await store.createOpenScad(payload)
+    await store.updateOpenScad('openscad-id', payload)
+    const discovered = await store.discoverOpenScad('agent-1')
+    await store.testOpenScad('openscad-id')
+    await store.removeOpenScad('openscad-id')
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/openscad')
+    expect(api.post).toHaveBeenCalledWith('/integrations/openscad', payload)
+    expect(api.put).toHaveBeenCalledWith('/integrations/openscad/openscad-id', payload)
+    expect(api.post).toHaveBeenCalledWith('/integrations/openscad/discover', { executionAgentId: 'agent-1' })
+    expect(api.post).toHaveBeenCalledWith('/integrations/openscad/openscad-id/test')
+    expect(api.delete).toHaveBeenCalledWith('/integrations/openscad/openscad-id')
+    expect(discovered.executablePath).toBe('/opt/openscad')
+    expect(store.openscad.instances).toEqual(openScadResponse.instances)
+  })
+
+  it('keeps loading active until concurrent integration requests finish', async () => {
+    let resolveSearch
+    let resolveCalendar
+    api.get.mockImplementation((url) => new Promise((resolve) => {
+      if (url === '/integrations/search') resolveSearch = resolve
+      else resolveCalendar = resolve
+    }))
+    const store = useIntegrationStore()
+
+    const search = store.fetchSearch()
+    const calendar = store.fetchCalendar()
+    expect(store.loading).toBe(true)
+
+    resolveSearch({ data: searchResponse })
+    await search
+    expect(store.loading).toBe(true)
+    expect(store.pendingLoads).toBe(1)
+
+    resolveCalendar({ data: calendarResponse })
+    await calendar
+    expect(store.loading).toBe(false)
+    expect(store.pendingLoads).toBe(0)
   })
 
   it('loads and saves resource policies for one integration', async () => {

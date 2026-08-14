@@ -85,6 +85,15 @@ def test_git_adapter_contract_and_tool_schemas() -> None:
         "git.clone": ToolExecutionPolicy.ASK,
         "git.commit": ToolExecutionPolicy.ASK,
     }
+    assert {
+        action.capability: action.default_policy
+        for action in tool_registry.integration_resource_actions(_instance())
+    } == {
+        "git.read": ToolExecutionPolicy.AUTO,
+        "git.stage": ToolExecutionPolicy.ASK,
+        "git.clone": ToolExecutionPolicy.ASK,
+        "git.commit": ToolExecutionPolicy.ASK,
+    }
     assert all(tool.result_model is not None for tool in tools.values())
     assert tools["git_clone"].execution_config_arguments == ("allowNetwork",)
     assert all(
@@ -156,6 +165,11 @@ def test_git_approval_decisions_are_narrow_for_clone_and_commit() -> None:
 
     assert clone.available_decisions == ("allow_once", "deny")
     assert commit.available_decisions == ("allow_once", "deny")
+    assert [
+        (item.label, item.value, item.format) for item in clone.display_items
+    ] == [
+        ("Repository-URL", "https://example.com/repository.git", "code"),
+    ]
     assert clone.approval_details == {
         "git": {
             "source": "https://example.com/repository.git",
