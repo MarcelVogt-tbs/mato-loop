@@ -377,7 +377,8 @@ const TOOL_DESCRIPTIONS = {
   tasks_delete: 'Löscht eine zuvor gelesene Aufgabe.',
   knowledge_list_accounts: 'Listet die konfigurierten BookStack-Wissensdatenbanken auf.',
   knowledge_list_books: 'Listet die Bücher einer Wissensdatenbank samt Regalzuordnung auf.',
-  knowledge_search: 'Durchsucht Bücher, Kapitel und Seiten einer Wissensdatenbank.',
+  knowledge_search:
+    'Durchsucht Bücher, Kapitel und Seiten einer Wissensdatenbank mit mehreren Suchbegriffen gleichzeitig.',
   knowledge_read_book: 'Listet Kapitel, Seiten und Regalzuordnung eines ausgewählten Buchs auf.',
   knowledge_read_page: 'Liest den Markdown-Inhalt einer zuvor gefundenen Seite.',
   knowledge_create_page: 'Erstellt eine Markdown-Seite in einem ausgewählten Buch.',

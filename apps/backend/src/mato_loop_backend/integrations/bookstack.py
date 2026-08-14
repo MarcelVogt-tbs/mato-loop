@@ -6,10 +6,17 @@ import json
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    StringConstraints,
+    model_validator,
+)
 
 from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.integrations.bookstack_client import (
@@ -21,6 +28,7 @@ from mato_loop_backend.integrations.bookstack_client import (
     BookStackClient,
     BookStackError,
     BookStackPage,
+    BookStackSearchResult,
     BookStackShelf,
 )
 from mato_loop_backend.integrations.contracts import (
@@ -43,6 +51,7 @@ _BOOK_KEY_RE = re.compile(_BOOK_KEY_PATTERN)
 _SHELF_KEY_RE = re.compile(_SHELF_KEY_PATTERN)
 MAX_SHELF_BOOKS = 200
 MAX_BOOK_SHELVES = 50
+MAX_SEARCH_QUERIES = 5
 
 
 def _validate_book_keys(book_keys: list[str] | None) -> None:
@@ -120,8 +129,37 @@ class KnowledgeBookArguments(KnowledgeIntegrationArguments):
 
 
 class KnowledgeSearchArguments(KnowledgeIntegrationArguments):
-    query: str = Field(min_length=1, max_length=400)
+    queries: list[
+        Annotated[str, StringConstraints(min_length=1, max_length=400)]
+    ] = Field(min_length=1, max_length=MAX_SEARCH_QUERIES)
     limit: int = Field(default=20, ge=1, le=50)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_single_query(cls, data: Any) -> Any:
+        # Models trained on the previous single-query schema keep emitting
+        # "query"; fold it in instead of failing the whole tool call.
+        if isinstance(data, dict) and "queries" not in data and "query" in data:
+            data = {
+                key: value for key, value in data.items() if key != "query"
+            } | {"queries": [data["query"]]}
+        return data
+
+    @model_validator(mode="after")
+    def normalize_queries(self) -> KnowledgeSearchArguments:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for query in self.queries:
+            cleaned = " ".join(query.split())
+            marker = cleaned.casefold()
+            if not cleaned or marker in seen:
+                continue
+            seen.add(marker)
+            unique.append(cleaned)
+        if not unique:
+            raise ValueError("at least one query is required")
+        self.queries = unique
+        return self
 
 
 class KnowledgeReadPageArguments(KnowledgeBookArguments):
@@ -725,6 +763,41 @@ async def knowledge_list_books(
         return _error(exc)
 
 
+async def _merged_search(
+    client: Any, queries: list[str], limit: int
+) -> list[BookStackSearchResult]:
+    """Run every query and interleave the batches so each query contributes its
+    strongest hits before lower ranked results of any other query. A failing
+    query is tolerated as long as at least one query returned results."""
+    outcomes = await asyncio.gather(
+        *(client.search(query, limit) for query in queries), return_exceptions=True
+    )
+    batches: list[tuple[BookStackSearchResult, ...]] = []
+    failure: BaseException | None = None
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            if not isinstance(outcome, Exception):
+                raise outcome
+            failure = failure or outcome
+            continue
+        batches.append(outcome)
+    if not batches and failure is not None:
+        raise failure
+    merged: list[BookStackSearchResult] = []
+    seen: set[tuple[str, int]] = set()
+    for rank in range(limit):
+        for batch in batches:
+            if rank >= len(batch):
+                continue
+            result = batch[rank]
+            marker = (result.type, result.id)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            merged.append(result)
+    return merged
+
+
 async def knowledge_search(arguments: KnowledgeSearchArguments, context: Any) -> Any:
     try:
         instance, _revision_value = _binding(context, arguments.integration_id)
@@ -733,9 +806,13 @@ async def knowledge_search(arguments: KnowledgeSearchArguments, context: Any) ->
             client,
             revision,
         ):
-            results = await client.search(arguments.query, arguments.limit)
+            results = await _merged_search(
+                client, arguments.queries, arguments.limit
+            )
         payload = []
         for result in results:
+            if len(payload) >= arguments.limit:
+                break
             if result.book_id is None and result.type != "book":
                 continue
             book_key = (
@@ -2043,7 +2120,12 @@ BOOKSTACK_SHARED_TOOLS = (
         name="knowledge_search",
         description=(
             "Search books, chapters and pages in one BookStack knowledge base. "
-            "Returns tokens required by the other knowledge tools."
+            f"Pass up to {MAX_SEARCH_QUERIES} alternative queries in one call and "
+            "cover synonyms, singular and plural forms, abbreviations and both "
+            "German and English wording of the topic, because a single query "
+            "often misses the relevant pages. Results of all queries are merged "
+            "and deduplicated. Returns tokens required by the other knowledge "
+            "tools."
         ),
         arguments_model=KnowledgeSearchArguments,
         handler=knowledge_search,

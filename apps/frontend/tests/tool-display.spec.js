@@ -206,6 +206,15 @@ describe('tool display', () => {
     })).toBe('https://example.com/private?…')
   })
 
+  it('summarizes knowledge searches with every search term', () => {
+    expect(toolSummary({
+      name: 'knowledge_search',
+      arguments: { queries: ['Netzwerk', 'VLAN'], limit: 20 }
+    })).toBe('Netzwerk · VLAN')
+    expect(toolSummary({ name: 'knowledge_search', arguments: { queries: [] } }))
+      .toBe('knowledge_search')
+  })
+
   it('labels media tools and summarizes their relevant arguments', () => {
     expect(toolIdentity('generate_qr_code')).toEqual({ label: 'QR-Code erzeugen', icon: 'qr_code_2' })
     expect(toolIdentity('read_qr_code')).toEqual({ label: 'QR-Code lesen', icon: 'qr_code_scanner' })
