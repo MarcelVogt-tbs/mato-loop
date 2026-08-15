@@ -1365,7 +1365,7 @@ async def test_search_merges_and_deduplicates_multiple_queries(monkeypatch) -> N
     assert {call.args[1] for call in client.search.await_args_list} == {20}
 
 
-async def test_search_tolerates_a_single_failing_query(monkeypatch) -> None:
+async def test_search_reports_error_when_one_query_fails(monkeypatch) -> None:
     instance = _base()
     revision = _revision(instance)
 
@@ -1393,7 +1393,8 @@ async def test_search_tolerates_a_single_failing_query(monkeypatch) -> None:
         _context(instance, revision),
     )
 
-    assert [item["name"] for item in json.loads(result.content)["results"]] == ["Treffer"]
+    assert result.is_error is True
+    assert json.loads(result.content)["error"]["code"] == "integration.unavailable"
 
 
 async def test_search_reports_error_when_every_query_fails(monkeypatch) -> None:

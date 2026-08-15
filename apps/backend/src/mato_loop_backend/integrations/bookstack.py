@@ -767,8 +767,7 @@ async def _merged_search(
     client: Any, queries: list[str], limit: int
 ) -> list[BookStackSearchResult]:
     """Run every query and interleave the batches so each query contributes its
-    strongest hits before lower ranked results of any other query. A failing
-    query is tolerated as long as at least one query returned results."""
+    strongest hits before lower ranked results of any other query."""
     outcomes = await asyncio.gather(
         *(client.search(query, limit) for query in queries), return_exceptions=True
     )
@@ -781,7 +780,7 @@ async def _merged_search(
             failure = failure or outcome
             continue
         batches.append(outcome)
-    if not batches and failure is not None:
+    if failure is not None:
         raise failure
     merged: list[BookStackSearchResult] = []
     seen: set[tuple[str, int]] = set()
