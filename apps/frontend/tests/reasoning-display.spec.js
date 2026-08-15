@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   formatReasoningDuration,
   reasoningBlocks,
+  reasoningHistoryPresentation,
   reasoningStatusLabel,
   reasoningTitle
 } from '../src/utils/reasoning-display'
@@ -49,5 +50,21 @@ describe('reasoning display', () => {
     expect(reasoningStatusLabel({ kind: 'summary', text: '**Wochenmenü planen' }))
       .toBe('Wochenmenü planen')
     expect(reasoningStatusLabel({ kind: 'content', text: 'Interne Überlegung' })).toBeNull()
+  })
+
+  it('keeps provider summaries visible while reasoning details stay optional', () => {
+    expect(reasoningHistoryPresentation({
+      kind: 'summary',
+      text: '**Ergebnisse prüfen**\nDetails',
+      observedDurationMs: 1600
+    })).toEqual({
+      title: 'Überlegt',
+      summary: 'Ergebnisse prüfen',
+      duration: '1.6 s'
+    })
+    expect(reasoningHistoryPresentation({ kind: 'content', text: 'Öffentliche Überlegung' }, true))
+      .toEqual({ title: 'Modell überlegt', summary: null, duration: null })
+    expect(reasoningHistoryPresentation({ status: 'interrupted' }))
+      .toEqual({ title: 'Überlegung unterbrochen', summary: null, duration: null })
   })
 })

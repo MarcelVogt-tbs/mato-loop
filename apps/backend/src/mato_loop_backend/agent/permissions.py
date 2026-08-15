@@ -758,6 +758,8 @@ class PermissionPolicy:
             return request.resource_scope == grant.resource_scope == "all"
         if request.resource_type == "url":
             return request.resource_scope == grant.resource_scope
+        if request.resource_type == "shell_command":
+            return request.resource_scope == grant.resource_scope
         if request.resource_type == "integration_operation":
             return (
                 _integration_operation_scope(request.resource_scope) is not None

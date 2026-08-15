@@ -72,6 +72,8 @@ A permission consists of a capability and typed resource matcher. Security decis
 - Persisted matchers deserialize losslessly to the same typed matcher.
 - Approval display title, summary, and risk are metadata, not matching inputs.
 - Integration-operation matchers compare the exact integration UUID, canonical binding-revision hash, optional opaque resource key, and host-generated operation key. Remote labels and URLs are never matcher inputs.
+- Read-only shell matchers compare the exact host-generated command scope, including agent, root revision, and working directory. The Execution Agent's read-only classification remains a hard boundary and is rechecked even when a grant matches.
+- Image-edit matchers retain direct attachment provenance separately from a bounded host-controlled authorization lineage. Descendants inherit lineage roots; unrelated images, sessions, targets, and trust levels do not match.
 
 Private integration data uses a separate session release. Sensitive integration tools require `integration.private_data.release` before a public model can receive a result. Successful use marks the session conservatively; later public requests recheck the revocable session grant before context projection and provider transport. This is deliberately a session-level boundary, not field-level taint tracking.
 

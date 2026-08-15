@@ -71,6 +71,83 @@ describe('persisted attachments', () => {
     })).toBeNull()
   })
 
+  it.each([
+    ['.gif', 'image/gif'],
+    ['.jpeg', 'image/jpeg'],
+    ['.jpg', 'image/jpeg'],
+    ['.png', 'image/png'],
+    ['.svg', 'image/svg+xml'],
+    ['.webp', 'image/webp']
+  ])('shows a provided %s file as a chat image', (extension, mimeType) => {
+    const filename = `photo${extension}`
+    const imageDownloadUrl = downloadUrl.replace('reports%2Flarge.zip', `images%2F${filename}`)
+    const attachment = toolFileAttachment({ id: 'call-1', name: 'provide_file' }, {
+      id: 'result-1',
+      content: JSON.stringify({
+        root: 'workspace',
+        path: `images/${filename}`,
+        filename,
+        sizeBytes: 1024,
+        downloadUrl: imageDownloadUrl
+      })
+    })
+    const contentUrl = imageDownloadUrl.replace('/files/download', '/files/content')
+
+    expect(attachment).toEqual({
+      id: 'provided-result-1',
+      kind: 'image',
+      mimeType,
+      sizeBytes: 1024,
+      filename,
+      url: contentUrl
+    })
+    expect(imageAttachments([attachment])[0].safeUrl).toBe(contentUrl)
+  })
+
+  it('shows a provided image from session attachments', () => {
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const sessionDownloadUrl = `/api/workspace/files/download?path=attachments%2Fimage.PNG&scope=session&session_id=${sessionId}&root_identity=${sessionId}`
+    const attachment = toolFileAttachment({ id: 'call-1', name: 'provide_file' }, {
+      id: 'result-1',
+      content: JSON.stringify({
+        root: 'session',
+        path: 'attachments/image.PNG',
+        filename: 'image.PNG',
+        sizeBytes: 2048,
+        downloadUrl: sessionDownloadUrl
+      })
+    })
+
+    expect(attachment).toMatchObject({
+      kind: 'image',
+      mimeType: 'image/png',
+      url: sessionDownloadUrl.replace('/files/download', '/files/content')
+    })
+    expect(imageAttachments([attachment])[0].safeUrl).toBe(attachment.url)
+  })
+
+  it('keeps oversized provided images as downloads', () => {
+    const imageDownloadUrl = downloadUrl.replace('reports%2Flarge.zip', 'images%2Fphoto.png')
+
+    expect(toolFileAttachment({ id: 'call-1', name: 'provide_file' }, {
+      id: 'result-1',
+      content: JSON.stringify({
+        root: 'workspace',
+        path: 'images/photo.png',
+        filename: 'photo.png',
+        sizeBytes: 5 * 1024 * 1024 + 1,
+        downloadUrl: imageDownloadUrl
+      })
+    })).toEqual({
+      id: 'provided-result-1',
+      kind: 'file',
+      mimeType: 'application/octet-stream',
+      sizeBytes: 5 * 1024 * 1024 + 1,
+      filename: 'photo.png',
+      url: imageDownloadUrl
+    })
+  })
+
   it('accepts only host-bound file actions', () => {
     const action = {
       operation: 'write',
@@ -104,6 +181,11 @@ describe('persisted attachments', () => {
     expect(attachments).toHaveLength(1)
     expect(attachments[0].safeUrl).toBe(url)
     expect(attachmentMetadata(attachments[0])).toBe('10 × 20 px · 2 KB · image/png')
+    expect(supportedAttachments([{
+      kind: 'image',
+      mimeType: 'image/png',
+      url: `https://example.com${downloadUrl.replace('/files/download', '/files/content')}`
+    }])[0].safeUrl).toBeNull()
   })
 
   it('keeps arbitrary audio formats with robust duration and metadata handling', () => {

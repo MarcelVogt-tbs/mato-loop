@@ -415,6 +415,7 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     tmp_path, monkeypatch
 ) -> None:
     attachment_ids = [uuid4(), uuid4()]
+    original_attachment_id = uuid4()
     call = ToolCall(
         id="edit",
         name="edit_image",
@@ -443,12 +444,18 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
             message=message,
             position=position,
             kind="image",
-            category="user_upload",
+            category="generated" if position == 0 else "user_upload",
+            purpose="artifact" if position == 0 else "attachment",
             processing_status="ready",
             mime_type="image/png",
             size_bytes=5,
             sha256="0" * 64,
             storage_path=f"attachments/{attachment_id}/image.png",
+            metadata_json=(
+                {"authorizationSourceAttachmentIds": [str(original_attachment_id)]}
+                if position == 0
+                else {}
+            ),
         )
         for position, attachment_id in enumerate(attachment_ids)
     ]
@@ -478,7 +485,13 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     request = tool_context.ask_handler.await_args.args[0]
     scope = json.loads(request.resource_scope)
     assert request.capability == "media.edit.image"
-    assert scope["sourceAttachmentIds"] == sorted(str(item) for item in attachment_ids)
+    assert scope["sourceAttachmentIds"] == sorted(
+        [str(original_attachment_id), str(attachment_ids[1])]
+    )
+    assert edit.await_args.kwargs["source_attachment_ids"] == tuple(attachment_ids)
+    assert result.attachments[0].metadata["authorizationSourceAttachmentIds"] == sorted(
+        [str(original_attachment_id), str(attachment_ids[1])]
+    )
 
 
 async def test_edit_image_blocks_private_sources_for_public_target(

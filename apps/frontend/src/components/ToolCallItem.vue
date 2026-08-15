@@ -4,21 +4,26 @@
       v-model="expanded"
       dense
       header-class="tool-call__header"
-      :duration="180"
+      expand-icon-class="tool-call__toggle"
+      :duration="expansionDuration"
+      :toggle-aria-label="`Technische Details für ${identity.label} ein- oder ausblenden`"
     >
       <template #header>
-        <q-item-section avatar class="tool-call__avatar-section">
-          <q-avatar rounded :size="status.name === 'completed' ? '24px' : '32px'" class="tool-call__avatar">
-            <q-icon :name="identity.icon" :size="status.name === 'completed' ? '16px' : '19px'" />
-          </q-avatar>
-        </q-item-section>
-
         <q-item-section class="tool-call__identity">
-          <q-item-label lines="1" class="text-weight-medium">{{ identity.label }}</q-item-label>
-          <q-item-label v-if="summary" caption lines="1">{{ summary }}</q-item-label>
+          <q-item-label lines="1" class="tool-call__line">
+            <span
+              class="tool-call__title"
+              :class="{ 'activity-shimmer': status.name === 'running' }"
+            >{{ identity.label }}</span>
+            <span v-if="summary" class="tool-call__summary">{{ summary }}</span>
+          </q-item-label>
         </q-item-section>
 
-        <q-item-section side class="tool-call__state">
+        <q-item-section
+          v-if="exceptionalStatus || (!technicalOnly && fileActions.length)"
+          side
+          class="tool-call__state"
+        >
           <div class="row items-center no-wrap q-gutter-xs">
             <div v-if="!technicalOnly && fileActions.length" class="tool-call__file-actions row items-center no-wrap">
               <div v-for="action in fileActions" :key="`${action.rootIdentity}:${action.path}`" class="row no-wrap">
@@ -53,11 +58,10 @@
               </div>
             </div>
             <div
+              v-if="exceptionalStatus"
               class="tool-call__status row items-center no-wrap q-gutter-xs"
               :class="`tool-call__status--${status.name}`"
             >
-              <q-spinner v-if="status.name === 'running'" size="16px" />
-              <q-icon v-else :name="status.icon" size="17px" />
               <span class="tool-call__status-label">{{ status.label }}</span>
             </div>
           </div>
@@ -65,7 +69,11 @@
       </template>
 
       <div class="tool-call__body">
-        <ToolPresentation v-if="!approval && presentation.items.length" :items="presentation.items" />
+        <ToolPresentation
+          v-if="!approval && presentation.items.length"
+          :items="presentation.items"
+          embedded
+        />
 
         <div
           v-if="argumentsDisplay.text"
@@ -180,6 +188,10 @@ const attachments = computed(() => {
 })
 const fileActions = computed(() => toolFileActions(props.result))
 const status = computed(() => toolStatus(props))
+const exceptionalStatus = computed(() => (
+  ['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name)
+))
+const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
 const expanded = ref(['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name))
 const showFullArguments = ref(false)
 const showFullResult = ref(false)

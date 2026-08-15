@@ -1,11 +1,7 @@
 <template>
   <div class="agent-activity">
     <div class="agent-activity__visible">
-      <q-avatar rounded size="30px" class="agent-activity__avatar" aria-hidden="true">
-        <q-spinner-dots color="primary" size="21px" class="agent-activity__spinner" />
-        <q-icon name="auto_awesome" color="primary" size="17px" class="agent-activity__static-icon" />
-      </q-avatar>
-      <span class="agent-activity__label">{{ label }}</span>
+      <span class="agent-activity__label activity-shimmer">{{ label }}</span>
       <span class="agent-activity__duration">{{ duration }}</span>
     </div>
   </div>
@@ -32,7 +28,5 @@ onMounted(() => {
   }, 1000)
 })
 
-onBeforeUnmount(() => {
-  clearInterval(timer)
-})
+onBeforeUnmount(() => clearInterval(timer))
 </script>

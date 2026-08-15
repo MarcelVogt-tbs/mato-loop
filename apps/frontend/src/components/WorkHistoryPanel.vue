@@ -68,46 +68,100 @@
       class="work-history__timeline"
       role="region"
       aria-label="Aktivitäten der Antworterstellung"
-      tabindex="0"
     >
       <div class="work-history__entries">
         <template v-for="entry in entries" :key="entry.key">
-          <div v-if="entry.type === 'reasoning'" class="work-history__reasoning">
-            <div class="work-history__marker flex flex-center">
-              <q-icon name="psychology_alt" size="16px" />
+          <q-expansion-item
+            v-if="entry.type === 'context' && !contextGroupHasAttention(entry)"
+            dense
+            class="work-history__context"
+            header-class="work-history__context-header"
+            expand-icon-class="work-history__context-toggle"
+            :duration="expansionDuration"
+            :toggle-aria-label="`${contextGroupLabel(entry)} ein- oder ausblenden`"
+          >
+            <template #header>
+              <q-item-section>
+                <q-item-label lines="1" class="work-history__activity-line">
+                  <span
+                    class="work-history__activity-title"
+                    :class="{ 'activity-shimmer': contextGroupActive(entry) }"
+                  >
+                    {{ contextGroupLabel(entry) }}
+                  </span>
+                  <span class="work-history__activity-summary">{{ contextGroupSummary(entry) }}</span>
+                </q-item-label>
+              </q-item-section>
+            </template>
+            <div class="work-history__context-items">
+              <ToolCallItem
+                v-for="item in entry.items"
+                :key="item.key"
+                :tool="item.tool"
+                :result="item.result"
+                :approval="item.approval"
+                :question="item.question"
+                :process-output="item.processOutput || processOutputs[item.tool.id]"
+                :active="item.active"
+                technical-only
+                @open-file="emit('open-file', $event)"
+              />
             </div>
-            <div class="work-history__reasoning-main">
-              <div class="work-history__entry-header row items-center q-gutter-x-sm">
-                <span class="text-weight-medium">{{ reasoningTitle(entry.reasoning) }}</span>
-                <span v-if="entryDuration(entry.reasoning)" class="work-history__entry-meta">
-                  {{ entryDuration(entry.reasoning) }}
-                </span>
-                <span v-if="entry.reasoning.reasoningTokens" class="work-history__entry-meta">
-                  {{ entry.reasoning.reasoningTokens }} Tok.
-                </span>
-              </div>
-              <div class="work-history__reasoning-text">
-                <p
-                  v-for="(block, blockIndex) in entry.blocks"
-                  :key="blockIndex"
-                  class="work-history__reasoning-block"
-                >
-                  <template v-for="(segment, segmentIndex) in block" :key="segmentIndex">
-                    <strong v-if="segment.strong">{{ segment.text }}</strong>
-                    <span v-else>{{ segment.text }}</span>
-                  </template>
-                </p>
-              </div>
+          </q-expansion-item>
+          <template v-else-if="entry.type === 'context'">
+            <ToolCallItem
+              v-for="item in entry.items"
+              :key="item.key"
+              :tool="item.tool"
+              :result="item.result"
+              :approval="item.approval"
+              :question="item.question"
+              :process-output="item.processOutput || processOutputs[item.tool.id]"
+              :active="item.active"
+              technical-only
+              @open-file="emit('open-file', $event)"
+            />
+          </template>
+          <q-expansion-item
+            v-else-if="entry.type === 'reasoning'"
+            dense
+            class="work-history__reasoning"
+            header-class="work-history__reasoning-header"
+            expand-icon-class="work-history__reasoning-toggle"
+            :duration="expansionDuration"
+            :toggle-aria-label="`${entry.presentation.title} ein- oder ausblenden`"
+          >
+            <template #header>
+              <q-item-section>
+                <q-item-label lines="1" class="work-history__activity-line">
+                  <span
+                    class="work-history__activity-title"
+                    :class="{ 'activity-shimmer': entry.live }"
+                  >{{ entry.presentation.title }}</span>
+                  <span v-if="entry.presentation.summary" class="work-history__activity-summary">
+                    {{ entry.presentation.summary }}
+                  </span>
+                </q-item-label>
+              </q-item-section>
+              <q-item-section v-if="entry.presentation.duration" side>
+                <span class="work-history__reasoning-duration">{{ entry.presentation.duration }}</span>
+              </q-item-section>
+            </template>
+            <div class="work-history__reasoning-detail">
+              <p
+                v-for="(block, blockIndex) in entry.blocks"
+                :key="blockIndex"
+                class="work-history__reasoning-block"
+              >
+                <template v-for="(segment, segmentIndex) in block" :key="segmentIndex">
+                  <strong v-if="segment.strong">{{ segment.text }}</strong>
+                  <span v-else>{{ segment.text }}</span>
+                </template>
+              </p>
             </div>
-          </div>
+          </q-expansion-item>
           <div v-else-if="entry.type === 'note'" class="work-history__note">
-            <div class="work-history__marker flex flex-center">
-              <q-icon name="chat_bubble_outline" size="15px" />
-            </div>
-            <div class="work-history__note-main">
-              <div class="work-history__entry-header text-weight-medium">Zwischenstand</div>
-              <div class="work-history__note-text">{{ entry.text }}</div>
-            </div>
+            {{ entry.text }}
           </div>
           <ToolCallItem
             v-else
@@ -187,11 +241,11 @@ import {
   toolFileAttachment
 } from 'src/utils/attachments'
 import { agentActivityLabel, formatActivityDuration } from 'src/utils/agent-activity'
+import { groupWorkHistoryEntries } from 'src/utils/chat-transcript'
 import {
-  formatReasoningDuration,
   reasoningBlocks,
-  reasoningStatusLabel,
-  reasoningTitle
+  reasoningHistoryPresentation,
+  reasoningStatusLabel
 } from 'src/utils/reasoning-display'
 import { toolIdentity, toolStatus, toolSummary, toolUsageSummary } from 'src/utils/tool-display'
 
@@ -207,15 +261,22 @@ const props = defineProps({
 const emit = defineEmits(['open-file', 'open-approval-draft'])
 const now = ref(Date.now())
 let timer = null
-const entries = computed(() => [
+const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
+const entries = computed(() => groupWorkHistoryEntries([
   ...(props.history?.entries || []),
   ...(props.reasoning
-    ? [{ key: 'live-reasoning', type: 'reasoning', reasoning: props.reasoning }]
+    ? [{ key: 'live-reasoning', type: 'reasoning', reasoning: props.reasoning, live: true }]
     : [])
 ].map((entry) => entry.type === 'reasoning'
-  ? { ...entry, blocks: reasoningBlocks(entry.reasoning) }
-  : entry))
-const items = computed(() => entries.value.filter((entry) => entry.type === 'tool'))
+  ? {
+      ...entry,
+      blocks: reasoningBlocks(entry.reasoning),
+      presentation: reasoningHistoryPresentation(entry.reasoning, entry.live)
+    }
+  : entry)))
+const items = computed(() => entries.value.flatMap((entry) => (
+  entry.type === 'context' ? entry.items : entry.type === 'tool' ? [entry] : []
+)))
 const states = computed(() => items.value.map((item) => ({ item, status: toolStatus(item) })))
 const activeItem = computed(() => items.value.find((item) => item.active) || null)
 const activeToolName = computed(() => activeItem.value?.tool.name || (
@@ -271,7 +332,25 @@ const errorLabel = computed(() => (
 const warningLabel = computed(() => (
   `${warningItems.value.length} ${warningItems.value.length === 1 ? 'Warnung' : 'Warnungen'}`
 ))
-const entryDuration = (reasoning) => formatReasoningDuration(reasoning.observedDurationMs)
+const contextGroupActive = (entry) => entry.items.some((item) => item.active)
+const contextGroupHasAttention = (entry) => entry.items.some((item) => (
+  ['approval', 'question', 'failed', 'denied', 'interrupted'].includes(toolStatus(item).name)
+))
+const contextGroupLabel = (entry) => {
+  if (contextGroupActive(entry)) return 'Kontext wird gesammelt'
+  if (entry.items.some((item) => toolStatus(item).name === 'pending')) return 'Kontext ausstehend'
+  return 'Kontext gesammelt'
+}
+const contextGroupSummary = (entry) => {
+  const reads = entry.items.filter((item) => ['read', 'read_file'].includes(item.tool.name)).length
+  const searches = entry.items.filter((item) => ['glob', 'grep'].includes(item.tool.name)).length
+  const lists = entry.items.filter((item) => item.tool.name === 'list_directory').length
+  return [
+    reads ? `${reads} ${reads === 1 ? 'Lesevorgang' : 'Lesevorgänge'}` : '',
+    searches ? `${searches} ${searches === 1 ? 'Suche' : 'Suchen'}` : '',
+    lists ? `${lists} ${lists === 1 ? 'Auflistung' : 'Auflistungen'}` : ''
+  ].filter(Boolean).join(' · ')
+}
 const outputs = computed(() => items.value.flatMap((item) => {
   const providedFile = toolFileAttachment(item.tool, item.result)
   const attachments = toolOutputAttachments(item.tool, [

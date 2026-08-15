@@ -1,3 +1,22 @@
+const CONTEXT_TOOL_NAMES = new Set(['read', 'read_file', 'glob', 'grep', 'list_directory'])
+
+export function groupWorkHistoryEntries(entries = []) {
+  const grouped = []
+  for (const entry of entries) {
+    if (entry.type !== 'tool' || !CONTEXT_TOOL_NAMES.has(entry.tool?.name)) {
+      grouped.push(entry)
+      continue
+    }
+    const previous = grouped.at(-1)
+    if (previous?.type === 'context') {
+      previous.items.push(entry)
+      continue
+    }
+    grouped.push({ key: `context-${entry.key}`, type: 'context', items: [entry] })
+  }
+  return grouped
+}
+
 export function buildChatTranscript(
   messages = [],
   approvals = [],

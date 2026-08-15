@@ -75,6 +75,17 @@
 
     <q-separator />
     <q-card-actions class="q-pa-md">
+      <div v-if="hasBothAllowDecisions" class="column">
+        <q-checkbox
+          v-model="rememberForSession"
+          color="primary"
+          label="Passende Aktionen in dieser Session nicht mehr nachfragen"
+          :disable="Boolean(loadingDecision) || matchingDraftDirty"
+        />
+        <div class="text-caption app-muted q-ml-sm">
+          Kann in den Session-Freigaben widerrufen werden.
+        </div>
+      </div>
       <q-space />
       <q-btn
         v-if="hasDecision('deny')"
@@ -87,7 +98,7 @@
         @click="decide('deny')"
       />
       <q-btn
-        v-if="hasDecision('allow_once')"
+        v-if="hasDecision('allow_once') && !hasBothAllowDecisions"
         outline
         no-caps
         color="primary"
@@ -97,7 +108,7 @@
         @click="decide('allow_once')"
       />
       <q-btn
-        v-if="hasDecision('allow_session')"
+        v-if="hasDecision('allow_session') && !hasBothAllowDecisions"
         unelevated
         no-caps
         color="primary"
@@ -105,6 +116,16 @@
         :loading="loadingDecision === 'allow_session'"
         :disable="Boolean(loadingDecision) || matchingDraftDirty"
         @click="decide('allow_session')"
+      />
+      <q-btn
+        v-if="hasBothAllowDecisions"
+        unelevated
+        no-caps
+        color="primary"
+        :label="rememberForSession ? 'Für Session erlauben' : 'Einmal erlauben'"
+        :loading="loadingDecision === allowDecision"
+        :disable="Boolean(loadingDecision) || matchingDraftDirty"
+        @click="decide(allowDecision)"
       />
     </q-card-actions>
   </q-card>
@@ -131,6 +152,7 @@ const chat = useChatStore()
 const workspace = useWorkspaceStore()
 const loadingDecision = ref(null)
 const showFullDetails = ref(false)
+const rememberForSession = ref(false)
 const riskColor = computed(() => props.approval.riskLevel === 'high' ? 'negative' : 'warning')
 const riskLabel = computed(() => ({ high: 'Hoch', medium: 'Mittel', low: 'Niedrig' })[props.approval.riskLevel] || props.approval.riskLevel)
 const actionIcon = computed(() => {
@@ -181,6 +203,12 @@ const technicalDetails = computed(() => {
   delete details.displayItems
   return technicalDetailsDisplay(details)
 })
+const hasBothAllowDecisions = computed(() => (
+  hasDecision('allow_once') && hasDecision('allow_session')
+))
+const allowDecision = computed(() => (
+  rememberForSession.value ? 'allow_session' : 'allow_once'
+))
 
 function hasDecision(decision) {
   return props.approval.availableDecisions.includes(decision)

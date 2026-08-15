@@ -228,6 +228,34 @@ async def test_image_read_revalidates_persisted_content(tmp_path: Path) -> None:
         await service.read_image(attachment, session_id)
 
 
+async def test_host_image_lineage_survives_untrusted_metadata_prefix(tmp_path: Path) -> None:
+    session_id = uuid4()
+    _sessions, storage = provisioned_storage(tmp_path, session_id)
+    message = Message(id=uuid4(), session_id=session_id, role="tool", content="Bild")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session_id, None]
+    source_id = uuid4()
+
+    attachment = await AttachmentService(storage).create_image(
+        db,
+        message,
+        image_bytes("PNG"),
+        "image/png",
+        metadata={
+            **{f"untrusted{index}": index for index in range(32)},
+            "authorizationSourceAttachmentIds": [str(source_id)],
+            "sourceAttachmentIds": [str(source_id)],
+        },
+        category="generated",
+        purpose="artifact",
+    )
+
+    assert attachment.metadata_json["authorizationSourceAttachmentIds"] == [
+        str(source_id)
+    ]
+    assert attachment.metadata_json["sourceAttachmentIds"] == [str(source_id)]
+
+
 async def test_service_persists_audio_duration_and_safe_metadata(tmp_path: Path) -> None:
     session_id = uuid4()
     _sessions, storage = provisioned_storage(tmp_path, session_id)

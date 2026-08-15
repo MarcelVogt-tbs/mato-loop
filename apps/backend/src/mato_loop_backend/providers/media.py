@@ -318,6 +318,8 @@ def _image_result(
     resolved: ResolvedMediaModel,
     trust_level: TrustLevel,
 ) -> MediaResult:
+    metadata.pop("authorizationSourceAttachmentIds", None)
+    metadata.pop("sourceAttachmentIds", None)
     mime_type = image_mime_type(data)
     if mime_type is None:
         raise ProviderError(
@@ -527,10 +529,11 @@ class MediaService:
             resolved,
             ImageEditRequest(protected, tuple(normalized_images), timeout),
         )
-        metadata["sourceAttachmentIds"] = [
+        result = _image_result(data, metadata, resolved, trust_level)
+        result.metadata["sourceAttachmentIds"] = [
             str(attachment_id) for attachment_id in source_attachment_ids
         ]
-        return _image_result(data, metadata, resolved, trust_level)
+        return result
 
     @classmethod
     async def generate_speech(

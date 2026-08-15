@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildChatTranscript } from '../src/utils/chat-transcript'
+import { buildChatTranscript, groupWorkHistoryEntries } from '../src/utils/chat-transcript'
 
 describe('chat transcript', () => {
+  it('groups consecutive filesystem context tools without crossing other activity', () => {
+    const read = { key: 'read', type: 'tool', tool: { name: 'read_file' } }
+    const search = { key: 'search', type: 'tool', tool: { name: 'grep' } }
+    const note = { key: 'note', type: 'note', text: 'Bearbeitung beginnt' }
+    const list = { key: 'list', type: 'tool', tool: { name: 'list_directory' } }
+
+    expect(groupWorkHistoryEntries([read, search, note, list])).toEqual([
+      { key: 'context-read', type: 'context', items: [read, search] },
+      note,
+      { key: 'context-list', type: 'context', items: [list] }
+    ])
+  })
+
   it('attaches results and approvals to their tool calls', () => {
     const messages = [
       { id: 'user-1', role: 'user', content: 'Lies die Datei' },

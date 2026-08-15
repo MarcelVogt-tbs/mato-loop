@@ -92,10 +92,10 @@ def _context(tmp_path, call, client, *, decision=PermissionDecision.ALLOW):
     )
 
 
-def _tools(operations):
+def _tools(operations, workspace_access="read-write"):
     return tool_registry.effective(
         IntegrationSettings(),
-        "read-write",
+        workspace_access,
         tool_settings=ToolSettings(),
         execution_operations=frozenset(operations),
     )
@@ -111,6 +111,10 @@ def test_process_tools_are_gated_and_cannot_select_execution_targets() -> None:
     assert not {"root", "rootId", "workingDirectory", "executable"} & set(
         schema["parameters"]["properties"]
     )
+
+    read_only = _tools({"process.exec", "shell.run"}, "read-only")
+    assert "process_exec" not in read_only.tools
+    assert "shell_run" in read_only.tools
 
 
 async def test_execution_client_adds_only_snapshot_root_and_sanitizes_agent_errors(
@@ -304,6 +308,70 @@ async def test_system_info_and_shell_inspection_use_selected_computer(tmp_path) 
         (item.label, item.value, item.format)
         for item in context.ask_handler.await_args_list[-1].args[0].display_items
     ] == [("Shell-Befehl", "pwd", "code")]
+
+
+async def test_read_only_shell_executes_only_host_verified_read_commands(tmp_path) -> None:
+    call = ToolCall("shell", "shell_run", {"command": "cat README.md"})
+    client = FakeExecutionClient(
+        {
+            "shell.inspect": ShellInspectResult(
+                targets=[],
+                analysis_complete=True,
+                read_only=True,
+                inspection_revision="c" * 64,
+            ),
+            "shell.run": ProcessResult(
+                exit_code=0,
+                timed_out=False,
+                duration_ms=1,
+                stdout_bytes=0,
+                stderr_bytes=0,
+                stdout_truncated=False,
+                stderr_truncated=False,
+            ),
+        },
+        {"shell.inspect", "shell.run"},
+    )
+    context = _context(tmp_path, call, client)
+    context.session.workspace_access = "read-only"
+
+    result = await _tools(client.operations, "read-only").execute(call, context)
+
+    assert not result.is_error
+    assert [request[0] for request in client.requests] == ["shell.inspect", "shell.run"]
+    permission = context.ask_handler.await_args.args[0]
+    assert permission.resource_type == "shell_command"
+    assert permission.available_decisions == ("allow_once", "allow_session", "deny")
+    grant = PermissionGrant(
+        session_id=context.session.id,
+        capability=permission.capability,
+        resource_type=permission.resource_type,
+        resource_scope=permission.resource_scope,
+    )
+    assert PermissionPolicy.grant_matches(grant, permission, context.root_files)
+    assert not PermissionPolicy.grant_matches(
+        grant,
+        replace(permission, resource_scope=permission.resource_scope.replace("cat", "head")),
+        context.root_files,
+    )
+
+    client.responses["shell.inspect"] = ShellInspectResult(
+        targets=[],
+        analysis_complete=True,
+        read_only=False,
+        inspection_revision="d" * 64,
+    )
+    context.tool_call = ToolCall("write", "shell_run", {"command": "rm README.md"})
+    result = await _tools(client.operations, "read-only").execute(
+        context.tool_call, context
+    )
+
+    assert result.metadata == {"errorCode": "tool.writeDisabled"}
+    assert [request[0] for request in client.requests] == [
+        "shell.inspect",
+        "shell.run",
+        "shell.inspect",
+    ]
 
 
 async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -> None:

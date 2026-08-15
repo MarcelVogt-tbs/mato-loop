@@ -70,6 +70,30 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             )
 
+            readable = root / "readable.txt"
+            readable.write_text("safe read")
+            inspection = runner.inspect_shell("cat readable.txt", str(root), ROOT_ID, revision)
+            fake_shell = root / "fake-shell"
+            fake_shell.write_text("#!/bin/sh\nexit 99\n")
+            fake_shell.chmod(0o700)
+            configured_shell = runner.shell
+            runner.shell = fake_shell
+            chunks.clear()
+            result = await runner.exec(
+                root_id=ROOT_ID,
+                revision=revision,
+                working_directory=str(root),
+                program=None,
+                args=[],
+                command="cat readable.txt",
+                timeout=2,
+                stream=stream,
+                expected_inspection_revision=inspection["inspectionRevision"],
+            )
+            runner.shell = configured_shell
+            self.assertEqual(result["exitCode"], 0)
+            self.assertEqual(dict(chunks)["stdout"], "safe read")
+
             result = await runner.exec(
                 root_id=ROOT_ID,
                 revision=revision,
@@ -150,6 +174,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 "python script.py < env.sh > output.txt", str(root), ROOT_ID, revision
             )
             self.assertTrue(inspected["analysisComplete"])
+            self.assertFalse(inspected["readOnly"])
             self.assertRegex(inspected["inspectionRevision"], r"^[0-9a-f]{64}$")
             self.assertEqual(
                 [(target["kind"], target["relativePath"]) for target in inspected["targets"]],
@@ -188,6 +213,52 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 runner.inspect_shell("/bin/sh script.py", str(root), ROOT_ID, revision)[
                     "analysisComplete"
                 ]
+            )
+
+            read_only = runner.inspect_shell("cat script.py", str(root), ROOT_ID, revision)
+            self.assertTrue(read_only["analysisComplete"])
+            self.assertTrue(read_only["readOnly"])
+            self.assertEqual(read_only["targets"][0]["relativePath"], "script.py")
+            self.assertFalse(
+                runner.inspect_shell("cat script.py > output.txt", str(root), ROOT_ID, revision)[
+                    "readOnly"
+                ]
+            )
+            self.assertFalse(
+                runner.inspect_shell("python script.py", str(root), ROOT_ID, revision)["readOnly"]
+            )
+            self.assertFalse(
+                runner.inspect_shell("cat script.py | wc -l", str(root), ROOT_ID, revision)[
+                    "readOnly"
+                ]
+            )
+            link = root / "link"
+            link.symlink_to(root.parent / "outside")
+            self.assertFalse(
+                runner.inspect_shell("cat link", str(root), ROOT_ID, revision)["readOnly"]
+            )
+            for unsafe in (
+                "ls -L .",
+                "tail -f script.py",
+                "wc --files0-from=script.py",
+                "sha256sum -c script.py",
+            ):
+                self.assertFalse(
+                    runner.inspect_shell(unsafe, str(root), ROOT_ID, revision)["readOnly"]
+                )
+
+            aliased = AgentConfig.model_validate(
+                {
+                    "name": "Agent",
+                    "roots": [{"id": ROOT_ID, "label": "Root", "path": root}],
+                    "dataDir": root / "alias-data",
+                    "processExecutables": {"rm": Path("/usr/bin/cat")},
+                }
+            )
+            self.assertFalse(
+                ProcessRunner(aliased, Workspace(aliased)).inspect_shell(
+                    "rm script.py", str(root), ROOT_ID, revision
+                )["readOnly"]
             )
 
 

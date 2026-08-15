@@ -20,12 +20,14 @@ Das Badge am Benutzermenü zeigt die Anzahl der aktuell offenen Anfragen.
 | Entscheidung | Wirkung |
 | --- | --- |
 | Ablehnen | Die Aktion wird nicht ausgeführt |
-| Einmal erlauben | Gilt nur für diese konkrete Aktion |
-| Für Session erlauben | Erstellt eine widerrufbare Freigabe für passende Aktionen dieser Session |
+| Einmal erlauben | Gilt nur für diese konkrete Aktion und ist die sichere Vorauswahl |
+| Passende Aktionen in dieser Session nicht mehr nachfragen | Der Haken ändert den Hauptbutton zu **Für Session erlauben** und erstellt eine widerrufbare Freigabe für den angezeigten Ressourcenumfang |
 
 Dauerhaft für eine Session erteilte Grants finden Sie weiterhin im Datei-Explorer. Dort
 können Sie diese widerrufen. Sie sind keine offenen Freigabeanfragen und erscheinen daher
 nicht in der globalen Pending-Liste.
+
+Der Haken ist bei jeder neuen Anfrage ausgeschaltet und wird nicht im Browser gespeichert. Manche sensible oder nicht sicher eingrenzbare Aktionen bieten bewusst keine Session-Freigabe an.
 
 ## Vertrauenslevel und Datenfreigabe
 

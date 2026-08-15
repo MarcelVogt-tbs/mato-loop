@@ -16,6 +16,21 @@ from .workspace import AgentError, Workspace, _parts
 
 StreamCallback = Callable[[str, str], Awaitable[None]]
 
+_READ_ONLY_EXECUTABLES = {
+    "cat",
+    "cmp",
+    "head",
+    "ls",
+    "pwd",
+    "readlink",
+    "realpath",
+    "sha256sum",
+    "stat",
+    "tail",
+    "wc",
+}
+_READ_ONLY_PATH_OPTION_EXECUTABLES = {"realpath"}
+
 
 class ProcessRunner:
     def __init__(self, config: AgentConfig, workspace: Workspace) -> None:
@@ -63,6 +78,13 @@ class ProcessRunner:
     def inspect_shell(
         self, command: str, current_directory: str, root_id: str, revision: str
     ) -> dict:
+        def incomplete(targets: list[dict] | None = None) -> dict:
+            return {
+                "targets": targets or [],
+                "analysisComplete": False,
+                "readOnly": False,
+            }
+
         current = self.workspace.resolve_directory(
             current_directory, root_id=root_id, revision=revision
         )["path"]
@@ -70,15 +92,15 @@ class ProcessRunner:
             character in command
             for character in ("$", "`", "\n", "\r", "*", "?", "[", "{", "}", "~")
         ):
-            return {"targets": [], "analysisComplete": False}
+            return incomplete()
         lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&")
         lexer.whitespace_split = True
         try:
             tokens = list(lexer)
         except ValueError:
-            return {"targets": [], "analysisComplete": False}
+            return incomplete()
         if not tokens or any(token in {";", "|", "||", "&", "&&", "(", ")"} for token in tokens):
-            return {"targets": [], "analysisComplete": False}
+            return incomplete()
 
         targets = []
 
@@ -94,19 +116,26 @@ class ProcessRunner:
             return True
 
         executable = tokens[0]
+        executable_name = ""
+        read_only_executable = False
         if executable in {".", "source"}:
             if len(tokens) < 2 or not add(tokens[1], "source", must_exist=True):
-                return {"targets": targets, "analysisComplete": False}
+                return incomplete(targets)
             index = 2
         else:
             resolved_executable = self._trusted_executable(executable, current)
             if resolved_executable is None:
-                return {"targets": [], "analysisComplete": False}
+                return incomplete()
             if "/" in executable and self._is_within_roots(resolved_executable):
                 if not add(executable, "executable", must_exist=True):
-                    return {"targets": targets, "analysisComplete": False}
+                    return incomplete(targets)
             index = 1
             executable_name = resolved_executable.name
+            read_only_executable = (
+                executable_name in _READ_ONLY_EXECUTABLES
+                and resolved_executable.parent
+                in {Path("/bin").resolve(), Path("/usr/bin").resolve()}
+            )
             if executable_name in {
                 "bash",
                 "dash",
@@ -119,13 +148,14 @@ class ProcessRunner:
             } or executable_name.startswith("python"):
                 while index < len(tokens) and tokens[index].startswith("-"):
                     if tokens[index] in {"-c", "--command"}:
-                        return {"targets": targets, "analysisComplete": False}
+                        return incomplete(targets)
                     index += 1
                 if index < len(tokens) and tokens[index] not in {"<", ">", ">>"}:
                     if not add(tokens[index], "script", must_exist=True):
-                        return {"targets": targets, "analysisComplete": False}
+                        return incomplete(targets)
                     index += 1
 
+        has_redirection = False
         while index < len(tokens):
             token = tokens[index]
             if (
@@ -136,20 +166,78 @@ class ProcessRunner:
                 index += 1
                 token = tokens[index]
             if token in {"<", ">", ">>"}:
+                has_redirection = True
                 if index + 1 >= len(tokens) or not add(
                     tokens[index + 1],
                     "input" if token == "<" else "output",
                     must_exist=token == "<",
                 ):
-                    return {"targets": targets, "analysisComplete": False}
+                    return incomplete(targets)
                 index += 2
                 continue
             if token in {"<<", "<<<", "<>", ">&", "<&"}:
-                return {"targets": targets, "analysisComplete": False}
+                return incomplete(targets)
             if "/" in token and not add(token, "path", must_exist=True):
-                return {"targets": targets, "analysisComplete": False}
+                return incomplete(targets)
             index += 1
-        result = {"targets": targets, "analysisComplete": True}
+
+        read_only = (
+            read_only_executable and executable not in {".", "source"} and not has_redirection
+        )
+        if read_only:
+            operands = []
+            after_options = False
+            for token in tokens[1:]:
+                if token == "--":
+                    after_options = True
+                    continue
+                if token in {"<", ">", ">>"}:
+                    break
+                if not after_options and token.startswith("-"):
+                    if (
+                        (
+                            executable_name == "ls"
+                            and (
+                                (not token.startswith("--") and "L" in token[1:])
+                                or token.startswith("--dere")
+                            )
+                        )
+                        or (
+                            executable_name == "tail"
+                            and (
+                                (not token.startswith("--") and {"f", "F"} & set(token[1:]))
+                                or token.startswith(("--f", "--retry"))
+                            )
+                        )
+                        or (executable_name == "wc" and token.startswith("--f"))
+                        or (
+                            executable_name == "sha256sum"
+                            and (
+                                (not token.startswith("--") and "c" in token[1:])
+                                or token.startswith("--c")
+                            )
+                        )
+                    ):
+                        read_only = False
+                        continue
+                    if executable_name in _READ_ONLY_PATH_OPTION_EXECUTABLES and "=" in token:
+                        if not add(token.split("=", 1)[1], "path", must_exist=True):
+                            read_only = False
+                    continue
+                operands.append(token)
+            if executable_name == "pwd" and operands:
+                read_only = False
+            else:
+                for operand in operands:
+                    if "/" not in operand and not add(operand, "path", must_exist=True):
+                        read_only = False
+                        break
+
+        result = {
+            "targets": targets,
+            "analysisComplete": True,
+            "readOnly": read_only,
+        }
         result["inspectionRevision"] = self._inspection_revision(result)
         return result
 
@@ -160,8 +248,6 @@ class ProcessRunner:
         ).hexdigest()
 
     def _trusted_executable(self, executable: str, current_directory: str) -> Path | None:
-        if executable in self.executables:
-            return self.executables[executable]
         if "/" in executable:
             candidates = [Path(current_directory) / executable]
         else:
@@ -196,6 +282,7 @@ class ProcessRunner:
         stream: StreamCallback,
         expected_inspection_revision: str | None = None,
     ) -> dict:
+        inspection = None
         if command is None:
             executable_path = self.executables.get(program or "")
             if executable_path is None:
@@ -211,12 +298,26 @@ class ProcessRunner:
                 )
                 if actual_revision != expected_inspection_revision:
                     raise AgentError("process.inspectionChanged", "Shell inspection changed")
-            argv = [os.fspath(self.shell), "-c", command]
+            if inspection is not None and inspection.get("readOnly") is True:
+                tokens = shlex.split(command)
+                current = self.workspace.resolve_directory(
+                    working_directory, root_id=root_id, revision=revision
+                )["path"]
+                executable = self._trusted_executable(tokens[0], current)
+                if executable is None:
+                    raise AgentError("process.inspectionChanged", "Shell inspection changed")
+                argv = [os.fspath(executable), *tokens[1:]]
+            else:
+                argv = [os.fspath(self.shell), "-c", command]
         cwd, cwd_fd = self._cwd(root_id, revision, working_directory)
         environment = {
             "HOME": cwd,
             "LANG": os.environ.get("LANG", "C.UTF-8"),
-            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH": (
+                "/usr/bin:/bin"
+                if inspection is not None and inspection.get("readOnly") is True
+                else "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ),
         }
         started = time.monotonic()
         try:

@@ -179,6 +179,7 @@ class ShellTarget(ExecutionResult):
 class ShellInspectResult(ExecutionResult):
     targets: list[ShellTarget]
     analysis_complete: bool
+    read_only: bool = False
     inspection_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 

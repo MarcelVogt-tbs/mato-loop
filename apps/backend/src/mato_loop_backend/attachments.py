@@ -246,7 +246,7 @@ def _safe_metadata(metadata: dict | None) -> dict:
     if not metadata:
         return {}
     safe = {}
-    for key, value in list(metadata.items())[:32]:
+    for key, value in metadata.items():
         if key not in {
             "channels",
             "created",
@@ -259,6 +259,7 @@ def _safe_metadata(metadata: dict | None) -> dict:
             "sampleRate",
             "sampleWidth",
             "size",
+            "authorizationSourceAttachmentIds",
             "sourceAttachmentIds",
             "sourceSha256",
             "targetTrustLevel",
@@ -266,10 +267,16 @@ def _safe_metadata(metadata: dict | None) -> dict:
             continue
         if isinstance(value, str):
             safe[key] = value[:500]
-        elif key == "sourceAttachmentIds" and isinstance(value, list):
-            safe[key] = [item[:100] for item in value[:5] if isinstance(item, str)]
+        elif key in {
+            "authorizationSourceAttachmentIds",
+            "sourceAttachmentIds",
+        } and isinstance(value, list):
+            limit = 100 if key == "authorizationSourceAttachmentIds" else 5
+            safe[key] = [item[:100] for item in value[:limit] if isinstance(item, str)]
         elif isinstance(value, (bool, int, float)) or value is None:
             safe[key] = value
+        if len(safe) == 32:
+            break
     return safe
 
 

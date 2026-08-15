@@ -53,3 +53,13 @@ export function reasoningStatusLabel(reasoning, maxLength = 160) {
   }
   return null
 }
+
+export function reasoningHistoryPresentation(reasoning, live = false) {
+  return {
+    title: reasoning?.status === 'interrupted'
+      ? 'Überlegung unterbrochen'
+      : live ? 'Modell überlegt' : 'Überlegt',
+    summary: reasoningStatusLabel(reasoning),
+    duration: formatReasoningDuration(reasoning?.observedDurationMs)
+  }
+}

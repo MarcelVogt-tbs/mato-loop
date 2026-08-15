@@ -5,6 +5,16 @@ const INTERNAL_ATTACHMENT_URL = new RegExp(
   'i'
 )
 const INTERNAL_FILE_DOWNLOAD_PATH = '/api/workspace/files/download'
+const INTERNAL_FILE_CONTENT_PATH = '/api/workspace/files/content'
+const PROVIDED_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+const PROVIDED_IMAGE_MIME_TYPES = new Map([
+  ['.gif', 'image/gif'],
+  ['.jpeg', 'image/jpeg'],
+  ['.jpg', 'image/jpeg'],
+  ['.png', 'image/png'],
+  ['.svg', 'image/svg+xml'],
+  ['.webp', 'image/webp']
+])
 const UUID_PATTERN = new RegExp(`^${UUID}$`, 'i')
 const ROOT_REVISION_PATTERN = /^[0-9a-f]{64}$/u
 
@@ -24,8 +34,8 @@ export function safeAttachmentUrl(value) {
   return typeof value === 'string' && INTERNAL_ATTACHMENT_URL.test(value) ? value : null
 }
 
-export function safeFileDownloadUrl(value) {
-  if (typeof value !== 'string' || !value.startsWith(`${INTERNAL_FILE_DOWNLOAD_PATH}?`)) return null
+function safeFileUrl(value, expectedPath) {
+  if (typeof value !== 'string' || !value.startsWith(`${expectedPath}?`)) return null
   let parsed
   try {
     parsed = new URL(value, 'https://mato-loop.invalid')
@@ -50,7 +60,7 @@ export function safeFileDownloadUrl(value) {
       : null
   if (
     parsed.origin !== 'https://mato-loop.invalid'
-    || parsed.pathname !== INTERNAL_FILE_DOWNLOAD_PATH
+    || parsed.pathname !== expectedPath
     || parsed.hash
     || !allowedKeys
     || keys.length !== allowedKeys.size
@@ -73,6 +83,14 @@ export function safeFileDownloadUrl(value) {
     && validRelativePath(workingDirectory, true)
     ? value
     : null
+}
+
+export function safeFileDownloadUrl(value) {
+  return safeFileUrl(value, INTERNAL_FILE_DOWNLOAD_PATH)
+}
+
+function safeFileContentUrl(value) {
+  return safeFileUrl(value, INTERNAL_FILE_CONTENT_PATH)
 }
 
 export function toolFileAttachment(tool, result) {
@@ -98,13 +116,19 @@ export function toolFileAttachment(tool, result) {
   ) return null
   const params = new URL(safeUrl, 'https://mato-loop.invalid').searchParams
   if (params.get('scope') !== expectedScope || params.get('path') !== path) return null
+  const suffix = filename.match(/\.[^.]+$/u)?.[0].toLowerCase() || ''
+  const imageMimeType = size <= PROVIDED_IMAGE_MAX_BYTES
+    ? PROVIDED_IMAGE_MIME_TYPES.get(suffix)
+    : null
   return {
     id: `provided-${result.id || tool.id || path}`,
-    kind: 'file',
-    mimeType: 'application/octet-stream',
+    kind: imageMimeType ? 'image' : 'file',
+    mimeType: imageMimeType || 'application/octet-stream',
     sizeBytes: size,
     filename,
-    url: safeUrl
+    url: imageMimeType
+      ? safeUrl.replace(INTERNAL_FILE_DOWNLOAD_PATH, INTERNAL_FILE_CONTENT_PATH)
+      : safeUrl
   }
 }
 
@@ -185,6 +209,7 @@ export function supportedAttachments(attachments) {
       ? attachment.mimeType.split(';', 1)[0].trim().toLowerCase()
       : ''
     const safeUrl = safeAttachmentUrl(attachment.url)
+      || (attachment.kind === 'image' ? safeFileContentUrl(attachment.url) : null)
       || (attachment.kind === 'file' ? safeFileDownloadUrl(attachment.url) : null)
     return [{
       ...attachment,

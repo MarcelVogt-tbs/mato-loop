@@ -166,6 +166,7 @@ SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
 QR_CODE_MAX_CONTENT_BYTES = 2_000
 QR_CODE_MAX_RESULTS = 16
 SKILL_DRAFT_MAX_BYTES = 40 * 1024
+IMAGE_AUTHORIZATION_LINEAGE_LIMIT = 100
 ALL_TOOL_EXECUTION_POLICIES = tuple(ToolExecutionPolicy)
 
 
@@ -2372,9 +2373,45 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
 
 
 def _process_permission(
-    context: ToolContext, arguments: dict[str, Any], *, shell: bool
+    context: ToolContext,
+    arguments: dict[str, Any],
+    *,
+    shell: bool,
+    read_only: bool = False,
 ) -> PermissionRequest:
     client = _workspace_client(context)
+    if shell and read_only:
+        return PermissionRequest(
+            capability="process.execute",
+            resource_type="shell_command",
+            resource_scope=json.dumps(
+                {
+                    "agentId": str(client.agent_id),
+                    "command": str(arguments["command"]),
+                    "rootId": str(client.root_id),
+                    "rootRevision": client.root_revision,
+                    "workingDirectory": client.working_directory,
+                },
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            action_kind="shell_run",
+            risk_level="medium",
+            title="Lesenden Shell-Befehl ausführen?",
+            summary=(
+                "Der Befehl wurde als rein lesend geprüft. Eine Session-Freigabe gilt nur für "
+                "denselben Befehl im aktuellen Arbeitsordner."
+            ),
+            resource_display=client.current_directory or "Ausgewählter Computer",
+            display_items=(
+                PermissionDisplayItem(
+                    label="Shell-Befehl",
+                    value=str(arguments["command"]),
+                    format="code",
+                ),
+            ),
+        )
     warning = (
         "Shell-Befehle können Dateien verändern, Programme starten und auf Netzwerkdienste "
         "zugreifen. Je nach Agent werden sie mit Administratorrechten ausgeführt. Das "
@@ -2511,8 +2548,13 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         "shell.inspect", {"command": arguments.command}, ShellInspectResult
     )
     assert isinstance(inspection, ShellInspectResult)
+    if context.session.workspace_access != "read-write" and not inspection.read_only:
+        return ToolResult.error("tool.writeDisabled")
     process_permission = _process_permission(
-        context, {"command": arguments.command}, shell=True
+        context,
+        {"command": arguments.command},
+        shell=True,
+        read_only=inspection.read_only,
     )
     if inspection.analysis_complete:
         for target in inspection.targets:
@@ -3285,11 +3327,28 @@ async def _edit_image(
     ):
         return ToolResult.error("privacy.privateContentBlocked")
     source_attachment_ids = tuple(arguments.attachment_ids)
+    authorization_source_ids = []
+    for attachment in ordered:
+        lineage = None
+        if attachment.category == "generated" and attachment.purpose == "artifact":
+            metadata = attachment.metadata_json or {}
+            values = metadata.get("authorizationSourceAttachmentIds")
+            if values is None:
+                values = metadata.get("sourceAttachmentIds")
+            if isinstance(values, list) and values:
+                try:
+                    lineage = [UUID(value) for value in values]
+                except (TypeError, ValueError):
+                    lineage = None
+        authorization_source_ids.extend(lineage or [attachment.id])
+    authorization_source_ids = sorted(set(authorization_source_ids), key=str)
+    if len(authorization_source_ids) > IMAGE_AUTHORIZATION_LINEAGE_LIMIT:
+        authorization_source_ids = list(source_attachment_ids)
     if error := await _authorize_media(
         context,
         "media.edit.image",
         target,
-        source_attachment_ids=source_attachment_ids,
+        source_attachment_ids=tuple(authorization_source_ids),
     ):
         return error
     service = AttachmentService()
@@ -3314,6 +3373,9 @@ async def _edit_image(
         expected_model_id=target.model.id,
         expected_trust_level=target_trust_level,
     )
+    result.metadata["authorizationSourceAttachmentIds"] = [
+        str(attachment_id) for attachment_id in authorization_source_ids
+    ]
     return ToolResult(
         "Image edited.",
         {},
@@ -4538,12 +4600,13 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "shell_run",
-            "Run one command directly with the host-configured shell in the current directory. "
-            "This is not an operating-system sandbox; shell cd applies only to this call.",
+            "Run one command directly with the host-configured shell in the current directory. In "
+            "read-only mode, only host-verified simple pwd, ls, cat, head, tail, wc, stat, "
+            "readlink, realpath, cmp, and sha256sum commands are accepted. This is not an "
+            "operating-system sandbox; shell cd applies only to this call.",
             ShellRunArguments,
             _shell_run,
             tool_type="computer",
-            write=True,
             required_operation="shell.run",
             group="process",
             label="Shell-Befehl ausführen",
