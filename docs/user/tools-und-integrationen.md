@@ -86,13 +86,13 @@ Suche, Bücherliste und Regale sind keine einzeln freigebbaren Ressourcen. Sperr
 
 ## OpenSCAD integrieren
 
-Der vorbereitete Docker-Computer enthält OpenSCAD bereits. Legen Sie unter **Einstellungen > Integrationen** eine OpenSCAD-Integration an, wählen Sie den Computer und verwenden Sie **Erkennen**, um den dort geprüften Binary-Pfad zu übernehmen. Ein eigener nativer Execution Agent benötigt OpenSCAD, Xvfb und Bubblewrap. Der Verbindungstest ist nur erfolgreich, wenn auch das isolierte Headless-Rendering verfügbar ist.
+Der vorbereitete Docker-Computer enthält OpenSCAD bereits. Legen Sie unter **Einstellungen > Integrationen** eine OpenSCAD-Integration an, wählen Sie den Computer und verwenden Sie **Erkennen**, um den dort geprüften Binary-Pfad zu übernehmen. Ein eigener nativer Execution Agent benötigt OpenSCAD. Der Verbindungstest ist nur erfolgreich, wenn auch ein begrenztes Testrendering funktioniert.
 
 Beschreiben Sie im Chat das gewünschte Modell mit seinen notwendigen Abmessungen und Randbedingungen. Wenn Sie einen Dateinamen nennen, verwendet der Agent diesen und ergänzt bei fehlender Endung `.scad`. Ohne Vorgabe wählt er einen kurzen beschreibenden Namen. Neue Dateien werden standardmäßig unter den Session-Dateien angelegt; einen Workspace verwendet der Agent auf ausdrücklichen Wunsch oder beim Bearbeiten eines dort vorhandenen Projekts.
 
 Der Agent erzeugt den OpenSCAD-Quelltext selbst, rendert ihn und prüft Diagnosen, Abmessungen sowie Ansichten von schräg vorne, vorne, rechts und oben. Erkennt er ein Problem, korrigiert er den Quelltext und rendert erneut. Nach erfolgreichem Abschluss stehen die `.scad`-Quelldatei und eine interaktive 3D-Vorschau zur Verfügung. Eine STL-Datei erzeugt der Agent nur auf ausdrücklichen Wunsch. Im Dateiexplorer können Sie `.scad` zwischen Quelltext und 3D-Ansicht umschalten und STL explizit exportieren. 3D-Modelle lassen sich drehen, verschieben, zoomen und aus festen Perspektiven betrachten.
 
-Vor dem Rendern gelten weiterhin die Datei- und CAD-Freigaben. OpenSCAD läuft ohne Netzwerk in einer isolierten Umgebung, die nur die bereitgestellten Projektdateien und das Ausgabeziel sieht. Sehr große Projekte oder STL-Dateien werden abgelehnt beziehungsweise nur als Download angeboten.
+CAD-Rendering ist standardmäßig auf **Automatisch** gestellt. Unter **Zugriff** können Sie weiterhin **Nachfragen** oder **Nicht erlaubt** wählen. Datei- und Agent-Modus-Grenzen gelten unabhängig davon weiter. OpenSCAD läuft direkt mit den Rechten des Execution Agents. Das private Arbeitsverzeichnis, feste Aufrufparameter, Laufzeit- und Größenlimits sowie die Ausgabeprüfung sind keine Betriebssystem-Sandbox; OpenSCAD kann grundsätzlich auf weitere Dateien und Netzwerkziele zugreifen, die für den Agent erreichbar sind. Verwenden Sie für eine stärkere Trennung einen Container, eine virtuelle Maschine oder einen eigenen eingeschränkten Betriebssystembenutzer. Sehr große Projekte oder STL-Dateien werden abgelehnt beziehungsweise nur als Download angeboten.
 
 ## Webfetch konfigurieren
 

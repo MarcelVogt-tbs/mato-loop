@@ -27,7 +27,7 @@ ROOT_ID = "4d0a316f-5fb5-4ec5-a5c4-04aed66c5e6d"
 TICKET_ID = "0a01092c-13d6-49fd-b62c-e2b98deed2bb"
 
 
-def _write_fake_binaries(directory: Path) -> tuple[Path, Path, Path]:
+def _write_fake_binary(directory: Path) -> Path:
     openscad = directory / "openscad"
     openscad.write_text(
         f"""#!{sys.executable}
@@ -48,10 +48,8 @@ if "FAIL_RENDER" in content:
     raise SystemExit(2)
 if "cube(" not in content:
     raise SystemExit(2)
-if output.suffix == ".png":
-    output.write_bytes(b"\\x89PNG\\r\\n\\x1a\\npreview")
-elif output.suffix == ".off":
-    output.write_text("OFF\\n3 1 0\\n0 0 0\\n1 0 0\\n0 1 0\\n3 0 1 2 66 165 245\\n")
+if output.suffix == ".off":
+    output.write_text("OFF\\n3 1 0\\n0 0 0\\n1 0 0\\n0 1 0\\n3 0 1 2\\n")
 else:
     output.write_bytes(bytes(80) + struct.pack("<I", 1) + bytes(50))
 print("rendered")
@@ -59,66 +57,7 @@ print("rendered")
         encoding="utf-8",
     )
     openscad.chmod(0o755)
-
-    xvfb = directory / "xvfb-run"
-    xvfb.write_text(
-        f"""#!{sys.executable}
-import os
-import sys
-
-arguments = sys.argv[1:]
-if arguments and arguments[0] == "-a":
-    arguments = arguments[1:]
-os.execv(arguments[0], arguments)
-""",
-        encoding="utf-8",
-    )
-    xvfb.chmod(0o755)
-
-    bwrap = directory / "bwrap"
-    bwrap.write_text(
-        f"""#!{sys.executable}
-import json
-import os
-import pathlib
-import sys
-
-arguments = sys.argv[1:]
-log = pathlib.Path(__file__).with_name("sandbox-calls.jsonl")
-log.open("a").write(json.dumps(arguments) + "\\n")
-mounts = {{}}
-working_directory = None
-index = 0
-while arguments[index] != "--":
-    option = arguments[index]
-    if option in {{"--ro-bind", "--bind"}}:
-        mounts[arguments[index + 2]] = arguments[index + 1]
-        index += 3
-    elif option == "--chdir":
-        working_directory = arguments[index + 1]
-        index += 2
-    elif option == "--setenv":
-        index += 3
-    elif option in {{"--proc", "--dev", "--tmpfs", "--dir", "--cap-drop"}}:
-        index += 2
-    else:
-        index += 1
-
-def translate(value):
-    for destination, source in sorted(mounts.items(), key=lambda item: len(item[0]), reverse=True):
-        if value == destination or value.startswith(destination + "/"):
-            return source + value[len(destination):]
-    return value
-
-command = [translate(value) for value in arguments[index + 1:]]
-if working_directory is not None:
-    os.chdir(translate(working_directory))
-os.execv(command[0], command)
-""",
-        encoding="utf-8",
-    )
-    bwrap.chmod(0o755)
-    return openscad, xvfb, bwrap
+    return openscad
 
 
 def _configuration(
@@ -151,16 +90,9 @@ def _request(operation: str, arguments: dict) -> Request:
 
 
 class OpenScadTests(unittest.IsolatedAsyncioTestCase):
-    def test_off_validation_rejects_oversized_lines(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary) / "oversized.off"
-            output.write_bytes(b"OFF " + b" " * (1024 * 1024))
-            with self.assertRaises(AgentError):
-                OpenScadRunner._validate_off(output)
-
     @unittest.skipUnless(
-        shutil.which("openscad") and shutil.which("xvfb-run") and shutil.which("bwrap"),
-        "packaged OpenSCAD sandbox is unavailable",
+        shutil.which("openscad"),
+        "packaged OpenSCAD is unavailable",
     )
     async def test_packaged_openscad_renders_real_preview_and_stl(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -185,7 +117,6 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                             "sessionId": "session",
                             "entrypoint": "halterung.scad",
                             "source": {"type": "workspace", "path": "project"},
-                            "previewImages": True,
                         },
                     ),
                     backend_id=AGENT_ID,
@@ -196,17 +127,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             preview = ArtifactDescriptor.model_validate(rendered["artifact"])
             self.assertEqual(rendered["output"], "preview")
             self.assertEqual(preview.filename, "halterung.off")
-            self.assertTrue(agent.openscad._is_off(agent.cache._path(preview)))
-            self.assertEqual(
-                [item["view"] for item in rendered["previews"]],
-                ["isometric", "front", "right", "top"],
-            )
-            for item in rendered["previews"]:
-                descriptor = ArtifactDescriptor.model_validate(item["artifact"])
-                self.assertEqual(
-                    agent.cache._path(descriptor).read_bytes()[:8],
-                    b"\x89PNG\r\n\x1a\n",
-                )
+            OpenScadRunner._validate_off(agent.cache._path(preview))
 
             exported = await agent.dispatch(
                 _request(
@@ -248,7 +169,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             data_dir = base / "data"
             binaries = base / "bin"
             binaries.mkdir()
-            openscad, xvfb, bwrap = _write_fake_binaries(binaries)
+            openscad = _write_fake_binary(binaries)
             project = root / "project"
             project.mkdir()
             (project / "halterung.scad").write_text("cube([1, 1, 1]);\n", encoding="utf-8")
@@ -259,11 +180,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                 access_key="key",
                 client=http,
             )
-            with (
-                patch.dict(os.environ, {"PATH": os.fspath(binaries)}),
-                patch.object(OpenScadRunner, "_find_xvfb", return_value=xvfb),
-                patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
-            ):
+            with patch.dict(os.environ, {"PATH": os.fspath(binaries)}):
                 agent = ExecutionAgent(
                     _configuration(root, openscad, data_dir), "key", transfer_client=transfer
                 )
@@ -304,7 +221,6 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                         "sessionId": "session",
                         "entrypoint": "halterung.scad",
                         "source": {"type": "workspace", "path": "project"},
-                        "previewImages": True,
                     },
                 ),
                 backend_id=AGENT_ID,
@@ -314,11 +230,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(preview.filename, "halterung.off")
             self.assertIn("rendered", rendered["diagnostics"])
             self.assertFalse(rendered["diagnosticsTruncated"])
-            self.assertTrue(agent.openscad._is_off(agent.cache._path(preview)))
-            self.assertEqual(
-                [item["view"] for item in rendered["previews"]],
-                ["isometric", "front", "right", "top"],
-            )
+            OpenScadRunner._validate_off(agent.cache._path(preview))
 
             (project / "failed.scad").write_text("FAIL_RENDER\n", encoding="utf-8")
             with self.assertRaises(AgentError) as failure:
@@ -393,43 +305,14 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                 json.loads(line) for line in (binaries / "calls.jsonl").read_text().splitlines()
             ]
             self.assertTrue(any("--export-format=binstl" in call for call in calls))
-            preview_calls = [
-                call
-                for call in calls
-                if "--export-format=off" in call
-                and any(value.endswith("/project/halterung.scad") for value in call)
-            ]
-            self.assertEqual(len(preview_calls), 1)
-            self.assertTrue(any("--backend=manifold" in call for call in preview_calls))
-            self.assertTrue(all("$preview=true" in call for call in preview_calls))
-            image_calls = [call for call in calls if "--imgsize=800,600" in call]
-            self.assertEqual(len(image_calls), 4)
-            self.assertTrue(all("$preview=true" in call for call in image_calls))
-            all_sandbox_calls = [
-                json.loads(line)
-                for line in (binaries / "sandbox-calls.jsonl").read_text().splitlines()
-            ]
-            self.assertTrue(any("--export-format=off" in call for call in all_sandbox_calls))
-            sandbox_calls = [call for call in all_sandbox_calls if "/project" in call]
-            for call in sandbox_calls:
-                self.assertIn("--unshare-all", call)
-                self.assertNotIn("--share-net", call)
-                binds = [
-                    (call[index + 1], call[index + 2])
-                    for index, value in enumerate(call)
-                    if value in {"--ro-bind", "--bind"}
-                ]
-                destinations = {destination for _, destination in binds}
-                self.assertIn("/project", destinations)
-                self.assertIn("/output", destinations)
-                self.assertNotIn(os.fspath(root), destinations)
-                self.assertNotIn(os.fspath(data_dir), destinations)
-                self.assertNotIn("/workspace", destinations)
-                self.assertNotIn("/data", destinations)
-                self.assertNotIn("/config", destinations)
-                for source, destination in binds:
-                    if source.startswith(os.fspath(data_dir)):
-                        self.assertIn(destination, {"/project", "/output"})
+            render_calls = [call for call in calls if "--export-format=off" in call]
+            self.assertTrue(render_calls)
+            self.assertTrue(
+                all(
+                    Path(call[call.index("-o") + 1]).is_absolute() for call in calls if "-o" in call
+                )
+            )
+            self.assertTrue(all(Path(call[-1]).is_absolute() for call in calls if "-o" in call))
             await http.aclose()
 
     async def test_strict_contract_custom_validation_and_capability_omission(self) -> None:
@@ -437,34 +320,24 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             root = Path(temporary)
             binaries = root / "bin"
             binaries.mkdir()
-            openscad, xvfb, bwrap = _write_fake_binaries(binaries)
+            openscad = _write_fake_binary(binaries)
             config = _configuration(root, openscad)
-            with (
-                patch.object(OpenScadRunner, "_find_xvfb", return_value=xvfb),
-                patch.object(OpenScadRunner, "_find_bwrap", return_value=None),
-            ):
-                missing_bwrap_agent = ExecutionAgent(config, "key")
-            self.assertNotIn("integration.openscad.render", missing_bwrap_agent.operations)
-            with self.assertRaises(AgentError) as missing_bwrap:
-                await missing_bwrap_agent.dispatch(
+            with patch.object(OpenScadRunner, "_probe_render", return_value=False):
+                agent = ExecutionAgent(config, "key")
+            self.assertIn("integration.openscad.test", agent.operations)
+            self.assertNotIn("integration.openscad.render", agent.operations)
+            with self.assertRaises(AgentError) as failed_probe:
+                await agent.dispatch(
                     _request(
                         "integration.openscad.test",
                         {"executablePath": os.fspath(openscad)},
                     ),
                     backend_id=AGENT_ID,
                 )
-            self.assertEqual(missing_bwrap.exception.code, "openscad.headlessPreviewUnavailable")
+            self.assertEqual(failed_probe.exception.code, "openscad.headlessPreviewUnavailable")
 
-            with (
-                patch.object(OpenScadRunner, "_find_xvfb", return_value=xvfb),
-                patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
-            ):
-                available = ExecutionAgent(config, "key")
-            with (
-                patch.object(OpenScadRunner, "_find_openscad", return_value=None),
-                patch.object(OpenScadRunner, "_find_xvfb", return_value=None),
-                patch.object(OpenScadRunner, "_find_bwrap", return_value=None),
-            ):
+            available = ExecutionAgent(config, "key")
+            with patch.object(OpenScadRunner, "_find_openscad", return_value=None):
                 unavailable = ExecutionAgent(config, "key")
             self.assertIn("integration.openscad.discover", unavailable.operations)
             self.assertIn("integration.openscad.test", unavailable.operations)

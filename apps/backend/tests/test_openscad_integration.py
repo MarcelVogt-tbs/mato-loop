@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from PIL import Image
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,7 +34,6 @@ from mato_loop_backend.integrations.openscad import (
     render_openscad,
     render_project,
     validate_binary_stl,
-    validate_off,
 )
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
@@ -72,29 +72,19 @@ def _artifact(agent_id, session_id, name, content_type, size=100) -> dict:
     }
 
 
-def _render_result(
-    agent_id, session_id, output="preview", preview_images=False
-) -> OpenScadRenderResult:
-    suffix = "off" if output == "preview" else "stl"
-    content_type = "model/vnd.off" if output == "preview" else "model/stl"
+def _render_result(agent_id, session_id) -> OpenScadRenderResult:
     return OpenScadRenderResult.model_validate(
         {
-            "output": output,
-            "artifact": _artifact(agent_id, session_id, f"model.{suffix}", content_type),
+            "model": _artifact(agent_id, session_id, "model.stl", "model/stl"),
             "previews": [
                 {
                     "view": view,
                     "artifact": _artifact(
-                        agent_id,
-                        session_id,
-                        f"model-{view}.png",
-                        "image/png",
+                        agent_id, session_id, f"{view}.png", "image/png"
                     ),
                 }
                 for view in ("isometric", "front", "right", "top")
-            ]
-            if preview_images
-            else [],
+            ],
             "diagnostics": "rendered",
             "diagnosticsTruncated": False,
         }
@@ -141,7 +131,6 @@ def test_openscad_adapter_requires_render_and_export_and_hides_cli_arguments() -
         "root",
         "path",
         "projectPath",
-        "output",
     }
     properties = tool.arguments_model.model_json_schema()["properties"]
     assert "storage root" in properties["root"]["description"].casefold()
@@ -197,7 +186,7 @@ def test_openscad_prompt_fragment_covers_the_source_render_verify_workflow() -> 
 
     for requirement in (
         "use render_openscad, not shell_run or process_exec",
-        "render output=preview",
+        "validated binary stl and preview attachments",
         "file tools",
         "source in assistant text is not a file",
         "exact .scad basename",
@@ -218,12 +207,11 @@ def test_openscad_prompt_fragment_covers_the_source_render_verify_workflow() -> 
         "connected and closed",
         "one grouped question",
         "read files before modifying",
-        "render output=preview after every material change",
-        "isometric, front, right, and top views",
-        "triangle count, bounds, and dimensions",
-        "output=stl only when the user explicitly requested",
+        "render after every material change",
+        "stl triangle count, bounds, dimensions",
+        "every supplied view",
         "never claim success",
-        "name the source file and every generated file",
+        "name the source file and stl file",
     ):
         assert requirement in prompt
 
@@ -255,14 +243,12 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
             "sessionId": str(session_id),
             "entrypoint": "main.scad",
             "source": {"type": "workspace", "path": "enclosure"},
-            "output": "preview",
-            "previewImages": False,
         },
         OpenScadRenderResult,
         timeout=300.0,
     )
 
-    rendered.artifact.backend_id = str(uuid4())
+    rendered.model.backend_id = str(uuid4())
     with pytest.raises(ExecutionClientError, match="executionAgent.protocolError"):
         await render_project(
             client,
@@ -270,38 +256,6 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
             session_id=session_id,
             arguments=OpenScadRenderArguments(root="workspace", path="main.scad"),
             root_files=RootFileService(session_id),
-        )
-
-
-async def test_openscad_render_validates_requested_preview_views() -> None:
-    agent_id = uuid4()
-    session_id = uuid4()
-    rendered = _render_result(agent_id, session_id, preview_images=True)
-    client = SimpleNamespace(
-        agent_id=agent_id,
-        request=AsyncMock(return_value=rendered),
-    )
-    arguments = OpenScadRenderArguments(root="workspace", path="model.scad")
-
-    await render_project(
-        client,
-        executable_path="/usr/bin/openscad",
-        session_id=session_id,
-        arguments=arguments,
-        root_files=RootFileService(session_id),
-        preview_images=True,
-    )
-    assert client.request.await_args.args[1]["previewImages"] is True
-
-    rendered.previews = rendered.previews[:-1]
-    with pytest.raises(ExecutionClientError, match="executionAgent.protocolError"):
-        await render_project(
-            client,
-            executable_path="/usr/bin/openscad",
-            session_id=session_id,
-            arguments=arguments,
-            root_files=RootFileService(session_id),
-            preview_images=True,
         )
 
 
@@ -369,40 +323,46 @@ def test_binary_stl_validation_checks_size_and_finite_coordinates() -> None:
         validate_binary_stl(invalid)
 
 
-def test_off_validation_checks_structure_indices_and_geometry_metadata() -> None:
-    valid = b"OFF 3 1 0\n-2 0 1\n5 4 7\n1 -1 0\n3 0 1 2 66 165 245\n"
-    assert validate_off(valid) == {
-        "triangleCount": 1,
-        "bounds": {
-            "min": {"x": -2.0, "y": -1.0, "z": 0.0},
-            "max": {"x": 5.0, "y": 4.0, "z": 7.0},
-        },
-        "dimensions": {"x": 7.0, "y": 5.0, "z": 7.0},
-    }
-    with pytest.raises(ValueError, match="index"):
-        validate_off(b"OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n3 0 1 3\n")
-    with pytest.raises(ValueError, match="non-finite"):
-        validate_off(b"OFF\n3 1 0\n0 0 0\ninf 0 0\n0 1 0\n3 0 1 2\n")
-    with pytest.raises(ValueError, match="line exceeds"):
-        validate_off(b"OFF " + b" " * (1024 * 1024))
-
-
-async def test_render_tool_returns_preview_and_geometry_metadata(
+async def test_render_tool_returns_stl_four_views_and_geometry_metadata(
     monkeypatch,
 ) -> None:
     instance = _instance()
     context = _tool_context(instance)
-    rendered = _render_result(
-        instance.execution_agent_id, context.session.id, preview_images=True
+    rendered = _render_result(instance.execution_agent_id, context.session.id)
+    stl = (
+        bytes(80)
+        + struct.pack("<I", 1)
+        + struct.pack(
+            "<12fH",
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
+            0,
+            3,
+            4,
+            0,
+        )
     )
-    off = b"OFF\n3 1 0\n0 0 0\n2 0 0\n0 3 4\n3 0 1 2\n"
+    png_buffer = BytesIO()
+    Image.new("RGB", (2, 2), "red").save(png_buffer, format="PNG")
+    png = png_buffer.getvalue()
     monkeypatch.setattr(
         SettingsStore,
         "load",
         AsyncMock(return_value=IntegrationSettings(instances=[instance])),
     )
     monkeypatch.setattr(openscad_module, "render_project", AsyncMock(return_value=rendered))
-    exported = AsyncMock(return_value=off)
+    exported = AsyncMock(
+        side_effect=lambda _client, artifact: stl
+        if artifact.content_type == "model/stl"
+        else png
+    )
     monkeypatch.setattr(openscad_module, "export_artifact", exported)
 
     result = await render_openscad(
@@ -418,13 +378,13 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
         "image",
     ]
     assert [attachment.filename for attachment in result.attachments] == [
-        "model.off",
-        "model-isometric.png",
-        "model-front.png",
-        "model-right.png",
-        "model-top.png",
+        "model.stl",
+        "isometric.png",
+        "front.png",
+        "right.png",
+        "top.png",
     ]
-    assert json.loads(result.content)["geometryMetadata"] == {
+    assert json.loads(result.content)["stlMetadata"] == {
         "triangleCount": 1,
         "bounds": {
             "min": {"x": 0.0, "y": 0.0, "z": 0.0},
@@ -432,14 +392,7 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
         },
         "dimensions": {"x": 2.0, "y": 3.0, "z": 4.0},
     }
-    assert json.loads(result.content)["previewFiles"] == [
-        "model-isometric.png",
-        "model-front.png",
-        "model-right.png",
-        "model-top.png",
-    ]
     assert exported.await_count == 5
-    assert openscad_module.render_project.await_args.kwargs["preview_images"] is True
 
 
 async def test_render_tool_exposes_only_controlled_syntax_diagnostics(
@@ -486,7 +439,8 @@ async def test_render_tool_rejects_aggregate_artifacts_before_export(
     instance = _instance()
     context = _tool_context(instance)
     rendered = _render_result(instance.execution_agent_id, context.session.id)
-    rendered.artifact.size = 65 * 1024 * 1024
+    for artifact in [rendered.model, *(preview.artifact for preview in rendered.previews)]:
+        artifact.size = 14 * 1024 * 1024
     monkeypatch.setattr(
         SettingsStore,
         "load",

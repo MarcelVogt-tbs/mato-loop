@@ -681,7 +681,7 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
     )
 
 
-_CAD_RENDER = ToolAction("cad.render", "CAD rendern", ToolExecutionPolicy.ASK)
+_CAD_RENDER = ToolAction("cad.render", "CAD rendern", ToolExecutionPolicy.AUTO)
 _FILESYSTEM_READ = ToolAction("filesystem.read", "Lesen", ToolExecutionPolicy.AUTO)
 
 OPENSCAD_TOOL = ToolContribution(

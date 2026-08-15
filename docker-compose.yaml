@@ -85,9 +85,7 @@ services:
       context: ./apps/execution-agent
     restart: unless-stopped
     security_opt:
-      - apparmor=unconfined
       - no-new-privileges:true
-      - seccomp=unconfined
     environment:
       MATO_EXECUTION_AGENT_BACKEND_URL: ws://mato-loop:6020/api/execution-agents/connect
       MATO_EXECUTION_AGENT_ID: ${MATO_EXECUTION_AGENT_ID:-}

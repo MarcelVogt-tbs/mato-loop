@@ -141,9 +141,7 @@ services:
       dockerfile: Dockerfile.dev
     restart: unless-stopped
     security_opt:
-      - apparmor=unconfined
       - no-new-privileges:true
-      - seccomp=unconfined
     environment:
       UV_PROJECT_ENVIRONMENT: /opt/mato-loop/execution-agent/venv
       UV_CACHE_DIR: /opt/mato-loop/execution-agent/uv-cache
