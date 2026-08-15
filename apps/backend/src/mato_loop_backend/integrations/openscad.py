@@ -52,7 +52,6 @@ _MAX_OFF_VERTICES = 500_000
 _MAX_OFF_TRIANGLES = 500_000
 _RENDER_TIMEOUT_SECONDS = 300.0
 _EXPORT_TIMEOUT_SECONDS = 120.0
-_PREVIEW_VIEWS = ("isometric", "front", "right", "top")
 _DIRECTORY_FLAGS = (
     os.O_RDONLY
     | getattr(os, "O_DIRECTORY", 0)
@@ -412,7 +411,6 @@ async def render_project(
     session_id: UUID,
     arguments: OpenScadRenderArguments,
     root_files: RootFileService,
-    preview_images: bool = False,
 ) -> OpenScadRenderResult:
     project_path, entrypoint = _project_parts(arguments)
     source: dict[str, Any]
@@ -461,7 +459,6 @@ async def render_project(
                 "entrypoint": entrypoint,
                 "source": source,
                 "output": arguments.output,
-                "previewImages": preview_images,
             },
             OpenScadRenderResult,
             timeout=_RENDER_TIMEOUT_SECONDS,
@@ -479,17 +476,8 @@ async def render_project(
         content_type="model/vnd.off" if arguments.output == "preview" else "model/stl",
         suffix=".off" if arguments.output == "preview" else ".stl",
     )
-    expected_views = _PREVIEW_VIEWS if preview_images and arguments.output == "preview" else ()
-    if tuple(preview.view for preview in result.previews) != expected_views:
+    if result.previews:
         raise ExecutionClientError("executionAgent.protocolError")
-    for preview in result.previews:
-        _validate_descriptor(
-            preview.artifact,
-            agent_id=client.agent_id,
-            session_id=session_id,
-            content_type="image/png",
-            suffix=".png",
-        )
     return result
 
 
@@ -628,17 +616,10 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
             session_id=context.session.id,
             arguments=arguments,
             root_files=context.root_files,
-            preview_images=arguments.output == "preview",
         )
-        if rendered.artifact.size + sum(
-            preview.artifact.size for preview in rendered.previews
-        ) > _MAX_RENDER_ATTACHMENTS_BYTES:
+        if rendered.artifact.size > _MAX_RENDER_ATTACHMENTS_BYTES:
             return ToolResult.error("integration.attachmentTooLarge")
         data = await export_artifact(context.execution_client, rendered.artifact)
-        preview_data = [
-            await export_artifact(context.execution_client, preview.artifact)
-            for preview in rendered.previews
-        ]
         metadata = await asyncio.to_thread(
             validate_off if arguments.output == "preview" else validate_binary_stl,
             data,
@@ -653,7 +634,6 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
     payload = {
         "output": arguments.output,
         "file": rendered.artifact.filename,
-        "previewFiles": [preview.artifact.filename for preview in rendered.previews],
         "diagnostics": rendered.diagnostics,
         "diagnosticsTruncated": rendered.diagnostics_truncated,
         "geometryMetadata": metadata,
@@ -668,15 +648,6 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
                 rendered.artifact.filename,
                 kind="file",
             ),
-            *(
-                ToolAttachment(
-                    image,
-                    preview.artifact.content_type,
-                    preview.artifact.filename,
-                    kind="image",
-                )
-                for preview, image in zip(rendered.previews, preview_data, strict=True)
-            ),
         ),
     )
 
@@ -688,7 +659,7 @@ OPENSCAD_TOOL = ToolContribution(
     name="render_openscad",
     description=(
         "Render one .scad entrypoint from an explicit session or workspace project. "
-        "Returns an interactive OFF preview and four visual inspection views by default. "
+        "Returns an interactive OFF preview by default. "
         "Set output to stl only when the user explicitly requests an STL file."
     ),
     arguments_model=OpenScadRenderArguments,
@@ -739,8 +710,8 @@ def _contributions(_instance: IntegrationInstance) -> IntegrationContributions:
             "OpenSCAD validation:\n"
             "- If required dimensions are missing, ask one grouped question; otherwise state reasonable "
             "assumptions. Read files before modifying them and do not overwrite unrelated content.\n"
-            "- Render output=preview after every material change. Inspect the isometric, front, "
-            "right, and top views plus controlled diagnostics, triangle count, bounds, and dimensions. "
+            "- Render output=preview after every material change. Inspect controlled diagnostics, "
+            "triangle count, bounds, and dimensions. "
             "Correct problems and rerender. Use output=stl "
             "only when the user explicitly requested an STL file. Never claim success before a "
             "successful preview. In the final response, name the source file and every generated file.",
