@@ -1,4 +1,5 @@
-import { toolIdentity } from 'src/utils/tool-display'
+import { reasoningStatusLabel } from 'src/utils/reasoning-display'
+import { toolIdentity, toolSummary } from 'src/utils/tool-display'
 
 const LABELS = {
   submitting: 'Anfrage wird übergeben',
@@ -54,54 +55,47 @@ export function agentActivityDisplayKey(activity) {
 
 export function agentRunPresentation({
   running = false,
+  stopping = false,
   activity = null,
   streamReasoning = null,
   streamContent = '',
   transcript = null
 } = {}) {
-  if (!running) return { showActivity: false, announcement: '' }
+  if (!running) return { showActivity: false, label: '', summary: '', announcement: '' }
 
   const toolItems = (transcript?.messages || []).flatMap((message) => (
     message.workHistory?.entries?.filter((entry) => entry.type === 'tool') || message.toolCalls || []
   ))
-  const currentWorkHistory = (transcript?.messages || [])
-    .some((message) => message.currentTurn && message.workHistory)
   const currentToolItems = toolItems.filter((item) => item.current)
+  const activeTool = toolItems.find((item) => item.active)
+    || currentToolItems.find((item) => item.tool?.id === activity?.toolCallId)
   const approval = toolItems.find((item) => item.approval)?.approval
     || transcript?.unmatchedApprovals?.[0]
-  if (approval) {
-    return {
-      showActivity: false,
-      announcement: approval.title
-        ? `Freigabe erforderlich: ${approval.title}`
-        : 'Freigabe erforderlich'
-    }
-  }
   const question = toolItems.find((item) => item.question)?.question
     || transcript?.unmatchedQuestions?.[0]
-  if (question) {
-    return { showActivity: false, announcement: 'Antwort erforderlich' }
+  const label = stopping
+    ? 'Anfrage wird abgebrochen'
+    : approval
+      ? 'Wartet auf Freigabe'
+      : question ? 'Wartet auf deine Antwort' : agentActivityLabel(activity)
+  const summary = approval?.title
+    || question?.questions?.[0]?.question
+    || (activeTool ? toolSummary(activeTool.tool) : '')
+    || reasoningStatusLabel(streamReasoning)
+    || ''
+  let announcement = label
+  if (approval) {
+    announcement = approval.title
+      ? `Freigabe erforderlich: ${approval.title}`
+      : 'Freigabe erforderlich'
+  } else if (question) {
+    announcement = 'Antwort erforderlich'
+  } else if (streamContent) {
+    announcement = 'Antwort wird erstellt'
+  } else if (streamReasoning) {
+    announcement = 'Überlegung'
   }
-
-  if (toolItems.some((item) => item.active)) {
-    return { showActivity: false, announcement: agentActivityLabel(activity) }
-  }
-  if (currentToolItems.length && ['processing_tool', 'preparing_tools', 'waiting_approval', 'waiting_input'].includes(activity?.phase)) {
-    return { showActivity: false, announcement: agentActivityLabel(activity) }
-  }
-  if (streamContent) {
-    return { showActivity: false, announcement: 'Antwort wird erstellt' }
-  }
-  if (streamReasoning) {
-    return { showActivity: false, announcement: 'Überlegung' }
-  }
-  if (currentWorkHistory) {
-    return { showActivity: false, announcement: agentActivityLabel(activity) }
-  }
-  if (activity?.phase === 'finalizing') {
-    return { showActivity: false, announcement: 'Antwort wird abgeschlossen' }
-  }
-  return { showActivity: true, announcement: agentActivityLabel(activity) }
+  return { showActivity: true, label, summary, announcement }
 }
 
 export function formatActivityDuration(startedAt, now = Date.now()) {

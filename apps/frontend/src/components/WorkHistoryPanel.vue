@@ -1,68 +1,65 @@
 <template>
   <div class="work-history">
-    <q-item dense class="work-history__header">
-      <q-item-section class="work-history__identity" :aria-label="headerAriaLabel">
-        <div class="work-history__title text-weight-medium">
-          <span v-if="activityDisplay" class="work-history__current">
-            <span class="work-history__status-dot" aria-hidden="true" />
-            <span class="work-history__current-label">{{ activityDisplay.label }}</span>
-          </span>
-          <span v-else>Aktivitäten</span>
-          <span v-if="toolUsage.length" class="work-history__tool-icons" aria-hidden="true">
-            <span
-              v-for="tool in toolUsage"
-              :key="tool.name"
-              class="work-history__tool-usage"
-            >
+    <q-expansion-item
+      v-model="historyExpanded"
+      dense
+      class="work-history__panel"
+      header-class="work-history__header"
+      expand-icon-class="work-history__toggle"
+      :duration="expansionDuration"
+      toggle-aria-label="Verlauf ein- oder ausblenden"
+    >
+      <template #header>
+        <q-item-section class="work-history__identity" :aria-label="headerAriaLabel">
+          <div class="work-history__title text-weight-medium">
+            <span>Verlauf</span>
+            <span v-if="toolUsage.length" class="work-history__tool-icons" aria-hidden="true">
               <span
-                class="work-history__tool-icon flex flex-center"
-                :class="{ 'work-history__tool-icon--active': tool.active }"
+                v-for="tool in toolUsage"
+                :key="tool.name"
+                class="work-history__tool-usage"
               >
-                <q-icon :name="tool.icon" size="15px" />
+                <span
+                  class="work-history__tool-icon flex flex-center"
+                  :class="{ 'work-history__tool-icon--active': tool.active }"
+                >
+                  <q-icon :name="tool.icon" size="15px" />
+                </span>
+                <span class="work-history__tool-count">×{{ tool.count }}</span>
+                <q-tooltip>
+                  {{ tool.label }} · {{ tool.count }} {{ tool.count === 1 ? 'Aufruf' : 'Aufrufe' }}{{ tool.active ? ' · aktiv' : '' }}
+                </q-tooltip>
               </span>
-              <span class="work-history__tool-count">×{{ tool.count }}</span>
-              <q-tooltip>
-                {{ tool.label }} · {{ tool.count }} {{ tool.count === 1 ? 'Aufruf' : 'Aufrufe' }}{{ tool.active ? ' · aktiv' : '' }}
-              </q-tooltip>
             </span>
-          </span>
-        </div>
-        <q-item-label
-          v-if="activityDisplay?.summary"
-          caption
-          lines="1"
-          class="work-history__summary"
-        >
-          <span class="work-history__resource">{{ activityDisplay.summary }}</span>
-        </q-item-label>
-      </q-item-section>
-      <q-item-section side class="work-history__meta-section">
-        <div class="work-history__meta row items-center no-wrap q-gutter-xs">
-          <span v-if="totalDuration">
-            {{ totalDuration }}
-            <q-tooltip>Gesamtdauer bis zur Antwort</q-tooltip>
-          </span>
-          <span
-            v-if="errorItems.length"
-            class="work-history__message-count work-history__message-count--error row items-center no-wrap"
-            role="img"
-            :aria-label="errorLabel"
-          >
-            <q-icon name="error" size="17px" />
-            <span>{{ errorItems.length }}</span>
-          </span>
-          <span
-            v-if="warningItems.length"
-            class="work-history__message-count work-history__message-count--warning row items-center no-wrap"
-            role="img"
-            :aria-label="warningLabel"
-          >
-            <q-icon name="warning" size="17px" />
-            <span>{{ warningItems.length }}</span>
-          </span>
-        </div>
-      </q-item-section>
-    </q-item>
+          </div>
+        </q-item-section>
+        <q-item-section side class="work-history__meta-section">
+          <div class="work-history__meta row items-center no-wrap q-gutter-xs">
+            <span v-if="totalDuration">
+              {{ totalDuration }}
+              <q-tooltip>Gesamtdauer bis zur Antwort</q-tooltip>
+            </span>
+            <span
+              v-if="errorItems.length"
+              class="work-history__message-count work-history__message-count--error row items-center no-wrap"
+              role="img"
+              :aria-label="errorLabel"
+            >
+              <q-icon name="error" size="17px" />
+              <span>{{ errorItems.length }}</span>
+            </span>
+            <span
+              v-if="warningItems.length"
+              class="work-history__message-count work-history__message-count--warning row items-center no-wrap"
+              role="img"
+              :aria-label="warningLabel"
+            >
+              <q-icon name="warning" size="17px" />
+              <span>{{ warningItems.length }}</span>
+            </span>
+          </div>
+        </q-item-section>
+      </template>
 
     <div
       class="work-history__timeline"
@@ -178,6 +175,7 @@
         </template>
       </div>
     </div>
+    </q-expansion-item>
 
     <ApprovalCard
       v-for="item in approvalItems"
@@ -240,26 +238,25 @@ import {
   toolFileActions,
   toolFileAttachment
 } from 'src/utils/attachments'
-import { agentActivityLabel, formatActivityDuration } from 'src/utils/agent-activity'
+import { formatActivityDuration } from 'src/utils/agent-activity'
 import { groupWorkHistoryEntries } from 'src/utils/chat-transcript'
 import {
   reasoningBlocks,
-  reasoningHistoryPresentation,
-  reasoningStatusLabel
+  reasoningHistoryPresentation
 } from 'src/utils/reasoning-display'
-import { toolIdentity, toolStatus, toolSummary, toolUsageSummary } from 'src/utils/tool-display'
+import { toolStatus, toolUsageSummary } from 'src/utils/tool-display'
 
 defineOptions({ name: 'WorkHistoryPanel' })
 
 const props = defineProps({
   history: { type: Object, required: true },
-  activity: { type: Object, default: null },
   reasoning: { type: Object, default: null },
   processOutputs: { type: Object, default: () => ({}) },
   running: Boolean
 })
 const emit = defineEmits(['open-file', 'open-approval-draft'])
 const now = ref(Date.now())
+const historyExpanded = ref(false)
 let timer = null
 const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
 const entries = computed(() => groupWorkHistoryEntries([
@@ -278,22 +275,12 @@ const items = computed(() => entries.value.flatMap((entry) => (
   entry.type === 'context' ? entry.items : entry.type === 'tool' ? [entry] : []
 )))
 const states = computed(() => items.value.map((item) => ({ item, status: toolStatus(item) })))
-const activeItem = computed(() => items.value.find((item) => item.active) || null)
-const activeToolName = computed(() => activeItem.value?.tool.name || (
-  props.activity?.phase === 'processing_tool' ? props.activity.tool : null
-))
-const toolUsage = computed(() => toolUsageSummary(items.value).map((tool) => ({
-  ...tool,
-  active: tool.active || tool.name === activeToolName.value
-})))
+const toolUsage = computed(() => toolUsageSummary(items.value))
 const approvalItems = computed(() => items.value.filter((item) => item.approval))
 const errorItems = computed(() => states.value.filter(({ status }) => (
   ['failed', 'denied'].includes(status.name)
 )))
 const warningItems = computed(() => states.value.filter(({ status }) => status.name === 'interrupted'))
-const reasoningStatus = computed(() => props.activity?.phase === 'waiting_model'
-  ? reasoningStatusLabel(props.reasoning)
-  : null)
 const totalDuration = computed(() => {
   if (!props.history?.startedAt || (!props.running && !props.history?.completedAt)) return null
   const startedAt = new Date(props.history?.startedAt).getTime()
@@ -302,23 +289,9 @@ const totalDuration = computed(() => {
     ? formatActivityDuration(startedAt, completedAt)
     : null
 })
-const activityDisplay = computed(() => {
-  if (!props.running) return null
-  if (activeItem.value) {
-    const identity = toolIdentity(activeItem.value.tool.name)
-    return { label: identity.label, summary: toolSummary(activeItem.value.tool) }
-  }
-  const phase = props.activity?.phase
-  if (phase === 'processing_tool' && props.activity?.tool) {
-    const identity = toolIdentity(props.activity.tool)
-    return { label: identity.label, summary: '' }
-  }
-  if (reasoningStatus.value) return { label: reasoningStatus.value, summary: '' }
-  return { label: agentActivityLabel(props.activity), summary: '' }
-})
 const headerAriaLabel = computed(() => {
   const parts = [
-    activityDisplay.value ? `Aktuell: ${activityDisplay.value.label}` : 'Verlauf der Antworterstellung',
+    'Verlauf der Antworterstellung',
     ...toolUsage.value.map((tool) => `${tool.label}: ${tool.count} ${tool.count === 1 ? 'Aufruf' : 'Aufrufe'}`),
     ...(totalDuration.value ? [`Gesamtdauer: ${totalDuration.value}`] : []),
     ...(errorItems.value.length ? [errorLabel.value] : []),

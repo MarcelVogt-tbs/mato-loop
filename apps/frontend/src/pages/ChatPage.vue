@@ -51,6 +51,8 @@
           <AgentActivity
             v-if="runPresentation.showActivity"
             :activity="chat.activity"
+            :label="runPresentation.label"
+            :summary="runPresentation.summary"
             class="chat-welcome__activity text-left q-mx-auto"
           />
         </div>
@@ -93,7 +95,6 @@
                 v-if="message.workHistory"
                 :history="message.workHistory"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
-                :activity="chat.activity"
                 :process-outputs="message.currentTurn ? chat.processOutputs : emptyProcessOutputs"
                 :running="chat.running && message.currentTurn"
                 :class="{
@@ -217,7 +218,6 @@
               v-if="chat.streamReasoning && !hasCurrentWorkHistory"
               :history="emptyWorkHistory"
               :reasoning="chat.streamReasoning"
-              :activity="chat.activity"
               :process-outputs="chat.processOutputs"
               :running="chat.running"
               :class="{ 'q-mb-sm': chat.streamContent }"
@@ -243,7 +243,12 @@
               class="q-mt-md"
               @open-approval-draft="openApprovalDraft"
             />
-            <AgentActivity v-if="runPresentation.showActivity" :activity="chat.activity" />
+            <AgentActivity
+              v-if="runPresentation.showActivity"
+              :activity="chat.activity"
+              :label="runPresentation.label"
+              :summary="runPresentation.summary"
+            />
           </template>
         </q-virtual-scroll>
       </div>
@@ -434,6 +439,7 @@ const hasCurrentWorkHistory = computed(() => (
 ))
 const runPresentation = computed(() => agentRunPresentation({
   running: chat.running,
+  stopping: chat.stopping,
   activity: chat.activity,
   streamReasoning: chat.streamReasoning,
   streamContent: chat.streamContent,

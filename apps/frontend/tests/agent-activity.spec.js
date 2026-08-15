@@ -47,72 +47,102 @@ describe('agent activity', () => {
       .not.toBe(agentActivityDisplayKey({ phase: 'processing_tool', tool: 'read_file', index: 1, total: 2 }))
   })
 
-  it('shows the global activity only when no concrete run artifact owns the status', () => {
+  it('keeps the current activity visible with the most useful summary', () => {
     const activity = { phase: 'waiting_model', modelRequest: 1 }
     expect(agentRunPresentation({ running: true, activity })).toEqual({
       showActivity: true,
+      label: 'Modell analysiert die Anfrage',
+      summary: '',
       announcement: 'Modell analysiert die Anfrage'
     })
-    expect(agentRunPresentation({ running: true, activity, streamReasoning: { text: 'Plan' } }))
-      .toEqual({ showActivity: false, announcement: 'Überlegung' })
-    expect(agentRunPresentation({ running: true, activity, streamContent: 'Antwort' }))
-      .toEqual({ showActivity: false, announcement: 'Antwort wird erstellt' })
     expect(agentRunPresentation({
       running: true,
-      activity: { phase: 'waiting_model', modelRequest: 2 },
+      activity,
+      streamReasoning: { kind: 'summary', text: '**Ergebnisse prüfen**\nDetails' }
+    })).toEqual({
+      showActivity: true,
+      label: 'Modell analysiert die Anfrage',
+      summary: 'Ergebnisse prüfen',
+      announcement: 'Überlegung'
+    })
+    expect(agentRunPresentation({ running: true, activity, streamContent: 'Antwort' }))
+      .toEqual({
+        showActivity: true,
+        label: 'Modell analysiert die Anfrage',
+        summary: '',
+        announcement: 'Antwort wird erstellt'
+      })
+    expect(agentRunPresentation({
+      running: true,
+      activity: {
+        phase: 'processing_tool', tool: 'read_file', toolCallId: 'call-1', index: 1, total: 3
+      },
       transcript: {
-        messages: [{ workHistory: { entries: [{ type: 'tool', current: true, result: {} }] } }],
+        messages: [{
+          workHistory: {
+            entries: [{
+              type: 'tool', current: true, active: true,
+              tool: { id: 'call-1', name: 'read_file', arguments: { path: 'plan.md' } }
+            }]
+          }
+        }],
         unmatchedApprovals: []
       }
     })).toEqual({
       showActivity: true,
-      announcement: 'Modell wertet Tool-Ergebnisse aus'
+      label: 'Tool wird ausgeführt: Datei lesen (2 von 3)',
+      summary: 'plan.md',
+      announcement: 'Tool wird ausgeführt: Datei lesen (2 von 3)'
     })
-    expect(agentRunPresentation({
-      running: true,
-      activity: { phase: 'waiting_model', modelRequest: 2 },
-      streamReasoning: { text: 'Ergebnisse prüfen' },
-      transcript: {
-        messages: [{ workHistory: { entries: [{ type: 'tool', current: true, result: {} }] } }],
-        unmatchedApprovals: []
-      }
-    })).toEqual({ showActivity: false, announcement: 'Überlegung' })
-    expect(agentRunPresentation({
-      running: true,
-      activity: { phase: 'processing_tool', tool: 'read_file' },
-      transcript: {
-        messages: [{ workHistory: { entries: [{ type: 'tool', active: true }] } }],
-        unmatchedApprovals: []
-      }
-    })).toEqual({ showActivity: false, announcement: 'Tool wird ausgeführt: Datei lesen' })
-    expect(agentRunPresentation({
-      running: true,
-      activity: { phase: 'preparing_tools' },
-      transcript: {
-        messages: [{ workHistory: { entries: [{ type: 'tool', current: true, result: null }] } }],
-        unmatchedApprovals: []
-      }
-    })).toEqual({ showActivity: false, announcement: 'Tool-Aufrufe werden vorbereitet' })
     expect(agentRunPresentation({
       running: true,
       activity,
       transcript: {
-        messages: [{ workHistory: { entries: [{ type: 'tool', approval: { title: 'Datei schreiben?' } }] } }],
+        messages: [{ workHistory: { entries: [{
+          type: 'tool', approval: { title: 'Datei schreiben?' }
+        }] } }],
         unmatchedApprovals: []
       }
-    })).toEqual({ showActivity: false, announcement: 'Freigabe erforderlich: Datei schreiben?' })
+    })).toEqual({
+      showActivity: true,
+      label: 'Wartet auf Freigabe',
+      summary: 'Datei schreiben?',
+      announcement: 'Freigabe erforderlich: Datei schreiben?'
+    })
     expect(agentRunPresentation({
       running: true,
-      activity: { phase: 'waiting_model', modelRequest: 2 },
+      activity,
       transcript: {
-        messages: [{ currentTurn: true, workHistory: { entries: [] } }],
-        unmatchedApprovals: []
+        messages: [],
+        unmatchedApprovals: [],
+        unmatchedQuestions: [{ questions: [{ question: 'Welches Format?' }] }]
       }
-    })).toEqual({ showActivity: false, announcement: 'Modell wertet Tool-Ergebnisse aus' })
-    expect(agentRunPresentation({ running: true, activity: { phase: 'finalizing' } }))
-      .toEqual({ showActivity: false, announcement: 'Antwort wird abgeschlossen' })
+    })).toEqual({
+      showActivity: true,
+      label: 'Wartet auf deine Antwort',
+      summary: 'Welches Format?',
+      announcement: 'Antwort erforderlich'
+    })
+    expect(agentRunPresentation({
+      running: true,
+      stopping: true,
+      activity
+    })).toEqual({
+      showActivity: true,
+      label: 'Anfrage wird abgebrochen',
+      summary: '',
+      announcement: 'Anfrage wird abgebrochen'
+    })
+    expect(agentRunPresentation({ running: true, activity: { phase: 'finalizing' } })).toEqual({
+      showActivity: true,
+      label: 'Antwort wird abgeschlossen',
+      summary: '',
+      announcement: 'Antwort wird abgeschlossen'
+    })
     expect(agentRunPresentation({ running: false, activity })).toEqual({
       showActivity: false,
+      label: '',
+      summary: '',
       announcement: ''
     })
   })

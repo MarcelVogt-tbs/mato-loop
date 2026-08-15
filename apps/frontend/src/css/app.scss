@@ -1416,21 +1416,33 @@ body.body--dark .app-floating-control--flat {
 
 .agent-activity__visible {
   display: flex;
+  width: 100%;
   min-height: 20px;
   align-items: center;
   gap: 10px;
 }
 
 .agent-activity__label {
-  min-width: 0;
+  flex: 0 0 auto;
   font-size: 0.875rem;
   font-weight: 500;
   line-height: 20px;
   overflow-wrap: anywhere;
 }
 
+.agent-activity__summary {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--app-muted);
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-activity__duration {
   flex: 0 0 auto;
+  margin-left: auto;
   color: var(--app-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.75rem;
@@ -1461,10 +1473,19 @@ body.body--dark .app-floating-control--flat {
   min-width: 0;
 }
 
+.work-history__panel {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
 .work-history__header {
   min-height: 44px;
   padding: 3px 2px;
   color: var(--app-muted);
+}
+
+.work-history__header:hover {
+  background: var(--app-hover);
 }
 
 .work-history__identity {
@@ -1478,19 +1499,6 @@ body.body--dark .app-floating-control--flat {
   align-items: center;
   flex-wrap: wrap;
   gap: 4px 8px;
-}
-
-.work-history__current {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-}
-
-.work-history__current-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .work-history__tool-icons {
@@ -1525,30 +1533,6 @@ body.body--dark .app-floating-control--flat {
   font-size: 0.72rem;
   font-weight: 400;
   white-space: nowrap;
-}
-
-.work-history__summary {
-  min-width: 0;
-  color: var(--app-muted);
-  font-size: 0.72rem;
-}
-
-.work-history__status-dot {
-  width: 5px;
-  height: 5px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--q-primary);
-  animation: work-history-status 2.8s ease-in-out infinite;
-}
-
-@keyframes work-history-status {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
-
-.work-history__resource {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .work-history__meta-section {
@@ -1806,10 +1790,6 @@ body.body--dark .tool-call__status--denied { color: #ff9b91; }
     transition: none;
   }
 
-  .work-history__status-dot {
-    opacity: 0.75;
-    animation: none;
-  }
 }
 
 body.body--dark .chat-composer__card,

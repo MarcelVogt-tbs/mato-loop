@@ -2,6 +2,7 @@
   <div class="agent-activity">
     <div class="agent-activity__visible">
       <span class="agent-activity__label activity-shimmer">{{ label }}</span>
+      <span v-if="summary" class="agent-activity__summary">{{ summary }}</span>
       <span class="agent-activity__duration">{{ duration }}</span>
     </div>
   </div>
@@ -14,11 +15,13 @@ import { agentActivityLabel, formatActivityDuration } from 'src/utils/agent-acti
 defineOptions({ name: 'AgentActivity' })
 
 const props = defineProps({
-  activity: { type: Object, required: true }
+  activity: { type: Object, required: true },
+  label: { type: String, default: '' },
+  summary: { type: String, default: '' }
 })
 
 const now = ref(Date.now())
-const label = computed(() => agentActivityLabel(props.activity))
+const label = computed(() => props.label || agentActivityLabel(props.activity))
 const duration = computed(() => formatActivityDuration(props.activity.startedAt, now.value))
 let timer = null
 
