@@ -989,10 +989,20 @@ def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
     assert "managed read-only assets" in prompt
     assert "only files/... is writable" in prompt
     assert "exact new destination" in prompt
-    assert "file approval cannot create one" in prompt
+    assert "No computer directory selected. Use root=session." in prompt
     assert "A path or read output is not a download" in prompt
     assert "provide_file only for another existing file" in prompt
     assert "use the host download card" in prompt
+
+
+def test_missing_computer_directory_uses_structured_question_when_available() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"read", "question", "change_directory"}),
+    )
+
+    assert "question for its absolute path" in prompt
+    assert "approval is separate" in prompt
 
 
 def test_read_only_prompt_keeps_media_tools_available() -> None:

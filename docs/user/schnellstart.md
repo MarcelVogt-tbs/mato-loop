@@ -33,10 +33,8 @@ Vor dem Senden können Sie unter anderem auswählen:
 - Memory-Modus
 - Websuchmodus
 - Computer
-- Arbeitsbereich
-- Arbeitsordner
 
-Ohne gewählten und verbundenen Computer bleibt der Chat nutzbar; lokale Arbeitsbereiche und lokale Integrationen fehlen.
+Arbeitsbereich und aktueller Ordner werden bei Bedarf im Datei-Explorer gewählt. Ohne gewählten und verbundenen Computer bleibt der Chat nutzbar; lokale Arbeitsbereiche und lokale Integrationen fehlen.
 
 ## 6. Freigaben prüfen
 

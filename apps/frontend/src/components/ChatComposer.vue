@@ -227,53 +227,6 @@
                         </template>
                       </q-select>
 
-                      <q-input
-                        :model-value="session?.currentDirectory"
-                        readonly
-                        outlined
-                        :dense="$q.screen.gt.xs"
-                        label="Aktueller Ordner"
-                        :hint="session?.currentDirectory ? 'Vom Computer für diese Session gemeldet.' : 'Kein aktueller Ordner ausgewählt.'"
-                        persistent-hint
-                      >
-                        <template #prepend><q-icon name="folder_open" /></template>
-                      </q-input>
-
-                      <q-select
-                        v-if="legacyExecutionAgent"
-                        :model-value="session?.preferredRootId"
-                        :options="rootOptions"
-                        emit-value
-                        map-options
-                        outlined
-                        :dense="$q.screen.gt.xs"
-                        options-dense
-                        label="Arbeitsbereich"
-                        hint="Der Computer gibt verfügbare Arbeitsbereiche vor."
-                        persistent-hint
-                        popup-content-class="app-menu-popup"
-                        :disable="interactionDisabled || !selectedExecutionAgent"
-                        @update:model-value="selectRoot"
-                      >
-                        <template #prepend><q-icon name="folder" /></template>
-                      </q-select>
-
-                      <q-input
-                        v-if="legacyExecutionAgent"
-                        :model-value="session?.workingDirectory"
-                        outlined
-                        :dense="$q.screen.gt.xs"
-                        clearable
-                        label="Arbeitsordner"
-                        hint="Relativer Ordner innerhalb des Arbeitsbereichs. Leer bedeutet dessen Wurzel."
-                        persistent-hint
-                        :disable="interactionDisabled || !session?.preferredRootId"
-                        @change="updateWorkingDirectory"
-                        @clear="update({ working_directory: null })"
-                      >
-                        <template #prepend><q-icon name="folder_open" /></template>
-                      </q-input>
-
                       <q-banner v-if="executionAgentMessage" dense rounded class="app-surface-tonal">
                         <template #avatar>
                           <q-icon :name="selectedExecutionAgent?.connected === false ? 'cloud_off' : 'info_outline'" color="warning" />
@@ -465,9 +418,6 @@ const executionAgents = useExecutionAgentStore()
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(props.session?.preferredExecutionAgentId)
 ))
-const legacyExecutionAgent = computed(() => (
-  selectedExecutionAgent.value && selectedExecutionAgent.value.protocolVersion < 2
-))
 const executionAgentOptions = computed(() => {
   const options = [
     { label: 'Kein Computer', value: null, connected: null, caption: 'Nur Backend-Funktionen verwenden' },
@@ -491,16 +441,6 @@ const executionAgentOptions = computed(() => {
     })
   }
   return options
-})
-const rootOptions = computed(() => {
-  const roots = (selectedExecutionAgent.value?.roots || []).map((root) => ({
-    label: root.label,
-    value: root.id
-  }))
-  if (props.session?.preferredRootId && !roots.some((root) => root.value === props.session.preferredRootId)) {
-    roots.push({ label: 'Nicht verfügbarer Arbeitsbereich', value: props.session.preferredRootId })
-  }
-  return roots
 })
 const liveWorkspaceContext = computed(() => executionAgents.workspaceContextFor(props.session))
 const mutatingWorkspaceOperations = new Set([
@@ -527,10 +467,7 @@ const executionAgentMessage = computed(() => {
   if (selectedExecutionAgent.value.pairingState === 'pending') return 'Die Kopplung des ausgewählten Computers steht noch aus.'
   if (selectedExecutionAgent.value.pairingState === 'unpaired') return 'Der ausgewählte Computer ist nicht gekoppelt.'
   if (!selectedExecutionAgent.value.connected) return 'Der ausgewählte Computer ist offline. Es erfolgt kein automatischer Wechsel.'
-  if (selectedExecutionAgent.value.protocolVersion >= 2 && !props.session?.currentDirectory) {
-    return 'Kein aktueller Ordner verfügbar. Bis zu einem Wechsel mit „Verzeichnis wechseln“ stehen nur Systeminformationen zur Verfügung.'
-  }
-  if (!props.session?.preferredRootId) return 'Wähle einen Arbeitsbereich für lokale Dateioperationen aus.'
+  if (!props.session?.preferredRootId) return ''
   if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
   return ''
 })
@@ -672,14 +609,6 @@ async function selectExecutionAgent(value) {
     working_directory: agent?.homeRelativeDirectory || null,
     current_directory: agent?.homeDirectory || null
   })
-}
-
-function selectRoot(value) {
-  update({ preferred_root_id: value })
-}
-
-function updateWorkingDirectory(value) {
-  update({ working_directory: String(value || '').trim() || null })
 }
 
 function submit() {

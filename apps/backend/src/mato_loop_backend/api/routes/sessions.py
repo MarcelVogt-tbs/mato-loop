@@ -447,6 +447,26 @@ async def _validate_execution_preferences(
         if root_id == home_root_id and normalized == home_relative
         else None
     )
+    snapshot = execution_agent_connections.snapshot(agent.id)
+    if current_directory is None and snapshot is not None and "workspace.resolve" in snapshot[0]:
+        try:
+            result = await ExecutionClient(
+                agent.id, root_id, revision, ".", snapshot[0]
+            ).request("workspace.resolve", {"path": normalized}, DirectoryResult)
+        except ExecutionClientError as exc:
+            raise ApiError(
+                400, "session.invalidWorkingDirectory", field="workingDirectory"
+            ) from exc
+        assert isinstance(result, DirectoryResult)
+        if (
+            result.root_id != root_id
+            or result.root_revision != revision
+            or result.relative_path != normalized
+        ):
+            raise ApiError(
+                502, "executionAgent.protocolError", field="workingDirectory"
+            )
+        current_directory = result.path
     return normalized, current_directory, root_id, revision
 
 

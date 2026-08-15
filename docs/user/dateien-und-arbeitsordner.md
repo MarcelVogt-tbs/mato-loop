@@ -10,7 +10,7 @@
 
 Neue Sessions besitzen zunächst keinen Computer und keinen Arbeitsbereich. Ohne einen gewählten und verbundenen Computer funktioniert der Chat weiter, lokale Arbeitsbereiche und lokale Integrationen stehen jedoch nicht zur Verfügung. Der getrennte Session-Speicher existiert immer im MatoLoop-Backend.
 
-MatoLoop unterstützt mehrere Computer. Unter **Sessioneinstellungen** wählen Sie einen Computer, einen von ihm gemeldeten Arbeitsbereich und optional einen relativen Arbeitsordner. Die Auswahl ist die Vorgabe für den nächsten Lauf; ein bereits laufender Lauf behält unveränderlich seinen bisherigen Computer und Pfad. Wird der Computer getrennt, erfolgt kein automatischer Wechsel und keine automatische Wiederholung.
+MatoLoop unterstützt mehrere Computer. Unter **Sessioneinstellungen** wählen Sie den Computer. Ein dort konfiguriertes Home-Verzeichnis wird als aktueller Ordner übernommen; ohne Home bleibt der Ordner leer. Arbeitsbereich und aktueller Ordner werden im Datei-Explorer gewählt. Die Auswahl ist die Vorgabe für den nächsten Lauf; ein bereits laufender Lauf behält unveränderlich seinen bisherigen Computer und Pfad. Wird der Computer getrennt, erfolgt kein automatischer Wechsel und keine automatische Wiederholung.
 
 ## Session-Speicher
 
@@ -29,6 +29,8 @@ Nur `files` ist direkt veränderbar. Die übrigen Bereiche werden von MatoLoop v
 Im Explorer können Sie:
 
 - Ordner öffnen, filtern und weitere Einträge nachladen
+- einen vom Computer gemeldeten Arbeitsbereich wählen
+- einen markierten Ordner als aktuellen Ordner der Session verwenden
 - den gewählten Arbeitsbereich durchsuchen
 - Dateien hochladen und herunterladen
 - leere Text- oder Markdown-Dateien anlegen
@@ -39,6 +41,8 @@ Im Explorer können Sie:
 Von Tools zurückgegebene Dateien erscheinen als schreibgeschützte Session-Artefakte unter `generated`, heruntergeladene Originale unter `downloads` und erforderliche Medienableitungen unter `derived`. Reine Status-, JSON- und in Chatantworten eingebettete Ergebnisse erzeugen keine zusätzlichen Dateien.
 
 `root=session` bezeichnet immer den Backend-Speicher der Session, `root=workspace` den Arbeitsbereich des für den Lauf gewählten Computers. Kopien zwischen beiden Bereichen werden vom Backend vermittelt und anhand von Größe und SHA-256 geprüft. Der Computer darf verwendete Session-Dateien in einem begrenzten, unvollständigen Cache halten. Dieser Cache ist keine maßgebliche Kopie und kann jederzeit geleert werden.
+
+Benötigt eine angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel bleibt eine getrennte, widerrufbare Session-Freigabe.
 
 Bis zu vier Dateien mit jeweils höchstens 64 MiB können gemeinsam hochgeladen werden. Neue Dateien überschreiben keine vorhandenen Pfade. Der gesamte Session-Dateibaum und alle Nachrichtenanhänge einer Session sind jeweils auf 500 MiB begrenzt.
 

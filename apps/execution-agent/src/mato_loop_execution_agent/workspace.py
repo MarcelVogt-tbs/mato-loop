@@ -307,6 +307,22 @@ class Workspace:
     def _combined(working_directory: str, path: str) -> tuple[str, ...]:
         return (*_parts(working_directory), *_parts(path))
 
+    def resolve_workspace_directory(
+        self, root_id: str, revision: str, working_directory: str, path: str
+    ) -> dict[str, str]:
+        parts = self._combined(working_directory, path)
+        root = self._root(root_id, revision)
+        with self._lock, self._root_fd(root_id, revision) as root_fd:
+            directory_fd = self._open_dir(root_fd, parts)
+            os.close(directory_fd)
+        relative = _path(parts)
+        return {
+            "path": os.fspath(root.config.path / relative),
+            "rootId": root_id,
+            "rootRevision": revision,
+            "relativePath": relative,
+        }
+
     @contextmanager
     def _parent(
         self, root_id: str, revision: str, working_directory: str, path: str

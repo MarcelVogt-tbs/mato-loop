@@ -42,6 +42,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "workspace.move",
         "workspace.read",
         "workspace.rename",
+        "workspace.resolve",
         "workspace.stat",
         "workspace.write",
     }

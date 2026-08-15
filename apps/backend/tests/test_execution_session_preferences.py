@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.runtime import AgentRuntime, _effective_execution_operations
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
     SessionUpdateRequest,
@@ -14,7 +14,11 @@ from mato_loop_backend.api.routes.sessions import (
     _validate_execution_preferences,
     update_session,
 )
-from mato_loop_backend.execution import execution_agent_connections
+from mato_loop_backend.execution import (
+    DirectoryResult,
+    ExecutionClient,
+    execution_agent_connections,
+)
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
 from mato_loop_backend.models import (
     AgentRun,
@@ -91,6 +95,56 @@ async def test_preferences_validate_owned_root_and_normalized_relative_workdir()
 
     assert exc_info.value.code == "session.invalidWorkingDirectory"
     assert exc_info.value.field == "workingDirectory"
+
+
+async def test_preferences_resolve_a_connected_workspace_directory(monkeypatch) -> None:
+    user_id = uuid4()
+    agent, root = _agent_and_root(user_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    request = AsyncMock(
+        return_value=DirectoryResult(
+            path="/srv/projects/mato-loop",
+            root_id=root.id,
+            root_revision=root.revision,
+            relative_path="projects/mato-loop",
+        )
+    )
+    monkeypatch.setattr(ExecutionClient, "request", request)
+    monkeypatch.setattr(
+        execution_agent_connections,
+        "snapshot",
+        lambda _agent_id: (frozenset({"workspace.resolve"}), (root,)),
+    )
+
+    assert await _validate_execution_preferences(
+        db, user_id, agent.id, root.id, "projects/mato-loop"
+    ) == ("projects/mato-loop", "/srv/projects/mato-loop", root.id, root.revision)
+    request.assert_awaited_once_with(
+        "workspace.resolve", {"path": "projects/mato-loop"}, DirectoryResult
+    )
+
+
+def test_effective_operations_follow_the_current_directory() -> None:
+    run = AgentRun(
+        execution_operations=[
+            "filesystem.resolve",
+            "integration.git.status",
+            "process.exec",
+            "workspace.read",
+            "workspace.resolve",
+        ]
+    )
+
+    assert _effective_execution_operations(run) == {"filesystem.resolve"}
+    run.execution_root_id = uuid4()
+    assert _effective_execution_operations(run) == {
+        "filesystem.resolve",
+        "workspace.read",
+        "workspace.resolve",
+    }
+    run.current_directory_snapshot = "/srv/project"
+    assert _effective_execution_operations(run) == set(run.execution_operations)
 
 
 async def test_executor_preferences_cannot_change_during_active_run() -> None:
@@ -179,11 +233,20 @@ async def test_start_persists_live_executor_snapshot(monkeypatch) -> None:
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(EpisodeIndexService, "enqueue", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_schedule_run", lambda _run: None)
+    resolve = AsyncMock(
+        return_value=DirectoryResult(
+            path="/srv/project/subdir",
+            root_id=root.id,
+            root_revision=root.revision,
+            relative_path="project/subdir",
+        )
+    )
+    monkeypatch.setattr(ExecutionClient, "request", resolve)
     monkeypatch.setattr(
         execution_agent_connections,
         "snapshot",
         lambda _agent_id: (
-            frozenset({"workspace.write", "workspace.read"}),
+            frozenset({"workspace.resolve", "workspace.write", "workspace.read"}),
             (SimpleNamespace(id=root.id, revision=root.revision),),
         ),
     )
@@ -197,10 +260,18 @@ async def test_start_persists_live_executor_snapshot(monkeypatch) -> None:
     assert run.execution_root_id == root.id
     assert run.execution_root_revision == root.revision
     assert run.working_directory_snapshot == "project/subdir"
-    assert run.execution_operations == ["workspace.read", "workspace.write"]
+    assert run.current_directory_snapshot == "/srv/project/subdir"
+    assert run.execution_operations == [
+        "workspace.read",
+        "workspace.resolve",
+        "workspace.write",
+    ]
+    resolve.assert_awaited_once_with(
+        "workspace.resolve", {"path": "project/subdir"}, DirectoryResult
+    )
 
 
-async def test_start_keeps_archive_render_operations_without_a_workspace(monkeypatch) -> None:
+async def test_start_preserves_live_operations_without_a_workspace(monkeypatch) -> None:
     user_id = uuid4()
     agent, _root = _agent_and_root(user_id)
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
@@ -250,6 +321,7 @@ async def test_start_keeps_archive_render_operations_without_a_workspace(monkeyp
         "filesystem.resolve",
         "integration.openscad.render",
         "system.info",
+        "workspace.read",
     ]
 
 

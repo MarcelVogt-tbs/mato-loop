@@ -83,6 +83,7 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "workspace.write",
         "workspace.mkdir",
         "workspace.rename",
+        "workspace.resolve",
         "workspace.delete",
         "workspace.copy",
         "workspace.move",

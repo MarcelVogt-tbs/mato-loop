@@ -16,14 +16,12 @@ Für jede Session können Sie festlegen:
 | Memory | Voll, nur lesen oder deaktiviert |
 | Websuche | Erzwingen, verfügbar oder deaktiviert |
 | Computer | Optional verbundener Computer für lokale Funktionen |
-| Arbeitsbereich | Vom Computer gemeldete Wurzel |
-| Arbeitsordner | Optionaler relativer Unterordner im Arbeitsbereich |
 
 Der Agent-Modus beschränkt den Agenten. Direkte Dateiaktionen, die Sie selbst im Explorer ausführen, richten sich nach den dort geltenden Grenzen.
 
 Im Modus **Lesen** akzeptiert die Shell nur einfache Aufrufe von `pwd`, `ls`, `cat`, `head`, `tail`, `wc`, `stat`, `readlink`, `realpath`, `cmp` und `sha256sum`. Verkettungen, Umleitungen, Skripte, rekursive Symlink-Verfolgung, indirekte Dateilisten, unbekannte Programme und nicht sicher auflösbare Pfade werden abgelehnt. Geprüfte Lesebefehle startet MatoLoop direkt als Systemprogramm statt über konfigurierbare Shell-Startdateien. Eine Freigabe kann diese Grenze nicht erweitern.
 
-Die Auswahl von Computer, Arbeitsbereich und Arbeitsordner ist eine veränderbare Session-Vorgabe. Beim Start eines Laufs speichert MatoLoop davon eine unveränderliche Momentaufnahme. Änderungen gelten erst für den nächsten Lauf. Ist kein Computer gewählt oder der gewählte Computer offline, bleiben Chat und Backend-Tools verfügbar; Workspace-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Computer und wiederholt keine fehlgeschlagene lokale Operation automatisch.
+Die Computerauswahl ist eine veränderbare Session-Vorgabe. Arbeitsbereich und aktueller Ordner werden im Datei-Explorer gewählt. Beim Start eines Laufs speichert MatoLoop davon eine unveränderliche Momentaufnahme. Änderungen gelten erst für den nächsten Lauf. Ist kein Computer gewählt oder der gewählte Computer offline, bleiben Chat und Backend-Tools verfügbar; Workspace-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Computer und wiederholt keine fehlgeschlagene lokale Operation automatisch.
 
 ## Laufende Antworten
 

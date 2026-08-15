@@ -610,14 +610,27 @@ def general_system_prompt(
                 ensure_ascii=False,
             )
         )
-    if file_tools_available and (chat_session.current_directory or chat_session.working_directory):
+    can_request_directory = {"question", "change_directory"} <= offered_tool_names
+    if file_tools_available and chat_session.current_directory:
         parts.append(
             "Current computer directory selected; root=workspace is host-bound to it."
         )
-    elif file_tools_available:
+    elif file_tools_available and chat_session.working_directory:
         parts.append(
-            "No computer directory selected. Use root=session; file approval cannot create one."
+            "Computer files are selected, but directory-dependent actions have no absolute directory. "
+            + (
+                "If required, question for its absolute path, then change_directory; do not ask speculatively."
+                if can_request_directory
+                else "Directory-dependent computer actions are unavailable."
+            )
         )
+    elif file_tools_available and can_request_directory:
+        parts.append(
+            "No computer directory selected. If required, question for its absolute path, then "
+            "change_directory; approval is separate. Otherwise use root=session."
+        )
+    elif file_tools_available:
+        parts.append("No computer directory selected. Use root=session.")
     if file_tools_available and chat_session.workspace_access == "read-only":
         parts.append(
             "Workspace mode: read-only. For a requested file mutation, tell the user to switch "

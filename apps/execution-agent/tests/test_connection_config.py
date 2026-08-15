@@ -237,6 +237,23 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
+            workspace_resolved = await agent.dispatch(
+                Request.model_validate(
+                    {
+                        "type": "request",
+                        "id": REQUEST_ID,
+                        "operation": "workspace.resolve",
+                        "arguments": {
+                            "rootId": ROOT_ID,
+                            "rootRevision": revision,
+                            "workingDirectory": ".",
+                            "path": "home",
+                        },
+                    }
+                )
+            )
+            self.assertEqual(workspace_resolved, resolved)
+
             info = await agent.dispatch(
                 Request.model_validate(
                     {

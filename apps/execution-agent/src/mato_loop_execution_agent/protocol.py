@@ -113,6 +113,10 @@ class PathArguments(RootArguments):
     path: str
 
 
+class ResolveWorkspaceDirectoryArguments(PathArguments):
+    pass
+
+
 class StatArguments(PathArguments):
     pass
 
@@ -424,6 +428,7 @@ class OpenScadRenderArguments(StrictModel):
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "system.info": SystemInfoArguments,
     "filesystem.resolve": ResolveDirectoryArguments,
+    "workspace.resolve": ResolveWorkspaceDirectoryArguments,
     "workspace.stat": StatArguments,
     "workspace.list": ListArguments,
     "workspace.read": ReadArguments,

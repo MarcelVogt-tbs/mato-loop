@@ -142,6 +142,58 @@ from mato_loop_backend.video_processing import VideoAnalysisMode, VideoFrame
 from mato_loop_backend.workspace import RootFileError, RootFileService, WorkspaceError
 
 logger = logging.getLogger(__name__)
+_ROOT_INDEPENDENT_EXECUTION_OPERATIONS = frozenset(
+    {
+        "cache.export",
+        "filesystem.resolve",
+        "integration.openscad.render",
+        "system.info",
+    }
+)
+_CURRENT_DIRECTORY_EXECUTION_OPERATIONS = frozenset(
+    {"process.exec", "shell.inspect", "shell.run"}
+)
+
+
+def _effective_execution_operations(run: AgentRun) -> frozenset[str]:
+    operations = frozenset(run.execution_operations or [])
+    if run.current_directory_snapshot is not None:
+        return operations
+    if run.execution_root_id is None:
+        return operations & _ROOT_INDEPENDENT_EXECUTION_OPERATIONS
+    return frozenset(
+        operation
+        for operation in operations
+        if operation not in _CURRENT_DIRECTORY_EXECUTION_OPERATIONS
+        and not operation.startswith("integration.git.")
+    )
+
+
+async def _resolve_run_directory(
+    agent_id: UUID,
+    root_id: UUID,
+    root_revision: str,
+    working_directory: str,
+    operations: frozenset[str],
+) -> DirectoryResult | None:
+    try:
+        directory = await ExecutionClient(
+            agent_id, root_id, root_revision, ".", operations
+        ).request(
+            "workspace.resolve",
+            {"path": working_directory},
+            DirectoryResult,
+        )
+    except ExecutionClientError:
+        return None
+    assert isinstance(directory, DirectoryResult)
+    if (
+        directory.root_id != root_id
+        or directory.root_revision != root_revision
+        or directory.relative_path != working_directory
+    ):
+        return None
+    return directory
 
 RUN_PHASES = {
     "preparing_context",
@@ -1021,27 +1073,24 @@ class AgentRuntime:
                 else:
                     execution_root_id = execution_root.id
                     execution_root_revision = execution_root.revision
+                    if (
+                        effective_working_directory is not None
+                        and "workspace.resolve" in snapshot[0]
+                    ):
+                        directory = await _resolve_run_directory(
+                            execution_agent.id,
+                            execution_root_id,
+                            execution_root_revision,
+                            effective_working_directory,
+                            snapshot[0],
+                        )
+                        if directory is None:
+                            snapshot = None
+                        else:
+                            current_directory = directory.path
             elif chat_session.working_directory is not None:
                 snapshot = None
             execution_operations = sorted(snapshot[0]) if snapshot is not None else []
-            if current_directory is None and execution_root_id is None:
-                execution_operations = [
-                    operation
-                    for operation in execution_operations
-                    if operation
-                    in {
-                        "system.info",
-                        "filesystem.resolve",
-                        "integration.openscad.render",
-                        "cache.export",
-                    }
-                ]
-            elif current_directory is None:
-                execution_operations = [
-                    operation
-                    for operation in execution_operations
-                    if operation not in {"process.exec", "shell.inspect", "shell.run"}
-                ]
         message = Message(
             session_id=chat_session.id,
             role="user",
@@ -1199,22 +1248,20 @@ class AgentRuntime:
             if live_root is not None:
                 root_id = failed_run.execution_root_id
                 root_revision = failed_run.execution_root_revision
+                if working_directory is not None and "workspace.resolve" in snapshot[0]:
+                    directory = await _resolve_run_directory(
+                        failed_run.execution_agent_id,
+                        root_id,
+                        root_revision,
+                        working_directory,
+                        snapshot[0],
+                    )
+                    if directory is None:
+                        snapshot = None
+                    else:
+                        current_directory = directory.path
             else:
                 snapshot = None
-        if current_directory is None and root_id is None and snapshot is not None:
-            snapshot = (
-                frozenset({"system.info", "filesystem.resolve"}) & snapshot[0],
-                snapshot[1],
-            )
-        elif current_directory is None and snapshot is not None:
-            snapshot = (
-                frozenset(
-                    operation
-                    for operation in snapshot[0]
-                    if operation not in {"process.exec", "shell.inspect", "shell.run"}
-                ),
-                snapshot[1],
-            )
         run = AgentRun(
             session_id=chat_session.id,
             status="queued",
@@ -1764,7 +1811,7 @@ class AgentRuntime:
                 else None
             )
             execution_operations = (
-                frozenset(run.execution_operations or [])
+                _effective_execution_operations(run)
                 if run.execution_agent_id is not None
                 else frozenset()
             )

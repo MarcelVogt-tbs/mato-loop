@@ -49,6 +49,7 @@ from .protocol import (
     RenameArguments,
     Request,
     ResolveDirectoryArguments,
+    ResolveWorkspaceDirectoryArguments,
     Response,
     RootDescriptor,
     ShellArguments,
@@ -196,6 +197,14 @@ class ExecutionAgent:
         if isinstance(arguments, ResolveDirectoryArguments):
             return await asyncio.to_thread(
                 self.workspace.resolve_directory, arguments.path, arguments.current_directory
+            )
+        if isinstance(arguments, ResolveWorkspaceDirectoryArguments):
+            return await asyncio.to_thread(
+                self.workspace.resolve_workspace_directory,
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.working_directory,
+                arguments.path,
             )
         if isinstance(arguments, OpenScadDiscoverArguments):
             return self.openscad.discover()

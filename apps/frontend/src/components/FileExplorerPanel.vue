@@ -30,24 +30,26 @@
         <q-menu anchor="bottom right" self="top right" class="app-action-menu">
           <q-list padding class="file-toolbar-menu">
             <q-item
-              v-if="legacyExecutionAgent && !workspace.rootIdentity && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('workspace.list')"
+              v-if="!workspace.rootIdentity && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('workspace.list')"
               clickable
               v-ripple
               v-close-popup
+              :disable="chat.running"
               @click="setWorkdir"
             >
               <q-item-section avatar><q-icon name="home_work" /></q-item-section>
               <q-item-section>Als aktuellen Ordner verwenden</q-item-section>
             </q-item>
             <q-item
-              v-if="legacyExecutionAgent && workspace.scope === 'filesystem' && chat.activeContext?.workingDirectory"
+              v-if="workspace.scope === 'filesystem' && chat.activeContext?.workingDirectory && chat.activeContext.workingDirectory !== '.'"
               clickable
               v-ripple
               v-close-popup
-              @click="chat.updateActive({ working_directory: null })"
+              :disable="chat.running"
+              @click="setWorkspaceRoot"
             >
-              <q-item-section avatar><q-icon name="link_off" /></q-item-section>
-              <q-item-section>Aktuellen Ordner entfernen</q-item-section>
+              <q-item-section avatar><q-icon name="vertical_align_top" /></q-item-section>
+              <q-item-section>Zur Arbeitsbereichswurzel wechseln</q-item-section>
             </q-item>
             <q-item v-if="chat.current" clickable v-ripple v-close-popup @click="openPermissionsDialog">
               <q-item-section avatar><q-icon name="verified_user" /></q-item-section>
@@ -70,6 +72,22 @@
         :options="scopeOptions"
         @update:model-value="workspace.setScope"
       />
+      <q-select
+        v-if="selectedExecutionAgent"
+        :model-value="chat.activeContext?.preferredRootId"
+        :options="rootOptions"
+        emit-value
+        map-options
+        outlined
+        dense
+        options-dense
+        label="Arbeitsbereich"
+        popup-content-class="app-menu-popup"
+        :disable="chat.running"
+        @update:model-value="selectRoot"
+      >
+        <template #prepend><q-icon name="folder" /></template>
+      </q-select>
       <div class="text-caption app-muted ellipsis">{{ scopeDescription }}</div>
       <div class="row items-center no-wrap">
         <q-btn
@@ -409,13 +427,23 @@ const selectedEntry = computed(() => {
   return Object.values(workspace.entries).flat().find((item) => item.path === workspace.selectedPath)
 })
 const selectedIsDirectory = computed(() => selectedEntry.value?.kind === 'directory')
-const legacyExecutionAgent = computed(() => {
-  const agent = executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
-  return Boolean(agent && agent.protocolVersion < 2)
+const selectedExecutionAgent = computed(() => (
+  executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
+))
+const rootOptions = computed(() => {
+  const roots = (selectedExecutionAgent.value?.roots || []).map((root) => ({
+    label: root.label,
+    value: root.id
+  }))
+  const selected = chat.activeContext?.preferredRootId
+  if (selected && !roots.some((root) => root.value === selected)) {
+    roots.push({ label: 'Nicht verfügbarer Arbeitsbereich', value: selected })
+  }
+  return roots
 })
 const hasOverflowActions = computed(() => Boolean(
-  (legacyExecutionAgent.value && workspace.scope === 'filesystem' && selectedIsDirectory.value)
-  || (legacyExecutionAgent.value && chat.activeContext?.workingDirectory)
+  (workspace.scope === 'filesystem' && selectedIsDirectory.value)
+  || (workspace.scope === 'filesystem' && chat.activeContext?.workingDirectory)
   || chat.current
 ))
 const targetDirectory = computed(() => {
@@ -677,8 +705,19 @@ async function confirmDiscard() {
 async function setWorkdir() {
   const selected = workspace.selectedPath
   const current = workspace.workingDirectory
-  const path = current && selected !== '.' ? `${current}/${selected}` : current || selected
+  const path = current && current !== '.' && selected !== '.'
+    ? `${current}/${selected}`
+    : selected === '.' ? current || '.' : selected
   await chat.updateActive({ working_directory: path })
+  $q.notify({ type: 'positive', message: 'Aktueller Ordner wurde geändert.' })
+}
+
+async function setWorkspaceRoot() {
+  await chat.updateActive({ working_directory: '.' })
+}
+
+async function selectRoot(value) {
+  await chat.updateActive({ preferred_root_id: value })
 }
 
 function openRenameDialog(entry) {
