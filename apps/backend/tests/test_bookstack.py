@@ -1302,13 +1302,170 @@ async def test_search_hides_results_from_books_with_disabled_read_policy(
     monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
 
     result = await knowledge_search(
-        KnowledgeSearchArguments(integration_id=instance.id, query="Netz"),
+        KnowledgeSearchArguments(integration_id=instance.id, queries=["Netz"]),
         _blocked_context(instance, revision),
     )
 
     payload = json.loads(result.content)["results"]
     assert [item["name"] for item in payload] == ["Sichtbar"]
     assert "Vertraulich" not in result.content
+
+
+async def test_search_merges_and_deduplicates_multiple_queries(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    batches = {
+        "Netzwerk": (
+            BookStackSearchResult(
+                type="page", id=1, name="Netzwerkplan", book_id=7, chapter_id=None,
+                preview=None,
+            ),
+            BookStackSearchResult(
+                type="page", id=2, name="Kabelwege", book_id=7, chapter_id=None,
+                preview=None,
+            ),
+        ),
+        "vlan": (
+            BookStackSearchResult(
+                type="page", id=3, name="VLAN-Konzept", book_id=7, chapter_id=None,
+                preview=None,
+            ),
+            BookStackSearchResult(
+                type="page", id=1, name="Netzwerkplan", book_id=7, chapter_id=None,
+                preview=None,
+            ),
+        ),
+    }
+    client = AsyncMock()
+    client.search.side_effect = lambda query, _limit: batches[query]
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_search(
+        KnowledgeSearchArguments(
+            integration_id=instance.id, queries=["Netzwerk", " vlan ", "VLAN"]
+        ),
+        _context(instance, revision),
+    )
+
+    payload = json.loads(result.content)["results"]
+    assert [item["name"] for item in payload] == [
+        "Netzwerkplan",
+        "VLAN-Konzept",
+        "Kabelwege",
+    ]
+    assert [call.args[0] for call in client.search.await_args_list] == [
+        "Netzwerk",
+        "vlan",
+    ]
+    assert {call.args[1] for call in client.search.await_args_list} == {20}
+
+
+async def test_search_reports_error_when_one_query_fails(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+
+    def search(query, _limit):
+        if query == "kaputt":
+            raise BookStackError("bookstack.unavailable")
+        return (
+            BookStackSearchResult(
+                type="page", id=1, name="Treffer", book_id=7, chapter_id=None,
+                preview=None,
+            ),
+        )
+
+    client = AsyncMock()
+    client.search.side_effect = search
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_search(
+        KnowledgeSearchArguments(integration_id=instance.id, queries=["gut", "kaputt"]),
+        _context(instance, revision),
+    )
+
+    assert result.is_error is True
+    assert json.loads(result.content)["error"]["code"] == "integration.unavailable"
+
+
+async def test_search_reports_error_when_every_query_fails(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    client = AsyncMock()
+    client.search.side_effect = BookStackError("bookstack.unavailable")
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_search(
+        KnowledgeSearchArguments(integration_id=instance.id, queries=["a", "b"]),
+        _context(instance, revision),
+    )
+
+    assert result.is_error is True
+    assert json.loads(result.content)["error"]["code"] == "integration.unavailable"
+
+
+async def test_search_limits_merged_results(monkeypatch) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    client = AsyncMock()
+    client.search.side_effect = lambda query, _limit: (
+        BookStackSearchResult(
+            type="page",
+            id=1 if query == "a" else 2,
+            name=f"Treffer {query}",
+            book_id=7,
+            chapter_id=None,
+            preview=None,
+        ),
+    )
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+
+    result = await knowledge_search(
+        KnowledgeSearchArguments(integration_id=instance.id, queries=["a", "b"], limit=1),
+        _context(instance, revision),
+    )
+
+    assert [item["name"] for item in json.loads(result.content)["results"]] == [
+        "Treffer a"
+    ]
+
+
+def test_search_arguments_reject_blank_queries() -> None:
+    with pytest.raises(ValidationError):
+        KnowledgeSearchArguments(integration_id=uuid4(), queries=["   "])
+    with pytest.raises(ValidationError):
+        KnowledgeSearchArguments(integration_id=uuid4(), queries=[])
+    with pytest.raises(ValidationError):
+        KnowledgeSearchArguments(
+            integration_id=uuid4(), queries=[f"q{index}" for index in range(6)]
+        )
+
+
+def test_search_arguments_accept_legacy_single_query() -> None:
+    arguments = KnowledgeSearchArguments.model_validate(
+        {"integration_id": str(uuid4()), "query": "Netzwerk", "limit": 5}
+    )
+    assert arguments.queries == ["Netzwerk"]
+    assert arguments.limit == 5
 
 
 async def test_book_listing_hides_books_with_disabled_read_policy(monkeypatch) -> None:

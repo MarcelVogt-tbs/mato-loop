@@ -294,6 +294,10 @@ export function toolSummary(tool) {
   }
   if (typeof argumentsValue.url === 'string') return cleanUrlForDisplay(argumentsValue.url)
   if (typeof argumentsValue.query === 'string') return truncate(argumentsValue.query)
+  if (Array.isArray(argumentsValue.queries)) {
+    const queries = argumentsValue.queries.filter((value) => typeof value === 'string' && value)
+    if (queries.length) return truncate(queries.join(' · '))
+  }
   if (typeof argumentsValue.name === 'string') return truncate(argumentsValue.name)
   if (typeof argumentsValue.sessionName === 'string') return truncate(argumentsValue.sessionName)
   return fallback
