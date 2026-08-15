@@ -579,8 +579,8 @@ describe('workspace store', () => {
   })
 
   it('requests OpenSCAD rendering with the latest revision and workspace context', async () => {
-    const model = new Blob(['stl'], { type: 'model/stl' })
-    api.post.mockResolvedValue({ data: model, headers: { 'content-type': 'model/stl' } })
+    const model = new Blob(['off'], { type: 'model/vnd.off' })
+    api.post.mockResolvedValue({ data: model, headers: { 'content-type': 'model/vnd.off' } })
     const workspace = useWorkspaceStore()
     workspace.configure({
       workingDirectory: 'project',
@@ -591,7 +591,7 @@ describe('workspace store', () => {
     await expect(workspace.renderOpenScad('model.scad', 'revision-2', controller.signal)).resolves.toBe(model)
 
     expect(api.post).toHaveBeenCalledWith('/workspace/files/openscad/render', {
-      path: 'model.scad', expectedRevision: 'revision-2'
+      path: 'model.scad', expectedRevision: 'revision-2', output: 'preview'
     }, {
       params: {
         scope: 'filesystem',
@@ -603,5 +603,10 @@ describe('workspace store', () => {
       signal: controller.signal,
       suppressErrorToast: true
     })
+
+    await workspace.renderOpenScad('model.scad', 'revision-2', undefined, 'stl')
+    expect(api.post).toHaveBeenLastCalledWith('/workspace/files/openscad/render', {
+      path: 'model.scad', expectedRevision: 'revision-2', output: 'stl'
+    }, expect.objectContaining({ suppressErrorToast: false }))
   })
 })

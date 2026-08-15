@@ -3169,7 +3169,9 @@ class AgentRuntime:
                     raise asyncio.CancelledError
                 error_code = metadata.get("errorCode")
                 if not isinstance(error_code, str):
-                    if call.name == "render_openscad":
+                    if call.name == "render_openscad" and call.arguments.get(
+                        "output", "preview"
+                    ) == "preview":
                         openscad_render_pending = False
                         openscad_render_retries = 0
                     elif (

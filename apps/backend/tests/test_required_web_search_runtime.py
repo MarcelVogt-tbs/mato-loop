@@ -259,6 +259,20 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
             ProviderResult(
                 tool_calls=[
                     ToolCall(
+                        id="export",
+                        name="render_openscad",
+                        arguments={
+                            "root": "session",
+                            "path": "files/cube.scad",
+                            "output": "stl",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
                         id="render",
                         name="render_openscad",
                         arguments={
@@ -282,6 +296,7 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
 
     assert [request["tool_choice"] for request in requests] == [
         "auto",
+        "required",
         "required",
         "required",
         "auto",

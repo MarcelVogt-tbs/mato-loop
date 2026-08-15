@@ -33,6 +33,7 @@ def test_openscad_render_request_accepts_frontend_revision_alias() -> None:
         {"path": "model.scad", "expectedRevision": "a" * 64}
     )
     assert request.expected_revision == "a" * 64
+    assert request.output == "preview"
 
 
 @pytest.mark.parametrize(

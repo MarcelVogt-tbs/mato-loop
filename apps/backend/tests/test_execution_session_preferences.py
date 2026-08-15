@@ -33,7 +33,7 @@ def _agent_and_root(user_id=None):
         name="Desktop",
         token_hash="a" * 64,
         revision=7,
-        protocol_version=2,
+        protocol_version=3,
         operations=["workspace.list", "workspace.read", "workspace.write"],
     )
     root = ExecutionAgentRoot(

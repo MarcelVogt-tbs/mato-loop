@@ -128,7 +128,7 @@ check_frontend() {
 
 check_execution_agent() {
     print_step "Check execution agent"
-    run_execution_agent "test \"\$(id -u)\" = 0 && command -v apt-get bwrap git openscad rg >/dev/null && uv sync --frozen && uv run --no-sync python -m compileall src tests && uv run --no-sync ruff check src tests && uv run --no-sync ruff format --check src tests"
+    run_execution_agent "test \"\$(id -u)\" = 0 && command -v apt-get bwrap git openscad rg xauth xvfb-run >/dev/null && uv sync --frozen && uv run --no-sync python -m compileall src tests && uv run --no-sync ruff check src tests && uv run --no-sync ruff format --check src tests"
 }
 
 test_backend() {

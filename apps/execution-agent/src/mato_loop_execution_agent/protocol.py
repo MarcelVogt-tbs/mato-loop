@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 UUID_PATTERN = (
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
@@ -23,7 +23,7 @@ class RootDescriptor(StrictModel):
 
 class Hello(StrictModel):
     type: Literal["hello"] = "hello"
-    protocol_version: Literal[2] = Field(default=2, alias="protocolVersion")
+    protocol_version: Literal[3] = Field(default=3, alias="protocolVersion")
     agent_id: str = Field(alias="agentId", pattern=UUID_PATTERN)
     name: str = Field(min_length=1, max_length=160)
     platform: str = Field(min_length=1, max_length=80)
@@ -57,7 +57,7 @@ class Hello(StrictModel):
 
 class Welcome(StrictModel):
     type: Literal["welcome"]
-    protocol_version: Literal[2] = Field(alias="protocolVersion")
+    protocol_version: Literal[3] = Field(alias="protocolVersion")
     agent_id: str = Field(alias="agentId", pattern=UUID_PATTERN)
 
 
@@ -386,6 +386,8 @@ class OpenScadRenderArguments(StrictModel):
     )
     entrypoint: str = Field(min_length=1, max_length=1000, pattern=r"^[^\x00\\]+$")
     source: OpenScadSource
+    output: Literal["preview", "stl"] = "preview"
+    preview_images: bool = Field(default=False, alias="previewImages")
 
     @field_validator("executable_path")
     @classmethod

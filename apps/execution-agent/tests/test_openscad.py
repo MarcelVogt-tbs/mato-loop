@@ -50,6 +50,8 @@ if "cube(" not in content:
     raise SystemExit(2)
 if output.suffix == ".png":
     output.write_bytes(b"\\x89PNG\\r\\n\\x1a\\npreview")
+elif output.suffix == ".off":
+    output.write_text("OFF\\n3 1 0\\n0 0 0\\n1 0 0\\n0 1 0\\n3 0 1 2 66 165 245\\n")
 else:
     output.write_bytes(bytes(80) + struct.pack("<I", 1) + bytes(50))
 print("rendered")
@@ -149,6 +151,13 @@ def _request(operation: str, arguments: dict) -> Request:
 
 
 class OpenScadTests(unittest.IsolatedAsyncioTestCase):
+    def test_off_validation_rejects_oversized_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "oversized.off"
+            output.write_bytes(b"OFF " + b" " * (1024 * 1024))
+            with self.assertRaises(AgentError):
+                OpenScadRunner._validate_off(output)
+
     @unittest.skipUnless(
         shutil.which("openscad") and shutil.which("xvfb-run") and shutil.which("bwrap"),
         "packaged OpenSCAD sandbox is unavailable",
@@ -176,6 +185,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                             "sessionId": "session",
                             "entrypoint": "halterung.scad",
                             "source": {"type": "workspace", "path": "project"},
+                            "previewImages": True,
                         },
                     ),
                     backend_id=AGENT_ID,
@@ -183,27 +193,40 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             except AgentError as exc:
                 self.fail(f"Packaged OpenSCAD render failed: {exc.code} {exc.params}")
 
-            model = ArtifactDescriptor.model_validate(rendered["model"])
-            previews = [
-                ArtifactDescriptor.model_validate(item["artifact"]) for item in rendered["previews"]
-            ]
-            self.assertGreater(model.size, 84)
-            self.assertEqual(model.filename, "halterung.stl")
+            preview = ArtifactDescriptor.model_validate(rendered["artifact"])
+            self.assertEqual(rendered["output"], "preview")
+            self.assertEqual(preview.filename, "halterung.off")
+            self.assertTrue(agent.openscad._is_off(agent.cache._path(preview)))
             self.assertEqual(
                 [item["view"] for item in rendered["previews"]],
                 ["isometric", "front", "right", "top"],
             )
-            self.assertEqual(
-                [preview.filename for preview in previews],
-                [
-                    "halterung-isometric.png",
-                    "halterung-front.png",
-                    "halterung-right.png",
-                    "halterung-top.png",
-                ],
+            for item in rendered["previews"]:
+                descriptor = ArtifactDescriptor.model_validate(item["artifact"])
+                self.assertEqual(
+                    agent.cache._path(descriptor).read_bytes()[:8],
+                    b"\x89PNG\r\n\x1a\n",
+                )
+
+            exported = await agent.dispatch(
+                _request(
+                    "integration.openscad.render",
+                    {
+                        "rootId": ROOT_ID,
+                        "rootRevision": revision,
+                        "currentDirectory": os.fspath(root),
+                        "executablePath": os.fspath(executable),
+                        "sessionId": "session",
+                        "entrypoint": "halterung.scad",
+                        "source": {"type": "workspace", "path": "project"},
+                        "output": "stl",
+                    },
+                ),
+                backend_id=AGENT_ID,
             )
-            for preview in previews:
-                self.assertEqual(agent.cache._path(preview).read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            model = ArtifactDescriptor.model_validate(exported["artifact"])
+            self.assertGreater(model.size, 84)
+            self.assertEqual(model.filename, "halterung.stl")
 
     async def test_discover_test_workspace_and_archive_render_and_cache_export(self) -> None:
         uploaded = []
@@ -225,7 +248,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             data_dir = base / "data"
             binaries = base / "bin"
             binaries.mkdir()
-            openscad, _, bwrap = _write_fake_binaries(binaries)
+            openscad, xvfb, bwrap = _write_fake_binaries(binaries)
             project = root / "project"
             project.mkdir()
             (project / "halterung.scad").write_text("cube([1, 1, 1]);\n", encoding="utf-8")
@@ -238,6 +261,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             )
             with (
                 patch.dict(os.environ, {"PATH": os.fspath(binaries)}),
+                patch.object(OpenScadRunner, "_find_xvfb", return_value=xvfb),
                 patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
             ):
                 agent = ExecutionAgent(
@@ -280,29 +304,21 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                         "sessionId": "session",
                         "entrypoint": "halterung.scad",
                         "source": {"type": "workspace", "path": "project"},
+                        "previewImages": True,
                     },
                 ),
                 backend_id=AGENT_ID,
             )
-            model = ArtifactDescriptor.model_validate(rendered["model"])
-            previews = [
-                ArtifactDescriptor.model_validate(item["artifact"]) for item in rendered["previews"]
-            ]
-            self.assertEqual(agent.cache._path(model).stat().st_size, 134)
-            self.assertEqual(model.filename, "halterung.stl")
-            self.assertEqual(
-                [preview.filename for preview in previews],
-                [
-                    "halterung-isometric.png",
-                    "halterung-front.png",
-                    "halterung-right.png",
-                    "halterung-top.png",
-                ],
-            )
+            preview = ArtifactDescriptor.model_validate(rendered["artifact"])
+            self.assertEqual(rendered["output"], "preview")
+            self.assertEqual(preview.filename, "halterung.off")
             self.assertIn("rendered", rendered["diagnostics"])
             self.assertFalse(rendered["diagnosticsTruncated"])
-            for preview in previews:
-                self.assertEqual(agent.cache._path(preview).read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertTrue(agent.openscad._is_off(agent.cache._path(preview)))
+            self.assertEqual(
+                [item["view"] for item in rendered["previews"]],
+                ["isometric", "front", "right", "top"],
+            )
 
             (project / "failed.scad").write_text("FAIL_RENDER\n", encoding="utf-8")
             with self.assertRaises(AgentError) as failure:
@@ -342,6 +358,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                         "executablePath": os.fspath(openscad),
                         "sessionId": "session",
                         "entrypoint": "main.scad",
+                        "output": "stl",
                         "source": {
                             "type": "archive",
                             "artifact": archive_descriptor,
@@ -354,13 +371,13 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 backend_id=AGENT_ID,
             )
-            self.assertEqual(archive_render["model"]["contentType"], "model/stl")
+            self.assertEqual(archive_render["artifact"]["contentType"], "model/stl")
 
             exported = await agent.dispatch(
                 _request(
                     "cache.export",
                     {
-                        "artifact": rendered["previews"][0]["artifact"],
+                        "artifact": rendered["artifact"],
                         "transfer": {
                             "url": f"http://backend/api/workspace/transfers/{TICKET_ID}",
                             "token": "upload",
@@ -369,39 +386,30 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 backend_id=AGENT_ID,
             )
-            self.assertEqual(exported["sha256"], previews[0].sha256)
-            self.assertEqual(uploaded, [agent.cache._path(previews[0]).read_bytes()])
+            self.assertEqual(exported["sha256"], preview.sha256)
+            self.assertEqual(uploaded, [agent.cache._path(preview).read_bytes()])
 
             calls = [
                 json.loads(line) for line in (binaries / "calls.jsonl").read_text().splitlines()
             ]
             self.assertTrue(any("--export-format=binstl" in call for call in calls))
-            preview_calls = [call for call in calls if "--imgsize=800,600" in call]
-            self.assertEqual(len(preview_calls), 8)
-            self.assertEqual(
-                {Path(call[call.index("-o") + 1]).stem for call in preview_calls},
-                {
-                    "halterung-isometric",
-                    "halterung-front",
-                    "halterung-right",
-                    "halterung-top",
-                    "main-isometric",
-                    "main-front",
-                    "main-right",
-                    "main-top",
-                },
-            )
-            self.assertTrue(all("--autocenter" in call for call in preview_calls))
-            self.assertTrue(all("--viewall" in call for call in preview_calls))
-            self.assertTrue(all("--projection=o" in call for call in preview_calls))
-            self.assertTrue(
-                all(any(arg.startswith("--camera=") for arg in call) for call in preview_calls)
-            )
+            preview_calls = [
+                call
+                for call in calls
+                if "--export-format=off" in call
+                and any(value.endswith("/project/halterung.scad") for value in call)
+            ]
+            self.assertEqual(len(preview_calls), 1)
+            self.assertTrue(any("--backend=manifold" in call for call in preview_calls))
+            self.assertTrue(all("$preview=true" in call for call in preview_calls))
+            image_calls = [call for call in calls if "--imgsize=800,600" in call]
+            self.assertEqual(len(image_calls), 4)
+            self.assertTrue(all("$preview=true" in call for call in image_calls))
             all_sandbox_calls = [
                 json.loads(line)
                 for line in (binaries / "sandbox-calls.jsonl").read_text().splitlines()
             ]
-            self.assertTrue(any("--imgsize=32,32" in call for call in all_sandbox_calls))
+            self.assertTrue(any("--export-format=off" in call for call in all_sandbox_calls))
             sandbox_calls = [call for call in all_sandbox_calls if "/project" in call]
             for call in sandbox_calls:
                 self.assertIn("--unshare-all", call)
@@ -432,24 +440,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             openscad, xvfb, bwrap = _write_fake_binaries(binaries)
             config = _configuration(root, openscad)
             with (
-                patch.object(OpenScadRunner, "_find_executable", return_value=None),
-                patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
-            ):
-                agent = ExecutionAgent(config, "key")
-            self.assertIn("integration.openscad.test", agent.operations)
-            self.assertNotIn("integration.openscad.render", agent.operations)
-            with self.assertRaises(AgentError) as missing_xvfb:
-                await agent.dispatch(
-                    _request(
-                        "integration.openscad.test",
-                        {"executablePath": os.fspath(openscad)},
-                    ),
-                    backend_id=AGENT_ID,
-                )
-            self.assertEqual(missing_xvfb.exception.code, "openscad.headlessPreviewUnavailable")
-
-            with (
-                patch.object(OpenScadRunner, "_find_executable", return_value=xvfb),
+                patch.object(OpenScadRunner, "_find_xvfb", return_value=xvfb),
                 patch.object(OpenScadRunner, "_find_bwrap", return_value=None),
             ):
                 missing_bwrap_agent = ExecutionAgent(config, "key")
@@ -465,23 +456,13 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(missing_bwrap.exception.code, "openscad.headlessPreviewUnavailable")
 
             with (
-                patch.object(OpenScadRunner, "_find_executable", return_value=xvfb),
+                patch.object(OpenScadRunner, "_find_xvfb", return_value=xvfb),
                 patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
             ):
                 available = ExecutionAgent(config, "key")
-            broken_xvfb = binaries / "broken-xvfb-run"
-            broken_xvfb.write_text(f"#!{sys.executable}\nraise SystemExit(1)\n", encoding="utf-8")
-            broken_xvfb.chmod(0o755)
-            with (
-                patch.object(OpenScadRunner, "_find_executable", return_value=broken_xvfb),
-                patch.object(OpenScadRunner, "_find_bwrap", return_value=bwrap),
-            ):
-                broken_preview = ExecutionAgent(config, "key")
-            self.assertNotIn("integration.openscad.render", broken_preview.operations)
-            self.assertFalse(broken_preview.openscad.discover()["headlessPreview"])
             with (
                 patch.object(OpenScadRunner, "_find_openscad", return_value=None),
-                patch.object(OpenScadRunner, "_find_executable", return_value=None),
+                patch.object(OpenScadRunner, "_find_xvfb", return_value=None),
                 patch.object(OpenScadRunner, "_find_bwrap", return_value=None),
             ):
                 unavailable = ExecutionAgent(config, "key")

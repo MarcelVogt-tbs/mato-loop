@@ -151,7 +151,11 @@ class ProtocolTests(unittest.TestCase):
                 },
             }
         )
-        self.assertIsNone(validate_arguments(archive).root_id)
+        arguments = validate_arguments(archive)
+        self.assertIsNone(arguments.root_id)
+        self.assertFalse(arguments.preview_images)
+        archive.arguments["previewImages"] = True
+        self.assertTrue(validate_arguments(archive).preview_images)
 
         workspace = Request.model_validate(
             {

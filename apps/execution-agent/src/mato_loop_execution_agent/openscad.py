@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import math
 import os
 import re
@@ -35,6 +36,10 @@ MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAX_ADDRESS_SPACE_BYTES = 8 * 1024 * 1024 * 1024
 MAX_CPU_SECONDS = 600
 MAX_PROCESSES = 256
+MAX_OFF_BYTES = 24 * 1024 * 1024
+MAX_OFF_LINE_LENGTH = 1024 * 1024
+MAX_OFF_VERTICES = 500_000
+MAX_OFF_TRIANGLES = 500_000
 ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 CAMERAS = {
     "isometric": "0,0,0,55,0,25,140",
@@ -43,6 +48,7 @@ CAMERAS = {
     "top": "0,0,0,0,0,0,140",
 }
 KNOWN_OPENSCAD = (Path("/usr/local/bin/openscad"), Path("/usr/bin/openscad"))
+logger = logging.getLogger(__name__)
 
 
 class OpenScadRunner:
@@ -75,7 +81,8 @@ class OpenScadRunner:
             self.executable_identity = None
         else:
             self.executable, self.version, self.executable_identity = found
-        self.xvfb = self._find_executable()
+        self.manifold_available = self._probe_manifold(self.executable)
+        self.xvfb = self._find_xvfb()
         self.bwrap = self._find_bwrap()
         self.xvfb_identity = self._identity(self.xvfb)
         self.bwrap_identity = self._identity(self.bwrap)
@@ -128,23 +135,19 @@ class OpenScadRunner:
                 continue
         return None
 
-    def _find_executable(self) -> Path | None:
-        path_candidate = shutil.which("xvfb-run")
-        candidates = [Path("/usr/bin/xvfb-run"), Path("/usr/local/bin/xvfb-run")]
-        if path_candidate:
-            candidates.append(Path(path_candidate))
-        for candidate in candidates:
-            try:
-                return self._candidate(candidate)
-            except AgentError:
-                continue
-        return None
-
     def _find_bwrap(self) -> Path | None:
         try:
             return self._candidate(Path("/usr/bin/bwrap"))
         except AgentError:
             return None
+
+    def _find_xvfb(self) -> Path | None:
+        for candidate in (Path("/usr/bin/xvfb-run"), Path("/usr/local/bin/xvfb-run")):
+            try:
+                return self._candidate(candidate)
+            except AgentError:
+                continue
+        return None
 
     def _same_identity(self, path: Path | None, identity: tuple[int, int] | None) -> bool:
         if path is None or identity is None:
@@ -163,6 +166,13 @@ class OpenScadRunner:
             and self._same_identity(self.xvfb, self.xvfb_identity)
             and self._same_identity(self.bwrap, self.bwrap_identity)
         )
+
+    @staticmethod
+    def _is_off(path: Path) -> bool:
+        try:
+            return path.read_text(encoding="utf-8").split()[0] == "OFF"
+        except (OSError, UnicodeError, IndexError):
+            return False
 
     def _probe_sandbox(self) -> bool:
         if not self._runtime_available():
@@ -192,14 +202,52 @@ class OpenScadRunner:
                     cwd=work,
                     env=self._environment(work),
                     stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    timeout=10,
+                    check=False,
+                )
+                preview = output / "probe.png"
+                available = (
+                    result.returncode == 0
+                    and preview.is_file()
+                    and preview.read_bytes()[: len(PNG_SIGNATURE)] == PNG_SIGNATURE
+                )
+                if not available:
+                    logger.warning(
+                        "OpenSCAD sandbox probe failed: %s",
+                        result.stderr.decode("utf-8", errors="replace")[:2000],
+                    )
+                return available
+            except (OSError, subprocess.TimeoutExpired):
+                return False
+
+    def _probe_manifold(self, executable: Path | None) -> bool:
+        if executable is None:
+            return False
+        with tempfile.TemporaryDirectory(prefix="manifold-", dir=self.temp_root) as temporary:
+            work = Path(temporary)
+            source = work / "probe.scad"
+            output = work / "probe.off"
+            source.write_text("cube(1);\n", encoding="ascii")
+            try:
+                result = subprocess.run(
+                    [
+                        os.fspath(executable),
+                        "--backend=manifold",
+                        "--export-format=off",
+                        "-o",
+                        os.fspath(output),
+                        os.fspath(source),
+                    ],
+                    cwd=work,
+                    env=self._environment(work),
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=10,
                     check=False,
                 )
-                with (output / "probe.png").open("rb") as handle:
-                    signature = handle.read(len(PNG_SIGNATURE))
-                    return result.returncode == 0 and signature == PNG_SIGNATURE
+                return result.returncode == 0 and self._is_off(output)
             except (OSError, subprocess.TimeoutExpired):
                 return False
 
@@ -691,16 +739,20 @@ class OpenScadRunner:
         return path
 
     @staticmethod
-    def _output_names(entrypoint: str) -> tuple[str, dict[str, str]]:
+    def _output_name(entrypoint: str, output: str) -> str:
         stem = Path(entrypoint).stem
-        model = f"{stem}.stl"
-        previews = {view: f"{stem}-{view}.png" for view in CAMERAS}
-        if any(
-            len(name) > 255 or len(name.encode("utf-8")) > 255
-            for name in (model, *previews.values())
-        ):
+        name = f"{stem}.{'off' if output == 'preview' else 'stl'}"
+        if len(name) > 255 or len(name.encode("utf-8")) > 255:
             raise AgentError("path.invalid", "OpenSCAD output filename is too long")
-        return model, previews
+        return name
+
+    @staticmethod
+    def _preview_names(entrypoint: str) -> dict[str, str]:
+        stem = Path(entrypoint).stem
+        names = {view: f"{stem}-{view}.png" for view in CAMERAS}
+        if any(len(name) > 255 or len(name.encode("utf-8")) > 255 for name in names.values()):
+            raise AgentError("path.invalid", "OpenSCAD preview filename is too long")
+        return names
 
     @staticmethod
     def _validate_stl(path: Path) -> None:
@@ -719,6 +771,60 @@ class OpenScadRunner:
         except (OSError, struct.error, ValueError) as exc:
             raise AgentError(
                 "openscad.invalidOutput", "OpenSCAD produced an invalid binary STL"
+            ) from exc
+
+    @staticmethod
+    def _validate_off(path: Path) -> None:
+        try:
+            if path.stat().st_size > MAX_OFF_BYTES:
+                raise ValueError
+            raw_lines = path.read_text(encoding="utf-8").splitlines()
+            if any(len(line) > MAX_OFF_LINE_LENGTH for line in raw_lines):
+                raise ValueError
+            lines = [line.strip() for line in raw_lines if line.strip()]
+            header = lines[0].split(maxsplit=1)
+            if header[0] != "OFF":
+                raise ValueError
+            if len(header) == 2:
+                lines[0:1] = ["OFF", header[1]]
+            if len(lines) < 3:
+                raise ValueError
+            counts = lines[1].split()
+            if len(counts) != 3:
+                raise ValueError
+            vertices, faces, edges = (int(value) for value in counts)
+            if (
+                vertices < 3
+                or vertices > MAX_OFF_VERTICES
+                or faces < 1
+                or faces > MAX_OFF_TRIANGLES
+                or edges < 0
+                or len(lines) != 2 + vertices + faces
+            ):
+                raise ValueError
+            for line in lines[2 : 2 + vertices]:
+                values = line.split()
+                if len(values) != 3 or not all(math.isfinite(float(value)) for value in values):
+                    raise ValueError
+            triangles = 0
+            for line in lines[2 + vertices :]:
+                values = line.split()
+                count = int(values[0])
+                if count < 3 or len(values) not in {count + 1, count + 4, count + 5}:
+                    raise ValueError
+                indices = [int(value) for value in values[1 : count + 1]]
+                if any(index < 0 or index >= vertices for index in indices):
+                    raise ValueError
+                if not all(math.isfinite(float(value)) for value in values[count + 1 :]):
+                    raise ValueError
+                triangles += count - 2
+                if triangles > MAX_OFF_TRIANGLES:
+                    raise ValueError
+            if triangles < 1:
+                raise ValueError
+        except (OSError, UnicodeError, ValueError, IndexError) as exc:
+            raise AgentError(
+                "openscad.invalidOutput", "OpenSCAD produced an invalid OFF preview"
             ) from exc
 
     def _validate_output_file(self, path: Path) -> int:
@@ -802,133 +908,132 @@ class OpenScadRunner:
             else:
                 await asyncio.to_thread(self._copy_workspace_project, arguments, project)
             self._validate_entrypoint(project, arguments.entrypoint)
-            model_filename, preview_filenames = self._output_names(arguments.entrypoint)
-
-            diagnostics = []
-            model_path = output / model_filename
+            filename = self._output_name(arguments.entrypoint, arguments.output)
+            output_path = output / filename
+            format_argument = "off" if arguments.output == "preview" else "binstl"
+            command = ["/openscad"]
+            if arguments.output == "preview":
+                command.extend(("-D", "$preview=true"))
+            command.extend(
+                (
+                    f"--export-format={format_argument}",
+                    "-o",
+                    f"/output/{filename}",
+                    f"/project/{arguments.entrypoint}",
+                )
+            )
+            if arguments.output == "preview" and self.manifold_available:
+                command.insert(1, "--backend=manifold")
             diagnostic = await self._run(
-                self._sandbox_argv(
-                    project,
-                    output,
-                    [
-                        "/openscad",
-                        "--export-format=binstl",
-                        "-o",
-                        f"/output/{model_filename}",
-                        f"/project/{arguments.entrypoint}",
-                    ],
-                ),
+                self._sandbox_argv(project, output, command),
                 work,
                 diagnostic_limit=self.max_diagnostics,
                 error_code="openscad.renderFailed",
                 timeout_code="openscad.timedOut",
             )
-            diagnostics.append(diagnostic)
+            diagnostics = [diagnostic]
             try:
-                self._validate_output_file(model_path)
-                await asyncio.to_thread(self._validate_stl, model_path)
+                self._validate_output_file(output_path)
+                validator = (
+                    self._validate_off if arguments.output == "preview" else self._validate_stl
+                )
+                await asyncio.to_thread(validator, output_path)
             except AgentError as exc:
                 if exc.params is None:
                     exc.params = self._failure_params(diagnostic)
                 raise
 
-            preview_paths = []
-            for name, camera in CAMERAS.items():
-                filename = preview_filenames[name]
-                path = output / filename
-                diagnostic = await self._run(
-                    self._sandbox_argv(
-                        project,
-                        output,
-                        [
-                            "/xvfb-run",
-                            "-a",
-                            "/openscad",
-                            "-o",
-                            f"/output/{filename}",
-                            f"--camera={camera}",
-                            "--autocenter",
-                            "--viewall",
-                            "--projection=o",
-                            "--imgsize=800,600",
-                            f"/project/{arguments.entrypoint}",
-                        ],
-                    ),
-                    work,
-                    diagnostic_limit=self.max_diagnostics,
-                    error_code="openscad.previewFailed",
-                )
-                diagnostics.append(diagnostic)
-                try:
-                    self._validate_output_file(path)
-                    with path.open("rb") as handle:
-                        signature = handle.read(len(PNG_SIGNATURE))
-                    if signature != PNG_SIGNATURE:
-                        raise AgentError(
-                            "openscad.invalidOutput", "OpenSCAD produced an invalid PNG"
-                        )
-                except AgentError as exc:
-                    if exc.params is None:
-                        exc.params = self._failure_params(diagnostic)
-                    raise
-                preview_paths.append((name, path))
+            preview_paths: list[tuple[str, Path]] = []
+            if arguments.output == "preview" and arguments.preview_images:
+                preview_names = self._preview_names(arguments.entrypoint)
+                for view, camera in CAMERAS.items():
+                    preview_path = output / preview_names[view]
+                    preview_diagnostic = await self._run(
+                        self._sandbox_argv(
+                            project,
+                            output,
+                            [
+                                "/xvfb-run",
+                                "-a",
+                                "/openscad",
+                                "-D",
+                                "$preview=true",
+                                "-o",
+                                f"/output/{preview_path.name}",
+                                f"--camera={camera}",
+                                "--autocenter",
+                                "--viewall",
+                                "--projection=o",
+                                "--imgsize=800,600",
+                                f"/project/{arguments.entrypoint}",
+                            ],
+                        ),
+                        work,
+                        diagnostic_limit=self.max_diagnostics,
+                        error_code="openscad.previewFailed",
+                    )
+                    diagnostics.append(preview_diagnostic)
+                    try:
+                        self._validate_output_file(preview_path)
+                        with preview_path.open("rb") as handle:
+                            if handle.read(len(PNG_SIGNATURE)) != PNG_SIGNATURE:
+                                raise AgentError(
+                                    "openscad.invalidOutput",
+                                    "OpenSCAD produced an invalid PNG preview",
+                                )
+                    except AgentError as exc:
+                        if exc.params is None:
+                            exc.params = self._failure_params(preview_diagnostic)
+                        raise
+                    preview_paths.append((view, preview_path))
 
-            output_size = model_path.stat().st_size + sum(
-                path.stat().st_size for _, path in preview_paths
-            )
-            if output_size > self.cache.max_bytes:
+            if (
+                output_path.stat().st_size + sum(path.stat().st_size for _, path in preview_paths)
+                > self.cache.max_bytes
+            ):
                 raise AgentError("operation.tooLarge", "Rendered artifacts exceed cache capacity")
             render_id = uuid4().hex
-            model = await asyncio.to_thread(
+            artifact = await asyncio.to_thread(
                 self._descriptor,
-                model_path,
+                output_path,
                 backend_id=backend_id,
                 session_id=arguments.session_id,
                 render_id=render_id,
-                name="model",
-                content_type="model/stl",
+                name=arguments.output,
+                content_type="model/vnd.off" if arguments.output == "preview" else "model/stl",
             )
-            previews = []
-            for name, path in preview_paths:
-                previews.append(
-                    await asyncio.to_thread(
+            previews = [
+                {
+                    "view": view,
+                    "artifact": await asyncio.to_thread(
                         self._descriptor,
                         path,
                         backend_id=backend_id,
                         session_id=arguments.session_id,
                         render_id=render_id,
-                        name=name,
+                        name=view,
                         content_type="image/png",
-                    )
-                )
-            artifacts = [
-                (model, model_path),
-                *(
-                    (preview, path)
-                    for preview, (_, path) in zip(previews, preview_paths, strict=True)
-                ),
+                    ),
+                }
+                for view, path in preview_paths
             ]
-            for descriptor, path in artifacts:
-                await asyncio.to_thread(self._store, descriptor, path)
+            await asyncio.to_thread(self._store, artifact, output_path)
+            for preview, (_, path) in zip(previews, preview_paths, strict=True):
+                await asyncio.to_thread(self._store, preview["artifact"], path)
             diagnostic_text = "\n".join(
-                text
-                for diagnostic in diagnostics
-                for text in (diagnostic["stdout"], diagnostic["stderr"])
-                if text
+                text for item in diagnostics for text in (item["stdout"], item["stderr"]) if text
             )
             return {
-                "model": model.model_dump(by_alias=True),
+                "output": arguments.output,
+                "artifact": artifact.model_dump(by_alias=True),
                 "previews": [
                     {
-                        "view": view,
-                        "artifact": preview.model_dump(by_alias=True),
+                        "view": preview["view"],
+                        "artifact": preview["artifact"].model_dump(by_alias=True),
                     }
-                    for preview, (view, path) in zip(previews, preview_paths, strict=True)
+                    for preview in previews
                 ],
                 "diagnostics": diagnostic_text[: self.max_diagnostics],
                 "diagnosticsTruncated": len(diagnostic_text) > self.max_diagnostics
-                or any(
-                    diagnostic["stdoutTruncated"] or diagnostic["stderrTruncated"]
-                    for diagnostic in diagnostics
-                ),
+                or any(item["stdoutTruncated"] or item["stderrTruncated"] for item in diagnostics),
             }

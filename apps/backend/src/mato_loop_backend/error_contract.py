@@ -74,7 +74,7 @@ _MESSAGES = {
     "openscad.invalidExecutable": "The configured OpenSCAD executable is invalid.",
     "openscad.notConfigured": "OpenSCAD is not configured for this computer.",
     "openscad.notFound": "OpenSCAD was not found on this computer.",
-    "openscad.previewFailed": "OpenSCAD could not create the preview images.",
+    "openscad.previewFailed": "OpenSCAD could not create the model preview.",
     "openscad.previewUnavailable": "Headless OpenSCAD previews are unavailable on this computer.",
     "openscad.projectTooLarge": "The OpenSCAD project exceeds the configured limits.",
     "openscad.renderFailed": "OpenSCAD could not render the model.",

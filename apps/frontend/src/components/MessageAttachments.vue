@@ -141,7 +141,7 @@
           <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
         </div>
         <q-btn
-          v-if="attachment.safeUrl && isStl(attachment)"
+          v-if="attachment.safeUrl && isModel(attachment)"
           flat
           dense
           no-caps
@@ -173,7 +173,11 @@
       <q-card v-if="selectedAttachment" class="app-file-dialog">
         <FileViewerPanel
           :image="selectedAttachment.kind === 'image' ? { url: selectedAttachment.safeUrl, name: selectedAttachment.filename || 'Bild' } : null"
-          :model="isStl(selectedAttachment) ? { url: selectedAttachment.safeUrl, name: selectedAttachment.filename || '3D-Modell' } : null"
+          :model="isModel(selectedAttachment) ? {
+            url: selectedAttachment.safeUrl,
+            name: selectedAttachment.filename || '3D-Modell',
+            format: modelFormat(selectedAttachment)
+          } : null"
           fullscreen
           @close="attachmentDialog = false"
           @toggle-fullscreen="attachmentDialog = false"
@@ -218,9 +222,15 @@ function openAttachment(attachment) {
   attachmentDialog.value = true
 }
 
-function isStl(attachment) {
-  return attachment?.mimeType === 'model/stl'
-    || attachment?.filename?.toLocaleLowerCase().endsWith('.stl')
+function modelFormat(attachment) {
+  return attachment?.mimeType === 'model/vnd.off' || attachment?.filename?.toLocaleLowerCase().endsWith('.off')
+    ? 'off'
+    : 'stl'
+}
+
+function isModel(attachment) {
+  return ['model/stl', 'model/vnd.off'].includes(attachment?.mimeType)
+    || /\.(stl|off)$/i.test(attachment?.filename || '')
 }
 
 </script>

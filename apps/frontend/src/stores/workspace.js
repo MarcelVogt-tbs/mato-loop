@@ -491,20 +491,21 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorDirty = false
       return data
     },
-    async renderOpenScad(path, expectedRevision, signal) {
+    async renderOpenScad(path, expectedRevision, signal, output = 'preview') {
       if (!this.operationAvailable('workspace.read')) return null
       const { data, headers } = await api.post('/workspace/files/openscad/render', {
         path,
-        expectedRevision
+        expectedRevision,
+        output
       }, {
         params: this.readRequestParams(),
         responseType: 'blob',
         signal,
-        suppressErrorToast: true
+        suppressErrorToast: output === 'preview'
       })
       return data instanceof Blob
         ? data
-        : new Blob([data], { type: headers?.['content-type'] || 'model/stl' })
+        : new Blob([data], { type: headers?.['content-type'] || (output === 'stl' ? 'model/stl' : 'model/vnd.off') })
     },
     download(path) {
       if (!this.operationAvailable('workspace.export')) return

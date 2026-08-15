@@ -33,12 +33,14 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import { parseOffBuffer } from 'src/utils/off'
 import { StlValidationError, validateStlBuffer, validateStlGeometry } from 'src/utils/stl'
 
 defineOptions({ name: 'StlViewerPanel' })
 
 const props = defineProps({
-  src: { type: String, required: true }
+  src: { type: String, required: true },
+  format: { type: String, default: 'stl', validator: (value) => ['off', 'stl'].includes(value) }
 })
 
 const $q = useQuasar()
@@ -59,10 +61,10 @@ let loadVersion = 0
 let activeView = 'iso'
 
 const errorMessages = {
-  invalid: 'Die STL-Datei enthält keine gültige Geometrie.',
-  tooLarge: 'Die STL-Datei ist für die 3D-Ansicht zu groß.',
+  invalid: 'Die Modelldatei enthält keine gültige Geometrie.',
+  tooLarge: 'Die Modelldatei ist für die 3D-Ansicht zu groß.',
   tooComplex: 'Das Modell enthält zu viele Dreiecke für eine sichere Darstellung.',
-  unavailable: 'Die STL-Datei konnte nicht geladen werden.',
+  unavailable: 'Die Modelldatei konnte nicht geladen werden.',
   webgl: 'Die 3D-Darstellung wird von diesem Browser oder Gerät nicht unterstützt.'
 }
 
@@ -147,12 +149,13 @@ async function load() {
   const request = new AbortController()
   abortController = request
   try {
-    const [THREE, { STLLoader }, { OrbitControls }] = await Promise.all([
+    const responsePromise = fetch(props.src, { signal: request.signal })
+    const [THREE, { OrbitControls }, stlModule, response] = await Promise.all([
       import('three'),
-      import('three/examples/jsm/loaders/STLLoader.js'),
-      import('three/examples/jsm/controls/OrbitControls.js')
+      import('three/examples/jsm/controls/OrbitControls.js'),
+      props.format === 'stl' ? import('three/examples/jsm/loaders/STLLoader.js') : null,
+      responsePromise
     ])
-    const response = await fetch(props.src, { signal: request.signal })
     if (!response.ok) {
       let payload
       try {
@@ -165,11 +168,19 @@ async function load() {
       throw error
     }
     const buffer = await response.arrayBuffer()
-    validateStlBuffer(buffer)
     if (version !== loadVersion) return
 
-    geometry = new STLLoader().parse(buffer)
-    validateStlGeometry(geometry)
+    if (props.format === 'off') {
+      const parsed = parseOffBuffer(buffer)
+      geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(parsed.positions, 3))
+      if (parsed.colors) geometry.setAttribute('color', new THREE.Float32BufferAttribute(parsed.colors, 3))
+      validateStlGeometry(geometry)
+    } else {
+      validateStlBuffer(buffer)
+      geometry = new stlModule.STLLoader().parse(buffer)
+      validateStlGeometry(geometry)
+    }
     geometry.center()
     geometry.computeVertexNormals()
     modelRadius = geometry.boundingSphere.radius
@@ -192,7 +203,12 @@ async function load() {
     )
     canvasHost.value.appendChild(renderer.domElement)
 
-    material = new THREE.MeshStandardMaterial({ color: 0x42a5f5, metalness: 0.08, roughness: 0.72 })
+    material = new THREE.MeshStandardMaterial({
+      color: geometry.getAttribute('color') ? 0xffffff : 0x42a5f5,
+      vertexColors: Boolean(geometry.getAttribute('color')),
+      metalness: 0.08,
+      roughness: 0.72
+    })
     mesh = new THREE.Mesh(geometry, material)
     scene.add(mesh)
     scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 2.2))
@@ -219,7 +235,7 @@ async function load() {
   }
 }
 
-watch(() => props.src, load)
+watch(() => [props.src, props.format], load)
 watch(() => $q.dark.isActive, (dark) => {
   if (scene) {
     scene.background.set(dark ? 0x111827 : 0xf1f5f9)

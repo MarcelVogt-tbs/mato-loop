@@ -32,6 +32,21 @@
         @update:model-value="setOpenScadView"
       />
       <q-btn
+        v-if="preview.kind === 'openscad' && !workspace.editorActive"
+        class="file-viewer__export-stl"
+        unelevated
+        no-caps
+        color="primary"
+        icon="download"
+        :label="$q.screen.gt.xs ? 'STL erzeugen' : undefined"
+        :loading="exportingOpenScad"
+        :disable="renderingOpenScad"
+        aria-label="STL erzeugen und herunterladen"
+        @click="exportOpenScad"
+      >
+        <q-tooltip>STL erzeugen und herunterladen</q-tooltip>
+      </q-btn>
+      <q-btn
         v-if="editable && !workspace.editorActive"
         ref="editButton"
         class="file-viewer__edit"
@@ -180,9 +195,9 @@
           <div class="app-muted q-mt-xs">{{ openScadErrorMessage }}</div>
           <q-btn class="q-mt-lg" color="primary" no-caps label="Erneut versuchen" @click="renderOpenScad" />
         </div>
-        <StlViewerPanel v-else-if="openScadUrl" :src="openScadUrl" />
+        <StlViewerPanel v-else-if="openScadUrl" :src="openScadUrl" format="off" />
       </template>
-      <StlViewerPanel v-else-if="preview.kind === 'stl'" :src="stlUrl" />
+      <StlViewerPanel v-else-if="preview.kind === 'stl'" :src="stlUrl" :format="directModel?.format || 'stl'" />
       <div v-else class="fit column flex-center text-center q-pa-xl">
         <q-icon name="draft" size="64px" class="app-muted q-mb-md" />
         <div class="text-subtitle1">Keine Vorschau verfügbar</div>
@@ -230,12 +245,15 @@ const saveError = ref(null)
 const conflictLoadError = ref(null)
 const preview = ref({ kind: 'none', reason: 'unsupported' })
 const loadedImageUrl = ref('')
-const openScadView = ref('source')
+const openScadView = ref('model')
 const renderingOpenScad = ref(false)
+const exportingOpenScad = ref(false)
 const openScadError = ref(null)
 const openScadUrl = ref('')
 let renderController
 let renderVersion = 0
+let exportController
+let exportVersion = 0
 let previewVersion = 0
 const directImage = computed(() => props.image?.url ? props.image : null)
 const directModel = computed(() => props.model?.url ? props.model : null)
@@ -317,7 +335,8 @@ const unavailableMessage = computed(() => ({
 async function loadPreview() {
   const version = ++previewVersion
   clearOpenScadRender()
-  openScadView.value = 'source'
+  clearOpenScadExport()
+  openScadView.value = 'model'
   preview.value = { kind: 'none', reason: 'unsupported' }
   loadError.value = null
   if (directModel.value) {
@@ -336,6 +355,7 @@ async function loadPreview() {
       preview.value = result
       imageLoading.value = result.kind === 'image' && loadedImageUrl.value !== imageUrl.value
       if (workspace.editorDraft === null) workspace.editorDraft = result.content || ''
+      if (result.kind === 'openscad') void renderOpenScad()
     }
   } catch (error) {
     if (version === previewVersion) loadError.value = error
@@ -345,6 +365,7 @@ async function loadPreview() {
 }
 
 function startEditing() {
+  clearOpenScadExport()
   saveError.value = null
   openScadView.value = 'source'
   workspace.startEdit(preview.value.content)
@@ -356,13 +377,13 @@ async function setOpenScadView(view) {
     return
   }
   if (workspace.editorActive) workspace.discardEdit()
+  if (view === 'source' && renderingOpenScad.value) clearOpenScadRender()
   openScadView.value = view
   if (view === 'model') await renderOpenScad()
-  else clearOpenScadRender()
 }
 
 async function renderOpenScad() {
-  if (!props.entry?.path || renderingOpenScad.value || workspace.editorDirty) return
+  if (!props.entry?.path || openScadUrl.value || renderingOpenScad.value || workspace.editorDirty) return
   clearOpenScadRender()
   const version = ++renderVersion
   renderingOpenScad.value = true
@@ -383,6 +404,45 @@ async function renderOpenScad() {
   } finally {
     if (version === renderVersion) renderingOpenScad.value = false
   }
+}
+
+async function exportOpenScad() {
+  if (
+    !props.entry?.path || renderingOpenScad.value || exportingOpenScad.value
+    || workspace.editorDirty
+  ) return
+  const path = props.entry.path
+  const revision = preview.value.revision
+  const filename = `${props.entry.name.replace(/\.scad$/i, '')}.stl`
+  const version = ++exportVersion
+  exportingOpenScad.value = true
+  exportController = new AbortController()
+  try {
+    const blob = await workspace.renderOpenScad(path, revision, exportController.signal, 'stl')
+    if (!blob || version !== exportVersion || props.entry?.path !== path) return
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  } catch {
+    // The central Axios interceptor displays the API error.
+  } finally {
+    if (version === exportVersion) {
+      exportController = null
+      exportingOpenScad.value = false
+    }
+  }
+}
+
+function clearOpenScadExport() {
+  exportVersion += 1
+  exportController?.abort()
+  exportController = null
+  exportingOpenScad.value = false
 }
 
 function clearOpenScadRender() {
@@ -421,6 +481,7 @@ async function save() {
   try {
     const result = await workspace.saveFile(props.entry.path, draft.value, preview.value.revision)
     if (!result) return
+    clearOpenScadRender()
     preview.value = workspace.filePreviews[props.entry.path]
     workspace.discardEdit()
     $q.notify({ type: 'positive', message: 'Datei gespeichert.' })
@@ -463,7 +524,7 @@ function download() {
   }
   const anchor = document.createElement('a')
   anchor.href = directModel.value.url
-  anchor.download = directModel.value.name || 'modell.stl'
+    anchor.download = directModel.value.name || `modell.${directModel.value.format || 'stl'}`
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
@@ -504,5 +565,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', warnBeforeUnload)
   previewVersion += 1
   clearOpenScadRender()
+  clearOpenScadExport()
 })
 </script>

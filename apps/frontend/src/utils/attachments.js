@@ -253,7 +253,8 @@ export function attachmentIcon(attachment) {
   if (attachment?.kind === 'audio') return 'audio_file'
   if (attachment?.kind === 'video') return 'video_file'
   const mimeType = String(attachment?.mimeType || '')
-  if (mimeType === 'model/stl' || attachment?.filename?.toLocaleLowerCase().endsWith('.stl')) return 'view_in_ar'
+  if (['model/stl', 'model/vnd.off'].includes(mimeType)
+    || /\.(stl|off)$/i.test(attachment?.filename || '')) return 'view_in_ar'
   if (mimeType === 'application/pdf') return 'picture_as_pdf'
   if (attachment?.kind === 'text' || mimeType.startsWith('text/')) return 'description'
   if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'table_view'

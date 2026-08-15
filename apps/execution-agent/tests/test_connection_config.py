@@ -49,7 +49,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                     json.dumps(
                         {
                             "type": "welcome",
-                            "protocolVersion": 2,
+                            "protocolVersion": 3,
                             "agentId": AGENT_ID,
                         }
                     )
@@ -77,7 +77,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(received["authorization"], "Bearer agent-secret")
             self.assertEqual(received["hello"]["type"], "hello")
-            self.assertEqual(received["hello"]["protocolVersion"], 2)
+            self.assertEqual(received["hello"]["protocolVersion"], 3)
             self.assertEqual(received["hello"]["roots"][0]["id"], ROOT_ID)
 
     async def test_mutation_cancellation_waits_for_actual_outcome(self) -> None:

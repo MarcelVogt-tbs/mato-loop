@@ -19,8 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.attachments import (
     MAX_FILE_ATTACHMENT_BYTES,
-    AttachmentError,
-    validate_image,
 )
 from mato_loop_backend.execution.client import (
     ExecutionClient,
@@ -47,10 +45,14 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
-_VIEWS = ("isometric", "front", "right", "top")
 _MAX_RENDER_ATTACHMENTS_BYTES = MAX_FILE_ATTACHMENT_BYTES
+_MAX_OFF_BYTES = 24 * 1024 * 1024
+_MAX_OFF_LINE_LENGTH = 1024 * 1024
+_MAX_OFF_VERTICES = 500_000
+_MAX_OFF_TRIANGLES = 500_000
 _RENDER_TIMEOUT_SECONDS = 300.0
 _EXPORT_TIMEOUT_SECONDS = 120.0
+_PREVIEW_VIEWS = ("isometric", "front", "right", "top")
 _DIRECTORY_FLAGS = (
     os.O_RDONLY
     | getattr(os, "O_DIRECTORY", 0)
@@ -110,6 +112,13 @@ class OpenScadRenderArguments(_OpenScadModel):
             "dependency. Pass it explicitly for new projects."
         ),
     )
+    output: Literal["preview", "stl"] = Field(
+        default="preview",
+        description=(
+            "Output to create. Use preview by default. Use stl only when the user explicitly "
+            "requested an STL file."
+        ),
+    )
 
     @field_validator("path")
     @classmethod
@@ -161,16 +170,11 @@ class OpenScadPreview(_OpenScadModel):
 class OpenScadRenderResult(ExecutionResult):
     model_config = _OpenScadModel.model_config
 
-    model: ArtifactDescriptor
-    previews: list[OpenScadPreview] = Field(min_length=4, max_length=4)
+    output: Literal["preview", "stl"]
+    artifact: ArtifactDescriptor
+    previews: list[OpenScadPreview] = Field(default_factory=list, max_length=4)
     diagnostics: str = Field(max_length=256 * 1_024)
     diagnostics_truncated: bool
-
-    @model_validator(mode="after")
-    def complete_views(self) -> OpenScadRenderResult:
-        if {preview.view for preview in self.previews} != set(_VIEWS):
-            raise ValueError("previews must contain every view")
-        return self
 
 
 class CacheExportResult(ExecutionResult):
@@ -310,6 +314,79 @@ def validate_binary_stl(data: bytes) -> dict[str, Any]:
     }
 
 
+def validate_off(data: bytes) -> dict[str, Any]:
+    if not 1 <= len(data) <= _MAX_OFF_BYTES:
+        raise ValueError("invalid OFF size")
+    try:
+        raw_lines = data.decode("utf-8").splitlines()
+        if any(len(line) > _MAX_OFF_LINE_LENGTH for line in raw_lines):
+            raise ValueError("OFF line exceeds the limit")
+        lines = [line.strip() for line in raw_lines if line.strip()]
+        header = lines[0].split(maxsplit=1)
+        if header[0] != "OFF":
+            raise ValueError("invalid OFF header")
+        if len(header) == 2:
+            lines[0:1] = ["OFF", header[1]]
+        if len(lines) < 3:
+            raise ValueError("invalid OFF structure")
+        counts = lines[1].split()
+        if len(counts) != 3:
+            raise ValueError("invalid OFF counts")
+        vertex_count, face_count, edge_count = (int(value) for value in counts)
+        if (
+            vertex_count < 3
+            or vertex_count > _MAX_OFF_VERTICES
+            or face_count < 1
+            or face_count > _MAX_OFF_TRIANGLES
+            or edge_count < 0
+            or len(lines) != 2 + vertex_count + face_count
+        ):
+            raise ValueError("invalid OFF structure")
+        minimum = [math.inf, math.inf, math.inf]
+        maximum = [-math.inf, -math.inf, -math.inf]
+        for line in lines[2 : 2 + vertex_count]:
+            values = line.split()
+            if len(values) != 3:
+                raise ValueError("invalid OFF vertex")
+            coordinates = [float(value) for value in values]
+            if not all(math.isfinite(value) for value in coordinates):
+                raise ValueError("OFF contains non-finite coordinates")
+            for axis, value in enumerate(coordinates):
+                minimum[axis] = min(minimum[axis], value)
+                maximum[axis] = max(maximum[axis], value)
+        triangles = 0
+        for line in lines[2 + vertex_count :]:
+            values = line.split()
+            count = int(values[0])
+            if count < 3 or len(values) not in {count + 1, count + 4, count + 5}:
+                raise ValueError("invalid OFF face")
+            indices = [int(value) for value in values[1 : count + 1]]
+            if any(index < 0 or index >= vertex_count for index in indices):
+                raise ValueError("invalid OFF index")
+            if not all(math.isfinite(float(value)) for value in values[count + 1 :]):
+                raise ValueError("invalid OFF color")
+            triangles += count - 2
+            if triangles > _MAX_OFF_TRIANGLES:
+                raise ValueError("invalid OFF triangle count")
+        if triangles < 1:
+            raise ValueError("OFF contains no triangles")
+    except (UnicodeError, ValueError, IndexError) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith(("invalid OFF", "OFF ")):
+            raise
+        raise ValueError("invalid OFF structure") from exc
+    axes = ("x", "y", "z")
+    return {
+        "triangleCount": triangles,
+        "bounds": {
+            "min": dict(zip(axes, minimum, strict=True)),
+            "max": dict(zip(axes, maximum, strict=True)),
+        },
+        "dimensions": {
+            axis: maximum[index] - minimum[index] for index, axis in enumerate(axes)
+        },
+    }
+
+
 def _validate_descriptor(
     artifact: ArtifactDescriptor,
     *,
@@ -335,6 +412,7 @@ async def render_project(
     session_id: UUID,
     arguments: OpenScadRenderArguments,
     root_files: RootFileService,
+    preview_images: bool = False,
 ) -> OpenScadRenderResult:
     project_path, entrypoint = _project_parts(arguments)
     source: dict[str, Any]
@@ -382,6 +460,8 @@ async def render_project(
                 "sessionId": str(session_id),
                 "entrypoint": entrypoint,
                 "source": source,
+                "output": arguments.output,
+                "previewImages": preview_images,
             },
             OpenScadRenderResult,
             timeout=_RENDER_TIMEOUT_SECONDS,
@@ -390,13 +470,18 @@ async def render_project(
         if ticket_id is not None:
             transfer_tickets.revoke(ticket_id)
     assert isinstance(result, OpenScadRenderResult)
+    if result.output != arguments.output:
+        raise ExecutionClientError("executionAgent.protocolError")
     _validate_descriptor(
-        result.model,
+        result.artifact,
         agent_id=client.agent_id,
         session_id=session_id,
-        content_type="model/stl",
-        suffix=".stl",
+        content_type="model/vnd.off" if arguments.output == "preview" else "model/stl",
+        suffix=".off" if arguments.output == "preview" else ".stl",
     )
+    expected_views = _PREVIEW_VIEWS if preview_images and arguments.output == "preview" else ()
+    if tuple(preview.view for preview in result.previews) != expected_views:
+        raise ExecutionClientError("executionAgent.protocolError")
     for preview in result.previews:
         _validate_descriptor(
             preview.artifact,
@@ -543,49 +628,54 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
             session_id=context.session.id,
             arguments=arguments,
             root_files=context.root_files,
+            preview_images=arguments.output == "preview",
         )
-        if (
-            rendered.model.size
-            + sum(preview.artifact.size for preview in rendered.previews)
-            > _MAX_RENDER_ATTACHMENTS_BYTES
-        ):
+        if rendered.artifact.size + sum(
+            preview.artifact.size for preview in rendered.previews
+        ) > _MAX_RENDER_ATTACHMENTS_BYTES:
             return ToolResult.error("integration.attachmentTooLarge")
-        model = await export_artifact(context.execution_client, rendered.model)
-        stl_metadata = await asyncio.to_thread(validate_binary_stl, model)
-        previews = []
-        previews_by_view = {preview.view: preview for preview in rendered.previews}
-        for view in _VIEWS:
-            preview = previews_by_view[view]
-            data = await export_artifact(context.execution_client, preview.artifact)
-            await asyncio.to_thread(validate_image, data, "image/png")
-            previews.append((preview, data))
+        data = await export_artifact(context.execution_client, rendered.artifact)
+        preview_data = [
+            await export_artifact(context.execution_client, preview.artifact)
+            for preview in rendered.previews
+        ]
+        metadata = await asyncio.to_thread(
+            validate_off if arguments.output == "preview" else validate_binary_stl,
+            data,
+        )
     except ExecutionClientError as exc:
         return ToolResult.error(exc.code, params=_diagnostic_params(exc))
     except RootFileError as exc:
         return ToolResult.error(exc.code)
-    except (AttachmentError, ValueError, OSError, zipfile.BadZipFile):
+    except (ValueError, OSError, zipfile.BadZipFile):
         return ToolResult.error("openscad.invalidArtifact")
 
     payload = {
-        "model": rendered.model.filename,
-        "previews": [preview.view for preview, _ in previews],
+        "output": arguments.output,
+        "file": rendered.artifact.filename,
+        "previewFiles": [preview.artifact.filename for preview in rendered.previews],
         "diagnostics": rendered.diagnostics,
         "diagnosticsTruncated": rendered.diagnostics_truncated,
-        "stlMetadata": stl_metadata,
+        "geometryMetadata": metadata,
     }
     return ToolResult(
         json.dumps(payload, ensure_ascii=False),
         {},
         attachments=(
             ToolAttachment(
-                model,
-                "model/stl",
-                rendered.model.filename,
+                data,
+                rendered.artifact.content_type,
+                rendered.artifact.filename,
                 kind="file",
             ),
             *(
-                ToolAttachment(data, "image/png", preview.artifact.filename)
-                for preview, data in previews
+                ToolAttachment(
+                    image,
+                    preview.artifact.content_type,
+                    preview.artifact.filename,
+                    kind="image",
+                )
+                for preview, image in zip(rendered.previews, preview_data, strict=True)
             ),
         ),
     )
@@ -598,7 +688,8 @@ OPENSCAD_TOOL = ToolContribution(
     name="render_openscad",
     description=(
         "Render one .scad entrypoint from an explicit session or workspace project. "
-        "Returns a downloadable binary STL and four PNG views."
+        "Returns an interactive OFF preview and four visual inspection views by default. "
+        "Set output to stl only when the user explicitly requests an STL file."
     ),
     arguments_model=OpenScadRenderArguments,
     handler=render_openscad,
@@ -648,11 +739,11 @@ def _contributions(_instance: IntegrationInstance) -> IntegrationContributions:
             "OpenSCAD validation:\n"
             "- If required dimensions are missing, ask one grouped question; otherwise state reasonable "
             "assumptions. Read files before modifying them and do not overwrite unrelated content.\n"
-            "- Render after every material change. A render is complete only when render_openscad "
-            "returns its validated binary STL and preview attachments. Inspect controlled diagnostics, "
-            "STL triangle count, bounds, dimensions, and every supplied view. Correct problems and "
-            "rerender. Never claim success before a successful render. In the final response, name the "
-            "source file and STL file.",
+            "- Render output=preview after every material change. Inspect the isometric, front, "
+            "right, and top views plus controlled diagnostics, triangle count, bounds, and dimensions. "
+            "Correct problems and rerender. Use output=stl "
+            "only when the user explicitly requested an STL file. Never claim success before a "
+            "successful preview. In the final response, name the source file and every generated file.",
         )
     )
 
@@ -683,4 +774,5 @@ __all__ = [
     "render_openscad",
     "render_project",
     "validate_binary_stl",
+    "validate_off",
 ]

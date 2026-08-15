@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Annotated, BinaryIO
+from typing import Annotated, BinaryIO, Literal
 from urllib.parse import quote
 from uuid import UUID
 
@@ -48,6 +48,7 @@ from mato_loop_backend.integrations.openscad import (
     export_artifact,
     render_project,
     validate_binary_stl,
+    validate_off,
 )
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant, UserAccount
 from mato_loop_backend.safe_svg import MAX_SAFE_SVG_BYTES, validate_svg
@@ -119,6 +120,7 @@ class OpenScadFileRenderRequest(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
         validation_alias=AliasChoices("expected_revision", "expectedRevision"),
     )
+    output: Literal["preview", "stl"] = "preview"
 
 
 class CopyMoveEntryRequest(BaseModel):
@@ -1532,6 +1534,7 @@ async def render_openscad_file(
         arguments = OpenScadRenderArguments(
             root="session" if scope is FileScope.SESSION else "workspace",
             path=payload.path,
+            output=payload.output,
         )
     except ValueError as exc:
         raise ApiError(422, "validation.invalid", field="path") from exc
@@ -1544,8 +1547,11 @@ async def render_openscad_file(
             arguments=arguments,
             root_files=root_files,
         )
-        data = await export_artifact(client, rendered.model)
-        await asyncio.to_thread(validate_binary_stl, data)
+        data = await export_artifact(client, rendered.artifact)
+        await asyncio.to_thread(
+            validate_off if payload.output == "preview" else validate_binary_stl,
+            data,
+        )
     except ExecutionClientError as exc:
         raise _openscad_render_api_error(exc) from exc
     except (RootFileError, WorkspaceError) as exc:
@@ -1554,12 +1560,12 @@ async def render_openscad_file(
         raise ApiError(502, "openscad.invalidArtifact") from exc
     return Response(
         content=data,
-        media_type="model/stl",
+        media_type=rendered.artifact.content_type,
         headers={
             **_FILE_RESPONSE_HEADERS,
             "Content-Disposition": (
-                "inline; filename=\"model.stl\"; "
-                f"filename*=UTF-8''{quote(rendered.model.filename, safe='')}"
+                f"{'attachment' if payload.output == 'stl' else 'inline'}; "
+                f"filename*=UTF-8''{quote(rendered.artifact.filename, safe='')}"
             ),
         },
     )

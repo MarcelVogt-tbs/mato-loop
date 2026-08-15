@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 MAX_MESSAGE_BYTES = 1_048_576
 MAX_REQUEST_BYTES = 262_144
 MAX_EVENT_BYTES = 65_536
@@ -71,7 +71,7 @@ class RootSnapshot(WireModel):
 
 class HelloMessage(WireModel):
     type: Literal["hello"]
-    protocol_version: Literal[2]
+    protocol_version: Literal[3]
     agent_id: UUID
     name: str = Field(min_length=1, max_length=160)
     platform: str = Field(min_length=1, max_length=120)
@@ -109,7 +109,7 @@ class HelloMessage(WireModel):
 
 class WelcomeMessage(WireModel):
     type: Literal["welcome"] = "welcome"
-    protocol_version: Literal[2] = PROTOCOL_VERSION
+    protocol_version: Literal[3] = PROTOCOL_VERSION
     agent_id: UUID
 
 

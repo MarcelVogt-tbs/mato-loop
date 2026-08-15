@@ -29,7 +29,7 @@ def _hello(agent_id=None, *, operations=None) -> HelloMessage:
     return HelloMessage.model_validate(
         {
             "type": "hello",
-            "protocolVersion": 2,
+            "protocolVersion": 3,
             "agentId": agent_id or uuid4(),
             "name": "Test Agent",
             "platform": "linux",

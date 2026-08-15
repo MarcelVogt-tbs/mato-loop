@@ -558,7 +558,7 @@ async def test_ws_snapshot_rejects_stale_authenticated_hash(monkeypatch) -> None
     hello = HelloMessage.model_validate(
         {
             "type": "hello",
-            "protocolVersion": 2,
+            "protocolVersion": 3,
             "agentId": agent_id,
             "name": "Desktop",
             "platform": "linux",
