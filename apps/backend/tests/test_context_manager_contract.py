@@ -1140,7 +1140,6 @@ def test_runtime_state_follows_the_stable_prompt_contract() -> None:
         web_search_required=True,
         memory_write_pending=True,
         response_repair_required=True,
-        tool_calls_used=2,
         tool_call_limit=8,
         research_tool_calls_used=1,
         research_tool_call_limit=4,
@@ -1149,7 +1148,7 @@ def test_runtime_state_follows_the_stable_prompt_contract() -> None:
         ),
     )
     runtime_prefixes = (
-        "Tool budget: 2/8 calls used, 6 remaining.",
+        "Tool budget limit for this run: 8.",
         "Research budget: 1/4 calls used, 3 remaining.",
         "Required memory mutation remains unresolved.",
         "Persistent memory status:",

@@ -285,7 +285,6 @@ def general_system_prompt(
     openscad_render_pending: bool = False,
     memory_write_pending: bool = False,
     memory_write_outcome: str | None = None,
-    tool_calls_used: int = 0,
     tool_call_limit: int | None = None,
     tool_budget_exhausted: bool = False,
     research_tool_calls_used: int = 0,
@@ -346,7 +345,6 @@ def general_system_prompt(
             + "\n- ".join(inactive_capability_groups)
         )
     if tool_call_limit is not None and (offered_tool_names or tool_budget_exhausted):
-        remaining = max(0, tool_call_limit - tool_calls_used)
         if tool_budget_exhausted:
             runtime_parts.append(
                 "Tool budget exhausted. No tools are available. Finalize from confirmed results "
@@ -354,9 +352,10 @@ def general_system_prompt(
             )
         else:
             runtime_parts.append(
-                f"Tool budget: {tool_calls_used}/{tool_call_limit} calls used, {remaining} remaining. "
-                "Each call in a parallel batch consumes one call. Prioritize required actions and "
-                "never emit more calls than remain."
+                f"Tool budget limit for this run: {tool_call_limit}. "
+                "Each call in a parallel batch consumes one call. Prioritize required actions. "
+                "The host rejects batches that exceed the remaining budget and removes tools when "
+                "the budget is exhausted."
             )
     if "question" in offered_tool_names:
         parts.append(

@@ -1856,7 +1856,6 @@ class AgentRuntime:
                 openscad_render_pending=openscad_render_pending,
                 memory_write_pending=memory_write_pending,
                 memory_write_outcome=memory_write_outcome,
-                tool_calls_used=tool_calls_used,
                 tool_call_limit=(runtime_settings.max_tool_calls if model.supports_tools else None),
                 tool_budget_exhausted=tool_budget_exhausted,
                 research_tool_calls_used=research_tool_calls_used,
