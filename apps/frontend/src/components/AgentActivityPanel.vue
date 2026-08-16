@@ -1,5 +1,5 @@
 <template>
-  <div class="work-history">
+  <div ref="panel" class="work-history">
     <q-expansion-item
       v-model="historyExpanded"
       dense
@@ -7,12 +7,13 @@
       header-class="work-history__header"
       expand-icon-class="work-history__toggle"
       :duration="expansionDuration"
-      toggle-aria-label="Verlauf ein- oder ausblenden"
+      :toggle-aria-label="`${headerTitle} ein- oder ausblenden`"
+      @after-show="emit('expanded', panel)"
     >
       <template #header>
         <q-item-section class="work-history__identity" :aria-label="headerAriaLabel">
           <div class="work-history__title text-weight-medium">
-            <span>Verlauf</span>
+            <span :class="{ 'activity-shimmer': running }">{{ headerTitle }}</span>
             <span v-if="toolUsage.length" class="work-history__tool-icons" aria-hidden="true">
               <span
                 v-for="tool in toolUsage"
@@ -31,6 +32,9 @@
                 </q-tooltip>
               </span>
             </span>
+          </div>
+          <div v-if="headerSummary" class="work-history__summary">
+            {{ headerSummary }}
           </div>
         </q-item-section>
         <q-item-section side class="work-history__meta-section">
@@ -246,15 +250,18 @@ import {
 } from 'src/utils/reasoning-display'
 import { toolStatus, toolUsageSummary } from 'src/utils/tool-display'
 
-defineOptions({ name: 'WorkHistoryPanel' })
+defineOptions({ name: 'AgentActivityPanel' })
 
 const props = defineProps({
   history: { type: Object, required: true },
+  activity: { type: Object, default: null },
+  presentation: { type: Object, default: null },
   reasoning: { type: Object, default: null },
   processOutputs: { type: Object, default: () => ({}) },
   running: Boolean
 })
-const emit = defineEmits(['open-file', 'open-approval-draft'])
+const emit = defineEmits(['open-file', 'open-approval-draft', 'expanded'])
+const panel = ref(null)
 const now = ref(Date.now())
 const historyExpanded = ref(false)
 let timer = null
@@ -275,7 +282,13 @@ const items = computed(() => entries.value.flatMap((entry) => (
   entry.type === 'context' ? entry.items : entry.type === 'tool' ? [entry] : []
 )))
 const states = computed(() => items.value.map((item) => ({ item, status: toolStatus(item) })))
-const toolUsage = computed(() => toolUsageSummary(items.value))
+const activeToolName = computed(() => props.running && props.activity?.phase === 'processing_tool'
+  ? props.activity.tool
+  : null)
+const toolUsage = computed(() => toolUsageSummary(items.value).map((tool) => ({
+  ...tool,
+  active: tool.active || tool.name === activeToolName.value
+})))
 const approvalItems = computed(() => items.value.filter((item) => item.approval))
 const errorItems = computed(() => states.value.filter(({ status }) => (
   ['failed', 'denied'].includes(status.name)
@@ -289,9 +302,14 @@ const totalDuration = computed(() => {
     ? formatActivityDuration(startedAt, completedAt)
     : null
 })
+const headerTitle = computed(() => props.running
+  ? props.presentation?.label || 'Agent arbeitet'
+  : 'Verlauf')
+const headerSummary = computed(() => props.running ? props.presentation?.summary || '' : '')
 const headerAriaLabel = computed(() => {
   const parts = [
-    'Verlauf der Antworterstellung',
+    props.running ? `Aktuell: ${headerTitle.value}` : 'Verlauf der Antworterstellung',
+    ...(headerSummary.value ? [headerSummary.value] : []),
     ...toolUsage.value.map((tool) => `${tool.label}: ${tool.count} ${tool.count === 1 ? 'Aufruf' : 'Aufrufe'}`),
     ...(totalDuration.value ? [`Gesamtdauer: ${totalDuration.value}`] : []),
     ...(errorItems.value.length ? [errorLabel.value] : []),

@@ -73,15 +73,17 @@ export function agentRunPresentation({
     || transcript?.unmatchedApprovals?.[0]
   const question = toolItems.find((item) => item.question)?.question
     || transcript?.unmatchedQuestions?.[0]
+  const reasoningLabel = activity?.phase === 'waiting_model' && !streamContent && streamReasoning
+    ? reasoningStatusLabel(streamReasoning) || 'Nachdenken'
+    : ''
   const label = stopping
     ? 'Anfrage wird abgebrochen'
     : approval
       ? 'Wartet auf Freigabe'
-      : question ? 'Wartet auf deine Antwort' : agentActivityLabel(activity)
+      : question ? 'Wartet auf deine Antwort' : reasoningLabel || agentActivityLabel(activity)
   const summary = approval?.title
     || question?.questions?.[0]?.question
     || (activeTool ? toolSummary(activeTool.tool) : '')
-    || reasoningStatusLabel(streamReasoning)
     || ''
   let announcement = label
   if (approval) {
@@ -93,7 +95,7 @@ export function agentRunPresentation({
   } else if (streamContent) {
     announcement = 'Antwort wird erstellt'
   } else if (streamReasoning) {
-    announcement = 'Überlegung'
+    announcement = 'Nachdenken'
   }
   return { showActivity: true, label, summary, announcement }
 }

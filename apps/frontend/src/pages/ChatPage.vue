@@ -48,12 +48,14 @@
           <p class="text-body1 app-muted q-mx-auto">
             Was möchtest du tun?
           </p>
-          <AgentActivity
+          <AgentActivityPanel
             v-if="runPresentation.showActivity"
+            :history="liveWorkHistory"
             :activity="chat.activity"
-            :label="runPresentation.label"
-            :summary="runPresentation.summary"
+            :presentation="runPresentation"
+            running
             class="chat-welcome__activity text-left q-mx-auto"
+            @expanded="revealActivityPanel"
           />
         </div>
 
@@ -91,9 +93,11 @@
                 || message.workHistory
                 || message.generationStatus === 'interrupted'"
             >
-              <WorkHistoryPanel
+              <AgentActivityPanel
                 v-if="message.workHistory"
                 :history="message.workHistory"
+                :activity="message.currentTurn ? chat.activity : null"
+                :presentation="message.currentTurn ? runPresentation : null"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
                 :process-outputs="message.currentTurn ? chat.processOutputs : emptyProcessOutputs"
                 :running="chat.running && message.currentTurn"
@@ -104,6 +108,7 @@
                 }"
                 @open-file="openToolFile"
                 @open-approval-draft="openApprovalDraft"
+                @expanded="revealActivityPanel"
               />
               <MessageContent
                 v-if="message.content && message.role === 'assistant'"
@@ -208,19 +213,22 @@
           </template>
           <template #after>
             <div
-              v-if="chat.streamContent || (chat.streamReasoning && !hasCurrentWorkHistory)"
+              v-if="chat.streamContent || (chat.running && !hasCurrentWorkHistory)"
               class="chat-message chat-message--assistant"
             >
             <div v-if="!hasCurrentAssistantTurn" class="chat-message__label">
               <span>{{ identity.displayName }}</span>
             </div>
-            <WorkHistoryPanel
-              v-if="chat.streamReasoning && !hasCurrentWorkHistory"
-              :history="emptyWorkHistory"
+            <AgentActivityPanel
+              v-if="chat.running && !hasCurrentWorkHistory"
+              :history="liveWorkHistory"
+              :activity="chat.activity"
+              :presentation="runPresentation"
               :reasoning="chat.streamReasoning"
               :process-outputs="chat.processOutputs"
-              :running="chat.running"
+              running
               :class="{ 'q-mb-sm': chat.streamContent }"
+              @expanded="revealActivityPanel"
             />
             <MessageContent
               v-if="chat.streamContent"
@@ -242,12 +250,6 @@
               :approval="approval"
               class="q-mt-md"
               @open-approval-draft="openApprovalDraft"
-            />
-            <AgentActivity
-              v-if="runPresentation.showActivity"
-              :activity="chat.activity"
-              :label="runPresentation.label"
-              :summary="runPresentation.summary"
             />
           </template>
         </q-virtual-scroll>
@@ -350,14 +352,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'components/ApprovalCard.vue'
-import AgentActivity from 'components/AgentActivity.vue'
+import AgentActivityPanel from 'components/AgentActivityPanel.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
 import FileExplorerPanel from 'components/FileExplorerPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import QuestionDock from 'components/QuestionDock.vue'
-import WorkHistoryPanel from 'components/WorkHistoryPanel.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
@@ -373,7 +374,11 @@ import {
 } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import { agentRunPresentation } from 'src/utils/agent-activity'
-import { chatBottomDistance, scrollChatToBottom } from 'src/utils/chat-scroll'
+import {
+  chatBottomDistance,
+  scrollChatElementToTop,
+  scrollChatToBottom
+} from 'src/utils/chat-scroll'
 import { buildChatTranscript } from 'src/utils/chat-transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
@@ -403,7 +408,14 @@ const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
 const announcedRunStatus = ref('')
 const bottomThreshold = 64
-const emptyWorkHistory = { entries: [], observedDurationMs: null }
+const reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+const liveWorkHistory = computed(() => ({
+  entries: [],
+  observedDurationMs: null,
+  startedAt: [...(chat.current?.messages || [])].reverse()
+    .find((message) => message.role === 'user')?.createdAt || chat.activity.startedAt,
+  completedAt: null
+}))
 const emptyProcessOutputs = {}
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
@@ -416,6 +428,7 @@ let userScrollTimer = null
 let messageTimestampTimer = null
 let runAnnouncementTimer = null
 let touchActive = false
+let activityPanelScrollFrame = null
 let virtualScrollRefreshFrame = null
 let virtualScrollRefreshTimer = null
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
@@ -672,6 +685,17 @@ function scheduleVirtualScrollRefresh(delay = 0) {
   })
 }
 
+function revealActivityPanel(element) {
+  followingBottom.value = false
+  cancelFollowScroll()
+  scheduleVirtualScrollRefresh()
+  if (activityPanelScrollFrame !== null) window.cancelAnimationFrame(activityPanelScrollFrame)
+  activityPanelScrollFrame = window.requestAnimationFrame(() => {
+    activityPanelScrollFrame = null
+    scrollChatElementToTop(element, !reducedMotion)
+  })
+}
+
 function updateFollowState() {
   if (!scrollTarget) return
   const atBottom = chatBottomDistance(scrollTarget) <= bottomThreshold
@@ -819,6 +843,7 @@ onBeforeUnmount(() => {
   clearTimeout(runAnnouncementTimer)
   clearTimeout(userScrollTimer)
   clearTimeout(virtualScrollRefreshTimer)
+  if (activityPanelScrollFrame !== null) window.cancelAnimationFrame(activityPanelScrollFrame)
   if (virtualScrollRefreshFrame !== null) window.cancelAnimationFrame(virtualScrollRefreshFrame)
   cancelFollowScroll()
 })

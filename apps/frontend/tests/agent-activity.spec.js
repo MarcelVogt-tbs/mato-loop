@@ -61,14 +61,29 @@ describe('agent activity', () => {
       streamReasoning: { kind: 'summary', text: '**Ergebnisse prüfen**\nDetails' }
     })).toEqual({
       showActivity: true,
-      label: 'Modell analysiert die Anfrage',
-      summary: 'Ergebnisse prüfen',
-      announcement: 'Überlegung'
+      label: 'Ergebnisse prüfen',
+      summary: '',
+      announcement: 'Nachdenken'
     })
-    expect(agentRunPresentation({ running: true, activity, streamContent: 'Antwort' }))
+    expect(agentRunPresentation({
+      running: true,
+      activity,
+      streamReasoning: { kind: 'content', text: 'Öffentliche Überlegung' }
+    })).toEqual({
+      showActivity: true,
+      label: 'Nachdenken',
+      summary: '',
+      announcement: 'Nachdenken'
+    })
+    expect(agentRunPresentation({
+      running: true,
+      activity: { phase: 'streaming' },
+      streamReasoning: { kind: 'summary', text: '**Ergebnisse prüfen**\nDetails' },
+      streamContent: 'Antwort'
+    }))
       .toEqual({
         showActivity: true,
-        label: 'Modell analysiert die Anfrage',
+        label: 'Antwort wird erstellt',
         summary: '',
         announcement: 'Antwort wird erstellt'
       })

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { chatBottomDistance, chatBottomOffset, scrollChatToBottom } from '../src/utils/chat-scroll'
+import {
+  chatBottomDistance,
+  chatBottomOffset,
+  scrollChatElementToTop,
+  scrollChatToBottom
+} from '../src/utils/chat-scroll'
 
 describe('chat scroll geometry', () => {
   it('calculates the exact bottom offset without an oversized sentinel value', () => {
@@ -21,5 +26,18 @@ describe('chat scroll geometry', () => {
     scrollChatToBottom(target)
 
     expect(target.scrollTop).toBe(1280)
+  })
+
+  it('aligns expanded chat content at the top and respects reduced motion', () => {
+    const calls = []
+    const element = { scrollIntoView: (options) => calls.push(options) }
+
+    scrollChatElementToTop(element)
+    scrollChatElementToTop(element, false)
+
+    expect(calls).toEqual([
+      { behavior: 'smooth', block: 'start' },
+      { behavior: 'auto', block: 'start' }
+    ])
   })
 })
