@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildChatTranscript, groupWorkHistoryEntries } from '../src/utils/chat-transcript'
+import {
+  buildChatTranscript,
+  groupWorkHistoryEntries,
+  splitLiveWorkHistory
+} from '../src/utils/chat-transcript'
 
 describe('chat transcript', () => {
   it('groups consecutive filesystem context tools without crossing other activity', () => {
@@ -14,6 +18,30 @@ describe('chat transcript', () => {
       note,
       { key: 'context-list', type: 'context', items: [list] }
     ])
+  })
+
+  it('separates the current live step from completed steps and pending calls', () => {
+    const completed = {
+      key: 'completed', type: 'tool', tool: { id: 'call-1', name: 'web_search' }, result: {}
+    }
+    const active = {
+      key: 'active', type: 'tool', tool: { id: 'call-2', name: 'webfetch' }, active: true
+    }
+    const pending = {
+      key: 'pending', type: 'tool', tool: { id: 'call-3', name: 'read_file' }
+    }
+    const reasoning = {
+      key: 'live-reasoning', type: 'reasoning', live: true, reasoning: { text: 'Prüfen' }
+    }
+
+    expect(splitLiveWorkHistory(
+      [completed, active, pending],
+      { phase: 'processing_tool', toolCallId: 'call-2' }
+    )).toEqual({ current: active, previous: [completed] })
+    expect(splitLiveWorkHistory(
+      [completed, reasoning],
+      { phase: 'waiting_model' }
+    )).toEqual({ current: reasoning, previous: [completed] })
   })
 
   it('attaches results and approvals to their tool calls', () => {

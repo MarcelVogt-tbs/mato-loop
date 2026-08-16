@@ -71,109 +71,49 @@
       aria-label="Aktivitäten der Antworterstellung"
     >
       <div class="work-history__entries">
-        <template v-for="entry in entries" :key="entry.key">
+        <template v-if="running">
+          <AgentActivityEntry
+            v-if="liveHistory.current"
+            :key="`live-${liveHistory.current.key}`"
+            :entry="liveHistory.current"
+            :process-outputs="processOutputs"
+            auto-expand
+            @open-file="emit('open-file', $event)"
+          />
           <q-expansion-item
-            v-if="entry.type === 'context' && !contextGroupHasAttention(entry)"
+            v-if="previousEntries.length"
+            v-model="previousHistoryExpanded"
             dense
             class="work-history__context"
             header-class="work-history__context-header"
             expand-icon-class="work-history__context-toggle"
             :duration="expansionDuration"
-            :toggle-aria-label="`${contextGroupLabel(entry)} ein- oder ausblenden`"
+            toggle-aria-label="Bisherigen Verlauf ein- oder ausblenden"
           >
             <template #header>
               <q-item-section>
                 <q-item-label lines="1" class="work-history__activity-line">
-                  <span
-                    class="work-history__activity-title"
-                    :class="{ 'activity-shimmer': contextGroupActive(entry) }"
-                  >
-                    {{ contextGroupLabel(entry) }}
-                  </span>
-                  <span class="work-history__activity-summary">{{ contextGroupSummary(entry) }}</span>
+                  <span class="work-history__activity-title">Bisheriger Verlauf</span>
                 </q-item-label>
               </q-item-section>
             </template>
             <div class="work-history__context-items">
-              <ToolCallItem
-                v-for="item in entry.items"
-                :key="item.key"
-                :tool="item.tool"
-                :result="item.result"
-                :approval="item.approval"
-                :question="item.question"
-                :process-output="item.processOutput || processOutputs[item.tool.id]"
-                :active="item.active"
-                technical-only
+              <AgentActivityEntry
+                v-for="entry in previousEntries"
+                :key="`previous-${entry.key}`"
+                :entry="entry"
+                :process-outputs="processOutputs"
                 @open-file="emit('open-file', $event)"
               />
             </div>
           </q-expansion-item>
-          <template v-else-if="entry.type === 'context'">
-            <ToolCallItem
-              v-for="item in entry.items"
-              :key="item.key"
-              :tool="item.tool"
-              :result="item.result"
-              :approval="item.approval"
-              :question="item.question"
-              :process-output="item.processOutput || processOutputs[item.tool.id]"
-              :active="item.active"
-              technical-only
-              @open-file="emit('open-file', $event)"
-            />
-          </template>
-          <q-expansion-item
-            v-else-if="entry.type === 'reasoning'"
-            dense
-            class="work-history__reasoning"
-            header-class="work-history__reasoning-header"
-            expand-icon-class="work-history__reasoning-toggle"
-            :duration="expansionDuration"
-            :toggle-aria-label="`${entry.presentation.title} ein- oder ausblenden`"
-          >
-            <template #header>
-              <q-item-section>
-                <q-item-label lines="1" class="work-history__activity-line">
-                  <span
-                    class="work-history__activity-title"
-                    :class="{ 'activity-shimmer': entry.live }"
-                  >{{ entry.presentation.title }}</span>
-                  <span v-if="entry.presentation.summary" class="work-history__activity-summary">
-                    {{ entry.presentation.summary }}
-                  </span>
-                </q-item-label>
-              </q-item-section>
-              <q-item-section v-if="entry.presentation.duration" side>
-                <span class="work-history__reasoning-duration">{{ entry.presentation.duration }}</span>
-              </q-item-section>
-            </template>
-            <div class="work-history__reasoning-detail">
-              <p
-                v-for="(block, blockIndex) in entry.blocks"
-                :key="blockIndex"
-                class="work-history__reasoning-block"
-              >
-                <template v-for="(segment, segmentIndex) in block" :key="segmentIndex">
-                  <strong v-if="segment.strong">{{ segment.text }}</strong>
-                  <span v-else>{{ segment.text }}</span>
-                </template>
-              </p>
-            </div>
-          </q-expansion-item>
-          <div v-else-if="entry.type === 'note'" class="work-history__note">
-            {{ entry.text }}
-          </div>
-          <ToolCallItem
-            v-else
-            class="work-history__tool"
-            :tool="entry.tool"
-            :result="entry.result"
-            :approval="entry.approval"
-            :question="entry.question"
-            :process-output="entry.processOutput || processOutputs[entry.tool.id]"
-            :active="entry.active"
-            technical-only
+        </template>
+        <template v-else>
+          <AgentActivityEntry
+            v-for="entry in entries"
+            :key="`history-${entry.key}`"
+            :entry="entry"
+            :process-outputs="processOutputs"
             @open-file="emit('open-file', $event)"
           />
         </template>
@@ -234,16 +174,16 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import AgentActivityEntry from 'components/AgentActivityEntry.vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
-import ToolCallItem from 'components/ToolCallItem.vue'
 import {
   toolOutputAttachments,
   toolFileActions,
   toolFileAttachment
 } from 'src/utils/attachments'
 import { formatActivityDuration } from 'src/utils/agent-activity'
-import { groupWorkHistoryEntries } from 'src/utils/chat-transcript'
+import { groupWorkHistoryEntries, splitLiveWorkHistory } from 'src/utils/chat-transcript'
 import {
   reasoningBlocks,
   reasoningHistoryPresentation
@@ -264,9 +204,10 @@ const emit = defineEmits(['open-file', 'open-approval-draft', 'expanded'])
 const panel = ref(null)
 const now = ref(Date.now())
 const historyExpanded = ref(false)
+const previousHistoryExpanded = ref(false)
 let timer = null
 const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
-const entries = computed(() => groupWorkHistoryEntries([
+const preparedEntries = computed(() => [
   ...(props.history?.entries || []),
   ...(props.reasoning
     ? [{ key: 'live-reasoning', type: 'reasoning', reasoning: props.reasoning, live: true }]
@@ -277,7 +218,10 @@ const entries = computed(() => groupWorkHistoryEntries([
       blocks: reasoningBlocks(entry.reasoning),
       presentation: reasoningHistoryPresentation(entry.reasoning, entry.live)
     }
-  : entry)))
+  : entry))
+const entries = computed(() => groupWorkHistoryEntries(preparedEntries.value))
+const liveHistory = computed(() => splitLiveWorkHistory(preparedEntries.value, props.activity))
+const previousEntries = computed(() => groupWorkHistoryEntries(liveHistory.value.previous))
 const items = computed(() => entries.value.flatMap((entry) => (
   entry.type === 'context' ? entry.items : entry.type === 'tool' ? [entry] : []
 )))
@@ -323,25 +267,6 @@ const errorLabel = computed(() => (
 const warningLabel = computed(() => (
   `${warningItems.value.length} ${warningItems.value.length === 1 ? 'Warnung' : 'Warnungen'}`
 ))
-const contextGroupActive = (entry) => entry.items.some((item) => item.active)
-const contextGroupHasAttention = (entry) => entry.items.some((item) => (
-  ['approval', 'question', 'failed', 'denied', 'interrupted'].includes(toolStatus(item).name)
-))
-const contextGroupLabel = (entry) => {
-  if (contextGroupActive(entry)) return 'Kontext wird gesammelt'
-  if (entry.items.some((item) => toolStatus(item).name === 'pending')) return 'Kontext ausstehend'
-  return 'Kontext gesammelt'
-}
-const contextGroupSummary = (entry) => {
-  const reads = entry.items.filter((item) => ['read', 'read_file'].includes(item.tool.name)).length
-  const searches = entry.items.filter((item) => ['glob', 'grep'].includes(item.tool.name)).length
-  const lists = entry.items.filter((item) => item.tool.name === 'list_directory').length
-  return [
-    reads ? `${reads} ${reads === 1 ? 'Lesevorgang' : 'Lesevorgänge'}` : '',
-    searches ? `${searches} ${searches === 1 ? 'Suche' : 'Suchen'}` : '',
-    lists ? `${lists} ${lists === 1 ? 'Auflistung' : 'Auflistungen'}` : ''
-  ].filter(Boolean).join(' · ')
-}
 const outputs = computed(() => items.value.flatMap((item) => {
   const providedFile = toolFileAttachment(item.tool, item.result)
   const attachments = toolOutputAttachments(item.tool, [
@@ -359,7 +284,13 @@ function updateTimer(running) {
   timer = running ? setInterval(() => { now.value = Date.now() }, 1000) : null
 }
 
-watch(() => props.running, updateTimer)
+watch(() => props.running, (running, wasRunning) => {
+  updateTimer(running)
+  if (wasRunning && !running) {
+    historyExpanded.value = false
+    previousHistoryExpanded.value = false
+  }
+})
 onMounted(() => updateTimer(props.running))
 onBeforeUnmount(() => clearInterval(timer))
 </script>

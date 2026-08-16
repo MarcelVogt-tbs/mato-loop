@@ -6,6 +6,7 @@ import {
   parseToolResult,
   shellCommand,
   toolArgumentsDisplay,
+  toolActivityLabel,
   toolIdentity,
   toolPresentation,
   toolStatus,
@@ -51,7 +52,7 @@ describe('tool display', () => {
     ]
 
     expect(toolPresentation(tool, displayItems)).toEqual({
-      summary: 'Aufgabe ändern',
+      summary: 'Neuer Titel',
       items: displayItems
     })
     expect(toolPresentation(tool).items).toEqual([
@@ -107,6 +108,16 @@ describe('tool display', () => {
       { label: 'Aufgabe löschen', icon: 'delete_outline' }
     ])
     expect(toolSummary({ name: 'session_browse', arguments: {} })).toBe('Letzte Sessions')
+    expect(toolActivityLabel('web_search')).toBe('Web wird durchsucht')
+    expect(toolActivityLabel('webfetch')).toBe('Webseite wird abgerufen')
+    expect(toolActivityLabel('write_file')).toBe('Datei wird geschrieben')
+    expect(toolActivityLabel('shell_run')).toBe('Befehl wird ausgeführt')
+    expect(toolActivityLabel('unknown_tool')).toBe('Tool wird ausgeführt')
+    expect(toolSummary({ name: 'web_search', arguments: { query: 'Quasar Expansion Item' } }))
+      .toBe('Quasar Expansion Item')
+    expect(toolSummary({
+      name: 'write_file', arguments: { root: 'workspace', path: 'docs/plan.md', content: 'secret' }
+    })).toBe('workspace:docs/plan.md')
     expect(toolSummary({
       name: 'copy_path',
       arguments: {
@@ -163,6 +174,10 @@ describe('tool display', () => {
       .toBe('src/app.js, README.md')
     expect(toolSummary({ name: 'git_commit', arguments: { message: 'Git-Anzeige ergänzen' } }))
       .toBe('Git-Anzeige ergänzen')
+    expect(toolSummary({ name: 'git_diff', arguments: { staged: true, paths: ['src/app.js'] } }))
+      .toBe('Vorgemerkt: src/app.js')
+    expect(toolSummary({ name: 'git_log', arguments: { limit: 10, paths: [] } }))
+      .toBe('Letzte 10 Commits')
     expect(toolPresentation({
       name: 'git_clone',
       arguments: {
@@ -204,6 +219,20 @@ describe('tool display', () => {
       name: 'webfetch',
       arguments: { url: 'https://user:secret@example.com/private?token=secret' }
     })).toBe('https://example.com/private?…')
+  })
+
+  it('summarizes calendar, task and session resources without exposing tokens', () => {
+    expect(toolSummary({
+      name: 'calendar_query_events',
+      arguments: { start: '2026-08-07T14:00:00+02:00', end: '2026-08-07T15:00:00+02:00' }
+    })).toBe('2026-08-07T14:00:00+02:00 – 2026-08-07T15:00:00+02:00')
+    expect(toolSummary({
+      name: 'calendar_create_event',
+      arguments: { summary: 'Projektbesprechung', event_token: 'secret' }
+    })).toBe('Projektbesprechung')
+    expect(toolSummary({ name: 'tasks_query', arguments: { include_completed: false } }))
+      .toBe('Offene Aufgaben')
+    expect(toolSummary({ name: 'session_read', arguments: {} })).toBe('Aktuelle Session')
   })
 
   it('summarizes knowledge searches with every search term', () => {

@@ -23,12 +23,16 @@ describe('agent activity', () => {
 
   it('reuses readable tool identities without exposing arguments', () => {
     expect(agentActivityLabel({ phase: 'processing_tool', tool: 'read_file' }))
-      .toBe('Tool wird ausgeführt: Datei lesen')
+      .toBe('Datei wird gelesen')
     expect(agentActivityLabel({ phase: 'processing_tool', tool: 'unknown_tool' }))
-      .toBe('Tool wird ausgeführt: Tool ausführen')
+      .toBe('Tool wird ausgeführt')
     expect(agentActivityLabel({
       phase: 'processing_tool', tool: 'read_file', index: 1, total: 3
-    })).toBe('Tool wird ausgeführt: Datei lesen (2 von 3)')
+    })).toBe('Datei wird gelesen')
+    expect(agentActivityLabel({ phase: 'processing_tool', tool: 'web_search' }))
+      .toBe('Web wird durchsucht')
+    expect(agentActivityLabel({ phase: 'processing_tool', tool: 'webfetch' }))
+      .toBe('Webseite wird abgerufen')
   })
 
   it('identifies changes to the visible activity independently from event timestamps', () => {
@@ -105,9 +109,9 @@ describe('agent activity', () => {
       }
     })).toEqual({
       showActivity: true,
-      label: 'Tool wird ausgeführt: Datei lesen (2 von 3)',
+      label: 'Datei wird gelesen',
       summary: 'plan.md',
-      announcement: 'Tool wird ausgeführt: Datei lesen (2 von 3)'
+      announcement: 'Datei wird gelesen'
     })
     expect(agentRunPresentation({
       running: true,

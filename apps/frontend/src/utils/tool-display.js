@@ -3,58 +3,58 @@ import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
 import { cleanUrlForDisplay } from 'src/utils/webfetch'
 
 const TOOL_DISPLAY = {
-  question: { label: 'Rückfrage stellen', icon: 'help_outline' },
-  read: { label: 'Datei lesen', icon: 'description' },
-  glob: { label: 'Dateien suchen', icon: 'folder_open' },
-  grep: { label: 'Dateiinhalte durchsuchen', icon: 'manage_search' },
-  list_directory: { label: 'Ordner auflisten', icon: 'folder_open' },
-  read_file: { label: 'Datei lesen', icon: 'description' },
-  provide_file: { label: 'Datei bereitstellen', icon: 'download' },
-  write_file: { label: 'Datei schreiben', icon: 'edit_document' },
-  create_directory: { label: 'Ordner erstellen', icon: 'create_new_folder' },
-  delete_path: { label: 'Pfad löschen', icon: 'delete_outline' },
-  copy_path: { label: 'Pfad kopieren', icon: 'content_copy' },
-  move_path: { label: 'Pfad verschieben', icon: 'drive_file_move' },
-  web_search: { label: 'Im Web suchen', icon: 'travel_explore' },
-  webfetch: { label: 'Webseite abrufen', icon: 'language' },
-  generate_qr_code: { label: 'QR-Code erzeugen', icon: 'qr_code_2' },
-  read_qr_code: { label: 'QR-Code lesen', icon: 'qr_code_scanner' },
-  generate_image: { label: 'Bild erzeugen', icon: 'image' },
-  edit_image: { label: 'Bild bearbeiten', icon: 'auto_fix_high' },
-  generate_speech: { label: 'Sprache erzeugen', icon: 'record_voice_over' },
-  generate_audio: { label: 'Audio erzeugen', icon: 'graphic_eq' },
-  transcribe_audio: { label: 'Audio transkribieren', icon: 'mic' },
-  analyze_video: { label: 'Video analysieren', icon: 'video_file' },
-  calendar_list_accounts: { label: 'Kalenderkonten auflisten', icon: 'account_circle' },
-  calendar_list_calendars: { label: 'Kalender auflisten', icon: 'calendar_month' },
-  calendar_query_events: { label: 'Termine lesen', icon: 'event' },
-  calendar_create_event: { label: 'Termin erstellen', icon: 'event_available' },
-  calendar_update_event: { label: 'Termin ändern', icon: 'edit_calendar' },
-  calendar_delete_event: { label: 'Termin löschen', icon: 'event_busy' },
-  tasks_list_accounts: { label: 'Aufgabenkonten auflisten', icon: 'account_circle' },
-  tasks_list_lists: { label: 'Aufgabenlisten auflisten', icon: 'checklist' },
-  tasks_query: { label: 'Aufgaben lesen', icon: 'task_alt' },
-  tasks_create: { label: 'Aufgabe erstellen', icon: 'add_task' },
-  tasks_update: { label: 'Aufgabe ändern', icon: 'edit_note' },
-  tasks_set_completed: { label: 'Aufgabenstatus ändern', icon: 'task_alt' },
-  tasks_delete: { label: 'Aufgabe löschen', icon: 'delete_outline' },
-  session_read: { label: 'Session lesen', icon: 'forum' },
-  session_tool_result_read: { label: 'Tool-Ergebnis lesen', icon: 'history' },
-  session_browse: { label: 'Letzte Sessions anzeigen', icon: 'view_list' },
-  session_search: { label: 'Sessions durchsuchen', icon: 'manage_search' },
-  memory_retrieve: { label: 'Memory abrufen', icon: 'psychology' },
-  memory_write: { label: 'Memory speichern', icon: 'save' },
-  update_agent_identity: { label: 'Persona ändern', icon: 'face' },
-  process_exec: { label: 'Prozess ausführen', icon: 'terminal' },
-  'process.exec': { label: 'Prozess ausführen', icon: 'terminal' },
-  shell_run: { label: 'Shell-Befehl ausführen', icon: 'terminal' },
-  'shell.run': { label: 'Shell-Befehl ausführen', icon: 'terminal' },
-  git_clone: { label: 'Git-Repository klonen', icon: 'account_tree' },
-  git_status: { label: 'Git-Status anzeigen', icon: 'fact_check' },
-  git_diff: { label: 'Git-Änderungen anzeigen', icon: 'difference' },
-  git_log: { label: 'Git-Verlauf anzeigen', icon: 'history' },
-  git_add: { label: 'Git-Änderungen vormerken', icon: 'add_task' },
-  git_commit: { label: 'Git-Commit erstellen', icon: 'commit' }
+  question: { label: 'Rückfrage stellen', activity: 'Rückfrage wird vorbereitet', icon: 'help_outline' },
+  read: { label: 'Datei lesen', activity: 'Datei wird gelesen', icon: 'description' },
+  glob: { label: 'Dateien suchen', activity: 'Dateien werden gesucht', icon: 'folder_open' },
+  grep: { label: 'Dateiinhalte durchsuchen', activity: 'Dateiinhalte werden durchsucht', icon: 'manage_search' },
+  list_directory: { label: 'Ordner auflisten', activity: 'Ordner wird aufgelistet', icon: 'folder_open' },
+  read_file: { label: 'Datei lesen', activity: 'Datei wird gelesen', icon: 'description' },
+  provide_file: { label: 'Datei bereitstellen', activity: 'Datei wird bereitgestellt', icon: 'download' },
+  write_file: { label: 'Datei schreiben', activity: 'Datei wird geschrieben', icon: 'edit_document' },
+  create_directory: { label: 'Ordner erstellen', activity: 'Ordner wird erstellt', icon: 'create_new_folder' },
+  delete_path: { label: 'Pfad löschen', activity: 'Pfad wird gelöscht', icon: 'delete_outline' },
+  copy_path: { label: 'Pfad kopieren', activity: 'Pfad wird kopiert', icon: 'content_copy' },
+  move_path: { label: 'Pfad verschieben', activity: 'Pfad wird verschoben', icon: 'drive_file_move' },
+  web_search: { label: 'Im Web suchen', activity: 'Web wird durchsucht', icon: 'travel_explore' },
+  webfetch: { label: 'Webseite abrufen', activity: 'Webseite wird abgerufen', icon: 'language' },
+  generate_qr_code: { label: 'QR-Code erzeugen', activity: 'QR-Code wird erzeugt', icon: 'qr_code_2' },
+  read_qr_code: { label: 'QR-Code lesen', activity: 'QR-Code wird gelesen', icon: 'qr_code_scanner' },
+  generate_image: { label: 'Bild erzeugen', activity: 'Bild wird erzeugt', icon: 'image' },
+  edit_image: { label: 'Bild bearbeiten', activity: 'Bild wird bearbeitet', icon: 'auto_fix_high' },
+  generate_speech: { label: 'Sprache erzeugen', activity: 'Sprachaufnahme wird erzeugt', icon: 'record_voice_over' },
+  generate_audio: { label: 'Audio erzeugen', activity: 'Audio wird erzeugt', icon: 'graphic_eq' },
+  transcribe_audio: { label: 'Audio transkribieren', activity: 'Audio wird transkribiert', icon: 'mic' },
+  analyze_video: { label: 'Video analysieren', activity: 'Video wird analysiert', icon: 'video_file' },
+  calendar_list_accounts: { label: 'Kalenderkonten auflisten', activity: 'Kalenderkonten werden geladen', icon: 'account_circle' },
+  calendar_list_calendars: { label: 'Kalender auflisten', activity: 'Kalender werden geladen', icon: 'calendar_month' },
+  calendar_query_events: { label: 'Termine lesen', activity: 'Termine werden gelesen', icon: 'event' },
+  calendar_create_event: { label: 'Termin erstellen', activity: 'Termin wird erstellt', icon: 'event_available' },
+  calendar_update_event: { label: 'Termin ändern', activity: 'Termin wird geändert', icon: 'edit_calendar' },
+  calendar_delete_event: { label: 'Termin löschen', activity: 'Termin wird gelöscht', icon: 'event_busy' },
+  tasks_list_accounts: { label: 'Aufgabenkonten auflisten', activity: 'Aufgabenkonten werden geladen', icon: 'account_circle' },
+  tasks_list_lists: { label: 'Aufgabenlisten auflisten', activity: 'Aufgabenlisten werden geladen', icon: 'checklist' },
+  tasks_query: { label: 'Aufgaben lesen', activity: 'Aufgaben werden gelesen', icon: 'task_alt' },
+  tasks_create: { label: 'Aufgabe erstellen', activity: 'Aufgabe wird erstellt', icon: 'add_task' },
+  tasks_update: { label: 'Aufgabe ändern', activity: 'Aufgabe wird geändert', icon: 'edit_note' },
+  tasks_set_completed: { label: 'Aufgabenstatus ändern', activity: 'Aufgabenstatus wird geändert', icon: 'task_alt' },
+  tasks_delete: { label: 'Aufgabe löschen', activity: 'Aufgabe wird gelöscht', icon: 'delete_outline' },
+  session_read: { label: 'Session lesen', activity: 'Session wird gelesen', icon: 'forum' },
+  session_tool_result_read: { label: 'Tool-Ergebnis lesen', activity: 'Tool-Ergebnis wird gelesen', icon: 'history' },
+  session_browse: { label: 'Letzte Sessions anzeigen', activity: 'Letzte Sessions werden geladen', icon: 'view_list' },
+  session_search: { label: 'Sessions durchsuchen', activity: 'Sessions werden durchsucht', icon: 'manage_search' },
+  memory_retrieve: { label: 'Memory abrufen', activity: 'Memory wird abgerufen', icon: 'psychology' },
+  memory_write: { label: 'Memory speichern', activity: 'Memory wird gespeichert', icon: 'save' },
+  update_agent_identity: { label: 'Persona ändern', activity: 'Persona wird aktualisiert', icon: 'face' },
+  process_exec: { label: 'Prozess ausführen', activity: 'Prozess wird ausgeführt', icon: 'terminal' },
+  'process.exec': { label: 'Prozess ausführen', activity: 'Prozess wird ausgeführt', icon: 'terminal' },
+  shell_run: { label: 'Shell-Befehl ausführen', activity: 'Befehl wird ausgeführt', icon: 'terminal' },
+  'shell.run': { label: 'Shell-Befehl ausführen', activity: 'Befehl wird ausgeführt', icon: 'terminal' },
+  git_clone: { label: 'Git-Repository klonen', activity: 'Git-Repository wird geklont', icon: 'account_tree' },
+  git_status: { label: 'Git-Status anzeigen', activity: 'Git-Status wird gelesen', icon: 'fact_check' },
+  git_diff: { label: 'Git-Änderungen anzeigen', activity: 'Git-Änderungen werden gelesen', icon: 'difference' },
+  git_log: { label: 'Git-Verlauf anzeigen', activity: 'Git-Verlauf wird gelesen', icon: 'history' },
+  git_add: { label: 'Git-Änderungen vormerken', activity: 'Git-Änderungen werden vorgemerkt', icon: 'add_task' },
+  git_commit: { label: 'Git-Commit erstellen', activity: 'Git-Commit wird erstellt', icon: 'commit' }
 }
 
 function truncate(value, maxLength = 140) {
@@ -63,7 +63,12 @@ function truncate(value, maxLength = 140) {
 }
 
 export function toolIdentity(name) {
-  return TOOL_DISPLAY[name] || { label: 'Tool ausführen', icon: 'build' }
+  const display = TOOL_DISPLAY[name]
+  return display ? { label: display.label, icon: display.icon } : { label: 'Tool ausführen', icon: 'build' }
+}
+
+export function toolActivityLabel(name) {
+  return TOOL_DISPLAY[name]?.activity || 'Tool wird ausgeführt'
 }
 
 export function toolUsageSummary(items = []) {
@@ -211,6 +216,9 @@ export function toolSummary(tool) {
   const argumentsValue = tool?.arguments
   const fallback = TOOL_DISPLAY[tool?.name] ? '' : tool?.name || ''
   if (!argumentsValue || typeof argumentsValue !== 'object') return fallback
+  if (tool?.name === 'question') {
+    return truncate(argumentsValue.questions?.find((item) => typeof item?.question === 'string')?.question)
+  }
   if (tool?.name === 'memory_retrieve' && argumentsValue.mode === 'browse') {
     return argumentsValue.cursor_id ? 'Memory-Übersicht fortsetzen' : 'Memory-Übersicht'
   }
@@ -226,7 +234,12 @@ export function toolSummary(tool) {
   if (tool?.name === 'tasks_create' && typeof argumentsValue.title === 'string') {
     return truncate(argumentsValue.title)
   }
-  if (tool?.name === 'tasks_update') return 'Aufgabe ändern'
+  if (tool?.name === 'tasks_query') {
+    return argumentsValue.include_completed ? 'Offene und erledigte Aufgaben' : 'Offene Aufgaben'
+  }
+  if (tool?.name === 'tasks_update') {
+    return typeof argumentsValue.title === 'string' ? truncate(argumentsValue.title) : 'Aufgabe ändern'
+  }
   if (tool?.name === 'tasks_set_completed') {
     return argumentsValue.completed ? 'Als erledigt markieren' : 'Als offen markieren'
   }
@@ -238,6 +251,14 @@ export function toolSummary(tool) {
   }
   if (tool?.name === 'git_add' && Array.isArray(argumentsValue.paths)) {
     return truncate(argumentsValue.paths.join(', '))
+  }
+  if (['git_diff', 'git_log'].includes(tool?.name) && Array.isArray(argumentsValue.paths)) {
+    const paths = truncate(argumentsValue.paths.join(', '))
+    if (paths) return tool.name === 'git_diff' && argumentsValue.staged ? `Vorgemerkt: ${paths}` : paths
+    if (tool.name === 'git_diff' && argumentsValue.staged) return 'Vorgemerkte Änderungen'
+    if (tool.name === 'git_log' && Number.isInteger(argumentsValue.limit)) {
+      return `Letzte ${argumentsValue.limit} Commits`
+    }
   }
   if (tool?.name === 'git_commit' && typeof argumentsValue.message === 'string') {
     return truncate(argumentsValue.message)
@@ -272,6 +293,18 @@ export function toolSummary(tool) {
     const suffix = offset > 0 ? `, ab Zeichen ${offset}` : ''
     return `Nachricht ${truncate(argumentsValue.message_id, 36)}${suffix}`
   }
+  if (tool?.name === 'session_read') {
+    return typeof argumentsValue.session_id === 'string'
+      ? `Session ${truncate(argumentsValue.session_id, 36)}`
+      : 'Aktuelle Session'
+  }
+  if (tool?.name === 'calendar_query_events') {
+    return truncate([argumentsValue.start, argumentsValue.end].filter(Boolean).join(' – '))
+  }
+  if (['calendar_create_event', 'calendar_update_event'].includes(tool?.name)) {
+    if (typeof argumentsValue.summary === 'string') return truncate(argumentsValue.summary)
+    return truncate([argumentsValue.timing?.start, argumentsValue.timing?.end].filter(Boolean).join(' – '))
+  }
   if (['read', 'glob', 'grep'].includes(tool?.name)) {
     const location = [argumentsValue.root, argumentsValue.path]
       .filter((value) => typeof value === 'string' && value)
@@ -286,7 +319,10 @@ export function toolSummary(tool) {
     }
     return 'Verhalten und Charakter aktualisieren'
   }
-  if (typeof argumentsValue.path === 'string') return truncate(argumentsValue.path)
+  if (typeof argumentsValue.path === 'string') {
+    const root = typeof argumentsValue.root === 'string' ? `${argumentsValue.root}:` : ''
+    return truncate(`${root}${argumentsValue.path}`)
+  }
   if (typeof argumentsValue.source_path === 'string' && typeof argumentsValue.destination_path === 'string') {
     const sourceRoot = argumentsValue.source_root ? `${argumentsValue.source_root}:` : ''
     const destinationRoot = argumentsValue.destination_root ? `${argumentsValue.destination_root}:` : ''

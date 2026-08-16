@@ -1,5 +1,5 @@
 import { reasoningStatusLabel } from 'src/utils/reasoning-display'
-import { toolIdentity, toolSummary } from 'src/utils/tool-display'
+import { toolActivityLabel, toolSummary } from 'src/utils/tool-display'
 
 const LABELS = {
   submitting: 'Anfrage wird übergeben',
@@ -12,15 +12,6 @@ const LABELS = {
   waiting_input: 'Wartet auf deine Antwort',
   finalizing: 'Antwort wird abgeschlossen',
   reconnecting: 'Verbindung wird wiederhergestellt'
-}
-
-function toolProgress(activity) {
-  const index = activity?.index
-  const total = activity?.total
-  if (!Number.isInteger(index) || !Number.isInteger(total) || index < 0 || total < 1 || index >= total) {
-    return ''
-  }
-  return ` (${index + 1} von ${total})`
 }
 
 export function agentActivityLabel(activity) {
@@ -38,7 +29,7 @@ export function agentActivityLabel(activity) {
       : 'Modell analysiert die Anfrage'
   }
   if (activity?.phase === 'processing_tool') {
-    return `Tool wird ausgeführt: ${toolIdentity(activity.tool).label}${toolProgress(activity)}`
+    return toolActivityLabel(activity.tool)
   }
   return LABELS[activity?.phase] || 'Agent arbeitet'
 }

@@ -164,6 +164,7 @@ const props = defineProps({
   question: { type: Object, default: null },
   processOutput: { type: Object, default: null },
   active: Boolean,
+  autoExpand: Boolean,
   technicalOnly: Boolean
 })
 const emit = defineEmits(['open-file'])
@@ -192,10 +193,13 @@ const exceptionalStatus = computed(() => (
   ['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name)
 ))
 const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
-const expanded = ref(['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name))
+const expanded = ref(props.autoExpand || ['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name))
 const showFullArguments = ref(false)
 const showFullResult = ref(false)
 watch(() => status.value.name, (name) => {
   if (['approval', 'question', 'failed', 'denied', 'interrupted'].includes(name)) expanded.value = true
+})
+watch(() => props.autoExpand, (value) => {
+  if (value) expanded.value = true
 })
 </script>

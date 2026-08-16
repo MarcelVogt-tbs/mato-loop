@@ -17,6 +17,27 @@ export function groupWorkHistoryEntries(entries = []) {
   return grouped
 }
 
+export function splitLiveWorkHistory(entries = [], activity = null) {
+  const attention = entries.find((entry) => (
+    entry.type === 'tool' && (entry.approval || entry.question)
+  ))
+  const liveReasoning = activity?.phase === 'waiting_model'
+    ? [...entries].reverse().find((entry) => entry.type === 'reasoning' && entry.live)
+    : null
+  const activeTool = activity?.phase === 'processing_tool'
+    ? entries.find((entry) => entry.type === 'tool' && (
+      entry.active || entry.tool?.id === activity.toolCallId
+    ))
+    : null
+  const current = attention || liveReasoning || activeTool || null
+  const previous = entries.filter((entry) => (
+    entry !== current
+    && !entry.live
+    && (entry.type !== 'tool' || entry.result || entry.approval || entry.question)
+  ))
+  return { current, previous }
+}
+
 export function buildChatTranscript(
   messages = [],
   approvals = [],
