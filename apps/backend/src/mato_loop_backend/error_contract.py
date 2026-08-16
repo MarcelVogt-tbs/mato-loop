@@ -149,6 +149,7 @@ _MESSAGES = {
     "session.retryUnavailable": "The failed response can no longer be retried.",
     "skill.duplicate": "A skill with this name already exists.",
     "skill.alreadyActive": "A different skill is already active for this run.",
+    "skill.changed": "The skill changed while the edit was in progress.",
     "skill.creationModelFailed": "The skill creation model could not produce a valid draft.",
     "skill.draftInvalid": "The skill draft is invalid or unavailable.",
     "skill.limitReached": "The maximum number of skills has been reached.",

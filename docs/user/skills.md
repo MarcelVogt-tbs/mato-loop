@@ -4,11 +4,11 @@ Skills sind persönliche, wiederverwendbare Anweisungen für bestimmte Aufgaben.
 
 ## Skills verwenden
 
-Bei einer passenden Anfrage kann der Agent automatisch genau einen Skill aus Ihrer Sammlung laden. Sie können einen Skill auch ausdrücklich mit seinem Namen anfordern. Für die Auswahl sieht das Modell Name und Kurzbeschreibung; nach dem Laden erhält es die vollständigen Anweisungen. Pro Agent-Lauf ist höchstens ein Skill aktiv.
+Bei einer passenden Anfrage kann der Agent automatisch genau einen Skill aus Ihrer Sammlung laden. Sie können einen Skill auch ausdrücklich mit seinem Namen anfordern. Für die Auswahl sieht das Modell Name und Einsatzbeschreibung; nach dem Laden erhält es die vollständigen Anweisungen. Pro Agent-Lauf ist höchstens ein Skill aktiv.
 
 Ist Webrecherche für die Session verpflichtend, darf der Agent zunächst einen eindeutig passenden Skill laden. Die vorgeschriebene Suche bleibt trotzdem erforderlich und folgt im nächsten Schritt.
 
-Unter **Einstellungen > Tools** gelten getrennte Richtlinien für **Skills laden** und **Skills erstellen**:
+Unter **Einstellungen > Tools** gelten getrennte Richtlinien für **Skills laden** und **Skills speichern**:
 
 - **Nicht erlaubt** deaktiviert die Aktion.
 - **Nachfragen** zeigt vor der Aktion eine Freigabe.
@@ -24,16 +24,22 @@ Der Agent übergibt eine kurze Aufgabenbeschreibung und auf Wunsch einen Namensv
 
 Fehlen für einen wiederverwendbaren Skill relevante Angaben, fragt der Agent diese vor der Erstellung gebündelt ab. Bereits vollständige Anfragen werden ohne zusätzliche Rückfragerunde an das Builder-Modell übergeben.
 
-!!! info "Isolierte Erstellung"
-    Das Builder-Modell erhält nicht den gesamten Chat. Es sieht nur Ihre neueste Anfrage, die kurze Aufgabenbeschreibung, den optionalen Namensvorschlag und die in diesem Schritt tatsächlich verfügbaren Tool-Schemas. Frühere Nachrichten, Memories, Anhänge, Tool-Ergebnisse, Persona und andere Skills werden nicht mitgesendet.
+!!! info "Isolierter Builder"
+    Das Builder-Modell erhält nicht den gesamten Chat. Es sieht nur Ihre neueste Anfrage, die kurze Aufgabenbeschreibung, den optionalen Namensvorschlag und die in diesem Schritt tatsächlich verfügbaren Tool-Schemas. Bei einer Bearbeitung erhält es zusätzlich den aktuellen Ziel-Skill. Frühere Nachrichten, Memories, Anhänge, Tool-Ergebnisse, Persona und andere Skills werden nicht mitgesendet.
 
-Die Modellwahl bestimmt weiterhin Vertrauenslevel und Pseudonymisierung. Bei einem öffentlichen Builder werden die genannten Daten an diesen Provider übertragen. Der Erstellungsversuch und eine mögliche Korrektur verbrauchen Modellanfragen aus dem normalen Agent-Limit.
+Die Modellwahl bestimmt weiterhin Vertrauenslevel und Pseudonymisierung. Bei einem öffentlichen Builder werden die genannten Daten an diesen Provider übertragen. Der Builder-Versuch und eine mögliche Korrektur verbrauchen Modellanfragen aus dem normalen Agent-Limit.
+
+## Im Chat bearbeiten
+
+Bitten Sie ausdrücklich um die Änderung eines vorhandenen Skills, zum Beispiel: „Ändere beim Songfinder nur die Einsatzbeschreibung.“ Der Agent wählt den Skill anhand seiner festen ID aus und aktiviert ihn während der Bearbeitung nicht. Name, Einsatzbeschreibung und Anweisungen können geändert werden; die ID bleibt erhalten.
+
+Das Builder-Modell erhält zusätzlich den aktuellen Skill und liefert nur die gewünschten Änderungen. MatoLoop ergänzt unveränderte Felder selbst und erstellt daraus den vollständigen prüfbaren Entwurf. Wird der gespeicherte Skill währenddessen anderweitig geändert, bricht der Import ab, statt die neuere Fassung zu überschreiben.
 
 ## Entwurf prüfen und freigeben
 
-Bei der Richtlinie **Nachfragen** zeigt die Freigabekarte Name, Kurzbeschreibung und Anweisungen. Über **Entwurf öffnen und bearbeiten** können Sie die strikte JSON-Datei im Session-Bereich `files` bearbeiten. Speichern Sie Änderungen vor der Entscheidung.
+Bei der Richtlinie **Nachfragen** zeigt die Freigabekarte Name, Einsatzbeschreibung und Anweisungen. Über **Entwurf öffnen und bearbeiten** können Sie die strikte JSON-Datei im Session-Bereich `files` bearbeiten. Speichern Sie Änderungen vor der Entscheidung.
 
-MatoLoop importiert nur exakt die Dateiversion, deren SHA-256-Revision Sie freigeben. Eine zwischenzeitlich erneut geänderte oder ungültige Datei wird nicht übernommen. **Einmal erlauben** importiert diesen Skill; **Für Session erlauben** kann spätere Skill-Erstellungen derselben Session ohne neue Karte zulassen. Bei **Automatisch** wird der unveränderte generierte Entwurf direkt importiert.
+MatoLoop importiert nur exakt die Dateiversion, deren SHA-256-Revision Sie freigeben. Eine zwischenzeitlich erneut geänderte oder ungültige Datei wird nicht übernommen. **Einmal erlauben** importiert diesen Entwurf. **Für Session erlauben** gilt bei Erstellungen für die persönliche Skill-Sammlung und bei Bearbeitungen nur für den exakt ausgewählten Skill. Bei **Automatisch** wird der unveränderte generierte Entwurf direkt importiert.
 
 Die Entwurfsdatei bleibt nach Import, Ablehnung oder Fehler in den Session-Dateien erhalten. Sie können sie dort später prüfen oder manuell löschen.
 
@@ -42,10 +48,10 @@ Die Entwurfsdatei bleibt nach Import, Ablehnung oder Fehler in den Session-Datei
 Unter **Einstellungen > Skills** können Sie Skills anlegen, bearbeiten und dauerhaft löschen. Ein Skill besteht aus:
 
 - Name mit höchstens 64 Zeichen
-- Kurzbeschreibung mit höchstens 240 Zeichen
+- Einsatzbeschreibung mit höchstens 240 Zeichen
 - Anweisungen mit höchstens 8.000 Zeichen
 
 Pro Benutzer sind höchstens 20 Skills möglich. Namen müssen eindeutig sein. Änderungen wirken ab dem nächsten Agent-Lauf; ein bereits laufender Agent verwendet weiterhin seinen Startzustand.
 
 !!! warning "Keine Secrets speichern"
-    Tragen Sie keine Passwörter, API-Schlüssel, Tokens oder andere Geheimnisse in Skills, Chat-Anfragen oder Entwurfsdateien ein. Skill-Inhalte können an das aktive Sessionmodell und bei der Erstellung an das ausgewählte Builder-Modell gesendet werden. Automatische Schutzmaßnahmen erkennen nicht jede Darstellung zuverlässig.
+    Tragen Sie keine Passwörter, API-Schlüssel, Tokens oder andere Geheimnisse in Skills, Chat-Anfragen oder Entwurfsdateien ein. Skill-Inhalte können an das aktive Sessionmodell und bei Erstellung oder Bearbeitung an das ausgewählte Builder-Modell gesendet werden. Automatische Schutzmaßnahmen erkennen nicht jede Darstellung zuverlässig.

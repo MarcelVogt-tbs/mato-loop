@@ -121,6 +121,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'skill.creationModelFailed' } })).toBe(
       'Der Skill-Entwurf konnte vom ausgewählten Modell nicht erstellt werden.'
     )
+    expect(apiErrorMessage({ error: { code: 'skill.changed' } })).toBe(
+      'Der Skill wurde zwischenzeitlich geändert. Starte die Bearbeitung erneut.'
+    )
     expect(apiErrorMessage({ error: { code: 'skill.notFound' } })).toBe(
       'Der Skill wurde nicht gefunden.'
     )

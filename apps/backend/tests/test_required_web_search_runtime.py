@@ -606,6 +606,7 @@ async def test_required_search_loads_matching_skill_before_search(monkeypatch) -
 
     assert {tool["name"] for tool in requests[0]["tools"]} == {
         "load_skill",
+        "edit_skill",
         "web_search",
     }
     assert [tool["name"] for tool in requests[1]["tools"]] == ["web_search"]
@@ -837,7 +838,7 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
         "system",
         "user",
     ]
-    assert "terms likely to appear in matching user requests" in builder_request[
+    assert "terms likely to appear in matching requests" in builder_request[
         "messages"
     ][0]["content"]
     assert [message["role"] for message in repair_request["messages"]] == [
@@ -866,6 +867,99 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
     request_question.assert_awaited_once()
     assert [skill.name for skill in skills.skills] == ["API checks"]
     SettingsStore.save.assert_awaited_once()
+
+
+async def test_skill_editor_sends_current_skill_and_merges_partial_patch(
+    monkeypatch, tmp_path
+) -> None:
+    skill = SkillDefinition(
+        name="Songfinder",
+        description="Findet Songs.",
+        instructions="Suche breit und prüfe Quellen.",
+    )
+    skills = SkillsSettings(skills=[skill])
+    original_execute = ToolRegistry._execute_definition
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="edit-skill",
+                        name="edit_skill",
+                        arguments={
+                            "skill_id": str(skill.id),
+                            "brief": "Ändere nur die Einsatzbeschreibung.",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="draft",
+                        name="return_skill_edit",
+                        arguments={
+                            "description": "Immer bei einer Song-Suche verwenden."
+                        },
+                    )
+                ]
+            ),
+            ProviderResult(content="Skill geändert.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        skills=skills,
+    )
+
+    async def execute(call, context, bound_tool):
+        return await original_execute(tool_registry, call, context, bound_tool)
+
+    tool_registry._execute_definition.side_effect = execute
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(run.session_id)
+    monkeypatch.setattr(
+        runtime_module,
+        "RootFileService",
+        lambda session_id, **kwargs: RootFileService(
+            session_id,
+            session_storage=storage,
+            workspace_home=tmp_path,
+            working_directory=kwargs.get("working_directory"),
+        ),
+    )
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        AgentRuntime,
+        "_authorize",
+        AsyncMock(return_value=PermissionDecision.ALLOW),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 3
+    builder_request = requests[1]
+    assert [tool["name"] for tool in builder_request["tools"]] == [
+        "return_skill_edit"
+    ]
+    builder_payload = json.loads(builder_request["messages"][1]["content"])
+    assert builder_payload["currentSkill"] == {
+        "name": "Songfinder",
+        "description": "Findet Songs.",
+        "instructions": "Suche breit und prüfe Quellen.",
+    }
+    assert builder_payload["brief"] == "Ändere nur die Einsatzbeschreibung."
+    assert {tool["name"] for tool in requests[2]["tools"]}.isdisjoint(
+        {"load_skill", "edit_skill"}
+    )
+    assert skills.skills == [
+        SkillDefinition(
+            id=skill.id,
+            name=skill.name,
+            description="Immer bei einer Song-Suche verwenden.",
+            instructions=skill.instructions,
+        )
+    ]
 
 
 async def test_skill_builder_uses_only_one_structured_repair_across_fallback(

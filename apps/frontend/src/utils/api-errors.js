@@ -283,6 +283,7 @@ const messages = {
   'session.runNotFound': () => 'Der Agent-Run wurde nicht gefunden.',
   'session.storageUnavailable': () => 'Der interne Dateispeicher dieser Session ist derzeit nicht verfügbar.',
   'skill.alreadyActive': () => 'Für diesen Agent-Run ist bereits ein Skill aktiv.',
+  'skill.changed': () => 'Der Skill wurde zwischenzeitlich geändert. Starte die Bearbeitung erneut.',
   'skill.creationModelFailed': () => 'Der Skill-Entwurf konnte vom ausgewählten Modell nicht erstellt werden.',
   'skill.draftInvalid': () => 'Der Skill-Entwurf ist ungültig. Prüfe die Entwurfsdatei und versuche es erneut.',
   'skill.duplicate': () => 'Ein Skill mit diesem Namen ist bereits vorhanden.',

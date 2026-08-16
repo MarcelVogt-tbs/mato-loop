@@ -19,6 +19,7 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.skills import (
     SkillDraft,
+    SkillEditPatch,
     SkillError,
     SkillService,
     parse_skill_draft,
@@ -81,6 +82,22 @@ def test_skill_draft_json_is_strict_stable_and_controlled() -> None:
         assert exc_info.value.code == "skill.draftInvalid"
 
 
+def test_skill_edit_patch_is_partial_strict_and_requires_a_change() -> None:
+    assert SkillEditPatch(description="  Neue Beschreibung  ").model_dump() == {
+        "name": None,
+        "description": "Neue Beschreibung",
+        "instructions": None,
+    }
+    for value in (
+        {},
+        {"description": None},
+        {"description": " "},
+        {"description": "Neu", "extra": True},
+    ):
+        with pytest.raises(ValidationError):
+            SkillEditPatch.model_validate(value)
+
+
 async def test_skill_service_locks_mutations_preserves_id_and_does_not_commit(
     monkeypatch,
 ) -> None:
@@ -96,13 +113,29 @@ async def test_skill_service_locks_mutations_preserves_id_and_does_not_commit(
     db = AsyncMock(spec=AsyncSession)
 
     replacement = await SkillService.replace(
-        db, user_id, existing.id, _draft("Quellenpruefung")
+        db,
+        user_id,
+        existing.id,
+        _draft("Quellenpruefung"),
+        expected=existing,
     )
 
     assert replacement.id == existing.id
     assert load.await_args.kwargs == {"user_id": user_id, "for_update": True}
     save.assert_awaited_once_with(db, settings, user_id=user_id)
     db.commit.assert_not_awaited()
+
+    with pytest.raises(SkillError) as exc_info:
+        await SkillService.replace(
+            db,
+            user_id,
+            existing.id,
+            _draft("Nochmals"),
+            expected=existing,
+        )
+
+    assert exc_info.value.code == "skill.changed"
+    save.assert_awaited_once()
 
 
 async def test_skill_service_rejects_casefold_duplicate(monkeypatch) -> None:

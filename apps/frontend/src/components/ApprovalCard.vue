@@ -162,6 +162,7 @@ const actionIcon = computed(() => {
   if (props.approval.capability === 'process.execute') return 'terminal'
   if (props.approval.capability?.startsWith('git.')) return 'account_tree'
   if (props.approval.capability === 'skills.load') return 'school'
+  if (props.approval.actionKind === 'edit_skill') return 'edit_note'
   if (props.approval.capability === 'skills.write' || props.approval.actionKind === 'build_skill') return 'auto_awesome'
   if (props.approval.capability === 'integration.private_data.release') return 'cloud_upload'
   if (props.approval.resourceType === 'url') return 'language'
@@ -170,6 +171,9 @@ const actionIcon = computed(() => {
   return 'approval'
 })
 const resource = computed(() => approvalResource(props.approval, chat.sessions))
+const skillDraftApproval = computed(() => (
+  props.approval.actionKind === 'build_skill' || props.approval.actionKind === 'edit_skill'
+))
 const approvalTool = computed(() => ({
   name: props.approval.details?.tool,
   arguments: props.approval.details?.arguments
@@ -178,10 +182,10 @@ const presentation = computed(() => toolPresentation(
   approvalTool.value,
   props.approval.details?.displayItems
 ))
-const skillPreview = computed(() => props.approval.actionKind === 'build_skill'
+const skillPreview = computed(() => skillDraftApproval.value
   ? props.approval.details?.skillPreview
   : null)
-const draftFile = computed(() => props.approval.actionKind === 'build_skill'
+const draftFile = computed(() => skillDraftApproval.value
   ? props.approval.details?.draftFile
   : null)
 const matchingDraftDirty = computed(() => Boolean(

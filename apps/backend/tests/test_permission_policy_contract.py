@@ -17,6 +17,7 @@ from mato_loop_backend.agent.permissions import (
     session_browse_permission,
     session_permission,
     session_search_permission,
+    skill_edit_permission,
     skill_load_permission,
     skill_write_permission,
     webfetch_permission,
@@ -851,6 +852,38 @@ async def test_skill_collection_grant_matches_exact_user_and_capability(tmp_path
         session,
         skill_write_permission(session.user_id, "Recherche"),
         root_files,
+    ) == PermissionDecision.ASK
+
+
+async def test_skill_edit_grant_matches_only_exact_skill(tmp_path) -> None:
+    session = _session(user_id=uuid4())
+    skill_id = uuid4()
+    request = skill_edit_permission(skill_id, "Songfinder")
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=request.capability,
+        resource_type=request.resource_type,
+        resource_scope=request.resource_scope,
+    )
+    collection_grant = PermissionGrant(
+        session_id=session.id,
+        capability="skills.write",
+        resource_type="skill_collection",
+        resource_scope=str(session.user_id),
+    )
+    root_files = _root_files(tmp_path, session)
+
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant), session, request, root_files
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant),
+        session,
+        skill_edit_permission(uuid4(), "Anderer Skill"),
+        root_files,
+    ) == PermissionDecision.ASK
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(collection_grant), session, request, root_files
     ) == PermissionDecision.ASK
 
 

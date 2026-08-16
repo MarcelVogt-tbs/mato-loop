@@ -50,7 +50,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 17
+    assert INVENTORY_VERSION == 18
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -83,7 +83,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 130
+    assert 80 <= len(CASES) <= 140
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -226,9 +226,19 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     )
     assert [tool["name"] for tool in automatic_skill_tools] == [
         "load_skill",
+        "edit_skill",
         "web_search",
     ]
     assert "Songfinder" in automatic_skill_messages[0]["content"]
+
+    edit_skill_messages, edit_skill_tools = build_case(
+        _case("explicit_skill_edit_uses_editor")
+    )
+    assert [tool["name"] for tool in edit_skill_tools] == [
+        "load_skill",
+        "edit_skill",
+    ]
+    assert "never load the target" in edit_skill_messages[0]["content"]
 
     build_messages, build_tools = build_case(_case("vague_skill_build_uses_question"))
     assert [tool["name"] for tool in build_tools] == ["question", "build_skill"]
@@ -1148,11 +1158,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 122
-    assert payload["contractCount"] == 252
-    assert "Cases: 130" in report
-    assert "Semantic contracts: 122" in report
-    assert "All inventory rows: 252" in report
+    assert payload["semanticContractCount"] == 123
+    assert payload["contractCount"] == 255
+    assert "Cases: 132" in report
+    assert "Semantic contracts: 123" in report
+    assert "All inventory rows: 255" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

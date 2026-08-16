@@ -516,7 +516,7 @@ async function openToolFile(action) {
 async function openApprovalDraft(approval) {
   const draft = approval?.details?.draftFile
   const sessionId = approval?.sessionId
-  if (approval?.actionKind !== 'build_skill' || !draft || chat.current?.id !== sessionId) return
+  if (!['build_skill', 'edit_skill'].includes(approval?.actionKind) || !draft || chat.current?.id !== sessionId) return
   if (workspace.editorDirty) {
     const accepted = await confirm(
       'Sollen die ungespeicherten Änderungen verworfen werden?',

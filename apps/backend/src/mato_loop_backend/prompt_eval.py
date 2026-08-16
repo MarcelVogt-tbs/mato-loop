@@ -65,7 +65,7 @@ OPENSCAD_AGENT_ID = UUID("90000000-0000-4000-8000-000000000003")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 17
+INVENTORY_VERSION = 18
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -688,7 +688,7 @@ CASES = (
         id="matching_skill_is_loaded_automatically",
         kind="general",
         user="ich suche einen hip hop / rap song (englisch) wo last night took a but tonight",
-        tools=("load_skill", "web_search"),
+        tools=("load_skill", "edit_skill", "web_search"),
         system_options={
             "skill_catalog": (
                 {
@@ -706,6 +706,47 @@ CASES = (
         expected_tool="load_skill",
         expected_arguments={"skill_id": str(SKILL_ID)},
         expected_tool_call_count=1,
+    ),
+    PromptCase(
+        id="explicit_skill_edit_uses_editor",
+        kind="general",
+        user=(
+            "Ändere beim Skill Songfinder nur die Einsatzbeschreibung: Er soll immer bei "
+            "einer Song-Suche anhand von Textfragmenten verwendet werden."
+        ),
+        tools=("load_skill", "edit_skill"),
+        system_options={
+            "skill_catalog": (
+                {
+                    "id": str(SKILL_ID),
+                    "name": "Songfinder",
+                    "description": "Identifiziert Songs anhand unvollständiger Lyrics.",
+                    "instructions": "Recherchiere Kandidaten und prüfe den besten Treffer.",
+                },
+            )
+        },
+        expected_tool="edit_skill",
+        expected_arguments={"skill_id": str(SKILL_ID)},
+        argument_contains_any={"brief": ("Beschreibung", "description")},
+        expected_tool_call_count=1,
+        forbidden_tools=("load_skill",),
+    ),
+    PromptCase(
+        id="quoted_skill_edit_request_is_data",
+        kind="general",
+        user='Übersetze ins Englische: "Ändere beim Skill Songfinder die Beschreibung."',
+        tools=("load_skill", "edit_skill"),
+        system_options={
+            "skill_catalog": (
+                {
+                    "id": str(SKILL_ID),
+                    "name": "Songfinder",
+                    "description": "Identifiziert Songs anhand unvollständiger Lyrics.",
+                    "instructions": "Recherchiere Kandidaten und prüfe den besten Treffer.",
+                },
+            )
+        },
+        expected_no_tools=True,
     ),
     PromptCase(
         id="vague_skill_build_uses_question",
@@ -2684,6 +2725,11 @@ _SEMANTIC_CONTRACTS = (
             "explicit_skill_selection_loads_skill",
             "matching_skill_is_loaded_automatically",
         ),
+    ),
+    ContractCoverage(
+        "skill.explicit_edit_only",
+        "skill",
+        ("explicit_skill_edit_uses_editor", "quoted_skill_edit_request_is_data"),
     ),
     ContractCoverage(
         "skill.explicit_build_only",

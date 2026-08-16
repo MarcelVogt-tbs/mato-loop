@@ -169,6 +169,15 @@ describe('approval display', () => {
       value: 'Persönliche Skills',
       icon: 'auto_awesome'
     })
+    expect(permissionGrantDisplay({
+      capability: 'skills.write',
+      resourceType: 'skill',
+      resourceDisplay: 'Songfinder'
+    })).toEqual({
+      label: 'Skill bearbeiten',
+      value: '„Songfinder“',
+      icon: 'edit_note'
+    })
   })
 
   it('redacts sensitive and bounds large technical details', () => {

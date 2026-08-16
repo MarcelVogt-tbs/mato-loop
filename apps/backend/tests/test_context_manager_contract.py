@@ -829,9 +829,17 @@ def test_skill_catalog_contains_selection_metadata_without_instructions() -> Non
             "description": skill.description,
         }
     ]
-    assert "Before answering or using a task tool" in prompt
-    assert "even if the task seems simple" in prompt
+    assert "before any answer or task tool" in prompt
+    assert "even a simple one" in prompt
     assert skill.instructions not in prompt
+
+    edit_prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"load_skill", "edit_skill"}),
+        skill_catalog=(skill,),
+    )
+    assert "For an explicit edit" in edit_prompt
+    assert "never load the target" in edit_prompt
 
 
 def test_skill_build_prompt_collects_only_relevant_missing_details() -> None:

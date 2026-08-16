@@ -50,6 +50,7 @@ from mato_loop_backend.agent.permissions import (
     session_browse_permission,
     session_permission,
     session_search_permission,
+    skill_edit_permission,
     skill_load_permission,
     skill_write_permission,
     system_info_permission,
@@ -153,7 +154,9 @@ from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 logger = logging.getLogger(__name__)
 AskHandler = Callable[[PermissionRequest], Awaitable[PermissionDecision]]
-SkillCreationHandler = Callable[[str, str | None], Awaitable[SkillDraft]]
+SkillDraftHandler = Callable[
+    [str, str | None, SkillDefinition | None], Awaitable[SkillDraft]
+]
 QuestionHandler = Callable[
     ["QuestionArguments"], Awaitable[dict[str, list[str]] | Literal["rejected"] | None]
 ]
@@ -279,7 +282,7 @@ class ToolContext:
     model_trust_level: TrustLevel = TrustLevel.PUBLIC
     bound_resource: IntegrationResource | None = None
     skill_state: RunSkillState = field(default_factory=RunSkillState)
-    skill_creation_handler: SkillCreationHandler | None = None
+    skill_draft_handler: SkillDraftHandler | None = None
     approval_resolution: dict[str, str] = field(default_factory=dict)
     execution_client: ExecutionClient | None = None
 
@@ -1680,6 +1683,23 @@ class BuildSkillArguments(ToolArguments):
         return cleaned
 
 
+class EditSkillArguments(ToolArguments):
+    skill_id: UUID = Field(description="Exact ID copied from the available skill catalog.")
+    brief: str = Field(
+        min_length=1,
+        max_length=2_000,
+        description="Compact description of the requested changes.",
+    )
+
+    @field_validator("brief")
+    @classmethod
+    def normalize_brief(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("brief must not be blank")
+        return cleaned
+
+
 class LoadSkillArguments(ToolArguments):
     skill_id: UUID = Field(description="Exact ID copied from the available skill catalog.")
 
@@ -3028,8 +3048,12 @@ async def _update_agent_identity(
     )
 
 
-async def _build_skill(
-    arguments: BuildSkillArguments, context: ToolContext
+async def _save_skill_draft(
+    context: ToolContext,
+    brief: str,
+    *,
+    name_hint: str | None = None,
+    current_skill: SkillDefinition | None = None,
 ) -> ToolResult:
     context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
     policy = tool_execution_policy(
@@ -3037,17 +3061,18 @@ async def _build_skill(
     )
     if policy == ToolExecutionPolicy.DISABLED:
         return ToolResult.error("tool.unavailable")
-    if context.skill_creation_handler is None:
+    if context.skill_draft_handler is None:
         return ToolResult.error("skill.creationModelFailed")
     try:
-        draft = await context.skill_creation_handler(arguments.brief, arguments.name_hint)
+        draft = await context.skill_draft_handler(brief, name_hint, current_skill)
     except SkillError as error:
         return ToolResult.error(error.code)
 
-    skill_id = uuid4()
+    draft_id = uuid4()
+    skill_id = current_skill.id if current_skill is not None else draft_id
     draft_bytes = serialize_skill_draft(draft).encode("utf-8")
     initial_revision = hashlib.sha256(draft_bytes).hexdigest()
-    draft_path = f"files/skill-draft-{skill_id}.json"
+    draft_path = f"files/skill-draft-{draft_id}.json"
     try:
         entry = context.root_files.create_file(
             FileRoot.SESSION,
@@ -3068,16 +3093,30 @@ async def _build_skill(
             "initialRevision": initial_revision,
         },
     }
+    if current_skill is not None:
+        approval_details["skillTarget"] = {
+            "id": str(current_skill.id),
+            "name": current_skill.name,
+        }
     approval_received = False
     if policy == ToolExecutionPolicy.ASK:
         context.approval_resolution.clear()
-        if not await _allow(
-            context,
-            skill_write_permission(
+        permission = (
+            skill_edit_permission(
+                current_skill.id,
+                current_skill.name,
+                approval_details=approval_details,
+            )
+            if current_skill is not None
+            else skill_write_permission(
                 context.session.user_id,
                 draft.name,
                 approval_details=approval_details,
-            ),
+            )
+        )
+        if not await _allow(
+            context,
+            permission,
         ):
             return ToolResult.error("permission.denied")
         approval_received = True
@@ -3109,10 +3148,20 @@ async def _build_skill(
         return ToolResult.error("file.changed")
     try:
         current_draft = parse_skill_draft(current_bytes)
-        skill = await SkillService.create_definition(
-            context.db,
-            user_id=context.session.user_id,
-            definition=SkillDefinition(id=skill_id, **current_draft.model_dump()),
+        skill = (
+            await SkillService.replace(
+                context.db,
+                context.session.user_id,
+                current_skill.id,
+                current_draft,
+                expected=current_skill,
+            )
+            if current_skill is not None
+            else await SkillService.create_definition(
+                context.db,
+                user_id=context.session.user_id,
+                definition=SkillDefinition(id=skill_id, **current_draft.model_dump()),
+            )
         )
     except SkillError as error:
         return ToolResult.error(
@@ -3120,13 +3169,40 @@ async def _build_skill(
             field="name" if error.code == "skill.duplicate" else None,
             params={"maxSkills": 20} if error.code == "skill.limitReached" else None,
         )
-    return ToolResult.json(
-        {
-            "id": str(skill.id),
-            "name": skill.name,
-            "effectiveFrom": "next_run",
-        }
+    payload: dict[str, Any] = {
+        "id": str(skill.id),
+        "name": skill.name,
+        "effectiveFrom": "next_run",
+    }
+    if current_skill is not None:
+        payload["updated"] = True
+    return ToolResult.json(payload)
+
+
+async def _build_skill(
+    arguments: BuildSkillArguments, context: ToolContext
+) -> ToolResult:
+    return await _save_skill_draft(
+        context,
+        arguments.brief,
+        name_hint=arguments.name_hint,
     )
+
+
+async def _edit_skill(arguments: EditSkillArguments, context: ToolContext) -> ToolResult:
+    skill = context.skill_state.catalog.get(arguments.skill_id)
+    if skill is None:
+        return ToolResult.error("skill.notFound")
+    if context.skill_state.active is not None:
+        return ToolResult.error("tool.unavailable")
+    result = await _save_skill_draft(
+        context,
+        arguments.brief,
+        current_skill=skill,
+    )
+    if not result.is_error:
+        context.skill_state.edit_completed = True
+    return result
 
 
 async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> ToolResult:
@@ -4292,7 +4368,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "web_search",
-            "Search the web. Fetch imageUrl from image results before use.",
+            "Search the web after resolving any clear catalog skill match. Fetch imageUrl from image "
+            "results before use.",
             WebSearchArguments,
             _web_search,
             requires_search=True,
@@ -4537,6 +4614,18 @@ tool_registry = ToolRegistry(
             group="agent",
             label="Skill speichern",
             icon="construction",
+            actions=(_SKILL_WRITE,),
+        ),
+        ToolDefinition(
+            "edit_skill",
+            "Edit one existing user skill only after an explicit request in the latest user message. "
+            "Copy the exact skill ID from the catalog and delegate the requested changes as a compact "
+            "brief. Do not load the skill being edited. Changes apply from the next run.",
+            EditSkillArguments,
+            _edit_skill,
+            group="agent",
+            label="Skill bearbeiten",
+            icon="edit_note",
             actions=(_SKILL_WRITE,),
         ),
         ToolDefinition(

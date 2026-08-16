@@ -88,11 +88,17 @@ async def test_approval_without_live_waiter_expires_without_creating_grant(monke
     db.add.assert_not_called()
 
 
-async def test_skill_approval_requires_and_forwards_exact_revision(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("action_kind", "resource_type"),
+    [("build_skill", "skill_collection"), ("edit_skill", "skill")],
+)
+async def test_skill_approval_requires_and_forwards_exact_revision(
+    monkeypatch, action_kind, resource_type
+) -> None:
     approval = _approval()
-    approval.action_kind = "build_skill"
+    approval.action_kind = action_kind
     approval.capability = "skills.write"
-    approval.resource_type = "skill_collection"
+    approval.resource_type = resource_type
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     session = ChatSession(id=approval.session_id, user_id=user.id, title="Test")
     db = AsyncMock(spec=AsyncSession)

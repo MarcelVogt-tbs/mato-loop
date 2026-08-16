@@ -496,6 +496,25 @@ def skill_write_permission(
     )
 
 
+def skill_edit_permission(
+    skill_id: UUID,
+    skill_name: str,
+    *,
+    approval_details: dict[str, Any] | None = None,
+) -> PermissionRequest:
+    return PermissionRequest(
+        capability="skills.write",
+        resource_type="skill",
+        resource_scope=str(skill_id),
+        action_kind="edit_skill",
+        risk_level="medium",
+        title="Skill ändern?",
+        summary=f'Der Agent möchte den persönlichen Skill „{skill_name}“ ändern.',
+        resource_display=skill_name,
+        approval_details=approval_details,
+    )
+
+
 def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath] | None:
     try:
         value = json.loads(resource_scope)
@@ -772,7 +791,7 @@ class PermissionPolicy:
             "media_model",
         }:
             return request.resource_scope == grant.resource_scope
-        if request.resource_type == "agent_identity":
+        if request.resource_type in {"agent_identity", "skill"}:
             try:
                 return UUID(request.resource_scope) == UUID(grant.resource_scope)
             except ValueError:

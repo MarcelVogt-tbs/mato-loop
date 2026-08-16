@@ -1244,7 +1244,7 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
         arguments={"brief": "Create a reusable API research workflow."},
     )
     context = _context(tmp_path, call)
-    context.skill_creation_handler = AsyncMock(
+    context.skill_draft_handler = AsyncMock(
         return_value=SkillDraft(
             name="API research",
             description="Use when an API must be queried.",
@@ -1313,7 +1313,7 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(
         arguments={"brief": "Create an API workflow."},
     )
     context = _context(tmp_path, call)
-    context.skill_creation_handler = AsyncMock(
+    context.skill_draft_handler = AsyncMock(
         return_value=SkillDraft(
             name="API research",
             description="Use for API research.",
@@ -1338,6 +1338,118 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(
     assert result.is_error
     assert result.metadata["errorCode"] == "file.changed"
     assert skills.skills == []
+    save.assert_not_awaited()
+
+
+async def test_edit_skill_reuses_draft_approval_and_preserves_target(
+    monkeypatch, tmp_path
+) -> None:
+    existing = SkillDefinition(
+        name="Songfinder",
+        description="Findet Songs.",
+        instructions="Suche breit und prüfe Quellen.",
+    )
+    skills = SkillsSettings(skills=[existing])
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return {ToolSettings: ToolSettings(), SkillsSettings: skills}[settings_type]
+
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", save)
+    call = ToolCall(
+        id="edit-skill",
+        name="edit_skill",
+        arguments={
+            "skill_id": str(existing.id),
+            "brief": "Ändere nur die Einsatzbeschreibung.",
+        },
+    )
+    context = _context(tmp_path, call)
+    target = existing.model_copy(deep=True)
+    context.skill_state.catalog[existing.id] = target
+    context.skill_draft_handler = AsyncMock(
+        return_value=SkillDraft(
+            name=existing.name,
+            description="Immer bei einer Suche anhand von Lyrics verwenden.",
+            instructions=existing.instructions,
+        )
+    )
+
+    result = await tool_registry.execute(call, context)
+
+    payload = json.loads(result.content)
+    assert payload == {
+        "id": str(existing.id),
+        "name": "Songfinder",
+        "effectiveFrom": "next_run",
+        "updated": True,
+    }
+    assert len(skills.skills) == 1
+    assert skills.skills[0].id == existing.id
+    assert skills.skills[0].description.startswith("Immer bei")
+    assert skills.skills[0].instructions == existing.instructions
+    assert context.skill_state.edit_completed
+    context.skill_draft_handler.assert_awaited_once_with(
+        "Ändere nur die Einsatzbeschreibung.", None, target
+    )
+    request = context.ask_handler.await_args.args[0]
+    assert request.action_kind == "edit_skill"
+    assert request.resource_type == "skill"
+    assert request.resource_scope == str(existing.id)
+    assert request.approval_details["skillTarget"] == {
+        "id": str(existing.id),
+        "name": "Songfinder",
+    }
+    save.assert_awaited_once()
+
+
+async def test_edit_skill_rejects_parallel_target_change(monkeypatch, tmp_path) -> None:
+    existing = SkillDefinition(
+        name="Songfinder",
+        description="Findet Songs.",
+        instructions="Suche breit.",
+    )
+    skills = SkillsSettings(skills=[existing])
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return {ToolSettings: ToolSettings(), SkillsSettings: skills}[settings_type]
+
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", save)
+    call = ToolCall(
+        id="edit-stale-skill",
+        name="edit_skill",
+        arguments={
+            "skill_id": str(existing.id),
+            "brief": "Verbessere die Beschreibung.",
+        },
+    )
+    context = _context(tmp_path, call)
+    context.skill_state.catalog[existing.id] = existing.model_copy(deep=True)
+    context.skill_draft_handler = AsyncMock(
+        return_value=SkillDraft(
+            name=existing.name,
+            description="Neue Beschreibung.",
+            instructions=existing.instructions,
+        )
+    )
+
+    async def approve_after_parallel_change(_request):
+        skills.skills[0] = existing.model_copy(
+            update={"description": "Parallel geändert."}
+        )
+        return PermissionDecision.ALLOW
+
+    context.ask_handler = AsyncMock(side_effect=approve_after_parallel_change)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.is_error
+    assert result.metadata["errorCode"] == "skill.changed"
+    assert skills.skills[0].description == "Parallel geändert."
+    assert not context.skill_state.edit_completed
     save.assert_not_awaited()
 
 
@@ -2474,15 +2586,22 @@ def test_webfetch_schema_has_the_expected_contract() -> None:
     }
 
 
-def test_build_skill_schema_delegates_only_a_compact_brief() -> None:
-    schema = next(
+def test_skill_write_schemas_delegate_compact_briefs() -> None:
+    build_schema = next(
         item.schema()
         for item in tool_registry.available(IntegrationSettings(), "read-only")
         if item.name == "build_skill"
     )["parameters"]
+    edit_schema = next(
+        item.schema()
+        for item in tool_registry.available(IntegrationSettings(), "read-only")
+        if item.name == "edit_skill"
+    )["parameters"]
 
-    assert set(schema["properties"]) == {"brief", "name_hint"}
-    assert schema["required"] == ["brief"]
+    assert set(build_schema["properties"]) == {"brief", "name_hint"}
+    assert build_schema["required"] == ["brief"]
+    assert set(edit_schema["properties"]) == {"skill_id", "brief"}
+    assert edit_schema["required"] == ["skill_id", "brief"]
 
 
 def test_tool_schemas_remove_annotative_titles_recursively() -> None:

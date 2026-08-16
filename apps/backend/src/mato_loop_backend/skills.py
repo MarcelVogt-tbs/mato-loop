@@ -6,7 +6,14 @@ from json import JSONDecodeError
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.settings import (
@@ -41,6 +48,34 @@ class SkillDraft(BaseModel):
         return normalize_skill_text(value, info.field_name) if isinstance(value, str) else value
 
 
+class SkillEditPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    description: str | None = Field(default=None, min_length=1, max_length=240)
+    instructions: str | None = Field(default=None, min_length=1, max_length=8_000)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("name must not be null")
+        return normalize_skill_name(value) if isinstance(value, str) else value
+
+    @field_validator("description", "instructions", mode="before")
+    @classmethod
+    def validate_text(cls, value: Any, info: Any) -> Any:
+        if value is None:
+            raise ValueError(f"{info.field_name} must not be null")
+        return normalize_skill_text(value, info.field_name) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def require_change(self) -> SkillEditPatch:
+        if self.name is None and self.description is None and self.instructions is None:
+            raise ValueError("at least one skill field is required")
+        return self
+
+
 def serialize_skill_draft(draft: SkillDraft) -> str:
     return json.dumps(draft.model_dump(), ensure_ascii=False, indent=2) + "\n"
 
@@ -56,6 +91,7 @@ def parse_skill_draft(value: str | bytes) -> SkillDraft:
 class RunSkillState:
     catalog: dict[UUID, SkillDefinition] = field(default_factory=dict)
     active: SkillDefinition | None = None
+    edit_completed: bool = False
 
     @classmethod
     def from_settings(cls, settings: SkillsSettings) -> RunSkillState:
@@ -92,7 +128,12 @@ class SkillService:
 
     @staticmethod
     async def replace(
-        db: AsyncSession, user_id: UUID, skill_id: UUID, draft: SkillDraft
+        db: AsyncSession,
+        user_id: UUID,
+        skill_id: UUID,
+        draft: SkillDraft,
+        *,
+        expected: SkillDefinition | None = None,
     ) -> SkillDefinition:
         settings = await SettingsStore.load(
             db, SkillsSettings, user_id=user_id, for_update=True
@@ -100,6 +141,8 @@ class SkillService:
         current = next((item for item in settings.skills if item.id == skill_id), None)
         if current is None:
             raise SkillError("skill.notFound")
+        if expected is not None and current != expected:
+            raise SkillError("skill.changed")
         SkillService._ensure_unique(settings, draft.name, exclude_id=skill_id)
         replacement = SkillDefinition(id=current.id, **draft.model_dump())
         settings.skills[settings.skills.index(current)] = replacement

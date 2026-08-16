@@ -73,9 +73,17 @@ async def decide_approval(
     if payload.decision not in approval.available_decisions:
         raise ApiError(400, "approval.decisionUnavailable")
     skill_draft_approval = (
-        approval.action_kind == "build_skill"
-        and approval.capability == "skills.write"
-        and approval.resource_type == "skill_collection"
+        approval.capability == "skills.write"
+        and (
+            (
+                approval.action_kind == "build_skill"
+                and approval.resource_type == "skill_collection"
+            )
+            or (
+                approval.action_kind == "edit_skill"
+                and approval.resource_type == "skill"
+            )
+        )
     )
     if (
         skill_draft_approval

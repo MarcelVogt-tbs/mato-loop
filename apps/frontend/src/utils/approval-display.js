@@ -88,6 +88,9 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'memory_collection') {
     return { label: 'Memory-Sammlung', value: approval?.resourceDisplay || 'Eigene Memories' }
   }
+  if (approval?.resourceType === 'skill') {
+    return { label: 'Skill', value: approval?.resourceDisplay ? `„${approval.resourceDisplay}“` : scope }
+  }
   if (approval?.resourceType === 'skill_collection') {
     return {
       label: 'Skill-Sammlung',
@@ -138,6 +141,9 @@ export function permissionGrantDisplay(grant, sessions = []) {
       value: `${resource.value}${fingerprint}`,
       icon: 'language'
     }
+  }
+  if (grant?.resourceType === 'skill') {
+    return { label: 'Skill bearbeiten', value: resource.value, icon: 'edit_note' }
   }
   const capability = {
     'filesystem.read': { label: 'Dateien lesen', icon: 'visibility' },
