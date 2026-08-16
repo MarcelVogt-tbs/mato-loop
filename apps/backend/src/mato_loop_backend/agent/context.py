@@ -283,7 +283,6 @@ def general_system_prompt(
     web_search_retry: int = 0,
     response_repair_required: bool = False,
     openscad_render_pending: bool = False,
-    openscad_visual_check_pending: bool = False,
     memory_write_pending: bool = False,
     memory_write_outcome: str | None = None,
     tool_call_limit: int | None = None,
@@ -534,13 +533,6 @@ def general_system_prompt(
         runtime_parts.append(
             "OpenSCAD source was generated but has not been rendered successfully. Call "
             "render_openscad before answering. If rendering fails, correct the source and rerender."
-        )
-    if openscad_visual_check_pending:
-        runtime_parts.append(
-            "Reference-based OpenSCAD visual verification is pending. Inspect the supplied reference image "
-            "and generated four-view sheet together before producing the final response. A successful render "
-            "or matching bounds is not evidence of visual conformity. Name remaining visible mismatches or "
-            "uncertainty, and do not claim completion if either image is unavailable."
         )
     if memory_write_pending:
         runtime_parts.append(

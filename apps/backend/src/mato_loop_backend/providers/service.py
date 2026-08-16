@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 _IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 _RETRY_DELAYS = (2.0, 5.0)
 _MODEL_IMAGE_MAX_EDGE = 2048
-_MODEL_IMAGE_MAX_BYTES = MAX_PROVIDER_IMAGE_BYTES // MAX_PROVIDER_IMAGES
+_MODEL_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 _AUDIO_FORMATS = {
     "audio/mpeg": "mp3",
     "audio/mp3": "mp3",
@@ -166,11 +166,6 @@ async def _provider_projection(
         ProviderMedia(
             message_index=item.message_index,
             mime_type=str(item.attachment.get("mime_type") or "image"),
-            attachment_id=(
-                str(item.attachment["id"])
-                if isinstance(item.attachment.get("id"), str)
-                else None
-            ),
             status="unavailable",
         )
         for item in selected
@@ -454,7 +449,6 @@ class ProviderService:
         media_inputs: list[ProviderMediaInput] | None = None,
         prompt_cache_key: str | None = None,
         required_image_ids: tuple[str, ...] = (),
-        on_image_projection: Callable[[tuple[str, ...], frozenset[str]], None] | None = None,
     ) -> ProviderResult:
         if model.provider_id != provider.id:
             raise ProviderError(
@@ -524,15 +518,6 @@ class ProviderService:
             image_inputs=image_inputs,
             required_image_ids=required_image_ids,
         )
-        if on_image_projection is not None:
-            on_image_projection(
-                tuple(item.attachment_id for item in media if item.attachment_id is not None),
-                frozenset(
-                    item.attachment_id
-                    for item in media
-                    if item.attachment_id is not None and item.status == "ready"
-                ),
-            )
         media.extend(direct_media)
         pseudonymizer = RequestPseudonymizer() if use_pseudonymization else None
         if pseudonymizer is not None:

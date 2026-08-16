@@ -252,6 +252,7 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
             root="workspace", path="enclosure/main.scad"
         ),
         root_files=RootFileService(session_id),
+        preview_images=True,
     )
 
     assert result is rendered
@@ -278,6 +279,7 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
             session_id=session_id,
             arguments=OpenScadRenderArguments(root="workspace", path="main.scad"),
             root_files=RootFileService(session_id),
+            preview_images=True,
         )
     rendered.previews[1].artifact.path = original_path
     rendered.artifact.backend_id = str(uuid4())
@@ -288,6 +290,7 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
             session_id=session_id,
             arguments=OpenScadRenderArguments(root="workspace", path="main.scad"),
             root_files=RootFileService(session_id),
+            preview_images=True,
         )
 
 
@@ -402,6 +405,14 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
     )
 
     assert result.is_error is False
+    openscad_module.render_project.assert_awaited_once_with(
+        context.execution_client,
+        executable_path="/usr/bin/openscad",
+        session_id=context.session.id,
+        arguments=OpenScadRenderArguments(root="workspace", path="model.scad"),
+        root_files=context.root_files,
+        preview_images=True,
+    )
     assert [attachment.kind for attachment in result.attachments] == ["file", "image"]
     assert [attachment.filename for attachment in result.attachments] == [
         "model.off",

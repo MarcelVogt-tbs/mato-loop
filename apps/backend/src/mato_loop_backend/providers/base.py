@@ -10,7 +10,7 @@ from mato_loop_backend.error_contract import safe_provider_error_code
 DeltaCallback = Callable[[str], Awaitable[None]]
 ReasoningDeltaCallback = Callable[[str, str], Awaitable[None]]
 
-MAX_PROVIDER_IMAGES = 4
+MAX_PROVIDER_IMAGES = 8
 MAX_PROVIDER_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_PROVIDER_AUDIO_BYTES = 25 * 1024 * 1024
 MAX_PROVIDER_VIDEO_BYTES = 50 * 1024 * 1024
@@ -37,7 +37,6 @@ class PublicReasoning:
 class ProviderMedia:
     message_index: int
     mime_type: str
-    attachment_id: str | None = None
     data_url: str | None = field(default=None, repr=False)
     status: str = "unavailable"
     modality: Literal["image", "audio", "video"] = "image"
@@ -115,7 +114,9 @@ def select_provider_images(
         if isinstance(filename, str) and filename:
             filename_counts[filename] = filename_counts.get(filename, 0) + 1
 
-    required_order = {attachment_id: order for order, attachment_id in enumerate(required_image_ids)}
+    required_order = {
+        attachment_id: order for order, attachment_id in enumerate(required_image_ids)
+    }
     candidates: list[tuple[int, int, int, int, dict[str, Any]]] = []
     for message_index, attachment_index, attachment in references:
         source_role = str(attachment.get("source_role") or messages[message_index].get("role") or "")
@@ -125,13 +126,15 @@ def select_provider_images(
             source_order = message_index
         attachment_id = attachment.get("id")
         if isinstance(attachment_id, str) and attachment_id in required_order:
-            candidates.append((-1, required_order[attachment_id], message_index, source_order, attachment))
+            candidates.append(
+                (-1, required_order[attachment_id], message_index, source_order, attachment)
+            )
             continue
         if not historical and source_role == "user" and message_index == latest_user_index:
             candidates.append((0, attachment_index, message_index, source_order, attachment))
             continue
         if not historical and source_role == "tool" and message_index > latest_user_index:
-            candidates.append((2, -source_order, message_index, source_order, attachment))
+            candidates.append((1, -source_order, message_index, source_order, attachment))
             continue
 
         storage_path = attachment.get("storage_path")
@@ -154,7 +157,7 @@ def select_provider_images(
             )
         ]
         if matching_indices:
-            candidates.append((1, -source_order, max(matching_indices), source_order, attachment))
+            candidates.append((2, -source_order, max(matching_indices), source_order, attachment))
 
     candidates.sort(key=lambda item: (item[0], item[1]))
     selected: list[tuple[int, int, int, ProviderImageSelection]] = []

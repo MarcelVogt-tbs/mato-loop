@@ -99,9 +99,6 @@ async def _runtime_setup(
     execution_operations: tuple[str, ...] = (),
     user_image: bool = False,
     user_image_count: int = 1,
-    historical_user_image: bool = False,
-    reactivate_historical_on_request: int | None = None,
-    unready_image_projection_calls: tuple[int, ...] = (),
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -160,17 +157,11 @@ async def _runtime_setup(
     )
     user = Message(id=uuid4(), session_id=session.id, role="user", content="Aktuelle Frage")
     records = [user]
-    image_message = user
-    if historical_user_image:
-        image_message = Message(
-            id=uuid4(), session_id=session.id, role="user", content="CAD aus diesem Bild"
-        )
-        records.insert(0, image_message)
-    if user_image or historical_user_image:
-        image_message.attachments = [
+    if user_image:
+        user.attachments = [
             MessageAttachment(
                 id=uuid4(),
-                message_id=image_message.id,
+                message_id=user.id,
                 position=position,
                 kind="image",
                 category="user_upload",
@@ -216,21 +207,6 @@ async def _runtime_setup(
 
     async def complete(_db, **kwargs):
         requests.append(kwargs)
-        if callback := kwargs.get("on_image_projection"):
-            image_ids = tuple(kwargs.get("required_image_ids") or ())
-            image_request = len(requests) == 1 and user_image
-            historical_request = len(requests) == reactivate_historical_on_request
-            if not image_ids and (image_request or historical_request):
-                image_ids = tuple(str(attachment.id) for attachment in image_message.attachments)
-            image_ids = image_ids[: runtime_module.MAX_PROVIDER_IMAGES]
-            callback(
-                image_ids,
-                (
-                    frozenset()
-                    if len(requests) in unready_image_projection_calls
-                    else frozenset(image_ids)
-                ),
-            )
         result = queue.pop(0)
         streamed_content = (
             streamed_queue.pop(0) if streamed_queue is not None else result.content
@@ -360,7 +336,7 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
     assert _assistant_messages(db)[-1].content == "Fertig gerendert."
 
 
-async def test_reference_openscad_final_requires_ready_reference_and_preview(monkeypatch) -> None:
+async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkeypatch) -> None:
     agent_id = uuid4()
     integration = IntegrationInstance(
         name="OpenSCAD",
@@ -372,12 +348,6 @@ async def test_reference_openscad_final_requires_ready_reference_and_preview(mon
     db, run, requests, projections, _events = await _runtime_setup(
         monkeypatch,
         [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(id="history", name="session_read", arguments={})
-                ],
-                finish_reason="tool_calls",
-            ),
             ProviderResult(
                 tool_calls=[
                     ToolCall(
@@ -407,7 +377,6 @@ async def test_reference_openscad_final_requires_ready_reference_and_preview(mon
                 finish_reason="tool_calls",
             ),
             ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
-            ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
         max_steps=3,
@@ -416,9 +385,7 @@ async def test_reference_openscad_final_requires_ready_reference_and_preview(mon
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
-        historical_user_image=True,
-        reactivate_historical_on_request=2,
-        unready_image_projection_calls=(4,),
+        user_image=True,
     )
     generated_id = uuid4()
 
@@ -435,16 +402,6 @@ async def test_reference_openscad_final_requires_ready_reference_and_preview(mon
         "_execute_definition",
         AsyncMock(
             side_effect=[
-                ToolResult.json(
-                    {
-                        "messages": [
-                            {
-                                "role": "user",
-                                "attachments": [{"filename": "reference.png"}],
-                            }
-                        ]
-                    }
-                ),
                 ToolResult.json({"written": "files/model.scad"}),
                 ToolResult(
                     '{"output":"preview"}',
@@ -459,15 +416,25 @@ async def test_reference_openscad_final_requires_ready_reference_and_preview(mon
 
     await AgentRuntime._execute_loop(db, run)
 
-    reference_id = requests[2]["required_image_ids"][0]
-    assert requests[3]["required_image_ids"] == (reference_id, str(generated_id))
-    assert requests[4]["required_image_ids"] == (reference_id, str(generated_id))
-    assert projections[3]["required_image_ids"] == (reference_id, str(generated_id))
-    assert "visual verification is pending" in projections[3]["system_prompt"]
+    assert requests[2]["required_image_ids"] == (str(generated_id),)
+    assert projections[2]["required_image_ids"] == (str(generated_id),)
+    render_message = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+        and call.args[0].role == "tool"
+        and call.args[0].tool_call_id == "render"
+    )
+    assert json.loads(render_message.content)["visualVerification"] == {
+        "status": "pending"
+    }
     assert _assistant_messages(db)[-1].content == "Visuell verglichen."
 
 
-async def test_reference_openscad_does_not_ignore_a_fourth_reference(monkeypatch) -> None:
+@pytest.mark.parametrize("vision_fallback", [False, True])
+async def test_text_model_marks_or_runs_openscad_visual_verification(
+    monkeypatch, vision_fallback: bool
+) -> None:
     agent_id = uuid4()
     integration = IntegrationInstance(
         name="OpenSCAD",
@@ -476,46 +443,47 @@ async def test_reference_openscad_does_not_ignore_a_fourth_reference(monkeypatch
         execution_agent_id=agent_id,
         config={"binary_path": "/usr/bin/openscad"},
     )
+    results = [
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    id="write",
+                    name="write_file",
+                    arguments={
+                        "root": "session",
+                        "path": "files/model.scad",
+                        "content": "cube(1);",
+                    },
+                )
+            ],
+            finish_reason="tool_calls",
+        ),
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    id="render",
+                    name="render_openscad",
+                    arguments={"root": "session", "path": "files/model.scad"},
+                )
+            ],
+            finish_reason="tool_calls",
+        ),
+    ]
+    if vision_fallback:
+        results.append(ProviderResult(content="Visible geometry matches.", finish_reason="stop"))
+    results.append(ProviderResult(content="Fertig.", finish_reason="stop"))
     db, run, requests, _projections, _events = await _runtime_setup(
         monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="write",
-                        name="write_file",
-                        arguments={
-                            "root": "session",
-                            "path": "files/model.scad",
-                            "content": "cube(1);",
-                        },
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="render",
-                        name="render_openscad",
-                        arguments={"root": "session", "path": "files/model.scad"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
-            ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
-            ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
-        ],
+        results,
         search_policy=WebSearchPolicy.AVAILABLE,
-        max_steps=2,
-        active_supports_image_input=True,
+        max_steps=3,
+        vision_fallback=vision_fallback,
         workspace_access="read-write",
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
         user_image=True,
-        user_image_count=4,
+        user_image_count=8,
     )
     generated_id = uuid4()
 
@@ -525,6 +493,9 @@ async def test_reference_openscad_does_not_ignore_a_fourth_reference(monkeypatch
 
         async def discard(self, _attachment, _session_id):
             return None
+
+        async def read_image(self, attachment, _session_id):
+            return f"reference-{attachment.position}".encode()
 
     monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
     monkeypatch.setattr(
@@ -542,12 +513,32 @@ async def test_reference_openscad_does_not_ignore_a_fourth_reference(monkeypatch
         ),
     )
 
-    with pytest.raises(AgentRunError) as error:
-        await AgentRuntime._execute_loop(db, run)
+    await AgentRuntime._execute_loop(db, run)
 
-    assert error.value.code == "agent.requiredOpenScadVisualVerificationMissing"
-    assert len(requests[2]["required_image_ids"]) == 5
-    assert str(generated_id) in requests[2]["required_image_ids"]
+    assert [request["model"].model_id for request in requests] == (
+        ["local-model", "local-model", "vision-model", "local-model"]
+        if vision_fallback
+        else ["local-model", "local-model", "local-model"]
+    )
+    if vision_fallback:
+        assert len(requests[2]["image_inputs"]) == 8
+    tool_message = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+        and call.args[0].role == "tool"
+        and call.args[0].tool_call_id == "render"
+    )
+    verification = json.loads(tool_message.content)["visualVerification"]
+    assert verification == (
+        {
+            "status": "completed",
+            "referenceImageCount": 7,
+            "analysis": "Visible geometry matches.",
+        }
+        if vision_fallback
+        else {"status": "unavailable"}
+    )
 
 
 async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None:

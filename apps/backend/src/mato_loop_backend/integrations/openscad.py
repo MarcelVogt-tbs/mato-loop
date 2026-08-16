@@ -416,6 +416,7 @@ async def render_project(
     session_id: UUID,
     arguments: OpenScadRenderArguments,
     root_files: RootFileService,
+    preview_images: bool = False,
 ) -> OpenScadRenderResult:
     project_path, entrypoint = _project_parts(arguments)
     source: dict[str, Any]
@@ -464,7 +465,7 @@ async def render_project(
                 "entrypoint": entrypoint,
                 "source": source,
                 "output": arguments.output,
-                "previewImages": arguments.output == "preview",
+                "previewImages": preview_images,
             },
             OpenScadRenderResult,
             timeout=_RENDER_TIMEOUT_SECONDS,
@@ -482,12 +483,18 @@ async def render_project(
         content_type="model/vnd.off" if arguments.output == "preview" else "model/stl",
         suffix=".off" if arguments.output == "preview" else ".stl",
     )
-    expected_views = _PREVIEW_VIEWS if arguments.output == "preview" else ()
+    expected_views = _PREVIEW_VIEWS if preview_images and arguments.output == "preview" else ()
     if tuple(preview.view for preview in result.previews) != expected_views:
         raise ExecutionClientError("executionAgent.protocolError")
-    preview_ids = {preview.artifact.artifact_id for preview in result.previews}
-    preview_paths = {preview.artifact.path for preview in result.previews}
-    if len(preview_ids) != len(result.previews) or len(preview_paths) != len(result.previews):
+    artifact_ids = {result.artifact.artifact_id} | {
+        preview.artifact.artifact_id for preview in result.previews
+    }
+    artifact_paths = {result.artifact.path} | {
+        preview.artifact.path for preview in result.previews
+    }
+    if len(artifact_ids) != len(result.previews) + 1 or len(artifact_paths) != len(
+        result.previews
+    ) + 1:
         raise ExecutionClientError("executionAgent.protocolError")
     stem = PurePosixPath(result.artifact.filename).stem
     for preview in result.previews:
@@ -658,6 +665,7 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
             session_id=context.session.id,
             arguments=arguments,
             root_files=context.root_files,
+            preview_images=arguments.output == "preview",
         )
         if rendered.artifact.size + sum(
             preview.artifact.size for preview in rendered.previews

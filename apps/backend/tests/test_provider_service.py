@@ -480,8 +480,6 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
     storage_path = storage.write(session_id, uuid4(), data, "image.png", "generated")
     attachment = _attachment_reference(session_id, storage_path, data)
     captured = {}
-    observed = []
-
     async def fake_chat_completions(**kwargs):
         captured.update(kwargs)
         return ProviderResult(content="OK")
@@ -502,14 +500,12 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
             }
         ],
         tools=[],
-        on_image_projection=lambda selected, ready: observed.append((selected, ready)),
     )
 
     request = captured["request"]
     assert request.media[0].status == "ready"
     assert request.media[0].data_url is not None
     assert base64.b64decode(request.media[0].data_url.split(",", 1)[1]) == data
-    assert observed == [((attachment["id"],), frozenset({attachment["id"]}))]
     assert storage_path not in repr(request.messages)
     assert storage_path not in repr(request.media)
 
@@ -749,7 +745,7 @@ async def test_session_tool_result_read_reactivates_historical_image(monkeypatch
 
 async def test_historical_image_limit_prefers_newest_references(monkeypatch) -> None:
     references = []
-    for order in range(5):
+    for order in range(9):
         attachment_id = uuid4()
         reference = _attachment_reference(
             uuid4(),
@@ -779,18 +775,21 @@ async def test_historical_image_limit_prefers_newest_references(monkeypatch) -> 
         target_trust_level=TrustLevel.PUBLIC,
     )
 
-    assert len(media) == 4
+    assert len(media) == 8
     assert [item.data_url.rsplit(",", 1)[1] for item in media] == [
         reference["id"] for reference in references[1:]
     ]
 
 
-async def test_required_historical_image_outranks_current_tool_images(monkeypatch) -> None:
-    required = _attachment_reference(uuid4(), "attachments/reference.png", _png_bytes())
-    required.update({"historical": True, "source_order": 0})
-    generated = [
-        _attachment_reference(uuid4(), f"generated/view-{index}.png", _png_bytes())
-        for index in range(4)
+async def test_required_contact_sheet_leaves_room_for_seven_current_references(
+    monkeypatch,
+) -> None:
+    contact_sheet = _attachment_reference(
+        uuid4(), "generated/model-views.png", _png_bytes()
+    )
+    references = [
+        _attachment_reference(uuid4(), f"attachments/reference-{index}.png", _png_bytes())
+        for index in range(8)
     ]
     monkeypatch.setattr(service_module, "AttachmentStorage", lambda: object())
     monkeypatch.setattr(
@@ -801,23 +800,22 @@ async def test_required_historical_image_outranks_current_tool_images(monkeypatc
 
     _projected, media = await service_module._provider_projection(
         [
-            {"role": "system", "content": "System", "attachments": [required]},
-            {"role": "user", "content": "Use the existing reference"},
+            {"role": "user", "content": "Use these references", "attachments": references},
             {
                 "role": "tool",
                 "content": "Rendered views",
                 "tool_call_id": "render",
-                "attachments": generated,
+                "attachments": [contact_sheet],
             },
         ],
         supports_image_input=True,
         target_trust_level=TrustLevel.PUBLIC,
-        required_image_ids=(required["id"],),
+        required_image_ids=(contact_sheet["id"],),
     )
 
-    assert [item.attachment_id for item in media] == [
-        required["id"],
-        *(item["id"] for item in generated[:3]),
+    assert [item.data_url.rsplit(",", 1)[1] for item in media] == [
+        contact_sheet["id"],
+        *(item["id"] for item in references[:7]),
     ]
 
 

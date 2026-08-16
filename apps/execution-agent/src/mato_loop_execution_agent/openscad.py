@@ -56,7 +56,7 @@ class OpenScadRunner:
         self.workspace = workspace
         self.cache = cache
         self.transfer = transfer
-        self.timeout = min(config.default_timeout_seconds, 120.0)
+        self.timeout = config.default_timeout_seconds
         self.max_entries = config.max_operation_entries
         self.max_file_bytes = config.max_file_bytes
         self.max_bytes = config.max_transfer_bytes
