@@ -837,6 +837,9 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
         "system",
         "user",
     ]
+    assert "terms likely to appear in matching user requests" in builder_request[
+        "messages"
+    ][0]["content"]
     assert [message["role"] for message in repair_request["messages"]] == [
         "system",
         "user",

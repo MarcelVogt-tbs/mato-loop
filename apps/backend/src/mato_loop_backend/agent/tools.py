@@ -4517,8 +4517,9 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "load_skill",
             "Load one user-authored skill from the supplied catalog before following its instructions. "
-            "Use it automatically for one clear match or when the user explicitly names a skill. Call "
-            "this tool alone. A skill only guides use of currently offered tools.",
+            "This is the mandatory first tool when one catalog description clearly matches the latest "
+            "user request or the user names a skill, even if another tool could complete the task. Call "
+            "it alone. A skill only guides use of currently offered tools.",
             LoadSkillArguments,
             _load_skill,
             group="agent",

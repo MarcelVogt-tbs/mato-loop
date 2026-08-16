@@ -829,6 +829,8 @@ def test_skill_catalog_contains_selection_metadata_without_instructions() -> Non
             "description": skill.description,
         }
     ]
+    assert "Before answering or using a task tool" in prompt
+    assert "even if the task seems simple" in prompt
     assert skill.instructions not in prompt
 
 

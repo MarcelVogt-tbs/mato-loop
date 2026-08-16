@@ -70,7 +70,7 @@
             <q-avatar color="primary" text-color="white" :icon="editingSkill ? 'edit' : 'auto_awesome'" />
             <div class="col">
               <div class="text-h6">{{ editingSkill ? 'Skill bearbeiten' : 'Skill erstellen' }}</div>
-              <div class="text-body2 app-muted">Name, Kurzbeschreibung und Arbeitsanweisungen festlegen.</div>
+              <div class="text-body2 app-muted">Name, Einsatzbeschreibung und Arbeitsanweisungen festlegen.</div>
             </div>
             <q-btn flat round dense icon="close" aria-label="Dialog schließen" :disable="saving" v-close-popup />
           </q-card-section>
@@ -91,11 +91,12 @@
               outlined
               autogrow
               type="textarea"
-              label="Kurzbeschreibung"
+              label="Einsatzbeschreibung"
               maxlength="240"
               counter
               lazy-rules
               :rules="[requiredRule]"
+              hint="Bestimmt die automatische Auswahl: Was macht der Skill und wann soll er verwendet werden?"
             />
             <q-input
               v-model="form.instructions"
@@ -107,7 +108,7 @@
               counter
               lazy-rules
               :rules="[requiredRule]"
-              hint="Beschreibe konkret, wann und wie der Skill arbeiten soll."
+              hint="Beschreibe konkret, wie der Skill arbeiten soll."
             />
           </q-card-section>
           <q-separator />

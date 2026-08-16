@@ -221,6 +221,15 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     assert [tool["name"] for tool in skill_tools] == ["load_skill"]
     assert str(prompt_eval.SKILL_ID) in skill_messages[0]["content"]
 
+    automatic_skill_messages, automatic_skill_tools = build_case(
+        _case("matching_skill_is_loaded_automatically")
+    )
+    assert [tool["name"] for tool in automatic_skill_tools] == [
+        "load_skill",
+        "web_search",
+    ]
+    assert "Songfinder" in automatic_skill_messages[0]["content"]
+
     build_messages, build_tools = build_case(_case("vague_skill_build_uses_question"))
     assert [tool["name"] for tool in build_tools] == ["question", "build_skill"]
     assert "use question once for gaps" in build_messages[0]["content"]

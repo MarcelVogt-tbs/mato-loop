@@ -687,15 +687,19 @@ CASES = (
     PromptCase(
         id="matching_skill_is_loaded_automatically",
         kind="general",
-        user="Rufe die Daten über die vorhandene API ab und prüfe die Antwort.",
-        tools=("load_skill",),
+        user="ich suche einen hip hop / rap song (englisch) wo last night took a but tonight",
+        tools=("load_skill", "web_search"),
         system_options={
             "skill_catalog": (
                 {
                     "id": str(SKILL_ID),
-                    "name": "API-Recherche",
-                    "description": "Use when an API must be queried and checked.",
-                    "instructions": "Call the available API tool and validate its response.",
+                    "name": "Songfinder",
+                    "description": (
+                        "Identifiziert Songs anhand unvollständiger oder falsch verstandener "
+                        "Lyrics und Erinnerungsfragmenten. Immer verwenden, wenn ein Nutzer "
+                        "einen Song oder Interpreten sucht, auch bei kurzen Textfragmenten."
+                    ),
+                    "instructions": "Recherchiere Kandidaten und prüfe den besten Treffer.",
                 },
             )
         },

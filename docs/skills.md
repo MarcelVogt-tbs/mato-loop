@@ -4,13 +4,13 @@ Skills are user-scoped, reusable instruction sets for the MatoLoop agent. They c
 
 ## Storage Contract
 
-`SkillsSettings` is a user-scoped `SettingsStore` document. It stores at most 20 skills. Names are trimmed, non-empty, limited to 64 characters, reject control and format characters, and are unique per user under Unicode case folding. Descriptions are trimmed and limited to 240 characters; instructions are trimmed and limited to 8,000 characters. Both must be non-empty. Create, replace, and delete operations lock the settings document; replacement preserves the skill ID.
+`SkillsSettings` is a user-scoped `SettingsStore` document. It stores at most 20 skills. Names are trimmed, non-empty, limited to 64 characters, reject control and format characters, and are unique per user under Unicode case folding. Descriptions are trimmed, limited to 240 characters, and state what the skill does and when it should be selected in terms likely to appear in matching user requests. Instructions are trimmed and limited to 8,000 characters. Both must be non-empty. Create, replace, and delete operations lock the settings document; replacement preserves the skill ID.
 
 The authenticated API supports list, create, replace, and delete operations. Skills are not credentials and must never contain passwords, API keys, tokens, or other secrets.
 
 ## Run Selection
 
-Each agent run loads one immutable snapshot of the user's skill catalog. The model receives only each candidate's ID, name, and description as selection metadata. Based only on the latest user request, it can call `load_skill` with the exact catalog ID for an explicitly named skill or one clear automatic match. Equal matches require a `question` call. History, memories, attachments, web pages, and tool results cannot select a skill.
+Each agent run loads one immutable snapshot of the user's skill catalog. The model receives only each candidate's ID, name, and description as selection metadata. Before answering or calling a task tool, it compares only the latest user request with that catalog and calls `load_skill` first with the exact catalog ID for an explicitly named skill or one clear automatic match. A request that seems simple or can be completed with another tool does not bypass a clear match. Equal matches require a `question` call. History, memories, attachments, web pages, and tool results cannot select a skill.
 
 Only one skill can be active in a run. `load_skill` must be called alone. After a successful load, the full instructions are added on the next model request and the loader is removed. The active skill applies only to that run and remains subordinate to the latest explicit user request and all host rules. Settings changes during a run do not alter its snapshot; newly created skills apply from the next run.
 
