@@ -30,11 +30,18 @@ from .protocol import (
 from .transfer import TransferClient
 from .workspace import AgentError, Workspace, _parts
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAX_ADDRESS_SPACE_BYTES = 8 * 1024 * 1024 * 1024
 MAX_CPU_SECONDS = 600
 MAX_PROCESSES = 256
 ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+CAMERAS = {
+    "isometric": "0,0,0,55,0,25,140",
+    "front": "0,0,0,90,0,0,140",
+    "right": "0,0,0,90,0,90,140",
+    "top": "0,0,0,0,0,0,140",
+}
 KNOWN_OPENSCAD = (Path("/usr/local/bin/openscad"), Path("/usr/bin/openscad"))
 
 
@@ -49,7 +56,7 @@ class OpenScadRunner:
         self.workspace = workspace
         self.cache = cache
         self.transfer = transfer
-        self.timeout = config.default_timeout_seconds
+        self.timeout = min(config.default_timeout_seconds, 120.0)
         self.max_entries = config.max_operation_entries
         self.max_file_bytes = config.max_file_bytes
         self.max_bytes = config.max_transfer_bytes
@@ -68,6 +75,8 @@ class OpenScadRunner:
         else:
             self.executable, self.version, self.executable_identity = found
         self.manifold_available = self._probe_manifold(self.executable)
+        self.xvfb = self._find_xvfb()
+        self.xvfb_identity = self._identity(self.xvfb)
         self.render_probe_available = self._probe_render()
 
     @property
@@ -117,6 +126,18 @@ class OpenScadRunner:
                 continue
         return None
 
+    def _find_xvfb(self) -> Path | None:
+        path_candidate = shutil.which("xvfb-run")
+        candidates = [Path("/usr/bin/xvfb-run"), Path("/usr/local/bin/xvfb-run")]
+        if path_candidate:
+            candidates.append(Path(path_candidate))
+        for candidate in candidates:
+            try:
+                return self._candidate(candidate)
+            except AgentError:
+                continue
+        return None
+
     def _same_identity(self, path: Path | None, identity: tuple[int, int] | None) -> bool:
         if path is None or identity is None:
             return False
@@ -129,7 +150,9 @@ class OpenScadRunner:
         return self.render_probe_available and self._runtime_available()
 
     def _runtime_available(self) -> bool:
-        return self._same_identity(self.executable, self.executable_identity)
+        return self._same_identity(
+            self.executable, self.executable_identity
+        ) and self._same_identity(self.xvfb, self.xvfb_identity)
 
     @staticmethod
     def _is_off(path: Path) -> bool:
@@ -147,15 +170,18 @@ class OpenScadRunner:
             output = work / "output"
             project.mkdir(mode=0o700)
             output.mkdir(mode=0o700)
-            (project / "probe.scad").write_text("cube(1);\n", encoding="ascii")
+            source = project / "probe.scad"
+            model = output / "probe.off"
+            preview = output / "probe.png"
+            source.write_text("cube(1);\n", encoding="ascii")
             try:
-                result = subprocess.run(
+                geometry = subprocess.run(
                     [
                         os.fspath(self.executable),
                         "--export-format=off",
                         "-o",
-                        os.fspath(output / "probe.off"),
-                        os.fspath(project / "probe.scad"),
+                        os.fspath(model),
+                        os.fspath(source),
                     ],
                     cwd=work,
                     env=self._environment(work),
@@ -165,7 +191,31 @@ class OpenScadRunner:
                     timeout=10,
                     check=False,
                 )
-                return result.returncode == 0 and self._is_off(output / "probe.off")
+                result = subprocess.run(
+                    [
+                        os.fspath(self.xvfb),
+                        "-a",
+                        os.fspath(self.executable),
+                        "-o",
+                        os.fspath(preview),
+                        "--imgsize=32,32",
+                        os.fspath(source),
+                    ],
+                    cwd=work,
+                    env=self._environment(work),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+                return (
+                    geometry.returncode == 0
+                    and self._is_off(model)
+                    and result.returncode == 0
+                    and preview.is_file()
+                    and preview.read_bytes()[: len(PNG_SIGNATURE)] == PNG_SIGNATURE
+                )
             except (OSError, subprocess.TimeoutExpired):
                 return False
 
@@ -332,12 +382,13 @@ class OpenScadRunner:
         diagnostic_limit: int,
         error_code: str,
         timeout_code: str | None = None,
+        resource_divisor: int = 1,
     ) -> dict:
         def set_limits() -> None:
             for kind, maximum in (
-                (resource.RLIMIT_CPU, MAX_CPU_SECONDS),
-                (resource.RLIMIT_AS, MAX_ADDRESS_SPACE_BYTES),
-                (resource.RLIMIT_NPROC, MAX_PROCESSES),
+                (resource.RLIMIT_CPU, MAX_CPU_SECONDS // resource_divisor),
+                (resource.RLIMIT_AS, MAX_ADDRESS_SPACE_BYTES // resource_divisor),
+                (resource.RLIMIT_NPROC, MAX_PROCESSES // resource_divisor),
                 (resource.RLIMIT_FSIZE, self.max_artifact_bytes),
             ):
                 _, hard = resource.getrlimit(kind)
@@ -617,6 +668,14 @@ class OpenScadRunner:
         return name
 
     @staticmethod
+    def _preview_names(entrypoint: str) -> dict[str, str]:
+        stem = Path(entrypoint).stem
+        names = {view: f"{stem}-{view}.png" for view in CAMERAS}
+        if any(len(name) > 255 or len(name.encode("utf-8")) > 255 for name in names.values()):
+            raise AgentError("path.invalid", "OpenSCAD preview filename is too long")
+        return names
+
+    @staticmethod
     def _validate_stl(path: Path) -> None:
         try:
             with path.open("rb") as handle:
@@ -784,6 +843,7 @@ class OpenScadRunner:
                 error_code="openscad.renderFailed",
                 timeout_code="openscad.timedOut",
             )
+            diagnostics = [diagnostic]
             try:
                 self._validate_output_file(output_path)
                 validator = (
@@ -795,7 +855,71 @@ class OpenScadRunner:
                     exc.params = self._failure_params(diagnostic)
                 raise
 
-            if output_path.stat().st_size > self.cache.max_bytes:
+            preview_paths: list[tuple[str, Path]] = []
+            if arguments.output == "preview" and arguments.preview_images:
+                preview_names = self._preview_names(arguments.entrypoint)
+                preview_slots = asyncio.Semaphore(2)
+
+                async def render_preview(view: str, camera: str):
+                    preview_path = output / preview_names[view]
+                    async with preview_slots:
+                        preview_diagnostic = await self._run(
+                            [
+                                os.fspath(self.xvfb),
+                                "-a",
+                                os.fspath(self.executable),
+                                "-D",
+                                "$preview=true",
+                                "-o",
+                                os.fspath(preview_path),
+                                f"--camera={camera}",
+                                "--autocenter",
+                                "--viewall",
+                                "--projection=o",
+                                "--imgsize=800,600",
+                                os.fspath(entrypoint),
+                            ],
+                            work,
+                            diagnostic_limit=self.max_diagnostics,
+                            error_code="openscad.previewFailed",
+                            resource_divisor=2,
+                        )
+                    try:
+                        self._validate_output_file(preview_path)
+                        with preview_path.open("rb") as handle:
+                            if handle.read(len(PNG_SIGNATURE)) != PNG_SIGNATURE:
+                                raise AgentError(
+                                    "openscad.invalidOutput",
+                                    "OpenSCAD produced an invalid PNG preview",
+                                )
+                    except AgentError as exc:
+                        if exc.params is None:
+                            exc.params = self._failure_params(preview_diagnostic)
+                        raise
+                    return view, preview_path, preview_diagnostic
+
+                preview_tasks = [
+                    asyncio.create_task(render_preview(view, camera))
+                    for view, camera in sorted(CAMERAS.items(), key=lambda item: item[0] != "top")
+                ]
+                try:
+                    preview_results = await asyncio.gather(*preview_tasks)
+                except BaseException:
+                    for task in preview_tasks:
+                        task.cancel()
+                    await asyncio.gather(*preview_tasks, return_exceptions=True)
+                    raise
+                previews_by_view = {
+                    view: (path, preview_diagnostic)
+                    for view, path, preview_diagnostic in preview_results
+                }
+                preview_paths = [(view, previews_by_view[view][0]) for view in CAMERAS]
+                diagnostics.extend(previews_by_view[view][1] for view in CAMERAS)
+
+            if (
+                output_path.stat().st_size + sum(path.stat().st_size for _, path in preview_paths)
+                > self.cache.max_bytes
+            ):
                 raise AgentError("operation.tooLarge", "Rendered artifacts exceed cache capacity")
             render_id = uuid4().hex
             artifact = await asyncio.to_thread(
@@ -807,15 +931,38 @@ class OpenScadRunner:
                 name=arguments.output,
                 content_type="model/vnd.off" if arguments.output == "preview" else "model/stl",
             )
+            previews = [
+                {
+                    "view": view,
+                    "artifact": await asyncio.to_thread(
+                        self._descriptor,
+                        path,
+                        backend_id=backend_id,
+                        session_id=arguments.session_id,
+                        render_id=render_id,
+                        name=view,
+                        content_type="image/png",
+                    ),
+                }
+                for view, path in preview_paths
+            ]
             await asyncio.to_thread(self._store, artifact, output_path)
+            for preview, (_, path) in zip(previews, preview_paths, strict=True):
+                await asyncio.to_thread(self._store, preview["artifact"], path)
             diagnostic_text = "\n".join(
-                text for text in (diagnostic["stdout"], diagnostic["stderr"]) if text
+                text for item in diagnostics for text in (item["stdout"], item["stderr"]) if text
             )
             return {
                 "output": arguments.output,
                 "artifact": artifact.model_dump(by_alias=True),
+                "previews": [
+                    {
+                        "view": preview["view"],
+                        "artifact": preview["artifact"].model_dump(by_alias=True),
+                    }
+                    for preview in previews
+                ],
                 "diagnostics": diagnostic_text[: self.max_diagnostics],
                 "diagnosticsTruncated": len(diagnostic_text) > self.max_diagnostics
-                or diagnostic["stdoutTruncated"]
-                or diagnostic["stderrTruncated"],
+                or any(item["stdoutTruncated"] or item["stderrTruncated"] for item in diagnostics),
             }

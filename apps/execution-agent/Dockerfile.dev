@@ -1,7 +1,7 @@
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y git openscad ripgrep \
+    && apt-get install --no-install-recommends -y git openscad ripgrep xauth xvfb \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data /workspace /opt/mato-loop/execution-agent/venv /opt/mato-loop/execution-agent/uv-cache \
     && mv /usr/local/bin/uv /usr/local/bin/uv-real

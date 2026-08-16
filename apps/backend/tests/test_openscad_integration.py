@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from PIL import Image
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,7 @@ from mato_loop_backend.integrations.openscad import (
     OpenScadConfig,
     OpenScadRenderArguments,
     OpenScadRenderResult,
+    _preview_contact_sheet,
     _revision,
     _zip_project,
     render_openscad,
@@ -72,6 +74,12 @@ def _artifact(agent_id, session_id, name, content_type, size=100) -> dict:
     }
 
 
+def _png(color: tuple[int, int, int]) -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (800, 600), color).save(output, format="PNG")
+    return output.getvalue()
+
+
 def _render_result(agent_id, session_id, output="preview") -> OpenScadRenderResult:
     suffix = "off" if output == "preview" else "stl"
     content_type = "model/vnd.off" if output == "preview" else "model/stl"
@@ -79,6 +87,22 @@ def _render_result(agent_id, session_id, output="preview") -> OpenScadRenderResu
         {
             "output": output,
             "artifact": _artifact(agent_id, session_id, f"model.{suffix}", content_type),
+            "previews": (
+                [
+                    {
+                        "view": view,
+                        "artifact": _artifact(
+                            agent_id,
+                            session_id,
+                            f"model-{view}.png",
+                            "image/png",
+                        ),
+                    }
+                    for view in ("isometric", "front", "right", "top")
+                ]
+                if output == "preview"
+                else []
+            ),
             "diagnostics": "rendered",
             "diagnosticsTruncated": False,
         }
@@ -239,11 +263,23 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
             "entrypoint": "main.scad",
             "source": {"type": "workspace", "path": "enclosure"},
             "output": "preview",
+            "previewImages": True,
         },
         OpenScadRenderResult,
-        timeout=300.0,
+        timeout=600.0,
     )
 
+    original_path = rendered.previews[1].artifact.path
+    rendered.previews[1].artifact.path = rendered.previews[0].artifact.path
+    with pytest.raises(ExecutionClientError, match="executionAgent.protocolError"):
+        await render_project(
+            client,
+            executable_path="/usr/bin/openscad",
+            session_id=session_id,
+            arguments=OpenScadRenderArguments(root="workspace", path="main.scad"),
+            root_files=RootFileService(session_id),
+        )
+    rendered.previews[1].artifact.path = original_path
     rendered.artifact.backend_id = str(uuid4())
     with pytest.raises(ExecutionClientError, match="executionAgent.protocolError"):
         await render_project(
@@ -337,6 +373,13 @@ def test_off_validation_checks_structure_indices_and_geometry_metadata() -> None
         validate_off(b"OFF " + b" " * (1024 * 1024))
 
 
+def test_preview_contact_sheet_rejects_unexpected_dimensions() -> None:
+    output = BytesIO()
+    Image.new("RGB", (8, 6), (1, 2, 3)).save(output, format="PNG")
+    with pytest.raises(ValueError, match="dimensions"):
+        _preview_contact_sheet([output.getvalue()] * 4)
+
+
 async def test_render_tool_returns_preview_and_geometry_metadata(
     monkeypatch,
 ) -> None:
@@ -350,7 +393,8 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
         AsyncMock(return_value=IntegrationSettings(instances=[instance])),
     )
     monkeypatch.setattr(openscad_module, "render_project", AsyncMock(return_value=rendered))
-    exported = AsyncMock(return_value=off)
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)]
+    exported = AsyncMock(side_effect=[off, *(_png(color) for color in colors)])
     monkeypatch.setattr(openscad_module, "export_artifact", exported)
 
     result = await render_openscad(
@@ -358,8 +402,11 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
     )
 
     assert result.is_error is False
-    assert [attachment.kind for attachment in result.attachments] == ["file"]
-    assert [attachment.filename for attachment in result.attachments] == ["model.off"]
+    assert [attachment.kind for attachment in result.attachments] == ["file", "image"]
+    assert [attachment.filename for attachment in result.attachments] == [
+        "model.off",
+        "model-views.png",
+    ]
     assert json.loads(result.content)["geometryMetadata"] == {
         "triangleCount": 1,
         "bounds": {
@@ -368,8 +415,13 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
         },
         "dimensions": {"x": 2.0, "y": 3.0, "z": 4.0},
     }
-    assert exported.await_count == 1
-    assert "preview_images" not in openscad_module.render_project.await_args.kwargs
+    assert exported.await_count == 5
+    with Image.open(BytesIO(result.attachments[1].data)) as sheet:
+        assert sheet.size == (1600, 1200)
+        assert [
+            sheet.getpixel(point)
+            for point in ((400, 300), (1200, 300), (400, 900), (1200, 900))
+        ] == colors
 
 
 async def test_render_tool_exposes_only_controlled_syntax_diagnostics(

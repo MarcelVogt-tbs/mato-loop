@@ -9,16 +9,20 @@ import stat
 import struct
 import zipfile
 from dataclasses import replace
+from io import BytesIO
 from pathlib import PurePosixPath
 from tempfile import SpooledTemporaryFile
 from typing import Any, BinaryIO, Literal
 from uuid import UUID
 
+from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.attachments import (
     MAX_FILE_ATTACHMENT_BYTES,
+    AttachmentError,
+    validate_image,
 )
 from mato_loop_backend.execution.client import (
     ExecutionClient,
@@ -50,8 +54,9 @@ _MAX_OFF_BYTES = 24 * 1024 * 1024
 _MAX_OFF_LINE_LENGTH = 1024 * 1024
 _MAX_OFF_VERTICES = 500_000
 _MAX_OFF_TRIANGLES = 500_000
-_RENDER_TIMEOUT_SECONDS = 300.0
+_RENDER_TIMEOUT_SECONDS = 600.0
 _EXPORT_TIMEOUT_SECONDS = 120.0
+_PREVIEW_VIEWS = ("isometric", "front", "right", "top")
 _DIRECTORY_FLAGS = (
     os.O_RDONLY
     | getattr(os, "O_DIRECTORY", 0)
@@ -459,6 +464,7 @@ async def render_project(
                 "entrypoint": entrypoint,
                 "source": source,
                 "output": arguments.output,
+                "previewImages": arguments.output == "preview",
             },
             OpenScadRenderResult,
             timeout=_RENDER_TIMEOUT_SECONDS,
@@ -476,8 +482,24 @@ async def render_project(
         content_type="model/vnd.off" if arguments.output == "preview" else "model/stl",
         suffix=".off" if arguments.output == "preview" else ".stl",
     )
-    if result.previews:
+    expected_views = _PREVIEW_VIEWS if arguments.output == "preview" else ()
+    if tuple(preview.view for preview in result.previews) != expected_views:
         raise ExecutionClientError("executionAgent.protocolError")
+    preview_ids = {preview.artifact.artifact_id for preview in result.previews}
+    preview_paths = {preview.artifact.path for preview in result.previews}
+    if len(preview_ids) != len(result.previews) or len(preview_paths) != len(result.previews):
+        raise ExecutionClientError("executionAgent.protocolError")
+    stem = PurePosixPath(result.artifact.filename).stem
+    for preview in result.previews:
+        if preview.artifact.filename != f"{stem}-{preview.view}.png":
+            raise ExecutionClientError("executionAgent.protocolError")
+        _validate_descriptor(
+            preview.artifact,
+            agent_id=client.agent_id,
+            session_id=session_id,
+            content_type="image/png",
+            suffix=".png",
+        )
     return result
 
 
@@ -519,6 +541,26 @@ async def export_artifact(client: ExecutionClient, artifact: ArtifactDescriptor)
         return data
     finally:
         transfer_tickets.revoke(grant.ticket_id)
+
+
+def _preview_contact_sheet(images: list[bytes]) -> bytes:
+    if len(images) != len(_PREVIEW_VIEWS):
+        raise ValueError("incomplete OpenSCAD previews")
+    validated = [validate_image(image, "image/png") for image in images]
+    size = (validated[0].width, validated[0].height)
+    if size != (800, 600) or any(
+        (item.width, item.height) != size for item in validated[1:]
+    ):
+        raise ValueError("invalid OpenSCAD preview dimensions")
+    sheet = Image.new("RGB", (size[0] * 2, size[1] * 2), "white")
+    for index, data in enumerate(images):
+        with Image.open(BytesIO(data)) as image:
+            sheet.paste(image.convert("RGB"), ((index % 2) * size[0], (index // 2) * size[1]))
+    output = BytesIO()
+    sheet.save(output, format="PNG")
+    data = output.getvalue()
+    validate_image(data, "image/png")
+    return data
 
 
 def _authorization(arguments: OpenScadRenderArguments, context: Any) -> tuple[Any, ...]:
@@ -617,9 +659,20 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
             arguments=arguments,
             root_files=context.root_files,
         )
-        if rendered.artifact.size > _MAX_RENDER_ATTACHMENTS_BYTES:
+        if rendered.artifact.size + sum(
+            preview.artifact.size for preview in rendered.previews
+        ) > _MAX_RENDER_ATTACHMENTS_BYTES:
             return ToolResult.error("integration.attachmentTooLarge")
         data = await export_artifact(context.execution_client, rendered.artifact)
+        preview_data = [
+            await export_artifact(context.execution_client, preview.artifact)
+            for preview in rendered.previews
+        ]
+        contact_sheet = (
+            await asyncio.to_thread(_preview_contact_sheet, preview_data)
+            if preview_data
+            else None
+        )
         metadata = await asyncio.to_thread(
             validate_off if arguments.output == "preview" else validate_binary_stl,
             data,
@@ -628,12 +681,20 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
         return ToolResult.error(exc.code, params=_diagnostic_params(exc))
     except RootFileError as exc:
         return ToolResult.error(exc.code)
-    except (ValueError, OSError, zipfile.BadZipFile):
+    except (AttachmentError, ValueError, OSError, zipfile.BadZipFile):
         return ToolResult.error("openscad.invalidArtifact")
 
     payload = {
         "output": arguments.output,
         "file": rendered.artifact.filename,
+        **(
+            {
+                "previewFile": f"{PurePosixPath(rendered.artifact.filename).stem}-views.png",
+                "previewLayout": list(_PREVIEW_VIEWS),
+            }
+            if contact_sheet is not None
+            else {}
+        ),
         "diagnostics": rendered.diagnostics,
         "diagnosticsTruncated": rendered.diagnostics_truncated,
         "geometryMetadata": metadata,
@@ -648,6 +709,18 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
                 rendered.artifact.filename,
                 kind="file",
             ),
+            *(
+                (
+                    ToolAttachment(
+                        contact_sheet,
+                        "image/png",
+                        f"{PurePosixPath(rendered.artifact.filename).stem}-views.png",
+                        kind="image",
+                    ),
+                )
+                if contact_sheet is not None
+                else ()
+            ),
         ),
     )
 
@@ -659,7 +732,7 @@ OPENSCAD_TOOL = ToolContribution(
     name="render_openscad",
     description=(
         "Render one .scad entrypoint from an explicit session or workspace project. "
-        "Returns an interactive OFF preview by default. "
+        "Returns an interactive OFF preview and a four-view inspection sheet by default. "
         "Set output to stl only when the user explicitly requests an STL file."
     ),
     arguments_model=OpenScadRenderArguments,
@@ -710,8 +783,12 @@ def _contributions(_instance: IntegrationInstance) -> IntegrationContributions:
             "OpenSCAD validation:\n"
             "- If required dimensions are missing, ask one grouped question; otherwise state reasonable "
             "assumptions. Read files before modifying them and do not overwrite unrelated content.\n"
-            "- Render output=preview after every material change. Inspect controlled diagnostics, "
-            "triangle count, bounds, and dimensions. "
+            "- For an identifiable standard product, use available research tools to verify the exact visible "
+            "variant and specifications; never substitute generic category dimensions.\n"
+            "- Render output=preview after every material change. Inspect the reference image and the "
+            "isometric, front, right, and top views together, plus controlled diagnostics, triangle count, "
+            "bounds, and dimensions. A successful render and matching bounds prove technical validity only, "
+            "not visual conformity. If either visual input is unavailable, state that conformity is unverified. "
             "Correct problems and rerender. Use output=stl "
             "only when the user explicitly requested an STL file. Never claim success before a "
             "successful preview. In the final response, name the source file and every generated file.",

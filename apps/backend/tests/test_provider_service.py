@@ -478,7 +478,9 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
     storage = AttachmentStorage(sessions)
     data = _png_bytes()
     storage_path = storage.write(session_id, uuid4(), data, "image.png", "generated")
+    attachment = _attachment_reference(session_id, storage_path, data)
     captured = {}
+    observed = []
 
     async def fake_chat_completions(**kwargs):
         captured.update(kwargs)
@@ -496,16 +498,18 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
                 "role": "tool",
                 "content": "Screenshot",
                 "tool_call_id": "call-1",
-                "attachments": [_attachment_reference(session_id, storage_path, data)],
+                "attachments": [attachment],
             }
         ],
         tools=[],
+        on_image_projection=lambda selected, ready: observed.append((selected, ready)),
     )
 
     request = captured["request"]
     assert request.media[0].status == "ready"
     assert request.media[0].data_url is not None
     assert base64.b64decode(request.media[0].data_url.split(",", 1)[1]) == data
+    assert observed == [((attachment["id"],), frozenset({attachment["id"]}))]
     assert storage_path not in repr(request.messages)
     assert storage_path not in repr(request.media)
 
@@ -778,6 +782,42 @@ async def test_historical_image_limit_prefers_newest_references(monkeypatch) -> 
     assert len(media) == 4
     assert [item.data_url.rsplit(",", 1)[1] for item in media] == [
         reference["id"] for reference in references[1:]
+    ]
+
+
+async def test_required_historical_image_outranks_current_tool_images(monkeypatch) -> None:
+    required = _attachment_reference(uuid4(), "attachments/reference.png", _png_bytes())
+    required.update({"historical": True, "source_order": 0})
+    generated = [
+        _attachment_reference(uuid4(), f"generated/view-{index}.png", _png_bytes())
+        for index in range(4)
+    ]
+    monkeypatch.setattr(service_module, "AttachmentStorage", lambda: object())
+    monkeypatch.setattr(
+        service_module,
+        "_read_image_data_url",
+        lambda _storage, attachment: f"data:image/png;base64,{attachment['id']}",
+    )
+
+    _projected, media = await service_module._provider_projection(
+        [
+            {"role": "system", "content": "System", "attachments": [required]},
+            {"role": "user", "content": "Use the existing reference"},
+            {
+                "role": "tool",
+                "content": "Rendered views",
+                "tool_call_id": "render",
+                "attachments": generated,
+            },
+        ],
+        supports_image_input=True,
+        target_trust_level=TrustLevel.PUBLIC,
+        required_image_ids=(required["id"],),
+    )
+
+    assert [item.attachment_id for item in media] == [
+        required["id"],
+        *(item["id"] for item in generated[:3]),
     ]
 
 

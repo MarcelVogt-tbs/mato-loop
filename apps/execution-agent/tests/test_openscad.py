@@ -6,6 +6,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -35,6 +36,7 @@ import json
 import pathlib
 import struct
 import sys
+import time
 
 pathlib.Path(__file__).with_name("calls.jsonl").open("a").write(json.dumps(sys.argv[1:]) + "\\n")
 if sys.argv[1:] == ["--version"]:
@@ -46,9 +48,15 @@ content = source.read_text()
 if "FAIL_RENDER" in content:
     print(f"\\x1b[31mfailed {{source}}\\x1b[0m", file=sys.stderr)
     raise SystemExit(2)
+if "FAIL_TOP" in content and output.suffix == ".png":
+    if "--camera=0,0,0,0,0,0,140" in sys.argv:
+        raise SystemExit(2)
+    time.sleep(5)
 if "cube(" not in content:
     raise SystemExit(2)
-if output.suffix == ".off":
+if output.suffix == ".png":
+    output.write_bytes(b"\\x89PNG\\r\\n\\x1a\\npreview")
+elif output.suffix == ".off":
     output.write_text("OFF\\n3 1 0\\n0 0 0\\n1 0 0\\n0 1 0\\n3 0 1 2\\n")
 else:
     output.write_bytes(bytes(80) + struct.pack("<I", 1) + bytes(50))
@@ -57,6 +65,20 @@ print("rendered")
         encoding="utf-8",
     )
     openscad.chmod(0o755)
+    xvfb = directory / "xvfb-run"
+    xvfb.write_text(
+        f"""#!{sys.executable}
+import os
+import sys
+
+arguments = sys.argv[1:]
+if arguments and arguments[0] == "-a":
+    arguments = arguments[1:]
+os.execv(arguments[0], arguments)
+""",
+        encoding="utf-8",
+    )
+    xvfb.chmod(0o755)
     return openscad
 
 
@@ -91,8 +113,8 @@ def _request(operation: str, arguments: dict) -> Request:
 
 class OpenScadTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipUnless(
-        shutil.which("openscad"),
-        "packaged OpenSCAD is unavailable",
+        shutil.which("openscad") and shutil.which("xvfb-run"),
+        "packaged OpenSCAD preview is unavailable",
     )
     async def test_packaged_openscad_renders_real_preview_and_stl(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -117,6 +139,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                             "sessionId": "session",
                             "entrypoint": "halterung.scad",
                             "source": {"type": "workspace", "path": "project"},
+                            "previewImages": True,
                         },
                     ),
                     backend_id=AGENT_ID,
@@ -128,6 +151,16 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rendered["output"], "preview")
             self.assertEqual(preview.filename, "halterung.off")
             OpenScadRunner._validate_off(agent.cache._path(preview))
+            self.assertEqual(
+                [item["view"] for item in rendered["previews"]],
+                ["isometric", "front", "right", "top"],
+            )
+            for item in rendered["previews"]:
+                descriptor = ArtifactDescriptor.model_validate(item["artifact"])
+                self.assertEqual(
+                    agent.cache._path(descriptor).read_bytes()[:8],
+                    b"\x89PNG\r\n\x1a\n",
+                )
 
             exported = await agent.dispatch(
                 _request(
@@ -140,6 +173,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                         "sessionId": "session",
                         "entrypoint": "halterung.scad",
                         "source": {"type": "workspace", "path": "project"},
+                        "previewImages": True,
                         "output": "stl",
                     },
                 ),
@@ -212,18 +246,26 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                 )["ok"]
             )
 
-            rendered = await agent.dispatch(
-                _request(
-                    "integration.openscad.render",
-                    {
-                        **host,
-                        "executablePath": os.fspath(openscad),
-                        "sessionId": "session",
-                        "entrypoint": "halterung.scad",
-                        "source": {"type": "workspace", "path": "project"},
-                    },
-                ),
-                backend_id=AGENT_ID,
+            with patch.object(agent.openscad, "_run", wraps=agent.openscad._run) as run:
+                rendered = await agent.dispatch(
+                    _request(
+                        "integration.openscad.render",
+                        {
+                            **host,
+                            "executablePath": os.fspath(openscad),
+                            "sessionId": "session",
+                            "entrypoint": "halterung.scad",
+                            "source": {"type": "workspace", "path": "project"},
+                            "previewImages": True,
+                        },
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            preview_runs = [
+                call for call in run.await_args_list if "--imgsize=800,600" in call.args[0]
+            ]
+            self.assertEqual(
+                [call.kwargs["resource_divisor"] for call in preview_runs], [2, 2, 2, 2]
             )
             preview = ArtifactDescriptor.model_validate(rendered["artifact"])
             self.assertEqual(rendered["output"], "preview")
@@ -231,6 +273,10 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("rendered", rendered["diagnostics"])
             self.assertFalse(rendered["diagnosticsTruncated"])
             OpenScadRunner._validate_off(agent.cache._path(preview))
+            self.assertEqual(
+                [item["view"] for item in rendered["previews"]],
+                ["isometric", "front", "right", "top"],
+            )
 
             (project / "failed.scad").write_text("FAIL_RENDER\n", encoding="utf-8")
             with self.assertRaises(AgentError) as failure:
@@ -248,6 +294,28 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                     backend_id=AGENT_ID,
                 )
             self.assertEqual(failure.exception.code, "openscad.renderFailed")
+
+            (project / "partial.scad").write_text(
+                "cube([1, 1, 1]); // FAIL_TOP\n", encoding="utf-8"
+            )
+            started = time.monotonic()
+            with self.assertRaises(AgentError) as partial_failure:
+                await agent.dispatch(
+                    _request(
+                        "integration.openscad.render",
+                        {
+                            **host,
+                            "executablePath": os.fspath(openscad),
+                            "sessionId": "session",
+                            "entrypoint": "partial.scad",
+                            "source": {"type": "workspace", "path": "project"},
+                            "previewImages": True,
+                        },
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            self.assertEqual(partial_failure.exception.code, "openscad.previewFailed")
+            self.assertLess(time.monotonic() - started, 3)
             diagnostics = failure.exception.params["diagnostics"]
             self.assertIn("failed <render>/project/failed.scad", diagnostics)
             self.assertNotIn("\x1b", diagnostics)
@@ -307,6 +375,24 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any("--export-format=binstl" in call for call in calls))
             render_calls = [call for call in calls if "--export-format=off" in call]
             self.assertTrue(render_calls)
+            image_calls = [
+                call
+                for call in calls
+                if "--imgsize=800,600" in call and call[-1].endswith("halterung.scad")
+            ]
+            self.assertEqual(len(image_calls), 4)
+            self.assertCountEqual(
+                [
+                    next(value for value in call if value.startswith("--camera="))
+                    for call in image_calls
+                ],
+                [
+                    "--camera=0,0,0,55,0,25,140",
+                    "--camera=0,0,0,90,0,0,140",
+                    "--camera=0,0,0,90,0,90,140",
+                    "--camera=0,0,0,0,0,0,140",
+                ],
+            )
             self.assertTrue(
                 all(
                     Path(call[call.index("-o") + 1]).is_absolute() for call in calls if "-o" in call

@@ -146,6 +146,7 @@ async def _provider_projection(
     supports_image_input: bool,
     target_trust_level: TrustLevel,
     image_inputs: list[ProviderImageInput] | None = None,
+    required_image_ids: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, Any]], list[ProviderMedia]]:
     projected_messages: list[dict[str, Any]] = []
     for message in messages:
@@ -159,11 +160,17 @@ async def _provider_projection(
     selected = select_provider_images(
         messages,
         target_trust_level=target_trust_level.value,
+        required_image_ids=required_image_ids,
     )
     media = [
         ProviderMedia(
             message_index=item.message_index,
             mime_type=str(item.attachment.get("mime_type") or "image"),
+            attachment_id=(
+                str(item.attachment["id"])
+                if isinstance(item.attachment.get("id"), str)
+                else None
+            ),
             status="unavailable",
         )
         for item in selected
@@ -446,6 +453,8 @@ class ProviderService:
         image_inputs: list[ProviderImageInput] | None = None,
         media_inputs: list[ProviderMediaInput] | None = None,
         prompt_cache_key: str | None = None,
+        required_image_ids: tuple[str, ...] = (),
+        on_image_projection: Callable[[tuple[str, ...], frozenset[str]], None] | None = None,
     ) -> ProviderResult:
         if model.provider_id != provider.id:
             raise ProviderError(
@@ -513,7 +522,17 @@ class ProviderService:
             supports_image_input=model.supports_image_input,
             target_trust_level=model_trust_level,
             image_inputs=image_inputs,
+            required_image_ids=required_image_ids,
         )
+        if on_image_projection is not None:
+            on_image_projection(
+                tuple(item.attachment_id for item in media if item.attachment_id is not None),
+                frozenset(
+                    item.attachment_id
+                    for item in media
+                    if item.attachment_id is not None and item.status == "ready"
+                ),
+            )
         media.extend(direct_media)
         pseudonymizer = RequestPseudonymizer() if use_pseudonymization else None
         if pseudonymizer is not None:

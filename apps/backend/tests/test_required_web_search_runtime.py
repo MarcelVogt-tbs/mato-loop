@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -17,6 +18,7 @@ from mato_loop_backend.agent.runtime import (
     _VisibleResponse,
 )
 from mato_loop_backend.agent.tools import (
+    ToolAttachment,
     ToolFileAction,
     ToolRegistry,
     ToolResult,
@@ -24,7 +26,13 @@ from mato_loop_backend.agent.tools import (
 )
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution.protocol import ResponseMessage
-from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
+from mato_loop_backend.models import (
+    AgentRun,
+    ChatSession,
+    Message,
+    MessageAttachment,
+    WebSearchPolicy,
+)
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.session_storage import SessionStorage
@@ -89,6 +97,11 @@ async def _runtime_setup(
     integration_settings: IntegrationSettings | None = None,
     execution_agent_id=None,
     execution_operations: tuple[str, ...] = (),
+    user_image: bool = False,
+    user_image_count: int = 1,
+    historical_user_image: bool = False,
+    reactivate_historical_on_request: int | None = None,
+    unready_image_projection_calls: tuple[int, ...] = (),
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -146,6 +159,30 @@ async def _runtime_setup(
         execution_operations=list(execution_operations),
     )
     user = Message(id=uuid4(), session_id=session.id, role="user", content="Aktuelle Frage")
+    records = [user]
+    image_message = user
+    if historical_user_image:
+        image_message = Message(
+            id=uuid4(), session_id=session.id, role="user", content="CAD aus diesem Bild"
+        )
+        records.insert(0, image_message)
+    if user_image or historical_user_image:
+        image_message.attachments = [
+            MessageAttachment(
+                id=uuid4(),
+                message_id=image_message.id,
+                position=position,
+                kind="image",
+                category="user_upload",
+                purpose="attachment",
+                mime_type="image/png",
+                size_bytes=100,
+                sha256="a" * 64,
+                storage_path=f"attachments/{uuid4()}/reference.png",
+                filename=f"reference-{position}.png",
+            )
+            for position in range(user_image_count)
+        ]
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
 
@@ -179,6 +216,21 @@ async def _runtime_setup(
 
     async def complete(_db, **kwargs):
         requests.append(kwargs)
+        if callback := kwargs.get("on_image_projection"):
+            image_ids = tuple(kwargs.get("required_image_ids") or ())
+            image_request = len(requests) == 1 and user_image
+            historical_request = len(requests) == reactivate_historical_on_request
+            if not image_ids and (image_request or historical_request):
+                image_ids = tuple(str(attachment.id) for attachment in image_message.attachments)
+            image_ids = image_ids[: runtime_module.MAX_PROVIDER_IMAGES]
+            callback(
+                image_ids,
+                (
+                    frozenset()
+                    if len(requests) in unready_image_projection_calls
+                    else frozenset(image_ids)
+                ),
+            )
         result = queue.pop(0)
         streamed_content = (
             streamed_queue.pop(0) if streamed_queue is not None else result.content
@@ -193,7 +245,7 @@ async def _runtime_setup(
         events.append(event)
 
     monkeypatch.setattr(SettingsStore, "load", load_settings)
-    monkeypatch.setattr(AgentRuntime, "_records", AsyncMock(return_value=[user]))
+    monkeypatch.setattr(AgentRuntime, "_records", AsyncMock(return_value=records))
     monkeypatch.setattr(ContextManager, "build", build_context)
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
     monkeypatch.setattr(
@@ -306,6 +358,196 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
         "cube(1)" in message.content for message in _assistant_messages(db)
     )
     assert _assistant_messages(db)[-1].content == "Fertig gerendert."
+
+
+async def test_reference_openscad_final_requires_ready_reference_and_preview(monkeypatch) -> None:
+    agent_id = uuid4()
+    integration = IntegrationInstance(
+        name="OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
+        execution_agent_id=agent_id,
+        config={"binary_path": "/usr/bin/openscad"},
+    )
+    db, run, requests, projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(id="history", name="session_read", arguments={})
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="write",
+                        name="write_file",
+                        arguments={
+                            "root": "session",
+                            "path": "files/model.scad",
+                            "content": "cube(1);",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="render",
+                        name="render_openscad",
+                        arguments={
+                            "root": "session",
+                            "path": "files/model.scad",
+                            "output": "preview",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
+            ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        max_steps=3,
+        active_supports_image_input=True,
+        workspace_access="read-write",
+        integration_settings=IntegrationSettings(instances=[integration]),
+        execution_agent_id=agent_id,
+        execution_operations=("integration.openscad.render", "cache.export"),
+        historical_user_image=True,
+        reactivate_historical_on_request=2,
+        unready_image_projection_calls=(4,),
+    )
+    generated_id = uuid4()
+
+    class FakeAttachmentService:
+        async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
+            return SimpleNamespace(id=generated_id, kind=kwargs["kind"])
+
+        async def discard(self, _attachment, _session_id):
+            return None
+
+    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    monkeypatch.setattr(
+        tool_registry,
+        "_execute_definition",
+        AsyncMock(
+            side_effect=[
+                ToolResult.json(
+                    {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "attachments": [{"filename": "reference.png"}],
+                            }
+                        ]
+                    }
+                ),
+                ToolResult.json({"written": "files/model.scad"}),
+                ToolResult(
+                    '{"output":"preview"}',
+                    {},
+                    attachments=(
+                        ToolAttachment(b"png", "image/png", "model-views.png"),
+                    ),
+                ),
+            ]
+        ),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    reference_id = requests[2]["required_image_ids"][0]
+    assert requests[3]["required_image_ids"] == (reference_id, str(generated_id))
+    assert requests[4]["required_image_ids"] == (reference_id, str(generated_id))
+    assert projections[3]["required_image_ids"] == (reference_id, str(generated_id))
+    assert "visual verification is pending" in projections[3]["system_prompt"]
+    assert _assistant_messages(db)[-1].content == "Visuell verglichen."
+
+
+async def test_reference_openscad_does_not_ignore_a_fourth_reference(monkeypatch) -> None:
+    agent_id = uuid4()
+    integration = IntegrationInstance(
+        name="OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
+        execution_agent_id=agent_id,
+        config={"binary_path": "/usr/bin/openscad"},
+    )
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="write",
+                        name="write_file",
+                        arguments={
+                            "root": "session",
+                            "path": "files/model.scad",
+                            "content": "cube(1);",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="render",
+                        name="render_openscad",
+                        arguments={"root": "session", "path": "files/model.scad"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
+            ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
+            ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        max_steps=2,
+        active_supports_image_input=True,
+        workspace_access="read-write",
+        integration_settings=IntegrationSettings(instances=[integration]),
+        execution_agent_id=agent_id,
+        execution_operations=("integration.openscad.render", "cache.export"),
+        user_image=True,
+        user_image_count=4,
+    )
+    generated_id = uuid4()
+
+    class FakeAttachmentService:
+        async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
+            return SimpleNamespace(id=generated_id, kind=kwargs["kind"])
+
+        async def discard(self, _attachment, _session_id):
+            return None
+
+    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    monkeypatch.setattr(
+        tool_registry,
+        "_execute_definition",
+        AsyncMock(
+            side_effect=[
+                ToolResult.json({"written": "files/model.scad"}),
+                ToolResult(
+                    '{"output":"preview"}',
+                    {},
+                    attachments=(ToolAttachment(b"png", "image/png", "model-views.png"),),
+                ),
+            ]
+        ),
+    )
+
+    with pytest.raises(AgentRunError) as error:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert error.value.code == "agent.requiredOpenScadVisualVerificationMissing"
+    assert len(requests[2]["required_image_ids"]) == 5
+    assert str(generated_id) in requests[2]["required_image_ids"]
 
 
 async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None:

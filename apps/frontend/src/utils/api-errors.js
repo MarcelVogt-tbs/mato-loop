@@ -54,6 +54,7 @@ const messages = {
   'agent.modelRequestLimitReached': () => 'Der Agent hat die maximale Anzahl an Modellaufrufen erreicht.',
   'agent.requiredMemoryWriteMissing': () => 'Das Modell hat den begonnenen Memory-Schreibvorgang auch nach mehreren Versuchen nicht abgeschlossen.',
   'agent.requiredOpenScadRenderMissing': () => 'Das Modell hat die erzeugte OpenSCAD-Datei auch nach mehreren Versuchen nicht gerendert.',
+  'agent.requiredOpenScadVisualVerificationMissing': () => 'Das erzeugte OpenSCAD-Modell konnte nicht visuell mit dem Referenzbild verglichen werden.',
   'agent.requiredWebSearchFailed': () => 'Die verpflichtende Websuche ist wiederholt fehlgeschlagen.',
   'agent.requiredWebSearchMissing': () => 'Das Modell hat die verpflichtende Websuche auch nach mehreren Versuchen nicht ausgeführt.',
   'agent.requiredWebSearchUnsupported': () => 'Das ausgewählte Modell kann die verpflichtende Websuche nicht ausführen.',

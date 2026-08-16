@@ -283,6 +283,7 @@ def general_system_prompt(
     web_search_retry: int = 0,
     response_repair_required: bool = False,
     openscad_render_pending: bool = False,
+    openscad_visual_check_pending: bool = False,
     memory_write_pending: bool = False,
     memory_write_outcome: str | None = None,
     tool_call_limit: int | None = None,
@@ -458,9 +459,9 @@ def general_system_prompt(
         parts.append("Web research contract:\n- " + "\n- ".join(research_instructions))
     if "session_read" in offered_tool_names:
         parts.append(
-            "Use session_read for compacted details. Historical attachment metadata includes IDs, "
-            "filenames, and session-relative paths. Use a discovery anchor as around_message_id and "
-            "continue with the returned nextAfterMessageId."
+            "Use session_read for compacted details or to reactivate a historical attachment needed now; "
+            "do not claim visual inspection before it is returned. Metadata includes IDs, filenames, and "
+            "session-relative paths."
         )
     if {"session_browse", "session_search"} & offered_tool_names:
         parts.append(
@@ -533,6 +534,13 @@ def general_system_prompt(
         runtime_parts.append(
             "OpenSCAD source was generated but has not been rendered successfully. Call "
             "render_openscad before answering. If rendering fails, correct the source and rerender."
+        )
+    if openscad_visual_check_pending:
+        runtime_parts.append(
+            "Reference-based OpenSCAD visual verification is pending. Inspect the supplied reference image "
+            "and generated four-view sheet together before producing the final response. A successful render "
+            "or matching bounds is not evidence of visual conformity. Name remaining visible mismatches or "
+            "uncertainty, and do not claim completion if either image is unavailable."
         )
     if memory_write_pending:
         runtime_parts.append(
@@ -1331,11 +1339,14 @@ def _strip_projection_metadata(messages: list[dict[str, Any]]) -> None:
 
 
 def _image_input_tokens(
-    messages: list[dict[str, Any]], target_trust_level: TrustLevel
+    messages: list[dict[str, Any]],
+    target_trust_level: TrustLevel,
+    required_image_ids: tuple[str, ...] = (),
 ) -> int:
     selected = select_provider_images(
         messages,
         target_trust_level=target_trust_level.value,
+        required_image_ids=required_image_ids,
     )
     return IMAGE_INPUT_RESERVE_TOKENS * sum(item.allow_raw for item in selected)
 
@@ -1360,10 +1371,13 @@ def _prune_tool_outputs_to_budget(
     input_budget: int,
     include_image_input: bool,
     target_trust_level: TrustLevel,
+    required_image_ids: tuple[str, ...] = (),
 ) -> int:
     def estimate() -> int:
         image_tokens = (
-            _image_input_tokens(messages, target_trust_level) if include_image_input else 0
+            _image_input_tokens(messages, target_trust_level, required_image_ids)
+            if include_image_input
+            else 0
         )
         return (
             _message_text_tokens(messages, characters_per_token)
@@ -1418,6 +1432,7 @@ class ContextManager:
         settings: AgentRuntimeSettings,
         summarize: SummaryCallback,
         target_trust_level: TrustLevel = TrustLevel.PUBLIC,
+        required_image_ids: tuple[str, ...] = (),
     ) -> ContextProjection:
         records = [item for item in records if item.error_code is None]
         input_budget = (
@@ -1468,7 +1483,7 @@ class ContextManager:
                 _message_text_tokens(messages, characters_per_token)
                 + tools_tokens
                 + (
-                    _image_input_tokens(messages, target_trust_level)
+                    _image_input_tokens(messages, target_trust_level, required_image_ids)
                     if model.supports_image_input
                     else 0
                 )
@@ -1549,7 +1564,7 @@ class ContextManager:
             _message_text_tokens(messages, characters_per_token)
             + tools_tokens
             + (
-                _image_input_tokens(messages, target_trust_level)
+                _image_input_tokens(messages, target_trust_level, required_image_ids)
                 if model.supports_image_input
                 else 0
             )
@@ -1571,7 +1586,7 @@ class ContextManager:
                 _message_text_tokens(messages, characters_per_token)
                 + tools_tokens
                 + (
-                    _image_input_tokens(messages, target_trust_level)
+                    _image_input_tokens(messages, target_trust_level, required_image_ids)
                     if model.supports_image_input
                     else 0
                 )
@@ -1587,6 +1602,7 @@ class ContextManager:
                 input_budget=input_budget,
                 include_image_input=model.supports_image_input,
                 target_trust_level=target_trust_level,
+                required_image_ids=required_image_ids,
             )
         if estimated > input_budget:
             raise ContextError("agent.contextWindowExceeded")

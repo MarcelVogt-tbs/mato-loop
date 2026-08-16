@@ -37,6 +37,7 @@ class PublicReasoning:
 class ProviderMedia:
     message_index: int
     mime_type: str
+    attachment_id: str | None = None
     data_url: str | None = field(default=None, repr=False)
     status: str = "unavailable"
     modality: Literal["image", "audio", "video"] = "image"
@@ -88,6 +89,7 @@ def select_provider_images(
     messages: list[dict[str, Any]],
     *,
     target_trust_level: str,
+    required_image_ids: tuple[str, ...] = (),
 ) -> list[ProviderImageSelection]:
     references: list[tuple[int, int, dict[str, Any]]] = []
     for message_index, message in enumerate(messages):
@@ -113,6 +115,7 @@ def select_provider_images(
         if isinstance(filename, str) and filename:
             filename_counts[filename] = filename_counts.get(filename, 0) + 1
 
+    required_order = {attachment_id: order for order, attachment_id in enumerate(required_image_ids)}
     candidates: list[tuple[int, int, int, int, dict[str, Any]]] = []
     for message_index, attachment_index, attachment in references:
         source_role = str(attachment.get("source_role") or messages[message_index].get("role") or "")
@@ -120,14 +123,17 @@ def select_provider_images(
         source_order = attachment.get("source_order")
         if not isinstance(source_order, int) or isinstance(source_order, bool):
             source_order = message_index
+        attachment_id = attachment.get("id")
+        if isinstance(attachment_id, str) and attachment_id in required_order:
+            candidates.append((-1, required_order[attachment_id], message_index, source_order, attachment))
+            continue
         if not historical and source_role == "user" and message_index == latest_user_index:
             candidates.append((0, attachment_index, message_index, source_order, attachment))
             continue
         if not historical and source_role == "tool" and message_index > latest_user_index:
-            candidates.append((1, -source_order, message_index, source_order, attachment))
+            candidates.append((2, -source_order, message_index, source_order, attachment))
             continue
 
-        attachment_id = attachment.get("id")
         storage_path = attachment.get("storage_path")
         filename = attachment.get("filename")
         matching_indices = [
@@ -148,7 +154,7 @@ def select_provider_images(
             )
         ]
         if matching_indices:
-            candidates.append((2, -source_order, max(matching_indices), source_order, attachment))
+            candidates.append((1, -source_order, max(matching_indices), source_order, attachment))
 
     candidates.sort(key=lambda item: (item[0], item[1]))
     selected: list[tuple[int, int, int, ProviderImageSelection]] = []

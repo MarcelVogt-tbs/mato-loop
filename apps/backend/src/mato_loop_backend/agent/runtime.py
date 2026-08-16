@@ -205,6 +205,7 @@ RUN_PHASES = {
 REQUIRED_WEB_SEARCH_RETRIES = 2
 REQUIRED_MEMORY_WRITE_RETRIES = 3
 REQUIRED_OPENSCAD_RENDER_RETRIES = 2
+REQUIRED_OPENSCAD_VISUAL_CHECK_RETRIES = 2
 EMPTY_RESPONSE_RETRIES = 1
 MEMORY_WRITE_OUTCOME_PRIORITY = {"denied": 0, "duplicate": 1, "stored": 2}
 AUTOMATIC_MEMORY_MAX_ITEMS = 3
@@ -1517,6 +1518,10 @@ class AgentRuntime:
         empty_response_retries = 0
         openscad_render_pending = False
         openscad_render_retries = 0
+        openscad_reference_image_ids: tuple[str, ...] = ()
+        openscad_preview_image_id: str | None = None
+        openscad_visual_check_pending = False
+        openscad_visual_check_retries = 0
         memory_write_pending = False
         memory_write_retries = 0
         memory_write_outcome: str | None = None
@@ -1548,7 +1553,12 @@ class AgentRuntime:
                 tool_calls_used >= runtime_settings.max_tool_calls
                 or empty_response_retries > 0
                 or openscad_render_pending
+                or openscad_visual_check_pending
             )
+        ) or (
+            openscad_visual_check_pending
+            and step
+            <= runtime_settings.max_steps + REQUIRED_OPENSCAD_VISUAL_CHECK_RETRIES
         ):
             step += 1
             context_started_at = time.monotonic()
@@ -1568,6 +1578,18 @@ class AgentRuntime:
                 chat_session, memory_settings, provider, model
             )
             records = await cls._records(db, chat_session.id)
+            user_image_ids = {
+                str(attachment.id)
+                for message in records
+                if message.role == "user"
+                for attachment in message.attachments
+                if attachment.kind == "image"
+            }
+            required_image_ids = tuple(
+                image_id
+                for image_id in (*openscad_reference_image_ids, openscad_preview_image_id)
+                if image_id is not None
+            )
             root_files = RootFileService(
                 chat_session.id,
                 working_directory=run.working_directory_snapshot,
@@ -1901,6 +1923,7 @@ class AgentRuntime:
                 web_search_retry=required_search_retries,
                 response_repair_required=empty_response_retries > 0,
                 openscad_render_pending=openscad_render_pending,
+                openscad_visual_check_pending=openscad_visual_check_pending,
                 memory_write_pending=memory_write_pending,
                 memory_write_outcome=memory_write_outcome,
                 tool_call_limit=(runtime_settings.max_tool_calls if model.supports_tools else None),
@@ -2004,6 +2027,7 @@ class AgentRuntime:
                         target_trust_level=model_trust_level,
                         settings=runtime_settings,
                         summarize=summarize,
+                        required_image_ids=required_image_ids,
                     )
                     memory_text = candidate_text
                     injected_memory_count = candidate_memory_count
@@ -2031,6 +2055,7 @@ class AgentRuntime:
                 search_pending
                 or memory_write_pending
                 or openscad_render_pending
+                or openscad_visual_check_pending
                 or mutation_repair_pending
             )
             visible_response.reset()
@@ -2139,6 +2164,23 @@ class AgentRuntime:
                     chat_session,
                     root_files,
                 )
+            ready_provider_image_ids: frozenset[str] = frozenset()
+
+            def on_image_projection(
+                selected: tuple[str, ...],
+                ready: frozenset[str],
+                active_preview_id: str | None = openscad_preview_image_id,
+                active_user_image_ids: frozenset[str] = frozenset(user_image_ids),
+            ) -> None:
+                nonlocal openscad_reference_image_ids, ready_provider_image_ids
+                ready_provider_image_ids = ready
+                if not openscad_reference_image_ids and active_preview_id is None:
+                    openscad_reference_image_ids = tuple(
+                        image_id
+                        for image_id in selected
+                        if image_id in ready and image_id in active_user_image_ids
+                    )
+
             result = await ProviderService.complete(
                 db,
                 provider=provider,
@@ -2157,6 +2199,8 @@ class AgentRuntime:
                 target_trust_level=model_trust_level,
                 pseudonymization_enabled=run_pseudonymization_enabled,
                 prompt_cache_key=str(chat_session.id),
+                required_image_ids=required_image_ids,
+                on_image_projection=on_image_projection,
             )
             provider_duration_ms = max(
                 0, round((time.monotonic() - provider_started_at) * 1_000)
@@ -2202,6 +2246,20 @@ class AgentRuntime:
                 }
                 for call in normalized_calls
             ] or None
+            if not normalized_calls and openscad_visual_check_pending:
+                if set(required_image_ids) <= ready_provider_image_ids:
+                    openscad_visual_check_pending = False
+                    openscad_visual_check_retries = 0
+                else:
+                    openscad_visual_check_retries += 1
+                    if (
+                        openscad_visual_check_retries
+                        > REQUIRED_OPENSCAD_VISUAL_CHECK_RETRIES
+                    ):
+                        raise AgentRunError(
+                            "agent.requiredOpenScadVisualVerificationMissing"
+                        )
+                    continue
             if not normalized_calls and result.finish_reason in {"length", "max_tokens"}:
                 raise AgentRunError("agent.outputLimitReached")
             if not normalized_calls and unresolved_mutation_errors:
@@ -2242,6 +2300,7 @@ class AgentRuntime:
             ) or (
                 memory_write_pending
                 or openscad_render_pending
+                or openscad_visual_check_pending
                 or starts_memory_workflow
                 or mutation_repair_pending
             )
@@ -3221,12 +3280,27 @@ class AgentRuntime:
                     ) == "preview":
                         openscad_render_pending = False
                         openscad_render_retries = 0
+                        openscad_preview_image_id = next(
+                            (
+                                str(attachment.id)
+                                for attachment in created_attachments
+                                if attachment.kind == "image"
+                            ),
+                            None,
+                        )
+                        openscad_visual_check_pending = bool(
+                            openscad_reference_image_ids and openscad_preview_image_id
+                        )
+                        openscad_visual_check_retries = 0
                     elif (
                         call.name == "write_file"
                         and isinstance(call.arguments.get("path"), str)
                         and call.arguments["path"].casefold().endswith(".scad")
                     ):
                         openscad_render_pending = True
+                        openscad_preview_image_id = None
+                        openscad_visual_check_pending = False
+                        openscad_visual_check_retries = 0
                 if call.name in mutating_tool_names:
                     if isinstance(error_code, str) and error_code != "permission.denied":
                         mutation_results[call.name] = error_code
