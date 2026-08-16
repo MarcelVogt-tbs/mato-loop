@@ -126,7 +126,7 @@ class EpisodeIndexService:
         return len(chunks)
 
     @staticmethod
-    async def reconcile(db: AsyncSession) -> int:
+    async def reconcile(db: AsyncSession, *, retry_failed: bool = False) -> int:
         eligible = select(Message.id).where(
             Message.id == MessageSearchChunk.message_id, *_eligible_filters()
         )
@@ -156,6 +156,17 @@ class EpisodeIndexService:
                 for index, (row, content) in enumerate(zip(existing, expected, strict=True))
             )
             if valid:
+                for row in existing:
+                    if not retry_failed or row.status != MemoryEmbeddingStatus.FAILED.value:
+                        continue
+                    row.status = MemoryEmbeddingStatus.QUEUED.value
+                    row.vector = None
+                    row.attempts = 0
+                    row.next_attempt_at = None
+                    row.claimed_at = None
+                    row.error_code = None
+                    row.updated_at = datetime.now(UTC)
+                    changed += 1
                 continue
             await EpisodeIndexService.enqueue(db, message)
             changed += max(len(existing), len(expected))

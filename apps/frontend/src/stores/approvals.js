@@ -3,7 +3,9 @@ import { api } from 'src/boot/axios'
 import { errorDescriptor } from 'src/utils/api-errors'
 
 const TERMINAL_DECISION_ERRORS = new Set([
+  'approval.policyChanged',
   'approval.runInactive',
+  'approval.targetChanged',
   'approval.alreadyDecided',
   'approval.notFound'
 ])
@@ -19,7 +21,9 @@ export const useApprovalStore = defineStore('approvals', {
   }),
   getters: {
     pendingCount: (state) => state.pending.length,
-    forSession: (state) => (sessionId) => state.pending.filter((item) => item.sessionId === sessionId)
+    forSession: (state) => (sessionId) => state.pending.filter((item) => (
+      item.sessionId === sessionId && item.requestType !== 'memory_change'
+    ))
   },
   actions: {
     async fetchPending(config = {}) {

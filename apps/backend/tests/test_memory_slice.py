@@ -19,19 +19,26 @@ from mato_loop_backend.api.routes.memories import (
     put_memory_settings,
 )
 from mato_loop_backend.memory.dreaming import (
+    DREAMING_RECONCILIATION_OUTPUT_TOKENS,
     DREAMING_SYSTEM_PROMPT,
     RECONCILIATION_SYSTEM_PROMPT,
     DreamCandidates,
+    DreamingContractError,
     DreamingService,
     DreamReconciliation,
     _extract_candidates,
+    _fit_message_batch,
     _memory_read_trust,
     _reconcile_candidates,
+    _reconciliation_batches,
+    _reconciliation_source,
     _reconciliation_tool,
     _record_candidates_tool,
+    _source_character_limit,
     dreaming_availability,
 )
 from mato_loop_backend.memory.service import (
+    MemoryApprovalPayload,
     MemoryDuplicateError,
     MemoryMutation,
     MemoryService,
@@ -39,9 +46,11 @@ from mato_loop_backend.memory.service import (
     normalize_content,
 )
 from mato_loop_backend.models import (
+    ApprovalRequest,
     ChatSession,
     MemoryCategory,
     MemoryDreamRun,
+    MemoryDreamState,
     MemoryRecord,
     MemorySourceMessage,
     Message,
@@ -56,6 +65,7 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     MemorySettings,
     SettingsStore,
+    ToolExecutionPolicy,
     TrustLevel,
 )
 from mato_loop_backend.settings.models import (
@@ -713,6 +723,9 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
         dreaming_idle_minutes=10,
         dreaming_max_batch_messages=25,
         dreaming_max_candidates=5,
+        dreaming_update_policy="ask",
+        dreaming_merge_policy="auto",
+        dreaming_pin_policy="disabled",
     )
 
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
@@ -723,10 +736,28 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
         "for_update": True,
     }
     assert settings.dreaming_interval_minutes == 30
+    assert settings.dreaming_update_policy == ToolExecutionPolicy.ASK
     save.assert_awaited_once_with(db, settings, user_id=user.id)
     db.commit.assert_awaited_once()
     assert response["effectiveAutomaticDreamingEnabled"] is False
     assert response["manualDreamingAvailable"] is False
+    assert response["dreamingUpdatePolicy"] == "ask"
+    assert response["dreamingMergePolicy"] == "auto"
+    assert response["dreamingPinPolicy"] == "disabled"
+
+
+def test_memory_policy_request_accepts_camel_case_contract() -> None:
+    payload = MemorySettingsRequest.model_validate(
+        {
+            "dreamingUpdatePolicy": "auto",
+            "dreamingMergePolicy": "ask",
+            "dreamingPinPolicy": "ask",
+        }
+    )
+
+    assert payload.dreaming_update_policy == ToolExecutionPolicy.AUTO
+    assert payload.dreaming_merge_policy == ToolExecutionPolicy.ASK
+    assert payload.dreaming_pin_policy == ToolExecutionPolicy.ASK
 
 
 async def test_dreaming_restart_requeues_running_without_own_commit() -> None:
@@ -851,6 +882,11 @@ def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
     assert "$defs" not in candidate_schema
     assert "$ref" not in json.dumps(candidate_schema)
     assert candidate_schema["required"] == ["candidates"]
+    assert candidate_schema["additionalProperties"] is False
+    assert candidate_schema["properties"]["candidates"]["maxItems"] == 100
+    assert candidate["additionalProperties"] is False
+    assert candidate["properties"]["memory"]["maxLength"] == 20_000
+    assert candidate["properties"]["evidence"]["maxItems"] == 100
     assert set(candidate["required"]) == {
         "memory",
         "category",
@@ -869,13 +905,13 @@ def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
     assert set(decisions["items"]["required"]) == {
         "index",
         "action",
-        "memoryId",
-        "memory",
         "category",
+        "memory",
+        "memoryIds",
+        "pin",
     }
-    assert decisions["items"]["properties"]["memoryId"]["anyOf"][-1] == {
-        "type": "null"
-    }
+    assert "anyOf" not in json.dumps(reconciliation_schema)
+    assert decisions["items"]["additionalProperties"] is False
 
 
 async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) -> None:
@@ -929,7 +965,6 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
         model=model,
         system_prompt=DREAMING_SYSTEM_PROMPT,
         source=f"MESSAGE {evidence_id} [USER]\nmeine Frau und unser Kind",
-        pinned_memories=[],
         max_candidates=10,
         evidence_ids={evidence_id},
         user_evidence_ids={evidence_id},
@@ -999,7 +1034,6 @@ async def test_dreaming_repairs_assistant_only_evidence(monkeypatch) -> None:
             f"MESSAGE {user_id} [USER]\nBitte antworte kurz.\n\n"
             f"MESSAGE {assistant_id} [ASSISTANT]\nVerstanden."
         ),
-        pinned_memories=[],
         max_candidates=10,
         evidence_ids={user_id, assistant_id},
         user_evidence_ids={user_id},
@@ -1012,7 +1046,7 @@ async def test_dreaming_repairs_assistant_only_evidence(monkeypatch) -> None:
     ][-1]["content"]
 
 
-async def test_dreaming_uses_pinned_context_and_merges_candidate_calls(
+async def test_dreaming_extraction_uses_source_only_and_merges_candidate_calls(
     monkeypatch,
 ) -> None:
     first_evidence_id = uuid4()
@@ -1074,7 +1108,6 @@ async def test_dreaming_uses_pinned_context_and_merges_candidate_calls(
             f"MESSAGE {first_evidence_id} [USER]\nMeine Familie ist wichtig.\n\n"
             f"MESSAGE {second_evidence_id} [ASSISTANT]\nVerstanden."
         ),
-        pinned_memories=[pinned],
         max_candidates=10,
         evidence_ids={first_evidence_id, second_evidence_id},
         user_evidence_ids={first_evidence_id},
@@ -1087,7 +1120,8 @@ async def test_dreaming_uses_pinned_context_and_merges_candidate_calls(
         second_evidence_id,
     ]
     request = complete.await_args.kwargs
-    assert pinned.content in request["messages"][1]["content"]
+    assert pinned.content not in request["messages"][1]["content"]
+    assert request["messages"][1]["content"].startswith("SOURCE MESSAGE BATCH")
     assert [tool["name"] for tool in request["tools"]] == [
         "record_memory_candidates"
     ]
@@ -1120,7 +1154,8 @@ async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> No
                                 {
                                     "index": 0,
                                     "action": "unchanged",
-                                    "memoryId": str(memory_id),
+                                    "memoryIds": [str(memory_id)],
+                                    "pin": False,
                                 }
                             ]
                         },
@@ -1137,7 +1172,7 @@ async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> No
         model=model,
         source="{}",
         candidate_count=1,
-        supplied_ids={memory_id},
+        candidate_local_ids=[{memory_id}],
     )
 
     assert result.decisions[0].action == "unchanged"
@@ -1164,7 +1199,8 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
                             {
                                 "index": 0,
                                 "action": "unchanged",
-                                "memoryId": str(memory_id),
+                                "memoryIds": [str(memory_id)],
+                                "pin": False,
                             }
                         ]
                     },
@@ -1172,7 +1208,11 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
                 ToolCall(
                     id="decision-2",
                     name="reconcile_memory_candidates",
-                    arguments={"decisions": [{"index": 1, "action": "create"}]},
+                    arguments={
+                        "decisions": [
+                            {"index": 1, "action": "create", "memoryIds": [], "pin": False}
+                        ]
+                    },
                 ),
             ]
         )
@@ -1185,7 +1225,7 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
         model=model,
         source="{}",
         candidate_count=2,
-        supplied_ids={memory_id},
+        candidate_local_ids=[{memory_id}, set()],
     )
 
     assert [decision.candidate_index for decision in result.decisions] == [0, 1]
@@ -1207,13 +1247,15 @@ def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
 
 def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
     memory_id = uuid4()
+    second_memory_id = uuid4()
     create = DreamReconciliation.model_validate(
         {
             "decisions": [
                 {
                     "index": 0,
                     "action": "create",
-                    "memory": "Vom Modell wiederholter Kandidat",
+                    "memoryIds": [],
+                    "pin": False,
                 }
             ]
         }
@@ -1224,24 +1266,652 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
                 {
                     "candidateIndex": 0,
                     "action": "update",
-                    "memoryId": str(memory_id),
+                    "memoryIds": [str(memory_id)],
                     "content": "Aktuelle Präferenz",
                     "category": "preference",
+                    "pin": False,
                 }
             ]
         }
     )
 
     assert create.content is None
-    assert result.decisions[0].memory_id == memory_id
-    assert "Reference only supplied memory IDs" in RECONCILIATION_SYSTEM_PROMPT
+    assert result.decisions[0].memory_ids == [memory_id]
+    assert "Reference only memory IDs supplied" in RECONCILIATION_SYSTEM_PROMPT
     assert "broader or weaker restatement" in RECONCILIATION_SYSTEM_PROMPT
     assert "usefully connects" not in RECONCILIATION_SYSTEM_PROMPT
+    merge = DreamReconciliation.model_validate(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "merge",
+                    "memoryIds": [str(memory_id), str(second_memory_id)],
+                    "memory": "Ich heiße Mara.",
+                    "category": "identity",
+                    "pin": True,
+                    "pinKind": "preferred_name",
+                }
+            ]
+        }
+    ).decisions[0]
+    assert merge.memory_ids == [memory_id, second_memory_id]
     with pytest.raises(ValidationError):
         DreamReconciliation.model_validate(
             {
                 "decisions": [
-                    {"candidateIndex": 0, "action": "update", "memoryId": str(memory_id)}
+                    {
+                        "candidateIndex": 0,
+                        "action": "update",
+                        "memoryIds": [str(memory_id)],
+                        "pin": False,
+                    }
                 ]
             }
         )
+    with pytest.raises(ValidationError):
+        DreamReconciliation.model_validate(
+            {
+                "decisions": [
+                    {
+                        "index": 0,
+                        "action": "merge",
+                        "memoryIds": [str(memory_id)],
+                        "memory": "Zusammengeführt",
+                        "category": "fact",
+                        "pin": False,
+                    }
+                ]
+            }
+        )
+
+
+def test_dreaming_fit_keeps_only_complete_serialized_turns() -> None:
+    model = ModelConfig(
+        provider_id=uuid4(),
+        model_id="small",
+        context_window_tokens=12_300,
+        max_output_tokens=8_192,
+        characters_per_token=4.0,
+    )
+    first = Message(id=uuid4(), role="user", content="short", created_at=datetime.now(UTC))
+    second = Message(
+        id=uuid4(), role="assistant", content="complete", created_at=datetime.now(UTC)
+    )
+    omitted = Message(
+        id=uuid4(), role="user", content="x" * 2_000, created_at=datetime.now(UTC)
+    )
+
+    fitted = _fit_message_batch([first, second, omitted], model)
+
+    assert fitted == [first, second]
+    assert omitted.id not in {item.id for item in fitted}
+
+
+def test_reconciliation_batches_never_slice_candidate_content() -> None:
+    model = ModelConfig(
+        provider_id=uuid4(),
+        model_id="small",
+        context_window_tokens=16_384,
+        max_output_tokens=8_192,
+        characters_per_token=4.0,
+    )
+    first = DreamCandidates.model_validate(
+        {
+            "candidates": [
+                {
+                    "memory": "a" * 8_000,
+                    "category": "fact",
+                    "evidence": [str(uuid4())],
+                },
+                {
+                    "memory": "b" * 8_000,
+                    "category": "fact",
+                    "evidence": [str(uuid4())],
+                },
+            ]
+        }
+    ).candidates
+
+    batches = _reconciliation_batches(
+        [(index, candidate, []) for index, candidate in enumerate(first)], model
+    )
+
+    assert [entry[1].content for batch in batches for entry in batch] == [
+        "a" * 8_000,
+        "b" * 8_000,
+    ]
+    assert all(
+        len(_reconciliation_source([(entry[1], entry[2]) for entry in batch]))
+        <= _source_character_limit(model, DREAMING_RECONCILIATION_OUTPUT_TOKENS)
+        for batch in batches
+    )
+
+
+async def test_contract_exhaustion_fails_persistent_run_without_retry(monkeypatch) -> None:
+    run = MemoryDreamRun(
+        id=uuid4(),
+        session_id=uuid4(),
+        status="queued",
+        trigger="manual",
+        source_from_message_id=uuid4(),
+        source_to_message_id=uuid4(),
+        source_message_count=2,
+        attempts=0,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = run
+    db.get.return_value = run
+    monkeypatch.setattr(
+        DreamingService,
+        "_process",
+        AsyncMock(side_effect=DreamingContractError("memory.dreamingOutputInvalid")),
+    )
+
+    assert await DreamingService.process_next(db) is True
+
+    assert run.status == "failed"
+    assert run.error == "memory.dreamingOutputInvalid"
+    assert run.next_attempt_at is None
+
+
+@pytest.mark.parametrize("exact", [True, False], ids=["exact_duplicate", "unrelated_pinned"])
+async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) -> None:
+    user_id = uuid4()
+    session = ChatSession(id=uuid4(), user_id=user_id, title="Test", memory_mode="full")
+    user_message = Message(
+        id=uuid4(),
+        session_id=session.id,
+        role="user",
+        content="Ich heiße Lara.",
+        trust_level="public",
+        created_at=datetime.now(UTC),
+    )
+    assistant_message = Message(
+        id=uuid4(),
+        session_id=session.id,
+        role="assistant",
+        content="Verstanden.",
+        trust_level="public",
+        created_at=datetime.now(UTC),
+    )
+    run = MemoryDreamRun(
+        id=uuid4(),
+        session_id=session.id,
+        status="running",
+        trigger="manual",
+        source_from_message_id=user_message.id,
+        source_to_message_id=assistant_message.id,
+        source_message_count=2,
+        attempts=1,
+    )
+    state = MemoryDreamState(session_id=session.id)
+    existing_content = "Ich heiße Lara." if exact else "Der Nutzer spielt Klavier."
+    _, content_hash = normalize_content(existing_content)
+    existing = MemoryRecord(
+        id=uuid4(),
+        source_type="manual",
+        pinned=not exact,
+        trust_level="public",
+        category="identity",
+        content=existing_content,
+        normalized_content_hash=content_hash,
+        revision=2,
+    )
+    provider = LlmProviderConfig(name="Lokal", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    complete = AsyncMock(
+        return_value=ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    id="extract",
+                    name="record_memory_candidates",
+                    arguments={
+                        "candidates": [
+                            {
+                                "memory": "Ich heiße Lara.",
+                                "category": "identity",
+                                "evidence": [str(user_message.id)],
+                            }
+                        ]
+                    },
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(ProviderService, "complete", complete)
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(
+            side_effect=lambda _db, kind, **_kwargs: (
+                MemorySettings() if kind is MemorySettings else ai
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        MemoryService,
+        "reconciliation_candidates",
+        AsyncMock(return_value=[[existing] if exact else []]),
+    )
+    keep = AsyncMock(return_value=MemoryMutation(existing))
+    created_item = MemoryRecord(
+        id=uuid4(),
+        source_type="dreaming",
+        pinned=False,
+        trust_level="public",
+        category="identity",
+        content="Ich heiße Lara.",
+        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
+        revision=1,
+    )
+    create = AsyncMock(return_value=MemoryMutation(created_item, created=True))
+    monkeypatch.setattr(MemoryService, "keep_dreaming", keep)
+    monkeypatch.setattr(MemoryService, "create_dreaming", create)
+    pinned_context = AsyncMock(return_value=[existing])
+    monkeypatch.setattr(MemoryService, "pinned_context", pinned_context)
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.dreaming.get_runtime_config",
+        lambda: Mock(embedding_enabled=False),
+    )
+    db = AsyncMock(spec=AsyncSession)
+
+    async def get(model_type, item_id):
+        return {
+            (MemoryDreamRun, run.id): run,
+            (ChatSession, session.id): session,
+            (Message, user_message.id): user_message,
+            (Message, assistant_message.id): assistant_message,
+        }.get((model_type, item_id))
+
+    db.get.side_effect = get
+    db.scalar.side_effect = [None, state]
+    rows = Mock()
+    rows.all.return_value = [user_message, assistant_message]
+    db.scalars.return_value = rows
+
+    await DreamingService._process(db, run.id)
+
+    complete.assert_awaited_once()
+    if exact:
+        keep.assert_awaited_once()
+        create.assert_not_awaited()
+    else:
+        create.assert_awaited_once()
+        keep.assert_not_awaited()
+    pinned_context.assert_not_awaited()
+    assert state.last_processed_message_id == assistant_message.id
+    assert run.status == "completed"
+
+
+@pytest.mark.parametrize("policy", list(ToolExecutionPolicy))
+async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) -> None:
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test", memory_mode="full")
+    messages = [
+        Message(
+            id=uuid4(),
+            session_id=session.id,
+            role="user",
+            content="Ich heiße jetzt Mara.",
+            trust_level="public",
+            created_at=datetime.now(UTC),
+        ),
+        Message(
+            id=uuid4(),
+            session_id=session.id,
+            role="assistant",
+            content="Verstanden.",
+            trust_level="public",
+            created_at=datetime.now(UTC),
+        ),
+    ]
+    run = MemoryDreamRun(
+        id=uuid4(),
+        session_id=session.id,
+        status="running",
+        trigger="manual",
+        source_from_message_id=messages[0].id,
+        source_to_message_id=messages[1].id,
+        source_message_count=2,
+        attempts=1,
+    )
+    state = MemoryDreamState(session_id=session.id)
+    existing = MemoryRecord(
+        id=uuid4(),
+        source_type="manual",
+        pinned=False,
+        trust_level="public",
+        category="identity",
+        content="Ich heiße Lara.",
+        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
+        revision=3,
+    )
+    provider = LlmProviderConfig(name="Lokal", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    settings = MemorySettings(dreaming_update_policy=policy)
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(side_effect=lambda _db, kind, **_kwargs: settings if kind is MemorySettings else ai),
+    )
+    candidate = DreamCandidates.model_validate(
+        {
+            "candidates": [
+                {
+                    "memory": "Ich heiße jetzt Mara.",
+                    "category": "identity",
+                    "evidence": [str(messages[0].id)],
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.dreaming._extract_candidates",
+        AsyncMock(return_value=candidate),
+    )
+    monkeypatch.setattr(
+        MemoryService, "reconciliation_candidates", AsyncMock(return_value=[[existing]])
+    )
+    reconciliation = DreamReconciliation.model_validate(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "update",
+                    "memoryIds": [str(existing.id)],
+                    "memory": "Ich heiße Mara.",
+                    "category": "identity",
+                    "pin": False,
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.dreaming._reconcile_candidates",
+        AsyncMock(return_value=reconciliation),
+    )
+    update = AsyncMock(return_value=MemoryMutation(existing, updated=True))
+    approval = AsyncMock()
+    monkeypatch.setattr(MemoryService, "update_dreaming", update)
+    monkeypatch.setattr(MemoryService, "request_dreaming_approval", approval)
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.dreaming.get_runtime_config",
+        lambda: Mock(embedding_enabled=False),
+    )
+    db = AsyncMock(spec=AsyncSession)
+
+    async def get(model_type, item_id):
+        return {
+            (MemoryDreamRun, run.id): run,
+            (ChatSession, session.id): session,
+            (Message, messages[0].id): messages[0],
+            (Message, messages[1].id): messages[1],
+        }.get((model_type, item_id))
+
+    db.get.side_effect = get
+    db.scalar.side_effect = [None, state]
+    rows = Mock()
+    rows.all.return_value = messages
+    db.scalars.return_value = rows
+
+    await DreamingService._process(db, run.id)
+
+    assert update.await_count == (1 if policy == ToolExecutionPolicy.AUTO else 0)
+    assert approval.await_count == (1 if policy == ToolExecutionPolicy.ASK else 0)
+    assert run.status == "completed"
+
+
+def test_memory_approval_payload_rejects_invalid_pin_and_unbounded_targets() -> None:
+    base = {
+        "schemaVersion": 1,
+        "targetMemories": [
+            {
+                "id": str(uuid4()),
+                "revision": 1,
+                "content": "Ich heiße Lara.",
+                "category": "identity",
+                "trustLevel": "public",
+                "pinned": False,
+                "evidenceHash": "0" * 64,
+            }
+        ],
+        "requestedPin": True,
+        "sourceDreamRunId": str(uuid4()),
+        "sourceSessionId": str(uuid4()),
+        "evidenceMessageIds": [str(uuid4())],
+        "trustLevel": "public",
+        "readableBy": "public",
+        "actionPolicy": "ask",
+        "pinPolicy": "ask",
+    }
+
+    with pytest.raises(ValidationError):
+        MemoryApprovalPayload.model_validate(base)
+    with pytest.raises(ValidationError):
+        MemoryApprovalPayload.model_validate(
+            {**base, "requestedPin": False, "targetMemories": base["targetMemories"] * 51}
+        )
+
+
+async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypatch) -> None:
+    first_source = uuid4()
+    second_source = uuid4()
+    current_evidence = uuid4()
+    canonical = "Ich heiße Mara."
+    first = MemoryRecord(
+        id=uuid4(),
+        source_message_id=first_source,
+        source_type="manual",
+        pinned=True,
+        trust_level="public",
+        category="identity",
+        content="Ich heiße Lara.",
+        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
+        revision=2,
+    )
+    second = MemoryRecord(
+        id=uuid4(),
+        source_message_id=second_source,
+        source_type="dreaming",
+        pinned=False,
+        trust_level="private",
+        category="identity",
+        content=canonical,
+        normalized_content_hash=normalize_content(canonical)[1],
+        revision=4,
+    )
+    item_rows = Mock()
+    item_rows.all.return_value = [first, second]
+    evidence_id = uuid4()
+    evidence_rows = Mock()
+    evidence_rows.all.return_value = [evidence_id]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.side_effect = [item_rows, evidence_rows]
+    db.scalar.return_value = None
+    enqueue = AsyncMock()
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.service.MemoryIndexService.enqueue", enqueue
+    )
+
+    mutation = await MemoryService.merge_dreaming(
+        db,
+        memory_ids=[first.id, second.id],
+        expected_revisions={first.id: 2, second.id: 4},
+        expected_trust={first.id: TrustLevel.PUBLIC, second.id: TrustLevel.PRIVATE},
+        content=canonical,
+        category=MemoryCategory.IDENTITY,
+        trust_level=TrustLevel.PUBLIC,
+        readable_by=TrustLevel.PRIVATE,
+        session_id=uuid4(),
+        dream_run_id=uuid4(),
+        evidence_message_ids=[current_evidence],
+    )
+
+    assert mutation.item is second
+    assert second.trust_level == "private"
+    assert second.pinned is True
+    assert second.revision == 5
+    db.delete.assert_awaited_once_with(first)
+    enqueue.assert_not_awaited()
+    evidence_insert = next(
+        call.args[0]
+        for call in db.execute.await_args_list
+        if "memory_source_messages" in str(call.args[0])
+    )
+    params = evidence_insert.compile().params
+    assert {
+        value for key, value in params.items() if key.startswith("message_id_m")
+    } == {evidence_id, first_source, second_source, current_evidence}
+
+
+async def test_merge_stale_snapshot_changes_nothing() -> None:
+    first = MemoryRecord(
+        id=uuid4(),
+        source_type="manual",
+        pinned=False,
+        trust_level="public",
+        category="fact",
+        content="A",
+        normalized_content_hash=normalize_content("A")[1],
+        revision=2,
+    )
+    second = MemoryRecord(
+        id=uuid4(),
+        source_type="manual",
+        pinned=False,
+        trust_level="public",
+        category="fact",
+        content="B",
+        normalized_content_hash=normalize_content("B")[1],
+        revision=3,
+    )
+    rows = Mock()
+    rows.all.return_value = [first, second]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = rows
+
+    mutation = await MemoryService.merge_dreaming(
+        db,
+        memory_ids=[first.id, second.id],
+        expected_revisions={first.id: 1, second.id: 3},
+        expected_trust={first.id: TrustLevel.PUBLIC, second.id: TrustLevel.PUBLIC},
+        content="C",
+        category=MemoryCategory.FACT,
+        trust_level=TrustLevel.PUBLIC,
+        readable_by=TrustLevel.PUBLIC,
+        session_id=uuid4(),
+        dream_run_id=uuid4(),
+        evidence_message_ids=[uuid4()],
+    )
+
+    assert mutation.conflict is True
+    assert (first.content, first.revision, second.content, second.revision) == ("A", 2, "B", 3)
+    db.delete.assert_not_awaited()
+    db.flush.assert_not_awaited()
+
+
+async def test_approved_update_is_restart_independent_and_does_not_commit(monkeypatch) -> None:
+    user_id = uuid4()
+    session = ChatSession(
+        id=uuid4(), user_id=user_id, title="Quelle", memory_mode="full"
+    )
+    run = MemoryDreamRun(id=uuid4(), session_id=session.id)
+    evidence_id = uuid4()
+    target = MemoryRecord(
+        id=uuid4(),
+        source_type="manual",
+        pinned=False,
+        trust_level="public",
+        category="identity",
+        content="Ich heiße Lara.",
+        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
+        revision=3,
+    )
+    payload = MemoryApprovalPayload.model_validate(
+        {
+            "schemaVersion": 1,
+            "targetMemories": [
+                {
+                    "id": str(target.id),
+                    "revision": 3,
+                    "content": target.content,
+                    "category": "identity",
+                    "trustLevel": "public",
+                    "pinned": False,
+                    "evidenceHash": "0" * 64,
+                }
+            ],
+            "after": {
+                "content": "Ich heiße Mara.",
+                "category": "identity",
+                "trustLevel": "public",
+                "pinned": True,
+            },
+            "requestedPin": True,
+            "pinKind": "preferred_name",
+            "sourceDreamRunId": str(run.id),
+            "sourceSessionId": str(session.id),
+            "evidenceMessageIds": [str(evidence_id)],
+            "trustLevel": "public",
+            "readableBy": "public",
+            "actionPolicy": "ask",
+            "pinPolicy": "ask",
+        }
+    )
+    approval = ApprovalRequest(
+        request_type="memory_change",
+        user_id=user_id,
+        action_kind="memory_update",
+        payload=payload.model_dump(by_alias=True, mode="json", exclude_none=True),
+    )
+    db = AsyncMock(spec=AsyncSession)
+
+    async def get(model_type, _item_id, **_kwargs):
+        return session if model_type is ChatSession else run
+
+    db.get.side_effect = get
+    rows = Mock()
+    rows.all.return_value = [target]
+    db.scalars.return_value = rows
+    monkeypatch.setattr(
+        MemoryService, "_valid_source_evidence", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(MemoryService, "_evidence_hash", AsyncMock(return_value="0" * 64))
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=MemorySettings(dreaming_update_policy="ask")),
+    )
+    update = AsyncMock(return_value=MemoryMutation(target, updated=True))
+    monkeypatch.setattr(MemoryService, "update_dreaming", update)
+
+    outcome = await MemoryService.apply_approved_change(
+        db, approval=approval, user_id=user_id
+    )
+
+    assert outcome == "applied"
+    update.assert_awaited_once()
+    assert target.pinned is True
+    db.commit.assert_not_awaited()
+
+
+async def test_auto_pin_stops_at_five(monkeypatch) -> None:
+    item = MemoryRecord(
+        id=uuid4(),
+        source_type="manual",
+        pinned=False,
+        trust_level="public",
+        category="identity",
+        content="Ich heiße Lara.",
+        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
+        revision=1,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = 5
+    set_pinned = AsyncMock(return_value=item)
+    monkeypatch.setattr(MemoryService, "set_pinned", set_pinned)
+
+    assert await MemoryService.auto_pin(db, item) is False
+    set_pinned.assert_not_awaited()

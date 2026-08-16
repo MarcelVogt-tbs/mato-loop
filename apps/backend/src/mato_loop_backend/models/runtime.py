@@ -458,13 +458,35 @@ class AgentRun(Base):
 
 class ApprovalRequest(Base):
     __tablename__ = "approval_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "request_type IN ('agent_action', 'memory_change')",
+            name="request_type_valid",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'denied', 'expired')",
+            name="status_valid",
+        ),
+        Index(
+            "ix_approval_requests_user_pending",
+            "user_id",
+            "created_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    session_id: Mapped[UUID] = mapped_column(
-        ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    request_type: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="agent_action", server_default=text("'agent_action'")
     )
-    run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    session_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True
     )
     action_kind: Mapped[str] = mapped_column(String(80), nullable=False)
     risk_level: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
@@ -476,7 +498,7 @@ class ApprovalRequest(Base):
     resource_scope: Mapped[str] = mapped_column(String(1200), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     available_decisions: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
-    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending", index=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
     decision: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

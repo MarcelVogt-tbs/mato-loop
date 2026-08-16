@@ -39,6 +39,15 @@ describe('inline approvals', () => {
     expect(approvals.loadFailed).toBe(false)
   })
 
+  it('counts memory approvals globally but excludes them from session approvals', () => {
+    const approvals = useApprovalStore()
+    approvals.add({ id: 'agent', requestType: 'agent_action', sessionId: 'session-1' })
+    approvals.add({ id: 'memory', requestType: 'memory_change', sessionId: 'session-1' })
+
+    expect(approvals.pendingCount).toBe(2)
+    expect(approvals.forSession('session-1').map((item) => item.id)).toEqual(['agent'])
+  })
+
   it('does not overwrite an approval added while pending approvals load', async () => {
     let resolveRequest
     api.get.mockReturnValue(new Promise((resolve) => { resolveRequest = resolve }))
@@ -57,15 +66,20 @@ describe('inline approvals', () => {
     const approvals = useApprovalStore()
     approvals.add({ id: 'allow', sessionId: 'session-1' })
     approvals.add({ id: 'deny', sessionId: 'session-1' })
+    approvals.add({ id: 'approve', requestType: 'memory_change' })
 
     await approvals.decide('allow', 'allow_once', 'revision-2')
     await approvals.decide('deny', 'deny', 'revision-2')
+    await approvals.decide('approve', 'approve', 'revision-2')
 
     expect(api.post).toHaveBeenNthCalledWith(1, '/approvals/allow/decisions', {
       decision: 'allow_once', expected_revision: 'revision-2'
     })
     expect(api.post).toHaveBeenNthCalledWith(2, '/approvals/deny/decisions', {
       decision: 'deny'
+    })
+    expect(api.post).toHaveBeenNthCalledWith(3, '/approvals/approve/decisions', {
+      decision: 'approve'
     })
   })
 
@@ -80,8 +94,12 @@ describe('inline approvals', () => {
     expect(approvals.pending).toEqual([approval])
   })
 
-  it('reconciles terminal approval errors', async () => {
-    api.post.mockRejectedValue({ response: { data: { error: { code: 'approval.runInactive' } } } })
+  it.each([
+    'approval.runInactive',
+    'approval.targetChanged',
+    'approval.policyChanged'
+  ])('reconciles terminal approval error %s', async (code) => {
+    api.post.mockRejectedValue({ response: { data: { error: { code } } } })
     api.get.mockResolvedValue({ data: [] })
     const approvals = useApprovalStore()
     approvals.add({ id: 'approval-1', sessionId: 'session-1' })

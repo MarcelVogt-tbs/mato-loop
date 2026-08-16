@@ -119,6 +119,9 @@ describe('memory store', () => {
       dreamingIdleMinutes: 10,
       dreamingMaxBatchMessages: 50,
       dreamingMaxCandidates: 8,
+      dreamingUpdatePolicy: 'auto',
+      dreamingMergePolicy: 'ask',
+      dreamingPinPolicy: 'ask',
       effectiveAutomaticDreamingEnabled: true,
       automaticDreamingUnavailableReason: null,
       manualDreamingAvailable: true,
@@ -132,7 +135,10 @@ describe('memory store', () => {
       dreamingIntervalMinutes: settings.dreamingIntervalMinutes,
       dreamingIdleMinutes: settings.dreamingIdleMinutes,
       dreamingMaxBatchMessages: settings.dreamingMaxBatchMessages,
-      dreamingMaxCandidates: settings.dreamingMaxCandidates
+      dreamingMaxCandidates: settings.dreamingMaxCandidates,
+      dreamingUpdatePolicy: settings.dreamingUpdatePolicy,
+      dreamingMergePolicy: settings.dreamingMergePolicy,
+      dreamingPinPolicy: settings.dreamingPinPolicy
     }
 
     await store.fetchSettings()

@@ -3981,6 +3981,8 @@ class AgentRuntime:
         permission: PermissionRequest,
     ) -> str | ApprovalResolution:
         approval = ApprovalRequest(
+            request_type="agent_action",
+            user_id=chat_session.user_id,
             session_id=chat_session.id,
             run_id=run.id,
             action_kind=permission.action_kind,
@@ -4120,8 +4122,9 @@ class AgentRuntime:
 def approval_payload(approval: ApprovalRequest) -> dict[str, Any]:
     return {
         "id": str(approval.id),
-        "sessionId": str(approval.session_id),
-        "runId": str(approval.run_id),
+        "requestType": approval.request_type,
+        "sessionId": str(approval.session_id) if approval.session_id else None,
+        "runId": str(approval.run_id) if approval.run_id else None,
         "actionKind": approval.action_kind,
         "riskLevel": approval.risk_level,
         "title": approval.title,
@@ -4131,6 +4134,7 @@ def approval_payload(approval: ApprovalRequest) -> dict[str, Any]:
         "resourceType": approval.resource_type,
         "resourceScope": approval.resource_scope,
         "resourceDisplay": approval.payload.get("resourceDisplay"),
+        "payload": approval.payload,
         "details": approval.payload,
         "availableDecisions": approval.available_decisions,
         "status": approval.status,

@@ -164,6 +164,46 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
         await db.rollback()
 
 
+async def test_episode_rag_is_immediate_without_embedding_or_dreaming() -> None:
+    marker = f"Sofortkennung-{uuid4().hex}"
+    async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"immediate-{uuid4().hex}", password_hash="test")
+        db.add(user)
+        await db.flush()
+        prior_session = ChatSession(user_id=user.id, title="Frueher")
+        current_session = ChatSession(user_id=user.id, title="Aktuell")
+        db.add_all([prior_session, current_session])
+        await db.flush()
+        message = Message(
+            session_id=prior_session.id,
+            role="user",
+            content=f"Die projektweite Referenz lautet {marker}.",
+            trust_level=TrustLevel.PUBLIC.value,
+        )
+        db.add(message)
+        await db.flush()
+        await EpisodeIndexService.enqueue(db, message)
+        chunk = await db.scalar(
+            select(MessageSearchChunk).where(MessageSearchChunk.message_id == message.id)
+        )
+
+        result = await EpisodeRetrievalService.retrieve(
+            db,
+            owner_id=user.id,
+            current_session_id=current_session.id,
+            readable_by=TrustLevel.PUBLIC,
+            query=marker,
+            semantic_enabled=False,
+            limit=1,
+        )
+
+        assert chunk is not None
+        assert chunk.status == MemoryEmbeddingStatus.QUEUED.value
+        assert result.references[0].session_id == prior_session.id
+        assert marker in result.references[0].anchor_content
+        await db.rollback()
+
+
 async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
     content = f"Fallbackkennung {uuid4().hex}"
     query = content.split()[-1]

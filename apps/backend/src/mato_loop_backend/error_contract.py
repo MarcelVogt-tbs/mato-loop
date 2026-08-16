@@ -21,6 +21,8 @@ _MESSAGES = {
     "agent.researchBudgetReached": "The current-turn research budget has been reached.",
     "agent.repeatedToolCall": "The model repeated a failed tool call without changing its arguments.",
     "agent.toolCallLimitReached": "The agent reached the maximum number of tool calls.",
+    "approval.policyChanged": "The approval policy changed before the decision was applied.",
+    "approval.targetChanged": "The approval target changed before the decision was applied.",
     "attachment.tooLarge": "The attachment is too large.",
     "executionAgent.notFound": "The execution agent was not found.",
     "executionAgent.alreadyPaired": "The execution agent is already paired.",

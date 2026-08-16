@@ -623,14 +623,14 @@ async function refreshActiveSessions() {
   if (
     document.visibilityState !== 'visible'
     || sessionActivityRefreshPending
-    || !chat.sessions.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))
   ) return
   sessionActivityRefreshPending = true
   try {
-    await Promise.all([
-      chat.refreshSessions({ suppressErrorToast: true }),
-      approvals.fetchPending({ suppressErrorToast: true })
-    ])
+    const requests = [approvals.fetchPending({ suppressErrorToast: true })]
+    if (chat.sessions.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))) {
+      requests.push(chat.refreshSessions({ suppressErrorToast: true }))
+    }
+    await Promise.all(requests)
   } catch {
     // The next interval reconciles transient background refresh failures.
   } finally {

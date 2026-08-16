@@ -13,7 +13,7 @@
           />
         </div>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Offene Entscheidungen aus allen Sessions zentral prüfen.
+          Offene Entscheidungen aus Sessions und Hintergrundprozessen zentral prüfen.
         </p>
       </div>
       <q-btn
@@ -70,7 +70,7 @@
         <q-avatar color="positive" text-color="white" icon="check" size="48px" />
         <div class="text-subtitle1 text-weight-bold q-mt-md">Keine offenen Freigaben</div>
         <div class="text-body2 app-muted q-mt-xs">
-          Neue Anfragen erscheinen hier und weiterhin direkt in der betreffenden Session.
+          Agent-Anfragen erscheinen zusätzlich in der betreffenden Session. Memory-Änderungen bleiben hier.
         </div>
       </q-card-section>
     </q-card>
@@ -82,13 +82,15 @@
         class="q-mb-md"
       >
         <div class="row items-center q-gutter-sm q-mb-sm">
-          <q-icon name="forum" color="primary" />
+          <q-icon :name="approval.sessionId ? 'forum' : 'auto_awesome'" color="primary" />
           <router-link
+            v-if="approval.sessionId"
             :to="{ name: 'chat', query: { session: approval.sessionId } }"
             class="text-primary text-weight-medium"
           >
             {{ approval.sourceSession?.title || 'Session öffnen' }}
           </router-link>
+          <span v-else class="text-weight-medium">Dreaming im Hintergrund</span>
           <span class="app-muted text-caption">
             {{ formatRelativeDateTime(approval.createdAt) }}
           </span>
@@ -111,7 +113,8 @@ const approvals = useApprovalStore()
 const selectedType = ref('all')
 const typeOptions = [
   { label: 'Alle Typen', value: 'all' },
-  { label: 'Agent-Aktionen', value: 'agent_action' }
+  { label: 'Agent-Aktionen', value: 'agent_action' },
+  { label: 'Memory-Änderungen', value: 'memory_change' }
 ]
 const filteredApprovals = computed(() => selectedType.value === 'all'
   ? approvals.pending

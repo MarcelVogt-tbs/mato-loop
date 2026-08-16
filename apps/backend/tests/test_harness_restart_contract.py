@@ -11,7 +11,6 @@ from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, deci
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
-    ChatSession,
     TitleGenerationStatus,
     UserAccount,
 )
@@ -40,8 +39,11 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     monkeypatch.setattr(app_module, "engine", engine)
     monkeypatch.setattr(app_module.MemoryIndexService, "recover", AsyncMock())
     monkeypatch.setattr(app_module.MemoryIndexService, "reconcile", AsyncMock())
-    monkeypatch.setattr(app_module.EpisodeIndexService, "recover", AsyncMock())
-    monkeypatch.setattr(app_module.EpisodeIndexService, "reconcile", AsyncMock())
+    episode_recover = AsyncMock()
+    episode_reconcile = AsyncMock()
+    monkeypatch.setattr(app_module.EpisodeIndexService, "recover", episode_recover)
+    monkeypatch.setattr(app_module.EpisodeIndexService, "reconcile", episode_reconcile)
+    monkeypatch.setattr(app_module.runtime_config, "embedding_enabled", False)
     monkeypatch.setattr(app_module.MemoryIndexScheduler, "start", Mock())
     monkeypatch.setattr(app_module.MemoryIndexScheduler, "stop", AsyncMock())
     monkeypatch.setattr(app_module.EpisodeIndexScheduler, "start", Mock())
@@ -66,8 +68,10 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     approval_params = list(approval_update.compile().params.values())
 
     recover_runs.assert_awaited_once_with(db)
-    assert "expired" in approval_params
-    assert "pending" in approval_params
+    episode_recover.assert_awaited_once_with(db)
+    episode_reconcile.assert_awaited_once_with(db, retry_failed=True)
+    assert {"expired", "pending", "agent_action"}.issubset(approval_params)
+    assert "resolved_at=" in str(approval_update)
     title_params = list(title_update.compile().params.values())
     assert TitleGenerationStatus.RUNNING.value in title_params
     assert TitleGenerationStatus.FAILED.value in title_params
@@ -110,6 +114,8 @@ async def test_startup_recovery_persists_one_error_message_per_active_run(monkey
 async def test_persisted_approval_without_live_waiter_cannot_resume_run(monkeypatch) -> None:
     approval = ApprovalRequest(
         id=uuid4(),
+        request_type="agent_action",
+        user_id=uuid4(),
         session_id=uuid4(),
         run_id=uuid4(),
         action_kind="read_session",
@@ -121,10 +127,9 @@ async def test_persisted_approval_without_live_waiter_cannot_resume_run(monkeypa
         available_decisions=["allow_once", "allow_session", "deny"],
         status="pending",
     )
-    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
-    session = ChatSession(id=approval.session_id, user_id=user.id, title="Test")
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [approval, session]
+    db.get.return_value = approval
     monkeypatch.setattr(AgentRuntime, "resolve_approval", lambda *_args: False)
 
     with pytest.raises(ApiError) as exc_info:

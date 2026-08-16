@@ -60,7 +60,7 @@ class MemoryIndexService:
         )
 
     @staticmethod
-    async def reconcile(db: AsyncSession) -> int:
+    async def reconcile(db: AsyncSession, *, retry_failed: bool = False) -> int:
         memories = list(
             (
                 await db.execute(
@@ -76,6 +76,15 @@ class MemoryIndexService:
                 and row.profile_fingerprint == ACTIVE_EMBEDDING_PROFILE.fingerprint
                 and row.content_hash == content_hash
             ):
+                if retry_failed and row.status == MemoryEmbeddingStatus.FAILED.value:
+                    row.status = MemoryEmbeddingStatus.QUEUED.value
+                    row.vector = None
+                    row.attempts = 0
+                    row.next_attempt_at = None
+                    row.claimed_at = None
+                    row.error_code = None
+                    row.updated_at = datetime.now(UTC)
+                    changed += 1
                 continue
             memory = await db.get(MemoryRecord, memory_id)
             if memory is None or memory.normalized_content_hash != content_hash:

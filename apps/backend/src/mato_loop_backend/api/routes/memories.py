@@ -30,7 +30,13 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.security import require_user
-from mato_loop_backend.settings import AiSettings, MemorySettings, SettingsStore, TrustLevel
+from mato_loop_backend.settings import (
+    AiSettings,
+    MemorySettings,
+    SettingsStore,
+    ToolExecutionPolicy,
+    TrustLevel,
+)
 
 router = APIRouter(prefix="/memories", dependencies=[Depends(require_user)])
 
@@ -62,6 +68,9 @@ class MemorySettingsRequest(ApiRequest):
     dreaming_idle_minutes: int | None = Field(default=None, ge=1, le=10_080)
     dreaming_max_batch_messages: int | None = Field(default=None, ge=2, le=500)
     dreaming_max_candidates: int | None = Field(default=None, ge=1, le=100)
+    dreaming_update_policy: ToolExecutionPolicy | None = None
+    dreaming_merge_policy: ToolExecutionPolicy | None = None
+    dreaming_pin_policy: ToolExecutionPolicy | None = None
 
     @model_validator(mode="after")
     def require_value(self) -> MemorySettingsRequest:
@@ -156,6 +165,9 @@ async def settings_payload(
         "dreamingIdleMinutes": settings.dreaming_idle_minutes,
         "dreamingMaxBatchMessages": settings.dreaming_max_batch_messages,
         "dreamingMaxCandidates": settings.dreaming_max_candidates,
+        "dreamingUpdatePolicy": settings.dreaming_update_policy,
+        "dreamingMergePolicy": settings.dreaming_merge_policy,
+        "dreamingPinPolicy": settings.dreaming_pin_policy,
         "effectiveAutomaticDreamingEnabled": automatic_enabled,
         "automaticDreamingUnavailableReason": automatic_reason,
         "manualDreamingAvailable": manual_enabled,

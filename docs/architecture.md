@@ -12,7 +12,7 @@ MatoLoop is a provider-neutral monorepo. FastAPI provides REST and SSE interface
 - Execution: outbound Python agents for selected workspace, process, and static local-integration operations
 - Providers: replaceable LLM and search transports
 - Memory: current-session context plus trust-filtered durable and prior-session retrieval
-- Embedding: local Infinity transport and asynchronous durable-memory and episode indexes
+- Embedding: local Infinity transport and asynchronous durable-memory and episode vectors
 - Persistence: SQLAlchemy models, Alembic migrations, and settings documents
 - Frontend: presentation, user interaction, and localization
 
@@ -23,6 +23,14 @@ Bootstrap and infrastructure values come from environment variables. Operational
 Additive settings fields have Pydantic defaults. Settings documents declare global or user scope. Global documents use `settings.user_id IS NULL`; user-scoped documents are loaded and stored with an explicit `user_id`. Partial unique indexes enforce the two namespaces separately. Background processing derives user scope from persistent session ownership and never uses an implicit request user. API keys and OAuth tokens are referenced by ID from the separate `credentials` table instead of being stored in settings JSON. Credential payloads are encrypted; the Fernet key is created under `/data/secrets/credential.key` on first use.
 
 Infinity is host-controlled local infrastructure, not a selectable LLM provider. It is reachable only inside the Compose network and computes query, durable-memory, and prior-session message-chunk embeddings with a pinned multilingual model. pgvector stores this derived data in PostgreSQL beside canonical memories and messages. Backend availability does not depend on Infinity and falls back to PostgreSQL FTS. Ownership, current-session exclusion, trust, and retrieval filters are applied in SQL before vector limits; the local embedding service may process both trust levels but never grants visibility.
+
+## Memory Boundary
+
+Episodic RAG is immediate, trust-filtered cross-session recall, not an automatic previous-session handoff. Persisting an eligible message creates its deterministic search chunks and generated FTS in the same transaction; embeddings are queued asynchronously. Startup and periodic reconciliation repair derived rows and recover interrupted claims. Startup also retries matching terminal embedding failures once; periodic reconciliation does not loop them. Lexical retrieval remains available.
+
+Dreaming extracts candidates from its source-message batch only. The host then performs bounded candidate-local matching, resolves exact duplicates and unmatched creates deterministically, and invokes a separate reconciliation request only for candidates with possible related memories. Reconciliation supports `create`, `unchanged`, `update`, and transactional `merge`, plus one-way pin suggestions from a fixed identity allowlist. Update, merge, and pin policies use `disabled`, `ask`, or `auto`, defaulting to `auto`, `ask`, and `ask` respectively.
+
+Dreaming changes governed by `ask` become persistent `memory_change` approvals and survive backend restart. Approval revalidates policies, source evidence, complete target snapshots, and revisions under lock; stale requests expire without partial mutation. Merge locks targets in deterministic order, preserves all evidence, private trust, and existing pinning, chooses a deterministic survivor, and updates the survivor before deleting redundant rows in the same transaction. The application remains single-user; durable-memory rows and normalized deduplication are still installation-wide and require an owner key before multiple accounts can be supported.
 
 ## Provider Boundary
 
@@ -151,7 +159,7 @@ Saved Markdown files have a standalone authenticated print route outside the app
 
 Reasoning is collapsed by default. The last selected state is stored in authenticated `UserPreferences` and applies across devices. The UI labels public reasoning as model-provided, not guaranteed complete internal thought.
 
-Run tasks and approval waiters are intentionally process-local. The backend uses one worker. Startup safely terminates active runs and invalidates open approvals; resume and distributed worker queues are out of scope. See [harness.md](harness.md).
+Run tasks and their agent-action approval waiters are intentionally process-local. The backend uses one worker. Startup safely terminates active runs and invalidates their open agent-action approvals; persistent `memory_change` approvals are independent of a live run. Run resume and distributed worker queues are out of scope. See [harness.md](harness.md).
 
 ## Working Directories and Approvals
 

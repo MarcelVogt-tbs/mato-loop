@@ -605,6 +605,9 @@ class MemorySettings(SettingsDocument):
     dreaming_idle_minutes: int = Field(default=15, ge=1, le=10_080)
     dreaming_max_batch_messages: int = Field(default=50, ge=2, le=500)
     dreaming_max_candidates: int = Field(default=10, ge=1, le=100)
+    dreaming_update_policy: ToolExecutionPolicy = ToolExecutionPolicy.AUTO
+    dreaming_merge_policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
+    dreaming_pin_policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
 
 
 class AgentIdentitySettings(SettingsDocument):

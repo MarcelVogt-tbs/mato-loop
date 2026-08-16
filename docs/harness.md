@@ -4,7 +4,7 @@ This document defines the target architecture for the lean OpenCode-inspired age
 
 ## Runtime and Coordinator
 
-MatoLoop manages runs and approvals through exactly one process-local run and approval coordinator. The backend therefore uses one worker. The coordinator owns active run tasks and waiters for open approvals. It is neither a distributed scheduler nor a queue and uses no cross-process locks.
+MatoLoop manages runs and run-bound agent-action approvals through exactly one process-local run and approval coordinator. The backend therefore uses one worker. The coordinator owns active run tasks and waiters for open agent-action approvals. Persistent background approvals such as `memory_change` do not use a live waiter. The coordinator is neither a distributed scheduler nor a queue and uses no cross-process locks.
 
 - A run continues only in the coordinator that started it.
 - An approval decision can resolve only a live waiter in that coordinator.
@@ -12,13 +12,13 @@ MatoLoop manages runs and approvals through exactly one process-local run and ap
 - Persistent run state serves API, UI, and audit. It is not a Python stack checkpoint or executable queue.
 - Graceful shutdown and process termination must not execute a tool twice.
 
-Approvals and session grants are persistent, but restart resume is explicitly not guaranteed. After backend restart, previously active or waiting runs end terminally as interrupted or failed and their open approvals expire. Deciding a persisted approval without a live waiter returns `approval.runInactive`; it does not resume the old run or create a grant. The user starts a new run when needed. Fully persisted session grants created before restart remain valid.
+Agent-action approvals and session grants are persistent, but run restart resume is explicitly not guaranteed. After backend restart, previously active or waiting runs end terminally as interrupted or failed and their open agent-action approvals expire. Deciding a persisted agent-action approval without a live waiter returns `approval.runInactive`; it does not resume the old run or create a grant. The user starts a new run when needed. Fully persisted session grants created before restart remain valid. Persistent `memory_change` approvals are not run-bound, survive restart, and execute through their own transactional resolver.
 
 Approvals and agent questions have no inactivity timeout. A live run waits until the user responds, explicitly cancels the run or deletes the session, or the backend process stops. Browser and SSE disconnects do not resolve or expire these interactions.
 
 This is a deliberate first-version boundary. Restart resume would require persistent tool checkpoints, idempotent execution, leases, and a recovery strategy; it must not be simulated by reloading an `AgentRun`.
 
-User cancellation is an explicit run operation and is never inferred from SSE disconnect. The cancel endpoint requests cancellation of the process-local task and waits for its persisted terminal state. Repeated calls do not cancel cleanup again. Completed runs return idempotently. Successfully streamed text and public reasoning become an interrupted assistant message; without visible output, an empty interruption marker is stored. Hidden output from the initial required-search phase remains excluded. Completed tool effects are not reversed. Open approvals expire and incomplete tool calls receive terminal errors before `message.interrupted` and then `run.cancelled` are published. Graceful backend shutdown is not an explicit user cancellation and creates no such message marker.
+User cancellation is an explicit run operation and is never inferred from SSE disconnect. The cancel endpoint requests cancellation of the process-local task and waits for its persisted terminal state. Repeated calls do not cancel cleanup again. Completed runs return idempotently. Successfully streamed text and public reasoning become an interrupted assistant message; without visible output, an empty interruption marker is stored. Hidden output from the initial required-search phase remains excluded. Completed tool effects are not reversed. The run's open agent-action approvals expire and incomplete tool calls receive terminal errors before `message.interrupted` and then `run.cancelled` are published. Graceful backend shutdown is not an explicit user cancellation and creates no such message marker.
 
 ## Tool Contract
 
@@ -133,8 +133,8 @@ The following independent cases are automated when their symbols are introduced.
 | ID | Given | When | Then |
 | --- | --- | --- | --- |
 | `COORD-01` | Coordinator with a live approval waiter | Matching decision arrives | Exactly that waiter resolves once and the run continues. |
-| `COORD-02` | Persisted pending approval without process-local waiter | Decision arrives | API returns `approval.runInactive`, approval expires, and no grant is created. |
-| `COORD-03` | Persisted `queued`, `running`, and `waiting_approval` runs plus a completed run | Backend starts | Only active states terminate; pending approvals expire and completed runs and grants remain. |
+| `COORD-02` | Persisted pending agent-action approval without process-local waiter | Decision arrives | API returns `approval.runInactive`, approval expires, and no grant is created. |
+| `COORD-03` | Persisted `queued`, `running`, and `waiting_approval` runs plus a completed run | Backend starts | Only active states terminate; their pending agent-action approvals expire and completed runs and grants remain. |
 | `COORD-04` | Two concurrent decisions for one approval | Both reach coordinator | At most one wins; tool effect and grant happen at most once. |
 | `COORD-05` | Active run with provider request or approval open | User cancels once or repeatedly | Task is cancelled once, cleanup finishes, and exactly persisted `cancelled` state is published. |
 | `TOOL-01` | Two tool definitions with same name | Registry builds | Build fails deterministically. |

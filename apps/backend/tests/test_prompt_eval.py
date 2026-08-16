@@ -50,7 +50,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 18
+    assert INVENTORY_VERSION == 20
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -898,12 +898,13 @@ def test_reconciliation_case_uses_runtime_contract() -> None:
 
     assert messages[0]["content"].startswith("Consolidate new cross-session memory candidates")
     assert [tool["name"] for tool in tools] == ["reconcile_memory_candidates"]
-    memory_schema = tools[0]["parameters"]["properties"]["decisions"]["items"][
-        "properties"
-    ]["memory"]
-    assert memory_schema == {
-        "anyOf": [{"type": "string"}, {"type": "null"}]
+    decision_schema = tools[0]["parameters"]["properties"]["decisions"]["items"]
+    assert decision_schema["properties"]["memory"] == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 20_000,
     }
+    assert "anyOf" not in json.dumps(decision_schema)
 
 
 def test_continuation_checks_repeated_calls_and_premature_success() -> None:
@@ -1158,11 +1159,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 123
-    assert payload["contractCount"] == 255
-    assert "Cases: 132" in report
-    assert "Semantic contracts: 123" in report
-    assert "All inventory rows: 255" in report
+    assert payload["semanticContractCount"] == 126
+    assert payload["contractCount"] == 261
+    assert "Cases: 135" in report
+    assert "Semantic contracts: 126" in report
+    assert "All inventory rows: 261" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

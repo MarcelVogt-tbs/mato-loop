@@ -11,6 +11,7 @@ from mato_loop_backend.settings import (
     MemorySettings,
     SettingsScope,
     SettingsStore,
+    ToolExecutionPolicy,
 )
 from mato_loop_backend.settings.models import (
     AgentRuntimeSettings,
@@ -136,7 +137,11 @@ def test_legacy_model_defaults_to_chat_capability() -> None:
 def test_user_settings_are_user_scoped() -> None:
     assert UserPreferences.settings_scope == SettingsScope.USER
     assert MemorySettings.settings_scope == SettingsScope.USER
-    assert MemorySettings().automatic_dreaming_enabled is False
+    settings = MemorySettings()
+    assert settings.automatic_dreaming_enabled is False
+    assert settings.dreaming_update_policy == ToolExecutionPolicy.AUTO
+    assert settings.dreaming_merge_policy == ToolExecutionPolicy.ASK
+    assert settings.dreaming_pin_policy == ToolExecutionPolicy.ASK
 
 
 def test_model_runtime_uses_defaults_and_legacy_config_values() -> None:

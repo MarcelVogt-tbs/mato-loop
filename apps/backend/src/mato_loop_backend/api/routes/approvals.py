@@ -17,6 +17,7 @@ from mato_loop_backend.agent.runtime import (
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.events import run_events
+from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.security import require_user
 
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/approvals", dependencies=[Depends(require_user)])
 
 
 class ApprovalDecisionRequest(BaseModel):
-    decision: Literal["allow_once", "allow_session", "deny"]
+    decision: Literal["allow_once", "allow_session", "approve", "deny"]
     expected_revision: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
@@ -39,17 +40,18 @@ async def pending_approvals(
     rows = (
         await db.execute(
             select(ApprovalRequest, ChatSession)
-            .join(ChatSession, ChatSession.id == ApprovalRequest.session_id)
+            .outerjoin(ChatSession, ChatSession.id == ApprovalRequest.session_id)
             .where(ApprovalRequest.status == "pending")
-            .where(ChatSession.user_id == user.id)
+            .where(ApprovalRequest.user_id == user.id)
             .order_by(ApprovalRequest.created_at)
         )
     ).all()
     return [
         {
             **approval_payload(approval),
-            "requestType": "agent_action",
-            "sourceSession": {"id": str(session.id), "title": session.title},
+            "sourceSession": (
+                {"id": str(session.id), "title": session.title} if session else None
+            ),
         }
         for approval, session in rows
     ]
@@ -63,14 +65,19 @@ async def decide_approval(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str]:
     approval = await db.get(ApprovalRequest, approval_id, with_for_update=True)
-    if approval is None:
-        raise ApiError(404, "approval.notFound")
-    session = await db.get(ChatSession, approval.session_id)
-    if session is None or session.user_id != user.id:
+    if approval is None or approval.user_id != user.id:
         raise ApiError(404, "approval.notFound")
     if approval.status != "pending":
         raise ApiError(409, "approval.alreadyDecided")
     if payload.decision not in approval.available_decisions:
+        raise ApiError(400, "approval.decisionUnavailable")
+    if approval.request_type == "memory_change":
+        if payload.decision not in {"approve", "deny"}:
+            raise ApiError(400, "approval.decisionUnavailable")
+        if payload.expected_revision is not None:
+            raise ApiError(400, "validation.invalid", field="expected_revision")
+        return await _decide_memory_change(approval, payload.decision, user.id, db)
+    if approval.request_type != "agent_action":
         raise ApiError(400, "approval.decisionUnavailable")
     skill_draft_approval = (
         approval.capability == "skills.write"
@@ -148,6 +155,43 @@ async def decide_approval(
         {"type": "approval.resolved", "approvalId": str(approval.id), "decision": payload.decision},
     )
     return {"status": approval.status, "decision": payload.decision}
+
+
+async def _decide_memory_change(
+    approval: ApprovalRequest,
+    decision: str,
+    user_id: UUID,
+    db: AsyncSession,
+) -> dict[str, str]:
+    now = datetime.now(UTC)
+    if decision == "deny":
+        approval.status = "denied"
+        approval.decision = decision
+        approval.resolved_at = now
+        await db.commit()
+        return {"status": approval.status, "decision": decision}
+
+    resolver = getattr(MemoryService, "apply_approved_change", None)
+    if resolver is None:
+        raise ApiError(503, "memory.unavailable")
+    outcome = await resolver(db, approval=approval, user_id=user_id)
+    error_code = {
+        "target_changed": "approval.targetChanged",
+        "policy_changed": "approval.policyChanged",
+    }.get(outcome)
+    if error_code is not None:
+        approval.status = "expired"
+        approval.resolved_at = now
+        await db.commit()
+        raise ApiError(409, error_code)
+    if outcome != "applied":
+        raise ApiError(503, "memory.unavailable")
+
+    approval.status = "approved"
+    approval.decision = decision
+    approval.resolved_at = now
+    await db.commit()
+    return {"status": approval.status, "decision": decision}
 
 
 @router.get("/sessions/{session_id}/permissions")

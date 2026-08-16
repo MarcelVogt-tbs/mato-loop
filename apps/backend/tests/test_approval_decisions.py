@@ -23,6 +23,8 @@ from mato_loop_backend.providers.base import ToolCall
 def _approval() -> ApprovalRequest:
     return ApprovalRequest(
         id=uuid4(),
+        request_type="agent_action",
+        user_id=uuid4(),
         session_id=uuid4(),
         run_id=uuid4(),
         action_kind="session_read",
@@ -40,10 +42,9 @@ def _approval() -> ApprovalRequest:
 
 async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None:
     approval = _approval()
-    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
-    session = ChatSession(id=approval.session_id, user_id=user.id, title="Test")
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [approval, session]
+    db.get.return_value = approval
     db.scalar.return_value = None
     claim = Mock(return_value=True)
     resolve = Mock(return_value=True)
@@ -70,10 +71,9 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
 
 async def test_approval_without_live_waiter_expires_without_creating_grant(monkeypatch) -> None:
     approval = _approval()
-    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
-    session = ChatSession(id=approval.session_id, user_id=user.id, title="Test")
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [approval, session]
+    db.get.return_value = approval
     monkeypatch.setattr(
         AgentRuntime, "claim_approval_resolution", Mock(return_value=False)
     )
@@ -99,10 +99,9 @@ async def test_skill_approval_requires_and_forwards_exact_revision(
     approval.action_kind = action_kind
     approval.capability = "skills.write"
     approval.resource_type = resource_type
-    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
-    session = ChatSession(id=approval.session_id, user_id=user.id, title="Test")
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [approval, session]
+    db.get.return_value = approval
 
     with pytest.raises(ApiError) as exc_info:
         await decide_approval(
@@ -110,7 +109,6 @@ async def test_skill_approval_requires_and_forwards_exact_revision(
         )
     assert exc_info.value.code == "validation.required"
 
-    db.get.side_effect = [approval, session]
     monkeypatch.setattr(
         AgentRuntime, "claim_approval_resolution", Mock(return_value=True)
     )
@@ -173,9 +171,97 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     async with asyncio.timeout(1):
         await created.wait()
     assert not task.done()
+    persisted = db.add.call_args.args[0]
+    assert persisted.request_type == "agent_action"
+    assert persisted.user_id == session.user_id
 
     assert AgentRuntime.claim_approval_resolution(approval_id) is True
     assert AgentRuntime.resolve_approval(approval_id, "allow_once") is True
     async with asyncio.timeout(1):
         assert await task == "allow_once"
     wait_for.assert_not_awaited()
+
+
+async def test_approval_ownership_is_checked_directly() -> None:
+    approval = _approval()
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    other_user = UserAccount(id=uuid4(), username="other", password_hash="hash")
+
+    with pytest.raises(ApiError) as exc_info:
+        await decide_approval(
+            approval.id, ApprovalDecisionRequest(decision="deny"), other_user, db
+        )
+
+    assert exc_info.value.code == "approval.notFound"
+    assert db.get.await_count == 1
+
+
+async def test_memory_deny_resolves_without_calling_memory_service(monkeypatch) -> None:
+    approval = _approval()
+    approval.request_type = "memory_change"
+    approval.session_id = None
+    approval.run_id = None
+    approval.available_decisions = ["approve", "deny"]
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    resolver = AsyncMock()
+    monkeypatch.setattr(
+        "mato_loop_backend.api.routes.approvals.MemoryService.apply_approved_change",
+        resolver,
+        raising=False,
+    )
+
+    result = await decide_approval(
+        approval.id, ApprovalDecisionRequest(decision="deny"), user, db
+    )
+
+    assert result == {"status": "denied", "decision": "deny"}
+    assert approval.resolved_at is not None
+    db.commit.assert_awaited_once()
+    resolver.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_code", "expected_status"),
+    [
+        ("applied", None, "approved"),
+        ("target_changed", "approval.targetChanged", "expired"),
+        ("policy_changed", "approval.policyChanged", "expired"),
+    ],
+)
+async def test_memory_approve_dispatches_service_outcomes(
+    monkeypatch, outcome, expected_code, expected_status
+) -> None:
+    approval = _approval()
+    approval.request_type = "memory_change"
+    approval.session_id = None
+    approval.run_id = None
+    approval.available_decisions = ["approve", "deny"]
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    resolver = AsyncMock(return_value=outcome)
+    monkeypatch.setattr(
+        "mato_loop_backend.api.routes.approvals.MemoryService.apply_approved_change",
+        resolver,
+        raising=False,
+    )
+
+    if expected_code is None:
+        result = await decide_approval(
+            approval.id, ApprovalDecisionRequest(decision="approve"), user, db
+        )
+        assert result == {"status": "approved", "decision": "approve"}
+    else:
+        with pytest.raises(ApiError) as exc_info:
+            await decide_approval(
+                approval.id, ApprovalDecisionRequest(decision="approve"), user, db
+            )
+        assert exc_info.value.code == expected_code
+
+    resolver.assert_awaited_once_with(db, approval=approval, user_id=user.id)
+    assert approval.status == expected_status
+    assert approval.resolved_at is not None
+    db.commit.assert_awaited_once()

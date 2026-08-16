@@ -58,6 +58,17 @@ def test_changed_file_error_has_controlled_fallback() -> None:
     assert describe_error("file.changed").message == "The file changed since it was opened."
 
 
+def test_memory_approval_conflicts_have_controlled_fallbacks() -> None:
+    assert (
+        describe_error("approval.targetChanged").message
+        == "The approval target changed before the decision was applied."
+    )
+    assert (
+        describe_error("approval.policyChanged").message
+        == "The approval policy changed before the decision was applied."
+    )
+
+
 def test_tls_error_has_controlled_fallback() -> None:
     assert (
         describe_error("webfetch.tlsFailed").message

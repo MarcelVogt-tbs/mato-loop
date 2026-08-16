@@ -1,6 +1,6 @@
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import httpx
@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.memory.embeddings import (
+    ACTIVE_EMBEDDING_PROFILE,
     DOCUMENT_PREFIX,
     EMBEDDING_DIMENSIONS,
     EMBEDDING_SERVED_MODEL,
@@ -15,6 +16,7 @@ from mato_loop_backend.memory.embeddings import (
     EmbeddingError,
     InfinityEmbeddingClient,
 )
+from mato_loop_backend.memory.episode_indexing import EpisodeIndexService, _content_hash
 from mato_loop_backend.memory.indexing import MemoryIndexService
 from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.models import (
@@ -22,6 +24,8 @@ from mato_loop_backend.models import (
     MemoryEmbedding,
     MemoryEmbeddingStatus,
     MemorySourceType,
+    Message,
+    MessageSearchChunk,
 )
 from mato_loop_backend.settings import TrustLevel
 
@@ -107,6 +111,95 @@ async def test_transient_index_failure_is_requeued_with_backoff() -> None:
     assert row.vector is None
     assert row.next_attempt_at is not None
     assert row.error_code == "memory.embeddingUnavailable"
+    db.commit.assert_awaited_once()
+
+
+async def test_memory_reconcile_only_requeues_matching_failed_rows() -> None:
+    statuses = list(MemoryEmbeddingStatus)
+    rows = [
+        MemoryEmbedding(
+            memory_id=uuid4(),
+            profile_fingerprint=ACTIVE_EMBEDDING_PROFILE.fingerprint,
+            content_hash=f"hash-{status.value}",
+            status=status.value,
+            attempts=3,
+            error_code="memory.embeddingInvalidResponse",
+        )
+        for status in statuses
+    ]
+    result = Mock()
+    result.all.return_value = [
+        (row.memory_id, row.content_hash)
+        for row in rows
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = result
+    db.get.side_effect = rows
+
+    changed = await MemoryIndexService.reconcile(db, retry_failed=True)
+
+    assert changed == 1
+    assert [row.status for row in rows] == [
+        MemoryEmbeddingStatus.QUEUED.value,
+        MemoryEmbeddingStatus.RUNNING.value,
+        MemoryEmbeddingStatus.READY.value,
+        MemoryEmbeddingStatus.QUEUED.value,
+    ]
+    failed = rows[-1]
+    assert failed.attempts == 0
+    assert failed.error_code is None
+    assert failed.next_attempt_at is None
+    assert failed.claimed_at is None
+    db.commit.assert_awaited_once()
+
+
+async def test_episode_reconcile_only_requeues_matching_failed_chunks() -> None:
+    statuses = list(MemoryEmbeddingStatus)
+    messages = [
+        Message(
+            id=uuid4(),
+            session_id=uuid4(),
+            role="user",
+            content=f"Episode in state {status.value}",
+        )
+        for status in statuses
+    ]
+    chunks = [
+        MessageSearchChunk(
+            message_id=message.id,
+            chunk_index=0,
+            content=message.content,
+            content_hash=_content_hash(message.content),
+            profile_fingerprint=ACTIVE_EMBEDDING_PROFILE.fingerprint,
+            status=status.value,
+            attempts=3,
+            error_code="memory.embeddingInvalidResponse",
+        )
+        for message, status in zip(messages, statuses, strict=True)
+    ]
+    removed = Mock(rowcount=0)
+    message_result = Mock()
+    message_result.all.return_value = messages
+    chunk_result = Mock()
+    chunk_result.all.return_value = chunks
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = removed
+    db.scalars.side_effect = [message_result, chunk_result]
+
+    changed = await EpisodeIndexService.reconcile(db, retry_failed=True)
+
+    assert changed == 1
+    assert [chunk.status for chunk in chunks] == [
+        MemoryEmbeddingStatus.QUEUED.value,
+        MemoryEmbeddingStatus.RUNNING.value,
+        MemoryEmbeddingStatus.READY.value,
+        MemoryEmbeddingStatus.QUEUED.value,
+    ]
+    failed = chunks[-1]
+    assert failed.attempts == 0
+    assert failed.error_code is None
+    assert failed.next_attempt_at is None
+    assert failed.claimed_at is None
     db.commit.assert_awaited_once()
 
 

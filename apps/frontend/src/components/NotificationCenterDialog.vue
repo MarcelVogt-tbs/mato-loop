@@ -66,7 +66,7 @@
               :key="`approval-${approval.id}`"
               clickable
               v-ripple
-              @click="openSession(approval.sessionId)"
+              @click="openApproval(approval)"
             >
               <q-item-section avatar>
                 <q-avatar color="warning" text-color="dark" icon="pending_actions" />
@@ -77,7 +77,9 @@
                   {{ approval.summary }}
                 </q-item-label>
                 <q-item-label caption class="q-mt-xs">
-                  {{ approval.sourceSession?.title || sessionTitle(approval.sessionId) }} ·
+                  {{ approval.requestType === 'memory_change'
+                    ? approval.sourceSession?.title || 'Dreaming im Hintergrund'
+                    : approval.sourceSession?.title || sessionTitle(approval.sessionId) }} ·
                   {{ formatRelativeDateTime(approval.createdAt, timestampNow) }}
                 </q-item-label>
               </q-item-section>
@@ -268,6 +270,17 @@ async function refreshAttention() {
 async function openSession(sessionId) {
   if (!sessionId) return
   const failure = await router.push({ name: 'chat', query: { session: sessionId } })
+  if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
+  emit('update:modelValue', false)
+  emit('navigated')
+}
+
+async function openApproval(approval) {
+  if (approval.requestType !== 'memory_change' && approval.sessionId) {
+    await openSession(approval.sessionId)
+    return
+  }
+  const failure = await router.push({ name: 'settings-approvals' })
   if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
   emit('update:modelValue', false)
   emit('navigated')

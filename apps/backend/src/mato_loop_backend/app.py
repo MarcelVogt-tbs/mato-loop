@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -68,8 +69,11 @@ async def lifespan(_app: FastAPI):
             await db.commit()
             await db.execute(
                 update(ApprovalRequest)
-                .where(ApprovalRequest.status == "pending")
-                .values(status="expired")
+                .where(
+                    ApprovalRequest.status == "pending",
+                    ApprovalRequest.request_type == "agent_action",
+                )
+                .values(status="expired", resolved_at=datetime.now(UTC))
             )
             await db.execute(
                 update(QuestionRequest)
@@ -99,8 +103,9 @@ async def lifespan(_app: FastAPI):
                 )
             if runtime_config.embedding_enabled:
                 await MemoryIndexService.recover(db)
-                await MemoryIndexService.reconcile(db)
-                await EpisodeIndexService.recover(db)
+                await MemoryIndexService.reconcile(db, retry_failed=True)
+            await EpisodeIndexService.recover(db)
+            await EpisodeIndexService.reconcile(db, retry_failed=True)
     except Exception:
         logger.exception("Failed to clean up stale runs and interactions during startup")
     DreamingScheduler.start()

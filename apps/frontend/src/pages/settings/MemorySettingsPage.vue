@@ -285,6 +285,43 @@
                   class="q-mb-lg"
                   :disable="memories.settingsLoading"
                 />
+                <div class="text-subtitle2 text-weight-medium">Änderungsrichtlinien</div>
+                <div class="text-body2 app-muted q-mt-xs q-mb-md">
+                  Legt fest, ob Dreaming Änderungen verwirft, zur Freigabe vorlegt oder automatisch anwendet.
+                </div>
+                <q-select
+                  v-model="settingsForm.dreamingUpdatePolicy"
+                  outlined
+                  emit-value
+                  map-options
+                  label="Bestehende Erinnerungen ändern"
+                  :options="dreamingPolicyOptions"
+                  :disable="memories.settingsLoading"
+                  :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                  class="q-mb-md"
+                />
+                <q-select
+                  v-model="settingsForm.dreamingMergePolicy"
+                  outlined
+                  emit-value
+                  map-options
+                  label="Erinnerungen zusammenführen"
+                  :options="dreamingPolicyOptions"
+                  :disable="memories.settingsLoading"
+                  :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                  class="q-mb-md"
+                />
+                <q-select
+                  v-model="settingsForm.dreamingPinPolicy"
+                  outlined
+                  emit-value
+                  map-options
+                  label="Berücksichtigung ändern"
+                  :options="dreamingPolicyOptions"
+                  :disable="memories.settingsLoading"
+                  :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                  class="q-mb-lg"
+                />
                 <div class="text-subtitle2 text-weight-medium">Extraktion</div>
                 <div class="text-body2 app-muted q-mt-xs">
                   Begrenzt, wie viele Nachrichten und Erinnerungskandidaten ein Lauf verarbeitet.
@@ -503,6 +540,9 @@ const settingsForm = reactive({
   dreamingIdleMinutes: 1,
   dreamingMaxBatchMessages: 2,
   dreamingMaxCandidates: 1,
+  dreamingUpdatePolicy: 'auto',
+  dreamingMergePolicy: 'ask',
+  dreamingPinPolicy: 'ask',
   automaticDreamingUnavailableReason: null,
   manualDreamingAvailable: false,
   manualDreamingUnavailableReason: null
@@ -519,6 +559,11 @@ const trustLevelOptions = [
 const pinnedOptions = [
   { label: 'Immer berücksichtigen', value: true },
   { label: 'Bei Bedarf berücksichtigen', value: false }
+]
+const dreamingPolicyOptions = [
+  { label: 'Deaktiviert', value: 'disabled' },
+  { label: 'Vorher fragen', value: 'ask' },
+  { label: 'Automatisch anwenden', value: 'auto' }
 ]
 const categoryOptions = [
   { label: 'Kontext', value: 'context', icon: 'notes', color: 'blue-grey-7' },
@@ -554,7 +599,10 @@ const editableTechnicalSettings = computed(() => ({
   dreamingIntervalMinutes: Number(settingsForm.dreamingIntervalMinutes),
   dreamingIdleMinutes: Number(settingsForm.dreamingIdleMinutes),
   dreamingMaxBatchMessages: Number(settingsForm.dreamingMaxBatchMessages),
-  dreamingMaxCandidates: Number(settingsForm.dreamingMaxCandidates)
+  dreamingMaxCandidates: Number(settingsForm.dreamingMaxCandidates),
+  dreamingUpdatePolicy: settingsForm.dreamingUpdatePolicy,
+  dreamingMergePolicy: settingsForm.dreamingMergePolicy,
+  dreamingPinPolicy: settingsForm.dreamingPinPolicy
 }))
 const settingsChanged = computed(() => (
   JSON.stringify(editableTechnicalSettings.value) !== JSON.stringify(savedSettings.value)
