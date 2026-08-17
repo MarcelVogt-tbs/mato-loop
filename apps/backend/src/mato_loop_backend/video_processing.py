@@ -102,15 +102,23 @@ def _run_media(
     timeout: int,
     max_stdout: int,
     source_path: str | None = None,
+    max_input_bytes: int = MAX_VIDEO_BYTES,
 ) -> bytes:
-    if not data or len(data) > MAX_VIDEO_BYTES:
+    if not data or len(data) > max_input_bytes:
         raise VideoProcessingError
     try:
         if source_path is None:
             with tempfile.NamedTemporaryFile() as source:
                 source.write(data)
                 source.flush()
-                return _run_media(command, data, timeout, max_stdout, source.name)
+                return _run_media(
+                    command,
+                    data,
+                    timeout,
+                    max_stdout,
+                    source.name,
+                    max_input_bytes,
+                )
         with tempfile.TemporaryFile() as output:
             prepared = [source_path if item == "pipe:0" else item for item in command]
             for index, item in enumerate(prepared[:-1]):
@@ -162,7 +170,12 @@ def _duration(payload: dict, streams: list[dict]) -> float:
     return max(positive)
 
 
-def probe_media(data: bytes) -> MediaInfo:
+def probe_media(
+    data: bytes,
+    *,
+    max_bytes: int = MAX_VIDEO_BYTES,
+    max_duration_seconds: int = MAX_VIDEO_DURATION_SECONDS,
+) -> MediaInfo:
     """Inspect a supported MP4/WebM container without trusting its name or signature."""
     raw = _run_media(
         [
@@ -180,6 +193,7 @@ def probe_media(data: bytes) -> MediaInfo:
         data,
         FFPROBE_TIMEOUT_SECONDS,
         MAX_PROBE_BYTES,
+        max_input_bytes=max_bytes,
     )
     try:
         payload = json.loads(raw)
@@ -213,7 +227,7 @@ def probe_media(data: bytes) -> MediaInfo:
                 or width * height > MAX_VIDEO_PIXELS
             ):
                 raise VideoProcessingError
-        if videos and duration > MAX_VIDEO_DURATION_SECONDS:
+        if videos and duration > max_duration_seconds:
             raise VideoProcessingError
         videos.sort(key=lambda stream: stream.get("disposition", {}).get("default") != 1)
         audios.sort(key=lambda stream: stream.get("disposition", {}).get("default") != 1)
@@ -234,8 +248,17 @@ def probe_media(data: bytes) -> MediaInfo:
         raise VideoProcessingError from exc
 
 
-def probe_video(data: bytes) -> MediaInfo:
-    info = probe_media(data)
+def probe_video(
+    data: bytes,
+    *,
+    max_bytes: int = MAX_VIDEO_BYTES,
+    max_duration_seconds: int = MAX_VIDEO_DURATION_SECONDS,
+) -> MediaInfo:
+    info = probe_media(
+        data,
+        max_bytes=max_bytes,
+        max_duration_seconds=max_duration_seconds,
+    )
     if not info.has_video:
         raise VideoProcessingError
     return info

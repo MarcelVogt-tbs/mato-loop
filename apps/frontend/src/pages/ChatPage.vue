@@ -367,6 +367,7 @@ import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
 import { useQuestionStore } from 'stores/questions'
 import { useToolSettingsStore } from 'stores/tool-settings'
+import { useFileMediaSettingsStore } from 'stores/file-media-settings'
 import {
   MAX_WORKSPACE_SPLIT_RATIO,
   MIN_WORKSPACE_SPLIT_RATIO,
@@ -394,6 +395,7 @@ const identity = useAgentIdentityStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
 const executionAgents = useExecutionAgentStore()
+const fileMediaSettings = useFileMediaSettingsStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
@@ -638,7 +640,8 @@ async function loadBackgroundData() {
     approvals.fetchPending(),
     questions.fetchPending(),
     chat.fetchDefaults(),
-    toolSettings.fetchSettings('personal')
+    toolSettings.fetchSettings('personal'),
+    fileMediaSettings.fetchSettings()
   ])
   if (
     providerResult.status === 'fulfilled'

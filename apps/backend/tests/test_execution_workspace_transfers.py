@@ -25,6 +25,7 @@ from mato_loop_backend.models import (
     Message,
     UserAccount,
 )
+from mato_loop_backend.settings import FileMediaSettings, SettingsStore
 
 
 def _user() -> UserAccount:
@@ -182,6 +183,9 @@ def test_transfer_url_uses_the_agent_connection_origin(monkeypatch) -> None:
 
 
 async def test_file_context_uses_owned_session_root_snapshot(monkeypatch) -> None:
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=FileMediaSettings())
+    )
     user = _user()
     agent_id = uuid4()
     root_id = uuid4()
@@ -240,6 +244,9 @@ async def test_file_context_uses_owned_session_root_snapshot(monkeypatch) -> Non
 async def test_historical_file_action_url_ignores_changed_session_preferences(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=FileMediaSettings())
+    )
     user = _user()
     bound_agent_id = uuid4()
     bound_root_id = uuid4()

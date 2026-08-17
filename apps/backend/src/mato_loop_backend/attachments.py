@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.attachment_processing import (
     AttachmentProcessingError,
+    AttachmentProcessingLimits,
     audio_mime_type,
     claimed_audio_format,
     claimed_document_format,
@@ -34,6 +35,7 @@ from mato_loop_backend.attachment_processing import (
 )
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
+from mato_loop_backend.settings import FileMediaSettings
 from mato_loop_backend.video_processing import (
     VideoProcessingError,
     probe_media,
@@ -42,6 +44,7 @@ from mato_loop_backend.video_processing import (
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
 MAX_FILE_ATTACHMENT_BYTES = 64 * 1024 * 1024
+ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES = 256 * 1024 * 1024
 MAX_IMAGE_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
 MAX_AUDIO_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
 MAX_ATTACHMENTS_PER_MESSAGE = 8
@@ -158,10 +161,12 @@ def image_mime_type(data: bytes) -> str | None:
     return _magic_mime_type(data)
 
 
-def validate_image(data: bytes, mime_type: str) -> ValidatedImage:
+def validate_image(
+    data: bytes, mime_type: str, *, max_bytes: int = MAX_IMAGE_ATTACHMENT_BYTES
+) -> ValidatedImage:
     if not data:
         raise AttachmentError("attachment.empty")
-    if len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
+    if len(data) > max_bytes:
         raise AttachmentError("attachment.tooLarge")
     claimed = mime_type.strip().lower()
     magic = _magic_mime_type(data)
@@ -206,15 +211,21 @@ def validate_image(data: bytes, mime_type: str) -> ValidatedImage:
     return ValidatedImage(magic, width, height, len(data), hashlib.sha256(data).hexdigest())
 
 
-def validate_audio(data: bytes, mime_type: str) -> ValidatedAudio:
+def validate_audio(
+    data: bytes,
+    mime_type: str,
+    *,
+    max_bytes: int = MAX_AUDIO_ATTACHMENT_BYTES,
+    limits: AttachmentProcessingLimits | None = None,
+) -> ValidatedAudio:
     if not data:
         raise AttachmentError("attachment.empty")
-    if len(data) > MAX_AUDIO_ATTACHMENT_BYTES:
+    if len(data) > max_bytes:
         raise AttachmentError("attachment.tooLarge")
     if mime_type.strip().lower() not in {"audio/wav", "audio/x-wav", "audio/wave"}:
         raise AttachmentError("attachment.unsupportedType")
     try:
-        info = validate_pcm_wav(data)
+        info = validate_pcm_wav(data, limits=limits)
     except AttachmentProcessingError as exc:
         raise AttachmentError(exc.code) from exc
     return ValidatedAudio(
@@ -280,22 +291,58 @@ def _safe_metadata(metadata: dict | None) -> dict:
     return safe
 
 
-def classify_attachment(data: bytes, browser_mime_type: str, filename: str | None) -> AttachmentInput:
+def processing_limits(settings: FileMediaSettings) -> AttachmentProcessingLimits:
+    return AttachmentProcessingLimits(
+        max_media_bytes=settings.max_upload_bytes,
+        max_extracted_characters=settings.max_extracted_characters,
+        max_pdf_pages=settings.max_pdf_pages,
+        max_workbook_sheets=settings.max_workbook_sheets,
+        max_workbook_cells=settings.max_workbook_cells,
+        max_presentation_slides=settings.max_presentation_slides,
+        max_zip_entries=settings.max_archive_entries,
+        max_zip_uncompressed_bytes=settings.max_archive_uncompressed_bytes,
+        max_zip_entry_bytes=settings.max_archive_entry_bytes,
+        max_zip_compression_ratio=settings.max_archive_compression_ratio,
+        max_audio_duration_seconds=settings.max_audio_duration_seconds,
+        max_video_duration_seconds=settings.max_video_duration_seconds,
+    )
+
+
+def classify_attachment(
+    data: bytes,
+    browser_mime_type: str,
+    filename: str | None,
+    *,
+    max_bytes: int = MAX_FILE_ATTACHMENT_BYTES,
+    limits: AttachmentProcessingLimits | None = None,
+) -> AttachmentInput:
     if not data:
         raise AttachmentError("attachment.empty")
-    if len(data) > MAX_FILE_ATTACHMENT_BYTES:
+    if len(data) > max_bytes:
         raise AttachmentError("attachment.tooLarge")
     cleaned_name = safe_filename(filename)
     image_mime = _magic_mime_type(data)
     if image_mime is not None:
-        validate_image(data, image_mime)
+        validate_image(data, image_mime, max_bytes=max_bytes)
         return AttachmentInput(data, image_mime, cleaned_name, "image")
     claimed = browser_mime_type.split(";", 1)[0].strip().lower()
     suffix = Path(cleaned_name).suffix.lower()
     video_candidate = video_container_candidate(data, claimed, suffix)
     if video_candidate:
         try:
-            media_info = probe_media(data)
+            media_info = (
+                probe_media(data)
+                if limits is None and max_bytes == MAX_FILE_ATTACHMENT_BYTES
+                else probe_media(
+                    data,
+                    max_bytes=max_bytes,
+                    max_duration_seconds=(
+                        limits.max_video_duration_seconds
+                        if limits is not None
+                        else 15 * 60
+                    ),
+                )
+            )
         except VideoProcessingError as exc:
             raise AttachmentError(exc.code) from exc
         if media_info.has_video:
@@ -308,7 +355,7 @@ def classify_attachment(data: bytes, browser_mime_type: str, filename: str | Non
         return AttachmentInput(
             data, audio_mime_type(audio_format), cleaned_name, "audio"
         )
-    signed_document = signed_document_format(data)
+    signed_document = signed_document_format(data, limits=limits)
     document_format = signed_document or claimed_document_format(claimed, suffix)
     if document_format is not None:
         return AttachmentInput(
@@ -532,8 +579,14 @@ class AttachmentStorage:
 
 
 class AttachmentService:
-    def __init__(self, storage: AttachmentStorage | None = None) -> None:
+    def __init__(
+        self,
+        storage: AttachmentStorage | None = None,
+        *,
+        settings: FileMediaSettings | None = None,
+    ) -> None:
         self.storage = storage or AttachmentStorage()
+        self.settings = settings
 
     async def create_image(self, db: AsyncSession, message: Message, data: bytes, mime_type: str, **kwargs) -> MessageAttachment:
         return await self.create_attachment(db, message, data, mime_type, kind="image", **kwargs)
@@ -558,7 +611,22 @@ class AttachmentService:
     ) -> MessageAttachment:
         if not data:
             raise AttachmentError("attachment.empty")
-        if len(data) > MAX_FILE_ATTACHMENT_BYTES:
+        max_bytes = (
+            self.settings.max_upload_bytes
+            if self.settings is not None and purpose == "attachment"
+            else MAX_FILE_ATTACHMENT_BYTES
+        )
+        limits = (
+            processing_limits(self.settings)
+            if self.settings is not None and purpose == "attachment"
+            else None
+        )
+        session_quota_bytes = (
+            self.settings.session_quota_bytes
+            if self.settings is not None
+            else SESSION_ATTACHMENT_QUOTA_BYTES
+        )
+        if len(data) > max_bytes:
             raise AttachmentError("attachment.tooLarge")
         if purpose not in {"attachment", "artifact"}:
             raise AttachmentError("attachment.invalidPurpose")
@@ -568,7 +636,7 @@ class AttachmentService:
         safe_metadata = _safe_metadata(metadata)
         derived_files: dict[str, bytes] = {}
         if kind == "image":
-            validated_image = validate_image(data, mime_type)
+            validated_image = validate_image(data, mime_type, max_bytes=max_bytes)
             mime_type = validated_image.mime_type
             width, height = validated_image.width, validated_image.height
         elif kind in {"audio", "video", "text", "document"}:
@@ -578,6 +646,7 @@ class AttachmentService:
                     kind=kind,
                     mime_type=mime_type,
                     filename=cleaned_filename,
+                    limits=limits,
                 )
             except AttachmentProcessingError as exc:
                 raise AttachmentError(exc.code) from exc
@@ -631,6 +700,7 @@ class AttachmentService:
                 RootFileService(
                     message.session_id,
                     session_storage=self.storage.sessions,
+                    session_quota_bytes=session_quota_bytes,
                 ).session_usage
             )
         except (RootFileError, AttachmentStorageError) as exc:
@@ -638,7 +708,7 @@ class AttachmentService:
         new_derived_bytes = sum(len(value) for value in derived_files.values())
         if (
             int(used_bytes or 0) + len(data) + new_derived_bytes
-            > SESSION_ATTACHMENT_QUOTA_BYTES
+            > session_quota_bytes
         ):
             raise AttachmentError("attachment.sessionQuotaExceeded")
         if position is None:
@@ -749,7 +819,7 @@ class AttachmentService:
         if (
             attachment.kind != "audio"
             or attachment.processing_status != "ready"
-            or attachment.size_bytes > MAX_AUDIO_ATTACHMENT_BYTES
+            or attachment.size_bytes > ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES
         ):
             raise AttachmentError("attachment.notFound")
         path = await self.verified_path(attachment, session_id)
@@ -763,7 +833,12 @@ class AttachmentService:
                 self._verified_derived_bytes, attachment, session_id, "audio.wav"
             )
         try:
-            validated = validate_audio(data, "audio/wav")
+            validated = validate_audio(
+                data,
+                "audio/wav",
+                max_bytes=ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES,
+                limits=AttachmentProcessingLimits(max_audio_duration_seconds=3_600),
+            )
         except AttachmentError as exc:
             raise AttachmentError("attachment.notFound") from exc
         if attachment.duration_ms is not None and validated.duration_ms != attachment.duration_ms:
@@ -774,13 +849,17 @@ class AttachmentService:
         if (
             attachment.kind != "image"
             or attachment.processing_status != "ready"
-            or attachment.size_bytes > MAX_IMAGE_ATTACHMENT_BYTES
+            or attachment.size_bytes > ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES
         ):
             raise AttachmentError("attachment.notFound")
         path = await self.verified_path(attachment, session_id)
         try:
             data = await asyncio.to_thread(path.read_bytes)
-            validated = validate_image(data, attachment.mime_type)
+            validated = validate_image(
+                data,
+                attachment.mime_type,
+                max_bytes=ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES,
+            )
         except (OSError, AttachmentError) as exc:
             raise AttachmentError("attachment.notFound") from exc
         if (

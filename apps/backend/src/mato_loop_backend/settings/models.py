@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from pydantic import (
     AliasChoices,
     BaseModel,
+    ConfigDict,
     Field,
     HttpUrl,
     PrivateAttr,
@@ -545,6 +546,82 @@ class GeneralSettings(SettingsDocument):
 
     default_locale: str = "de-DE"
     default_timezone: str = "Europe/Berlin"
+
+
+def _camel_case(value: str) -> str:
+    first, *rest = value.split("_")
+    return first + "".join(part.capitalize() for part in rest)
+
+
+class FileMediaSettings(SettingsDocument):
+    settings_key = "file-media"
+    model_config = ConfigDict(
+        alias_generator=_camel_case,
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    max_upload_mib: int = Field(default=64, ge=1, le=256)
+    max_attachments_per_message: int = Field(default=8, ge=1, le=16)
+    max_message_upload_mib: int = Field(default=512, ge=1, le=512)
+    session_quota_mib: int = Field(default=500, ge=1, le=102_400)
+    max_image_preview_mib: int = Field(default=5, ge=1, le=64)
+    max_editable_text_mib: int = Field(default=1, ge=1, le=16)
+    max_audio_duration_seconds: int = Field(default=3_600, ge=1, le=3_600)
+    max_video_duration_seconds: int = Field(default=900, ge=1, le=900)
+    max_extracted_characters: int = Field(default=1_000_000, ge=1_000, le=10_000_000)
+    max_pdf_pages: int = Field(default=1_000, ge=1, le=5_000)
+    max_workbook_sheets: int = Field(default=100, ge=1, le=500)
+    max_workbook_cells: int = Field(default=1_000_000, ge=1_000, le=5_000_000)
+    max_presentation_slides: int = Field(default=500, ge=1, le=2_000)
+    max_archive_entries: int = Field(default=5_000, ge=1, le=20_000)
+    max_archive_uncompressed_mib: int = Field(default=256, ge=1, le=1_024)
+    max_archive_entry_mib: int = Field(default=64, ge=1, le=256)
+    max_archive_compression_ratio: int = Field(default=200, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def validate_file_limits(self) -> Self:
+        if self.max_upload_mib > self.max_message_upload_mib:
+            raise ValueError("max_upload_mib must not exceed max_message_upload_mib")
+        if self.max_upload_mib > self.session_quota_mib:
+            raise ValueError("max_upload_mib must not exceed session_quota_mib")
+        if self.max_archive_entry_mib > self.max_archive_uncompressed_mib:
+            raise ValueError(
+                "max_archive_entry_mib must not exceed max_archive_uncompressed_mib"
+            )
+        return self
+
+    @staticmethod
+    def _mib(value: int) -> int:
+        return value * 1024 * 1024
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self._mib(self.max_upload_mib)
+
+    @property
+    def max_message_upload_bytes(self) -> int:
+        return self._mib(self.max_message_upload_mib)
+
+    @property
+    def session_quota_bytes(self) -> int:
+        return self._mib(self.session_quota_mib)
+
+    @property
+    def max_image_preview_bytes(self) -> int:
+        return self._mib(self.max_image_preview_mib)
+
+    @property
+    def max_editable_text_bytes(self) -> int:
+        return self._mib(self.max_editable_text_mib)
+
+    @property
+    def max_archive_uncompressed_bytes(self) -> int:
+        return self._mib(self.max_archive_uncompressed_mib)
+
+    @property
+    def max_archive_entry_bytes(self) -> int:
+        return self._mib(self.max_archive_entry_mib)
 
 
 class AiSettingsBase(SettingsDocument):

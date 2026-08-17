@@ -38,7 +38,7 @@ def probe_payload(
 
 
 def test_probe_video_validates_streams_duration_and_dimensions(monkeypatch) -> None:
-    monkeypatch.setattr(video, "_run_media", lambda *_args: probe_payload())
+    monkeypatch.setattr(video, "_run_media", lambda *_args, **_kwargs: probe_payload())
 
     info = video.probe_video(b"mp4")
 
@@ -48,7 +48,9 @@ def test_probe_video_validates_streams_duration_and_dimensions(monkeypatch) -> N
     monkeypatch.setattr(
         video,
         "_run_media",
-        lambda *_args: probe_payload(duration=str(video.MAX_VIDEO_DURATION_SECONDS + 0.1)),
+        lambda *_args, **_kwargs: probe_payload(
+            duration=str(video.MAX_VIDEO_DURATION_SECONDS + 0.1)
+        ),
     )
     with pytest.raises(video.VideoProcessingError, match="attachment.invalidVideo"):
         video.probe_video(b"too-long")
@@ -56,7 +58,7 @@ def test_probe_video_validates_streams_duration_and_dimensions(monkeypatch) -> N
     monkeypatch.setattr(
         video,
         "_run_media",
-        lambda *_args: probe_payload(width=video.MAX_VIDEO_WIDTH + 1),
+        lambda *_args, **_kwargs: probe_payload(width=video.MAX_VIDEO_WIDTH + 1),
     )
     with pytest.raises(video.VideoProcessingError, match="attachment.invalidVideo"):
         video.probe_video(b"too-wide")
@@ -69,7 +71,7 @@ def test_audio_only_container_is_not_a_video(monkeypatch) -> None:
             "streams": [{"index": 0, "codec_type": "audio"}],
         }
     ).encode()
-    monkeypatch.setattr(video, "_run_media", lambda *_args: payload)
+    monkeypatch.setattr(video, "_run_media", lambda *_args, **_kwargs: payload)
 
     assert video.probe_media(b"webm").has_video is False
     with pytest.raises(video.VideoProcessingError, match="attachment.invalidVideo"):

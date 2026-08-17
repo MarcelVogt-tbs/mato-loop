@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.attachments import (
-    MAX_AUDIO_ATTACHMENT_BYTES,
     AttachmentError,
+    processing_limits,
     validate_audio,
 )
 from mato_loop_backend.db.session import get_db_session
@@ -15,6 +15,8 @@ from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
+    FileMediaSettings,
+    SettingsStore,
     ToolExecutionPolicy,
     load_effective_tools,
 )
@@ -44,16 +46,22 @@ async def create_transcription(
     language: Annotated[str | None, Form(max_length=35)] = None,
 ) -> dict[str, str]:
     settings = await load_effective_tools(db, user.id)
+    file_settings = await SettingsStore.load(db, FileMediaSettings)
     if settings.transcribe_audio.policy == ToolExecutionPolicy.DISABLED:
         await audio.close()
         raise ApiError(409, "tool.unavailable")
     try:
-        data = await audio.read(MAX_AUDIO_ATTACHMENT_BYTES + 1)
+        data = await audio.read(file_settings.max_upload_bytes + 1)
     finally:
         await audio.close()
     mime_type = (audio.content_type or "").split(";", 1)[0].strip().lower()
     try:
-        validate_audio(data, mime_type)
+        validate_audio(
+            data,
+            mime_type,
+            max_bytes=file_settings.max_upload_bytes,
+            limits=processing_limits(file_settings),
+        )
     except AttachmentError as exc:
         raise ApiError(413 if exc.code == "attachment.tooLarge" else 400, exc.code) from exc
     try:

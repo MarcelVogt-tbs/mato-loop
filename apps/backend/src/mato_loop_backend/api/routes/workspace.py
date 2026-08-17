@@ -9,7 +9,7 @@ import logging
 import re
 import zipfile
 from collections.abc import Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Annotated, BinaryIO, Literal
@@ -53,7 +53,11 @@ from mato_loop_backend.integrations.openscad import (
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant, UserAccount
 from mato_loop_backend.safe_svg import MAX_SAFE_SVG_BYTES, validate_svg
 from mato_loop_backend.security import hash_token, require_user
-from mato_loop_backend.settings import load_effective_integrations
+from mato_loop_backend.settings import (
+    FileMediaSettings,
+    SettingsStore,
+    load_effective_integrations,
+)
 from mato_loop_backend.workspace import (
     MAX_EDITABLE_TEXT_BYTES,
     FileRoot,
@@ -143,6 +147,7 @@ class _FileContext:
     agent_root_revision: str | None = None
     agent_writable: bool = True
     agent_operations: frozenset[str] = frozenset()
+    file_settings: FileMediaSettings = field(default_factory=FileMediaSettings)
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -251,7 +256,9 @@ async def _file_context(
     root_id: UUID | None = None,
     root_revision: str | None = None,
     for_update: bool = False,
+    file_settings: FileMediaSettings | None = None,
 ) -> _FileContext:
+    file_settings = file_settings or await SettingsStore.load(db, FileMediaSettings)
     session = None
     if session_id is not None:
         if for_update:
@@ -271,8 +278,13 @@ async def _file_context(
         if root_identity is not None and root_identity != str(session.id):
             raise ApiError(404, "file.fileNotFound")
         return _FileContext(
-            root_files=RootFileService(session.id),
+            root_files=RootFileService(
+                session.id,
+                session_quota_bytes=file_settings.session_quota_bytes,
+                max_editable_text_bytes=file_settings.max_editable_text_bytes,
+            ),
             root=FileRoot.SESSION,
+            file_settings=file_settings,
         )
     if root_revision is not None:
         if (
@@ -281,15 +293,18 @@ async def _file_context(
             or working_directory is None
         ):
             raise ApiError(400, "file.invalidRoot")
-        return await _agent_context(
-            db,
-            user,
-            execution_agent_id,
-            root_id,
-            working_directory,
-            root_identity,
-            writable=session is None or session.workspace_access == "read-write",
-            expected_revision=root_revision,
+        return replace(
+            await _agent_context(
+                db,
+                user,
+                execution_agent_id,
+                root_id,
+                working_directory,
+                root_identity,
+                writable=session is None or session.workspace_access == "read-write",
+                expected_revision=root_revision,
+            ),
+            file_settings=file_settings,
         )
     if session is not None:
         selected_agent_id = session.preferred_execution_agent_id
@@ -300,25 +315,31 @@ async def _file_context(
             execution_agent_id is not None and execution_agent_id != selected_agent_id
         ) or (root_id is not None and root_id != selected_root_id):
             raise ApiError(404, "file.fileNotFound")
-        return await _agent_context(
-            db,
-            user,
-            selected_agent_id,
-            selected_root_id,
-            session.working_directory,
-            root_identity,
-            writable=session.workspace_access == "read-write",
+        return replace(
+            await _agent_context(
+                db,
+                user,
+                selected_agent_id,
+                selected_root_id,
+                session.working_directory,
+                root_identity,
+                writable=session.workspace_access == "read-write",
+            ),
+            file_settings=file_settings,
         )
     if execution_agent_id is not None or root_id is not None:
         if execution_agent_id is None or root_id is None:
             raise ApiError(400, "file.workspaceNotSelected")
-        return await _agent_context(
-            db,
-            user,
-            execution_agent_id,
-            root_id,
-            working_directory,
-            root_identity,
+        return replace(
+            await _agent_context(
+                db,
+                user,
+                execution_agent_id,
+                root_id,
+                working_directory,
+                root_identity,
+            ),
+            file_settings=file_settings,
         )
     raise ApiError(400, "file.workspaceNotSelected")
 
@@ -704,7 +725,7 @@ async def _agent_export(
 
 
 async def _agent_text_preview(
-    context: _FileContext, path: str, request: Request
+    context: _FileContext, path: str, request: Request, *, max_bytes: int
 ) -> tuple[str, str]:
     normalized = _normalize_agent_path(path)
     result = await _agent_request(
@@ -716,10 +737,10 @@ async def _agent_text_preview(
     if not isinstance(revision, str) or not _SHA256_RE.fullmatch(revision):
         raise ApiError(502, "executionAgent.protocolError")
     handle, _, digest = await _agent_export(
-        context, normalized, request, max_bytes=MAX_TEXT_PREVIEW_BYTES
+        context, normalized, request, max_bytes=max_bytes
     )
     try:
-        data = handle.read(MAX_TEXT_PREVIEW_BYTES + 1)
+        data = handle.read(max_bytes + 1)
     finally:
         handle.close()
     if digest != revision:
@@ -866,6 +887,7 @@ async def upload_file(
         root_id=root_id,
         for_update=session_id is not None,
     )
+    max_upload_bytes = context.file_settings.max_upload_bytes
     try:
         if context.agent_id is not None:
             if request is None:
@@ -876,7 +898,7 @@ async def upload_file(
             await _clear_file_grants(db, user, context, (path,))
             await db.commit()
             staged, size, digest = await asyncio.to_thread(
-                stage_file, file.file, max_bytes=MAX_FILE_ATTACHMENT_BYTES
+                stage_file, file.file, max_bytes=max_upload_bytes
             )
             assert context.agent_id is not None
             grant, _ = transfer_tickets.create_download(
@@ -913,7 +935,7 @@ async def upload_file(
                 context.root,
                 path,
                 file.file,
-                max_bytes=MAX_FILE_ATTACHMENT_BYTES,
+                max_bytes=max_upload_bytes,
             )
             entry = _root_entry_payload(created)
         return {"entry": entry}
@@ -952,7 +974,14 @@ async def preview_file(
         root_id=root_id,
         root_revision=root_revision,
     )
+    image_preview_bytes = context.file_settings.max_image_preview_bytes
+    text_preview_bytes = context.file_settings.max_editable_text_bytes
     suffix = PurePosixPath(path).suffix.casefold()
+    file_preview_bytes = (
+        min(image_preview_bytes, MAX_SAFE_SVG_BYTES)
+        if suffix == ".svg"
+        else image_preview_bytes
+    )
     try:
         if suffix == ".stl":
             if context.agent_id is not None:
@@ -975,7 +1004,9 @@ async def preview_file(
         if context.agent_id is not None and suffix not in {*_IMAGE_SUFFIXES, ".svg"}:
             if request is None:
                 raise ApiError(500, "internal.unexpected")
-            content, revision = await _agent_text_preview(context, path, request)
+            content, revision = await _agent_text_preview(
+                context, path, request, max_bytes=text_preview_bytes
+            )
             if "\0" in content:
                 return {"kind": "none", "reason": "unsupported"}
             return {
@@ -992,23 +1023,25 @@ async def preview_file(
             if request is None:
                 raise ApiError(500, "internal.unexpected")
             handle, _, _ = await _agent_export(
-                context, path, request, max_bytes=_IMAGE_PREVIEW_BYTES
+                context, path, request, max_bytes=file_preview_bytes
             )
             with handle:
-                data = handle.read(_IMAGE_PREVIEW_BYTES + 1)
+                data = handle.read(file_preview_bytes + 1)
         else:
             data = await asyncio.to_thread(
-                _read_context, context, path, _IMAGE_PREVIEW_BYTES
+                _read_context, context, path, file_preview_bytes
             )
     except RootFileError as exc:
         raise _context_error(exc) from exc
 
     mime_type = image_mime_type(data)
     if mime_type is not None:
-        if len(data) > _IMAGE_PREVIEW_BYTES:
+        if len(data) > image_preview_bytes:
             return {"kind": "none", "reason": "tooLarge"}
         try:
-            validated = await asyncio.to_thread(validate_image, data, mime_type)
+            validated = await asyncio.to_thread(
+                validate_image, data, mime_type, max_bytes=image_preview_bytes
+            )
         except AttachmentError:
             return {"kind": "none", "reason": "invalidImage"}
         return {
@@ -1025,7 +1058,7 @@ async def preview_file(
         return {"kind": "image", "mimeType": "image/svg+xml"}
     if suffix in _IMAGE_SUFFIXES:
         return {"kind": "none", "reason": "invalidImage"}
-    if len(data) > MAX_TEXT_PREVIEW_BYTES:
+    if len(data) > text_preview_bytes:
         return {"kind": "none", "reason": "tooLarge"}
     try:
         content = data.decode("utf-8", errors="strict")
@@ -1066,6 +1099,8 @@ async def update_file(
         root_id=root_id,
         for_update=session_id is not None,
     )
+    if len(payload.content.encode("utf-8")) > context.file_settings.max_editable_text_bytes:
+        raise ApiError(413, "file.tooLarge")
     if context.agent_id is not None:
         path = _normalize_agent_path(payload.path)
         await _clear_file_grants(db, user, context, (path,))
@@ -1145,7 +1180,10 @@ async def preview_image(
         root_revision=root_revision,
     )
     suffix = PurePosixPath(path).suffix.casefold()
-    max_bytes = _STL_PREVIEW_BYTES if suffix == ".stl" else _IMAGE_PREVIEW_BYTES
+    image_preview_bytes = context.file_settings.max_image_preview_bytes
+    max_bytes = _STL_PREVIEW_BYTES if suffix == ".stl" else image_preview_bytes
+    if suffix == ".svg":
+        max_bytes = min(max_bytes, MAX_SAFE_SVG_BYTES)
     try:
         if context.agent_id is not None:
             if request is None:
@@ -1167,9 +1205,11 @@ async def preview_image(
             mime_type = "image/svg+xml"
         else:
             mime_type = image_mime_type(data)
-            if mime_type is None or len(data) > _IMAGE_PREVIEW_BYTES:
+            if mime_type is None or len(data) > image_preview_bytes:
                 raise ApiError(415, "file.previewUnavailable")
-            await asyncio.to_thread(validate_image, data, mime_type)
+            await asyncio.to_thread(
+                validate_image, data, mime_type, max_bytes=image_preview_bytes
+            )
     except RootFileError as exc:
         raise _context_error(exc) from exc
     except (AttachmentError, ValueError) as exc:

@@ -22,13 +22,12 @@ from mato_loop_backend.agent.permissions import execution_directory_scope
 from mato_loop_backend.agent.runtime import AgentRunError
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.attachments import (
-    MAX_ATTACHMENTS_PER_MESSAGE,
-    MAX_FILE_ATTACHMENT_BYTES,
     AttachmentError,
     AttachmentInput,
     AttachmentService,
     classify_attachment,
     image_mime_type,
+    processing_limits,
     safe_filename,
 )
 from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
@@ -60,6 +59,7 @@ from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
     AiSettings,
+    FileMediaSettings,
     MemorySettings,
     SettingsStore,
     UserPreferences,
@@ -485,23 +485,39 @@ def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
         raise ApiError(422, "validation.invalid", field=field) from exc
 
 
-async def _attachment_uploads(files: list[UploadFile]) -> list[AttachmentInput]:
+async def _attachment_uploads(
+    files: list[UploadFile], settings: FileMediaSettings | None = None
+) -> list[AttachmentInput]:
+    settings = settings or FileMediaSettings()
     if not files:
         raise ApiError(422, "validation.required", field="attachments")
     attachments = []
     try:
-        if len(files) > MAX_ATTACHMENTS_PER_MESSAGE:
+        if len(files) > settings.max_attachments_per_message:
             raise ApiError(
                 422,
                 "validation.tooManyItems",
                 field="attachments",
-                params={"maxItems": MAX_ATTACHMENTS_PER_MESSAGE},
+                params={"maxItems": settings.max_attachments_per_message},
             )
+        total_bytes = 0
+        limits = processing_limits(settings)
         for index, upload in enumerate(files):
-            data = await upload.read(MAX_FILE_ATTACHMENT_BYTES + 1)
+            data = await upload.read(settings.max_upload_bytes + 1)
+            total_bytes += len(data)
+            if total_bytes > settings.max_message_upload_bytes:
+                raise ApiError(413, "attachment.tooLarge")
             mime_type = (upload.content_type or "").split(";", 1)[0].strip().lower()
             try:
-                attachments.append(classify_attachment(data, mime_type, upload.filename))
+                attachments.append(
+                    classify_attachment(
+                        data,
+                        mime_type,
+                        upload.filename,
+                        max_bytes=settings.max_upload_bytes,
+                        limits=limits,
+                    )
+                )
             except AttachmentError as exc:
                 if exc.code == "attachment.invalidImage":
                     filename = safe_filename(upload.filename)
@@ -1023,7 +1039,13 @@ async def create_session_with_attachments(
 ) -> dict:
     request = _multipart_payload(payload, SessionCreateRequest)
     assert isinstance(request, SessionCreateRequest)
-    return await _create_session(request, user, db, await _attachment_uploads(attachments))
+    file_settings = await SettingsStore.load(db, FileMediaSettings)
+    return await _create_session(
+        request,
+        user,
+        db,
+        await _attachment_uploads(attachments, file_settings),
+    )
 
 
 @router.get("/defaults")
@@ -1459,8 +1481,13 @@ async def send_message_with_attachments(
 ) -> dict[str, Any]:
     request = _multipart_payload(payload, SendMessageRequest)
     assert isinstance(request, SendMessageRequest)
+    file_settings = await SettingsStore.load(db, FileMediaSettings)
     return await _send_message(
-        session_id, request, user, db, await _attachment_uploads(attachments)
+        session_id,
+        request,
+        user,
+        db,
+        await _attachment_uploads(attachments, file_settings),
     )
 
 

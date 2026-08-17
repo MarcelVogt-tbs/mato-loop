@@ -3,6 +3,7 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
+import { useFileMediaSettingsStore } from 'src/stores/file-media-settings'
 import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { agentActivityDisplayKey } from 'src/utils/agent-activity'
@@ -388,23 +389,34 @@ export const useChatStore = defineStore('chat', {
       this.persistDrafts()
     },
     addAttachmentFiles(files) {
+      const limits = useFileMediaSettingsStore()
       const incoming = Array.from(files || [])
-      if (this.activeAttachmentDraft.length + incoming.length > MAX_ATTACHMENT_DRAFTS) {
-        return { added: 0, error: `Du kannst höchstens ${MAX_ATTACHMENT_DRAFTS} Dateien pro Nachricht anhängen.` }
+      if (this.activeAttachmentDraft.length + incoming.length > limits.maxAttachmentsPerMessage) {
+        return { added: 0, error: `Du kannst höchstens ${limits.maxAttachmentsPerMessage} Dateien pro Nachricht anhängen.` }
       }
       for (const file of incoming) {
         if (!Number.isFinite(file?.size) || file.size <= 0) {
           return { added: 0, error: 'Die ausgewählte Datei ist leer.' }
         }
-        if (file.size > MAX_ATTACHMENT_BYTES) {
-          return { added: 0, error: 'Eine Datei darf höchstens 64 MiB groß sein.' }
+        if (file.size > limits.maxUploadBytes) {
+          return { added: 0, error: `Eine Datei darf höchstens ${limits.maxUploadMib} MiB groß sein.` }
+        }
+      }
+      const incomingBytes = incoming.reduce((total, file) => total + file.size, 0)
+      const messageBytes = this.activeAttachmentDraft.reduce(
+        (total, attachment) => total + (Number(attachment.file?.size) || 0),
+        0
+      )
+      if (messageBytes + incomingBytes > limits.maxMessageUploadBytes) {
+        return {
+          added: 0,
+          error: `Die Anhänge einer Nachricht dürfen zusammen höchstens ${limits.maxMessageUploadMib} MiB groß sein.`
         }
       }
       const draftBytes = [
         ...this.attachmentDrafts.newSession,
         ...Object.values(this.attachmentDrafts.sessionMessages).flat()
       ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
-      const incomingBytes = incoming.reduce((total, file) => total + file.size, 0)
       if (draftBytes + incomingBytes > MAX_ATTACHMENT_DRAFT_BYTES) {
         return {
           added: 0,
@@ -459,16 +471,21 @@ export const useChatStore = defineStore('chat', {
       if (typeof window !== 'undefined') window.localStorage.removeItem(DRAFT_STORAGE_KEY)
     },
     attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
-      if (files.length > MAX_ATTACHMENT_DRAFTS) {
-        return `Du kannst höchstens ${MAX_ATTACHMENT_DRAFTS} Dateien pro Nachricht anhängen.`
+      const limits = useFileMediaSettingsStore()
+      if (files.length > limits.maxAttachmentsPerMessage) {
+        return `Du kannst höchstens ${limits.maxAttachmentsPerMessage} Dateien pro Nachricht anhängen.`
       }
       for (const file of files) {
         if (!Number.isFinite(file?.size) || file.size <= 0) {
           return 'Die wiederhergestellte Datei ist leer.'
         }
-        if (file.size > MAX_ATTACHMENT_BYTES) {
-          return 'Eine Datei darf höchstens 64 MiB groß sein.'
+        if (file.size > limits.maxUploadBytes) {
+          return `Eine Datei darf höchstens ${limits.maxUploadMib} MiB groß sein.`
         }
+      }
+      const incomingBytes = files.reduce((total, file) => total + file.size, 0)
+      if (incomingBytes > limits.maxMessageUploadBytes) {
+        return `Die Anhänge einer Nachricht dürfen zusammen höchstens ${limits.maxMessageUploadMib} MiB groß sein.`
       }
       const replaced = [
         ...(sessionId
@@ -486,7 +503,6 @@ export const useChatStore = defineStore('chat', {
         (total, attachment) => total + (Number(attachment.file?.size) || 0),
         0
       )
-      const incomingBytes = files.reduce((total, file) => total + file.size, 0)
       return currentBytes - replacedBytes + incomingBytes > MAX_ATTACHMENT_DRAFT_BYTES
         ? 'Dateianhänge dürfen über alle Sessions zusammen höchstens 256 MiB belegen.'
         : null

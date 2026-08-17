@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.settings import (
     DefaultTaskListSettings,
+    FileMediaSettings,
     IntegrationSettings,
     MemorySettings,
     SettingsScope,
@@ -46,6 +47,25 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert ToolSettings().default_calendar is None
     assert ToolSettings().default_task_list is None
     assert ToolSettings().resource_labels == {}
+    assert FileMediaSettings().max_upload_mib == 64
+    assert FileMediaSettings().session_quota_mib == 500
+
+
+def test_file_media_settings_validate_related_limits_and_aliases() -> None:
+    settings = FileMediaSettings.model_validate(
+        {
+            "maxUploadMib": 128,
+            "maxMessageUploadMib": 256,
+            "sessionQuotaMib": 1_024,
+            "maxArchiveEntryMib": 128,
+            "maxArchiveUncompressedMib": 256,
+        }
+    )
+
+    assert settings.max_upload_bytes == 128 * 1024 * 1024
+    assert settings.model_dump(by_alias=True)["maxUploadMib"] == 128
+    with pytest.raises(ValidationError):
+        FileMediaSettings(max_upload_mib=65, session_quota_mib=64)
 
 
 def test_default_calendar_requires_a_stable_calendar_target() -> None:

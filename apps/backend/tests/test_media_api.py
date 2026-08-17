@@ -19,7 +19,7 @@ from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.providers import TranscriptionResult
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService
-from mato_loop_backend.settings import SettingsStore, ToolSettings
+from mato_loop_backend.settings import FileMediaSettings, SettingsStore, ToolSettings
 
 
 def wav_bytes() -> bytes:
@@ -44,7 +44,11 @@ async def test_direct_transcription_obeys_policy_and_returns_text(monkeypatch) -
     settings = ToolSettings.model_validate(
         {"transcribeAudio": {"policy": "ask", "timeoutSeconds": 175}}
     )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(side_effect=[settings, FileMediaSettings()]),
+    )
     transcribe = AsyncMock(return_value=TranscriptionResult("Gesprochener Text"))
     monkeypatch.setattr(MediaService, "transcribe_audio", transcribe)
     db = AsyncMock(spec=AsyncSession)
@@ -62,7 +66,11 @@ async def test_direct_transcription_returns_structured_timeout(monkeypatch) -> N
     settings = ToolSettings.model_validate(
         {"transcribeAudio": {"policy": "auto", "timeoutSeconds": 480}}
     )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(side_effect=[settings, FileMediaSettings()]),
+    )
     monkeypatch.setattr(
         MediaService,
         "transcribe_audio",
@@ -111,6 +119,9 @@ async def test_session_multipart_routes_forward_classified_attachments(monkeypat
     send = AsyncMock(return_value={"runId": str(uuid4()), "modelName": "Test"})
     monkeypatch.setattr(sessions_route, "_create_session", create)
     monkeypatch.setattr(sessions_route, "_send_message", send)
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=FileMediaSettings())
+    )
     create_payload = json.dumps({"content": "Bitte transkribieren"})
     send_payload = json.dumps({"content": "Noch eine Aufnahme"})
 
@@ -175,7 +186,15 @@ async def test_runtime_cleans_stored_audio_when_transaction_fails(monkeypatch) -
     settings = AiSettings(
         providers=[provider], models=[model], default_model_id=model.id
     )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(
+            side_effect=lambda _db, settings_type, **_kwargs: (
+                settings if settings_type is AiSettings else FileMediaSettings()
+            )
+        ),
+    )
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
     attachment = MessageAttachment(
         id=uuid4(),
@@ -191,7 +210,7 @@ async def test_runtime_cleans_stored_audio_when_transaction_fails(monkeypatch) -
     )
     service = AsyncMock()
     service.create_attachment.return_value = attachment
-    monkeypatch.setattr(runtime_module, "AttachmentService", lambda: service)
+    monkeypatch.setattr(runtime_module, "AttachmentService", lambda **_kwargs: service)
     db = AsyncMock(spec=AsyncSession)
     db.commit.side_effect = RuntimeError("commit failed")
     session = ChatSession(
@@ -227,7 +246,15 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
     settings = AiSettings(
         providers=[provider], models=[model], default_model_id=model.id
     )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(
+            side_effect=lambda _db, settings_type, **_kwargs: (
+                settings if settings_type is AiSettings else FileMediaSettings()
+            )
+        ),
+    )
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
     attachment = MessageAttachment(
         id=uuid4(),
@@ -243,7 +270,7 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
     )
     service = AsyncMock()
     service.create_attachment.return_value = attachment
-    monkeypatch.setattr(runtime_module, "AttachmentService", lambda: service)
+    monkeypatch.setattr(runtime_module, "AttachmentService", lambda **_kwargs: service)
     commit_started = asyncio.Event()
     finish_commit = asyncio.Event()
     committed = False

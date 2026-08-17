@@ -157,9 +157,10 @@ def _replace_utf8_text_at(
     expected_revision: str,
     *,
     before_publish: Callable[[int], None] | None = None,
+    max_bytes: int = MAX_EDITABLE_TEXT_BYTES,
 ) -> str:
     encoded_content = content.encode("utf-8")
-    if len(encoded_content) > MAX_EDITABLE_TEXT_BYTES:
+    if len(encoded_content) > max_bytes:
         raise RootFileError("file.tooLarge", "File is too large")
     if "\0" in content:
         raise RootFileError("file.invalidEncoding", "File is not editable UTF-8 text")
@@ -172,7 +173,7 @@ def _replace_utf8_text_at(
         raise RootFileError("file.symlinkForbidden", "Symlinks are not followed")
     if not stat.S_ISREG(metadata.st_mode):
         raise RootFileError("file.notAFile", "Target is not a regular file")
-    if metadata.st_size > MAX_EDITABLE_TEXT_BYTES:
+    if metadata.st_size > max_bytes:
         raise RootFileError("file.tooLarge", "File is too large")
 
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -185,8 +186,8 @@ def _replace_utf8_text_at(
             raise RootFileError("file.symlinkForbidden", "Symlinks are not followed") from exc
         raise
     with os.fdopen(descriptor, "rb") as handle:
-        current = handle.read(MAX_EDITABLE_TEXT_BYTES + 1)
-    if len(current) > MAX_EDITABLE_TEXT_BYTES:
+        current = handle.read(max_bytes + 1)
+    if len(current) > max_bytes:
         raise RootFileError("file.tooLarge", "File is too large")
     try:
         current_text = current.decode("utf-8", errors="strict")
@@ -201,7 +202,7 @@ def _replace_utf8_text_at(
         parent_descriptor,
         filename,
         BytesIO(encoded_content),
-        max_bytes=MAX_EDITABLE_TEXT_BYTES,
+        max_bytes=max_bytes,
     )
     try:
         if before_publish is not None:
@@ -386,11 +387,16 @@ class RootFileService:
         session_id: UUID,
         *,
         session_storage: SessionStorage | None = None,
+        session_quota_bytes: int | None = None,
+        max_editable_text_bytes: int = MAX_EDITABLE_TEXT_BYTES,
     ) -> None:
         if not isinstance(session_id, UUID):
             raise TypeError("session_id must be supplied by the host as a UUID")
         self.session_id = session_id
         self.session_storage = session_storage or SessionStorage()
+        if session_quota_bytes is not None:
+            self.SESSION_QUOTA_BYTES = session_quota_bytes
+        self.max_editable_text_bytes = max_editable_text_bytes
 
     @staticmethod
     def _parts(relative_path: str) -> tuple[str, ...]:
@@ -827,6 +833,7 @@ class RootFileService:
                     before_publish=lambda replaced_bytes: self._assert_session_quota(
                         0, replaced_bytes=replaced_bytes
                     ),
+                    max_bytes=self.max_editable_text_bytes,
                 )
 
     def create_file(

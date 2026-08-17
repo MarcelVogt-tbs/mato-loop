@@ -389,8 +389,8 @@ import { apiErrorMessage } from 'src/utils/api-errors'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useExecutionAgentStore } from 'stores/execution-agents'
+import { useFileMediaSettingsStore } from 'stores/file-media-settings'
 import {
-  MAX_WORKSPACE_UPLOAD_BYTES,
   MAX_WORKSPACE_UPLOADS,
   workspaceContextKey,
   withFileSuffix,
@@ -404,6 +404,7 @@ const { confirm } = useConfirm()
 const workspace = useWorkspaceStore()
 const chat = useChatStore()
 const executionAgents = useExecutionAgentStore()
+const fileMediaSettings = useFileMediaSettingsStore()
 const approvals = useApprovalStore()
 const permissions = ref([])
 const permissionLoading = ref(false)
@@ -611,9 +612,9 @@ async function uploadSelected(event) {
     $q.notify({ type: 'negative', message: `Bitte höchstens ${MAX_WORKSPACE_UPLOADS} Dateien gleichzeitig auswählen.` })
     return
   }
-  const oversized = files.find((file) => file.size > MAX_WORKSPACE_UPLOAD_BYTES)
+  const oversized = files.find((file) => file.size > fileMediaSettings.maxUploadBytes)
   if (oversized) {
-    $q.notify({ type: 'negative', message: `„${oversized.name}“ ist größer als 64 MiB.` })
+    $q.notify({ type: 'negative', message: `„${oversized.name}“ ist größer als ${fileMediaSettings.maxUploadMib} MiB.` })
     return
   }
   try {

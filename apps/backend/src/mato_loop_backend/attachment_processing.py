@@ -94,6 +94,37 @@ class AttachmentProcessingError(ValueError):
 
 
 @dataclass(frozen=True)
+class AttachmentProcessingLimits:
+    max_media_bytes: int = 64 * 1024 * 1024
+    max_extracted_characters: int = MAX_EXTRACTED_CHARACTERS
+    max_pdf_pages: int = MAX_PDF_PAGES
+    max_workbook_sheets: int = MAX_WORKBOOK_SHEETS
+    max_workbook_cells: int = MAX_WORKBOOK_CELLS
+    max_presentation_slides: int = MAX_PRESENTATION_SLIDES
+    max_zip_entries: int = MAX_ZIP_ENTRIES
+    max_zip_uncompressed_bytes: int = MAX_ZIP_UNCOMPRESSED_BYTES
+    max_zip_entry_bytes: int = MAX_ZIP_ENTRY_BYTES
+    max_zip_compression_ratio: int = MAX_ZIP_COMPRESSION_RATIO
+    max_audio_duration_seconds: int = MAX_AUDIO_DURATION_SECONDS
+    max_video_duration_seconds: int = 15 * 60
+
+
+def _limits(value: AttachmentProcessingLimits | None) -> AttachmentProcessingLimits:
+    return value or AttachmentProcessingLimits(
+        max_extracted_characters=MAX_EXTRACTED_CHARACTERS,
+        max_pdf_pages=MAX_PDF_PAGES,
+        max_workbook_sheets=MAX_WORKBOOK_SHEETS,
+        max_workbook_cells=MAX_WORKBOOK_CELLS,
+        max_presentation_slides=MAX_PRESENTATION_SLIDES,
+        max_zip_entries=MAX_ZIP_ENTRIES,
+        max_zip_uncompressed_bytes=MAX_ZIP_UNCOMPRESSED_BYTES,
+        max_zip_entry_bytes=MAX_ZIP_ENTRY_BYTES,
+        max_zip_compression_ratio=MAX_ZIP_COMPRESSION_RATIO,
+        max_audio_duration_seconds=MAX_AUDIO_DURATION_SECONDS,
+    )
+
+
+@dataclass(frozen=True)
 class AudioInfo:
     duration_ms: int
     channels: int
@@ -154,7 +185,10 @@ def signed_audio_format(data: bytes) -> str | None:
     return None
 
 
-def signed_document_format(data: bytes) -> str | None:
+def signed_document_format(
+    data: bytes, *, limits: AttachmentProcessingLimits | None = None
+) -> str | None:
+    resolved = _limits(limits)
     if b"%PDF-" in data[:1_024]:
         return "pdf"
     if not data.startswith(b"PK\x03\x04"):
@@ -162,7 +196,7 @@ def signed_document_format(data: bytes) -> str | None:
     try:
         with zipfile.ZipFile(BytesIO(data)) as archive:
             entries = archive.infolist()
-            if len(entries) > MAX_ZIP_ENTRIES:
+            if len(entries) > resolved.max_zip_entries:
                 return None
             names = {entry.filename for entry in entries}
     except (OSError, ValueError, zipfile.BadZipFile):
@@ -178,7 +212,10 @@ def signed_document_format(data: bytes) -> str | None:
     return None
 
 
-def validate_pcm_wav(data: bytes) -> AudioInfo:
+def validate_pcm_wav(
+    data: bytes, *, limits: AttachmentProcessingLimits | None = None
+) -> AudioInfo:
+    resolved = _limits(limits)
     if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
         raise AttachmentProcessingError("attachment.invalidAudio")
     if int.from_bytes(data[4:8], "little") + 8 != len(data):
@@ -203,7 +240,7 @@ def validate_pcm_wav(data: bytes) -> AudioInfo:
         or not 1 <= sample_rate <= MAX_AUDIO_SAMPLE_RATE
         or not 1 <= sample_width <= MAX_AUDIO_SAMPLE_WIDTH
         or frames <= 0
-        or frames > sample_rate * MAX_AUDIO_DURATION_SECONDS
+        or frames > sample_rate * resolved.max_audio_duration_seconds
         or len(frame_data) != frames * channels * sample_width
     ):
         raise AttachmentProcessingError("attachment.invalidAudio")
@@ -230,7 +267,12 @@ def _run_media(command: list[str], data: bytes, timeout: int) -> subprocess.Comp
         raise AttachmentProcessingError("attachment.invalidAudio") from exc
 
 
-def _compressed_audio(data: bytes, audio_format: str) -> ProcessingResult:
+def _compressed_audio(
+    data: bytes,
+    audio_format: str,
+    limits: AttachmentProcessingLimits | None = None,
+) -> ProcessingResult:
+    resolved = _limits(limits)
     probe = _run_media(
         [
             "ffprobe",
@@ -267,7 +309,9 @@ def _compressed_audio(data: bytes, audio_format: str) -> ProcessingResult:
         raise AttachmentProcessingError("attachment.invalidAudio")
     duration = max(durations) if durations else None
     if duration is not None and (
-        not math.isfinite(duration) or duration <= 0 or duration > MAX_AUDIO_DURATION_SECONDS
+        not math.isfinite(duration)
+        or duration <= 0
+        or duration > resolved.max_audio_duration_seconds
     ):
         raise AttachmentProcessingError("attachment.invalidAudio")
 
@@ -285,7 +329,7 @@ def _compressed_audio(data: bytes, audio_format: str) -> ProcessingResult:
             "0:a:0",
             "-vn",
             "-t",
-            str(MAX_AUDIO_DURATION_SECONDS + 0.1),
+            str(resolved.max_audio_duration_seconds + 0.1),
             "-ac",
             "1",
             "-ar",
@@ -299,7 +343,7 @@ def _compressed_audio(data: bytes, audio_format: str) -> ProcessingResult:
         data,
         FFMPEG_TIMEOUT_SECONDS,
     )
-    max_pcm_bytes = MAX_AUDIO_DURATION_SECONDS * 16_000 * 2
+    max_pcm_bytes = resolved.max_audio_duration_seconds * 16_000 * 2
     if (
         conversion.returncode != 0
         or not conversion.stdout
@@ -314,7 +358,7 @@ def _compressed_audio(data: bytes, audio_format: str) -> ProcessingResult:
         wav_file.setframerate(16_000)
         wav_file.writeframes(conversion.stdout)
     wav_data = wav_buffer.getvalue()
-    info = validate_pcm_wav(wav_data)
+    info = validate_pcm_wav(wav_data, limits=resolved)
     if duration is not None and abs(info.duration_ms - round(duration * 1_000)) > 2_000:
         raise AttachmentProcessingError("attachment.invalidAudio")
     return ProcessingResult(
@@ -328,22 +372,27 @@ def _compressed_audio(data: bytes, audio_format: str) -> ProcessingResult:
     )
 
 
-def _append_text(parts: list[str], value: Any, count: int) -> int:
+def _append_text(
+    parts: list[str], value: Any, count: int, max_characters: int
+) -> int:
     text = str(value) if value is not None else ""
     if not text:
         return count
     count += len(text) + (1 if parts else 0)
-    if count > MAX_EXTRACTED_CHARACTERS:
+    if count > max_characters:
         raise AttachmentProcessingError("attachment.invalidDocument")
     parts.append(text)
     return count
 
 
-def _zip_safety_check(data: bytes) -> None:
+def _zip_safety_check(
+    data: bytes, *, limits: AttachmentProcessingLimits | None = None
+) -> None:
+    resolved = _limits(limits)
     try:
         with zipfile.ZipFile(BytesIO(data)) as archive:
             entries = archive.infolist()
-            if len(entries) > MAX_ZIP_ENTRIES:
+            if len(entries) > resolved.max_zip_entries:
                 raise AttachmentProcessingError("attachment.invalidDocument")
             names: set[str] = set()
             total = 0
@@ -361,9 +410,16 @@ def _zip_safety_check(data: bytes) -> None:
                     raise AttachmentProcessingError("attachment.invalidDocument")
                 names.add(entry.filename)
                 total += entry.file_size
-                if entry.file_size > MAX_ZIP_ENTRY_BYTES or total > MAX_ZIP_UNCOMPRESSED_BYTES:
+                if (
+                    entry.file_size > resolved.max_zip_entry_bytes
+                    or total > resolved.max_zip_uncompressed_bytes
+                ):
                     raise AttachmentProcessingError("attachment.invalidDocument")
-                if entry.file_size and entry.file_size / max(1, entry.compress_size) > MAX_ZIP_COMPRESSION_RATIO:
+                if (
+                    entry.file_size
+                    and entry.file_size / max(1, entry.compress_size)
+                    > resolved.max_zip_compression_ratio
+                ):
                     raise AttachmentProcessingError("attachment.invalidDocument")
     except AttachmentProcessingError:
         raise
@@ -397,12 +453,15 @@ def _pdf_page_has_image(page: Any) -> bool:
     return contains_image(page.get("/Resources"))
 
 
-def extract_pdf_pages(data: bytes) -> tuple[list[str], dict[str, Any]]:
+def extract_pdf_pages(
+    data: bytes, *, limits: AttachmentProcessingLimits | None = None
+) -> tuple[list[str], dict[str, Any]]:
+    resolved = _limits(limits)
     try:
         reader = PdfReader(BytesIO(data), strict=False)
         if reader.is_encrypted and not reader.decrypt(""):
             raise AttachmentProcessingError("attachment.invalidDocument")
-        if not 1 <= len(reader.pages) <= MAX_PDF_PAGES:
+        if not 1 <= len(reader.pages) <= resolved.max_pdf_pages:
             raise AttachmentProcessingError("attachment.invalidDocument")
         pages = []
         image_pages = []
@@ -410,8 +469,12 @@ def extract_pdf_pages(data: bytes) -> tuple[list[str], dict[str, Any]]:
         count = 0
         for number, page in enumerate(reader.pages, 1):
             text = page.extract_text() or ""
-            count = _append_text(budget_parts, f"--- Page {number} ---", count)
-            count = _append_text(budget_parts, text, count)
+            count = _append_text(
+                budget_parts, f"--- Page {number} ---", count, resolved.max_extracted_characters
+            )
+            count = _append_text(
+                budget_parts, text, count, resolved.max_extracted_characters
+            )
             pages.append(text)
             if not text.strip() and _pdf_page_has_image(page):
                 image_pages.append(number)
@@ -422,31 +485,45 @@ def extract_pdf_pages(data: bytes) -> tuple[list[str], dict[str, Any]]:
     return pages, {"pageCount": len(reader.pages), "imagePages": image_pages}
 
 
-def format_pdf_pages(pages: list[str]) -> str:
+def format_pdf_pages(
+    pages: list[str], *, limits: AttachmentProcessingLimits | None = None
+) -> str:
+    resolved = _limits(limits)
     parts: list[str] = []
     count = 0
     for number, text in enumerate(pages, 1):
-        count = _append_text(parts, f"--- Page {number} ---", count)
-        count = _append_text(parts, text, count)
+        count = _append_text(
+            parts, f"--- Page {number} ---", count, resolved.max_extracted_characters
+        )
+        count = _append_text(parts, text, count, resolved.max_extracted_characters)
     return "\n".join(parts)
 
 
-def _extract_pdf(data: bytes) -> tuple[str, dict[str, Any]]:
-    pages, metadata = extract_pdf_pages(data)
-    return format_pdf_pages(pages), metadata
+def _extract_pdf(
+    data: bytes, limits: AttachmentProcessingLimits
+) -> tuple[str, dict[str, Any]]:
+    pages, metadata = extract_pdf_pages(data, limits=limits)
+    return format_pdf_pages(pages, limits=limits), metadata
 
 
-def _extract_docx(data: bytes) -> tuple[str, dict[str, int]]:
-    _zip_safety_check(data)
+def _extract_docx(
+    data: bytes, limits: AttachmentProcessingLimits
+) -> tuple[str, dict[str, int]]:
+    _zip_safety_check(data, limits=limits)
     try:
         document = Document(BytesIO(data))
         parts: list[str] = []
         count = 0
         for paragraph in document.paragraphs:
-            count = _append_text(parts, paragraph.text, count)
+            count = _append_text(parts, paragraph.text, count, limits.max_extracted_characters)
         for table in document.tables:
             for row in table.rows:
-                count = _append_text(parts, "\t".join(cell.text for cell in row.cells), count)
+                count = _append_text(
+                    parts,
+                    "\t".join(cell.text for cell in row.cells),
+                    count,
+                    limits.max_extracted_characters,
+                )
     except AttachmentProcessingError:
         raise
     except Exception as exc:
@@ -454,26 +531,32 @@ def _extract_docx(data: bytes) -> tuple[str, dict[str, int]]:
     return "\n".join(parts), {}
 
 
-def _extract_xlsx(data: bytes) -> tuple[str, dict[str, int]]:
-    _zip_safety_check(data)
+def _extract_xlsx(
+    data: bytes, limits: AttachmentProcessingLimits
+) -> tuple[str, dict[str, int]]:
+    _zip_safety_check(data, limits=limits)
     try:
         workbook = load_workbook(
             BytesIO(data), read_only=True, data_only=True, keep_links=False
         )
-        if not 1 <= len(workbook.worksheets) <= MAX_WORKBOOK_SHEETS:
+        if not 1 <= len(workbook.worksheets) <= limits.max_workbook_sheets:
             raise AttachmentProcessingError("attachment.invalidDocument")
         parts: list[str] = []
         count = 0
         cells = 0
         for sheet in workbook.worksheets:
-            count = _append_text(parts, f"--- Sheet: {sheet.title} ---", count)
+            count = _append_text(
+                parts, f"--- Sheet: {sheet.title} ---", count, limits.max_extracted_characters
+            )
             for row in sheet.iter_rows(values_only=True):
                 cells += len(row)
-                if cells > MAX_WORKBOOK_CELLS:
+                if cells > limits.max_workbook_cells:
                     raise AttachmentProcessingError("attachment.invalidDocument")
                 values = ["" if value is None else str(value) for value in row]
                 if any(values):
-                    count = _append_text(parts, "\t".join(values), count)
+                    count = _append_text(
+                        parts, "\t".join(values), count, limits.max_extracted_characters
+                    )
         sheet_count = len(workbook.worksheets)
         workbook.close()
     except AttachmentProcessingError:
@@ -483,19 +566,25 @@ def _extract_xlsx(data: bytes) -> tuple[str, dict[str, int]]:
     return "\n".join(parts), {"sheetCount": sheet_count}
 
 
-def _extract_pptx(data: bytes) -> tuple[str, dict[str, int]]:
-    _zip_safety_check(data)
+def _extract_pptx(
+    data: bytes, limits: AttachmentProcessingLimits
+) -> tuple[str, dict[str, int]]:
+    _zip_safety_check(data, limits=limits)
     try:
         presentation = Presentation(BytesIO(data))
-        if not 1 <= len(presentation.slides) <= MAX_PRESENTATION_SLIDES:
+        if not 1 <= len(presentation.slides) <= limits.max_presentation_slides:
             raise AttachmentProcessingError("attachment.invalidDocument")
         parts: list[str] = []
         count = 0
         for number, slide in enumerate(presentation.slides, 1):
-            count = _append_text(parts, f"--- Slide {number} ---", count)
+            count = _append_text(
+                parts, f"--- Slide {number} ---", count, limits.max_extracted_characters
+            )
             for shape in slide.shapes:
                 if hasattr(shape, "text"):
-                    count = _append_text(parts, shape.text, count)
+                    count = _append_text(
+                        parts, shape.text, count, limits.max_extracted_characters
+                    )
         slide_count = len(presentation.slides)
     except AttachmentProcessingError:
         raise
@@ -510,14 +599,16 @@ def process_attachment(
     kind: str,
     mime_type: str,
     filename: str,
+    limits: AttachmentProcessingLimits | None = None,
 ) -> ProcessingResult | None:
+    resolved = _limits(limits)
     suffix = Path(filename).suffix.lower()
     if kind == "text":
         try:
             text = data.decode("utf-8", errors="strict")
         except UnicodeDecodeError as exc:
             raise AttachmentProcessingError("attachment.invalidText") from exc
-        if len(text) > MAX_EXTRACTED_CHARACTERS:
+        if len(text) > resolved.max_extracted_characters:
             raise AttachmentProcessingError("attachment.invalidText")
         return ProcessingResult(
             mime_type if mime_type.startswith("text/") else "text/plain",
@@ -531,7 +622,7 @@ def process_attachment(
         if audio_format is None or (signed is not None and claimed is not None and signed != claimed):
             raise AttachmentProcessingError("attachment.invalidAudio")
         if audio_format == "wav":
-            info = validate_pcm_wav(data)
+            info = validate_pcm_wav(data, limits=resolved)
             return ProcessingResult(
                 "audio/wav",
                 "wav",
@@ -540,10 +631,18 @@ def process_attachment(
                 sample_rate=info.sample_rate,
                 sample_width=info.sample_width,
             )
-        return _compressed_audio(data, audio_format)
+        return _compressed_audio(data, audio_format, resolved)
     if kind == "video":
         try:
-            info = probe_video(data)
+            info = (
+                probe_video(data)
+                if limits is None
+                else probe_video(
+                    data,
+                    max_bytes=resolved.max_media_bytes,
+                    max_duration_seconds=resolved.max_video_duration_seconds,
+                )
+            )
         except VideoProcessingError as exc:
             raise AttachmentProcessingError(exc.code) from exc
         claimed = claimed_video_format(mime_type, suffix)
@@ -557,7 +656,7 @@ def process_attachment(
             height=info.height,
         )
     if kind == "document":
-        signed = signed_document_format(data)
+        signed = signed_document_format(data, limits=resolved)
         claimed = claimed_document_format(mime_type, suffix)
         document_format = signed or claimed
         if document_format is None or (
@@ -570,7 +669,7 @@ def process_attachment(
             "xlsx": _extract_xlsx,
             "pptx": _extract_pptx,
         }
-        text, metadata = extractors[document_format](data)
+        text, metadata = extractors[document_format](data, resolved)
         encoded = text.encode("utf-8")
         return ProcessingResult(
             _DOCUMENT_FORMATS[document_format],

@@ -40,6 +40,7 @@ from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentRuntimeSettings,
     AiSettings,
+    FileMediaSettings,
     IntegrationInstance,
     IntegrationSettings,
     MemorySettings,
@@ -184,6 +185,7 @@ async def _runtime_setup(
             AiSettings: ai_settings,
             AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
+            FileMediaSettings: FileMediaSettings(),
             MemorySettings: MemorySettings(enabled=False),
             IntegrationSettings: integration_settings or IntegrationSettings(),
             SkillsSettings: skills or SkillsSettings(),
@@ -392,6 +394,9 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
     generated_id = uuid4()
 
     class FakeAttachmentService:
+        def __init__(self, **_kwargs):
+            pass
+
         async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
             return SimpleNamespace(id=generated_id, kind=kwargs["kind"])
 
@@ -490,6 +495,9 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
     generated_id = uuid4()
 
     class FakeAttachmentService:
+        def __init__(self, **_kwargs):
+            pass
+
         async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
             return SimpleNamespace(id=generated_id, kind=kwargs["kind"])
 

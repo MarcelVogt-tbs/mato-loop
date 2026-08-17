@@ -20,7 +20,8 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-persona',
       'settings-memory',
       'settings-account',
-      'settings-users'
+      'settings-users',
+      'settings-files-media'
     ])
     expect(
       settingsRoute.children.find((route) => route.name === 'settings-integrations').children
@@ -28,6 +29,7 @@ describe('MatoLoop frontend scaffold', () => {
     ).toEqual(['settings-integration-access'])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
+    expect(settingsRoutes.find((route) => route.name === 'settings-files-media')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-account')?.meta.requiresAdmin).toBeUndefined()
     expect(settingsRoutes
       .filter((route) => ['settings-providers', 'settings-default-models', 'settings-integrations', 'settings-tools'].includes(route.name))

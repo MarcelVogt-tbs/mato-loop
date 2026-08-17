@@ -21,6 +21,7 @@ from mato_loop_backend.api.routes.workspace import (
 from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.settings import FileMediaSettings
 from mato_loop_backend.workspace import FileRoot, RootFileService
 
 
@@ -78,7 +79,13 @@ async def test_file_context_hides_foreign_sessions() -> None:
     db.get.return_value = foreign
 
     with pytest.raises(ApiError) as exc_info:
-        await workspace_route._file_context(FileScope.SESSION, foreign.id, user, db)
+        await workspace_route._file_context(
+            FileScope.SESSION,
+            foreign.id,
+            user,
+            db,
+            file_settings=FileMediaSettings(),
+        )
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.code == "session.notFound"
@@ -91,6 +98,7 @@ async def test_filesystem_scope_without_agent_context_is_rejected() -> None:
             None,
             _user(),
             AsyncMock(spec=AsyncSession),
+            file_settings=FileMediaSettings(),
         )
 
     assert exc_info.value.status_code == 400

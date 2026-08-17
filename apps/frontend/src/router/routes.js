@@ -71,6 +71,12 @@ export const settingsRoutes = [
     name: 'settings-users',
     component: () => import('pages/settings/UserSettingsPage.vue'),
     meta: { settingsLabel: 'Benutzer', settingsIcon: 'group', requiresAdmin: true }
+  },
+  {
+    path: 'files-media',
+    name: 'settings-files-media',
+    component: () => import('pages/settings/FileMediaSettingsPage.vue'),
+    meta: { settingsLabel: 'Dateien und Medien', settingsIcon: 'perm_media', requiresAdmin: true }
   }
 ]
 

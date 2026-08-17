@@ -93,7 +93,11 @@ function safeFileContentUrl(value) {
   return safeFileUrl(value, INTERNAL_FILE_CONTENT_PATH)
 }
 
-export function toolFileAttachment(tool, result) {
+export function toolFileAttachment(
+  tool,
+  result,
+  maxImagePreviewBytes = PROVIDED_IMAGE_MAX_BYTES
+) {
   if (tool?.name !== 'provide_file' || typeof result?.content !== 'string') return null
   let value
   try {
@@ -117,7 +121,10 @@ export function toolFileAttachment(tool, result) {
   const params = new URL(safeUrl, 'https://mato-loop.invalid').searchParams
   if (params.get('scope') !== expectedScope || params.get('path') !== path) return null
   const suffix = filename.match(/\.[^.]+$/u)?.[0].toLowerCase() || ''
-  const imageMimeType = size <= PROVIDED_IMAGE_MAX_BYTES
+  const previewLimit = suffix === '.svg'
+    ? Math.min(maxImagePreviewBytes, PROVIDED_IMAGE_MAX_BYTES)
+    : maxImagePreviewBytes
+  const imageMimeType = size <= previewLimit
     ? PROVIDED_IMAGE_MIME_TYPES.get(suffix)
     : null
   return {
