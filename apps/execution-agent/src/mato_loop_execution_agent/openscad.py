@@ -42,6 +42,14 @@ CAMERAS = {
     "right": "0,0,0,90,0,90,140",
     "top": "0,0,0,0,0,0,140",
 }
+CAMERAS_6 = {
+    "front": "0,0,0,90,0,0,140",
+    "back": "0,0,0,90,0,180,140",
+    "left": "0,0,0,90,0,270,140",
+    "right": "0,0,0,90,0,90,140",
+    "top": "0,0,0,0,0,0,140",
+    "bottom": "0,0,0,180,0,0,140",
+}
 KNOWN_OPENSCAD = (Path("/usr/local/bin/openscad"), Path("/usr/bin/openscad"))
 
 
@@ -668,9 +676,9 @@ class OpenScadRunner:
         return name
 
     @staticmethod
-    def _preview_names(entrypoint: str) -> dict[str, str]:
+    def _preview_names(entrypoint: str, cameras: dict[str, str]) -> dict[str, str]:
         stem = Path(entrypoint).stem
-        names = {view: f"{stem}-{view}.png" for view in CAMERAS}
+        names = {view: f"{stem}-{view}.png" for view in cameras}
         if any(len(name) > 255 or len(name.encode("utf-8")) > 255 for name in names.values()):
             raise AgentError("path.invalid", "OpenSCAD preview filename is too long")
         return names
@@ -779,7 +787,10 @@ class OpenScadRunner:
         with path.open("rb") as handle:
             self.cache.store(descriptor, handle)
 
-    async def render(self, arguments: OpenScadRenderArguments, backend_id: str) -> dict:
+    async def render(
+        self, arguments: OpenScadRenderArguments, backend_id: str, *, six_views: bool = False
+    ) -> dict:
+        cameras = CAMERAS_6 if six_views else CAMERAS
         if not isinstance(arguments.source, OpenScadArchiveSource):
             assert arguments.current_directory is not None
             assert arguments.root_id is not None
@@ -857,7 +868,7 @@ class OpenScadRunner:
 
             preview_paths: list[tuple[str, Path]] = []
             if arguments.output == "preview" and arguments.preview_images:
-                preview_names = self._preview_names(arguments.entrypoint)
+                preview_names = self._preview_names(arguments.entrypoint, cameras)
                 preview_slots = asyncio.Semaphore(2)
 
                 async def render_preview(view: str, camera: str):
@@ -900,7 +911,11 @@ class OpenScadRunner:
 
                 preview_tasks = [
                     asyncio.create_task(render_preview(view, camera))
-                    for view, camera in sorted(CAMERAS.items(), key=lambda item: item[0] != "top")
+                    for view, camera in (
+                        cameras.items()
+                        if six_views
+                        else sorted(cameras.items(), key=lambda item: item[0] != "top")
+                    )
                 ]
                 try:
                     preview_results = await asyncio.gather(*preview_tasks)
@@ -913,8 +928,8 @@ class OpenScadRunner:
                     view: (path, preview_diagnostic)
                     for view, path, preview_diagnostic in preview_results
                 }
-                preview_paths = [(view, previews_by_view[view][0]) for view in CAMERAS]
-                diagnostics.extend(previews_by_view[view][1] for view in CAMERAS)
+                preview_paths = [(view, previews_by_view[view][0]) for view in cameras]
+                diagnostics.extend(previews_by_view[view][1] for view in cameras)
 
             if (
                 output_path.stat().st_size + sum(path.stat().st_size for _, path in preview_paths)

@@ -105,6 +105,7 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "integration.git.status",
         "integration.openscad.discover",
         "integration.openscad.render",
+        "integration.openscad.render6",
         "integration.openscad.test",
         "shell.inspect",
     }

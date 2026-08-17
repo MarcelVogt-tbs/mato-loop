@@ -458,6 +458,7 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "integration.openscad.discover": OpenScadDiscoverArguments,
     "integration.openscad.test": OpenScadTestArguments,
     "integration.openscad.render": OpenScadRenderArguments,
+    "integration.openscad.render6": OpenScadRenderArguments,
 }
 
 INBOUND_ADAPTER = TypeAdapter(Welcome | Request | Cancel)

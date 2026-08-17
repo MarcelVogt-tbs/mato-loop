@@ -100,6 +100,8 @@ async def _runtime_setup(
     execution_operations: tuple[str, ...] = (),
     user_image: bool = False,
     user_image_count: int = 1,
+    user_content: str = "Aktuelle Frage",
+    user_trust_level: TrustLevel | None = None,
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -156,7 +158,13 @@ async def _runtime_setup(
         execution_agent_id=execution_agent_id,
         execution_operations=list(execution_operations),
     )
-    user = Message(id=uuid4(), session_id=session.id, role="user", content="Aktuelle Frage")
+    user = Message(
+        id=uuid4(),
+        session_id=session.id,
+        role="user",
+        content=user_content,
+        trust_level=user_trust_level.value if user_trust_level is not None else None,
+    )
     records = [user]
     if user_image:
         user.attachments = [
@@ -380,6 +388,10 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
                 ],
                 finish_reason="tool_calls",
             ),
+            ProviderResult(
+                content="Verdict: PASS\nFindings:\n- No defect.\nUncertainty:\n- None.",
+                finish_reason="stop",
+            ),
             ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
@@ -403,6 +415,9 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
         async def discard(self, _attachment, _session_id):
             return None
 
+        async def read_image(self, attachment, _session_id):
+            return f"reference-{attachment.position}".encode()
+
     monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
     monkeypatch.setattr(
         tool_registry,
@@ -411,7 +426,13 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
             side_effect=[
                 ToolResult.json({"written": "files/model.scad"}),
                 ToolResult(
-                    '{"output":"preview"}',
+                    json.dumps(
+                        {
+                            "output": "preview",
+                            "previewLayout": ["isometric", "front", "right", "top"],
+                            "geometryMetadata": {"triangleCount": 12},
+                        }
+                    ),
                     {},
                     attachments=(
                         ToolAttachment(b"png", "image/png", "model-views.png"),
@@ -423,7 +444,34 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
 
     await AgentRuntime._execute_loop(db, run)
 
-    assert requests[2]["required_image_ids"] == (str(generated_id),)
+    assert [request["model"].model_id for request in requests] == [
+        "local-model",
+        "local-model",
+        "local-model",
+        "local-model",
+    ]
+    verifier = requests[2]
+    assert verifier["tools"] == []
+    assert verifier["tool_choice"] == "none"
+    assert verifier["max_output_tokens"] == 512
+    assert [image.data for image in verifier["image_inputs"]] == [
+        b"png",
+        b"reference-0",
+    ]
+    verifier_prompt = verifier["messages"][0]["content"]
+    assert "Verdict: <PASS|FAIL|UNCERTAIN>" in verifier_prompt
+    assert "Findings:" in verifier_prompt
+    assert "Uncertainty:" in verifier_prompt
+    assert "Do not infer hidden geometry" in verifier_prompt
+    verifier_data = json.loads(verifier["messages"][1]["content"])
+    assert verifier_data == {
+        "imageOrder": {"contactSheet": 1, "referenceImages": [2]},
+        "currentRequest": "Aktuelle Frage",
+        "previewLayout": ["isometric", "front", "right", "top"],
+        "geometryMetadata": {"triangleCount": 12},
+        "referenceImages": [{"image": 2, "filename": "reference-0.png"}],
+    }
+    assert requests[3]["required_image_ids"] == (str(generated_id),)
     assert projections[2]["required_image_ids"] == (str(generated_id),)
     render_message = next(
         call.args[0]
@@ -433,7 +481,9 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
         and call.args[0].tool_call_id == "render"
     )
     assert json.loads(render_message.content)["visualVerification"] == {
-        "status": "pending"
+        "status": "completed",
+        "referenceImageCount": 1,
+        "analysis": "Verdict: PASS\nFindings:\n- No defect.\nUncertainty:\n- None.",
     }
     assert _assistant_messages(db)[-1].content == "Visuell verglichen."
 
@@ -477,7 +527,12 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
         ),
     ]
     if vision_fallback:
-        results.append(ProviderResult(content="Visible geometry matches.", finish_reason="stop"))
+        results.append(
+            ProviderResult(
+                content="Verdict: PASS\nFindings:\n- Geometry matches.\nUncertainty:\n- None.",
+                finish_reason="stop",
+            )
+        )
     results.append(ProviderResult(content="Fertig.", finish_reason="stop"))
     db, run, requests, _projections, _events = await _runtime_setup(
         monkeypatch,
@@ -491,6 +546,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
         execution_operations=("integration.openscad.render", "cache.export"),
         user_image=True,
         user_image_count=8,
+        user_content="x" * 5_000,
     )
     generated_id = uuid4()
 
@@ -515,7 +571,13 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
             side_effect=[
                 ToolResult.json({"written": "files/model.scad"}),
                 ToolResult(
-                    '{"output":"preview"}',
+                    json.dumps(
+                        {
+                            "output": "preview",
+                            "previewLayout": ["isometric", "front", "right", "top"],
+                            "geometryMetadata": {"triangleCount": 6},
+                        }
+                    ),
                     {},
                     attachments=(ToolAttachment(b"png", "image/png", "model-views.png"),),
                 ),
@@ -531,7 +593,28 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
         else ["local-model", "local-model", "local-model"]
     )
     if vision_fallback:
-        assert len(requests[2]["image_inputs"]) == 8
+        assert [image.data for image in requests[2]["image_inputs"]] == [
+            b"png",
+            *(f"reference-{position}".encode() for position in range(7)),
+        ]
+        verifier_data = json.loads(requests[2]["messages"][1]["content"])
+        assert verifier_data["imageOrder"] == {
+            "contactSheet": 1,
+            "referenceImages": [2, 3, 4, 5, 6, 7, 8],
+        }
+        assert len(verifier_data["currentRequest"]) == 4_000
+        assert "middle omitted" in verifier_data["currentRequest"]
+        assert verifier_data["previewLayout"] == [
+            "isometric",
+            "front",
+            "right",
+            "top",
+        ]
+        assert verifier_data["geometryMetadata"] == {"triangleCount": 6}
+        assert verifier_data["referenceImages"] == [
+            {"image": position + 2, "filename": f"reference-{position}.png"}
+            for position in range(7)
+        ]
     tool_message = next(
         call.args[0]
         for call in db.add.call_args_list
@@ -544,11 +627,341 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
         {
             "status": "completed",
             "referenceImageCount": 7,
-            "analysis": "Visible geometry matches.",
+            "analysis": "Verdict: PASS\nFindings:\n- Geometry matches.\nUncertainty:\n- None.",
         }
         if vision_fallback
         else {"status": "unavailable"}
     )
+
+
+async def test_private_openscad_source_uses_configured_vision_release(monkeypatch) -> None:
+    agent_id = uuid4()
+    integration = IntegrationInstance(
+        name="OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
+        execution_agent_id=agent_id,
+        config={"binary_path": "/usr/bin/openscad"},
+    )
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="render",
+                        name="render_openscad",
+                        arguments={"root": "session", "path": "files/model.scad"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                content="Verdict: PASS\nFindings:\n- None visible.\nUncertainty:\n- None."
+            ),
+            ProviderResult(content="Fertig.", finish_reason="stop"),
+        ],
+        max_steps=2,
+        search_policy=WebSearchPolicy.AVAILABLE,
+        active_supports_image_input=True,
+        vision_fallback=True,
+        workspace_access="read-write",
+        integration_settings=IntegrationSettings(instances=[integration]),
+        execution_agent_id=agent_id,
+        execution_operations=("integration.openscad.render", "cache.export"),
+        user_trust_level=TrustLevel.PRIVATE,
+    )
+
+    class FakeAttachmentService:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
+            return SimpleNamespace(id=uuid4(), kind=kwargs["kind"])
+
+        async def discard(self, _attachment, _session_id):
+            return None
+
+    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    monkeypatch.setattr(
+        tool_registry,
+        "_execute_definition",
+        AsyncMock(
+            return_value=ToolResult(
+                '{"output":"preview"}',
+                {},
+                attachments=(ToolAttachment(b"png", "image/png", "model-views.png"),),
+            )
+        ),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["model"].model_id for request in requests] == [
+        "local-model",
+        "vision-model",
+        "local-model",
+    ]
+    assert requests[1]["target_trust_level"] == TrustLevel.PUBLIC
+    assert requests[1]["image_inputs"][0].trust_level == TrustLevel.PRIVATE.value
+
+
+async def test_failed_active_openscad_verifier_does_not_fallback_and_counts_budget(
+    monkeypatch,
+) -> None:
+    agent_id = uuid4()
+    integration = IntegrationInstance(
+        name="OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
+        execution_agent_id=agent_id,
+        config={"binary_path": "/usr/bin/openscad"},
+    )
+    db, run, requests, _projections, events = await _runtime_setup(
+        monkeypatch,
+        [],
+        max_steps=2,
+        max_model_requests=3,
+        search_policy=WebSearchPolicy.AVAILABLE,
+        active_supports_image_input=True,
+        vision_fallback=True,
+        workspace_access="read-write",
+        integration_settings=IntegrationSettings(instances=[integration]),
+        execution_agent_id=agent_id,
+        execution_operations=("integration.openscad.render", "cache.export"),
+    )
+    generated_id = uuid4()
+
+    class FakeAttachmentService:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
+            return SimpleNamespace(id=generated_id, kind=kwargs["kind"])
+
+        async def discard(self, _attachment, _session_id):
+            return None
+
+    async def complete(_db, **kwargs):
+        requests.append(kwargs)
+        if len(requests) == 1:
+            return ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="render",
+                        name="render_openscad",
+                        arguments={"root": "session", "path": "files/model.scad"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+        if len(requests) == 2:
+            raise RuntimeError("vision unavailable")
+        return ProviderResult(content="Fertig.", finish_reason="stop")
+
+    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
+    monkeypatch.setattr(
+        tool_registry,
+        "_execute_definition",
+        AsyncMock(
+            return_value=ToolResult(
+                '{"output":"preview"}',
+                {},
+                attachments=(ToolAttachment(b"png", "image/png", "model-views.png"),),
+            )
+        ),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["model"].model_id for request in requests] == [
+        "local-model",
+        "local-model",
+        "local-model",
+    ]
+    assert requests[1]["tool_choice"] == "none"
+    assert requests[2]["required_image_ids"] == (str(generated_id),)
+    assert [
+        event["modelRequest"]
+        for event in events
+        if event.get("type") == "run.phase" and event.get("phase") == "waiting_model"
+    ] == [1, 2, 3]
+    render_message = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+        and call.args[0].role == "tool"
+        and call.args[0].tool_call_id == "render"
+    )
+    assert json.loads(render_message.content)["visualVerification"] == {
+        "status": "unavailable"
+    }
+
+
+async def test_each_successful_openscad_preview_runs_a_verifier(monkeypatch) -> None:
+    agent_id = uuid4()
+    integration = IntegrationInstance(
+        name="OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
+        execution_agent_id=agent_id,
+        config={"binary_path": "/usr/bin/openscad"},
+    )
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="render-1",
+                        name="render_openscad",
+                        arguments={"root": "session", "path": "files/model.scad"},
+                    )
+                ]
+            ),
+            ProviderResult(
+                content="Verdict: PASS\nFindings:\n- First inspection.\nUncertainty:\n- None."
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="render-2",
+                        name="render_openscad",
+                        arguments={"root": "session", "path": "files/model.scad"},
+                    )
+                ]
+            ),
+            ProviderResult(content="Second inspection"),
+            ProviderResult(content="Fertig.", finish_reason="stop"),
+        ],
+        max_steps=3,
+        search_policy=WebSearchPolicy.AVAILABLE,
+        vision_fallback=True,
+        workspace_access="read-write",
+        integration_settings=IntegrationSettings(instances=[integration]),
+        execution_agent_id=agent_id,
+        execution_operations=("integration.openscad.render", "cache.export"),
+    )
+
+    class FakeAttachmentService:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
+            return SimpleNamespace(id=uuid4(), kind=kwargs["kind"])
+
+        async def discard(self, _attachment, _session_id):
+            return None
+
+    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    monkeypatch.setattr(
+        tool_registry,
+        "_execute_definition",
+        AsyncMock(
+            side_effect=[
+                ToolResult(
+                    '{"output":"preview"}',
+                    {},
+                    attachments=(ToolAttachment(b"one", "image/png", "one.png"),),
+                ),
+                ToolResult(
+                    '{"output":"preview"}',
+                    {},
+                    attachments=(ToolAttachment(b"two", "image/png", "two.png"),),
+                ),
+            ]
+        ),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["model"].model_id for request in requests] == [
+        "local-model",
+        "vision-model",
+        "local-model",
+        "vision-model",
+        "local-model",
+    ]
+    assert [request["image_inputs"][0].data for request in (requests[1], requests[3])] == [
+        b"one",
+        b"two",
+    ]
+    verifications = [
+        json.loads(call.args[0].content)["visualVerification"]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+        and call.args[0].role == "tool"
+        and call.args[0].tool_call_id in {"render-1", "render-2"}
+    ]
+    assert verifications == [
+        {
+            "status": "completed",
+            "referenceImageCount": 0,
+            "analysis": "Verdict: PASS\nFindings:\n- First inspection.\nUncertainty:\n- None.",
+        },
+        {"status": "unavailable"},
+    ]
+
+
+async def test_openscad_stl_and_failed_preview_do_not_run_verifier(monkeypatch) -> None:
+    agent_id = uuid4()
+    integration = IntegrationInstance(
+        name="OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
+        execution_agent_id=agent_id,
+        config={"binary_path": "/usr/bin/openscad"},
+    )
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="stl",
+                        name="render_openscad",
+                        arguments={
+                            "root": "session",
+                            "path": "files/model.scad",
+                            "output": "stl",
+                        },
+                    ),
+                    ToolCall(
+                        id="failed-preview",
+                        name="render_openscad",
+                        arguments={"root": "session", "path": "files/model.scad"},
+                    ),
+                ]
+            ),
+            ProviderResult(content="Fertig.", finish_reason="stop"),
+        ],
+        max_steps=2,
+        search_policy=WebSearchPolicy.AVAILABLE,
+        vision_fallback=True,
+        workspace_access="read-write",
+        integration_settings=IntegrationSettings(instances=[integration]),
+        execution_agent_id=agent_id,
+        execution_operations=("integration.openscad.render", "cache.export"),
+    )
+    monkeypatch.setattr(
+        tool_registry,
+        "_execute_definition",
+        AsyncMock(
+            side_effect=[
+                ToolResult.json({"output": "stl"}),
+                ToolResult.error("tool.executionFailed"),
+            ]
+        ),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["model"].model_id for request in requests] == [
+        "local-model",
+        "local-model",
+    ]
+    assert all(request["tool_choice"] != "none" for request in requests)
 
 
 async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None:

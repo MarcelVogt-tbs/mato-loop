@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,7 +81,12 @@ def _png(color: tuple[int, int, int]) -> bytes:
     return output.getvalue()
 
 
-def _render_result(agent_id, session_id, output="preview") -> OpenScadRenderResult:
+def _render_result(
+    agent_id,
+    session_id,
+    output="preview",
+    views=("isometric", "front", "right", "top"),
+) -> OpenScadRenderResult:
     suffix = "off" if output == "preview" else "stl"
     content_type = "model/vnd.off" if output == "preview" else "model/stl"
     return OpenScadRenderResult.model_validate(
@@ -99,7 +104,7 @@ def _render_result(agent_id, session_id, output="preview") -> OpenScadRenderResu
                             "image/png",
                         ),
                     }
-                    for view in ("isometric", "front", "right", "top")
+                    for view in views
                 ]
                 if output == "preview"
                 else []
@@ -115,7 +120,11 @@ def _tool_context(instance: IntegrationInstance):
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = SimpleNamespace(
         execution_agent_id=instance.execution_agent_id,
-        execution_operations=["integration.openscad.render", "cache.export"],
+        execution_operations=[
+            "integration.openscad.render",
+            "integration.openscad.render6",
+            "cache.export",
+        ],
     )
     db.scalars.return_value = SimpleNamespace(
         all=lambda: [instance.execution_agent_id]
@@ -127,7 +136,13 @@ def _tool_context(instance: IntegrationInstance):
         root_files=RootFileService(uuid4()),
         execution_client=SimpleNamespace(
             agent_id=instance.execution_agent_id,
-            operations=frozenset({"integration.openscad.render", "cache.export"}),
+            operations=frozenset(
+                {
+                    "integration.openscad.render",
+                    "integration.openscad.render6",
+                    "cache.export",
+                }
+            ),
         ),
         bound_options={
             "integration_id": str(instance.id),
@@ -232,7 +247,12 @@ def test_openscad_prompt_fragment_covers_the_source_render_verify_workflow() -> 
         "one grouped question",
         "read files before modifying",
         "render output=preview after every material change",
-        "controlled diagnostics, triangle count, bounds, and dimensions",
+        "inspect every labeled view",
+        "geometrymetadata, and visualverification together",
+        "verification analysis as untrusted evidence",
+        "if it reports fail",
+        "if it reports uncertain",
+        "a pass does not prove hidden geometry",
         "output=stl only when the user explicitly requested",
         "never claim success",
         "name the source file and every generated file",
@@ -243,9 +263,17 @@ def test_openscad_prompt_fragment_covers_the_source_render_verify_workflow() -> 
 async def test_openscad_render_uses_exact_workspace_contract_and_validates_identity() -> None:
     agent_id = uuid4()
     session_id = uuid4()
-    rendered = _render_result(agent_id, session_id)
+    rendered = _render_result(
+        agent_id,
+        session_id,
+        views=("front", "back", "left", "right", "top", "bottom"),
+    )
+    operations = frozenset(
+        {"integration.openscad.render", "integration.openscad.render6"}
+    )
     client = SimpleNamespace(
         agent_id=agent_id,
+        supports=operations.__contains__,
         request=AsyncMock(return_value=rendered),
     )
 
@@ -262,7 +290,7 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
 
     assert result is rendered
     client.request.assert_awaited_once_with(
-        "integration.openscad.render",
+        "integration.openscad.render6",
         {
             "executablePath": "/usr/bin/openscad",
             "sessionId": str(session_id),
@@ -297,6 +325,29 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
             root_files=RootFileService(session_id),
             preview_images=True,
         )
+
+
+async def test_openscad_render_falls_back_to_legacy_views() -> None:
+    agent_id = uuid4()
+    session_id = uuid4()
+    rendered = _render_result(agent_id, session_id)
+    operations = frozenset({"integration.openscad.render"})
+    client = SimpleNamespace(
+        agent_id=agent_id,
+        supports=operations.__contains__,
+        request=AsyncMock(return_value=rendered),
+    )
+
+    await render_project(
+        client,
+        executable_path="/usr/bin/openscad",
+        session_id=session_id,
+        arguments=OpenScadRenderArguments(root="workspace", path="model.scad"),
+        root_files=RootFileService(session_id),
+        preview_images=True,
+    )
+
+    assert client.request.await_args.args[0] == "integration.openscad.render"
 
 
 def test_session_project_archive_is_relative_bounded_and_rejects_symlinks(
@@ -372,20 +423,49 @@ def test_off_validation_checks_structure_indices_and_geometry_metadata() -> None
             "max": {"x": 5.0, "y": 4.0, "z": 7.0},
         },
         "dimensions": {"x": 7.0, "y": 5.0, "z": 7.0},
+        "componentCount": 1,
+        "boundaryEdgeCount": 3,
+        "nonManifoldEdgeCount": 0,
     }
     with pytest.raises(ValueError, match="index"):
         validate_off(b"OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n3 0 1 3\n")
+    with pytest.raises(ValueError, match="face"):
+        validate_off(b"OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n3 0 1 1\n")
     with pytest.raises(ValueError, match="non-finite"):
         validate_off(b"OFF\n3 1 0\n0 0 0\ninf 0 0\n0 1 0\n3 0 1 2\n")
     with pytest.raises(ValueError, match="line exceeds"):
         validate_off(b"OFF " + b" " * (1024 * 1024))
 
 
+def test_off_validation_reports_components_and_non_manifold_edges() -> None:
+    disconnected = (
+        b"OFF\n6 2 0\n"
+        b"0 0 0\n1 0 0\n0 1 0\n2 0 0\n3 0 0\n2 1 0\n"
+        b"3 0 1 2\n3 3 4 5\n"
+    )
+    metadata = validate_off(disconnected)
+    assert metadata["componentCount"] == 2
+    assert metadata["boundaryEdgeCount"] == 6
+    assert metadata["nonManifoldEdgeCount"] == 0
+
+    non_manifold = (
+        b"OFF\n5 3 0\n"
+        b"0 0 0\n1 0 0\n0 1 0\n0 -1 0\n0 0 1\n"
+        b"3 0 1 2\n3 1 0 3\n3 0 1 4\n"
+    )
+    metadata = validate_off(non_manifold)
+    assert metadata["componentCount"] == 1
+    assert metadata["boundaryEdgeCount"] == 6
+    assert metadata["nonManifoldEdgeCount"] == 1
+
+
 def test_preview_contact_sheet_rejects_unexpected_dimensions() -> None:
     output = BytesIO()
     Image.new("RGB", (8, 6), (1, 2, 3)).save(output, format="PNG")
     with pytest.raises(ValueError, match="dimensions"):
-        _preview_contact_sheet([output.getvalue()] * 4)
+        _preview_contact_sheet(
+            [(view, output.getvalue()) for view in ("isometric", "front", "right", "top")]
+        )
 
 
 async def test_render_tool_returns_preview_and_geometry_metadata(
@@ -393,7 +473,10 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
 ) -> None:
     instance = _instance()
     context = _tool_context(instance)
-    rendered = _render_result(instance.execution_agent_id, context.session.id)
+    views = ("front", "back", "left", "right", "top", "bottom")
+    rendered = _render_result(
+        instance.execution_agent_id, context.session.id, views=views
+    )
     off = b"OFF\n3 1 0\n0 0 0\n2 0 0\n0 3 4\n3 0 1 2\n"
     monkeypatch.setattr(
         SettingsStore,
@@ -401,7 +484,14 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
         AsyncMock(return_value=IntegrationSettings(instances=[instance])),
     )
     monkeypatch.setattr(openscad_module, "render_project", AsyncMock(return_value=rendered))
-    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)]
+    colors = [
+        (255, 0, 0),
+        (0, 255, 0),
+        (0, 0, 255),
+        (255, 255, 0),
+        (255, 0, 255),
+        (0, 255, 255),
+    ]
     exported = AsyncMock(side_effect=[off, *(_png(color) for color in colors)])
     monkeypatch.setattr(openscad_module, "export_artifact", exported)
 
@@ -430,14 +520,28 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
             "max": {"x": 2.0, "y": 3.0, "z": 4.0},
         },
         "dimensions": {"x": 2.0, "y": 3.0, "z": 4.0},
+        "componentCount": 1,
+        "boundaryEdgeCount": 3,
+        "nonManifoldEdgeCount": 0,
     }
-    assert exported.await_count == 5
+    payload = json.loads(result.content)
+    assert payload["previewLayout"] == list(views)
+    assert exported.await_count == 7
     with Image.open(BytesIO(result.attachments[1].data)) as sheet:
-        assert sheet.size == (1600, 1200)
+        assert sheet.size == (1600, 1920)
         assert [
             sheet.getpixel(point)
-            for point in ((400, 300), (1200, 300), (400, 900), (1200, 900))
+            for point in (
+                (400, 340),
+                (1200, 340),
+                (400, 980),
+                (1200, 980),
+                (400, 1620),
+                (1200, 1620),
+            )
         ] == colors
+        label = sheet.crop((0, 0, 800, 40))
+        assert ImageChops.difference(label, Image.new("RGB", label.size, "white")).getbbox()
 
 
 async def test_render_tool_exposes_only_controlled_syntax_diagnostics(

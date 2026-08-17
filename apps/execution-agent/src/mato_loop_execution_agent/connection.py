@@ -123,7 +123,10 @@ class ExecutionAgent:
         if self.git.executable is None:
             operations -= GIT_OPERATIONS
         if not self.openscad.render_available:
-            operations.remove("integration.openscad.render")
+            operations -= {
+                "integration.openscad.render",
+                "integration.openscad.render6",
+            }
         self.operations = sorted(operations)
 
     def hello(self) -> Hello:
@@ -443,7 +446,11 @@ class ExecutionAgent:
         if isinstance(arguments, OpenScadRenderArguments):
             if backend_id is None:
                 raise AgentError("cache.invalidDescriptor", "Backend identity is unavailable")
-            return await self.openscad.render(arguments, backend_id)
+            return await self.openscad.render(
+                arguments,
+                backend_id,
+                six_views=request.operation == "integration.openscad.render6",
+            )
         if isinstance(arguments, GitCloneArguments):
             return await _defer_cancellation(
                 self.git.clone(

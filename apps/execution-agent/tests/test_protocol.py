@@ -169,6 +169,21 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_arguments(workspace)
 
+        render6 = Request.model_validate(
+            {
+                **base,
+                "operation": "integration.openscad.render6",
+                "arguments": archive.arguments.copy(),
+            }
+        )
+        self.assertEqual(
+            type(validate_arguments(render6)),
+            type(validate_arguments(archive)),
+        )
+        render6.arguments["unexpected"] = True
+        with self.assertRaises(ValidationError):
+            validate_arguments(render6)
+
 
 if __name__ == "__main__":
     unittest.main()

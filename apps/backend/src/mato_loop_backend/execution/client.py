@@ -351,7 +351,8 @@ class ExecutionClient:
             and operation
             not in {"integration.openscad.discover", "integration.openscad.test"}
             and not (
-                operation == "integration.openscad.render"
+                operation
+                in {"integration.openscad.render", "integration.openscad.render6"}
                 and arguments.get("source", {}).get("type") == "archive"
             )
         ):

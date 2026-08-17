@@ -229,6 +229,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertIn("integration.openscad.test", agent.operations)
             self.assertIn("integration.openscad.render", agent.operations)
+            self.assertIn("integration.openscad.render6", agent.operations)
             discovered = await agent.dispatch(
                 _request("integration.openscad.discover", {}), backend_id=AGENT_ID
             )
@@ -277,6 +278,67 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                 [item["view"] for item in rendered["previews"]],
                 ["isometric", "front", "right", "top"],
             )
+            legacy_cameras = {
+                Path(call.args[0][call.args[0].index("-o") + 1]).stem.removeprefix(
+                    "halterung-"
+                ): next(value for value in call.args[0] if value.startswith("--camera="))
+                for call in preview_runs
+            }
+            self.assertEqual(
+                [legacy_cameras[item["view"]] for item in rendered["previews"]],
+                [
+                    "--camera=0,0,0,55,0,25,140",
+                    "--camera=0,0,0,90,0,0,140",
+                    "--camera=0,0,0,90,0,90,140",
+                    "--camera=0,0,0,0,0,0,140",
+                ],
+            )
+
+            with patch.object(agent.openscad, "_run", wraps=agent.openscad._run) as run6:
+                rendered6 = await agent.dispatch(
+                    _request(
+                        "integration.openscad.render6",
+                        {
+                            **host,
+                            "executablePath": os.fspath(openscad),
+                            "sessionId": "session",
+                            "entrypoint": "halterung.scad",
+                            "source": {"type": "workspace", "path": "project"},
+                            "previewImages": True,
+                        },
+                    ),
+                    backend_id=AGENT_ID,
+                )
+            preview_runs6 = [
+                call for call in run6.await_args_list if "--imgsize=800,600" in call.args[0]
+            ]
+            self.assertEqual(
+                [item["view"] for item in rendered6["previews"]],
+                ["front", "back", "left", "right", "top", "bottom"],
+            )
+            self.assertEqual(
+                [
+                    next(value for value in call.args[0] if value.startswith("--camera="))
+                    for call in preview_runs6
+                ],
+                [
+                    "--camera=0,0,0,90,0,0,140",
+                    "--camera=0,0,0,90,0,180,140",
+                    "--camera=0,0,0,90,0,270,140",
+                    "--camera=0,0,0,90,0,90,140",
+                    "--camera=0,0,0,0,0,0,140",
+                    "--camera=0,0,0,180,0,0,140",
+                ],
+            )
+            self.assertEqual([call.kwargs["resource_divisor"] for call in preview_runs6], [2] * 6)
+            self.assertTrue(
+                all(
+                    {"--autocenter", "--viewall", "--projection=o", "--imgsize=800,600"}
+                    <= set(call.args[0])
+                    for call in preview_runs6
+                )
+            )
+            self.assertIn("rendered", rendered6["diagnostics"])
 
             (project / "failed.scad").write_text("FAIL_RENDER\n", encoding="utf-8")
             with self.assertRaises(AgentError) as failure:
@@ -380,7 +442,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                 for call in calls
                 if "--imgsize=800,600" in call and call[-1].endswith("halterung.scad")
             ]
-            self.assertEqual(len(image_calls), 4)
+            self.assertEqual(len(image_calls), 10)
             self.assertCountEqual(
                 [
                     next(value for value in call if value.startswith("--camera="))
@@ -391,6 +453,12 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                     "--camera=0,0,0,90,0,0,140",
                     "--camera=0,0,0,90,0,90,140",
                     "--camera=0,0,0,0,0,0,140",
+                    "--camera=0,0,0,90,0,0,140",
+                    "--camera=0,0,0,90,0,180,140",
+                    "--camera=0,0,0,90,0,270,140",
+                    "--camera=0,0,0,90,0,90,140",
+                    "--camera=0,0,0,0,0,0,140",
+                    "--camera=0,0,0,180,0,0,140",
                 ],
             )
             self.assertTrue(
@@ -412,6 +480,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
                 agent = ExecutionAgent(config, "key")
             self.assertIn("integration.openscad.test", agent.operations)
             self.assertNotIn("integration.openscad.render", agent.operations)
+            self.assertNotIn("integration.openscad.render6", agent.operations)
             with self.assertRaises(AgentError) as failed_probe:
                 await agent.dispatch(
                     _request(
@@ -428,6 +497,7 @@ class OpenScadTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("integration.openscad.discover", unavailable.operations)
             self.assertIn("integration.openscad.test", unavailable.operations)
             self.assertNotIn("integration.openscad.render", unavailable.operations)
+            self.assertNotIn("integration.openscad.render6", unavailable.operations)
             with self.assertRaises(AgentError) as missing_openscad:
                 await unavailable.dispatch(
                     _request(

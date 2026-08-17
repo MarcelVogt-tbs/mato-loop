@@ -26,6 +26,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "integration.git.status",
         "integration.openscad.discover",
         "integration.openscad.render",
+        "integration.openscad.render6",
         "integration.openscad.test",
         "process.exec",
         "shell.run",

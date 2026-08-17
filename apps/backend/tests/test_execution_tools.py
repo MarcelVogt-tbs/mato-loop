@@ -225,8 +225,12 @@ async def test_execution_client_supports_root_independent_operations(monkeypatch
     assert result.path == "/workspace"
 
 
+@pytest.mark.parametrize(
+    "operation", ["integration.openscad.render", "integration.openscad.render6"]
+)
 async def test_execution_client_sends_archive_render_without_workspace_metadata(
     monkeypatch,
+    operation,
 ) -> None:
     agent_id = uuid4()
     client = ExecutionClient(
@@ -234,7 +238,7 @@ async def test_execution_client_sends_archive_render_without_workspace_metadata(
         None,
         None,
         None,
-        frozenset({"integration.openscad.render"}),
+        frozenset({operation}),
     )
     request = AsyncMock(
         return_value=ResponseMessage.model_validate(
@@ -251,11 +255,11 @@ async def test_execution_client_sends_archive_render_without_workspace_metadata(
     )
     arguments = {"source": {"type": "archive"}}
 
-    await client.request("integration.openscad.render", arguments, ExecutionResult)
+    await client.request(operation, arguments, ExecutionResult)
 
     assert request.await_args.args[:3] == (
         agent_id,
-        "integration.openscad.render",
+        operation,
         arguments,
     )
 
