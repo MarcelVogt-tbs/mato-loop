@@ -737,7 +737,7 @@ async def _owned_session(
     return await db.scalar(statement)
 
 
-def message_payload(item: Message) -> dict[str, Any]:
+def message_payload(item: Message, *, retry_available: bool = False) -> dict[str, Any]:
     error = (
         describe_error(item.error_code, params=item.error_params)
         if item.error_code
@@ -763,6 +763,7 @@ def message_payload(item: Message) -> dict[str, Any]:
         "research": _public_research_payload(item),
         "fileActions": _public_file_actions(item),
         "error": error.payload() if error else None,
+        "retryAvailable": retry_available,
         "attachments": [
             {
                 "id": str(attachment.id),
@@ -819,6 +820,16 @@ async def _session_detail_payload(db: AsyncSession, item: ChatSession) -> dict[s
         )
         .order_by(AgentRun.created_at.desc())
     )
+    retry_message_id = None
+    if active_run is None and messages:
+        retry_source = await ChatHistoryService.retry_source(
+            db,
+            session_id=item.id,
+            messages=messages,
+            message_id=messages[-1].id,
+        )
+        if retry_source is not None:
+            retry_message_id = messages[-1].id
     last_message_at = max(
         (
             message.created_at
@@ -846,7 +857,10 @@ async def _session_detail_payload(db: AsyncSession, item: ChatSession) -> dict[s
                 ),
             )
         ),
-        "messages": [message_payload(message) for message in messages],
+        "messages": [
+            message_payload(message, retry_available=message.id == retry_message_id)
+            for message in messages
+        ],
         "activeRun": (
             {
                 "id": str(active_run.id),

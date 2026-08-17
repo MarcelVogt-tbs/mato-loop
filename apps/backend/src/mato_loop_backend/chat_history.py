@@ -85,6 +85,32 @@ class ChatHistoryService:
             .execution_options(populate_existing=True)
         )
 
+    @staticmethod
+    async def retry_source(
+        db: AsyncSession,
+        *,
+        session_id: UUID,
+        messages: list[Message],
+        message_id: UUID,
+    ) -> tuple[AgentRun, int] | None:
+        if not messages or messages[-1].id != message_id:
+            return None
+        target = messages[-1]
+        if target.role != "assistant" or not target.error_code or target.error_run_id is None:
+            return None
+        failed_run = await db.get(AgentRun, target.error_run_id)
+        if (
+            failed_run is None
+            or failed_run.session_id != session_id
+            or failed_run.status != "failed"
+        ):
+            return None
+        user_index = next(
+            (index for index in range(len(messages) - 2, -1, -1) if messages[index].role == "user"),
+            None,
+        )
+        return (failed_run, user_index) if user_index is not None else None
+
     @classmethod
     async def _lock_after_cancelling_active_run(
         cls, db: AsyncSession, session_id: UUID, user_id: UUID
@@ -249,24 +275,15 @@ class ChatHistoryService:
         if await cls._active_run(db, session_id) is not None:
             raise ChatHistoryError("session.runAlreadyActive", 409)
         messages = await cls._messages(db, session_id)
-        if not messages or messages[-1].id != message_id:
-            raise ChatHistoryError("session.retryUnavailable", 409)
-        target = messages[-1]
-        if target.role != "assistant" or not target.error_code or target.error_run_id is None:
-            raise ChatHistoryError("session.retryUnavailable", 409)
-        failed_run = await db.get(AgentRun, target.error_run_id)
-        if (
-            failed_run is None
-            or failed_run.session_id != session_id
-            or failed_run.status != "failed"
-        ):
-            raise ChatHistoryError("session.retryUnavailable", 409)
-        user_index = next(
-            (index for index in range(len(messages) - 2, -1, -1) if messages[index].role == "user"),
-            None,
+        source = await cls.retry_source(
+            db,
+            session_id=session_id,
+            messages=messages,
+            message_id=message_id,
         )
-        if user_index is None:
+        if source is None:
             raise ChatHistoryError("session.retryUnavailable", 409)
+        failed_run, user_index = source
 
         attachments = await cls._delete_message_suffix(
             db, messages, user_index, include_boundary=False

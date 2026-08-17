@@ -380,7 +380,7 @@ import {
   scrollChatElementToTop,
   scrollChatToBottom
 } from 'src/utils/chat-scroll'
-import { buildChatTranscript } from 'src/utils/chat-transcript'
+import { buildChatTranscript, retryAvailableForMessage } from 'src/utils/chat-transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 
@@ -563,10 +563,7 @@ function messageTrustLabel(value) {
 }
 
 function canRetryMessage(message) {
-  const messages = transcript.value.messages
-  return message.kind === 'runtime_error'
-    && messages[messages.length - 1]?.id === message.id
-    && !chat.running
+  return retryAvailableForMessage(message, chat.current?.messages, chat.running)
 }
 
 async function undoMessage(message) {

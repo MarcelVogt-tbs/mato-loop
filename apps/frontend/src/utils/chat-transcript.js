@@ -1,5 +1,12 @@
 const CONTEXT_TOOL_NAMES = new Set(['read', 'read_file', 'glob', 'grep', 'list_directory'])
 
+export function retryAvailableForMessage(message, messages = [], running = false) {
+  return message?.kind === 'runtime_error'
+    && message.retryAvailable === true
+    && messages.at(-1)?.id === message.id
+    && !running
+}
+
 export function groupWorkHistoryEntries(entries = []) {
   const grouped = []
   for (const entry of entries) {

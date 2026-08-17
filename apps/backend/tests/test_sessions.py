@@ -469,6 +469,43 @@ async def test_session_payload_contains_active_run() -> None:
     }
 
 
+async def test_session_payload_marks_latest_restart_error_retryable() -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Test",
+        memory_mode="disabled",
+    )
+    user_message = Message(
+        id=uuid4(),
+        session_id=session.id,
+        role="user",
+        content="Fortsetzen",
+    )
+    failed_run = AgentRun(id=uuid4(), session_id=session.id, status="failed")
+    error_message = Message(
+        id=uuid4(),
+        session_id=session.id,
+        role="assistant",
+        content="",
+        error_code="agent.backendRestarted",
+        error_run_id=failed_run.id,
+    )
+    user_message.attachments = []
+    error_message.attachments = []
+    messages = MagicMock()
+    messages.all.return_value = [user_message, error_message]
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [session, failed_run]
+    db.scalars.return_value = messages
+    db.scalar.return_value = None
+
+    result = await get_session(session.id, user, db)
+
+    assert [message["retryAvailable"] for message in result["messages"]] == [False, True]
+
+
 async def test_session_owner_cannot_read_another_users_session() -> None:
     owner = _user()
     other = _user()
@@ -781,6 +818,7 @@ def test_message_payload_recreates_safe_english_runtime_error() -> None:
         "message": "The model provider request failed.",
         "params": {"retryable": True},
     }
+    assert payload["retryAvailable"] is False
     assert secret not in str(payload)
 
 

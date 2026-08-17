@@ -3,10 +3,22 @@ import { describe, expect, it } from 'vitest'
 import {
   buildChatTranscript,
   groupWorkHistoryEntries,
+  retryAvailableForMessage,
   splitLiveWorkHistory
 } from '../src/utils/chat-transcript'
 
 describe('chat transcript', () => {
+  it('offers retry only for the current backend-approved failed response', () => {
+    const error = {
+      id: 'error-1', role: 'assistant', kind: 'runtime_error', retryAvailable: true
+    }
+
+    expect(retryAvailableForMessage(error, [{ id: 'user-1' }, error])).toBe(true)
+    expect(retryAvailableForMessage(error, [error, { id: 'user-2' }])).toBe(false)
+    expect(retryAvailableForMessage(error, [error], true)).toBe(false)
+    expect(retryAvailableForMessage({ ...error, retryAvailable: false }, [error])).toBe(false)
+  })
+
   it('groups consecutive filesystem context tools without crossing other activity', () => {
     const read = { key: 'read', type: 'tool', tool: { name: 'read_file' } }
     const search = { key: 'search', type: 'tool', tool: { name: 'grep' } }
