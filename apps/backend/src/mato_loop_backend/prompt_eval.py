@@ -638,9 +638,16 @@ CASES = (
         expected_arguments={"root": "workspace", "path": "note.txt", "content": "Hallo"},
     ),
     PromptCase(
-        id="stable_self_context_writes_memory",
+        id="stable_self_context_avoids_memory",
         kind="general",
         user="Ich heiße Lara und bin 37 Jahre alt.",
+        tools=("memory_retrieve", "memory_write"),
+        expected_no_tools=True,
+    ),
+    PromptCase(
+        id="explicit_self_context_writes_memory",
+        kind="general",
+        user="Merke dir: Ich heiße Lara und bin 37 Jahre alt.",
         tools=("memory_retrieve", "memory_write"),
         expected_tool="memory_write",
         expected_tool_call_count=2,
@@ -2653,9 +2660,9 @@ _SEMANTIC_CONTRACTS = (
     ),
     ContractCoverage("session.uuid_fields", "session", ("session_read_uses_session_uuid",)),
     ContractCoverage(
-        "memory.stable_vs_transient",
+        "memory.explicit_write_only",
         "memory",
-        ("stable_self_context_writes_memory", "transient_context_avoids_memory"),
+        ("stable_self_context_avoids_memory", "explicit_self_context_writes_memory"),
     ),
     ContractCoverage(
         "memory.exclude_quoted_hypothetical_third_party",
@@ -2665,7 +2672,7 @@ _SEMANTIC_CONTRACTS = (
     ContractCoverage(
         "memory.separate_independently_mutable_facts",
         "memory",
-        ("stable_self_context_writes_memory",),
+        ("explicit_self_context_writes_memory",),
     ),
     ContractCoverage(
         "memory.retrieve_before_update",

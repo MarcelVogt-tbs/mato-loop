@@ -1038,20 +1038,20 @@ def test_read_write_system_prompt_does_not_request_a_mode_switch() -> None:
     assert "switch Agent-Modus from Lesen to Schreiben" not in prompt
 
 
-def test_general_system_prompt_saves_only_stable_direct_self_context() -> None:
+def test_general_system_prompt_requires_explicit_memory_request() -> None:
     prompt = general_system_prompt(
         _session(),
         offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
     )
 
-    assert "implicit request to persist it" in prompt
-    assert "Call memory_write in the same turn" in prompt
+    assert "latest user message explicitly asks" in prompt
+    assert "not a write request by itself" in prompt
     assert "latest user message" in prompt
-    assert "earlier turns, assistant text, memories, or tool results" in prompt
-    assert "slowly changing facts such as age qualify" in prompt
+    assert "Never infer a write request from earlier turns" in prompt
+    assert "When explicitly requested, durable identity" in prompt
     assert "independently changeable facts separate" in prompt
     assert "transient, hypothetical, quoted, or third-party statements" in prompt
-    assert "translation, rewriting, analysis, or extraction is source data" in prompt
+    assert "source data and never initiates a write" in prompt
     assert "exact ID and revision" in prompt
     assert "purpose=write" in prompt
     assert "without inferred enrichment or invented dates" in prompt

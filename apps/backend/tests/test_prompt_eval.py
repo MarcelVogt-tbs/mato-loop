@@ -137,7 +137,7 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
 
     memory_messages, memory_tools = build_case(
         replace(
-            _case("stable_self_context_writes_memory"),
+            _case("explicit_self_context_writes_memory"),
             memory_scope={"total": 0, "pinned": 0},
         )
     )
@@ -145,7 +145,7 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
         "parameters"
     ]["properties"]["category"]
     assert "occupations use fact" in category["description"]
-    assert "durable self-context" in memory_messages[0]["content"]
+    assert "explicitly asks" in memory_messages[0]["content"]
 
     media_messages, media_tools = build_case(_case("transcribe_audio_uses_attachment_uuid"))
     assert "verified PCM audio derivative" in media_messages[0]["content"]
@@ -635,8 +635,8 @@ def test_evaluate_checks_query_shape_multiple_calls_and_link_labels() -> None:
     assert any("contains forbidden '2026'" in failure for failure in invalid_failures)
     assert any("exceeds 10 words" in failure for failure in invalid_failures)
 
-    stable = _case("stable_self_context_writes_memory")
-    assert "37 Jahre alt" in stable.user
+    explicit = _case("explicit_self_context_writes_memory")
+    assert "37 Jahre alt" in explicit.user
     one_write = ProviderResult(
         tool_calls=[
             ToolCall(
@@ -646,7 +646,7 @@ def test_evaluate_checks_query_shape_multiple_calls_and_link_labels() -> None:
             )
         ]
     )
-    assert any("expected exactly 2" in failure for failure in evaluate(stable, one_write))
+    assert any("expected exactly 2" in failure for failure in evaluate(explicit, one_write))
 
     citation = _case("researched_answer_uses_exact_citation")
     bad_links = ProviderResult(
@@ -1160,10 +1160,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 126
-    assert payload["contractCount"] == 261
-    assert "Cases: 135" in report
+    assert payload["contractCount"] == 262
+    assert "Cases: 136" in report
     assert "Semantic contracts: 126" in report
-    assert "All inventory rows: 261" in report
+    assert "All inventory rows: 262" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report
