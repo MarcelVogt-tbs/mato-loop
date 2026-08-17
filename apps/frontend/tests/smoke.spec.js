@@ -31,6 +31,9 @@ describe('MatoLoop frontend scaffold', () => {
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-files-media')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-account')?.meta.requiresAdmin).toBeUndefined()
+    expect(settingsRoutes.find((route) => route.name === 'settings-approvals')?.redirect).toEqual({
+      name: 'chat', query: { controlCenter: 'approvals' }
+    })
     expect(settingsRoutes
       .filter((route) => ['settings-providers', 'settings-default-models', 'settings-integrations', 'settings-tools'].includes(route.name))
       .every((route) => route.meta.requiresAdmin === undefined)).toBe(true)

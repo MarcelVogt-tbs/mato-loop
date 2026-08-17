@@ -3,28 +3,6 @@ import { api } from 'src/boot/axios'
 
 export const MAX_WORKSPACE_UPLOADS = 4
 export const MAX_WORKSPACE_UPLOAD_BYTES = 64 * 1024 * 1024
-export const DEFAULT_WORKSPACE_SPLIT_RATIO = 60
-export const MIN_WORKSPACE_SPLIT_RATIO = 30
-export const MAX_WORKSPACE_SPLIT_RATIO = 70
-const WORKSPACE_SPLIT_STORAGE_KEY = 'matoLoopWorkspaceSplitRatio'
-
-function validSplitRatio(value) {
-  const ratio = Number(value)
-  return Number.isFinite(ratio)
-    && ratio >= MIN_WORKSPACE_SPLIT_RATIO
-    && ratio <= MAX_WORKSPACE_SPLIT_RATIO
-    ? ratio
-    : null
-}
-
-function storedSplitRatio() {
-  try {
-    return validSplitRatio(globalThis.localStorage?.getItem(WORKSPACE_SPLIT_STORAGE_KEY))
-      ?? DEFAULT_WORKSPACE_SPLIT_RATIO
-  } catch {
-    return DEFAULT_WORKSPACE_SPLIT_RATIO
-  }
-}
 
 function parentPath(path) {
   return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.'
@@ -96,7 +74,6 @@ export function withFileSuffix(name, suffix) {
 
 export const useWorkspaceStore = defineStore('workspace', {
   state: () => ({
-    open: false,
     scope: 'filesystem',
     sessionId: null,
     workingDirectory: null,
@@ -118,7 +95,6 @@ export const useWorkspaceStore = defineStore('workspace', {
     editorDirty: false,
     editorDraft: null,
     filter: '',
-    splitRatio: storedSplitRatio(),
     contextVersion: 0
   }),
   getters: {
@@ -137,14 +113,9 @@ export const useWorkspaceStore = defineStore('workspace', {
     )
   },
   actions: {
-    show() {
+    returnToCurrentContext() {
       if (this.rootIdentity) this.reset()
-      this.open = true
-      this.load('.')
-    },
-    toggle() {
-      if (this.open) this.open = false
-      else this.show()
+      return this.load('.')
     },
     configure({ sessionId = null, workingDirectory = null, workspaceContext = null } = {}) {
       if (this.scope === 'session' && !sessionId) this.scope = 'filesystem'
@@ -225,7 +196,6 @@ export const useWorkspaceStore = defineStore('workspace', {
         path: action.path,
         size: action.sizeBytes
       }
-      this.open = true
       return this.load('.')
     },
     openApprovalDraft(action) {
@@ -243,7 +213,6 @@ export const useWorkspaceStore = defineStore('workspace', {
         path: action.path,
         size: action.sizeBytes
       }, true)
-      this.open = true
       return this.load('.')
     },
     openEntry(entry, edit = false) {
@@ -273,16 +242,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
-    },
-    setSplitRatio(value) {
-      const ratio = validSplitRatio(value)
-      if (ratio === null) return
-      this.splitRatio = ratio
-      try {
-        globalThis.localStorage?.setItem(WORKSPACE_SPLIT_STORAGE_KEY, String(ratio))
-      } catch {
-        // Browser storage is optional UI persistence.
-      }
     },
     requestParams(extra = {}) {
       const liveFilesystemContext = this.scope === 'filesystem'

@@ -29,7 +29,7 @@ from mato_loop_backend.agent.tools import (
     tool_execution_policy,
     tool_registry,
 )
-from mato_loop_backend.attachments import AttachmentService
+from mato_loop_backend.attachments import AttachmentService, AttachmentStorage
 from mato_loop_backend.integrations import WebFetchError, WebFetchResult
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -2562,6 +2562,79 @@ async def test_read_does_not_access_path_after_denial(tmp_path) -> None:
 
     assert result.metadata == {"errorCode": "permission.denied"}
     context.root_files.path_kind.assert_not_called()
+    context.db.scalar.assert_not_awaited()
+
+
+async def test_read_reactivates_managed_session_image(tmp_path) -> None:
+    attachment_id = uuid4()
+    call = ToolCall(
+        id="read-image",
+        name="read",
+        arguments={
+            "root": "session",
+            "path": f"attachments/{attachment_id}/diagram.png",
+        },
+    )
+    context = _context(tmp_path, call)
+    storage = AttachmentStorage(context.root_files.session_storage)
+    storage_path = storage.write(
+        context.session.id, attachment_id, b"\x89PNG\r\n\x1a\n", "diagram.png", "user_upload"
+    )
+    attachment = MessageAttachment(
+        id=attachment_id,
+        message_id=uuid4(),
+        position=0,
+        filename="diagram.png",
+        kind="image",
+        category="user_upload",
+        processing_status="ready",
+        mime_type="image/png",
+        size_bytes=8,
+        sha256="a" * 64,
+        storage_path=storage_path,
+    )
+    context.db.scalar.return_value = attachment
+    context.root_files.read_file = Mock(side_effect=AssertionError("must not decode image"))
+
+    result = await tool_registry.execute(call, context)
+
+    assert json.loads(result.content) == {
+        "root": "session",
+        "path": storage_path,
+        "imageAttachment": {
+            "id": str(attachment_id),
+            "filename": "diagram.png",
+            "kind": "image",
+            "mimeType": "image/png",
+        },
+        "contentIsUntrusted": True,
+    }
+    context.root_files.read_file.assert_not_called()
+    statement = context.db.scalar.await_args.args[0]
+    parameters = set(statement.compile().params.values())
+    assert {storage_path, "image", "ready", context.session.id, "public"} <= parameters
+
+
+async def test_read_does_not_reactivate_unmanaged_binary_file(tmp_path) -> None:
+    attachment_id = uuid4()
+    call = ToolCall(
+        id="read-binary",
+        name="read",
+        arguments={
+            "root": "session",
+            "path": f"attachments/{attachment_id}/unknown.bin",
+        },
+    )
+    context = _context(tmp_path, call)
+    storage = AttachmentStorage(context.root_files.session_storage)
+    storage.write(
+        context.session.id, attachment_id, b"\xff", "unknown.bin", "user_upload"
+    )
+    context.db.scalar.return_value = None
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "file.invalidEncoding"}
 
 
 def test_webfetch_schema_has_the_expected_contract() -> None:

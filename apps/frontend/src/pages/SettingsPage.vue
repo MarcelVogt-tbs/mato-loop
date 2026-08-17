@@ -1,6 +1,6 @@
 <template>
   <q-page class="app-page settings-page column no-wrap">
-    <AppPageHeader title="Einstellungen" subtitle="Persona, Provider, Computer, Integrationen, Freigaben und Funktionen zentral verwalten." />
+    <AppPageHeader title="Einstellungen" subtitle="Persona, Provider, Computer, Integrationen und Funktionen zentral verwalten." />
 
     <q-tabs
       no-caps
@@ -34,9 +34,6 @@
           >
             <q-item-section avatar><q-icon :name="item.meta.settingsIcon" /></q-item-section>
             <q-item-section>{{ item.meta.settingsLabel }}</q-item-section>
-            <q-item-section v-if="item.name === 'settings-approvals' && approvals.pendingCount" side>
-              <q-badge color="warning" text-color="dark" :label="approvals.pendingCount" />
-            </q-item-section>
           </q-item>
         </q-list>
       </nav>
@@ -54,12 +51,12 @@
 import { computed } from 'vue'
 import AppPageHeader from 'components/AppPageHeader.vue'
 import { settingsRoutes } from 'src/router/routes'
-import { useApprovalStore } from 'stores/approvals'
 import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'SettingsPage' })
 
-const approvals = useApprovalStore()
 const auth = useAuthStore()
-const navigation = computed(() => settingsRoutes.filter((item) => !item.meta.requiresAdmin || auth.isAdmin))
+const navigation = computed(() => settingsRoutes.filter((item) => (
+  item.meta?.settingsLabel && (!item.meta.requiresAdmin || auth.isAdmin)
+)))
 </script>

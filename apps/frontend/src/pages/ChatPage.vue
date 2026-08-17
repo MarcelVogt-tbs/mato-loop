@@ -4,8 +4,8 @@
       v-model="splitPosition"
       class="chat-workspace-splitter col"
       :limits="splitLimits"
-      :disable="!desktopExplorerOpen"
-      :separator-style="desktopExplorerOpen ? undefined : { display: 'none' }"
+      :disable="!desktopControlCenterOpen"
+      :separator-style="desktopControlCenterOpen ? undefined : { display: 'none' }"
     >
       <template #before>
         <div class="chat-page__pane column no-wrap full-height">
@@ -317,15 +317,15 @@
 
       <template #separator>
         <div
-          v-if="desktopExplorerOpen"
+          v-if="desktopControlCenterOpen"
           class="chat-workspace-splitter__handle flex flex-center"
           role="separator"
           aria-label="Breite des Chat-Bereichs ändern"
           aria-orientation="vertical"
-          :aria-valuemin="MIN_WORKSPACE_SPLIT_RATIO"
-          :aria-valuemax="MAX_WORKSPACE_SPLIT_RATIO"
-          :aria-valuenow="workspace.splitRatio"
-          :aria-valuetext="`${workspace.splitRatio} Prozent Chat, ${100 - workspace.splitRatio} Prozent Dateien`"
+          :aria-valuemin="MIN_CONTROL_CENTER_SPLIT_RATIO"
+          :aria-valuemax="MAX_CONTROL_CENTER_SPLIT_RATIO"
+          :aria-valuenow="controlCenter.splitRatio"
+          :aria-valuetext="`${controlCenter.splitRatio} Prozent Chat, ${100 - controlCenter.splitRatio} Prozent Control Center`"
           tabindex="0"
           @keydown="resizeWorkspacePane"
         >
@@ -335,12 +335,11 @@
 
       <template #after>
         <aside
-          v-if="desktopExplorerOpen"
-          id="workspace-file-panel"
+          v-if="desktopControlCenterOpen"
           class="chat-workspace-pane full-height"
-          aria-label="Datei-Explorer"
+          aria-label="Control Center"
         >
-          <FileExplorerPanel />
+          <ControlCenterPanel />
         </aside>
       </template>
     </q-splitter>
@@ -355,24 +354,25 @@ import ApprovalCard from 'components/ApprovalCard.vue'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
-import FileExplorerPanel from 'components/FileExplorerPanel.vue'
+import ControlCenterPanel from 'components/ControlCenterPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import QuestionDock from 'components/QuestionDock.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
+import {
+  MAX_CONTROL_CENTER_SPLIT_RATIO,
+  MIN_CONTROL_CENTER_SPLIT_RATIO,
+  useControlCenterStore
+} from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
 import { useQuestionStore } from 'stores/questions'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { useFileMediaSettingsStore } from 'stores/file-media-settings'
-import {
-  MAX_WORKSPACE_SPLIT_RATIO,
-  MIN_WORKSPACE_SPLIT_RATIO,
-  useWorkspaceStore
-} from 'stores/workspace'
+import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import { agentRunPresentation } from 'src/utils/agent-activity'
 import {
@@ -399,6 +399,7 @@ const fileMediaSettings = useFileMediaSettingsStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
+const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
 const scrollArea = ref(null)
 const scrollContent = ref(null)
@@ -467,30 +468,30 @@ const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
 ))
 const liveWorkspaceContext = computed(() => executionAgents.workspaceContextFor(chat.activeContext))
-const desktopExplorerOpen = computed(() => workspace.open && $q.screen.gt.sm)
+const desktopControlCenterOpen = computed(() => controlCenter.open && $q.screen.gt.sm)
 const splitLimits = computed(() => (
-  desktopExplorerOpen.value
-    ? [MIN_WORKSPACE_SPLIT_RATIO, MAX_WORKSPACE_SPLIT_RATIO]
+  desktopControlCenterOpen.value
+    ? [MIN_CONTROL_CENTER_SPLIT_RATIO, MAX_CONTROL_CENTER_SPLIT_RATIO]
     : [100, 100]
 ))
 const splitPosition = computed({
-  get: () => desktopExplorerOpen.value ? workspace.splitRatio : 100,
+  get: () => desktopControlCenterOpen.value ? controlCenter.splitRatio : 100,
   set: (value) => {
-    if (desktopExplorerOpen.value) workspace.setSplitRatio(value)
+    if (desktopControlCenterOpen.value) controlCenter.setSplitRatio(value)
   }
 })
 
 function resizeWorkspacePane(event) {
-  let ratio = workspace.splitRatio
+  let ratio = controlCenter.splitRatio
   if (event.key === 'ArrowLeft') ratio -= 2
   else if (event.key === 'ArrowRight') ratio += 2
-  else if (event.key === 'Home') ratio = MIN_WORKSPACE_SPLIT_RATIO
-  else if (event.key === 'End') ratio = MAX_WORKSPACE_SPLIT_RATIO
+  else if (event.key === 'Home') ratio = MIN_CONTROL_CENTER_SPLIT_RATIO
+  else if (event.key === 'End') ratio = MAX_CONTROL_CENTER_SPLIT_RATIO
   else return
   event.preventDefault()
-  workspace.setSplitRatio(Math.min(
-    MAX_WORKSPACE_SPLIT_RATIO,
-    Math.max(MIN_WORKSPACE_SPLIT_RATIO, ratio)
+  controlCenter.setSplitRatio(Math.min(
+    MAX_CONTROL_CENTER_SPLIT_RATIO,
+    Math.max(MIN_CONTROL_CENTER_SPLIT_RATIO, ratio)
   ))
 }
 
@@ -513,6 +514,7 @@ async function openToolFile(action) {
     workspaceContext: liveWorkspaceContext.value
   })
   await workspace.openToolFile(action)
+  await controlCenter.openApp('files')
 }
 
 async function openApprovalDraft(approval) {
@@ -535,6 +537,7 @@ async function openApprovalDraft(approval) {
     workspaceContext: liveWorkspaceContext.value
   })
   await workspace.openApprovalDraft({ ...draft, sessionId })
+  await controlCenter.openApp('files')
 }
 
 function trustImageOrigin(origin) {
@@ -629,6 +632,16 @@ async function loadRouteSession() {
   await composer.value?.cancelAudioActivity?.()
   await request
   if (chat.selectedSessionId !== sessionId || chat.loadError) return
+  const requestedApp = typeof route.query.controlCenter === 'string'
+    ? route.query.controlCenter
+    : null
+  if (requestedApp) {
+    try {
+      await controlCenter.openApp(requestedApp)
+    } catch {
+      // The central API interceptor displays the error and restores the previous tabs.
+    }
+  }
   await nextTick()
   composer.value?.focus()
 }

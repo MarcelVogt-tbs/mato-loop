@@ -33,8 +33,7 @@ export const settingsRoutes = [
   {
     path: 'approvals',
     name: 'settings-approvals',
-    component: () => import('pages/settings/ApprovalSettingsPage.vue'),
-    meta: { settingsLabel: 'Freigaben', settingsIcon: 'pending_actions' }
+    redirect: { name: 'chat', query: { controlCenter: 'approvals' } }
   },
   {
     path: 'execution-agents',

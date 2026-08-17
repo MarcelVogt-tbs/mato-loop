@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import AgentRuntime
@@ -310,7 +311,17 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     db.scalar.return_value = persisted_message
 
     result = await create_session(
-        SessionCreateRequest(content="  Erste Nachricht  ", workspace_access="read-write"),
+        SessionCreateRequest(
+            content="  Erste Nachricht  ",
+            workspace_access="read-write",
+            control_center={
+                "tabs": [
+                    {"app_id": "files", "pinned": False},
+                    {"app_id": "notifications", "pinned": True},
+                ],
+                "active_app_id": "notifications",
+            },
+        ),
         user,
         db,
     )
@@ -322,6 +333,13 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert session.web_search_policy == "available"
     assert session.working_directory is None
     assert session.workspace_access == "read-write"
+    assert session.control_center == {
+        "tabs": [
+            {"app_id": "files", "pinned": False},
+            {"app_id": "notifications", "pinned": True},
+        ],
+        "active_app_id": "notifications",
+    }
     assert session.title_generation_status == TitleGenerationStatus.PENDING.value
     start.assert_awaited_once_with(db, session, "Erste Nachricht")
     assert result["session"]["id"] == str(session.id)
@@ -439,6 +457,10 @@ async def test_session_payload_contains_active_run() -> None:
     result = await get_session(session_id, user, db)
 
     assert result["pinned"] is True
+    assert result["controlCenter"] == {
+        "tabs": [{"appId": "files", "pinned": False}],
+        "activeAppId": "files",
+    }
     assert result["activeRun"] == {
         "id": str(run.id),
         "status": "waiting_approval",
@@ -1201,6 +1223,145 @@ async def test_session_can_be_pinned_during_active_run() -> None:
     assert session.is_pinned is True
     assert result["pinned"] is True
     db.scalar.assert_not_awaited()
+
+
+async def test_control_center_state_can_be_replaced() -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Test",
+        memory_mode="disabled",
+        control_center={
+            "tabs": [{"app_id": "files", "pinned": False}],
+            "active_app_id": "files",
+        },
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    state = {
+        "tabs": [
+            {"app_id": "files", "pinned": True},
+            {"app_id": "terminal_2", "pinned": False},
+        ],
+        "active_app_id": "terminal_2",
+    }
+
+    result = await update_session(
+        session.id, SessionUpdateRequest(control_center=state), user, db
+    )
+
+    assert session.control_center == state
+    assert result["controlCenter"] == {
+        "tabs": [
+            {"appId": "files", "pinned": True},
+            {"appId": "terminal_2", "pinned": False},
+        ],
+        "activeAppId": "terminal_2",
+    }
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {
+            "tabs": [
+                {"app_id": "files", "pinned": False},
+                {"app_id": "files", "pinned": True},
+            ],
+            "active_app_id": "files",
+        },
+        {
+            "tabs": [{"app_id": "../files", "pinned": False}],
+            "active_app_id": "../files",
+        },
+        {
+            "tabs": [{"app_id": "files", "pinned": False}],
+            "active_app_id": None,
+        },
+        {"tabs": [], "active_app_id": "files"},
+        {
+            "tabs": [
+                {"app_id": f"app_{index}", "pinned": False}
+                for index in range(21)
+            ],
+            "active_app_id": "app_0",
+        },
+        None,
+    ],
+)
+def test_control_center_state_rejects_invalid_full_state(state) -> None:
+    with pytest.raises(ValidationError):
+        SessionUpdateRequest(control_center=state)
+
+
+async def test_control_center_state_can_be_empty() -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Test",
+        memory_mode="disabled",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+
+    result = await update_session(
+        session.id,
+        SessionUpdateRequest(control_center={"tabs": [], "active_app_id": None}),
+        user,
+        db,
+    )
+
+    assert session.control_center == {"tabs": [], "active_app_id": None}
+    assert result["controlCenter"] == {"tabs": [], "activeAppId": None}
+
+
+async def test_control_center_state_can_change_during_active_run() -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Test",
+        memory_mode="disabled",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+
+    await update_session(
+        session.id,
+        SessionUpdateRequest(
+            control_center={
+                "tabs": [{"app_id": "files", "pinned": True}],
+                "active_app_id": "files",
+            }
+        ),
+        user,
+        db,
+    )
+
+    assert session.control_center["tabs"][0]["pinned"] is True
+    db.scalar.assert_not_awaited()
+
+
+async def test_control_center_update_is_owner_scoped() -> None:
+    owner = _user()
+    other = _user()
+    session = ChatSession(id=uuid4(), user_id=owner.id, title="Privat")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+
+    with pytest.raises(ApiError) as exc_info:
+        await update_session(
+            session.id,
+            SessionUpdateRequest(control_center={"tabs": [], "active_app_id": None}),
+            other,
+            db,
+        )
+
+    assert exc_info.value.code == "session.notFound"
+    db.flush.assert_not_awaited()
 
 
 async def test_runtime_policy_cannot_change_during_active_run() -> None:

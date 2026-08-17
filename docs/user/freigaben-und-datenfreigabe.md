@@ -10,10 +10,10 @@ Wenn eine Aktion nicht automatisch erlaubt ist, pausiert der Agent und zeigt ein
 - zu speichernden Memory-Inhalt
 - technische Details
 
-Alle offenen Freigabeanfragen finden Sie außerdem unter **Einstellungen > Freigaben**.
+Alle offenen Freigabeanfragen finden Sie außerdem im globalen Bereich **Freigaben** des Control Centers.
 Die globale Liste zeigt die Ursprungssession und erlaubt dieselben Entscheidungen wie die
-Karte im Chat. Über den Session-Link können Sie den vollständigen Gesprächskontext öffnen.
-Das Badge am Benutzermenü zeigt die Anzahl der aktuell offenen Anfragen.
+Karte im Chat. Sie bündelt auch offene Agent-Rückfragen, die zur Beantwortung ihre Session
+öffnen. Das Badge am Control Center und am Benutzermenü zeigt offene Aktionen an.
 
 ## Entscheidungen
 
@@ -23,7 +23,7 @@ Das Badge am Benutzermenü zeigt die Anzahl der aktuell offenen Anfragen.
 | Einmal erlauben | Gilt nur für diese konkrete Aktion und ist die sichere Vorauswahl |
 | Passende Aktionen in dieser Session nicht mehr nachfragen | Der Haken ändert den Hauptbutton zu **Für Session erlauben** und erstellt eine widerrufbare Freigabe für den angezeigten Ressourcenumfang |
 
-Dauerhaft für eine Session erteilte Grants finden Sie weiterhin im Datei-Explorer. Dort
+Dauerhaft für eine Session erteilte Grants finden Sie weiterhin unter **Dateien** im Control Center. Dort
 können Sie diese widerrufen. Sie sind keine offenen Freigabeanfragen und erscheinen daher
 nicht in der globalen Pending-Liste.
 

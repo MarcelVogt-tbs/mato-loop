@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
   api: {
@@ -14,23 +14,10 @@ const { api } = vi.hoisted(() => ({
 vi.mock('src/boot/axios', () => ({ api }))
 
 import {
-  DEFAULT_WORKSPACE_SPLIT_RATIO,
-  MAX_WORKSPACE_SPLIT_RATIO,
-  MIN_WORKSPACE_SPLIT_RATIO,
   workspaceContextKey,
   withFileSuffix,
   useWorkspaceStore
 } from '../src/stores/workspace'
-
-const originalLocalStorage = globalThis.localStorage
-
-function storage(initialValue = null) {
-  let value = initialValue
-  return {
-    getItem: vi.fn(() => value),
-    setItem: vi.fn((_key, nextValue) => { value = nextValue })
-  }
-}
 
 function liveContext(operations) {
   return {
@@ -43,14 +30,8 @@ function liveContext(operations) {
 
 describe('workspace store', () => {
   beforeEach(() => {
-    delete globalThis.localStorage
     setActivePinia(createPinia())
     vi.clearAllMocks()
-  })
-
-  afterEach(() => {
-    if (originalLocalStorage) globalThis.localStorage = originalLocalStorage
-    else delete globalThis.localStorage
   })
 
   it('compares workspace contexts by value', () => {
@@ -65,47 +46,6 @@ describe('workspace store', () => {
       .toBe(workspaceContextKey(context))
     expect(workspaceContextKey({ ...context, connected: false }))
       .not.toBe(workspaceContextKey(context))
-  })
-
-  it('loads and persists a validated split ratio', () => {
-    globalThis.localStorage = storage('64')
-    const workspace = useWorkspaceStore()
-
-    expect(workspace.splitRatio).toBe(64)
-    workspace.setSplitRatio(67)
-    workspace.setSplitRatio(90)
-
-    expect(workspace.splitRatio).toBe(67)
-    expect(globalThis.localStorage.setItem).toHaveBeenCalledOnce()
-    expect(globalThis.localStorage.setItem).toHaveBeenCalledWith(
-      'matoLoopWorkspaceSplitRatio',
-      '67'
-    )
-  })
-
-  it('falls back when the persisted split ratio is invalid', () => {
-    globalThis.localStorage = storage('invalid')
-
-    expect(useWorkspaceStore().splitRatio).toBe(DEFAULT_WORKSPACE_SPLIT_RATIO)
-  })
-
-  it('keeps both split panes at least 30 percent wide', () => {
-    globalThis.localStorage = storage('30')
-    const workspace = useWorkspaceStore()
-
-    expect(MIN_WORKSPACE_SPLIT_RATIO).toBe(30)
-    expect(MAX_WORKSPACE_SPLIT_RATIO).toBe(70)
-    expect(workspace.splitRatio).toBe(30)
-    workspace.setSplitRatio(70)
-    workspace.setSplitRatio(29)
-    workspace.setSplitRatio(71)
-
-    expect(workspace.splitRatio).toBe(70)
-    expect(globalThis.localStorage.setItem).toHaveBeenCalledOnce()
-    expect(globalThis.localStorage.setItem).toHaveBeenCalledWith(
-      'matoLoopWorkspaceSplitRatio',
-      '70'
-    )
   })
 
   it('isolates entries when session or scope changes', async () => {
@@ -166,17 +106,8 @@ describe('workspace store', () => {
     workspace.configure({ workingDirectory: 'draft-project' })
 
     expect(await workspace.load('.')).toBe(false)
-    workspace.show()
+    workspace.returnToCurrentContext()
 
-    expect(api.get).not.toHaveBeenCalled()
-  })
-
-  it('opens without an API request before any context is configured', () => {
-    const workspace = useWorkspaceStore()
-
-    workspace.show()
-
-    expect(workspace.open).toBe(true)
     expect(api.get).not.toHaveBeenCalled()
   })
 
@@ -288,7 +219,6 @@ describe('workspace store', () => {
     })
     await workspace.preview('reports/result.txt')
 
-    expect(workspace.open).toBe(true)
     expect(workspace.viewedEntry).toEqual({
       kind: 'file', name: 'result.txt', path: 'reports/result.txt', size: 7
     })
@@ -316,7 +246,7 @@ describe('workspace store', () => {
     ])
     expect(workspace.fileUrl('download', 'reports/result.txt')).toContain('root_identity=original')
     await expect(workspace.createDirectory('.', 'blocked')).rejects.toThrow('Tool file contexts are read-only')
-    workspace.show()
+    workspace.returnToCurrentContext()
     expect(workspace.rootIdentity).toBeNull()
   })
 
@@ -356,7 +286,7 @@ describe('workspace store', () => {
       suppressErrorToast: true
     })
     expect(workspace.fileUrl('content', 'model.stl')).toContain('execution_agent_id=historical-agent')
-    workspace.show()
+    workspace.returnToCurrentContext()
     expect(workspace.workingDirectory).toBe('current')
     expect(workspace.workspaceContext).toEqual({
       executionAgentId: 'current-agent', rootId: 'current-root'
@@ -379,7 +309,6 @@ describe('workspace store', () => {
 
     expect(workspace.scope).toBe('session')
     expect(workspace.rootIdentity).toBeNull()
-    expect(workspace.open).toBe(true)
     expect(workspace.editorActive).toBe(true)
     expect(workspace.viewedEntry).toEqual({
       kind: 'file', name: 'skill-draft.json', path: 'files/skill-draft.json', size: 128

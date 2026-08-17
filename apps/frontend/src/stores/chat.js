@@ -3,6 +3,7 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
+import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useFileMediaSettingsStore } from 'src/stores/file-media-settings'
 import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -656,6 +657,12 @@ export const useChatStore = defineStore('chat', {
       this.sessionRequestController = controller
       this.current = null
       this.loadError = null
+      const controlCenter = useControlCenterStore()
+      if (id) {
+        controlCenter.bindSession(this.sessions.find((session) => session.id === id) || { id })
+      } else {
+        controlCenter.resetDraft()
+      }
       if (this.runSessionId !== id) {
         clearTimeout(this.reconnectTimer)
         this.reconnectTimer = null
@@ -681,6 +688,7 @@ export const useChatStore = defineStore('chat', {
       try {
         const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
         if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
+        controlCenter.syncSession(session)
         this.current = session
         void this.markSessionRead(session).catch(() => {})
         if (session.activeRun && this.runId !== session.activeRun.id) {
@@ -1095,14 +1103,35 @@ export const useChatStore = defineStore('chat', {
           ...(options.preferredExecutionAgentId && options.preferredRootId
             ? { working_directory: options.workingDirectory }
             : {}),
-          workspace_access: options.workspaceAccess
+          workspace_access: options.workspaceAccess,
+          control_center: controlCenterRequestState(useControlCenterStore())
         }
         const { data } = attachments.length
           ? await api.post('/sessions/with-attachments', buildAttachmentFormData(payload, attachments))
           : await api.post('/sessions', payload)
         const userMessage = data.message || { id: `local-${Date.now()}`, role: 'user', content }
         const session = { ...data.session, messages: [userMessage] }
-        const stillSelected = this.sessionLoadVersion === sessionLoadVersion
+        const wasStillSelected = this.sessionLoadVersion === sessionLoadVersion
+          && this.selectedSessionId === selectedSessionId
+          && !this.current
+        if (wasStillSelected) {
+          const controlCenter = useControlCenterStore()
+          try {
+            const reconciled = await controlCenter.attachCreatedSession(
+              session.id,
+              session.controlCenter
+            )
+            if (reconciled) session.controlCenter = reconciled
+          } catch {
+            if (
+              this.sessionLoadVersion === sessionLoadVersion
+              && this.selectedSessionId === selectedSessionId
+              && !this.current
+            ) controlCenter.syncSession(session)
+          }
+        }
+        const stillSelected = wasStillSelected
+          && this.sessionLoadVersion === sessionLoadVersion
           && this.selectedSessionId === selectedSessionId
           && !this.current
         this.sessions = [data.session, ...this.sessions.filter((item) => item.id !== session.id)]

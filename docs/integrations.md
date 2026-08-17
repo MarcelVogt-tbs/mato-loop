@@ -16,6 +16,12 @@ Authorization factories also provide the German approval title, concise action s
 
 Persisted configuration and external responses must not provide handlers, arbitrary JSON schemas, or prompt instructions. Duplicate tool names and contributions to undeclared configuration fields are programming errors. Host configuration values never become model arguments merely because an adapter contributes them.
 
+## Control Center Integrations
+
+An integration implementation may ship one Control Center view per integration type. Its inert ID, German label, Material icon, and Vue component are registered in the compiled frontend manifest. Multiple configured instances remain inside that one view. It uses normal typed MatoLoop APIs and stores; runtime settings require explicit authenticated backend contracts with the same ownership and effective-state rules as other settings.
+
+Control Center session metadata stores only bounded inert integration IDs, their order, and the active integration. Global Control Center sections such as notifications and approvals are not session metadata. Persisted integration configuration and external responses cannot provide component paths, JavaScript, HTML, routes, form schemas, or remote bundles. Unknown IDs never cause code loading. Independently installed frontend plugins would require a separate signed and isolated plugin platform and are not part of the integration contract.
+
 ## Execution Locations
 
 Every adapter declares one static execution location. `backend` adapters execute inside MatoLoop and cannot have an Execution Agent assignment. `agent` adapters represent local operations, require one configured Execution Agent, and contribute only host-declared tools whose operation names and schemas are compiled into MatoLoop. Configuration and agent advertisements cannot add executable schemas or permission behavior.

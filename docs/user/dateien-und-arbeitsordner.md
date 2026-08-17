@@ -10,7 +10,7 @@
 
 Neue Sessions besitzen zunächst keinen Computer und keinen Arbeitsbereich. Jeder Arbeitsbereich ist eine Wurzel, die ein Computer bereitstellt und selbst besitzt; das Backend besitzt keinen eigenen Arbeitsbereich. Ohne einen gewählten Computer und eine seiner Wurzeln funktioniert der Chat weiter und die Session-Dateien bleiben verfügbar. Computer-Arbeitsbereiche und lokale Integrationen stehen dann jedoch nicht zur Verfügung.
 
-MatoLoop unterstützt mehrere Computer. Unter **Sessioneinstellungen** wählen Sie den Computer. Dieser meldet eine oder mehrere Wurzeln und optional ein Home-Verzeichnis innerhalb einer Wurzel. Das Home ist nur die Vorgabe für neue Sessions. Danach speichert jede Session ihre gewählte Wurzel, ihren relativen Arbeitsordner und den dazugehörigen kanonischen aktuellen Ordner getrennt. Arbeitsbereich und aktueller Ordner werden im Datei-Explorer gewählt. Die Auswahl ist die Vorgabe für den nächsten Lauf; ein bereits laufender Lauf behält unveränderlich seinen bisherigen Computer und Pfad. Wird der Computer getrennt, erfolgt kein automatischer Wechsel und keine automatische Wiederholung.
+MatoLoop unterstützt mehrere Computer. Unter **Sessioneinstellungen** wählen Sie den Computer. Dieser meldet eine oder mehrere Wurzeln und optional ein Home-Verzeichnis innerhalb einer Wurzel. Das Home ist nur die Vorgabe für neue Sessions. Danach speichert jede Session ihre gewählte Wurzel, ihren relativen Arbeitsordner und den dazugehörigen kanonischen aktuellen Ordner getrennt. Arbeitsbereich und aktueller Ordner werden unter **Control Center > Dateien** gewählt. Die Auswahl ist die Vorgabe für den nächsten Lauf; ein bereits laufender Lauf behält unveränderlich seinen bisherigen Computer und Pfad. Wird der Computer getrennt, erfolgt kein automatischer Wechsel und keine automatische Wiederholung.
 
 Computer gehören genau einem Benutzer und können nicht von anderen Konten ausgewählt werden. Diese Anwendungsgrenze ersetzt keine Trennung auf dem Betriebssystem des Computers. Dateien in dessen externem Arbeitsbereich werden beim Löschen des MatoLoop-Kontos nicht automatisch entfernt.
 
@@ -26,9 +26,9 @@ Der Session-Speicher enthält fünf Bereiche:
 
 Nur `files` ist direkt veränderbar. Die übrigen Bereiche werden von MatoLoop verwaltet, können aber gelesen oder als Kopierquelle verwendet werden.
 
-## Datei-Explorer
+## Dateien im Control Center
 
-Im Explorer können Sie:
+In der App **Dateien** können Sie:
 
 - Ordner öffnen, filtern und weitere Einträge nachladen
 - einen vom Computer gemeldeten Arbeitsbereich wählen

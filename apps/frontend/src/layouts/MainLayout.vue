@@ -40,7 +40,7 @@
             dense
             :icon="notifications.unreadCount || attentionCount ? 'notifications' : 'notifications_none'"
             :aria-label="notificationBellLabel"
-            @click="openNotifications"
+            @click="openControlCenterApp('notifications')"
           >
             <q-badge
               v-if="notificationBadgeCount"
@@ -297,14 +297,13 @@
                 <q-item
                   clickable
                   v-ripple
-                  :to="{ name: 'settings-approvals' }"
                   v-close-popup
-                  @click="closeDrawerOnMobile"
+                  @click="openControlCenterApp('approvals')"
                 >
                   <q-item-section avatar><q-icon name="pending_actions" /></q-item-section>
                   <q-item-section>Freigaben</q-item-section>
-                  <q-item-section v-if="approvals.pendingCount" side>
-                    <q-badge color="warning" text-color="dark" :label="approvals.pendingCount" />
+                  <q-item-section v-if="attentionCount" side>
+                    <q-badge color="warning" text-color="dark" :label="attentionCount" />
                   </q-item-section>
                 </q-item>
                 <q-item clickable v-ripple to="/settings" v-close-popup @click="closeDrawerOnMobile">
@@ -371,25 +370,29 @@
       </q-btn>
       <q-space />
       <q-btn
-        v-if="showFloatingWorkspace"
-        id="workspace-explorer-toggle"
+        v-if="showFloatingControlCenter"
+        id="control-center-toggle"
         class="app-floating-control"
         round
         unelevated
-        icon="folder_open"
-        aria-label="Datei-Explorer öffnen"
-        :aria-expanded="workspace.open"
-        aria-controls="workspace-file-panel"
-        @click="toggleWorkspace"
+        icon="apps"
+        aria-label="Control Center öffnen"
+        :aria-expanded="controlCenter.open"
+        aria-controls="control-center-panel"
+        @click="openControlCenter"
       >
-        <q-tooltip>Datei-Explorer öffnen</q-tooltip>
+        <q-badge
+          v-if="notificationBadgeCount"
+          floating
+          rounded
+          :color="attentionCount ? 'warning' : 'primary'"
+          :text-color="attentionCount ? 'dark' : 'white'"
+          :label="notificationBadgeLabel"
+          aria-hidden="true"
+        />
+        <q-tooltip>Control Center öffnen</q-tooltip>
       </q-btn>
     </div>
-
-    <NotificationCenterDialog
-      v-model="notificationDialogOpen"
-      @navigated="closeDrawerOnMobile"
-    />
 
     <q-dialog v-model="renameDialogOpen">
       <q-card class="session-rename-dialog app-surface">
@@ -425,14 +428,15 @@
 
     <q-dialog
       v-if="route.name === 'chat' && $q.screen.lt.md"
-      :model-value="workspace.open"
+      :model-value="controlCenter.open"
+      aria-label="Control Center"
       maximized
       transition-show="slide-left"
       transition-hide="slide-right"
-      @update:model-value="setWorkspaceOpen"
+      @update:model-value="setControlCenterOpen"
     >
-      <q-card id="workspace-file-panel" class="app-file-dialog">
-        <FileExplorerPanel />
+      <q-card class="app-file-dialog">
+        <ControlCenterPanel />
       </q-card>
     </q-dialog>
 
@@ -447,12 +451,12 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import AppLogo from 'components/AppLogo.vue'
-import FileExplorerPanel from 'components/FileExplorerPanel.vue'
-import NotificationCenterDialog from 'components/NotificationCenterDialog.vue'
+import ControlCenterPanel from 'components/ControlCenterPanel.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
+import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
 import { useWorkspaceStore } from 'stores/workspace'
@@ -471,6 +475,7 @@ const router = useRouter()
 const auth = useAuthStore()
 const identity = useAgentIdentityStore()
 const chat = useChatStore()
+const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()
 const approvals = useApprovalStore()
@@ -487,9 +492,9 @@ const sessionStatuses = computed(() => new Map(chat.sessions.map((session) => [
   )
 ])))
 const showFloatingNavigation = computed(() => !drawerOpen.value)
-const showFloatingWorkspace = computed(() => route.name === 'chat' && !workspace.open)
+const showFloatingControlCenter = computed(() => route.name === 'chat' && !controlCenter.open)
 const showFloatingControls = computed(() => (
-  showFloatingNavigation.value || showFloatingWorkspace.value
+  showFloatingNavigation.value || showFloatingControlCenter.value
 ))
 const attentionCount = computed(() => approvals.pending.length + questions.pending.length)
 const notificationBadgeCount = computed(() => attentionCount.value || notifications.unreadCount)
@@ -510,7 +515,6 @@ const navigationLabel = computed(() => {
   if (!attentionCount.value && !notifications.unreadCount) return 'Navigation öffnen'
   return `Navigation öffnen, ${notificationBellLabel.value.replace('Benachrichtigungen öffnen, ', '')}`
 })
-const notificationDialogOpen = ref(false)
 const renameDialogOpen = ref(false)
 const renameSessionId = ref(null)
 const renameTitle = ref('')
@@ -604,9 +608,20 @@ function openNavigation() {
   drawerOpen.value = true
 }
 
-function openNotifications() {
+async function openControlCenterApp(appId) {
   if ($q.screen.lt.md) drawerOpen.value = false
-  notificationDialogOpen.value = true
+  if (route.name !== 'chat') {
+    await router.push({
+      name: 'chat',
+      query: chat.current?.id ? { session: chat.current.id, controlCenter: appId } : { controlCenter: appId }
+    })
+    return
+  }
+  try {
+    await controlCenter.openApp(appId)
+  } catch {
+    // The central API interceptor displays the error and restores the previous tabs.
+  }
 }
 
 async function closeNavigation() {
@@ -630,7 +645,10 @@ async function refreshActiveSessions() {
   ) return
   sessionActivityRefreshPending = true
   try {
-    const requests = [approvals.fetchPending({ suppressErrorToast: true })]
+    const requests = [
+      approvals.fetchPending({ suppressErrorToast: true }),
+      questions.fetchPending({ suppressErrorToast: true })
+    ]
     if (chat.sessions.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))) {
       requests.push(chat.refreshSessions({ suppressErrorToast: true }))
     }
@@ -683,28 +701,31 @@ async function confirmDiscardedEdit() {
   return accepted
 }
 
-async function toggleWorkspace() {
-  if (workspace.open && !await confirmDiscardedEdit()) return
-  workspace.toggle()
+async function openControlCenter() {
+  try {
+    await controlCenter.openApp(controlCenter.activeContentId || 'files')
+  } catch {
+    // The central API interceptor displays the error and restores the previous tabs.
+  }
 }
 
-async function setWorkspaceOpen(open) {
+async function setControlCenterOpen(open) {
   if (open) {
-    workspace.show()
+    controlCenter.open = true
     return
   }
-  if (await confirmDiscardedEdit()) workspace.open = false
+  if (await confirmDiscardedEdit()) controlCenter.open = false
 }
 
 watch(
-  () => [workspace.open, $q.screen.lt.lg],
+  () => [controlCenter.open, $q.screen.lt.lg],
   ([open, narrow]) => {
     if (open && narrow) drawerOpen.value = false
   }
 )
 
 watch(() => route.name, (name) => {
-  if (name !== 'chat') workspace.open = false
+  if (name !== 'chat') controlCenter.open = false
 })
 
 onBeforeRouteUpdate(confirmDiscardedEdit)

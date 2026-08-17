@@ -162,6 +162,20 @@ class ChatSession(Base):
         String(20), nullable=False, default=TitleGenerationStatus.PENDING.value
     )
     is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    control_center: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=lambda: {
+            "tabs": [{"app_id": "files", "pinned": False}],
+            "active_app_id": "files",
+        },
+        server_default=text(
+            "jsonb_build_object("
+            "'tabs', jsonb_build_array(jsonb_build_object("
+            "'app_id', 'files', 'pinned', false)), "
+            "'active_app_id', 'files')"
+        ),
+    )
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
     memory_mode: Mapped[str] = mapped_column(
         String(20), nullable=False, default=MemoryMode.FULL.value

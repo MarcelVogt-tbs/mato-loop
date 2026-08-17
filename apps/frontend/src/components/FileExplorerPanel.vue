@@ -10,26 +10,23 @@
       @toggle-fullscreen="viewerFullscreen = true"
     />
     <div v-show="!workspace.viewedEntry" class="column full-height no-wrap">
-    <q-toolbar class="file-explorer__toolbar q-px-md">
-      <q-icon name="folder_open" color="primary" size="26px" class="q-mr-sm" />
-      <q-toolbar-title class="text-subtitle1 text-weight-bold">Dateien</q-toolbar-title>
-      <q-btn
-        class="file-icon-action"
-        flat
-        round
-        dense
-        icon="refresh"
-        aria-label="Aktualisieren"
-        :loading="workspace.loading['.']"
-        :disable="!explorerAvailable"
-        @click="workspace.refresh()"
-      >
-        <q-tooltip>Aktualisieren</q-tooltip>
-      </q-btn>
-      <q-btn v-if="hasOverflowActions" class="file-icon-action" flat round dense icon="more_vert" aria-label="Weitere Dateiaktionen">
-        <q-tooltip>Weitere Aktionen</q-tooltip>
-        <q-menu anchor="bottom right" self="top right" class="app-action-menu">
-          <q-list padding class="file-toolbar-menu">
+    <ControlCenterContentHeader
+      icon="folder_open"
+      title="Dateien"
+      integration-id="files"
+      refreshable
+      :refreshing="workspace.loading['.']"
+      :refresh-disabled="!explorerAvailable"
+      :custom-menu="hasOverflowActions"
+      :can-move-left="integrationIndex > 0"
+      :can-move-right="integrationIndex >= 0 && integrationIndex < controlCenter.tabs.length - 1"
+      @refresh="workspace.refresh()"
+      @close="emit('close')"
+      @remove="emit('remove', 'files')"
+      @move="emit('move', 'files', $event)"
+    >
+      <template #menu>
+        <template v-if="hasOverflowActions">
             <q-item
               v-if="!workspace.rootIdentity && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('workspace.list')"
               clickable
@@ -56,13 +53,9 @@
               <q-item-section avatar><q-icon name="verified_user" /></q-item-section>
               <q-item-section>Session-Freigaben</q-item-section>
             </q-item>
-          </q-list>
-        </q-menu>
-      </q-btn>
-      <q-btn class="file-icon-action" flat round dense icon="close" aria-label="Explorer schließen" @click="closeExplorer">
-        <q-tooltip>Explorer schließen</q-tooltip>
-      </q-btn>
-    </q-toolbar>
+        </template>
+      </template>
+    </ControlCenterContentHeader>
     <div class="file-explorer__controls q-px-md q-pb-md q-gutter-y-sm">
       <q-btn-toggle
         :model-value="workspace.scope"
@@ -381,6 +374,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import FileTreeNode from 'components/FileTreeNode.vue'
 import FileViewerPanel from 'components/FileViewerPanel.vue'
 import { useConfirm } from 'src/composables/confirm'
@@ -388,6 +382,7 @@ import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
+import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useFileMediaSettingsStore } from 'stores/file-media-settings'
 import {
@@ -398,11 +393,13 @@ import {
 } from 'stores/workspace'
 
 defineOptions({ name: 'FileExplorerPanel' })
+const emit = defineEmits(['close', 'remove', 'move'])
 
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const workspace = useWorkspaceStore()
 const chat = useChatStore()
+const controlCenter = useControlCenterStore()
 const executionAgents = useExecutionAgentStore()
 const fileMediaSettings = useFileMediaSettingsStore()
 const approvals = useApprovalStore()
@@ -432,6 +429,7 @@ const fileTypeOptions = [
   { label: 'OpenSCAD (.scad)', value: '.scad' }
 ]
 const createFileName = computed(() => withFileSuffix(createName.value, createSuffix.value))
+const integrationIndex = computed(() => controlCenter.tabs.findIndex((tab) => tab.appId === 'files'))
 const selectedEntry = computed(() => {
   if (workspace.selectedPath === '.') return { kind: 'directory', path: '.' }
   return Object.values(workspace.entries).flat().find((item) => item.path === workspace.selectedPath)
@@ -721,9 +719,7 @@ async function focusPath(path, fallback = '.') {
 async function closeExplorer() {
   if (!await confirmDiscard()) return
   viewerFullscreen.value = false
-  workspace.open = false
-  await nextTick()
-  document.getElementById('workspace-explorer-toggle')?.focus()
+  emit('close')
 }
 
 async function confirmDiscard() {

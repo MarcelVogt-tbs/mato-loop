@@ -683,7 +683,7 @@ async def test_projection_accepts_and_downsizes_mpo_images_for_provider() -> Non
     assert len(normalized) <= service_module._MODEL_IMAGE_MAX_BYTES
 
 
-async def test_session_tool_result_read_reactivates_historical_image(monkeypatch) -> None:
+async def test_session_image_read_reactivates_historical_image(monkeypatch) -> None:
     attachment_id = uuid4()
     reference = _attachment_reference(
         uuid4(),
@@ -712,25 +712,31 @@ async def test_session_tool_result_read_reactivates_historical_image(monkeypatch
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "read", "name": "session_read", "arguments": {}}],
+                "tool_calls": [
+                    {
+                        "id": "read",
+                        "name": "read",
+                        "arguments": {
+                            "root": "session",
+                            "path": reference["storage_path"],
+                        },
+                    }
+                ],
             },
             {
                 "role": "tool",
                 "tool_call_id": "read",
                 "content": json.dumps(
                     {
-                        "messageId": str(uuid4()),
-                        "offset": 0,
-                        "content": "Image generated.",
-                        "attachments": [
-                            {
-                                "id": str(attachment_id),
-                                "filename": "scan.png",
-                                "kind": "image",
-                                "mimeType": "image/png",
-                                "path": reference["storage_path"],
-                            }
-                        ],
+                        "root": "session",
+                        "path": reference["storage_path"],
+                        "imageAttachment": {
+                            "id": str(attachment_id),
+                            "filename": "scan.png",
+                            "kind": "image",
+                            "mimeType": "image/png",
+                        },
+                        "contentIsUntrusted": True,
                     }
                 ),
             },

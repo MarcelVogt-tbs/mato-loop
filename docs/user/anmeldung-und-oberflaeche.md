@@ -16,7 +16,7 @@ Beim Löschen entfernt MatoLoop die zugehörigen Datenbankdaten und Session-Bäu
 
 Die linke Seitenleiste enthält:
 
-- Benachrichtigungsglocke für offene Aktionen und dauerhafte Hinweise
+- Benachrichtigungsglocke als direkter Zugang zu **Benachrichtigungen** im Control Center
 - Schaltfläche für eine neue Session
 - gruppierte Liste vorhandener Sessions
 - Statushinweise für aktive Läufe und offene Freigaben
@@ -24,15 +24,19 @@ Die linke Seitenleiste enthält:
 
 Sessions werden in **Angepinnt**, **Heute**, **Gestern**, **Letzte 7 Tage** und **Älter** gruppiert. Weitere Einträge lädt MatoLoop beim Scrollen automatisch nach. Nach einem Ladefehler kann **Weitere Sessions laden** verwendet werden.
 
-## Benachrichtigungen
+## Control Center
 
-Die Glocke bündelt offene Freigaben und Rückfragen mit dauerhaften Hinweisen. Freigaben und Rückfragen bleiben mit der betreffenden Session verbunden; ein Klick öffnet dort die vorhandene Entscheidungs- oder Eingabeoberfläche. Dauerhafte Hinweise können einzeln oder gemeinsam als gelesen markiert werden. Das Öffnen der Glocke allein markiert nichts als gelesen.
+Die schwebende Schaltfläche **Control Center** öffnet eine gemeinsame Arbeitsfläche für globale Bereiche und die Integrationen der aktuellen Session. **Benachrichtigungen** und **Freigaben** stehen als feste globale Schaltflächen bereit. **Dateien** ist die eingebaute Session-Integration; weitere mit MatoLoop ausgelieferte Integrationen können eigene Ansichten ergänzen. Integrationstabs lassen sich per Drag-and-drop sortieren. Auf Touch-Geräten und mit der Tastatur stehen dafür zusätzlich **Nach links verschieben** und **Nach rechts verschieben** im Menü des Inhalts-Headers bereit. Reihenfolge und aktive Integration werden serverseitig für die Session gespeichert. Neue Sessions beginnen mit **Dateien**.
+
+Der Schließen-Button im Inhalts-Header klappt das gesamte Control Center zu, ohne die Session zu verändern. **Integration aus Session entfernen** ist davon getrennt im Drei-Punkte-Menü untergebracht und erfordert eine Bestätigung. Gespeicherte Daten werden dabei nicht gelöscht; die Integration kann später erneut hinzugefügt werden.
+
+Die Glocke öffnet direkt **Benachrichtigungen**, ohne den Zustand einer Session zu verändern. Dauerhafte Hinweise können einzeln oder gemeinsam als gelesen markiert werden. **Freigaben** zeigt offene Entscheidungen und Agent-Rückfragen aus allen Sessions; Entscheidungen sind dort möglich, Rückfragen öffnen ihre Session zur Beantwortung im Chat. Die gleichen Freigaben und Rückfragen bleiben zusätzlich im zugehörigen Chat sichtbar.
 
 Normale Chat-Antworten erscheinen nicht zusätzlich als Benachrichtigung. Erinnerungen und Ergebnisse geplanter Automationen werden diese Zentrale später verwenden.
 
 ## Desktop und Mobilgeräte
 
-Auf größeren Bildschirmen können Chat und Datei-Explorer nebeneinander angezeigt und in der Breite angepasst werden. Auf schmalen Bildschirmen öffnet sich der Datei-Explorer als Vollbilddialog. Ist die Navigation geschlossen, erscheint eine schwebende Menüschaltfläche.
+Auf größeren Bildschirmen können Chat und Control Center nebeneinander angezeigt und in der Breite angepasst werden. Auf schmalen Bildschirmen öffnet sich das Control Center als Vollbilddialog. Ist die Navigation geschlossen, erscheint eine schwebende Menüschaltfläche.
 
 ## Heller und dunkler Modus
 

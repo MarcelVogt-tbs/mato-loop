@@ -51,7 +51,7 @@ Für Aktualisieren, Zusammenführen und Berücksichtigung stehen jeweils diese R
 
 Die Standardwerte sind **Automatisch** für Aktualisierungen sowie **Nachfragen** für Zusammenführungen und Änderungen an **Immer berücksichtigen**.
 
-Offene Dreaming-Entscheidungen finden Sie unter **Einstellungen > Freigaben** und im Benachrichtigungsbereich. Diese Memory-Freigaben bleiben auch nach einem Backend-Neustart offen. Beim Genehmigen prüft MatoLoop die betroffenen Erinnerungen, Belege und Richtlinien erneut. Wurde eine Erinnerung inzwischen geändert, läuft die Freigabe ab, ohne einen Teil der vorgeschlagenen Änderung anzuwenden. Zusammenführungen bewahren Belege, private Einstufung und vorhandene Markierungen gemeinsam in einer Transaktion.
+Offene Dreaming-Entscheidungen finden Sie unter **Control Center > Freigaben**. Diese Memory-Freigaben bleiben auch nach einem Backend-Neustart offen. Beim Genehmigen prüft MatoLoop die betroffenen Erinnerungen, Belege und Richtlinien erneut. Wurde eine Erinnerung inzwischen geändert, läuft die Freigabe ab, ohne einen Teil der vorgeschlagenen Änderung anzuwenden. Zusammenführungen bewahren Belege, private Einstufung und vorhandene Markierungen gemeinsam in einer Transaktion.
 
 Dreaming kann manuell für alle oder für eine einzelne Session gestartet werden. Die Oberfläche zeigt Laufstatus und die Anzahl neu angelegter beziehungsweise aktualisierter Erinnerungen.
 

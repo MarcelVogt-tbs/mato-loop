@@ -511,6 +511,42 @@ body.body--dark .app-floating-control--flat {
   border-left: 1px solid var(--app-surface-border);
 }
 
+.control-center {
+  min-width: 0;
+  min-height: 0;
+  background: var(--app-shell-bg);
+}
+
+.control-center__tabs {
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.control-center__tab--dragging {
+  opacity: 0.45;
+}
+
+.control-center__tab--drop-before {
+  box-shadow: inset 2px 0 var(--q-primary);
+}
+
+.control-center__tab--drop-after {
+  box-shadow: inset -2px 0 var(--q-primary);
+}
+
+.control-center__content,
+.notification-center-app,
+.approval-center-app {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.notification-center__text {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .chat-page__content {
   min-width: 0;
   min-height: 0;

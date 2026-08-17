@@ -1893,17 +1893,18 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
+    normalized_path = context.root_files.normalize_relative_path(arguments.path)
     kind: str
     if arguments.root == "workspace":
         stat_result = await _workspace_request(
             context,
             "workspace.stat",
-            {"path": context.root_files.normalize_relative_path(arguments.path)},
+            {"path": normalized_path},
             WorkspaceStatResult,
         )
         kind = stat_result.kind
     else:
-        kind = context.root_files.path_kind(arguments.root, arguments.path)
+        kind = context.root_files.path_kind(arguments.root, normalized_path)
     if kind == "directory":
         if arguments.root == "workspace":
             result = await _workspace_request(
@@ -1946,12 +1947,41 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         )
     if kind != "file":
         return ToolResult.error("file.unsupportedType")
+    if arguments.root == "session":
+        filters = [
+            MessageAttachment.storage_path == normalized_path,
+            MessageAttachment.kind == "image",
+            MessageAttachment.processing_status == "ready",
+            Message.session_id == context.session.id,
+            Message.error_code.is_(None),
+        ]
+        if context.model_trust_level == TrustLevel.PUBLIC:
+            filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
+        attachment = await context.db.scalar(
+            select(MessageAttachment)
+            .join(Message, Message.id == MessageAttachment.message_id)
+            .where(*filters)
+        )
+        if isinstance(attachment, MessageAttachment):
+            return ToolResult.json(
+                {
+                    "root": "session",
+                    "path": normalized_path,
+                    "imageAttachment": {
+                        "id": str(attachment.id),
+                        "filename": attachment.filename,
+                        "kind": "image",
+                        "mimeType": attachment.mime_type,
+                    },
+                    "contentIsUntrusted": True,
+                }
+            )
     if arguments.root == "workspace":
         result = await _workspace_request(
             context,
             "workspace.read",
             {
-                "path": context.root_files.normalize_relative_path(arguments.path),
+                "path": normalized_path,
                 "offset": arguments.offset,
                 "limit": arguments.limit,
                 "maxLineLength": 2_000,
@@ -4296,7 +4326,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "read",
-            "Read a file or directory in an explicit root. Files return numbered UTF-8 lines; directories return entries. Continue with offset and limit.",
+            "Read a directory, UTF-8 text file, or managed session image. Images become image input. "
+            "Continue text and directory reads with offset and limit.",
             ReadArguments,
             _read,
             tool_type="shared",

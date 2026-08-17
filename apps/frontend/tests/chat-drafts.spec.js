@@ -14,6 +14,8 @@ vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
 import { MAX_ATTACHMENT_DRAFT_BYTES, useChatStore } from '../src/stores/chat'
+import { useControlCenterStore } from '../src/stores/control-center'
+import { controlCenterIntegrationIds } from 'src/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
 
@@ -55,6 +57,7 @@ class EventSourceMock {
 describe('chat drafts', () => {
   beforeEach(() => {
     global.window = { localStorage: createStorage() }
+    controlCenterIntegrationIds.add('calendar')
     setActivePinia(createPinia())
     useChatStore().setDraftOwner('user-1')
     vi.clearAllMocks()
@@ -62,6 +65,7 @@ describe('chat drafts', () => {
   })
 
   afterEach(() => {
+    controlCenterIntegrationIds.delete('calendar')
     vi.useRealTimers()
     delete global.window
     delete global.EventSource
@@ -215,6 +219,50 @@ describe('chat drafts', () => {
     expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
       web_search_policy: 'required'
     }))
+  })
+
+  it('does not reselect a created session after switching during tab reconciliation', async () => {
+    let resolveTabs
+    api.post.mockResolvedValue({
+      data: {
+        session: {
+          id: 'created-session',
+          messages: [],
+          controlCenter: {
+            tabs: [{ appId: 'files', pinned: false }],
+            activeAppId: 'files'
+          }
+        },
+        runId: 'run-1'
+      }
+    })
+    api.patch.mockReturnValue(new Promise((resolve) => { resolveTabs = resolve }))
+    const chat = useChatStore()
+    const controlCenter = useControlCenterStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    await controlCenter.openApp('calendar')
+
+    const creating = chat.startSession('Neue Session')
+    await vi.waitFor(() => expect(api.patch).toHaveBeenCalled())
+    api.get.mockReturnValue(new Promise(() => {}))
+    void chat.loadSession('other-session')
+    expect(controlCenter.sessionId).toBe('other-session')
+    expect(controlCenter.ready).toBe(false)
+    resolveTabs({
+      data: {
+        controlCenter: {
+          tabs: [
+            { appId: 'files', pinned: false },
+            { appId: 'calendar', pinned: false }
+          ],
+          activeAppId: 'calendar'
+        }
+      }
+    })
+
+    expect(await creating).toEqual({ created: false, sessionId: 'created-session' })
+    expect(chat.current).toBeNull()
+    expect(chat.selectedSessionId).toBe('other-session')
   })
 
   it('creates a session without a computer or backend-local working directory', async () => {

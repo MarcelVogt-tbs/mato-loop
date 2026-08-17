@@ -294,6 +294,38 @@ def _provider_for_session(ai: AiSettings, model):
     return next((item for item in ai.providers if item.id == model.provider_id), None)
 
 
+class ControlCenterTabState(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    app_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_-]*$")
+    pinned: bool
+
+
+class ControlCenterState(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    tabs: list[ControlCenterTabState] = Field(max_length=20)
+    active_app_id: str | None = Field(max_length=64, pattern=r"^[a-z][a-z0-9_-]*$")
+
+    @model_validator(mode="after")
+    def validate_tabs(self) -> ControlCenterState:
+        app_ids = [tab.app_id for tab in self.tabs]
+        if len(app_ids) != len(set(app_ids)):
+            raise ValueError("control center app IDs must be unique")
+        if (not app_ids and self.active_app_id is not None) or (
+            app_ids and self.active_app_id not in app_ids
+        ):
+            raise ValueError("active app ID must identify a tab, or be null when tabs are empty")
+        return self
+
+
+def default_control_center_state() -> ControlCenterState:
+    return ControlCenterState(
+        tabs=[ControlCenterTabState(app_id="files", pinned=False)],
+        active_app_id="files",
+    )
+
+
 class SessionCreateRequest(BaseModel):
     content: str = Field(min_length=1, max_length=200_000)
     model_id: UUID | None = None
@@ -303,6 +335,7 @@ class SessionCreateRequest(BaseModel):
     preferred_root_id: UUID | None = None
     working_directory: str | None = Field(default=None, max_length=1_000)
     workspace_access: str = Field(default="read-only", pattern="^(read-only|read-write)$")
+    control_center: ControlCenterState = Field(default_factory=default_control_center_state)
 
 
 class SessionUpdateRequest(BaseModel):
@@ -315,6 +348,7 @@ class SessionUpdateRequest(BaseModel):
     preferred_root_id: UUID | None = None
     working_directory: str | None = Field(default=None, max_length=1_000)
     workspace_access: str | None = Field(default=None, pattern="^(read-only|read-write)$")
+    control_center: ControlCenterState = Field(default=None)
 
 
 async def _execution_home(
@@ -553,11 +587,22 @@ def session_payload(
     last_message_at: datetime | None | object = _LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
+    control_center = item.control_center or {
+        "tabs": [{"app_id": "files", "pinned": False}],
+        "active_app_id": "files",
+    }
     payload = {
         "id": str(item.id),
         "title": item.title,
         "titleGenerationStatus": item.title_generation_status,
         "pinned": bool(item.is_pinned),
+        "controlCenter": {
+            "tabs": [
+                {"appId": tab["app_id"], "pinned": tab["pinned"]}
+                for tab in control_center["tabs"]
+            ],
+            "activeAppId": control_center["active_app_id"],
+        },
         "modelId": str(item.model_config_id) if item.model_config_id else None,
         "memoryMode": item.memory_mode,
         "webSearchPolicy": item.web_search_policy,
@@ -972,6 +1017,7 @@ async def _create_session(
         working_directory=working_directory,
         current_directory=current_directory,
         workspace_access=payload.workspace_access,
+        control_center=payload.control_center.model_dump(mode="json"),
     )
     db.add(item)
     await _add_directory_grant(
@@ -1199,6 +1245,8 @@ async def update_session(
         item.title_generation_status = TitleGenerationStatus.SKIPPED.value
     if "pinned" in fields and payload.pinned is not None:
         item.is_pinned = payload.pinned
+    if "control_center" in fields:
+        item.control_center = payload.control_center.model_dump(mode="json")
     if "model_id" in fields:
         ai = await load_effective_ai(db, user.id)
         if payload.model_id is not None:

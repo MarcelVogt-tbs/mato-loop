@@ -34,10 +34,12 @@ Vor dem Senden können Sie unter anderem auswählen:
 - Websuchmodus
 - Computer
 
-Arbeitsbereich und aktueller Ordner werden bei Bedarf im Datei-Explorer gewählt. Ohne gewählten und verbundenen Computer bleibt der Chat nutzbar; lokale Arbeitsbereiche und lokale Integrationen fehlen.
+Arbeitsbereich und aktueller Ordner werden bei Bedarf unter **Control Center > Dateien** gewählt. Ohne gewählten und verbundenen Computer bleibt der Chat nutzbar; lokale Arbeitsbereiche und lokale Integrationen fehlen.
 
 ## 6. Freigaben prüfen
 
 Benötigt eine Aktion Ihre Zustimmung, erscheint die Anfrage direkt beim zugehörigen Tool-Aufruf. Prüfen Sie Ressource, Risikostufe und Details, bevor Sie **Einmal erlauben**, **Für Session erlauben** oder **Ablehnen** wählen.
+
+Offene Entscheidungen aus allen Sessions finden Sie zusätzlich unter **Control Center > Freigaben**.
 
 Als Nächstes: [Chat und Sessions](chat-und-sessions.md)
