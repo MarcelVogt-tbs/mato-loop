@@ -16,6 +16,7 @@ from sqlalchemy.orm import Load, selectinload
 
 from mato_loop_backend.memory.indexing import MemoryIndexService
 from mato_loop_backend.models import (
+    AgentRun,
     ApprovalRequest,
     ChatSession,
     MemoryCategory,
@@ -159,10 +160,20 @@ def memory_lexical_terms(content: str) -> list[str]:
     return terms
 
 
-def memory_reference_options() -> tuple[Load, Load]:
+def memory_reference_options(owner_id: UUID) -> tuple[Load, Load, Load]:
+    owned_message_ids = select(Message.id).join(ChatSession).where(ChatSession.user_id == owner_id)
     return (
-        selectinload(MemoryRecord.source_session),
-        selectinload(MemoryRecord.source_message).load_only(Message.created_at),
+        selectinload(
+            MemoryRecord.source_session.and_(ChatSession.user_id == owner_id)
+        ),
+        selectinload(
+            MemoryRecord.source_message.and_(Message.id.in_(owned_message_ids))
+        ).load_only(Message.created_at),
+        selectinload(
+            MemoryRecord.source_messages.and_(
+                MemorySourceMessage.message_id.in_(owned_message_ids)
+            )
+        ),
     )
 
 
@@ -210,17 +221,19 @@ class MemoryService:
     async def create_manual(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         content: str,
         category: MemoryCategory,
         trust_level: TrustLevel,
     ) -> MemoryRecord:
         _, content_hash = normalize_content(content)
-        if await MemoryService._duplicate_by_hash(db, content_hash) is not None:
+        if await MemoryService._duplicate_by_hash(db, owner_id=owner_id, content_hash=content_hash) is not None:
             raise MemoryDuplicateError
         try:
             async with db.begin_nested():
                 item = await MemoryService._create(
                     db,
+                    owner_id=owner_id,
                     content=content,
                     category=category,
                     source_type=MemorySourceType.MANUAL,
@@ -228,7 +241,7 @@ class MemoryService:
                 )
                 return item
         except IntegrityError as exc:
-            if await MemoryService._duplicate_by_hash(db, content_hash) is None:
+            if await MemoryService._duplicate_by_hash(db, owner_id=owner_id, content_hash=content_hash) is None:
                 raise
             raise MemoryDuplicateError from exc
 
@@ -236,6 +249,7 @@ class MemoryService:
     async def create_tool(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         content: str,
         category: MemoryCategory,
         trust_level: TrustLevel,
@@ -246,6 +260,7 @@ class MemoryService:
     ) -> MemoryMutation:
         existing = await db.scalar(
             select(MemoryRecord).where(
+                MemoryRecord.user_id == owner_id,
                 MemoryRecord.source_type == MemorySourceType.TOOL_CALL.value,
                 MemoryRecord.source_run_id == run_id,
                 MemoryRecord.source_tool_call_id == tool_call_id,
@@ -254,13 +269,16 @@ class MemoryService:
         if existing is not None:
             return MemoryMutation(existing, created=True)
         _, content_hash = normalize_content(content)
-        duplicate = await MemoryService._duplicate_by_hash(db, content_hash)
+        duplicate = await MemoryService._duplicate_by_hash(
+            db, owner_id=owner_id, content_hash=content_hash
+        )
         if duplicate is not None:
             return MemoryMutation(duplicate, duplicate=True)
         try:
             async with db.begin_nested():
                 item = await MemoryService._create(
                     db,
+                    owner_id=owner_id,
                     content=content,
                     category=category,
                     source_type=MemorySourceType.TOOL_CALL,
@@ -275,6 +293,7 @@ class MemoryService:
         except IntegrityError:
             replay = await db.scalar(
                 select(MemoryRecord).where(
+                    MemoryRecord.user_id == owner_id,
                     MemoryRecord.source_type == MemorySourceType.TOOL_CALL.value,
                     MemoryRecord.source_run_id == run_id,
                     MemoryRecord.source_tool_call_id == tool_call_id,
@@ -282,7 +301,9 @@ class MemoryService:
             )
             if replay is not None:
                 return MemoryMutation(replay, created=True)
-            duplicate = await MemoryService._duplicate_by_hash(db, content_hash)
+            duplicate = await MemoryService._duplicate_by_hash(
+                db, owner_id=owner_id, content_hash=content_hash
+            )
             if duplicate is None:
                 raise
             return MemoryMutation(duplicate, duplicate=True)
@@ -291,6 +312,7 @@ class MemoryService:
     async def update_tool(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         memory_id: UUID,
         expected_revision: int,
         content: str,
@@ -302,8 +324,16 @@ class MemoryService:
         run_id: UUID,
         tool_call_id: str,
     ) -> MemoryMutation:
+        await MemoryService._validate_source_references(
+            db,
+            owner_id=owner_id,
+            session_id=session_id,
+            message_id=evidence_message_id,
+            run_id=run_id,
+            dream_run_id=None,
+        )
         item = await MemoryService._get_for_automatic_update(
-            db, memory_id, readable_by=readable_by
+            db, owner_id=owner_id, memory_id=memory_id, readable_by=readable_by
         )
         if item is None:
             return MemoryMutation(None)
@@ -318,6 +348,7 @@ class MemoryService:
             await MemoryService.update(
                 db,
                 item,
+                owner_id=owner_id,
                 content=content,
                 category=category,
                 trust_level=target_trust,
@@ -331,7 +362,11 @@ class MemoryService:
         except MemoryDuplicateError:
             _, content_hash = normalize_content(content)
             duplicate = await MemoryService._duplicate_by_hash(
-                db, content_hash, exclude_id=item.id, for_update=True
+                db,
+                owner_id=owner_id,
+                content_hash=content_hash,
+                exclude_id=item.id,
+                for_update=True,
             )
             if duplicate is None:
                 raise
@@ -339,7 +374,12 @@ class MemoryService:
                 (
                     await db.scalars(
                         select(MemorySourceMessage.message_id).where(
-                            MemorySourceMessage.memory_id == item.id
+                            MemorySourceMessage.memory_id == item.id,
+                            MemorySourceMessage.message_id.in_(
+                                select(Message.id)
+                                .join(ChatSession)
+                                .where(ChatSession.user_id == owner_id)
+                            ),
                         )
                     )
                 ).all()
@@ -356,6 +396,7 @@ class MemoryService:
             await MemoryService._merge_automatic_metadata(
                 db,
                 duplicate,
+                owner_id=owner_id,
                 trust_level=merged_trust,
                 evidence_message_ids=source_evidence,
             )
@@ -374,6 +415,7 @@ class MemoryService:
     async def create_dreaming(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         content: str,
         category: MemoryCategory,
         trust_level: TrustLevel,
@@ -383,12 +425,13 @@ class MemoryService:
     ) -> MemoryMutation:
         _, content_hash = normalize_content(content)
         existing = await MemoryService._duplicate_by_hash(
-            db, content_hash, for_update=True
+            db, owner_id=owner_id, content_hash=content_hash, for_update=True
         )
         if existing is not None:
             await MemoryService._merge_automatic_metadata(
                 db,
                 existing,
+                owner_id=owner_id,
                 trust_level=trust_level,
                 evidence_message_ids=evidence_message_ids,
             )
@@ -397,6 +440,7 @@ class MemoryService:
             async with db.begin_nested():
                 item = await MemoryService._create(
                     db,
+                    owner_id=owner_id,
                     content=content,
                     category=category,
                     source_type=MemorySourceType.DREAMING,
@@ -409,13 +453,14 @@ class MemoryService:
                 return MemoryMutation(item, created=True)
         except IntegrityError:
             duplicate = await MemoryService._duplicate_by_hash(
-                db, content_hash, for_update=True
+                db, owner_id=owner_id, content_hash=content_hash, for_update=True
             )
             if duplicate is None:
                 raise
             await MemoryService._merge_automatic_metadata(
                 db,
                 duplicate,
+                owner_id=owner_id,
                 trust_level=trust_level,
                 evidence_message_ids=evidence_message_ids,
             )
@@ -425,6 +470,7 @@ class MemoryService:
     async def update_dreaming(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         memory_id: UUID,
         expected_revision: int,
         content: str,
@@ -435,7 +481,7 @@ class MemoryService:
         evidence_message_ids: list[UUID],
     ) -> MemoryMutation:
         item = await MemoryService._get_for_automatic_update(
-            db, memory_id, readable_by=trust_level
+            db, owner_id=owner_id, memory_id=memory_id, readable_by=trust_level
         )
         if item is None:
             return MemoryMutation(None)
@@ -450,6 +496,7 @@ class MemoryService:
             await MemoryService.update(
                 db,
                 item,
+                owner_id=owner_id,
                 content=content,
                 category=category,
                 trust_level=target_trust,
@@ -467,6 +514,7 @@ class MemoryService:
     async def merge_dreaming(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         memory_ids: list[UUID],
         expected_revisions: dict[UUID, int],
         expected_trust: dict[UUID, TrustLevel],
@@ -486,7 +534,10 @@ class MemoryService:
             (
                 await db.scalars(
                     select(MemoryRecord)
-                    .where(MemoryRecord.id.in_(unique_ids))
+                    .where(
+                        MemoryRecord.user_id == owner_id,
+                        MemoryRecord.id.in_(unique_ids),
+                    )
                     .order_by(MemoryRecord.id)
                     .execution_options(populate_existing=True)
                     .with_for_update()
@@ -507,11 +558,23 @@ class MemoryService:
         cleaned = content.strip()
         if not cleaned:
             raise ValueError("memory content must not be empty")
+        await MemoryService._validate_source_references(
+            db,
+            owner_id=owner_id,
+            session_id=session_id,
+            message_id=evidence_message_ids[0] if evidence_message_ids else None,
+            run_id=None,
+            dream_run_id=dream_run_id,
+        )
         _, content_hash = normalize_content(cleaned)
         matching = [item for item in items if item.normalized_content_hash == content_hash]
         survivor = min(matching or items, key=lambda item: str(item.id))
         duplicate = await MemoryService._duplicate_by_hash(
-            db, content_hash, exclude_id=survivor.id, for_update=True
+            db,
+            owner_id=owner_id,
+            content_hash=content_hash,
+            exclude_id=survivor.id,
+            for_update=True,
         )
         if duplicate is not None and duplicate.id not in set(unique_ids):
             return MemoryMutation(survivor, conflict=True)
@@ -520,7 +583,12 @@ class MemoryService:
             (
                 await db.scalars(
                     select(MemorySourceMessage.message_id).where(
-                        MemorySourceMessage.memory_id.in_(unique_ids)
+                        MemorySourceMessage.memory_id.in_(unique_ids),
+                        MemorySourceMessage.message_id.in_(
+                            select(Message.id)
+                            .join(ChatSession)
+                            .where(ChatSession.user_id == owner_id)
+                        ),
                     )
                 )
             ).all()
@@ -549,7 +617,9 @@ class MemoryService:
         survivor.source_tool_call_id = None
         survivor.revision = (survivor.revision or 1) + 1
         await db.flush()
-        await MemoryService._add_evidence(db, survivor.id, all_evidence)
+        await MemoryService._add_evidence(
+            db, owner_id=owner_id, memory_id=survivor.id, message_ids=all_evidence
+        )
         if content_changed:
             await MemoryIndexService.enqueue(db, survivor)
         for item in items:
@@ -562,13 +632,14 @@ class MemoryService:
     async def keep_dreaming(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         memory_id: UUID,
         expected_revision: int,
         trust_level: TrustLevel,
         evidence_message_ids: list[UUID],
     ) -> MemoryMutation:
         item = await MemoryService._get_for_automatic_update(
-            db, memory_id, readable_by=trust_level
+            db, owner_id=owner_id, memory_id=memory_id, readable_by=trust_level
         )
         if item is None:
             return MemoryMutation(None)
@@ -577,6 +648,7 @@ class MemoryService:
         await MemoryService._merge_automatic_metadata(
             db,
             item,
+            owner_id=owner_id,
             trust_level=trust_level,
             evidence_message_ids=evidence_message_ids,
         )
@@ -586,12 +658,13 @@ class MemoryService:
     async def reconciliation_candidates(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         candidates: list[tuple[str, MemoryCategory]],
         readable_by: TrustLevel,
         max_items_per_candidate: int = 5,
         max_characters: int = 40_000,
     ) -> list[list[MemoryRecord]]:
-        trust_filters = []
+        trust_filters = [MemoryRecord.user_id == owner_id]
         if readable_by == TrustLevel.PUBLIC:
             trust_filters.append(MemoryRecord.trust_level == TrustLevel.PUBLIC.value)
         result: list[list[MemoryRecord]] = []
@@ -603,7 +676,7 @@ class MemoryService:
                 select(MemoryRecord).where(
                     MemoryRecord.normalized_content_hash == content_hash,
                     *trust_filters,
-                ).options(*memory_reference_options())
+                ).options(*memory_reference_options(owner_id))
             )
             if exact is not None:
                 result.append([exact])
@@ -616,7 +689,7 @@ class MemoryService:
                     (
                         await db.scalars(
                             select(MemoryRecord)
-                            .options(*memory_reference_options())
+                            .options(*memory_reference_options(owner_id))
                             .where(
                                 MemoryRecord.search_vector.op("@@")(tsquery),
                                 *trust_filters,
@@ -643,24 +716,40 @@ class MemoryService:
         return result
 
     @staticmethod
-    async def _evidence_hash(db: AsyncSession, item: MemoryRecord) -> str:
+    async def _evidence_hash(
+        db: AsyncSession, item: MemoryRecord, *, owner_id: UUID
+    ) -> str:
+        if item.user_id != owner_id:
+            raise ValueError("memory owner mismatch")
         message_ids = list(
             (
                 await db.scalars(
                     select(MemorySourceMessage.message_id).where(
-                        MemorySourceMessage.memory_id == item.id
+                        MemorySourceMessage.memory_id == item.id,
+                        MemorySourceMessage.message_id.in_(
+                            select(Message.id)
+                            .join(ChatSession)
+                            .where(ChatSession.user_id == owner_id)
+                        ),
                     )
                 )
             ).all()
         )
-        if item.source_message_id is not None:
+        if item.source_message_id is not None and await db.scalar(
+            select(Message.id)
+            .join(ChatSession)
+            .where(
+                Message.id == item.source_message_id,
+                ChatSession.user_id == owner_id,
+            )
+        ):
             message_ids.append(item.source_message_id)
         serialized = "\n".join(sorted({str(message_id) for message_id in message_ids}))
         return hashlib.sha256(serialized.encode("ascii")).hexdigest()
 
     @staticmethod
     async def _approval_target(
-        db: AsyncSession, item: MemoryRecord
+        db: AsyncSession, item: MemoryRecord, *, owner_id: UUID
     ) -> MemoryApprovalTarget:
         return MemoryApprovalTarget(
             id=item.id,
@@ -669,7 +758,9 @@ class MemoryService:
             category=MemoryCategory(item.category),
             trustLevel=TrustLevel(item.trust_level),
             pinned=item.pinned,
-            evidenceHash=await MemoryService._evidence_hash(db, item),
+            evidenceHash=await MemoryService._evidence_hash(
+                db, item, owner_id=owner_id
+            ),
         )
 
     @staticmethod
@@ -677,7 +768,7 @@ class MemoryService:
         db: AsyncSession,
         *,
         action: Literal["update", "merge", "pin"],
-        user_id: UUID,
+        owner_id: UUID,
         source_session_id: UUID,
         source_dream_run_id: UUID,
         targets: list[MemoryRecord],
@@ -692,8 +783,22 @@ class MemoryService:
         pin_policy: ToolExecutionPolicy,
     ) -> ApprovalRequest:
         ordered_targets = sorted(targets, key=lambda item: str(item.id))
+        if not ordered_targets or any(item.user_id != owner_id for item in ordered_targets):
+            raise ValueError("memory owner mismatch")
+        await MemoryService._validate_source_references(
+            db,
+            owner_id=owner_id,
+            session_id=source_session_id,
+            message_id=None,
+            run_id=None,
+            dream_run_id=source_dream_run_id,
+        )
+        await MemoryService._validate_evidence_owner(
+            db, owner_id=owner_id, message_ids=evidence_message_ids
+        )
         snapshots = [
-            await MemoryService._approval_target(db, item) for item in ordered_targets
+            await MemoryService._approval_target(db, item, owner_id=owner_id)
+            for item in ordered_targets
         ]
         resulting_trust = (
             TrustLevel.PRIVATE
@@ -736,7 +841,7 @@ class MemoryService:
             (
                 await db.scalars(
                     select(ApprovalRequest).where(
-                        ApprovalRequest.user_id == user_id,
+                        ApprovalRequest.user_id == owner_id,
                         ApprovalRequest.request_type == "memory_change",
                         ApprovalRequest.action_kind == action_kind,
                         ApprovalRequest.status == "pending",
@@ -775,7 +880,7 @@ class MemoryService:
         title, summary = labels[action]
         approval = ApprovalRequest(
             request_type="memory_change",
-            user_id=user_id,
+            user_id=owner_id,
             session_id=source_session_id,
             run_id=None,
             action_kind=action_kind,
@@ -794,29 +899,41 @@ class MemoryService:
         return approval
 
     @staticmethod
-    async def auto_pin(db: AsyncSession, item: MemoryRecord) -> bool:
+    async def auto_pin(
+        db: AsyncSession, item: MemoryRecord, *, owner_id: UUID
+    ) -> bool:
+        if item.user_id != owner_id:
+            raise ValueError("memory owner mismatch")
         if item.pinned:
             return True
         await db.execute(select(func.pg_advisory_xact_lock(1_836_642_671)))
         pinned = int(
             await db.scalar(
-                select(func.count(MemoryRecord.id)).where(MemoryRecord.pinned.is_(True))
+                select(func.count(MemoryRecord.id)).where(
+                    MemoryRecord.user_id == owner_id,
+                    MemoryRecord.pinned.is_(True),
+                )
             )
             or 0
         )
         if pinned >= _MAX_PINNED_AUTO:
             return False
-        await MemoryService.set_pinned(db, item, pinned=True)
+        await MemoryService.set_pinned(db, item, owner_id=owner_id, pinned=True)
         return True
 
     @staticmethod
     async def _valid_source_evidence(
-        db: AsyncSession, payload: MemoryApprovalPayload
+        db: AsyncSession, payload: MemoryApprovalPayload, *, owner_id: UUID
     ) -> bool:
         messages = list(
             (
                 await db.scalars(
-                    select(Message).where(Message.id.in_(payload.evidence_message_ids))
+                    select(Message)
+                    .join(ChatSession)
+                    .where(
+                        Message.id.in_(payload.evidence_message_ids),
+                        ChatSession.user_id == owner_id,
+                    )
                 )
             ).all()
         )
@@ -835,9 +952,9 @@ class MemoryService:
 
     @staticmethod
     async def apply_approved_change(
-        db: AsyncSession, approval: ApprovalRequest, user_id: UUID
+        db: AsyncSession, approval: ApprovalRequest, *, owner_id: UUID
     ) -> Literal["applied", "target_changed", "policy_changed"]:
-        if approval.user_id != user_id or approval.request_type != "memory_change":
+        if approval.user_id != owner_id or approval.request_type != "memory_change":
             return "target_changed"
         try:
             payload = MemoryApprovalPayload.model_validate(approval.payload)
@@ -856,15 +973,17 @@ class MemoryService:
         dream_run = await db.get(MemoryDreamRun, payload.source_dream_run_id)
         if (
             session is None
-            or session.user_id != user_id
+            or session.user_id != owner_id
             or dream_run is None
             or dream_run.session_id != session.id
-            or not await MemoryService._valid_source_evidence(db, payload)
+            or not await MemoryService._valid_source_evidence(
+                db, payload, owner_id=owner_id
+            )
         ):
             return "target_changed"
 
         settings = await SettingsStore.load(
-            db, MemorySettings, user_id=user_id, for_update=True
+            db, MemorySettings, user_id=owner_id, for_update=True
         )
         if not settings.enabled or session.memory_mode != MemoryMode.FULL.value:
             return "policy_changed"
@@ -893,7 +1012,10 @@ class MemoryService:
             (
                 await db.scalars(
                     select(MemoryRecord)
-                    .where(MemoryRecord.id.in_(target_ids))
+                    .where(
+                        MemoryRecord.user_id == owner_id,
+                        MemoryRecord.id.in_(target_ids),
+                    )
                     .order_by(MemoryRecord.id)
                     .execution_options(populate_existing=True)
                     .with_for_update()
@@ -915,7 +1037,9 @@ class MemoryService:
                     payload.readable_by == TrustLevel.PUBLIC
                     and item.trust_level != TrustLevel.PUBLIC.value
                 )
-                or await MemoryService._evidence_hash(db, item)
+                or await MemoryService._evidence_hash(
+                    db, item, owner_id=owner_id
+                )
                 != snapshot.evidence_hash
             ):
                 return "target_changed"
@@ -927,7 +1051,9 @@ class MemoryService:
                 or targets[0].category != MemoryCategory.IDENTITY.value
             ):
                 return "target_changed"
-            await MemoryService.set_pinned(db, targets[0], pinned=True)
+            await MemoryService.set_pinned(
+                db, targets[0], owner_id=owner_id, pinned=True
+            )
             return "applied"
 
         if payload.after is None or (
@@ -952,6 +1078,7 @@ class MemoryService:
                 return "target_changed"
             mutation = await MemoryService.update_dreaming(
                 db,
+                owner_id=owner_id,
                 memory_id=targets[0].id,
                 expected_revision=targets[0].revision,
                 content=payload.after.content,
@@ -964,11 +1091,14 @@ class MemoryService:
             if mutation.item is None or mutation.conflict:
                 return "target_changed"
             if payload.requested_pin:
-                await MemoryService.set_pinned(db, mutation.item, pinned=True)
+                await MemoryService.set_pinned(
+                    db, mutation.item, owner_id=owner_id, pinned=True
+                )
             return "applied"
 
         mutation = await MemoryService.merge_dreaming(
             db,
+            owner_id=owner_id,
             memory_ids=target_ids,
             expected_revisions={item.id: item.revision for item in targets},
             expected_trust={item.id: TrustLevel(item.trust_level) for item in targets},
@@ -987,6 +1117,7 @@ class MemoryService:
     async def _create(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         content: str,
         category: MemoryCategory,
         source_type: MemorySourceType,
@@ -1002,7 +1133,16 @@ class MemoryService:
         if not cleaned:
             raise ValueError("memory content must not be empty")
         _, content_hash = normalize_content(cleaned)
+        await MemoryService._validate_source_references(
+            db,
+            owner_id=owner_id,
+            session_id=session_id,
+            message_id=message_id,
+            run_id=run_id,
+            dream_run_id=dream_run_id,
+        )
         item = MemoryRecord(
+            user_id=owner_id,
             source_session_id=session_id,
             source_message_id=message_id,
             source_run_id=run_id,
@@ -1018,19 +1158,26 @@ class MemoryService:
         )
         db.add(item)
         await db.flush()
-        await MemoryService._add_evidence(db, item.id, evidence_message_ids or [])
+        await MemoryService._add_evidence(
+            db,
+            owner_id=owner_id,
+            memory_id=item.id,
+            message_ids=evidence_message_ids or [],
+        )
         await MemoryIndexService.enqueue(db, item)
         return item
 
     @staticmethod
     async def _duplicate_by_hash(
         db: AsyncSession,
-        content_hash: str,
         *,
+        owner_id: UUID,
+        content_hash: str,
         exclude_id: UUID | None = None,
         for_update: bool = False,
     ) -> MemoryRecord | None:
         statement = select(MemoryRecord).where(
+            MemoryRecord.user_id == owner_id,
             MemoryRecord.normalized_content_hash == content_hash
         )
         if exclude_id is not None:
@@ -1042,11 +1189,15 @@ class MemoryService:
     @staticmethod
     async def _get_for_automatic_update(
         db: AsyncSession,
-        memory_id: UUID,
         *,
+        owner_id: UUID,
+        memory_id: UUID,
         readable_by: TrustLevel,
     ) -> MemoryRecord | None:
-        statement = select(MemoryRecord).where(MemoryRecord.id == memory_id)
+        statement = select(MemoryRecord).where(
+            MemoryRecord.user_id == owner_id,
+            MemoryRecord.id == memory_id,
+        )
         if readable_by == TrustLevel.PUBLIC:
             statement = statement.where(
                 MemoryRecord.trust_level == TrustLevel.PUBLIC.value
@@ -1056,12 +1207,78 @@ class MemoryService:
         )
 
     @staticmethod
+    async def _validate_source_references(
+        db: AsyncSession,
+        *,
+        owner_id: UUID,
+        session_id: UUID | None,
+        message_id: UUID | None,
+        run_id: UUID | None,
+        dream_run_id: UUID | None,
+    ) -> None:
+        if session_id is not None and not await db.scalar(
+            select(ChatSession.id).where(
+                ChatSession.id == session_id,
+                ChatSession.user_id == owner_id,
+            )
+        ):
+            raise ValueError("memory source session owner mismatch")
+        if message_id is not None and not await db.scalar(
+            select(Message.id)
+            .join(ChatSession)
+            .where(
+                Message.id == message_id,
+                ChatSession.user_id == owner_id,
+                *( [Message.session_id == session_id] if session_id is not None else [] ),
+            )
+        ):
+            raise ValueError("memory source message owner mismatch")
+        if run_id is not None and not await db.scalar(
+            select(AgentRun.id)
+            .join(ChatSession, ChatSession.id == AgentRun.session_id)
+            .where(
+                AgentRun.id == run_id,
+                ChatSession.user_id == owner_id,
+                *( [AgentRun.session_id == session_id] if session_id is not None else [] ),
+            )
+        ):
+            raise ValueError("memory source run owner mismatch")
+        if dream_run_id is not None and not await db.scalar(
+            select(MemoryDreamRun.id)
+            .join(ChatSession, ChatSession.id == MemoryDreamRun.session_id)
+            .where(
+                MemoryDreamRun.id == dream_run_id,
+                ChatSession.user_id == owner_id,
+                *(
+                    [MemoryDreamRun.session_id == session_id]
+                    if session_id is not None
+                    else []
+                ),
+            )
+        ):
+            raise ValueError("memory source dream run owner mismatch")
+
+    @staticmethod
     async def _add_evidence(
-        db: AsyncSession, memory_id: UUID, message_ids: list[UUID]
+        db: AsyncSession,
+        *,
+        owner_id: UUID,
+        memory_id: UUID,
+        message_ids: list[UUID],
     ) -> None:
         unique_ids = list(dict.fromkeys(message_ids))
         if not unique_ids:
             return
+        await MemoryService._validate_evidence_owner(
+            db, owner_id=owner_id, message_ids=unique_ids
+        )
+        if not await db.scalar(
+            select(MemoryRecord.id).where(
+                MemoryRecord.id == memory_id,
+                MemoryRecord.user_id == owner_id,
+            )
+        ):
+            raise ValueError("memory owner mismatch")
         await db.execute(
             postgresql_insert(MemorySourceMessage)
             .values(
@@ -1074,30 +1291,64 @@ class MemoryService:
         )
 
     @staticmethod
+    async def _validate_evidence_owner(
+        db: AsyncSession, *, owner_id: UUID, message_ids: list[UUID]
+    ) -> None:
+        unique_ids = set(message_ids)
+        if not unique_ids:
+            return
+        valid_ids = set(
+            (
+                await db.scalars(
+                    select(Message.id)
+                    .join(ChatSession)
+                    .where(
+                        Message.id.in_(unique_ids),
+                        ChatSession.user_id == owner_id,
+                    )
+                )
+            ).all()
+        )
+        if valid_ids != unique_ids:
+            raise ValueError("memory evidence owner mismatch")
+
+    @staticmethod
     async def _merge_automatic_metadata(
         db: AsyncSession,
         item: MemoryRecord,
         *,
+        owner_id: UUID,
         trust_level: TrustLevel,
         evidence_message_ids: list[UUID],
     ) -> None:
+        if item.user_id != owner_id:
+            raise ValueError("memory owner mismatch")
         if trust_level == TrustLevel.PRIVATE:
             item.trust_level = TrustLevel.PRIVATE.value
         item.revision = (item.revision or 1) + 1
-        await MemoryService._add_evidence(db, item.id, evidence_message_ids)
+        await MemoryService._add_evidence(
+            db,
+            owner_id=owner_id,
+            memory_id=item.id,
+            message_ids=evidence_message_ids,
+        )
         await db.flush()
 
     @staticmethod
     async def get(
-        db: AsyncSession, memory_id: UUID, *, for_update: bool = False
+        db: AsyncSession,
+        *,
+        owner_id: UUID,
+        memory_id: UUID,
+        for_update: bool = False,
     ) -> MemoryRecord | None:
         statement = (
             select(MemoryRecord)
-            .where(MemoryRecord.id == memory_id)
-            .options(
-                selectinload(MemoryRecord.source_session),
-                selectinload(MemoryRecord.source_messages),
+            .where(
+                MemoryRecord.user_id == owner_id,
+                MemoryRecord.id == memory_id,
             )
+            .options(*memory_reference_options(owner_id))
         )
         if for_update:
             statement = statement.execution_options(populate_existing=True).with_for_update()
@@ -1108,6 +1359,7 @@ class MemoryService:
         db: AsyncSession,
         item: MemoryRecord,
         *,
+        owner_id: UUID,
         content: str,
         category: MemoryCategory,
         trust_level: TrustLevel,
@@ -1120,13 +1372,15 @@ class MemoryService:
         source_tool_call_id: str | None = None,
         pinned: bool | None = None,
     ) -> MemoryRecord:
+        if item.user_id != owner_id:
+            raise ValueError("memory owner mismatch")
         cleaned = content.strip()
         if not cleaned:
             raise ValueError("memory content must not be empty")
         _, content_hash = normalize_content(cleaned)
         content_changed = content_hash != item.normalized_content_hash
         if await MemoryService._duplicate_by_hash(
-            db, content_hash, exclude_id=item.id
+            db, owner_id=owner_id, content_hash=content_hash, exclude_id=item.id
         ) is not None:
             raise MemoryDuplicateError
         item_id = item.id
@@ -1141,6 +1395,14 @@ class MemoryService:
                 item.revision = (item.revision or 1) + 1
                 if content_changed:
                     if source_type is not None:
+                        await MemoryService._validate_source_references(
+                            db,
+                            owner_id=owner_id,
+                            session_id=source_session_id,
+                            message_id=source_message_id,
+                            run_id=source_run_id,
+                            dream_run_id=source_dream_run_id,
+                        )
                         item.source_type = source_type.value
                         item.source_session_id = source_session_id
                         item.source_message_id = source_message_id
@@ -1149,32 +1411,45 @@ class MemoryService:
                         item.source_tool_call_id = source_tool_call_id
                 await db.flush()
                 await MemoryService._add_evidence(
-                    db, item.id, evidence_message_ids or []
+                    db,
+                    owner_id=owner_id,
+                    memory_id=item.id,
+                    message_ids=evidence_message_ids or [],
                 )
                 if content_changed:
                     await MemoryIndexService.enqueue(db, item)
                 await db.flush()
         except IntegrityError as exc:
             if await MemoryService._duplicate_by_hash(
-                db, content_hash, exclude_id=item_id
+                db,
+                owner_id=owner_id,
+                content_hash=content_hash,
+                exclude_id=item_id,
             ) is None:
                 raise
             raise MemoryDuplicateError from exc
         return item
 
     @staticmethod
-    async def delete(db: AsyncSession, item: MemoryRecord) -> None:
+    async def delete(
+        db: AsyncSession, item: MemoryRecord, *, owner_id: UUID
+    ) -> None:
+        if item.user_id != owner_id:
+            raise ValueError("memory owner mismatch")
         await db.delete(item)
         await db.flush()
 
     @staticmethod
-    async def mark_seen(db: AsyncSession, memory_ids: list[UUID]) -> int:
+    async def mark_seen(
+        db: AsyncSession, *, owner_id: UUID, memory_ids: list[UUID]
+    ) -> int:
         unique_ids = list(dict.fromkeys(memory_ids))
         if not unique_ids:
             return 0
         result = await db.scalars(
             update(MemoryRecord)
             .where(
+                MemoryRecord.user_id == owner_id,
                 MemoryRecord.id.in_(unique_ids),
                 MemoryRecord.seen_at.is_(None),
             )
@@ -1190,6 +1465,7 @@ class MemoryService:
     async def list(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         query: str | None = None,
         source_type: MemorySourceType | None = None,
         category: MemoryCategory | None = None,
@@ -1203,7 +1479,7 @@ class MemoryService:
     ) -> MemoryList:
         if (cursor_updated_at is None) != (cursor_id is None):
             raise ValueError("both cursor fields are required together")
-        filters = []
+        filters = [MemoryRecord.user_id == owner_id]
         if source_type is not None:
             filters.append(MemoryRecord.source_type == source_type.value)
         if category is not None:
@@ -1239,8 +1515,7 @@ class MemoryService:
             select(MemoryRecord)
             .where(*filters)
             .options(
-                *memory_reference_options(),
-                selectinload(MemoryRecord.source_messages),
+                *memory_reference_options(owner_id),
             )
         )
         if rank is not None:
@@ -1255,8 +1530,10 @@ class MemoryService:
         return MemoryList(items, total, offset, limit)
 
     @staticmethod
-    async def scope(db: AsyncSession, *, readable_by: TrustLevel) -> MemoryScope:
-        filters = []
+    async def scope(
+        db: AsyncSession, *, owner_id: UUID, readable_by: TrustLevel
+    ) -> MemoryScope:
+        filters = [MemoryRecord.user_id == owner_id]
         if readable_by == TrustLevel.PUBLIC:
             filters.append(MemoryRecord.trust_level == TrustLevel.PUBLIC.value)
         total, pinned = (
@@ -1273,9 +1550,13 @@ class MemoryService:
     async def pinned_context(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         input_trust_level: TrustLevel,
     ) -> list[MemoryRecord]:
-        filters = [MemoryRecord.pinned.is_(True)]
+        filters = [
+            MemoryRecord.user_id == owner_id,
+            MemoryRecord.pinned.is_(True),
+        ]
         if input_trust_level == TrustLevel.PUBLIC:
             filters.append(MemoryRecord.trust_level == TrustLevel.PUBLIC.value)
         return list(
@@ -1283,7 +1564,7 @@ class MemoryService:
                 await db.scalars(
                     select(MemoryRecord)
                     .where(*filters)
-                    .options(*memory_reference_options())
+                    .options(*memory_reference_options(owner_id))
                     .order_by(MemoryRecord.created_at, MemoryRecord.id)
                 )
             ).all()
@@ -1291,8 +1572,14 @@ class MemoryService:
 
     @staticmethod
     async def set_pinned(
-        db: AsyncSession, item: MemoryRecord, *, pinned: bool
+        db: AsyncSession,
+        item: MemoryRecord,
+        *,
+        owner_id: UUID,
+        pinned: bool,
     ) -> MemoryRecord:
+        if item.user_id != owner_id:
+            raise ValueError("memory owner mismatch")
         if item.pinned != pinned:
             item.pinned = pinned
             item.revision = (item.revision or 1) + 1

@@ -41,7 +41,7 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
     workspaceContextFor: (state) => (preferences) => {
       const executionAgentId = preferences?.preferredExecutionAgentId || null
       const agent = state.items.find((item) => item.id === executionAgentId)
-      const rootId = preferences?.preferredRootId || agent?.homeRootId || null
+      const rootId = preferences?.preferredRootId || null
       const root = agent?.roots?.find((item) => item.id === rootId)
       const availableOperations = root
         ? agent?.operations || []

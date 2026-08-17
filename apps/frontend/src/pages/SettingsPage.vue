@@ -11,112 +11,32 @@
       mobile-arrows
       outside-arrows
     >
-      <q-route-tab icon="dns" label="Provider" :to="{ name: 'settings-providers' }" />
-      <q-route-tab icon="stars" label="Standardmodelle" :to="{ name: 'settings-default-models' }" />
-      <q-route-tab icon="extension" label="Integrationen" :to="{ name: 'settings-integrations' }" />
-      <q-route-tab icon="build" label="Tools" :to="{ name: 'settings-tools' }" />
-      <q-route-tab icon="pending_actions" label="Freigaben" :to="{ name: 'settings-approvals' }" />
-      <q-route-tab icon="computer" label="Computer" :to="{ name: 'settings-execution-agents' }" />
-      <q-route-tab icon="school" label="Skills" :to="{ name: 'settings-skills' }" />
-      <q-route-tab icon="face" label="Persona" :to="{ name: 'settings-persona' }" />
-      <q-route-tab icon="psychology" label="Memory" :to="{ name: 'settings-memory' }" />
+      <q-route-tab
+        v-for="item in navigation"
+        :key="item.name"
+        :icon="item.meta.settingsIcon"
+        :label="item.meta.settingsLabel"
+        :to="{ name: item.name }"
+      />
     </q-tabs>
 
     <div class="settings-layout row no-wrap items-stretch col">
       <nav class="settings-category-nav q-py-xs q-pr-md" aria-label="Einstellungskategorien">
         <q-list class="settings-category-list">
           <q-item
+            v-for="item in navigation"
+            :key="item.name"
             clickable
             v-ripple
             class="q-mb-xs"
-            :to="{ name: 'settings-providers' }"
+            :to="{ name: item.name }"
             active-class="app-nav-item--active"
           >
-            <q-item-section avatar><q-icon name="dns" /></q-item-section>
-            <q-item-section>Provider</q-item-section>
-          </q-item>
-          <q-item
-            clickable
-            v-ripple
-            class="q-mb-xs"
-            :to="{ name: 'settings-default-models' }"
-            active-class="app-nav-item--active"
-          >
-            <q-item-section avatar><q-icon name="stars" /></q-item-section>
-            <q-item-section>Standardmodelle</q-item-section>
-          </q-item>
-          <q-item
-            clickable
-            v-ripple
-            class="q-mb-xs"
-            :to="{ name: 'settings-integrations' }"
-            active-class="app-nav-item--active"
-          >
-            <q-item-section avatar><q-icon name="extension" /></q-item-section>
-            <q-item-section>Integrationen</q-item-section>
-          </q-item>
-          <q-item
-            clickable
-            v-ripple
-            class="q-mb-xs"
-            :to="{ name: 'settings-tools' }"
-            active-class="app-nav-item--active"
-          >
-            <q-item-section avatar><q-icon name="build" /></q-item-section>
-            <q-item-section>Tools</q-item-section>
-          </q-item>
-          <q-item
-            clickable
-            v-ripple
-            class="q-mb-xs"
-            :to="{ name: 'settings-approvals' }"
-            active-class="app-nav-item--active"
-          >
-            <q-item-section avatar><q-icon name="pending_actions" /></q-item-section>
-            <q-item-section>Freigaben</q-item-section>
-            <q-item-section v-if="approvals.pendingCount" side>
+            <q-item-section avatar><q-icon :name="item.meta.settingsIcon" /></q-item-section>
+            <q-item-section>{{ item.meta.settingsLabel }}</q-item-section>
+            <q-item-section v-if="item.name === 'settings-approvals' && approvals.pendingCount" side>
               <q-badge color="warning" text-color="dark" :label="approvals.pendingCount" />
             </q-item-section>
-          </q-item>
-          <q-item
-            clickable
-            v-ripple
-            class="q-mb-xs"
-            :to="{ name: 'settings-execution-agents' }"
-            active-class="app-nav-item--active"
-          >
-            <q-item-section avatar><q-icon name="computer" /></q-item-section>
-            <q-item-section>Computer</q-item-section>
-          </q-item>
-          <q-item
-            clickable
-            v-ripple
-            class="q-mb-xs"
-            :to="{ name: 'settings-skills' }"
-            active-class="app-nav-item--active"
-          >
-            <q-item-section avatar><q-icon name="school" /></q-item-section>
-            <q-item-section>Skills</q-item-section>
-          </q-item>
-          <q-item
-            clickable
-            v-ripple
-            class="q-mb-xs"
-            :to="{ name: 'settings-persona' }"
-            active-class="app-nav-item--active"
-          >
-            <q-item-section avatar><q-icon name="face" /></q-item-section>
-            <q-item-section>Persona</q-item-section>
-          </q-item>
-          <q-item
-            clickable
-            v-ripple
-            class="q-mb-xs"
-            :to="{ name: 'settings-memory' }"
-            active-class="app-nav-item--active"
-          >
-            <q-item-section avatar><q-icon name="psychology" /></q-item-section>
-            <q-item-section>Memory</q-item-section>
           </q-item>
         </q-list>
       </nav>
@@ -131,10 +51,15 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import AppPageHeader from 'components/AppPageHeader.vue'
+import { settingsRoutes } from 'src/router/routes'
 import { useApprovalStore } from 'stores/approvals'
+import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'SettingsPage' })
 
 const approvals = useApprovalStore()
+const auth = useAuthStore()
+const navigation = computed(() => settingsRoutes.filter((item) => !item.meta.requiresAdmin || auth.isAdmin))
 </script>

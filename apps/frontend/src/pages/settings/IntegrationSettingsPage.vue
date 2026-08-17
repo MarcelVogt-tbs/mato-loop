@@ -8,15 +8,56 @@
           Externe Dienste für zusätzliche Agent-Funktionen verwalten.
         </p>
       </div>
-      <q-btn
-        color="primary"
-        unelevated
-        no-caps
-        icon="add"
-        label="Integration hinzufügen"
-        @click="openCreateDialog"
-      />
+      <div class="row items-center q-gutter-sm">
+        <SettingsScopeToggle
+          :model-value="integrations.scope"
+          :is-admin="auth.isAdmin"
+          :disable="integrations.loading || gateLoading || testingId !== null || removingId !== null"
+          @update:model-value="changeScope"
+        />
+        <q-btn
+          color="primary"
+          unelevated
+          no-caps
+          icon="add"
+          label="Integration hinzufügen"
+          :disable="personalBlocked || integrations.loading || !canCreateIntegration"
+          @click="openCreateDialog"
+        />
+      </div>
     </header>
+
+    <q-card v-if="auth.isAdmin && integrations.scope === 'instance'" flat class="app-surface-tonal q-mb-md">
+      <q-card-section>
+        <q-toggle
+          :model-value="integrations.personalIntegrationsEnabled"
+          color="primary"
+          label="Persönliche Integrationen erlauben"
+          :disable="gateLoading"
+          @update:model-value="togglePersonalIntegrations"
+        />
+        <div class="text-caption app-muted q-mt-sm q-mb-xs">Erlaubte persönliche Adapter</div>
+        <div class="row q-gutter-sm">
+          <q-toggle
+            v-for="adapter in adapterOptions"
+            :key="adapter.value"
+            :model-value="integrations.allowedPersonalAdapterTypes.includes(adapter.value)"
+            :label="adapter.label"
+            color="primary"
+            dense
+            :disable="gateLoading"
+            @update:model-value="toggleAllowedAdapter(adapter.value, $event)"
+          />
+        </div>
+      </q-card-section>
+    </q-card>
+
+    <q-banner v-if="integrations.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
+      <template #avatar><q-icon name="person" color="primary" /></template>
+      {{ personalBlocked
+        ? 'Persönliche Integrationen wurden für diese Instanz deaktiviert. Vorhandene Einstellungen bleiben gespeichert, können aber nicht bearbeitet werden.'
+        : 'Hier verwaltest du deine persönlichen Integrationen. Die Instanz legt fest, welche Adapter zulässig sind.' }}
+    </q-banner>
 
     <q-banner v-if="integrations.loadFailed" rounded class="app-surface-tonal q-mb-md">
       Die Integrationen konnten nicht geladen werden.
@@ -78,7 +119,8 @@
                 icon="policy"
                 :label="$q.screen.gt.sm ? 'Zugriff' : undefined"
                 aria-label="Zugriff verwalten"
-                :to="{ name: 'settings-integration-access', params: { integrationId: integration.id } }"
+                :disable="!canEditIntegration(integration)"
+                :to="{ name: 'settings-integration-access', params: { integrationId: integration.id }, query: { scope: integrations.scope } }"
               />
               <q-btn
                 v-if="integration.integrationType !== 'git'"
@@ -90,6 +132,7 @@
                 :label="$q.screen.gt.sm ? 'Testen' : undefined"
                 aria-label="Verbindung testen"
                 :loading="testingId === integration.id"
+                :disable="!canEditIntegration(integration)"
                 @click="testIntegration(integration)"
               />
               <q-btn
@@ -100,6 +143,7 @@
                 icon="edit"
                 :label="$q.screen.gt.sm ? 'Bearbeiten' : undefined"
                 aria-label="Integration bearbeiten"
+                :disable="!canEditIntegration(integration)"
                 @click="openEditDialog(integration)"
               />
               <q-btn
@@ -109,6 +153,7 @@
                 color="negative"
                 icon="delete"
                 :aria-label="`${integration.name} löschen`"
+                :disable="!canEditIntegration(integration)"
                 @click="removeIntegration(integration)"
               />
             </div>
@@ -127,9 +172,11 @@ import { computed, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import IntegrationConfigDialog from 'components/IntegrationConfigDialog.vue'
+import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
+import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'IntegrationSettingsPage' })
 
@@ -137,10 +184,13 @@ const $q = useQuasar()
 const route = useRoute()
 const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
+const auth = useAuthStore()
 const executionAgents = useExecutionAgentStore()
 const dialogOpen = ref(false)
 const selectedIntegration = ref(null)
 const testingId = ref(null)
+const removingId = ref(null)
+const gateLoading = ref(false)
 const showAccessPage = computed(() => route.name === 'settings-integration-access')
 const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)
@@ -156,6 +206,49 @@ const configuredIntegrations = computed(
     ...openScadInstances.value
   ]
 )
+const personalBlocked = computed(() => (
+  integrations.scope === 'personal' && !integrations.personalIntegrationsEnabled
+))
+const canCreateIntegration = computed(() => (
+  integrations.scope === 'instance' || integrations.allowedPersonalAdapterTypes.length > 0
+))
+const adapterOptions = [
+  { label: 'SearXNG', value: 'searxng' },
+  { label: 'CalDAV', value: 'caldav' },
+  { label: 'BookStack', value: 'bookstack' },
+  { label: 'Git', value: 'git' },
+  { label: 'OpenSCAD', value: 'openscad' }
+]
+
+function canEditIntegration(integration) {
+  return !personalBlocked.value && integrations.adapterAllowed(integration.providerType)
+}
+
+async function changeScope(scope) {
+  dialogOpen.value = false
+  integrations.selectScope(scope)
+  await reload()
+}
+
+async function saveIntegrationGate(enabled, allowedAdapterTypes) {
+  gateLoading.value = true
+  try {
+    await integrations.savePersonalSettings(enabled, allowedAdapterTypes)
+  } finally {
+    gateLoading.value = false
+  }
+}
+
+function togglePersonalIntegrations(enabled) {
+  return saveIntegrationGate(enabled, integrations.allowedPersonalAdapterTypes)
+}
+
+function toggleAllowedAdapter(adapterType, enabled) {
+  const allowed = new Set(integrations.allowedPersonalAdapterTypes)
+  if (enabled) allowed.add(adapterType)
+  else allowed.delete(adapterType)
+  return saveIntegrationGate(integrations.personalIntegrationsEnabled, [...allowed])
+}
 
 function openCreateDialog() {
   selectedIntegration.value = null
@@ -233,28 +326,32 @@ async function removeIntegration(integration) {
     { okLabel: 'Löschen' }
   )
   if (!confirmed) return
-  if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
-  else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
-  else if (integration.integrationType === 'git') await integrations.removeGit(integration.id)
-  else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)
-  else await integrations.removeSearch(integration.id)
-  $q.notify({ type: 'positive', message: 'Integration gelöscht' })
+  removingId.value = integration.id
+  try {
+    if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
+    else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
+    else if (integration.integrationType === 'git') await integrations.removeGit(integration.id)
+    else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)
+    else await integrations.removeSearch(integration.id)
+    $q.notify({ type: 'positive', message: 'Integration gelöscht' })
+  } finally {
+    removingId.value = null
+  }
 }
 
 async function reload() {
   try {
-    await Promise.all([
-      integrations.fetchSearch(),
-      integrations.fetchCalendar(),
-      integrations.fetchKnowledge(),
-      integrations.fetchGit(),
-      integrations.fetchOpenScad(),
-      executionAgents.fetchAll()
-    ])
+    await Promise.all([integrations.fetchAll(), executionAgents.fetchAll()])
   } catch {
     // The central API interceptor displays the error as a toast.
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  const scope = route.query.scope === 'personal'
+    ? 'personal'
+    : (auth.isAdmin ? 'instance' : 'personal')
+  integrations.selectScope(scope)
+  if (!showAccessPage.value) void reload()
+})
 </script>

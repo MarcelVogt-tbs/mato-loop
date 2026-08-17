@@ -25,8 +25,10 @@ MatoLoop kann mehrere Computer verwalten. Öffnen Sie **Einstellungen > Computer
 Der Arbeitsbereich kann vor dem Start angepasst werden:
 
 ```env
-MATO_EXECUTION_AGENT_WORKSPACE=./data/home
+MATO_EXECUTION_AGENT_WORKSPACE=./mein-agent-arbeitsbereich
 ```
+
+Ohne diese Variable verwendet Compose das Host-Verzeichnis `./data/home`. Es wird ausschließlich als `/workspace` in den mitgelieferten Computer eingebunden. Das Backend greift nicht darauf zu und migriert oder löscht seinen Inhalt nicht.
 
 Der normale Produktions- und Entwicklungsstack startet den Computer automatisch. Solange er ungekoppelt ist, wartet er auf die einmalige Kopplung. Führen Sie diese im laufenden Produktionscontainer aus:
 
@@ -59,6 +61,8 @@ Für eine vollständige Wiederherstellung benötigen Sie gemeinsam:
 Provider- und OAuth-Zugangsdaten liegen verschlüsselt in der Datenbank. Ohne den zugehörigen Schlüssel `credential.key` können sie nach einer Wiederherstellung nicht entschlüsselt werden.
 
 Das Modell-Cache-Volume des Embedding-Dienstes und der Session-Cache des Computers müssen nicht gesichert werden. Der Credential-Bereich `agent-state` im Volume `execution_agent_data` ist dagegen für eine Wiederherstellung ohne erneute Kopplung erforderlich. Geht er verloren, entkoppeln Sie den Computer in MatoLoop und stellen ein neues Kopplungstoken aus. Session-Dateien bleiben im Backend gespeichert.
+
+Beim Löschen eines Benutzers entfernt MatoLoop dessen Datenbankdaten und Session-Bäume. Dateien, Caches, dauerhafter Zustand und Konfigurationen aller Computer, einschließlich des Compose-Computers unter `./data/home`, sowie bereits in externe Dienste geschriebene Inhalte liegen außerhalb dieser Löschung. Entfernen Sie diese bei Bedarf separat. Instanzressourcen sind gemeinsam und bleiben bestehen.
 
 ## Entwicklungsdaten
 

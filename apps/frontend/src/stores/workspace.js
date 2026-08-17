@@ -67,12 +67,15 @@ function requireWritableContext(store) {
 }
 
 export function supportsWorkspaceOperation(context, operation) {
-  if (!context) return true
-  if (context.available === false || context.connected === false || context.agentConnected === false) return false
+  if (
+    !context?.executionAgentId
+    || !context.rootId
+    || context.connected !== true
+  ) return false
   const operations = Array.isArray(context.operations)
     ? context.operations
     : Array.isArray(context.capabilities) ? context.capabilities : null
-  return operations ? operations.includes(operation) : true
+  return operations?.includes(operation) === true
 }
 
 export function workspaceContextKey(context) {
@@ -120,9 +123,17 @@ export const useWorkspaceStore = defineStore('workspace', {
   }),
   getters: {
     operationAvailable: (state) => (operation) => (
-      state.scope === 'session'
-      || Boolean(state.rootIdentity)
-      || supportsWorkspaceOperation(state.workspaceContext, operation)
+      state.rootIdentity
+        ? state.scope === 'session'
+          ? Boolean(state.sessionId)
+          : Boolean(
+            state.toolContext?.executionAgentId
+            && state.toolContext.rootId
+            && state.toolContext.rootRevision
+          )
+        : state.scope === 'session'
+          ? Boolean(state.sessionId)
+          : supportsWorkspaceOperation(state.workspaceContext, operation)
     )
   },
   actions: {
@@ -154,10 +165,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (scope === 'session' && !this.sessionId) return
       if (scope === this.scope && !this.rootIdentity) return
       this.scope = scope
-      this.reset()
+      this.reset(false)
       return this.load('.')
     },
-    reset() {
+    reset(fallbackToSession = true) {
       this.contextVersion += 1
       this.entries = {}
       this.hasMore = {}
@@ -175,6 +186,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.filter = ''
       this.rootIdentity = null
       this.toolContext = null
+      if (
+        fallbackToSession
+        && this.scope === 'filesystem'
+        && this.sessionId
+        && !supportsWorkspaceOperation(this.workspaceContext, 'workspace.list')
+      ) this.scope = 'session'
     },
     openToolFile(action) {
       if (
@@ -190,8 +207,8 @@ export const useWorkspaceStore = defineStore('workspace', {
           || !action.workingDirectory
         ))
       ) return
+      this.reset(false)
       this.scope = action.root === 'session' ? 'session' : 'filesystem'
-      this.reset()
       this.rootIdentity = action.rootIdentity
       this.toolContext = action.root === 'workspace'
         ? {
@@ -218,8 +235,8 @@ export const useWorkspaceStore = defineStore('workspace', {
         || !action.path?.startsWith('files/')
         || !action.filename
       ) return
+      this.reset(false)
       this.scope = 'session'
-      this.reset()
       this.openEntry({
         kind: 'file',
         name: action.filename,
@@ -268,16 +285,20 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
     requestParams(extra = {}) {
+      const liveFilesystemContext = this.scope === 'filesystem'
+        && !this.rootIdentity
+        && this.workspaceContext?.executionAgentId
+        && this.workspaceContext?.rootId
       return {
         scope: this.scope,
         ...(this.sessionId ? { session_id: this.sessionId } : {}),
-        ...(!this.sessionId && this.workspaceContext?.executionAgentId
+        ...(liveFilesystemContext
           ? { execution_agent_id: this.workspaceContext.executionAgentId }
           : {}),
-        ...(!this.sessionId && this.workspaceContext?.rootId
+        ...(liveFilesystemContext
           ? { root_id: this.workspaceContext.rootId }
           : {}),
-        ...(!this.sessionId && this.workingDirectory
+        ...(liveFilesystemContext && this.workingDirectory
           ? { working_directory: this.workingDirectory }
           : {}),
         ...(this.rootIdentity && this.scope === 'filesystem' && this.toolContext
@@ -299,6 +320,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
     fileUrl(action, path) {
+      if (!this.operationAvailable(action === 'download' ? 'workspace.export' : 'workspace.read')) return ''
       const params = new URLSearchParams(this.readRequestParams({ path }))
       return `/api/workspace/files/${action}?${params}`
     },

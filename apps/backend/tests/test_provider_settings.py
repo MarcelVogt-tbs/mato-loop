@@ -17,9 +17,12 @@ from mato_loop_backend.api.routes.providers import (
     OpenAIProviderRequest,
     _settings_payload,
     codex_login_status,
+    codex_status,
     create_manual_model,
     delete_model,
     delete_provider,
+    get_personal_provider_policy,
+    list_providers,
     save_openai_provider,
     set_ai_enabled,
     set_default_model,
@@ -36,7 +39,12 @@ from mato_loop_backend.api.routes.providers import (
 )
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
 from mato_loop_backend.providers.service import ProviderService
-from mato_loop_backend.settings import AiSettings, SettingsStore, ToolSettings
+from mato_loop_backend.settings import (
+    AiSettings,
+    SettingsStore,
+    ToolSettings,
+    UserAiSettings,
+)
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     MemoryPolicy,
@@ -421,6 +429,7 @@ async def test_codex_sync_ignores_own_oauth_token_rotation(monkeypatch) -> None:
     credential = SimpleNamespace(
         encrypted_payload=b"old-token",
         metadata_json={"accountId": "account"},
+        user_id=None,
     )
     provider = LlmProviderConfig(
         name="Codex",
@@ -444,7 +453,7 @@ async def test_codex_sync_ignores_own_oauth_token_rotation(monkeypatch) -> None:
 
 
 async def test_codex_login_creates_provider_without_static_model(monkeypatch) -> None:
-    attempt = SimpleNamespace(id="login", created_at=0)
+    attempt = SimpleNamespace(id="login", created_at=0, owner_id=None)
     device_token = SimpleNamespace(authorization_code="code", code_verifier="verifier")
     credential = SimpleNamespace(id=uuid4())
     settings = AiSettings()
@@ -877,6 +886,130 @@ async def test_provider_delete_clears_default_without_selecting_another(monkeypa
     assert settings.default_model_id is None
     assert settings.compaction_model_id is None
     assert settings.title_generation_model_id is None
+
+
+async def test_instance_provider_mutation_requires_admin(monkeypatch) -> None:
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=AiSettings()))
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+
+    with pytest.raises(ApiError) as exc_info:
+        await set_ai_enabled(EnabledRequest(enabled=False), _db(), user=user)
+
+    assert exc_info.value.code == "auth.adminRequired"
+
+
+async def test_personal_provider_policy_read_exposes_only_runtime_gates(
+    monkeypatch,
+) -> None:
+    settings = AiSettings(enabled=False, personal_providers_enabled=False)
+    settings.providers.append(
+        LlmProviderConfig(
+            name="Secret",
+            adapter_type="openai-compatible",
+            config={"base_url": "https://private.example/v1"},
+        )
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+
+    result = await get_personal_provider_policy(
+        SimpleNamespace(id=uuid4(), is_admin=False), _db()
+    )
+
+    assert result == {"enabled": False, "personalProvidersEnabled": False}
+
+
+async def test_normal_provider_read_is_effective_and_hides_configuration(
+    monkeypatch,
+) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    instance_provider = LlmProviderConfig(
+        name="Instance",
+        adapter_type="openai-compatible",
+        config={"base_url": "https://internal.example/v1"},
+    )
+    personal_provider = LlmProviderConfig(
+        name="Personal",
+        adapter_type="openai-compatible",
+        config={"base_url": "https://personal.example/v1"},
+    )
+    models = [
+        ModelConfig(provider_id=instance_provider.id, model_id="instance"),
+        ModelConfig(provider_id=personal_provider.id, model_id="personal"),
+    ]
+    effective = AiSettings(
+        providers=[instance_provider, personal_provider],
+        models=models,
+        default_model_id=models[1].id,
+    )
+    monkeypatch.setattr(
+        provider_routes, "load_effective_ai", AsyncMock(return_value=effective)
+    )
+    monkeypatch.setattr(
+        provider_routes, "load_effective_tools", AsyncMock(return_value=ToolSettings())
+    )
+
+    result = await list_providers(_db(), user=user)
+
+    assert [item["name"] for item in result["providers"]] == [
+        "Instance",
+        "Personal",
+    ]
+    assert result["defaultModelId"] == str(models[1].id)
+    assert all(item["config"] == {} for item in result["providers"])
+
+
+async def test_nonadmin_cannot_read_or_test_explicit_instance_provider(
+    monkeypatch,
+) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    load = AsyncMock(return_value=AiSettings())
+    complete = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(ProviderService, "complete", complete)
+
+    with pytest.raises(ApiError, match="auth.adminRequired"):
+        await list_providers(_db(), scope="instance", user=user)
+    with pytest.raises(ApiError, match="auth.adminRequired"):
+        await run_model_test(uuid4(), _db(), scope="instance", user=user)
+    with pytest.raises(ApiError, match="auth.adminRequired"):
+        await codex_status(_db(), scope="instance", user=user)
+
+    load.assert_not_awaited()
+    complete.assert_not_awaited()
+
+
+@pytest.mark.parametrize("scope", ["instance", "personal"])
+async def test_provider_deletion_clears_sessions_and_credentials_in_its_scope(
+    monkeypatch, scope
+) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=True)
+    provider = LlmProviderConfig(
+        name="Scoped",
+        adapter_type="openai-compatible",
+        credential_id=uuid4(),
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    instance = AiSettings(providers=[provider], models=[model])
+    personal = UserAiSettings(providers=[provider], models=[model])
+
+    async def load(_db, settings_type, **_kwargs):
+        return personal if settings_type is UserAiSettings else instance
+
+    delete_credential = AsyncMock(return_value=True)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(provider_routes, "delete_credential", delete_credential)
+    db = _db()
+
+    await delete_provider(provider.id, db, scope=scope, user=user)
+
+    statement = db.execute.await_args.args[0]
+    sql = str(statement)
+    assert ("chat_sessions.user_id" in sql) is (scope == "personal")
+    assert user.id in statement.compile().params.values() if scope == "personal" else True
+    delete_credential.assert_awaited_once_with(
+        db, provider.credential_id, owner_id=user.id if scope == "personal" else None
+    )
 
 
 def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:

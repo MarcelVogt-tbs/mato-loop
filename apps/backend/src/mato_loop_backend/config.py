@@ -54,10 +54,6 @@ class RuntimeConfig(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
-    def agent_home(self) -> Path:
-        return self.data_dir / "home"
-
-    @property
     def secrets_dir(self) -> Path:
         return self.data_dir / "secrets"
 

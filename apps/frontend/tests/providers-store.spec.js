@@ -133,7 +133,11 @@ describe('provider store', () => {
     finishSync({ data: { status: 'ok' } })
     await syncing
 
-    expect(api.post).toHaveBeenCalledWith('/providers/configuration/p1/models/sync')
+    expect(api.post).toHaveBeenCalledWith(
+      '/providers/configuration/p1/models/sync',
+      null,
+      { params: { scope: 'instance' } }
+    )
     expect(store.models.map((item) => item.id)).toEqual(['new'])
   })
 
@@ -215,6 +219,33 @@ describe('provider store', () => {
     expect(store.loading).toBe(false)
   })
 
+  it('does not apply a disabled-personal early response after the scope changed', async () => {
+    const requests = []
+    api.get.mockImplementation((url, config) => new Promise((resolve) => {
+      requests.push({ url, scope: config?.params?.scope, resolve })
+    }))
+    const store = useProviderStore()
+    store.selectScope('personal')
+
+    const personalLoad = store.fetchAll()
+    store.selectScope('instance')
+    const instanceLoad = store.fetchAll()
+    requests.find((request) => request.scope === 'instance' && request.url === '/providers')
+      .resolve({ data: { providers: [{ id: 'latest' }], models: [] } })
+    requests.find((request) => request.url.endsWith('/codex/status')).resolve({
+      data: { authenticated: false }
+    })
+    await instanceLoad
+    requests[0].resolve({
+      data: { enabled: true, runtimeEnabled: true, personalProvidersEnabled: false }
+    })
+    await personalLoad
+
+    expect(store.scope).toBe('instance')
+    expect(store.providers.map((provider) => provider.id)).toEqual(['latest'])
+    expect(store.loading).toBe(false)
+  })
+
   it('saves model configuration and enabled state atomically', async () => {
     const store = useProviderStore()
     store.providers = [{ id: 'p1', name: 'Lokal', enabled: true, adapterType: 'openai-compatible' }]
@@ -227,11 +258,11 @@ describe('provider store', () => {
 
     await store.updateModel('m1', { model_id: 'alpha', name: 'Alpha', enabled: false })
 
-    expect(api.put).toHaveBeenCalledWith('/providers/models/m1', {
-      model_id: 'alpha',
-      name: 'Alpha',
-      enabled: false
-    })
+    expect(api.put).toHaveBeenCalledWith(
+      '/providers/models/m1',
+      { model_id: 'alpha', name: 'Alpha', enabled: false },
+      { params: { scope: 'instance' } }
+    )
     expect(api.patch).not.toHaveBeenCalled()
   })
 
@@ -303,7 +334,7 @@ describe('provider store', () => {
       audio_generation_model_id: 'audio',
       audio_transcription_model_id: 'transcription',
       skill_creation_model_id: 'compact'
-    })
+    }, { params: { scope: 'instance' } })
     expect(store.defaultModelId).toBe('agent')
     expect(store.compactionModelId).toBe('compact')
     expect(store.titleGenerationModelId).toBeNull()
@@ -348,8 +379,12 @@ describe('provider store', () => {
     await expect(store.createLemonade(payload)).resolves.toBe('lemonade')
     await store.updateLemonade('lemonade', payload)
 
-    expect(api.post).toHaveBeenCalledWith('/providers/lemonade', payload)
-    expect(api.put).toHaveBeenCalledWith('/providers/configuration/lemonade', payload)
+    expect(api.post).toHaveBeenCalledWith(
+      '/providers/lemonade', payload, { params: { scope: 'instance' } }
+    )
+    expect(api.put).toHaveBeenCalledWith(
+      '/providers/configuration/lemonade', payload, { params: { scope: 'instance' } }
+    )
   })
 
   it('keeps public and private models selectable', () => {
@@ -395,7 +430,9 @@ describe('provider store', () => {
 
     await store.setAiEnabled(true)
 
-    expect(api.patch).toHaveBeenCalledWith('/providers/enabled', { enabled: true })
+    expect(api.patch).toHaveBeenCalledWith(
+      '/providers/enabled', { enabled: true }, { params: { scope: 'instance' } }
+    )
     expect(store.enabled).toBe(true)
   })
 
@@ -411,7 +448,8 @@ describe('provider store', () => {
 
     expect(api.patch).toHaveBeenCalledWith(
       '/providers/configuration/p1/policy',
-      { trustLevel: 'private', pseudonymizationEnabled: true, memoryPolicy: 'deny' }
+      { trustLevel: 'private', pseudonymizationEnabled: true, memoryPolicy: 'deny' },
+      { params: { scope: 'instance' } }
     )
   })
 
@@ -434,7 +472,54 @@ describe('provider store', () => {
 
     await store.refreshAfterCodexLogin('codex')
 
-    expect(api.post).toHaveBeenCalledWith('/providers/configuration/codex/models/sync')
+    expect(api.post).toHaveBeenCalledWith(
+      '/providers/configuration/codex/models/sync',
+      null,
+      { params: { scope: 'instance' } }
+    )
     expect(store.models[0].modelId).toBe('openai-codex/gpt-test')
+  })
+
+  it('loads personal configuration only after the safe policy check', async () => {
+    const store = useProviderStore()
+    store.selectScope('personal')
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/codex/status')) return Promise.resolve({ data: { authenticated: false } })
+      if (url === '/providers/personal-policy') return Promise.resolve({
+        data: { enabled: true, runtimeEnabled: true, personalProvidersEnabled: true }
+      })
+      return Promise.resolve({
+        data: {
+          enabled: true,
+          providers: [{ id: 'personal-provider', name: 'Persönlich', enabled: true }],
+          models: [{ id: 'personal-model', providerId: 'personal-provider', enabled: true }]
+        }
+      })
+    })
+
+    await store.fetchAll()
+
+    expect(store.scope).toBe('personal')
+    expect(store.modelOptions.map((option) => option.value)).toEqual(['personal-model'])
+    expect(api.get).toHaveBeenCalledWith('/providers/personal-policy')
+    expect(api.get).toHaveBeenCalledWith('/providers', { params: { scope: 'personal' } })
+    expect(api.get).not.toHaveBeenCalledWith('/providers', { params: { scope: 'instance' } })
+  })
+
+  it('loads the backend effective catalog without scoped raw reads', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        enabled: true,
+        providers: [{ id: 'effective', name: 'Effektiv', enabled: true }],
+        models: [{ id: 'effective-model', providerId: 'effective', enabled: true }]
+      }
+    })
+    const store = useProviderStore()
+
+    await store.fetchEffective()
+
+    expect(store.modelOptions.map((option) => option.value)).toEqual(['effective-model'])
+    expect(api.get).toHaveBeenCalledTimes(1)
+    expect(api.get).toHaveBeenCalledWith('/providers')
   })
 })

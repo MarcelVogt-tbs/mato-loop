@@ -10,10 +10,14 @@ from mato_loop_backend.attachments import (
     validate_audio,
 )
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.models import UserAccount
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService
 from mato_loop_backend.security import require_user
-from mato_loop_backend.settings import SettingsStore, ToolExecutionPolicy, ToolSettings
+from mato_loop_backend.settings import (
+    ToolExecutionPolicy,
+    load_effective_tools,
+)
 
 router = APIRouter(prefix="/media", dependencies=[Depends(require_user)])
 
@@ -36,9 +40,10 @@ def _provider_api_error(exc: ProviderError) -> ApiError:
 async def create_transcription(
     audio: Annotated[UploadFile, File()],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount, Depends(require_user)],
     language: Annotated[str | None, Form(max_length=35)] = None,
 ) -> dict[str, str]:
-    settings = await SettingsStore.load(db, ToolSettings)
+    settings = await load_effective_tools(db, user.id)
     if settings.transcribe_audio.policy == ToolExecutionPolicy.DISABLED:
         await audio.close()
         raise ApiError(409, "tool.unavailable")
@@ -57,6 +62,7 @@ async def create_transcription(
             audio=data,
             language=language,
             timeout=settings.transcribe_audio.timeout_seconds,
+            user_id=user.id,
         )
     except ProviderError as exc:
         raise _provider_api_error(exc) from exc

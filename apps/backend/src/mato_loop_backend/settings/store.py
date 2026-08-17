@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TypeVar
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.models.setting import SettingRecord
@@ -44,6 +44,30 @@ class SettingsStore:
         return settings_type.model_validate(record.data)
 
     @staticmethod
+    async def load_optional(
+        session: AsyncSession,
+        settings_type: type[SettingsType],
+        *,
+        user_id: UUID | None = None,
+        for_update: bool = False,
+    ) -> SettingsType | None:
+        SettingsStore._validate_scope(settings_type, user_id)
+        if for_update:
+            await SettingsStore._lock_scope(session, settings_type.settings_key, user_id)
+        statement = (
+            select(SettingRecord)
+            .where(
+                SettingRecord.key == settings_type.settings_key,
+                SettingRecord.user_id == user_id,
+            )
+            .execution_options(populate_existing=True)
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        record = await session.scalar(statement)
+        return settings_type.model_validate(record.data) if record is not None else None
+
+    @staticmethod
     async def save(
         session: AsyncSession,
         settings: SettingsDocument,
@@ -68,6 +92,22 @@ class SettingsStore:
             record.data = payload
         await session.flush()
         return record
+
+    @staticmethod
+    async def delete(
+        session: AsyncSession,
+        settings_type: type[SettingsDocument],
+        *,
+        user_id: UUID | None = None,
+    ) -> None:
+        SettingsStore._validate_scope(settings_type, user_id)
+        await SettingsStore._lock_scope(session, settings_type.settings_key, user_id)
+        await session.execute(
+            delete(SettingRecord).where(
+                SettingRecord.key == settings_type.settings_key,
+                SettingRecord.user_id == user_id,
+            )
+        )
 
     @staticmethod
     def _validate_scope(

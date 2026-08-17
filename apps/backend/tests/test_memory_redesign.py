@@ -34,8 +34,10 @@ def test_episode_chunking_is_deterministic_paragraph_aware_and_bounded() -> None
 
 
 async def test_pinned_context_filters_visibility_and_set_pinned_preserves_index() -> None:
+    owner_id = uuid4()
     memory = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         content="Pinned",
         category="fact",
         trust_level="public",
@@ -49,15 +51,16 @@ async def test_pinned_context_filters_visibility_and_set_pinned_preserves_index(
     db.scalars.return_value = scalar_result
 
     records = await MemoryService.pinned_context(
-        db, input_trust_level=TrustLevel.PUBLIC
+        db, owner_id=owner_id, input_trust_level=TrustLevel.PUBLIC
     )
 
     assert records == [memory]
     statement = str(db.scalars.await_args.args[0])
     assert "memories.pinned IS true" in statement
     assert "memories.trust_level" in statement
+    assert "memories.user_id" in statement
 
-    await MemoryService.set_pinned(db, memory, pinned=True)
+    await MemoryService.set_pinned(db, memory, owner_id=owner_id, pinned=True)
     assert memory.pinned is True
     assert memory.revision == 2
 

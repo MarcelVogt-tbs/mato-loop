@@ -8,6 +8,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 import httpx
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -97,6 +98,7 @@ class LoginAttempt:
     interval: int
     created_at: float
     next_poll_at: float
+    owner_id: UUID | None = None
     polling: bool = False
 
 
@@ -105,7 +107,7 @@ class CodexOAuthManager:
         self.attempts: dict[str, LoginAttempt] = {}
         self._lock = threading.Lock()
 
-    async def start_login(self) -> LoginAttempt:
+    async def start_login(self, owner_id: UUID | None = None) -> LoginAttempt:
         device_code = await request_device_code()
         now = time.time()
         attempt = LoginAttempt(
@@ -116,6 +118,7 @@ class CodexOAuthManager:
             interval=max(1, min(device_code.interval, 30)),
             created_at=now,
             next_poll_at=now,
+            owner_id=owner_id,
         )
         with self._lock:
             self._cleanup(now)

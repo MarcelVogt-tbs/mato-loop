@@ -2,7 +2,7 @@
 
 ## 1. Benutzer einrichten
 
-Beim ersten Aufruf zeigt MatoLoop die Ersteinrichtung an. Legen Sie einen Benutzernamen und ein Passwort mit mindestens zehn Zeichen fest. Nach dem Speichern werden Sie automatisch angemeldet.
+Beim ersten Aufruf zeigt MatoLoop die Ersteinrichtung an. Legen Sie einen Benutzernamen und ein Passwort mit mindestens zehn Zeichen fest. Dieses erste lokale Konto wird Administrator und nach dem Speichern automatisch angemeldet. Weitere Konten legen Administratoren später unter **Einstellungen > Benutzer** an.
 
 ## 2. Provider verbinden
 

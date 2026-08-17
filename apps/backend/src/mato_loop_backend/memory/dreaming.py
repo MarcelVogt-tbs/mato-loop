@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -40,6 +41,7 @@ from mato_loop_backend.models import (
     MemoryMode,
     MemoryRecord,
     Message,
+    UserAccount,
 )
 from mato_loop_backend.providers.base import ProviderError, ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
@@ -50,6 +52,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     TrustLevel,
     effective_model_trust,
+    load_effective_ai,
 )
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
@@ -492,6 +495,7 @@ async def _extract_candidates(
     max_candidates: int,
     evidence_ids: set[UUID],
     user_evidence_ids: set[UUID],
+    active_check: Callable[[], Awaitable[None]] | None = None,
 ) -> DreamCandidates:
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -505,6 +509,8 @@ async def _extract_candidates(
         "exact fields memory, category, and evidence."
     )
     for repair in range(MAX_DREAMING_OUTPUT_REPAIRS + 1):
+        if active_check is not None:
+            await active_check()
         result = await ProviderService.complete(
             db,
             provider=provider,
@@ -699,12 +705,15 @@ async def _reconcile_candidates(
     source: str,
     candidate_count: int,
     candidate_local_ids: list[set[UUID]],
+    active_check: Callable[[], Awaitable[None]] | None = None,
 ) -> DreamReconciliation:
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": RECONCILIATION_SYSTEM_PROMPT},
         {"role": "user", "content": source},
     ]
     for repair in range(MAX_DREAMING_OUTPUT_REPAIRS + 1):
+        if active_check is not None:
+            await active_check()
         result = await ProviderService.complete(
             db,
             provider=provider,
@@ -858,6 +867,36 @@ def dreaming_availability(
 
 
 class DreamingService:
+    _active_users: dict[UUID, asyncio.Event] = {}
+
+    @classmethod
+    async def wait_for_user(cls, user_id: UUID) -> None:
+        event = cls._active_users.get(user_id)
+        if event is not None:
+            await event.wait()
+
+    @staticmethod
+    async def _cancel_if_inactive(
+        db: AsyncSession, run: MemoryDreamRun, user_id: UUID
+    ) -> bool:
+        active = await db.scalar(
+            select(UserAccount.is_active).where(UserAccount.id == user_id)
+        )
+        if active is not False and active is not None:
+            return False
+        await db.rollback()
+        current = await db.get(MemoryDreamRun, run.id)
+        if current is not None and current.status in {
+            MemoryDreamStatus.QUEUED.value,
+            MemoryDreamStatus.RUNNING.value,
+        }:
+            current.status = MemoryDreamStatus.CANCELLED.value
+            current.error = "auth.accountDisabled"
+            current.completed_at = datetime.now(UTC)
+            current.next_attempt_at = None
+            await db.commit()
+        return True
+
     @staticmethod
     async def recover(db: AsyncSession) -> None:
         await db.execute(
@@ -895,11 +934,14 @@ class DreamingService:
         session_id: UUID | None = None,
         user_id: UUID | None = None,
     ) -> list[MemoryDreamRun]:
-        ai = await SettingsStore.load(db, AiSettings)
-        model, _provider = _model_and_provider(ai)
-        if model is None:
-            return []
-        statement = select(ChatSession).where(ChatSession.memory_mode == MemoryMode.FULL.value)
+        statement = (
+            select(ChatSession)
+            .join(UserAccount, UserAccount.id == ChatSession.user_id)
+            .where(
+                ChatSession.memory_mode == MemoryMode.FULL.value,
+                UserAccount.is_active.is_(True),
+            )
+        )
         if session_id is not None:
             statement = statement.where(ChatSession.id == session_id)
         if user_id is not None:
@@ -913,8 +955,16 @@ class DreamingService:
         )
         runs: list[MemoryDreamRun] = []
         settings_by_user: dict[UUID, MemorySettings] = {}
+        ai_by_user: dict[UUID, AiSettings] = {}
         now = datetime.now(UTC)
         for session in sessions:
+            ai = ai_by_user.get(session.user_id)
+            if ai is None:
+                ai = await load_effective_ai(db, session.user_id)
+                ai_by_user[session.user_id] = ai
+            model, _provider = _model_and_provider(ai)
+            if model is None:
+                continue
             memory = settings_by_user.get(session.user_id)
             if memory is None:
                 memory = await SettingsStore.load(
@@ -1053,25 +1103,31 @@ class DreamingService:
 
     @staticmethod
     async def requeue_compatible_blocked(db: AsyncSession) -> None:
-        ai = await SettingsStore.load(db, AiSettings)
-        model, _provider = _model_and_provider(ai)
-        if model is None:
-            return
         rows = list(
             (
                 await db.execute(
                     select(ChatSession, MemoryDreamRun)
                     .join(MemoryDreamRun, MemoryDreamRun.session_id == ChatSession.id)
+                    .join(UserAccount, UserAccount.id == ChatSession.user_id)
                     .where(
                         MemoryDreamRun.status == MemoryDreamStatus.BLOCKED.value,
                         ChatSession.memory_mode == MemoryMode.FULL.value,
+                        UserAccount.is_active.is_(True),
                     )
                 )
             ).all()
         )
         settings_by_user: dict[UUID, MemorySettings] = {}
+        ai_by_user: dict[UUID, AiSettings] = {}
         compatible_run_ids = []
         for session, run in rows:
+            ai = ai_by_user.get(session.user_id)
+            if ai is None:
+                ai = await load_effective_ai(db, session.user_id)
+                ai_by_user[session.user_id] = ai
+            model, _provider = _model_and_provider(ai)
+            if model is None:
+                continue
             memory = settings_by_user.get(session.user_id)
             if memory is None:
                 memory = await SettingsStore.load(
@@ -1101,8 +1157,11 @@ class DreamingService:
         now = datetime.now(UTC)
         run = await db.scalar(
             select(MemoryDreamRun)
+            .join(ChatSession, ChatSession.id == MemoryDreamRun.session_id)
+            .join(UserAccount, UserAccount.id == ChatSession.user_id)
             .where(
                 MemoryDreamRun.status == MemoryDreamStatus.QUEUED.value,
+                UserAccount.is_active.is_(True),
                 or_(
                     MemoryDreamRun.next_attempt_at.is_(None),
                     MemoryDreamRun.next_attempt_at <= now,
@@ -1127,7 +1186,10 @@ class DreamingService:
             logger.exception("Dreaming run %s failed", run_id)
             await db.rollback()
             current = await db.get(MemoryDreamRun, run_id)
-            if current is not None:
+            if (
+                current is not None
+                and current.status == MemoryDreamStatus.RUNNING.value
+            ):
                 code = (
                     exc.public_code
                     if isinstance(exc, ProviderError)
@@ -1155,10 +1217,28 @@ class DreamingService:
         session = await db.get(ChatSession, run.session_id)
         if session is None:
             raise RuntimeError("session.notFound")
+        event = asyncio.Event()
+        DreamingService._active_users[session.user_id] = event
+        try:
+            await DreamingService._process_active(db, run, session)
+        finally:
+            DreamingService._active_users.pop(session.user_id, None)
+            event.set()
+
+    @staticmethod
+    async def _process_active(
+        db: AsyncSession, run: MemoryDreamRun, session: ChatSession
+    ) -> None:
+        async def ensure_active() -> None:
+            if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+                raise DreamingContractError("auth.accountDisabled")
+
+        if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+            return
         memory = await SettingsStore.load(
             db, MemorySettings, user_id=session.user_id
         )
-        ai = await SettingsStore.load(db, AiSettings)
+        ai = await load_effective_ai(db, session.user_id)
         available, reason = dreaming_availability(
             memory,
             ai,
@@ -1245,6 +1325,8 @@ class DreamingService:
                 "deduplication, or the rules above:\n" + instructions
             )
             system_prompt += guidance
+        if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+            return
         output = await _extract_candidates(
             db,
             provider=provider,
@@ -1254,7 +1336,10 @@ class DreamingService:
             max_candidates=memory.dreaming_max_candidates,
             evidence_ids=evidence_ids,
             user_evidence_ids=user_evidence_ids,
+            active_check=ensure_active,
         )
+        if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+            return
         validated_candidates: list[tuple[DreamCandidate, list[UUID]]] = []
         for candidate in output.candidates:
             candidate_evidence = list(dict.fromkeys(candidate.evidence_message_ids))
@@ -1267,6 +1352,7 @@ class DreamingService:
 
         local_matches = await MemoryService.reconciliation_candidates(
             db,
+            owner_id=session.user_id,
             candidates=[
                 (candidate.content, candidate.category)
                 for candidate, _evidence in validated_candidates
@@ -1274,12 +1360,16 @@ class DreamingService:
             readable_by=memory_read_trust,
         )
         if validated_candidates and get_runtime_config().embedding_enabled:
+            if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+                return
             try:
                 candidate_vectors = await embedding_client.embed_queries(
                     [candidate.content for candidate, _evidence in validated_candidates]
                 )
             except EmbeddingError:
                 candidate_vectors = []
+            if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+                return
             if candidate_vectors:
                 used_characters = sum(
                     len(item.content) + 200
@@ -1293,6 +1383,7 @@ class DreamingService:
                         continue
                     related = await MemoryRetrievalService.retrieve(
                         db,
+                        owner_id=session.user_id,
                         mode=MemoryRetrieveMode.SEARCH,
                         query=candidate.content,
                         query_embedding=vector,
@@ -1352,6 +1443,8 @@ class DreamingService:
             for index, candidate, matches in entries
         ]
         for batch in _reconciliation_batches(entries, model):
+            if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+                return
             batch_entries = [(candidate, matches) for _index, candidate, matches in batch]
             reconciliation = await _reconcile_candidates(
                 db,
@@ -1360,7 +1453,10 @@ class DreamingService:
                 source=_reconciliation_source(batch_entries),
                 candidate_count=len(batch),
                 candidate_local_ids=[{item.id for item in matches} for _candidate, matches in batch_entries],
+                active_check=ensure_active,
             )
+            if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+                return
             for local_index, decision in enumerate(reconciliation.decisions):
                 original_index = batch[local_index][0]
                 decisions[original_index] = decision.model_copy(
@@ -1395,12 +1491,14 @@ class DreamingService:
             if not decision.pin or item.pinned:
                 return
             if memory.dreaming_pin_policy == ToolExecutionPolicy.AUTO:
-                await MemoryService.auto_pin(db, item)
+                await MemoryService.auto_pin(
+                    db, item, owner_id=session.user_id
+                )
             elif memory.dreaming_pin_policy == ToolExecutionPolicy.ASK:
                 await MemoryService.request_dreaming_approval(
                     db,
                     action="pin",
-                    user_id=session.user_id,
+                    owner_id=session.user_id,
                     source_session_id=session.id,
                     source_dream_run_id=run.id,
                     targets=[item],
@@ -1418,6 +1516,8 @@ class DreamingService:
         created = 0
         updated = 0
         for index, (candidate, candidate_evidence) in enumerate(validated_candidates):
+            if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+                return
             decision = decisions[index]
             targets = [existing[memory_id] for memory_id in decision.memory_ids]
             if decision.action == "update":
@@ -1432,7 +1532,7 @@ class DreamingService:
                     await MemoryService.request_dreaming_approval(
                         db,
                         action="update",
-                        user_id=session.user_id,
+                        owner_id=session.user_id,
                         source_session_id=session.id,
                         source_dream_run_id=run.id,
                         targets=targets,
@@ -1449,6 +1549,7 @@ class DreamingService:
                     continue
                 mutation = await MemoryService.update_dreaming(
                     db,
+                    owner_id=session.user_id,
                     memory_id=targets[0].id,
                     expected_revision=targets[0].revision,
                     content=decision.content,
@@ -1475,7 +1576,7 @@ class DreamingService:
                     await MemoryService.request_dreaming_approval(
                         db,
                         action="merge",
-                        user_id=session.user_id,
+                        owner_id=session.user_id,
                         source_session_id=session.id,
                         source_dream_run_id=run.id,
                         targets=targets,
@@ -1492,6 +1593,7 @@ class DreamingService:
                     continue
                 mutation = await MemoryService.merge_dreaming(
                     db,
+                    owner_id=session.user_id,
                     memory_ids=decision.memory_ids,
                     expected_revisions={item.id: item.revision for item in targets},
                     expected_trust={item.id: TrustLevel(item.trust_level) for item in targets},
@@ -1511,6 +1613,7 @@ class DreamingService:
             if decision.action == "unchanged":
                 mutation = await MemoryService.keep_dreaming(
                     db,
+                    owner_id=session.user_id,
                     memory_id=targets[0].id,
                     expected_revision=targets[0].revision,
                     trust_level=input_trust,
@@ -1522,6 +1625,7 @@ class DreamingService:
                 continue
             mutation = await MemoryService.create_dreaming(
                 db,
+                owner_id=session.user_id,
                 content=candidate.content,
                 category=candidate.category,
                 trust_level=input_trust,
@@ -1541,6 +1645,8 @@ class DreamingService:
         if state is None:
             state = MemoryDreamState(session_id=session.id)
             db.add(state)
+        if await DreamingService._cancel_if_inactive(db, run, session.user_id):
+            return
         state.last_processed_message_id = run.source_to_message_id
         run.status = MemoryDreamStatus.COMPLETED.value
         run.model_config_id = model.id

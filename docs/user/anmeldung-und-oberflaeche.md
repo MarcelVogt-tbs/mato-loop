@@ -2,9 +2,15 @@
 
 ## Anmeldung
 
-MatoLoop verwendet eine lokale, Cookie-basierte Anmeldung. Geschützte Seiten leiten automatisch zur Anmeldeseite weiter. Über **Abmelden** im Benutzermenü beenden Sie die Sitzung.
+MatoLoop verwendet derzeit ausschließlich eine lokale, Cookie-basierte Anmeldung. Geschützte Seiten leiten automatisch zur Anmeldeseite weiter. Über **Abmelden** im Benutzermenü beenden Sie die Sitzung. Eine Anmeldung über einen externen OAuth- oder SSO-Anbieter ist noch nicht implementiert.
 
-Eine Oberfläche zum Ändern des Passworts oder zum Anlegen weiterer Benutzer gibt es derzeit nicht.
+Das erste bei der Ersteinrichtung angelegte lokale Konto erhält Administratorrechte. Unter **Einstellungen > Konto** ändern Sie Ihr eigenes Passwort; danach werden alle bestehenden Anmeldungen dieses Kontos beendet.
+
+Administratoren können unter **Einstellungen > Benutzer** lokale Konten anlegen, Passwörter zurücksetzen, Konten aktivieren oder deaktivieren und Administratorrechte zuweisen oder entziehen. Vor dem endgültigen Löschen muss ein Konto deaktiviert werden. Das eigene Konto kann nicht deaktiviert oder gelöscht werden; außerdem muss mindestens ein aktiver Administrator bestehen bleiben.
+
+Administratorrechte erlauben die Benutzerverwaltung und Änderungen an gemeinsamen Instanzeinstellungen. Sie erlauben keinen Zugriff auf Sessions, Nachrichten, Dateien, Erinnerungen, Zugangsdaten, Arbeitsbereiche oder Computer anderer Benutzer. Der Umschalter **Persönlich** / **Instanz** bearbeitet beim Administrator entweder die eigenen Einstellungen oder die gemeinsam genutzte Instanz, niemals das persönliche Profil eines anderen Benutzers.
+
+Beim Löschen entfernt MatoLoop die zugehörigen Datenbankdaten und Session-Bäume. Dateien, Caches und Konfigurationen auf Computern, einschließlich des mitgelieferten Compose-Computers, sowie Daten in externen Diensten werden nicht gelöscht und müssen dort bei Bedarf separat entfernt werden. Gemeinsam konfigurierte Instanzressourcen bleiben erhalten.
 
 ## Navigation
 

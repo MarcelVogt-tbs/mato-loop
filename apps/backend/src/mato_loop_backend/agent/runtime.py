@@ -106,6 +106,7 @@ from mato_loop_backend.models import (
     Message,
     QuestionRequest,
     TitleGenerationStatus,
+    UserAccount,
     WebSearchPolicy,
 )
 from mato_loop_backend.providers.base import (
@@ -133,6 +134,9 @@ from mato_loop_backend.settings import (
     WebFetchPolicy,
     effective_model_pseudonymization,
     effective_model_trust,
+    load_effective_ai,
+    load_effective_integrations,
+    load_effective_tools,
     resolve_web_fetch_policy,
 )
 from mato_loop_backend.settings.models import (
@@ -145,7 +149,7 @@ from mato_loop_backend.settings.models import (
 )
 from mato_loop_backend.skills import RunSkillState, SkillDraft, SkillEditPatch, SkillError
 from mato_loop_backend.video_processing import VideoAnalysisMode, VideoFrame
-from mato_loop_backend.workspace import RootFileError, RootFileService, WorkspaceError
+from mato_loop_backend.workspace import RootFileError, RootFileService
 
 logger = logging.getLogger(__name__)
 _ROOT_INDEPENDENT_EXECUTION_OPERATIONS = frozenset(
@@ -568,7 +572,7 @@ def _public_run_error(exc: Exception) -> ErrorDescriptor:
         return describe_error(exc.public_code, params=exc.params)
     if isinstance(exc, httpx.HTTPError):
         return describe_error("provider.unavailable")
-    if isinstance(exc, (RootFileError, WorkspaceError)):
+    if isinstance(exc, RootFileError):
         return describe_error(exc.code)
     if isinstance(exc, SearchIntegrationError):
         return describe_error(exc.code)
@@ -992,9 +996,17 @@ def _public_reasoning_payload(reasoning: PublicReasoning | None) -> dict[str, An
 
 class AgentRuntime:
     _tasks: dict[UUID, asyncio.Task[None]] = {}
-    _title_tasks: set[asyncio.Task[None]] = set()
+    _title_tasks: dict[asyncio.Task[None], UUID] = {}
     _cancellable_runs: set[UUID] = set()
     _user_cancelled_runs: set[UUID] = set()
+
+    @staticmethod
+    async def _ensure_user_active(db: AsyncSession, user_id: UUID) -> None:
+        active = await db.scalar(
+            select(UserAccount.is_active).where(UserAccount.id == user_id)
+        )
+        if active is False or active is None:
+            raise AgentRunError("auth.accountDisabled")
 
     @classmethod
     def _schedule_run(cls, run: AgentRun) -> None:
@@ -1011,7 +1023,8 @@ class AgentRuntime:
         *,
         attachments: list[AttachmentInput] | None = None,
     ) -> AgentRun:
-        ai_settings = await SettingsStore.load(db, AiSettings)
+        await cls._ensure_user_active(db, chat_session.user_id)
+        ai_settings = await load_effective_ai(db, chat_session.user_id)
         model_id = chat_session.model_config_id or ai_settings.default_model_id
         model = _model_for_id(ai_settings, model_id)
         if model is None:
@@ -1157,6 +1170,7 @@ class AgentRuntime:
                     )
 
         try:
+            await cls._ensure_user_active(db, chat_session.user_id)
             await db.flush()
             await EpisodeIndexService.enqueue(db, message)
             for position, attachment in enumerate(attachments or []):
@@ -1193,8 +1207,8 @@ class AgentRuntime:
             title_task = asyncio.create_task(
                 cls._generate_title(run.id, chat_session.id, content, chat_session.title)
             )
-            cls._title_tasks.add(title_task)
-            title_task.add_done_callback(cls._title_tasks.discard)
+            cls._title_tasks[title_task] = chat_session.user_id
+            title_task.add_done_callback(lambda task: cls._title_tasks.pop(task, None))
         return run
 
     @classmethod
@@ -1206,7 +1220,8 @@ class AgentRuntime:
     ) -> AgentRun:
         if failed_run.session_id != chat_session.id or failed_run.status != "failed":
             raise AgentRunError("session.retryUnavailable")
-        ai_settings = await SettingsStore.load(db, AiSettings)
+        await cls._ensure_user_active(db, chat_session.user_id)
+        ai_settings = await load_effective_ai(db, chat_session.user_id)
         model = _model_for_id(ai_settings, failed_run.model_config_id)
         provider = _provider_for_model(ai_settings, model) if model is not None else None
         if model is None or provider is None:
@@ -1223,10 +1238,18 @@ class AgentRuntime:
         current_directory = chat_session.current_directory
         working_directory = failed_run.working_directory_snapshot
         execution_agent = (
-            await db.get(ExecutionAgent, failed_run.execution_agent_id)
+            await db.scalar(
+                select(ExecutionAgent).where(
+                    ExecutionAgent.id == failed_run.execution_agent_id,
+                    ExecutionAgent.user_id == chat_session.user_id,
+                    ExecutionAgent.revoked_at.is_(None),
+                )
+            )
             if failed_run.execution_agent_id is not None
             else None
         )
+        if failed_run.execution_agent_id is not None and execution_agent is None:
+            raise AgentRunError("executionAgent.unavailable")
         if snapshot is not None and current_directory is not None:
             try:
                 directory = await ExecutionClient(
@@ -1297,6 +1320,7 @@ class AgentRuntime:
         db.add(run)
         commit_task: asyncio.Task[None] | None = None
         try:
+            await cls._ensure_user_active(db, chat_session.user_id)
             await db.flush()
             commit_task = asyncio.create_task(db.commit())
             await asyncio.shield(commit_task)
@@ -1339,6 +1363,20 @@ class AgentRuntime:
         return True
 
     @classmethod
+    async def cancel_and_wait_user_title_tasks(cls, user_id: UUID) -> bool:
+        tasks = [
+            task
+            for task, owner_id in cls._title_tasks.items()
+            if owner_id == user_id and not task.done()
+        ]
+        for task in tasks:
+            if task.cancelling() == 0:
+                task.cancel()
+        if tasks:
+            await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
+        return bool(tasks)
+
+    @classmethod
     async def shutdown(cls) -> None:
         tasks = [
             task
@@ -1356,7 +1394,7 @@ class AgentRuntime:
         try:
             async with AsyncSessionFactory() as db:
                 run = await db.get(AgentRun, run_id)
-                if run is None:
+                if run is None or run.status not in {"queued", "running"}:
                     return
                 session_id = run.session_id
                 visible_response = _VisibleResponse()
@@ -1479,9 +1517,12 @@ class AgentRuntime:
         chat_session = await db.get(ChatSession, run.session_id)
         if chat_session is None:
             raise AgentRunError("session.notFound")
-        ai_settings = await SettingsStore.load(db, AiSettings)
+        await cls._ensure_user_active(db, chat_session.user_id)
+        ai_settings = await load_effective_ai(db, chat_session.user_id)
         runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
-        integration_settings = await SettingsStore.load(db, IntegrationSettings)
+        integration_settings = await load_effective_integrations(
+            db, chat_session.user_id
+        )
         agent_identity = await SettingsStore.load(
             db, AgentIdentitySettings, user_id=chat_session.user_id
         )
@@ -1569,18 +1610,21 @@ class AgentRuntime:
             )
         ):
             step += 1
+            await cls._ensure_user_active(db, chat_session.user_id)
             context_started_at = time.monotonic()
             await _publish_run_phase(run.id, "preparing_context")
             await db.refresh(chat_session)
-            ai_settings = await SettingsStore.load(db, AiSettings)
+            ai_settings = await load_effective_ai(db, chat_session.user_id)
             if not ai_settings.enabled:
                 raise AgentRunError("provider.disabled")
             runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
             memory_settings = await SettingsStore.load(
                 db, MemorySettings, user_id=chat_session.user_id
             )
-            integration_settings = await SettingsStore.load(db, IntegrationSettings)
-            tool_settings = await SettingsStore.load(db, ToolSettings)
+            integration_settings = await load_effective_integrations(
+                db, chat_session.user_id
+            )
+            tool_settings = await load_effective_tools(db, chat_session.user_id)
             web_fetch_policy = resolve_web_fetch_policy(tool_settings, model)
             memory_state = memory_policy.effective_memory(
                 chat_session, memory_settings, provider, model
@@ -1591,7 +1635,6 @@ class AgentRuntime:
             )
             root_files = RootFileService(
                 chat_session.id,
-                working_directory=run.working_directory_snapshot,
             )
             if (
                 model_trust_level == TrustLevel.PUBLIC
@@ -1613,10 +1656,13 @@ class AgentRuntime:
             if memory_state.read_enabled:
                 if memory_scope is None:
                     memory_scope = await MemoryService.scope(
-                        db, readable_by=model_trust_level
+                        db,
+                        owner_id=chat_session.user_id,
+                        readable_by=model_trust_level,
                     )
                 pinned_memories = await MemoryService.pinned_context(
                     db,
+                    owner_id=chat_session.user_id,
                     input_trust_level=model_trust_level,
                 )
                 if memory_overview_required:
@@ -1643,6 +1689,7 @@ class AgentRuntime:
                         if should_retrieve:
                             overview_result = await MemoryRetrievalService.retrieve(
                                 db,
+                                owner_id=chat_session.user_id,
                                 mode=MemoryRetrieveMode.BROWSE,
                                 query=None,
                                 readable_by=model_trust_level,
@@ -1716,6 +1763,7 @@ class AgentRuntime:
                             automatic_memories = (
                                 await MemoryRetrievalService.retrieve(
                                     db,
+                                    owner_id=chat_session.user_id,
                                     mode=MemoryRetrieveMode.SEARCH,
                                     query=rag_query,
                                     readable_by=model_trust_level,
@@ -3084,6 +3132,7 @@ class AgentRuntime:
                                 language=requested_language,
                                 timeout=active_tool_settings.analyze_video.timeout_seconds,
                                 active_model_id=active_model.id,
+                                user_id=chat_session.user_id,
                             )
                             model_requests += 1
                             return result.text
@@ -3734,7 +3783,7 @@ class AgentRuntime:
                     )
                     await db.commit()
                     return
-                ai_settings = await SettingsStore.load(db, AiSettings)
+                ai_settings = await load_effective_ai(db, chat_session.user_id)
                 runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
                 explicit_model = ai_settings.title_generation_model_id is not None
                 model_ids = (
@@ -3782,6 +3831,7 @@ class AgentRuntime:
                 title = None
                 output_budget = initial_title_output_budget(model.max_output_tokens)
                 for attempt in range(2):
+                    await AgentRuntime._ensure_user_active(db, chat_session.user_id)
                     result = await ProviderService.complete(
                         db,
                         provider=provider,
@@ -3886,8 +3936,10 @@ class AgentRuntime:
         root_files: RootFileService,
         approval_resolution: dict[str, str] | None = None,
     ) -> PermissionDecision:
-        tool_settings = await SettingsStore.load(db, ToolSettings)
-        integration_settings = await SettingsStore.load(db, IntegrationSettings)
+        tool_settings = await load_effective_tools(db, chat_session.user_id)
+        integration_settings = await load_effective_integrations(
+            db, chat_session.user_id
+        )
         policy = _tool_policy(tool_settings, integration_settings, request)
         if request.force_ask and policy == ToolExecutionPolicy.AUTO:
             policy = ToolExecutionPolicy.ASK
@@ -3923,8 +3975,10 @@ class AgentRuntime:
         ):
             approval_resolution["expected_revision"] = resolution.expected_revision
         await db.refresh(chat_session)
-        tool_settings = await SettingsStore.load(db, ToolSettings)
-        integration_settings = await SettingsStore.load(db, IntegrationSettings)
+        tool_settings = await load_effective_tools(db, chat_session.user_id)
+        integration_settings = await load_effective_integrations(
+            db, chat_session.user_id
+        )
         current_policy = _tool_policy(tool_settings, integration_settings, request)
         current_decision = await PermissionPolicy.evaluate(
             db, chat_session, request, root_files, current_policy

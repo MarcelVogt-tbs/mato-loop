@@ -65,13 +65,9 @@ def _db_with_grants(*grants: PermissionGrant) -> AsyncMock:
 def _root_files(tmp_path, session: ChatSession) -> RootFileService:
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session.id)
-    if session.working_directory:
-        (tmp_path / session.working_directory).mkdir(parents=True, exist_ok=True)
     return RootFileService(
         session.id,
         session_storage=storage,
-        workspace_home=tmp_path,
-        working_directory=session.working_directory,
     )
 
 
@@ -93,9 +89,9 @@ def _path_request(
 
 
 def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -> None:
-    session = _session(working_directory="project")
+    session = _session()
     root_files = _root_files(tmp_path, session)
-    granted = _path_request(root_files, "docs", root="workspace")
+    granted = _path_request(root_files, "files/docs")
     grant = PermissionGrant(
         session_id=session.id,
         capability="filesystem.read",
@@ -104,10 +100,10 @@ def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -
     )
 
     assert PermissionPolicy.grant_matches(
-        grant, _path_request(root_files, "docs/readme.md", root="workspace"), root_files
+        grant, _path_request(root_files, "files/docs/readme.md"), root_files
     )
     assert not PermissionPolicy.grant_matches(
-        grant, _path_request(root_files, "docs-other/readme.md", root="workspace"), root_files
+        grant, _path_request(root_files, "files/docs-other/readme.md"), root_files
     )
 
 
@@ -149,17 +145,14 @@ def test_execution_directory_grant_matches_only_same_root_subtree(tmp_path) -> N
     ("root", "access", "capability", "expected"),
     [
         ("session", "read-only", "filesystem.read", PermissionDecision.ALLOW),
-        ("workspace", "read-only", "filesystem.read", PermissionDecision.ALLOW),
         ("session", "read-only", "filesystem.write", PermissionDecision.DENY),
-        ("workspace", "read-only", "filesystem.delete", PermissionDecision.DENY),
         ("session", "read-write", "filesystem.write", PermissionDecision.ALLOW),
-        ("workspace", "read-write", "filesystem.delete", PermissionDecision.ALLOW),
     ],
 )
 async def test_file_access_is_decided_only_for_current_host_bound_roots(
     tmp_path, root: str, access: str, capability: str, expected: PermissionDecision
 ) -> None:
-    session = _session(working_directory="project", workspace_access=access)
+    session = _session(workspace_access=access)
     root_files = _root_files(tmp_path, session)
     db = _db_with_grants()
 
@@ -173,12 +166,11 @@ async def test_file_access_is_decided_only_for_current_host_bound_roots(
 
 
 async def test_global_policy_can_require_or_deny_a_host_bound_file_action(tmp_path) -> None:
-    session = _session(working_directory="project", workspace_access="read-write")
+    session = _session(workspace_access="read-write")
     root_files = _root_files(tmp_path, session)
     request = _path_request(
         root_files,
-        "notes.txt",
-        root="workspace",
+        "files/notes.txt",
         capability="filesystem.delete",
     )
 
@@ -193,12 +185,11 @@ async def test_global_policy_can_require_or_deny_a_host_bound_file_action(tmp_pa
 async def test_policy_revocation_while_waiting_for_approval_stops_action(
     tmp_path, monkeypatch
 ) -> None:
-    session = _session(working_directory="project", workspace_access="read-write")
+    session = _session(workspace_access="read-write")
     root_files = _root_files(tmp_path, session)
     request = _path_request(
         root_files,
-        "notes.txt",
-        root="workspace",
+        "files/notes.txt",
         capability="filesystem.delete",
     )
     settings_loads = 0
@@ -615,20 +606,11 @@ def test_integration_operation_grants_match_only_exact_canonical_scope(tmp_path)
 
 
 async def test_stale_or_missing_workspace_cannot_be_approved(tmp_path) -> None:
-    session = _session(working_directory="project")
-    selected = _root_files(tmp_path, session)
-    request = _path_request(selected, "notes.txt", root="workspace")
-    session.working_directory = None
-    current = RootFileService(
-        session.id,
-        session_storage=selected.session_storage,
-        workspace_home=tmp_path,
-        working_directory=None,
-    )
+    session = _session()
+    root_files = _root_files(tmp_path, session)
 
-    assert await PermissionPolicy.evaluate(
-        _db_with_grants(), session, request, current
-    ) == PermissionDecision.DENY
+    with pytest.raises(ValueError, match="No working directory is selected"):
+        _path_request(root_files, "notes.txt", root="workspace")
 
 
 async def test_root_scope_from_another_session_is_denied(tmp_path) -> None:

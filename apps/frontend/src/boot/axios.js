@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { boot } from 'quasar/wrappers'
-import { decodeBlobApiError } from 'src/utils/api-errors'
+import { decodeBlobApiError, errorDescriptor } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
 
 const api = axios.create({
@@ -8,11 +8,40 @@ const api = axios.create({
   withCredentials: true
 })
 
+const SESSION_INVALIDATION_CODES = new Set([
+  'auth.accountDisabled',
+  'auth.notAuthenticated',
+  'auth.sessionExpired',
+  'auth.userMissing'
+])
+let sessionInvalidation = null
+let adminRefresh = null
+
+export async function recoverControlledAuth(error) {
+  const code = errorDescriptor(error)?.code
+  if (SESSION_INVALIDATION_CODES.has(code)) {
+    sessionInvalidation ||= import('src/stores/auth').then(({ useAuthStore }) => {
+      useAuthStore().invalidateSession()
+    })
+    await sessionInvalidation
+  } else if (code === 'auth.adminRequired' && !error.config?.authRefresh) {
+    adminRefresh ||= import('src/stores/auth')
+      .then(({ useAuthStore }) => useAuthStore().fetchMe({
+        authRefresh: true,
+        suppressErrorToast: true
+      }))
+      .catch(() => {})
+      .finally(() => { adminRefresh = null })
+    await adminRefresh
+  }
+}
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (axios.isCancel(error)) return Promise.reject(error)
     const decoded = await decodeBlobApiError(error)
+    await recoverControlledAuth(decoded)
     if (!decoded.config?.suppressErrorToast) notifyError(decoded)
     return Promise.reject(decoded)
   }

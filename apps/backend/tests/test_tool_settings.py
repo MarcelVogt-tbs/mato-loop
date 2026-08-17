@@ -1,4 +1,6 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -7,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.tool_settings import (
     ToolSettingsRequest,
+    get_personal_tool_settings,
     get_tool_settings,
     update_tool_settings,
 )
@@ -128,6 +131,53 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
     }
 
 
+async def test_nonadmin_cannot_read_instance_private_tool_origins(monkeypatch) -> None:
+    settings = ToolSettings(
+        web_fetch={"allowed_private_origins": ["https://private.example"]}
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+
+    with pytest.raises(ApiError, match="auth.adminRequired"):
+        await get_tool_settings(_db(), scope="instance", user=user)
+
+
+async def test_personal_tool_policy_read_exposes_only_gate(monkeypatch) -> None:
+    settings = ToolSettings(
+        personal_settings_enabled=False,
+        web_fetch={"allowed_private_origins": ["https://private.example"]},
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+
+    result = await get_personal_tool_settings(
+        SimpleNamespace(id=uuid4(), is_admin=False), _db()
+    )
+
+    assert result == {"enabled": False}
+
+
+async def test_personal_effective_tools_redact_instance_private_origins(
+    monkeypatch,
+) -> None:
+    settings = ToolSettings(
+        web_fetch={"allowed_private_origins": ["https://private.example"]}
+    )
+    monkeypatch.setattr(
+        "mato_loop_backend.api.routes.tool_settings.load_effective_tools",
+        AsyncMock(return_value=settings),
+    )
+    monkeypatch.setattr(
+        "mato_loop_backend.api.routes.tool_settings.load_effective_integrations",
+        AsyncMock(return_value=IntegrationSettings()),
+    )
+
+    result = await get_tool_settings(
+        _db(), scope="personal", user=SimpleNamespace(id=uuid4(), is_admin=False)
+    )
+
+    assert result["webFetch"]["allowedPrivateOrigins"] == []
+
+
 async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch) -> None:
     save = AsyncMock()
     existing = ToolSettings()
@@ -186,10 +236,12 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
         ],
     }
     saved = save.await_args.args[1]
-    assert load.await_args_list[0].args[1] is IntegrationSettings
-    assert load.await_args_list[0].kwargs == {"for_update": True}
+    assert load.await_args_list[0].args[1] is ToolSettings
+    assert load.await_args_list[0].kwargs == {}
     assert load.await_args_list[1].args[1] is ToolSettings
     assert load.await_args_list[1].kwargs == {"for_update": True}
+    assert load.await_args_list[2].args[1] is IntegrationSettings
+    assert load.await_args_list[2].kwargs == {"for_update": True}
     assert saved is existing
     assert saved.settings_key == "tools"
     assert saved.web_fetch.allowed_private_origins == result["webFetch"][

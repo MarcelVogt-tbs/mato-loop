@@ -100,7 +100,7 @@ describe('integration store', () => {
 
     await store.fetchSearch()
 
-    expect(api.get).toHaveBeenCalledWith('/integrations/search')
+    expect(api.get).toHaveBeenCalledWith('/integrations/search', { params: { scope: 'instance' } })
     expect(store.search.providers.map((item) => item.providerType)).toEqual(['searxng'])
     expect(store.search.providerOptions).toBeUndefined()
     expect(store.loaded).toBe(true)
@@ -132,7 +132,9 @@ describe('integration store', () => {
 
     await store.createSearch(payload)
 
-    expect(api.post).toHaveBeenCalledWith('/integrations/search/providers', payload)
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/search/providers', payload, { params: { scope: 'instance' } }
+    )
     expect(store.search.providers).toHaveLength(1)
   })
 
@@ -156,10 +158,16 @@ describe('integration store', () => {
     await store.testCalendar('calendar-id')
     await store.removeCalendar('calendar-id')
 
-    expect(api.get).toHaveBeenCalledWith('/integrations/calendar')
-    expect(api.post).toHaveBeenCalledWith('/integrations/calendar/accounts', payload)
-    expect(api.post).toHaveBeenCalledWith('/integrations/calendar/accounts/calendar-id/test')
-    expect(api.delete).toHaveBeenCalledWith('/integrations/calendar/accounts/calendar-id')
+    expect(api.get).toHaveBeenCalledWith('/integrations/calendar', { params: { scope: 'instance' } })
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/calendar/accounts', payload, { params: { scope: 'instance' } }
+    )
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/calendar/accounts/calendar-id/test', null, { params: { scope: 'instance' } }
+    )
+    expect(api.delete).toHaveBeenCalledWith(
+      '/integrations/calendar/accounts/calendar-id', { params: { scope: 'instance' } }
+    )
     expect(store.calendar.accounts).toHaveLength(1)
   })
 
@@ -174,10 +182,11 @@ describe('integration store', () => {
       enabled: true
     })
 
-    expect(api.put).toHaveBeenCalledWith('/integrations/calendar/accounts/calendar-id', {
-      name: 'Arbeit',
-      enabled: true
-    })
+    expect(api.put).toHaveBeenCalledWith(
+      '/integrations/calendar/accounts/calendar-id',
+      { name: 'Arbeit', enabled: true },
+      { params: { scope: 'instance' } }
+    )
   })
 
   it('loads and dispatches knowledge base operations', async () => {
@@ -200,10 +209,16 @@ describe('integration store', () => {
     await store.testKnowledge('knowledge-id')
     await store.removeKnowledge('knowledge-id')
 
-    expect(api.get).toHaveBeenCalledWith('/integrations/knowledge')
-    expect(api.post).toHaveBeenCalledWith('/integrations/knowledge/bases', payload)
-    expect(api.post).toHaveBeenCalledWith('/integrations/knowledge/bases/knowledge-id/test')
-    expect(api.delete).toHaveBeenCalledWith('/integrations/knowledge/bases/knowledge-id')
+    expect(api.get).toHaveBeenCalledWith('/integrations/knowledge', { params: { scope: 'instance' } })
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/knowledge/bases', payload, { params: { scope: 'instance' } }
+    )
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/knowledge/bases/knowledge-id/test', null, { params: { scope: 'instance' } }
+    )
+    expect(api.delete).toHaveBeenCalledWith(
+      '/integrations/knowledge/bases/knowledge-id', { params: { scope: 'instance' } }
+    )
     expect(store.knowledge.bases).toHaveLength(1)
   })
 
@@ -219,10 +234,11 @@ describe('integration store', () => {
       enabled: true
     })
 
-    expect(api.put).toHaveBeenCalledWith('/integrations/knowledge/bases/knowledge-id', {
-      name: 'Wiki',
-      enabled: true
-    })
+    expect(api.put).toHaveBeenCalledWith(
+      '/integrations/knowledge/bases/knowledge-id',
+      { name: 'Wiki', enabled: true },
+      { params: { scope: 'instance' } }
+    )
   })
 
   it('loads and dispatches Git instance operations with the Git payload', async () => {
@@ -243,10 +259,10 @@ describe('integration store', () => {
     await store.updateGit('git-id', payload)
     await store.removeGit('git-id')
 
-    expect(api.get).toHaveBeenCalledWith('/integrations/git')
-    expect(api.post).toHaveBeenCalledWith('/integrations/git', payload)
-    expect(api.put).toHaveBeenCalledWith('/integrations/git/git-id', payload)
-    expect(api.delete).toHaveBeenCalledWith('/integrations/git/git-id')
+    expect(api.get).toHaveBeenCalledWith('/integrations/git', { params: { scope: 'instance' } })
+    expect(api.post).toHaveBeenCalledWith('/integrations/git', payload, { params: { scope: 'instance' } })
+    expect(api.put).toHaveBeenCalledWith('/integrations/git/git-id', payload, { params: { scope: 'instance' } })
+    expect(api.delete).toHaveBeenCalledWith('/integrations/git/git-id', { params: { scope: 'instance' } })
     expect(store.git.instances).toEqual(gitResponse.instances)
   })
 
@@ -274,12 +290,20 @@ describe('integration store', () => {
     await store.testOpenScad('openscad-id')
     await store.removeOpenScad('openscad-id')
 
-    expect(api.get).toHaveBeenCalledWith('/integrations/openscad')
-    expect(api.post).toHaveBeenCalledWith('/integrations/openscad', payload)
-    expect(api.put).toHaveBeenCalledWith('/integrations/openscad/openscad-id', payload)
-    expect(api.post).toHaveBeenCalledWith('/integrations/openscad/discover', { executionAgentId: 'agent-1' })
-    expect(api.post).toHaveBeenCalledWith('/integrations/openscad/openscad-id/test')
-    expect(api.delete).toHaveBeenCalledWith('/integrations/openscad/openscad-id')
+    expect(api.get).toHaveBeenCalledWith('/integrations/openscad', { params: { scope: 'instance' } })
+    expect(api.post).toHaveBeenCalledWith('/integrations/openscad', payload, { params: { scope: 'instance' } })
+    expect(api.put).toHaveBeenCalledWith('/integrations/openscad/openscad-id', payload, { params: { scope: 'instance' } })
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/openscad/discover',
+      { executionAgentId: 'agent-1' },
+      { params: { scope: 'instance' } }
+    )
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/openscad/openscad-id/test', null, { params: { scope: 'instance' } }
+    )
+    expect(api.delete).toHaveBeenCalledWith(
+      '/integrations/openscad/openscad-id', { params: { scope: 'instance' } }
+    )
     expect(discovered.executablePath).toBe('/opt/openscad')
     expect(store.openscad.instances).toEqual(openScadResponse.instances)
   })
@@ -306,6 +330,43 @@ describe('integration store', () => {
     await calendar
     expect(store.loading).toBe(false)
     expect(store.pendingLoads).toBe(0)
+  })
+
+  it('discards a late integration response from the previous scope', async () => {
+    const requests = []
+    api.get.mockImplementation((_url, config) => new Promise((resolve) => {
+      requests.push({ scope: config.params.scope, resolve })
+    }))
+    const store = useIntegrationStore()
+
+    const instanceLoad = store.fetchSearch()
+    store.selectScope('personal')
+    const personalLoad = store.fetchSearch()
+    requests[1].resolve({ data: { ...searchResponse, providers: [{ id: 'personal' }] } })
+    await personalLoad
+    requests[0].resolve({ data: { ...searchResponse, providers: [{ id: 'instance' }] } })
+    await instanceLoad
+
+    expect(store.scope).toBe('personal')
+    expect(store.search.providers).toEqual([{ id: 'personal' }])
+    expect(store.loading).toBe(false)
+    expect(store.pendingLoads).toBe(0)
+  })
+
+  it('gates personal integration reads through the safe policy endpoint', async () => {
+    api.get.mockImplementation((url) => Promise.resolve({
+      data: url === '/integrations/personal-settings'
+        ? { enabled: true, allowedAdapterTypes: ['searxng'] }
+        : searchResponse
+    }))
+    const store = useIntegrationStore()
+    store.selectScope('personal')
+
+    await store.fetchEffectiveSearch()
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/personal-settings')
+    expect(api.get).toHaveBeenCalledWith('/integrations/search', { params: { scope: 'personal' } })
+    expect(api.get).not.toHaveBeenCalledWith('/integrations/search', { params: { scope: 'instance' } })
   })
 
   it('loads and saves resource policies for one integration', async () => {
@@ -350,13 +411,34 @@ describe('integration store', () => {
       }
     )
 
-    expect(api.get).toHaveBeenCalledWith('/integrations/integration-id/access')
+    expect(api.get).toHaveBeenCalledWith(
+      '/integrations/integration-id/access', { params: { scope: 'instance' } }
+    )
     expect(api.put).toHaveBeenCalledWith('/integrations/integration-id/access', {
       policies: { 'calendar.read': 'auto' },
       resources: { 'calendar:work': { 'calendar.read': 'auto' } },
       defaultResourceKey: 'calendar:work',
       defaultTaskListKey: null
-    })
+    }, { params: { scope: 'instance' } })
     expect(store.accessByIntegration['integration-id']).toEqual(access)
+  })
+
+  it('keeps integration access on the selected personal scope', async () => {
+    api.get.mockResolvedValue({ data: { integrationId: 'personal-id' } })
+    api.put.mockResolvedValue({ data: { integrationId: 'personal-id' } })
+    const store = useIntegrationStore()
+    store.selectScope('personal')
+
+    await store.fetchAccess('personal-id')
+    await store.saveAccess('personal-id', { resources: {} })
+
+    expect(api.get).toHaveBeenCalledWith(
+      '/integrations/personal-id/access', { params: { scope: 'personal' } }
+    )
+    expect(api.put).toHaveBeenCalledWith(
+      '/integrations/personal-id/access',
+      { resources: {} },
+      { params: { scope: 'personal' } }
+    )
   })
 })

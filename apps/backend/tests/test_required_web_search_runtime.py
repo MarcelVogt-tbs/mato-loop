@@ -176,6 +176,8 @@ async def _runtime_setup(
         ]
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
+    if execution_agent_id is not None:
+        db.scalars.return_value = SimpleNamespace(all=lambda: [execution_agent_id])
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {
@@ -803,8 +805,6 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
         lambda session_id, **kwargs: RootFileService(
             session_id,
             session_storage=storage,
-            workspace_home=tmp_path,
-            working_directory=kwargs.get("working_directory"),
         ),
     )
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
@@ -924,8 +924,6 @@ async def test_skill_editor_sends_current_skill_and_merges_partial_patch(
         lambda session_id, **kwargs: RootFileService(
             session_id,
             session_storage=storage,
-            workspace_home=tmp_path,
-            working_directory=kwargs.get("working_directory"),
         ),
     )
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())

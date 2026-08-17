@@ -56,6 +56,7 @@ describe('chat drafts', () => {
   beforeEach(() => {
     global.window = { localStorage: createStorage() }
     setActivePinia(createPinia())
+    useChatStore().setDraftOwner('user-1')
     vi.clearAllMocks()
     EventSourceMock.instances = []
   })
@@ -121,6 +122,7 @@ describe('chat drafts', () => {
 
     setActivePinia(createPinia())
     const restored = useChatStore()
+    restored.setDraftOwner('user-1')
 
     expect(restored.activeDraft).toBe('Bleibt lokal erhalten')
     const stored = JSON.parse(window.localStorage.getItem('matoLoopChatDrafts'))
@@ -129,27 +131,72 @@ describe('chat drafts', () => {
 
   it('migrates the persisted forced-search draft to the required policy', () => {
     window.localStorage.setItem('matoLoopChatDrafts', JSON.stringify({
+      ownerUserId: 'user-1',
       newSession: { message: '', options: { forceWebSearch: true } },
       sessionMessages: {}
     }))
 
     const chat = useChatStore()
+    chat.setDraftOwner(null)
+    chat.setDraftOwner('user-1')
 
     expect(chat.activeContext.webSearchPolicy).toBe('required')
   })
 
   it('drops aggregate trust from a legacy persisted draft', () => {
     window.localStorage.setItem('matoLoopChatDrafts', JSON.stringify({
+      ownerUserId: 'user-1',
       newSession: { message: 'Alt', options: { modelId: 'model-1', trustLevel: 'private' } },
       sessionMessages: {}
     }))
 
     const chat = useChatStore()
+    chat.setDraftOwner(null)
+    chat.setDraftOwner('user-1')
 
     expect(chat.activeContext).not.toHaveProperty('trustLevel')
     chat.setDraft('Neu')
     const stored = JSON.parse(window.localStorage.getItem('matoLoopChatDrafts'))
     expect(stored.newSession.options).not.toHaveProperty('trustLevel')
+  })
+
+  it('clears orphaned legacy workspace fields from persisted drafts', async () => {
+    window.localStorage.setItem('matoLoopChatDrafts', JSON.stringify({
+      ownerUserId: 'user-1',
+      newSession: {
+        message: 'Alt',
+        options: {
+          preferredRootId: 'root-without-agent',
+          workingDirectory: 'project',
+          currentDirectory: '/home/user/project'
+        }
+      },
+      sessionMessages: {}
+    }))
+    const chat = useChatStore()
+    chat.setDraftOwner(null)
+    chat.setDraftOwner('user-1')
+
+    expect(chat.activeContext).toMatchObject({
+      preferredExecutionAgentId: null,
+      preferredRootId: null,
+      workingDirectory: null,
+      currentDirectory: null
+    })
+
+    Object.assign(chat.activeContext, {
+      preferredExecutionAgentId: 'agent-1',
+      preferredRootId: null,
+      workingDirectory: 'project',
+      currentDirectory: '/home/user/project'
+    })
+    await chat.updateActive({ current_directory: '/home/user/project' })
+    expect(chat.activeContext).toMatchObject({
+      preferredExecutionAgentId: 'agent-1',
+      preferredRootId: null,
+      workingDirectory: null,
+      currentDirectory: null
+    })
   })
 
   it('sends the selected web-search policy when creating a session', async () => {
@@ -168,6 +215,28 @@ describe('chat drafts', () => {
     expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
       web_search_policy: 'required'
     }))
+  })
+
+  it('creates a session without a computer or backend-local working directory', async () => {
+    api.post.mockResolvedValue({
+      data: { session: { id: 'session-1', messages: [] }, runId: 'run-1' }
+    })
+    const chat = useChatStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    Object.assign(chat.activeContext, {
+      preferredExecutionAgentId: null,
+      preferredRootId: 'legacy-root',
+      workingDirectory: 'legacy-project',
+      currentDirectory: '/legacy/project'
+    })
+
+    await chat.startSession('Ohne Computer')
+
+    expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
+      preferred_execution_agent_id: null,
+      preferred_root_id: null
+    }))
+    expect(api.post.mock.calls[0][1]).not.toHaveProperty('working_directory')
   })
 
   it('persists executor preferences and sends them when creating a session', async () => {
@@ -268,14 +337,14 @@ describe('chat drafts', () => {
     expect(chat.current.currentDirectory).toBe('/home/new')
   })
 
-  it('persists server-derived current directories without sending them in updates', async () => {
+  it('drops draft directories without an explicit computer root', async () => {
     const chat = useChatStore()
 
     await chat.updateActive({ current_directory: '/home/user' })
 
-    expect(chat.activeContext.currentDirectory).toBe('/home/user')
+    expect(chat.activeContext.currentDirectory).toBeNull()
     expect(JSON.parse(window.localStorage.getItem('matoLoopChatDrafts')).newSession.options)
-      .toMatchObject({ currentDirectory: '/home/user' })
+      .toMatchObject({ currentDirectory: null })
 
     api.patch.mockResolvedValue({ data: { id: 'session-1', currentDirectory: '/srv/project' } })
     chat.current = { id: 'session-1', currentDirectory: '/srv' }
@@ -284,6 +353,28 @@ describe('chat drafts', () => {
 
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', { title: 'Test' })
     expect(chat.current.currentDirectory).toBe('/srv/project')
+  })
+
+  it('sanitizes incomplete workspace defaults', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        modelId: 'model-1',
+        preferredExecutionAgentId: 'agent-1',
+        preferredRootId: null,
+        workingDirectory: 'legacy-project',
+        currentDirectory: '/legacy/project'
+      }
+    })
+    const chat = useChatStore()
+
+    await chat.fetchDefaults()
+
+    expect(chat.activeContext).toMatchObject({
+      preferredExecutionAgentId: 'agent-1',
+      preferredRootId: null,
+      workingDirectory: null,
+      currentDirectory: null
+    })
   })
 
   it('applies and persists the backend default current directory', async () => {
@@ -479,6 +570,34 @@ describe('chat drafts', () => {
     expect(chat.audioDictations).toEqual({ newSession: null, sessionMessages: {} })
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:new')
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:old')
+  })
+
+  it('clears persisted text and attachment drafts together', () => {
+    const chat = useChatStore()
+    chat.setDraft('Vertraulicher Entwurf')
+    chat.attachmentDrafts.newSession.push({ id: 'file', file: { size: 1 } })
+
+    chat.clearAllDrafts()
+
+    expect(chat.activeDraft).toBe('')
+    expect(chat.attachmentDrafts).toEqual({ newSession: [], sessionMessages: {} })
+    expect(window.localStorage.getItem('matoLoopChatDrafts')).toBeNull()
+  })
+
+  it('does not restore drafts owned by another user', () => {
+    window.localStorage.setItem('matoLoopChatDrafts', JSON.stringify({
+      ownerUserId: 'user-2',
+      newSession: { message: 'Fremder Entwurf', options: { modelId: 'private-model' } },
+      sessionMessages: { private: 'Fremde Session' }
+    }))
+    const chat = useChatStore()
+    chat.setDraftOwner(null)
+    chat.setDraftOwner('user-1')
+
+    expect(chat.activeDraft).toBe('')
+    expect(chat.activeContext.modelId).toBeNull()
+    expect(chat.drafts.sessionMessages).toEqual({})
+    expect(JSON.parse(window.localStorage.getItem('matoLoopChatDrafts')).ownerUserId).toBe('user-1')
   })
 
   it('keeps the effective memory mode in sync for a new session draft', async () => {

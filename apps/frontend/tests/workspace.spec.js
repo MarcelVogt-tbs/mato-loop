@@ -32,6 +32,15 @@ function storage(initialValue = null) {
   }
 }
 
+function liveContext(operations) {
+  return {
+    executionAgentId: 'agent-1',
+    rootId: 'root-1',
+    connected: true,
+    operations
+  }
+}
+
 describe('workspace store', () => {
   beforeEach(() => {
     delete globalThis.localStorage
@@ -105,7 +114,11 @@ describe('workspace store', () => {
       .mockResolvedValueOnce({ data: { entries: [] } })
     const workspace = useWorkspaceStore()
 
-    workspace.configure({ sessionId: 'session-a', workingDirectory: 'project' })
+    workspace.configure({
+      sessionId: 'session-a',
+      workingDirectory: 'project',
+      workspaceContext: liveContext(['workspace.list'])
+    })
     await workspace.load('.')
     workspace.openEntry({ kind: 'file', path: 'old.txt' })
     workspace.filter = 'old'
@@ -148,21 +161,23 @@ describe('workspace store', () => {
     })
   })
 
-  it('sends a draft working directory without a persisted session', async () => {
-    api.get.mockResolvedValue({ data: { entries: [] } })
+  it('does not use a context-free draft working directory', async () => {
     const workspace = useWorkspaceStore()
     workspace.configure({ workingDirectory: 'draft-project' })
 
-    await workspace.load('.')
+    expect(await workspace.load('.')).toBe(false)
+    workspace.show()
 
-    expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
-      params: {
-        path: '.',
-        scope: 'filesystem',
-        working_directory: 'draft-project'
-      },
-      suppressErrorToast: true
-    })
+    expect(api.get).not.toHaveBeenCalled()
+  })
+
+  it('opens without an API request before any context is configured', () => {
+    const workspace = useWorkspaceStore()
+
+    workspace.show()
+
+    expect(workspace.open).toBe(true)
+    expect(api.get).not.toHaveBeenCalled()
   })
 
   it('routes a draft workspace through its selected agent and advertised root', async () => {
@@ -194,10 +209,39 @@ describe('workspace store', () => {
     expect(workspace.operationAvailable('workspace.write')).toBe(false)
   })
 
+  it('fails closed for null, incomplete, rootless and implicit operation contexts', () => {
+    const workspace = useWorkspaceStore()
+
+    for (const context of [
+      null,
+      { executionAgentId: 'agent-1', rootId: 'root-1', operations: ['workspace.list'] },
+      { executionAgentId: 'agent-1', connected: true, operations: ['workspace.list'] },
+      { executionAgentId: 'agent-1', rootId: 'root-1', connected: true }
+    ]) {
+      workspace.configure({ workspaceContext: context })
+      expect(workspace.operationAvailable('workspace.list')).toBe(false)
+    }
+    workspace.scope = 'session'
+    expect(workspace.operationAvailable('workspace.list')).toBe(false)
+  })
+
+  it('falls back to persisted session files when a live context is reset', () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a', workspaceContext: liveContext(['workspace.list']) })
+    workspace.workspaceContext = null
+
+    workspace.reset()
+
+    expect(workspace.scope).toBe('session')
+    expect(workspace.operationAvailable('workspace.list')).toBe(true)
+  })
+
   it('does not call the workspace API while the selected agent is offline', async () => {
     const workspace = useWorkspaceStore()
     workspace.configure({
       workspaceContext: {
+        executionAgentId: 'agent-1',
+        rootId: 'root-1',
         connected: false,
         operations: ['workspace.list']
       }
@@ -211,6 +255,8 @@ describe('workspace store', () => {
     const workspace = useWorkspaceStore()
     workspace.configure({
       workspaceContext: {
+        executionAgentId: 'agent-1',
+        rootId: 'root-1',
         connected: true,
         operations: ['workspace.export', 'workspace.import', 'workspace.list']
       }
@@ -350,6 +396,7 @@ describe('workspace store', () => {
       .mockRejectedValueOnce(error)
       .mockResolvedValueOnce({ data: { entries: [{ path: 'notes.txt' }], hasMore: false } })
     const workspace = useWorkspaceStore()
+    workspace.configure({ workspaceContext: liveContext(['workspace.list']) })
     workspace.entries['.'] = [{ path: 'stale.txt' }]
 
     expect(await workspace.load('.')).toBe(false)
@@ -360,7 +407,12 @@ describe('workspace store', () => {
     expect(workspace.entries['.']).toEqual([{ path: 'notes.txt' }])
     expect(workspace.loadErrors['.']).toBeUndefined()
     expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
-      params: { path: '.', scope: 'filesystem' },
+      params: {
+        path: '.',
+        scope: 'filesystem',
+        execution_agent_id: 'agent-1',
+        root_id: 'root-1'
+      },
       suppressErrorToast: true
     })
   })
@@ -419,6 +471,7 @@ describe('workspace store', () => {
     })
     api.get.mockResolvedValue({ data: { entries: [], hasMore: false } })
     const workspace = useWorkspaceStore()
+    workspace.configure({ workspaceContext: liveContext(['workspace.list', 'workspace.rename']) })
     workspace.entries = {
       '.': [{ kind: 'directory', name: 'old', path: 'old' }],
       old: [{ kind: 'directory', name: 'nested', path: 'old/nested' }],
@@ -435,7 +488,13 @@ describe('workspace store', () => {
     expect(api.patch).toHaveBeenCalledWith(
       '/workspace/entries',
       { path: 'old', name: 'renamed' },
-      { params: { scope: 'filesystem' } }
+      {
+        params: {
+          scope: 'filesystem',
+          execution_agent_id: 'agent-1',
+          root_id: 'root-1'
+        }
+      }
     )
     expect(workspace.entries.old).toBeUndefined()
     expect(workspace.entries['old/nested']).toBeUndefined()
@@ -444,7 +503,12 @@ describe('workspace store', () => {
     expect(workspace.selectedPath).toBe('renamed/nested/file.txt')
     expect(workspace.viewedEntry.path).toBe('renamed/nested/file.txt')
     expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
-      params: { path: '.', scope: 'filesystem' },
+      params: {
+        path: '.',
+        scope: 'filesystem',
+        execution_agent_id: 'agent-1',
+        root_id: 'root-1'
+      },
       suppressErrorToast: true
     })
   })
@@ -458,6 +522,7 @@ describe('workspace store', () => {
       data: { entry: { kind: 'file', name: 'renamed.txt', path: 'renamed.txt' } }
     })
     const workspace = useWorkspaceStore()
+    workspace.configure({ workspaceContext: liveContext(['workspace.list', 'workspace.rename']) })
 
     const staleLoad = workspace.load('.')
     await workspace.renameEntry('old.txt', 'renamed.txt')
@@ -474,6 +539,7 @@ describe('workspace store', () => {
       .mockResolvedValueOnce({ data: { entries: [] } })
     api.delete.mockResolvedValue({})
     const workspace = useWorkspaceStore()
+    workspace.configure({ workspaceContext: liveContext(['workspace.delete', 'workspace.list']) })
     workspace.entries.folder = [{ path: 'folder/file.txt' }]
     workspace.viewedEntry = { kind: 'file', path: 'folder/file.txt' }
 
@@ -491,6 +557,7 @@ describe('workspace store', () => {
     let rejectStale
     api.get.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectStale = reject }))
     const workspace = useWorkspaceStore()
+    workspace.configure({ workspaceContext: liveContext(['workspace.list']) })
 
     const staleLoad = workspace.load('.')
     workspace.configure({ sessionId: 'session-b', workingDirectory: 'project' })
@@ -554,6 +621,7 @@ describe('workspace store', () => {
       }
     })
     const workspace = useWorkspaceStore()
+    workspace.configure({ workspaceContext: liveContext(['workspace.read', 'workspace.write']) })
     workspace.entries = { '.': [{ kind: 'file', name: 'notes.md', path: 'notes.md', size: 3 }] }
     workspace.openEntry(workspace.entries['.'][0], true)
     workspace.filePreviews['notes.md'] = {
@@ -567,13 +635,25 @@ describe('workspace store', () => {
 
     expect(api.put).toHaveBeenCalledWith('/workspace/files', {
       path: 'notes.md', content: '# Neu\n', expected_revision: 'revision-1'
-    }, { params: { scope: 'filesystem' }, suppressErrorToast: true })
+    }, {
+      params: {
+        scope: 'filesystem',
+        execution_agent_id: 'agent-1',
+        root_id: 'root-1'
+      },
+      suppressErrorToast: true
+    })
     expect(workspace.filePreviews['notes.md']).toEqual({
       kind: 'markdown', content: '# Neu\n', revision: 'revision-2'
     })
     expect(workspace.viewedEntry.size).toBe(6)
     expect(api.get).toHaveBeenCalledWith('/workspace/files/preview', {
-      params: { path: 'notes.md', scope: 'filesystem' },
+      params: {
+        path: 'notes.md',
+        scope: 'filesystem',
+        execution_agent_id: 'agent-1',
+        root_id: 'root-1'
+      },
       suppressErrorToast: true
     })
   })
@@ -584,7 +664,7 @@ describe('workspace store', () => {
     const workspace = useWorkspaceStore()
     workspace.configure({
       workingDirectory: 'project',
-      workspaceContext: { executionAgentId: 'agent-1', rootId: 'root-1' }
+      workspaceContext: liveContext(['workspace.read'])
     })
     const controller = new AbortController()
 

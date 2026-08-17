@@ -28,10 +28,14 @@ async def test_refresh_codex_credential_persists_rotated_token(monkeypatch) -> N
     store = AsyncMock()
     monkeypatch.setattr(codex_auth, "store_credential", store)
 
-    assert await codex_auth.refresh_codex_credential(db, credential) == refreshed
+    assert (
+        await codex_auth.refresh_codex_credential(db, credential, owner_id=None)
+        == refreshed
+    )
 
     store.assert_awaited_once_with(
         db,
+        owner_id=None,
         kind="codex-oauth",
         label="Codex",
         payload=refreshed,

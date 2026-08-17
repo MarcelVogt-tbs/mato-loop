@@ -2,20 +2,22 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.integrations.bookstack import BOOKSTACK_CREDENTIAL_KIND
 from mato_loop_backend.integrations.caldav import CALDAV_CREDENTIAL_KIND
 from mato_loop_backend.integrations.registry import validate_integration
 from mato_loop_backend.integrations.search import normalize_search_tool_settings
-from mato_loop_backend.models import Credential, ExecutionAgent
-from mato_loop_backend.security import store_credential
+from mato_loop_backend.models import ExecutionAgent
+from mato_loop_backend.security import delete_credential, store_credential
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
     ToolSettings,
+    UserIntegrationSettings,
+    UserToolSettings,
 )
 
 
@@ -23,6 +25,46 @@ class IntegrationSettingsError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+IntegrationSettingsDocument = IntegrationSettings | UserIntegrationSettings
+ToolSettingsDocument = ToolSettings | UserToolSettings
+
+
+async def _load_integrations(
+    db: AsyncSession, owner_id: UUID | None, *, for_update: bool = False
+) -> IntegrationSettingsDocument:
+    settings_type = UserIntegrationSettings if owner_id is not None else IntegrationSettings
+    settings = await SettingsStore.load(
+        db, settings_type, user_id=owner_id, for_update=for_update
+    )
+    for instance in settings.instances:
+        instance.owner_id = owner_id
+    return settings
+
+
+async def _load_tools(
+    db: AsyncSession, owner_id: UUID | None, *, for_update: bool = False
+) -> ToolSettingsDocument:
+    if owner_id is None:
+        return await SettingsStore.load(db, ToolSettings, for_update=for_update)
+    personal = await SettingsStore.load_optional(
+        db, UserToolSettings, user_id=owner_id, for_update=for_update
+    )
+    if personal is not None:
+        return personal
+    instance = await SettingsStore.load(db, ToolSettings)
+    return UserToolSettings.model_validate(
+        instance.model_dump(exclude={"personal_settings_enabled"})
+    )
+
+
+async def _save_settings(
+    db: AsyncSession,
+    settings: IntegrationSettingsDocument | ToolSettingsDocument,
+    owner_id: UUID | None,
+) -> None:
+    await SettingsStore.save(db, settings, user_id=owner_id)
 
 
 class GitIntegrationService:
@@ -99,9 +141,10 @@ class GitIntegrationService:
         name: str = "Git",
         allow_network: bool = False,
         enabled: bool = True,
+        settings_owner_id: UUID | None = None,
     ) -> IntegrationSettings:
         await cls._owned_agent(db, user_id, execution_agent_id)
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, settings_owner_id, for_update=True)
         cls._ensure_unique(settings, execution_agent_id)
         instance = IntegrationInstance(
             name=name,
@@ -111,9 +154,10 @@ class GitIntegrationService:
             execution_agent_id=execution_agent_id,
             config={"allow_network": allow_network},
         )
+        instance.owner_id = settings_owner_id
         validate_integration(instance)
         settings.instances.append(instance)
-        await SettingsStore.save(db, settings)
+        await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings
 
@@ -128,8 +172,9 @@ class GitIntegrationService:
         name: str = "Git",
         allow_network: bool = False,
         enabled: bool = True,
+        settings_owner_id: UUID | None = None,
     ) -> IntegrationSettings:
-        initial = await SettingsStore.load(db, IntegrationSettings)
+        initial = await _load_integrations(db, settings_owner_id)
         current = cls._find(initial, integration_id)
         if current is None:
             raise IntegrationSettingsError("integration.notFound")
@@ -139,7 +184,7 @@ class GitIntegrationService:
             {current.execution_agent_id, execution_agent_id}, key=str
         ):
             await cls._owned_agent(db, user_id, agent_id)
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, settings_owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
@@ -151,32 +196,37 @@ class GitIntegrationService:
         instance.execution_agent_id = execution_agent_id
         instance.config = {"allow_network": allow_network}
         validate_integration(instance)
-        await SettingsStore.save(db, settings)
+        await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings
 
     @classmethod
     async def delete(
-        cls, db: AsyncSession, integration_id: UUID, *, user_id: UUID
+        cls,
+        db: AsyncSession,
+        integration_id: UUID,
+        *,
+        user_id: UUID,
+        settings_owner_id: UUID | None = None,
     ) -> IntegrationSettings:
-        initial = await SettingsStore.load(db, IntegrationSettings)
+        initial = await _load_integrations(db, settings_owner_id)
         current = cls._find(initial, integration_id)
         if current is None:
             raise IntegrationSettingsError("integration.notFound")
         if current.execution_agent_id is None:
             raise IntegrationSettingsError("executionAgent.notFound")
         await cls._owned_agent(db, user_id, current.execution_agent_id)
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, settings_owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
         if instance.execution_agent_id != current.execution_agent_id:
             raise IntegrationSettingsError("integration.changed")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
-        tools = await SettingsStore.load(db, ToolSettings, for_update=True)
+        tools = await _load_tools(db, settings_owner_id, for_update=True)
         tools.integration_policies.pop(str(integration_id), None)
-        await SettingsStore.save(db, tools)
-        await SettingsStore.save(db, settings)
+        await _save_settings(db, tools, settings_owner_id)
+        await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings
 
@@ -241,9 +291,10 @@ class OpenScadIntegrationService:
         name: str,
         binary_path: str,
         enabled: bool,
+        settings_owner_id: UUID | None = None,
     ) -> IntegrationSettings:
         await cls._owned_agent(db, user_id, execution_agent_id)
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, settings_owner_id, for_update=True)
         cls._ensure_unique(settings, execution_agent_id)
         instance = IntegrationInstance(
             name=name,
@@ -253,9 +304,10 @@ class OpenScadIntegrationService:
             execution_agent_id=execution_agent_id,
             config={"binary_path": binary_path},
         )
+        instance.owner_id = settings_owner_id
         validate_integration(instance)
         settings.instances.append(instance)
-        await SettingsStore.save(db, settings)
+        await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings
 
@@ -270,8 +322,9 @@ class OpenScadIntegrationService:
         name: str,
         binary_path: str,
         enabled: bool,
+        settings_owner_id: UUID | None = None,
     ) -> IntegrationSettings:
-        initial = await SettingsStore.load(db, IntegrationSettings)
+        initial = await _load_integrations(db, settings_owner_id)
         current = cls._find(initial, integration_id)
         if current is None:
             raise IntegrationSettingsError("integration.notFound")
@@ -279,7 +332,7 @@ class OpenScadIntegrationService:
             raise IntegrationSettingsError("executionAgent.notFound")
         for agent_id in sorted({current.execution_agent_id, execution_agent_id}, key=str):
             await cls._owned_agent(db, user_id, agent_id)
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, settings_owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
@@ -291,32 +344,37 @@ class OpenScadIntegrationService:
         instance.execution_agent_id = execution_agent_id
         instance.config = {"binary_path": binary_path}
         validate_integration(instance)
-        await SettingsStore.save(db, settings)
+        await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings
 
     @classmethod
     async def delete(
-        cls, db: AsyncSession, integration_id: UUID, *, user_id: UUID
+        cls,
+        db: AsyncSession,
+        integration_id: UUID,
+        *,
+        user_id: UUID,
+        settings_owner_id: UUID | None = None,
     ) -> IntegrationSettings:
-        initial = await SettingsStore.load(db, IntegrationSettings)
+        initial = await _load_integrations(db, settings_owner_id)
         current = cls._find(initial, integration_id)
         if current is None:
             raise IntegrationSettingsError("integration.notFound")
         if current.execution_agent_id is None:
             raise IntegrationSettingsError("executionAgent.notFound")
         await cls._owned_agent(db, user_id, current.execution_agent_id)
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, settings_owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
         if instance.execution_agent_id != current.execution_agent_id:
             raise IntegrationSettingsError("integration.changed")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
-        tools = await SettingsStore.load(db, ToolSettings, for_update=True)
+        tools = await _load_tools(db, settings_owner_id, for_update=True)
         tools.integration_policies.pop(str(integration_id), None)
-        await SettingsStore.save(db, tools)
-        await SettingsStore.save(db, settings)
+        await _save_settings(db, tools, settings_owner_id)
+        await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings
 
@@ -325,13 +383,14 @@ class SearchIntegrationService:
     @staticmethod
     async def _save(
         db: AsyncSession,
-        settings: IntegrationSettings,
+        settings: IntegrationSettingsDocument,
         *,
+        owner_id: UUID | None = None,
         normalize_tools: bool = False,
         remove_resource_policies: UUID | None = None,
     ) -> IntegrationSettings:
         if normalize_tools or remove_resource_policies is not None:
-            tool_settings = await SettingsStore.load(db, ToolSettings, for_update=True)
+            tool_settings = await _load_tools(db, owner_id, for_update=True)
             changed = normalize_tools and normalize_search_tool_settings(
                 tool_settings, settings
             )
@@ -351,8 +410,8 @@ class SearchIntegrationService:
                     or changed
                 )
             if changed:
-                await SettingsStore.save(db, tool_settings)
-        await SettingsStore.save(db, settings)
+                await _save_settings(db, tool_settings, owner_id)
+        await _save_settings(db, settings, owner_id)
         await db.commit()
         return settings
 
@@ -365,8 +424,9 @@ class SearchIntegrationService:
         provider_type: str,
         base_url: str,
         enabled: bool,
+        owner_id: UUID | None = None,
     ) -> IntegrationSettings:
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True)
         instance = IntegrationInstance(
             name=name,
             integration_type="search",
@@ -374,9 +434,10 @@ class SearchIntegrationService:
             enabled=enabled,
             config={"base_url": base_url.rstrip("/")},
         )
+        instance.owner_id = owner_id
         validate_integration(instance)
         settings.instances.append(instance)
-        return await cls._save(db, settings)
+        return await cls._save(db, settings, owner_id=owner_id)
 
     @classmethod
     async def update(
@@ -388,8 +449,9 @@ class SearchIntegrationService:
         provider_type: str,
         base_url: str,
         enabled: bool,
+        owner_id: UUID | None = None,
     ) -> IntegrationSettings:
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True)
         instance = next(
             (
                 item
@@ -411,15 +473,16 @@ class SearchIntegrationService:
         return await cls._save(
             db,
             settings,
+            owner_id=owner_id,
             normalize_tools=True,
             remove_resource_policies=integration_id if connection_changed else None,
         )
 
     @classmethod
     async def delete(
-        cls, db: AsyncSession, integration_id: UUID
+        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None = None
     ) -> IntegrationSettings:
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True)
         instance = next(
             (
                 item
@@ -432,10 +495,13 @@ class SearchIntegrationService:
             raise IntegrationSettingsError("integration.notFound")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
         if instance.credential_id:
-            await db.execute(delete(Credential).where(Credential.id == instance.credential_id))
+            await delete_credential(
+                db, instance.credential_id, owner_id=instance.owner_id
+            )
         return await cls._save(
             db,
             settings,
+            owner_id=owner_id,
             normalize_tools=True,
             remove_resource_policies=integration_id,
         )
@@ -445,12 +511,13 @@ class CalDavIntegrationService:
     @staticmethod
     async def _save(
         db: AsyncSession,
-        settings: IntegrationSettings,
+        settings: IntegrationSettingsDocument,
         *,
+        owner_id: UUID | None = None,
         clear_policies: UUID | None = None,
     ) -> IntegrationSettings:
         if clear_policies is not None:
-            tools = await SettingsStore.load(db, ToolSettings, for_update=True)
+            tools = await _load_tools(db, owner_id, for_update=True)
             integration_id = str(clear_policies)
             changed = tools.integration_policies.pop(integration_id, None) is not None
             changed = tools.resource_policies.pop(integration_id, None) is not None or changed
@@ -468,8 +535,8 @@ class CalDavIntegrationService:
                 tools.default_task_list = None
                 changed = True
             if changed:
-                await SettingsStore.save(db, tools)
-        await SettingsStore.save(db, settings)
+                await _save_settings(db, tools, owner_id)
+        await _save_settings(db, settings, owner_id)
         await db.commit()
         return settings
 
@@ -483,10 +550,11 @@ class CalDavIntegrationService:
         username: str,
         password: str,
         enabled: bool,
+        owner_id: UUID | None = None,
     ) -> IntegrationSettings:
         if not password:
             raise IntegrationSettingsError("validation.required")
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True)
         instance = IntegrationInstance(
             name=name,
             integration_type="calendar",
@@ -494,16 +562,18 @@ class CalDavIntegrationService:
             enabled=enabled,
             config={"base_url": base_url, "username": username},
         )
+        instance.owner_id = owner_id
         validate_integration(instance)
         credential = await store_credential(
             db,
+            owner_id=instance.owner_id,
             kind=CALDAV_CREDENTIAL_KIND,
             label=name,
             payload={"password": password},
         )
         instance.credential_id = credential.id
         settings.instances.append(instance)
-        return await cls._save(db, settings)
+        return await cls._save(db, settings, owner_id=owner_id)
 
     @classmethod
     async def update(
@@ -516,8 +586,9 @@ class CalDavIntegrationService:
         username: str,
         password: str | None,
         enabled: bool,
+        owner_id: UUID | None = None,
     ) -> IntegrationSettings:
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True)
         instance = next(
             (
                 item
@@ -543,26 +614,28 @@ class CalDavIntegrationService:
         if password is not None:
             credential = await store_credential(
                 db,
+                owner_id=instance.owner_id,
                 kind=CALDAV_CREDENTIAL_KIND,
                 label=name,
                 payload={"password": password},
             )
             instance.credential_id = credential.id
             if old_credential_id is not None:
-                await db.execute(
-                    delete(Credential).where(Credential.id == old_credential_id)
+                await delete_credential(
+                    db, old_credential_id, owner_id=instance.owner_id
                 )
         return await cls._save(
             db,
             settings,
+            owner_id=owner_id,
             clear_policies=integration_id if connection_changed else None,
         )
 
     @classmethod
     async def delete(
-        cls, db: AsyncSession, integration_id: UUID
+        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None = None
     ) -> IntegrationSettings:
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True)
         instance = next(
             (
                 item
@@ -577,29 +650,32 @@ class CalDavIntegrationService:
             raise IntegrationSettingsError("integration.notFound")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
         if instance.credential_id is not None:
-            await db.execute(
-                delete(Credential).where(Credential.id == instance.credential_id)
+            await delete_credential(
+                db, instance.credential_id, owner_id=instance.owner_id
             )
-        return await cls._save(db, settings, clear_policies=integration_id)
+        return await cls._save(
+            db, settings, owner_id=owner_id, clear_policies=integration_id
+        )
 
 
 class BookStackIntegrationService:
     @staticmethod
     async def _save(
         db: AsyncSession,
-        settings: IntegrationSettings,
+        settings: IntegrationSettingsDocument,
         *,
+        owner_id: UUID | None = None,
         clear_policies: UUID | None = None,
     ) -> IntegrationSettings:
         if clear_policies is not None:
-            tools = await SettingsStore.load(db, ToolSettings, for_update=True)
+            tools = await _load_tools(db, owner_id, for_update=True)
             integration_id = str(clear_policies)
             changed = tools.integration_policies.pop(integration_id, None) is not None
             changed = tools.resource_policies.pop(integration_id, None) is not None or changed
             changed = tools.resource_labels.pop(integration_id, None) is not None or changed
             if changed:
-                await SettingsStore.save(db, tools)
-        await SettingsStore.save(db, settings)
+                await _save_settings(db, tools, owner_id)
+        await _save_settings(db, settings, owner_id)
         await db.commit()
         return settings
 
@@ -628,10 +704,11 @@ class BookStackIntegrationService:
         token_id: str,
         token_secret: str,
         enabled: bool,
+        owner_id: UUID | None = None,
     ) -> IntegrationSettings:
         if not token_id or not token_secret:
             raise IntegrationSettingsError("validation.required")
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True)
         instance = IntegrationInstance(
             name=name,
             integration_type="knowledge",
@@ -639,16 +716,18 @@ class BookStackIntegrationService:
             enabled=enabled,
             config={"base_url": base_url},
         )
+        instance.owner_id = owner_id
         validate_integration(instance)
         credential = await store_credential(
             db,
+            owner_id=instance.owner_id,
             kind=BOOKSTACK_CREDENTIAL_KIND,
             label=name,
             payload={"token_id": token_id, "token_secret": token_secret},
         )
         instance.credential_id = credential.id
         settings.instances.append(instance)
-        return await cls._save(db, settings)
+        return await cls._save(db, settings, owner_id=owner_id)
 
     @classmethod
     async def update(
@@ -661,8 +740,9 @@ class BookStackIntegrationService:
         token_id: str | None,
         token_secret: str | None,
         enabled: bool,
+        owner_id: UUID | None = None,
     ) -> IntegrationSettings:
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
@@ -681,32 +761,36 @@ class BookStackIntegrationService:
         if token_id is not None and token_secret is not None:
             credential = await store_credential(
                 db,
+                owner_id=instance.owner_id,
                 kind=BOOKSTACK_CREDENTIAL_KIND,
                 label=name,
                 payload={"token_id": token_id, "token_secret": token_secret},
             )
             instance.credential_id = credential.id
             if old_credential_id is not None:
-                await db.execute(
-                    delete(Credential).where(Credential.id == old_credential_id)
+                await delete_credential(
+                    db, old_credential_id, owner_id=instance.owner_id
                 )
         return await cls._save(
             db,
             settings,
+            owner_id=owner_id,
             clear_policies=integration_id if connection_changed else None,
         )
 
     @classmethod
     async def delete(
-        cls, db: AsyncSession, integration_id: UUID
+        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None = None
     ) -> IntegrationSettings:
-        settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
         if instance.credential_id is not None:
-            await db.execute(
-                delete(Credential).where(Credential.id == instance.credential_id)
+            await delete_credential(
+                db, instance.credential_id, owner_id=instance.owner_id
             )
-        return await cls._save(db, settings, clear_policies=integration_id)
+        return await cls._save(
+            db, settings, owner_id=owner_id, clear_policies=integration_id
+        )

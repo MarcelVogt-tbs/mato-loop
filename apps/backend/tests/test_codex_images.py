@@ -1,6 +1,7 @@
 import base64
 import json
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -175,7 +176,7 @@ async def test_media_service_edits_with_native_codex_model(monkeypatch) -> None:
     transport = AsyncMock(return_value=(output, {"created": 123}))
     monkeypatch.setattr(codex_images, "edit_image", transport)
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = object()
+    db.get.return_value = SimpleNamespace(user_id=None)
     source_id = uuid4()
     source = BytesIO()
     Image.new("RGB", (3000, 2000), (10, 20, 30)).save(
@@ -190,6 +191,7 @@ async def test_media_service_edits_with_native_codex_model(monkeypatch) -> None:
         prompt="Change only the background",
         images=((source.getvalue(), "image/jpeg"),),
         source_attachment_ids=(source_id,),
+        user_id=uuid4(),
     )
 
     assert result.data == output

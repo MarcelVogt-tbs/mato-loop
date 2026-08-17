@@ -17,8 +17,8 @@ from mato_loop_backend.providers import codex_images, lemonade
 from mato_loop_backend.providers.base import MAX_PROVIDER_IMAGE_BYTES, ProviderError
 from mato_loop_backend.providers.codex_auth import refresh_codex_credential
 from mato_loop_backend.providers.codex_oauth import CODEX_IMAGE_MODEL_ID
-from mato_loop_backend.security import read_credential
-from mato_loop_backend.settings import AiSettings, SettingsStore
+from mato_loop_backend.security import load_credential, read_credential
+from mato_loop_backend.settings import AiSettings, load_effective_ai
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelAvailability,
@@ -263,7 +263,9 @@ async def _generate_image_with_codex(
         raise ProviderError(
             "ChatGPT Codex is not connected", code="provider.notConnected"
         )
-    credential = await refresh_codex_credential(db, resolved.credential)
+    credential = await refresh_codex_credential(
+        db, resolved.credential, owner_id=resolved.provider.owner_id
+    )
     return await codex_images.generate_image(
         credential=credential,
         prompt=request.prompt,
@@ -282,7 +284,9 @@ async def _edit_image_with_codex(
         raise ProviderError(
             "ChatGPT Codex is not connected", code="provider.notConnected"
         )
-    credential = await refresh_codex_credential(db, resolved.credential)
+    credential = await refresh_codex_credential(
+        db, resolved.credential, owner_id=resolved.provider.owner_id
+    )
     return await codex_images.edit_image(
         credential=credential,
         images=request.images,
@@ -367,13 +371,14 @@ class MediaService:
         capability: ModelCapability,
         *,
         active_model_id: UUID | None = None,
+        user_id: UUID,
     ) -> ResolvedMediaModel:
         field_name = _DEFAULT_FIELDS.get(capability)
         if field_name is None:
             raise ProviderError(
                 "Unsupported media capability", code="provider.modelCapabilityUnavailable"
             )
-        settings = await SettingsStore.load(db, AiSettings)
+        settings = await load_effective_ai(db, user_id)
         target = resolve_media_target(
             settings, capability, active_model_id=active_model_id
         )
@@ -391,7 +396,12 @@ class MediaService:
         api_key = None
         credential = None
         if provider.credential_id:
-            credential = await db.get(Credential, provider.credential_id, populate_existing=True)
+            credential = await load_credential(
+                db,
+                provider.credential_id,
+                owner_id=provider.owner_id,
+                populate_existing=True,
+            )
             if credential is None:
                 raise ProviderError(
                     "Provider credential is missing", code="provider.configurationInvalid"
@@ -427,6 +437,7 @@ class MediaService:
         active_model_id: UUID | None = None,
         expected_model_id: UUID | None = None,
         expected_trust_level: TrustLevel | None = None,
+        user_id: UUID,
     ) -> MediaResult:
         prompt = _require_text(prompt, max_length=20_000)
         _validate_image_size(size)
@@ -438,6 +449,7 @@ class MediaService:
             db,
             ModelCapability.IMAGE_GENERATION,
             active_model_id=active_model_id,
+            user_id=user_id,
         )
         if expected_model_id is not None and resolved.model.id != expected_model_id:
             raise ProviderError(
@@ -475,6 +487,7 @@ class MediaService:
         active_model_id: UUID | None = None,
         expected_model_id: UUID | None = None,
         expected_trust_level: TrustLevel | None = None,
+        user_id: UUID,
     ) -> MediaResult:
         prompt = _require_text(prompt, max_length=20_000)
         if not 1 <= len(images) <= 5 or len(images) != len(source_attachment_ids):
@@ -506,6 +519,7 @@ class MediaService:
             db,
             ModelCapability.IMAGE_EDITING,
             active_model_id=active_model_id,
+            user_id=user_id,
         )
         if expected_model_id is not None and resolved.model.id != expected_model_id:
             raise ProviderError(
@@ -544,11 +558,14 @@ class MediaService:
         voice: str = "shimmer",
         speed: float = 1.0,
         timeout: float = 300,
+        user_id: UUID,
     ) -> MediaResult:
         text = _require_text(text, max_length=100_000)
         voice = _require_text(voice, max_length=500)
         _optional_positive_number(speed, maximum=4)
-        resolved = await cls.resolve_model(db, ModelCapability.SPEECH_GENERATION)
+        resolved = await cls.resolve_model(
+            db, ModelCapability.SPEECH_GENERATION, user_id=user_id
+        )
         protected = await _protected_text(resolved.provider, resolved.model, text)
         data = await lemonade.generate_speech(
             base_url=resolved.base_url,
@@ -574,6 +591,7 @@ class MediaService:
         cfg: float | None = None,
         seed: int | None = None,
         timeout: float = 300,
+        user_id: UUID,
     ) -> MediaResult:
         prompt = _require_text(prompt, max_length=20_000)
         if lyrics is not None and len(lyrics) > 100_000:
@@ -584,7 +602,9 @@ class MediaService:
         _optional_positive_number(cfg, maximum=100)
         if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int) or seed < 0):
             raise ProviderError("Invalid audio seed", code="provider.configurationInvalid")
-        resolved = await cls.resolve_model(db, ModelCapability.AUDIO_GENERATION)
+        resolved = await cls.resolve_model(
+            db, ModelCapability.AUDIO_GENERATION, user_id=user_id
+        )
         protected_prompt = await _protected_text(resolved.provider, resolved.model, prompt)
         protected_lyrics = (
             await _protected_text(resolved.provider, resolved.model, lyrics)
@@ -615,6 +635,7 @@ class MediaService:
         language: str | None = None,
         timeout: float = 300,
         active_model_id: UUID | None = None,
+        user_id: UUID,
     ) -> TranscriptionResult:
         if not isinstance(audio, bytes) or not audio or len(audio) > lemonade.MAX_AUDIO_BYTES:
             raise ProviderError("Invalid audio input", code="provider.configurationInvalid")
@@ -623,6 +644,7 @@ class MediaService:
             db,
             ModelCapability.AUDIO_TRANSCRIPTION,
             active_model_id=active_model_id,
+            user_id=user_id,
         )
         text = await lemonade.transcribe_audio(
             base_url=resolved.base_url,

@@ -150,6 +150,7 @@ class LlmProviderConfig(BaseModel):
     )
     memory_policy: MemoryPolicy = MemoryPolicy.INHERIT
     credential_id: UUID | None = None
+    owner_id: UUID | None = Field(default=None, exclude=True)
     config: dict[str, Any] = Field(default_factory=dict)
     models_last_synced_at: datetime | None = None
 
@@ -330,6 +331,7 @@ class IntegrationInstance(BaseModel):
         validation_alias=AliasChoices("execution_agent_id", "executionAgentId"),
     )
     credential_id: UUID | None = None
+    owner_id: UUID | None = Field(default=None, exclude=True)
     config: dict[str, Any] = Field(default_factory=dict)
     _execution_operations: frozenset[str] | None = PrivateAttr(default=None)
 
@@ -463,9 +465,7 @@ class DefaultTaskListSettings(BaseModel):
     )
 
 
-class ToolSettings(SettingsDocument):
-    settings_key = "tools"
-
+class ToolSettingsBase(SettingsDocument):
     policies: dict[str, ToolExecutionPolicy] = Field(default_factory=dict)
     integration_policies: dict[str, dict[str, ToolExecutionPolicy]] = Field(
         default_factory=dict,
@@ -529,6 +529,17 @@ class ToolSettings(SettingsDocument):
     )
 
 
+class ToolSettings(ToolSettingsBase):
+    settings_key = "tools"
+
+    personal_settings_enabled: bool = True
+
+
+class UserToolSettings(ToolSettingsBase):
+    settings_key = "tools"
+    settings_scope = SettingsScope.USER
+
+
 class GeneralSettings(SettingsDocument):
     settings_key = "general"
 
@@ -536,10 +547,7 @@ class GeneralSettings(SettingsDocument):
     default_timezone: str = "Europe/Berlin"
 
 
-class AiSettings(SettingsDocument):
-    settings_key = "ai"
-
-    enabled: bool = True
+class AiSettingsBase(SettingsDocument):
     providers: list[LlmProviderConfig] = Field(default_factory=list)
     models: list[ModelConfig] = Field(default_factory=list)
     default_model_id: UUID | None = None
@@ -555,9 +563,21 @@ class AiSettings(SettingsDocument):
     audio_transcription_model_id: UUID | None = None
 
 
-class IntegrationSettings(SettingsDocument):
-    settings_key = "integrations"
+class AiSettings(AiSettingsBase):
+    settings_key = "ai"
 
+    enabled: bool = True
+    personal_providers_enabled: bool = True
+
+
+class UserAiSettings(AiSettingsBase):
+    settings_key = "ai"
+    settings_scope = SettingsScope.USER
+
+    enabled: bool = True
+
+
+class IntegrationSettingsBase(SettingsDocument):
     instances: list[IntegrationInstance] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -570,6 +590,20 @@ class IntegrationSettings(SettingsDocument):
         if len(keys) != len(set(keys)):
             raise ValueError("only one integration instance per kind and execution agent is allowed")
         return self
+
+
+class IntegrationSettings(IntegrationSettingsBase):
+    settings_key = "integrations"
+
+    personal_integrations_enabled: bool = True
+    allowed_personal_adapter_types: set[str] = Field(
+        default_factory=lambda: {"searxng", "caldav", "bookstack", "git", "openscad"}
+    )
+
+
+class UserIntegrationSettings(IntegrationSettingsBase):
+    settings_key = "integrations"
+    settings_scope = SettingsScope.USER
 
 
 class AgentRuntimeSettings(SettingsDocument):

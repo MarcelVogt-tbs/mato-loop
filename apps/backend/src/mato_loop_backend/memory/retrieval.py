@@ -61,11 +61,12 @@ class MemoryRetrieval:
 
 def _filters(
     *,
+    owner_id: UUID,
     readable_by: TrustLevel,
     category: MemoryCategory | None,
     pinned: bool | None,
 ) -> list[object]:
-    filters: list[object] = []
+    filters: list[object] = [MemoryRecord.user_id == owner_id]
     if category is not None:
         filters.append(MemoryRecord.category == category.value)
     if pinned is not None:
@@ -80,6 +81,7 @@ class MemoryRetrievalService:
     async def retrieve(
         db: AsyncSession,
         *,
+        owner_id: UUID,
         mode: MemoryRetrieveMode,
         readable_by: TrustLevel,
         query: str | None = None,
@@ -100,6 +102,7 @@ class MemoryRetrievalService:
                 raise ValueError("browse mode does not accept a query")
             result = await MemoryService.list(
                 db,
+                owner_id=owner_id,
                 category=category,
                 pinned=pinned,
                 readable_by=readable_by,
@@ -133,6 +136,7 @@ class MemoryRetrievalService:
             raise ValueError("search mode requires a query")
         candidate_limit = min(MAX_CANDIDATES, max(20, limit * 3))
         filters = _filters(
+            owner_id=owner_id,
             readable_by=readable_by,
             category=category,
             pinned=pinned,
@@ -144,7 +148,7 @@ class MemoryRetrievalService:
             (
                 await db.scalars(
                     select(MemoryRecord)
-                    .options(*memory_reference_options())
+                    .options(*memory_reference_options(owner_id))
                     .where(MemoryRecord.search_vector.op("@@")(tsquery), *filters)
                     .order_by(
                         func.ts_rank_cd(MemoryRecord.search_vector, tsquery).desc(),
@@ -181,7 +185,7 @@ class MemoryRetrievalService:
                         (
                             await db.scalars(
                                 select(MemoryRecord)
-                                .options(*memory_reference_options())
+                                .options(*memory_reference_options(owner_id))
                                 .join(
                                     MemoryEmbedding,
                                     MemoryEmbedding.memory_id == MemoryRecord.id,

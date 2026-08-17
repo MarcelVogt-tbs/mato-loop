@@ -21,6 +21,7 @@
         icon="refresh"
         aria-label="Aktualisieren"
         :loading="workspace.loading['.']"
+        :disable="!explorerAvailable"
         @click="workspace.refresh()"
       >
         <q-tooltip>Aktualisieren</q-tooltip>
@@ -74,7 +75,7 @@
       />
       <q-select
         v-if="selectedExecutionAgent"
-        :model-value="chat.activeContext?.preferredRootId"
+        :model-value="selectedRoot?.id || null"
         :options="rootOptions"
         emit-value
         map-options
@@ -83,7 +84,7 @@
         options-dense
         label="Arbeitsbereich"
         popup-content-class="app-menu-popup"
-        :disable="chat.running"
+        :disable="chat.running || !rootOptions.length"
         @update:model-value="selectRoot"
       >
         <template #prepend><q-icon name="folder" /></template>
@@ -97,7 +98,7 @@
           dense
           icon="arrow_upward"
           aria-label="Zum übergeordneten Ordner"
-          :disable="workspace.selectedPath === '.'"
+          :disable="!explorerAvailable || workspace.selectedPath === '.'"
           @click="navigateSelection(selectedParentPath)"
         >
           <q-tooltip>Zum übergeordneten Ordner</q-tooltip>
@@ -107,12 +108,12 @@
             v-for="crumb in selectedBreadcrumbs"
             :key="crumb.path"
             :label="crumb.label"
-            :class="{ 'cursor-pointer': crumb.path !== workspace.selectedPath }"
-            @click="crumb.path !== workspace.selectedPath && navigateSelection(crumb.path)"
+            :class="{ 'cursor-pointer': explorerAvailable && crumb.path !== workspace.selectedPath }"
+            @click="explorerAvailable && crumb.path !== workspace.selectedPath && navigateSelection(crumb.path)"
           />
         </q-breadcrumbs>
       </div>
-      <q-input v-model="workspace.filter" outlined dense clearable label="Geladene Einträge filtern">
+      <q-input v-model="workspace.filter" outlined dense clearable label="Geladene Einträge filtern" :disable="!explorerAvailable">
         <template #prepend><q-icon name="search" /></template>
       </q-input>
       <div class="file-explorer__actions row items-center no-wrap q-gutter-sm">
@@ -155,6 +156,15 @@
 
     <q-scroll-area class="col">
       <div
+        v-if="explorerUnavailableMessage"
+        class="file-load-state app-muted q-ma-md q-pa-lg text-center"
+        role="status"
+      >
+        <q-icon :name="explorerUnavailableIcon" size="40px" />
+        <div class="q-mt-sm">{{ explorerUnavailableMessage }}</div>
+      </div>
+      <div
+        v-else
         class="q-pa-sm"
         role="tree"
         aria-label="Dateien und Ordner"
@@ -382,7 +392,6 @@ import { useExecutionAgentStore } from 'stores/execution-agents'
 import {
   MAX_WORKSPACE_UPLOAD_BYTES,
   MAX_WORKSPACE_UPLOADS,
-  supportsWorkspaceOperation,
   workspaceContextKey,
   withFileSuffix,
   useWorkspaceStore
@@ -430,20 +439,18 @@ const selectedIsDirectory = computed(() => selectedEntry.value?.kind === 'direct
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
 ))
-const rootOptions = computed(() => {
-  const roots = (selectedExecutionAgent.value?.roots || []).map((root) => ({
+const selectedRoot = computed(() => selectedExecutionAgent.value?.roots?.find((root) => (
+  root.id === chat.activeContext?.preferredRootId
+)) || null)
+const rootOptions = computed(() => (
+  (selectedExecutionAgent.value?.roots || []).map((root) => ({
     label: root.label,
     value: root.id
   }))
-  const selected = chat.activeContext?.preferredRootId
-  if (selected && !roots.some((root) => root.value === selected)) {
-    roots.push({ label: 'Nicht verfügbarer Arbeitsbereich', value: selected })
-  }
-  return roots
-})
+))
 const hasOverflowActions = computed(() => Boolean(
-  (workspace.scope === 'filesystem' && selectedIsDirectory.value)
-  || (workspace.scope === 'filesystem' && chat.activeContext?.workingDirectory)
+  (workspace.scope === 'filesystem' && explorerAvailable.value && selectedIsDirectory.value)
+  || (workspace.scope === 'filesystem' && explorerAvailable.value && chat.activeContext?.workingDirectory)
   || chat.current
 ))
 const targetDirectory = computed(() => {
@@ -474,12 +481,39 @@ const rootLabel = computed(() => {
 })
 const scopeOptions = computed(() => [
   { label: 'Session', value: 'session', disable: !chat.current },
-  {
-    label: 'Computer',
-    value: 'filesystem',
-    disable: !supportsWorkspaceOperation(workspace.workspaceContext, 'workspace.list')
-  }
+  { label: 'Computer', value: 'filesystem' }
 ])
+const explorerAvailable = computed(() => workspace.operationAvailable('workspace.list'))
+const explorerUnavailableMessage = computed(() => {
+  if (explorerAvailable.value) return ''
+  if (workspace.scope === 'session') {
+    return 'Session-Dateien sind verfügbar, sobald die Session erstellt wurde.'
+  }
+  if (!chat.activeContext?.preferredExecutionAgentId) {
+    return workspace.sessionId
+      ? 'Wähle einen Computer aus, um Dateien anzuzeigen.'
+      : 'Erstelle zuerst eine Session oder wähle einen Computer aus, um Dateien anzuzeigen.'
+  }
+  if (!selectedExecutionAgent.value) {
+    return 'Der ausgewählte Computer ist nicht mehr verfügbar.'
+  }
+  if (!selectedExecutionAgent.value.connected) {
+    return 'Der ausgewählte Computer ist offline.'
+  }
+  if (!selectedExecutionAgent.value.roots?.length) {
+    return 'Auf dem ausgewählten Computer sind keine Arbeitsbereiche verfügbar.'
+  }
+  if (!chat.activeContext?.preferredRootId) {
+    return 'Wähle einen Arbeitsbereich aus.'
+  }
+  if (!selectedRoot.value) {
+    return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
+  }
+  return 'Der ausgewählte Arbeitsbereich bietet keinen Dateizugriff an.'
+})
+const explorerUnavailableIcon = computed(() => (
+  selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'folder_off'
+))
 const scopeDescription = computed(() => {
   if (workspace.rootIdentity) {
     return workspace.scope === 'session'

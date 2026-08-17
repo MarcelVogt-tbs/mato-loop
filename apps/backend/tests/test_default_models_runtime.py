@@ -122,7 +122,7 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch) -> None
         "Default Models in Settings einbauen",
     )
 
-    assert complete.await_args.kwargs["model"] is session_model
+    assert complete.await_args.kwargs["model"].id == session_model.id
     assert complete.await_args.kwargs["max_output_tokens"] == 2_048
     statement = db.scalar.await_args.args[0]
     assert "chat_sessions.title" in str(statement)

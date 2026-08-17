@@ -1,0 +1,129 @@
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+from fastapi import Response
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.api.routes import auth as auth_routes
+from mato_loop_backend.models import LoginSession, UserAccount
+from mato_loop_backend.security import create_login_session, require_admin, require_user
+
+
+def _user(*, active: bool = True, admin: bool = False) -> UserAccount:
+    return UserAccount(
+        id=uuid4(),
+        username="test",
+        password_hash="hash",
+        is_admin=admin,
+        is_active=active,
+    )
+
+
+async def test_setup_locks_before_check_and_creates_first_admin(monkeypatch) -> None:
+    events = []
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.side_effect = lambda _statement: events.append("lock")
+    db.scalar.side_effect = lambda _statement: events.append("count") or 0
+    monkeypatch.setattr(auth_routes, "hash_password", lambda _password: "hashed")
+    monkeypatch.setattr(
+        auth_routes,
+        "create_login_session",
+        AsyncMock(return_value=("token", datetime(2030, 1, 1, tzinfo=UTC))),
+    )
+    response = Response()
+
+    result = await auth_routes.setup(
+        auth_routes.CredentialsRequest(username=" admin ", password="long-password"),
+        response,
+        db,
+    )
+
+    user = db.add.call_args.args[0]
+    assert events == ["lock", "count"]
+    assert user.username == "admin"
+    assert user.is_admin and user.is_active
+    assert result["isAdmin"] is True
+    assert "token" in response.headers["set-cookie"]
+    db.commit.assert_awaited_once()
+
+
+async def test_setup_rejects_whitespace_before_locking() -> None:
+    db = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(ApiError) as exc_info:
+        await auth_routes.setup(
+            auth_routes.CredentialsRequest(username=" ", password="long-password"),
+            Response(),
+            db,
+        )
+
+    assert exc_info.value.code == "validation.required"
+    db.execute.assert_not_awaited()
+
+
+async def test_setup_lock_serializes_completed_setup() -> None:
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = 1
+
+    with pytest.raises(ApiError) as exc_info:
+        await auth_routes.setup(
+            auth_routes.CredentialsRequest(username="admin", password="long-password"),
+            Response(),
+            db,
+        )
+
+    assert exc_info.value.code == "auth.setupCompleted"
+    assert "pg_advisory_xact_lock" in str(db.execute.await_args.args[0])
+    db.commit.assert_not_awaited()
+
+
+async def test_session_issuance_rejects_inactive_user() -> None:
+    db = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(ApiError) as exc_info:
+        await create_login_session(db, _user(active=False))
+
+    assert exc_info.value.code == "auth.accountDisabled"
+    db.add.assert_not_called()
+
+
+async def test_session_issuance_is_provider_neutral() -> None:
+    db = AsyncMock(spec=AsyncSession)
+    user = _user()
+
+    token, expires_at = await create_login_session(db, user)
+
+    login = db.add.call_args.args[0]
+    assert token
+    assert expires_at > datetime.now(UTC)
+    assert isinstance(login, LoginSession)
+    assert login.user_id == user.id
+
+
+async def test_require_user_rejects_inactive_account() -> None:
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = LoginSession(
+        user_id=uuid4(), token_hash="hash", expires_at=datetime(2030, 1, 1, tzinfo=UTC)
+    )
+    db.get.return_value = _user(active=False)
+
+    with pytest.raises(ApiError) as exc_info:
+        await require_user(db=db, session_token="token")
+
+    assert exc_info.value.code == "auth.accountDisabled"
+
+
+async def test_require_admin_rejects_non_admin() -> None:
+    with pytest.raises(ApiError) as exc_info:
+        await require_admin(_user(admin=False))
+
+    assert exc_info.value.code == "auth.adminRequired"
+
+
+async def test_auth_options_exposes_only_local_provider() -> None:
+    assert await auth_routes.auth_options() == {
+        "providers": [{"id": "local", "type": "local", "name": "Lokales Konto"}]
+    }

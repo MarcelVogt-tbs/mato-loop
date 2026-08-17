@@ -11,7 +11,7 @@ import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Annotated, BinaryIO, Literal
 from urllib.parse import quote
 from uuid import UUID
@@ -53,15 +53,13 @@ from mato_loop_backend.integrations.openscad import (
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant, UserAccount
 from mato_loop_backend.safe_svg import MAX_SAFE_SVG_BYTES, validate_svg
 from mato_loop_backend.security import hash_token, require_user
-from mato_loop_backend.settings import IntegrationSettings, SettingsStore
+from mato_loop_backend.settings import load_effective_integrations
 from mato_loop_backend.workspace import (
     MAX_EDITABLE_TEXT_BYTES,
     FileRoot,
     RootFileEntry,
     RootFileError,
     RootFileService,
-    WorkspaceError,
-    WorkspaceService,
     validate_upload_filename,
 )
 
@@ -137,7 +135,6 @@ class CopyMoveEntryRequest(BaseModel):
 
 @dataclass(slots=True)
 class _FileContext:
-    workspace: WorkspaceService | None = None
     root_files: RootFileService | None = None
     root: FileRoot | None = None
     working_directory: str | None = None
@@ -268,24 +265,18 @@ async def _file_context(
         if candidate is None or candidate.user_id != user.id:
             raise ApiError(404, "session.notFound")
         session = candidate
-    if root_identity is not None and session is None:
-        raise ApiError(400, "file.sessionRequired")
     if scope is FileScope.SESSION:
         if session is None:
             raise ApiError(400, "file.sessionRequired")
         if root_identity is not None and root_identity != str(session.id):
             raise ApiError(404, "file.fileNotFound")
         return _FileContext(
-            root_files=RootFileService(
-                session.id,
-                working_directory=session.working_directory,
-            ),
+            root_files=RootFileService(session.id),
             root=FileRoot.SESSION,
         )
     if root_revision is not None:
         if (
-            session is None
-            or execution_agent_id is None
+            execution_agent_id is None
             or root_id is None
             or working_directory is None
         ):
@@ -297,7 +288,7 @@ async def _file_context(
             root_id,
             working_directory,
             root_identity,
-            writable=session.workspace_access == "read-write",
+            writable=session is None or session.workspace_access == "read-write",
             expected_revision=root_revision,
         )
     if session is not None:
@@ -318,7 +309,7 @@ async def _file_context(
             root_identity,
             writable=session.workspace_access == "read-write",
         )
-    elif execution_agent_id is not None or root_id is not None:
+    if execution_agent_id is not None or root_id is not None:
         if execution_agent_id is None or root_id is None:
             raise ApiError(400, "file.workspaceNotSelected")
         return await _agent_context(
@@ -329,23 +320,7 @@ async def _file_context(
             working_directory,
             root_identity,
         )
-    if session is None and working_directory:
-        global_workspace = WorkspaceService()
-        try:
-            root = global_workspace.resolve_read_target(working_directory)
-        except WorkspaceError as exc:
-            raise _context_error(exc) from exc
-        if not root.is_dir():
-            raise ApiError(400, "workspace.invalidWorkingDirectory")
-        return _FileContext(
-            root_files=RootFileService(
-                UUID(int=0),
-                working_directory=global_workspace.relative(root),
-            ),
-            root=FileRoot.WORKSPACE,
-            working_directory=global_workspace.relative(root),
-        )
-    return _FileContext(workspace=WorkspaceService())
+    raise ApiError(400, "file.workspaceNotSelected")
 
 
 def _root_entry_payload(entry: RootFileEntry) -> dict:
@@ -359,22 +334,18 @@ def _root_entry_payload(entry: RootFileEntry) -> dict:
     }
 
 
-def _context_error(exc: WorkspaceError | RootFileError) -> ApiError:
-    if exc.code in {"file.changed", "file.pathAlreadyExists", "workspace.pathAlreadyExists"}:
+def _context_error(exc: RootFileError) -> ApiError:
+    if exc.code in {"file.changed", "file.pathAlreadyExists"}:
         return ApiError(409, exc.code)
     if exc.code in {
         "file.directoryNotFound",
         "file.fileNotFound",
         "file.pathNotFound",
-        "workspace.directoryNotFound",
-        "workspace.fileNotFound",
-        "workspace.pathNotFound",
     }:
         return ApiError(404, exc.code)
     if exc.code in {
         "file.operationTooLarge",
         "file.tooLarge",
-        "workspace.fileTooLarge",
     }:
         return ApiError(413, exc.code)
     if exc.code == "file.sessionQuotaExceeded":
@@ -392,47 +363,11 @@ def _is_same_or_descendant(path: str, parent: str) -> bool:
     return path_parts[: len(parent_parts)] == parent_parts
 
 
-async def _assert_paths_not_in_use(
-    db: AsyncSession,
-    user: UserAccount,
-    workspace: WorkspaceService,
-    targets: tuple[Path, ...],
-) -> None:
-    sessions = list(
-        (
-            await db.scalars(
-                select(ChatSession).where(
-                    ChatSession.user_id == user.id,
-                    ChatSession.working_directory.is_not(None),
-                )
-            )
-        ).all()
-    )
-    for item in sessions:
-        workdir = workspace.resolve(item.working_directory)
-        if any(target == workdir or target in workdir.parents for target in targets):
-            raise ApiError(
-                409,
-                "workspace.pathInUse",
-                params={"sessionTitle": item.title},
-            )
-
-
-async def _lock_user(db: AsyncSession, user_id: UUID) -> None:
-    await db.scalar(
-        select(UserAccount.id)
-        .where(UserAccount.id == user_id)
-        .with_for_update()
-    )
-
-
 async def _clear_file_grants(
     db: AsyncSession,
     user: UserAccount,
     context: _FileContext,
     affected_paths: tuple[str, ...],
-    *,
-    global_targets: tuple[Path, ...] = (),
 ) -> None:
     root_name = context.root.value if context.root is not None else None
     root_identity = None
@@ -443,16 +378,13 @@ async def _clear_file_grants(
             await db.scalars(
                 select(PermissionGrant)
                 .where(
-                    PermissionGrant.resource_type.in_(
-                        ("execution_root_path", "path", "root_path")
-                    )
+                    PermissionGrant.resource_type.in_(("execution_root_path", "root_path"))
                 )
                 .join(ChatSession, ChatSession.id == PermissionGrant.session_id)
                 .where(ChatSession.user_id == user.id)
             )
         ).all()
     )
-    global_workspace = WorkspaceService()
     for grant in grants:
         remove = False
         if grant.resource_type == "execution_root_path":
@@ -489,15 +421,6 @@ async def _clear_file_grants(
                 )
             except (KeyError, TypeError, json.JSONDecodeError):
                 remove = True
-        elif global_targets:
-            try:
-                grant_path = global_workspace.resolve(grant.resource_scope)
-                remove = any(
-                    target == grant_path or target in grant_path.parents
-                    for target in global_targets
-                )
-            except WorkspaceError:
-                remove = True
         if remove:
             await db.delete(grant)
 
@@ -508,31 +431,7 @@ async def _clear_context_grants(
     context: _FileContext,
     paths: tuple[str, ...],
 ) -> None:
-    global_targets: tuple[Path, ...] = ()
-    if (
-        context.agent_id is None
-        and context.root is not FileRoot.SESSION
-        and (context.workspace is not None or context.root is FileRoot.WORKSPACE)
-    ):
-        workspace = WorkspaceService()
-        try:
-            global_targets = tuple(
-                workspace.resolve(
-                    _join_path(context.working_directory, path)
-                    if context.working_directory
-                    else path
-                )
-                for path in paths
-            )
-        except WorkspaceError as exc:
-            raise _context_error(exc) from exc
-    await _clear_file_grants(
-        db,
-        user,
-        context,
-        paths,
-        global_targets=global_targets,
-    )
+    await _clear_file_grants(db, user, context, paths)
 
 
 def _require_agent_operations(context: _FileContext, *operations: str) -> None:
@@ -543,8 +442,6 @@ def _require_agent_operations(context: _FileContext, *operations: str) -> None:
 def _list_context(
     context: _FileContext, path: str, offset: int
 ) -> tuple[list[dict], bool, int | None]:
-    if context.workspace is not None:
-        return (context.workspace.list_entries(path), False, None) if offset == 0 else ([], False, None)
     assert context.root_files is not None and context.root is not None
     result = context.root_files.list_entries(context.root, path, offset=offset, limit=1_000)
     return (
@@ -555,8 +452,6 @@ def _list_context(
 
 
 def _read_context(context: _FileContext, path: str, limit: int) -> bytes:
-    if context.workspace is not None:
-        return context.workspace.read_bytes(path, limit=limit)
     assert context.root_files is not None and context.root is not None
     return context.root_files.read_bytes(context.root, path, limit=limit)
 
@@ -564,8 +459,6 @@ def _read_context(context: _FileContext, path: str, limit: int) -> bytes:
 def _replace_text_context(
     context: _FileContext, path: str, content: str, expected_revision: str
 ) -> str:
-    if context.workspace is not None:
-        return context.workspace.replace_text_file(path, content, expected_revision)
     assert context.root_files is not None and context.root is not None
     return context.root_files.replace_text_file(
         context.root, path, content, expected_revision
@@ -573,8 +466,6 @@ def _replace_text_context(
 
 
 def _open_context(context: _FileContext, path: str) -> BinaryIO:
-    if context.workspace is not None:
-        return context.workspace.open_file(path)
     assert context.root_files is not None and context.root is not None
     return context.root_files.open_file(context.root, path)
 
@@ -902,7 +793,7 @@ async def list_entries(
             "hasMore": has_more,
             "nextOffset": next_offset,
         }
-    except (WorkspaceError, RootFileError) as exc:
+    except RootFileError as exc:
         raise _context_error(exc) from exc
 
 
@@ -944,20 +835,12 @@ async def create_directory(
                 "path": path,
                 "kind": "directory",
             }
-        if context.workspace is not None:
-            return await asyncio.to_thread(
-                context.workspace.create_directory, payload.parent, payload.name
-            )
         assert context.root_files is not None and context.root is not None
         path = _join_path(payload.parent, payload.name)
         await asyncio.to_thread(context.root_files.create_directory, context.root, path)
         return {"name": payload.name, "path": path, "kind": "directory"}
-    except (WorkspaceError, RootFileError) as exc:
+    except RootFileError as exc:
         raise _context_error(exc) from exc
-    except FileExistsError as exc:
-        raise ApiError(409, "workspace.pathAlreadyExists") from exc
-    except FileNotFoundError as exc:
-        raise ApiError(400, "workspace.parentNotFound") from exc
 
 
 @router.post("/files", status_code=status.HTTP_201_CREATED)
@@ -1022,14 +905,6 @@ async def upload_file(
             finally:
                 transfer_tickets.revoke(grant.ticket_id)
             entry = await _agent_stat(context, path)
-        elif context.workspace is not None:
-            entry = await asyncio.to_thread(
-                context.workspace.create_file,
-                parent,
-                file.filename,
-                file.file,
-                max_bytes=MAX_FILE_ATTACHMENT_BYTES,
-            )
         else:
             assert context.root_files is not None and context.root is not None
             path = _join_path(parent, validate_upload_filename(file.filename))
@@ -1042,7 +917,7 @@ async def upload_file(
             )
             entry = _root_entry_payload(created)
         return {"entry": entry}
-    except (WorkspaceError, RootFileError) as exc:
+    except RootFileError as exc:
         raise _context_error(exc) from exc
     except OSError as exc:
         if exc.errno == errno.ENOSPC:
@@ -1125,7 +1000,7 @@ async def preview_file(
             data = await asyncio.to_thread(
                 _read_context, context, path, _IMAGE_PREVIEW_BYTES
             )
-    except (WorkspaceError, RootFileError) as exc:
+    except RootFileError as exc:
         raise _context_error(exc) from exc
 
     mime_type = image_mime_type(data)
@@ -1212,34 +1087,9 @@ async def update_file(
         ):
             raise ApiError(502, "executionAgent.protocolError")
         return {"revision": revision, "entry": await _agent_stat(context, path)}
-    context_identity = (
-        context.root,
-        context.working_directory,
-        context.workspace is not None,
-    )
-    global_targets: tuple[Path, ...] = ()
-    if context.root is not FileRoot.SESSION:
-        global_workspace = WorkspaceService()
-        global_path = (
-            _join_path(context.working_directory, payload.path)
-            if context.working_directory
-            else payload.path
-        )
-        try:
-            global_targets = (global_workspace.resolve(global_path),)
-        except WorkspaceError as exc:
-            raise _context_error(exc) from exc
-    await _clear_file_grants(
-        db,
-        user,
-        context,
-        (payload.path,),
-        global_targets=global_targets,
-    )
+    await _clear_file_grants(db, user, context, (payload.path,))
     await db.commit()
 
-    if global_targets:
-        await _lock_user(db, user.id)
     context = await _file_context(
         scope,
         session_id,
@@ -1248,12 +1098,6 @@ async def update_file(
         working_directory=working_directory,
         for_update=session_id is not None,
     )
-    if context_identity != (
-        context.root,
-        context.working_directory,
-        context.workspace is not None,
-    ):
-        raise ApiError(409, "file.changed")
     try:
         revision = await asyncio.to_thread(
             _replace_text_context,
@@ -1262,7 +1106,7 @@ async def update_file(
             payload.content,
             payload.expected_revision,
         )
-    except (WorkspaceError, RootFileError) as exc:
+    except RootFileError as exc:
         raise _context_error(exc) from exc
     except OSError as exc:
         if exc.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}:
@@ -1326,7 +1170,7 @@ async def preview_image(
             if mime_type is None or len(data) > _IMAGE_PREVIEW_BYTES:
                 raise ApiError(415, "file.previewUnavailable")
             await asyncio.to_thread(validate_image, data, mime_type)
-    except (WorkspaceError, RootFileError) as exc:
+    except RootFileError as exc:
         raise _context_error(exc) from exc
     except (AttachmentError, ValueError) as exc:
         raise ApiError(415, "file.previewUnavailable") from exc
@@ -1398,7 +1242,7 @@ async def _openscad_client(
         raise ApiError(503, "executionAgent.unavailable")
     if not required <= snapshot[0]:
         raise ApiError(503, "executionAgent.operationUnavailable")
-    settings = await SettingsStore.load(db, IntegrationSettings)
+    settings = await load_effective_integrations(db, user.id)
     instance = next(
         (
             item
@@ -1519,7 +1363,7 @@ async def render_openscad_file(
                 if len(source) > MAX_TEXT_PREVIEW_BYTES:
                     raise ApiError(413, "file.tooLarge")
                 revision = hashlib.sha256(source).hexdigest()
-        except (RootFileError, WorkspaceError) as exc:
+        except RootFileError as exc:
             raise _context_error(exc) from exc
         if revision != payload.expected_revision:
             raise ApiError(409, "file.changed")
@@ -1554,7 +1398,7 @@ async def render_openscad_file(
         )
     except ExecutionClientError as exc:
         raise _openscad_render_api_error(exc) from exc
-    except (RootFileError, WorkspaceError) as exc:
+    except RootFileError as exc:
         raise _context_error(exc) from exc
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
         raise ApiError(502, "openscad.invalidArtifact") from exc
@@ -1606,7 +1450,7 @@ async def download_file(
         else:
             handle = await asyncio.to_thread(_open_context, context, path)
             size = None
-    except (WorkspaceError, RootFileError) as exc:
+    except RootFileError as exc:
         raise _context_error(exc) from exc
     filename = PurePosixPath(path).name or "download"
     headers = {
@@ -1667,58 +1511,28 @@ async def rename_entry(
         if result.get("path") != destination_path:
             raise ApiError(502, "executionAgent.protocolError")
         return {"entry": await _agent_stat(context, destination_path)}
-    global_targets: tuple[Path, ...] = ()
-    if context.root is not FileRoot.SESSION:
-        global_workspace = WorkspaceService()
-        global_path = (
-            _join_path(context.working_directory, payload.path)
-            if context.working_directory
-            else payload.path
-        )
-        try:
-            source = global_workspace.resolve(global_path)
-        except WorkspaceError as exc:
-            raise _context_error(exc) from exc
-        destination = source.parent / name
-        await _assert_paths_not_in_use(
-            db, user, global_workspace, (source, destination)
-        )
-        global_targets = (source, destination)
     await _clear_file_grants(
         db,
         user,
         context,
         (payload.path, destination_path),
-        global_targets=global_targets,
     )
     await db.commit()
-    if global_targets:
-        await _lock_user(db, user.id)
-        await _assert_paths_not_in_use(
-            db, user, WorkspaceService(), global_targets
-        )
     try:
-        if context.workspace is not None:
-            entry = await asyncio.to_thread(
-                context.workspace.rename, payload.path, name
-            )
-        else:
-            assert context.root_files is not None and context.root is not None
-            renamed = await asyncio.to_thread(
-                context.root_files.rename_path,
-                context.root,
-                payload.path,
-                name,
-            )
-            entry = _root_entry_payload(renamed)
-    except (WorkspaceError, RootFileError) as exc:
+        assert context.root_files is not None and context.root is not None
+        renamed = await asyncio.to_thread(
+            context.root_files.rename_path,
+            context.root,
+            payload.path,
+            name,
+        )
+        entry = _root_entry_payload(renamed)
+    except RootFileError as exc:
         raise _context_error(exc) from exc
     except OSError as exc:
         if exc.errno in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
             raise ApiError(501, "file.renameUnavailable") from exc
         raise
-    if global_targets:
-        await db.commit()
     return {"entry": entry}
 
 
@@ -1770,37 +1584,7 @@ async def delete_entry(
             raise _context_error(exc) from exc
         return
 
-    global_workspace = WorkspaceService()
-    global_path = _join_path(context.working_directory, path) if context.working_directory else path
-    try:
-        target = global_workspace.resolve(global_path)
-    except WorkspaceError as exc:
-        raise _context_error(exc) from exc
-    await _assert_paths_not_in_use(db, user, global_workspace, (target,))
-    await _clear_file_grants(
-        db,
-        user,
-        context,
-        (path,),
-        global_targets=(target,),
-    )
-    await db.commit()
-    await _lock_user(db, user.id)
-    await _assert_paths_not_in_use(db, user, global_workspace, (target,))
-    try:
-        if context.workspace is not None:
-            await asyncio.to_thread(context.workspace.delete, path)
-        else:
-            assert context.root_files is not None and context.root is FileRoot.WORKSPACE
-            await asyncio.to_thread(
-                context.root_files.delete_path,
-                FileRoot.WORKSPACE,
-                path,
-                recursive=True,
-            )
-    except (WorkspaceError, RootFileError) as exc:
-        raise _context_error(exc) from exc
-    await db.commit()
+    raise ApiError(400, "file.workspaceNotSelected")
 
 
 async def _import_agent_file(
@@ -1953,7 +1737,7 @@ async def _copy_or_move_entry(
             )
             if entry is None:
                 raise ApiError(502, "internal.unexpected")
-        except (WorkspaceError, RootFileError) as exc:
+        except RootFileError as exc:
             raise _context_error(exc) from exc
         return {"entry": _root_entry_payload(entry)}
 
@@ -1970,7 +1754,7 @@ async def _copy_or_move_entry(
                 )
             finally:
                 source_handle.close()
-        except (WorkspaceError, RootFileError) as exc:
+        except RootFileError as exc:
             raise _context_error(exc) from exc
 
     try:
@@ -1989,7 +1773,7 @@ async def _copy_or_move_entry(
             entry = _root_entry_payload(created)
         else:
             raise ApiError(400, "file.invalidRoot")
-    except (WorkspaceError, RootFileError) as exc:
+    except RootFileError as exc:
         raise _context_error(exc) from exc
     finally:
         handle.close()
@@ -2003,9 +1787,7 @@ async def _copy_or_move_entry(
                     source_path,
                     recursive=False,
                 )
-            elif source.workspace is not None:
-                await asyncio.to_thread(source.workspace.delete, source_path)
-        except (WorkspaceError, RootFileError) as exc:
+        except RootFileError as exc:
             raise _context_error(exc) from exc
     return {"entry": entry}
 

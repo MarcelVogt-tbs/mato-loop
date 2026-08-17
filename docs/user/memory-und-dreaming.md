@@ -58,5 +58,5 @@ Dreaming kann manuell für alle oder für eine einzelne Session gestartet werden
 !!! info "Memory ist kein exaktes Archiv"
     Erinnerungen sind verdichtete Arbeitsinformationen. Verwenden Sie für unveränderte Originalinhalte weiterhin Sessions und Dateien.
 
-!!! info "Derzeit Single-User"
-    MatoLoop unterstützt weiterhin genau einen lokalen Benutzer. Dauerhafte Erinnerungen und ihre Duplikaterkennung sind derzeit installationsweit und noch nicht für mehrere Benutzer getrennt.
+!!! info "Nach Benutzer getrennt"
+    Erinnerungen, Duplikaterkennung, Dreaming und der Abruf aus früheren Sessions verwenden ausschließlich Daten des angemeldeten Benutzers. Auch Administratoren können Erinnerungen anderer Benutzer nicht öffnen.

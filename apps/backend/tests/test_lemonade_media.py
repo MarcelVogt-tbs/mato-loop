@@ -2,6 +2,7 @@ import base64
 import json
 from io import BytesIO
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -205,7 +206,7 @@ async def test_media_service_resolves_host_default_without_model_argument(monkey
     monkeypatch.setattr(lemonade, "generate_image", transport)
 
     result = await MediaService.generate_image(
-        AsyncMock(spec=AsyncSession), prompt="Ein Bergsee"
+        AsyncMock(spec=AsyncSession), prompt="Ein Bergsee", user_id=uuid4()
     )
 
     assert result.data == image
@@ -253,6 +254,7 @@ async def test_media_service_rejects_changed_target_trust_before_transport(
             prompt="Ein Bergsee",
             expected_model_id=model.id,
             expected_trust_level=TrustLevel.PUBLIC,
+            user_id=uuid4(),
         )
 
     assert exc_info.value.code == "provider.modelCapabilityUnavailable"

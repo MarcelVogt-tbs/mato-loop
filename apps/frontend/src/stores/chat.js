@@ -86,8 +86,21 @@ function defaultSessionOptions() {
   }
 }
 
+function sanitizedSessionOptions(options) {
+  const sanitized = { ...options }
+  if (!sanitized.preferredExecutionAgentId) {
+    sanitized.preferredRootId = null
+    sanitized.workingDirectory = null
+    sanitized.currentDirectory = null
+  } else if (!sanitized.preferredRootId) {
+    sanitized.workingDirectory = null
+    sanitized.currentDirectory = null
+  }
+  return sanitized
+}
+
 function optionsFromSession(session) {
-  return {
+  return sanitizedSessionOptions({
     modelId: session.modelId,
     memoryMode: session.memoryMode,
     effectiveMemoryMode: session.effectiveMemoryMode,
@@ -100,7 +113,7 @@ function optionsFromSession(session) {
     currentDirectory: session.currentDirectory,
     workspaceAccess: session.workspaceAccess,
     workspaceContext: session.workspaceContext || null
-  }
+  })
 }
 
 function emptyDrafts() {
@@ -177,10 +190,11 @@ async function sessionStateAfterMutation(sessionId, messageId) {
   }
 }
 
-function loadDrafts() {
-  if (typeof window === 'undefined') return emptyDrafts()
+function loadDrafts(ownerUserId) {
+  if (!ownerUserId || typeof window === 'undefined') return emptyDrafts()
   try {
     const stored = JSON.parse(window.localStorage.getItem(DRAFT_STORAGE_KEY) || '{}')
+    if (stored.ownerUserId !== ownerUserId) return emptyDrafts()
     const sessionMessages = Object.fromEntries(
       Object.entries(stored.sessionMessages || {}).filter(([, value]) => typeof value === 'string')
     )
@@ -188,7 +202,7 @@ function loadDrafts() {
     return {
       newSession: {
         message: typeof stored.newSession?.message === 'string' ? stored.newSession.message : '',
-        options: {
+        options: sanitizedSessionOptions({
           modelId: typeof options.modelId === 'string' ? options.modelId : null,
           memoryMode: ['full', 'read_only', 'disabled'].includes(options.memoryMode)
             ? options.memoryMode
@@ -211,7 +225,7 @@ function loadDrafts() {
           currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
           workspaceAccess: options.workspaceAccess === 'read-write' ? 'read-write' : 'read-only',
           workspaceContext: null
-        }
+        })
       },
       sessionMessages
     }
@@ -251,7 +265,8 @@ export const useChatStore = defineStore('chat', {
     sessionRequestController: null,
     loadError: null,
     sessionDefaults: defaultSessionOptions(),
-    drafts: loadDrafts(),
+    draftOwnerUserId: null,
+    drafts: emptyDrafts(),
     attachmentDrafts: {
       newSession: [],
       sessionMessages: {}
@@ -298,18 +313,29 @@ export const useChatStore = defineStore('chat', {
       this.activity = emptyActivity(this.activity.revision + 1)
     },
     persistDrafts() {
-      if (typeof window === 'undefined') return
+      if (!this.draftOwnerUserId || typeof window === 'undefined') return
       try {
-        window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(this.drafts))
+        window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({
+          ownerUserId: this.draftOwnerUserId,
+          ...this.drafts
+        }))
       } catch {
         // Chat remains usable when local storage is blocked or full.
       }
     },
+    setDraftOwner(userId) {
+      const ownerUserId = typeof userId === 'string' && userId ? userId : null
+      if (ownerUserId === this.draftOwnerUserId) return
+      this.clearAllAttachmentDrafts()
+      this.draftOwnerUserId = ownerUserId
+      this.drafts = loadDrafts(ownerUserId)
+      if (ownerUserId) this.persistDrafts()
+    },
     async fetchDefaults() {
-      this.sessionDefaults = {
+      this.sessionDefaults = sanitizedSessionOptions({
         ...defaultSessionOptions(),
         ...(await api.get('/sessions/defaults')).data
-      }
+      })
       const options = this.drafts.newSession.options
       if (options.modelId === null) {
         Object.assign(options, this.sessionDefaults)
@@ -427,6 +453,11 @@ export const useChatStore = defineStore('chat', {
       this.attachmentDrafts = { newSession: [], sessionMessages: {} }
       this.audioDictations = { newSession: null, sessionMessages: {} }
     },
+    clearAllDrafts() {
+      this.clearAllAttachmentDrafts()
+      this.drafts = emptyDrafts()
+      if (typeof window !== 'undefined') window.localStorage.removeItem(DRAFT_STORAGE_KEY)
+    },
     attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
       if (files.length > MAX_ATTACHMENT_DRAFTS) {
         return `Du kannst höchstens ${MAX_ATTACHMENT_DRAFTS} Dateien pro Nachricht anhängen.`
@@ -490,7 +521,7 @@ export const useChatStore = defineStore('chat', {
       this.clearAttachmentDraft(null)
       this.drafts.newSession = {
         message: '',
-        options: { ...this.sessionDefaults }
+        options: sanitizedSessionOptions(this.sessionDefaults)
       }
       this.persistDrafts()
     },
@@ -717,6 +748,7 @@ export const useChatStore = defineStore('chat', {
             : value
         }
       }
+      Object.assign(options, sanitizedSessionOptions(options))
       if (Object.hasOwn(patch, 'model_id')) {
         const selectedModelId = patch.model_id
         const { data } = await api.get('/sessions/defaults', {
@@ -1035,7 +1067,7 @@ export const useChatStore = defineStore('chat', {
       this.streamModelName = null
       this.processOutputs = {}
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
-      const options = this.drafts.newSession.options
+      const options = sanitizedSessionOptions(this.drafts.newSession.options)
       try {
         const payload = {
           content,
@@ -1044,7 +1076,9 @@ export const useChatStore = defineStore('chat', {
           web_search_policy: options.webSearchPolicy,
           preferred_execution_agent_id: options.preferredExecutionAgentId,
           preferred_root_id: options.preferredRootId,
-          working_directory: options.workingDirectory,
+          ...(options.preferredExecutionAgentId && options.preferredRootId
+            ? { working_directory: options.workingDirectory }
+            : {}),
           workspace_access: options.workspaceAccess
         }
         const { data } = attachments.length

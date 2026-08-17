@@ -38,7 +38,7 @@ from mato_loop_backend.integrations.contracts import (
     ToolContribution,
 )
 from mato_loop_backend.models import Credential
-from mato_loop_backend.security import CredentialCipher, read_credential
+from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import (
     IntegrationInstance,
     ToolExecutionPolicy,
@@ -491,7 +491,9 @@ async def _selected_client(
     instance, revision = _binding(context, integration_id)
     if instance.credential_id is None:
         raise BookStackError("bookstack.authenticationFailed")
-    record = await context.db.get(Credential, instance.credential_id)
+    record = await load_credential(
+        context.db, instance.credential_id, owner_id=instance.owner_id
+    )
     credential = _credential_payload(record)
     config = BookStackConfig.model_validate(instance.config)
     async with BookStackClient(

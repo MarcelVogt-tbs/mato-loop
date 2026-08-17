@@ -2,6 +2,8 @@
 
 Standalone Linux agent for bounded workspace, process, transfer, and sparse session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
+The agent owns every filesystem root it advertises. `homeDirectory` is optional and, when set, must resolve inside one configured root; it provides the initial directory for new MatoLoop sessions but does not replace the root boundary. MatoLoop stores only root identity and per-session current and root-relative working directories. The backend neither owns nor deletes files below agent roots.
+
 ## Configuration
 
 ```json

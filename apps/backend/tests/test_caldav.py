@@ -607,7 +607,7 @@ async def test_calendar_listing_remembers_resource_labels(monkeypatch) -> None:
         str(account.id): {f"calendar:{'a' * 32}": "Privat"}
     }
     load.assert_awaited_once_with(context.db, ToolSettings, for_update=True)
-    save.assert_awaited_once_with(context.db, tools)
+    save.assert_awaited_once_with(context.db, tools, user_id=None)
 
 
 def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> None:

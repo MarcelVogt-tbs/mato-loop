@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from uuid import UUID
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,17 +11,19 @@ from mato_loop_backend import __version__
 from mato_loop_backend.models import Credential
 from mato_loop_backend.providers import codex_oauth
 from mato_loop_backend.providers.base import ProviderError
-from mato_loop_backend.security import read_credential, store_credential
+from mato_loop_backend.security import load_credential, read_credential, store_credential
 
 _refresh_lock = asyncio.Lock()
 
 
 async def refresh_codex_credential(
-    db: AsyncSession, credential: Credential
+    db: AsyncSession, credential: Credential, *, owner_id: UUID | None
 ) -> dict[str, Any]:
     # ponytail: one lock is enough while MatoLoop supports one Codex account.
     async with _refresh_lock:
-        current = await db.get(Credential, credential.id, populate_existing=True)
+        current = await load_credential(
+            db, credential.id, owner_id=owner_id, populate_existing=True
+        )
         if current is None:
             raise ProviderError(
                 "ChatGPT Codex credential is missing",
@@ -57,6 +60,7 @@ async def refresh_codex_credential(
         if refreshed != payload:
             await store_credential(
                 db,
+                owner_id=owner_id,
                 kind=current.kind,
                 label=current.label,
                 payload=refreshed,

@@ -19,7 +19,7 @@
                 type="password"
                 label="Passwort"
                 :hint="auth.setupRequired ? 'Mindestens 10 Zeichen' : undefined"
-                autocomplete="current-password"
+                :autocomplete="auth.setupRequired ? 'new-password' : 'current-password'"
               />
             </q-card-section>
             <q-card-actions align="right" class="q-pa-md q-pt-none">

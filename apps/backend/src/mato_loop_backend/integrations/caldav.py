@@ -28,12 +28,13 @@ from mato_loop_backend.integrations.contracts import (
     ToolContribution,
 )
 from mato_loop_backend.models import Credential
-from mato_loop_backend.security import CredentialCipher, read_credential
+from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import (
     IntegrationInstance,
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    UserToolSettings,
 )
 
 CALDAV_CREDENTIAL_KIND = "caldav.password"
@@ -439,7 +440,9 @@ async def _selected_client(
     instance, revision = _binding(context, integration_id)
     if instance.credential_id is None:
         raise CalDavError("caldav.authenticationFailed")
-    record = await context.db.get(Credential, instance.credential_id)
+    record = await load_credential(
+        context.db, instance.credential_id, owner_id=instance.owner_id
+    )
     password = _credential_payload(record)["password"]
     config = CalDavConfig.model_validate(instance.config)
     async with CalDavClient(str(config.base_url), config.username, password) as client:
@@ -882,16 +885,31 @@ async def _remember_resource_labels(
             labels[f"calendar:{calendar.key}"] = _label(calendar.name)
         if "VTODO" in calendar.supported_components:
             labels[f"tasklist:{calendar.key}"] = _task_label(calendar.name)
-    tools = await SettingsStore.load(context.db, ToolSettings, for_update=True)
+    integration = next(
+        item
+        for item in context.integration_settings.instances
+        if item.id == integration_id
+    )
+    owner_id = integration.owner_id
+    if owner_id is None:
+        tools = await SettingsStore.load(context.db, ToolSettings, for_update=True)
+    else:
+        tools = await SettingsStore.load_optional(
+            context.db, UserToolSettings, user_id=owner_id, for_update=True
+        )
+        if tools is None:
+            instance_tools = await SettingsStore.load(context.db, ToolSettings)
+            tools = UserToolSettings.model_validate(
+                instance_tools.model_dump(exclude={"personal_settings_enabled"})
+            )
     key = str(integration_id)
     if tools.resource_labels.get(key, {}) != labels:
         if labels:
             tools.resource_labels[key] = labels
         else:
             tools.resource_labels.pop(key, None)
-        await SettingsStore.save(context.db, tools)
+        await SettingsStore.save(context.db, tools, user_id=owner_id)
     context.tool_settings.resource_labels = dict(tools.resource_labels)
-    context.tool_settings = tools
 
 
 async def calendar_list_calendars(

@@ -633,12 +633,12 @@ async function loadRouteSession() {
 
 async function loadBackgroundData() {
   const [providerResult, integrationResult, , , defaultsResult] = await Promise.allSettled([
-    providers.fetchAll(),
-    integrations.fetchSearch(),
+    providers.fetchEffective(),
+    integrations.fetchEffectiveSearch(),
     approvals.fetchPending(),
     questions.fetchPending(),
     chat.fetchDefaults(),
-    toolSettings.fetchSettings()
+    toolSettings.fetchSettings('personal')
   ])
   if (
     providerResult.status === 'fulfilled'

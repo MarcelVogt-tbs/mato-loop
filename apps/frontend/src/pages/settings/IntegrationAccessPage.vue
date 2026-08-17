@@ -8,7 +8,7 @@
         icon="arrow_back"
         aria-label="Zurück zu den Integrationen"
         :disable="saving"
-        :to="{ name: 'settings-integrations' }"
+        :to="{ name: 'settings-integrations', query: { scope } }"
       />
       <q-avatar color="primary" text-color="white" icon="policy" class="q-ml-sm" />
       <q-toolbar-title>
@@ -28,10 +28,26 @@
         :label="$q.screen.gt.xs ? 'Speichern' : undefined"
         aria-label="Zugriffsrichtlinien speichern"
         :loading="saving"
-        :disable="loading || loadFailed || !access || !dirty"
+        :disable="personalBlocked || loading || loadFailed || !access || !dirty"
         @click="save"
       />
     </q-toolbar>
+
+    <div v-if="auth.isAdmin" class="row justify-end q-mb-md">
+      <SettingsScopeToggle
+        :model-value="scope"
+        :is-admin="auth.isAdmin"
+        :disable="loading || saving"
+        @update:model-value="switchScope"
+      />
+    </div>
+
+    <q-banner v-if="scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
+      <template #avatar><q-icon name="person" color="primary" /></template>
+      {{ personalBlocked
+        ? 'Persönliche Integrationen wurden für diese Instanz deaktiviert. Gespeicherte Zugriffsregeln bleiben erhalten, können aber nicht bearbeitet werden.'
+        : 'Diese Zugriffsregeln gehören zu deiner persönlichen Integration.' }}
+    </q-banner>
 
     <q-banner v-if="loadFailed" rounded class="app-surface-tonal q-mb-md">
       Die Ressourcen konnten nicht geladen werden.
@@ -57,12 +73,18 @@
       </q-card>
     </div>
 
-    <q-form v-else-if="access" class="q-gutter-md" @submit.prevent="save">
+    <q-form
+      v-else-if="access"
+      class="q-gutter-md"
+      :class="{ disabled: personalBlocked }"
+      :inert="personalBlocked"
+      @submit.prevent="save"
+    >
       <q-card v-if="supportsDefaultResources" flat class="app-surface-tonal">
         <q-card-section>
           <div class="text-subtitle1 text-weight-bold">Standardressourcen dieses Kontos</div>
           <div class="text-caption app-muted">
-            Gilt installationsweit für unspezifische Kalender- und Aufgabenanfragen sowie neue
+            Gilt {{ scope === 'instance' ? 'instanzweit' : 'persönlich' }} für unspezifische Kalender- und Aufgabenanfragen sowie neue
             Einträge. Beide Standards können unabhängig festgelegt werden.
           </div>
         </q-card-section>
@@ -78,6 +100,7 @@
                 map-options
                 label="Standardkalender"
                 :options="defaultCalendarOptions"
+                :disable="personalBlocked"
               />
             </div>
             <div v-if="taskListResourceList.length" class="col-12 col-md-6">
@@ -89,6 +112,7 @@
                 map-options
                 label="Standard-Aufgabenliste"
                 :options="defaultTaskListOptions"
+                :disable="personalBlocked"
               />
             </div>
           </div>
@@ -113,7 +137,7 @@
                 :label="action.label"
                 :options="policyOptions(action, action.globalPolicy)"
                 :hint="`Wirksam: ${policyLabel(action.effectiveIntegrationPolicy)}`"
-                :disable="action.globalPolicy === 'disabled'"
+                :disable="personalBlocked || action.globalPolicy === 'disabled'"
                 persistent-hint
               />
             </div>
@@ -155,7 +179,7 @@
                   :label="action.label"
                   :options="policyOptions(action, action.effectiveIntegrationPolicy)"
                   :hint="effectiveHint(resource, action)"
-                  :disable="action.globalPolicy === 'disabled' || resource.hardUnavailableCapabilities.includes(action.capability)"
+                  :disable="personalBlocked || action.globalPolicy === 'disabled' || resource.hardUnavailableCapabilities.includes(action.capability)"
                   persistent-hint
                 />
               </div>
@@ -170,7 +194,7 @@
           no-caps
           label="Zurück"
           :disable="saving"
-          :to="{ name: 'settings-integrations' }"
+          :to="{ name: 'settings-integrations', query: { scope } }"
         />
         <q-btn
           unelevated
@@ -180,7 +204,7 @@
           icon="save"
           label="Speichern"
           :loading="saving"
-          :disable="!dirty"
+          :disable="personalBlocked || !dirty"
         />
       </div>
     </q-form>
@@ -190,7 +214,8 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
 import {
   applicableResourceActions,
@@ -199,13 +224,16 @@ import {
   taskListResources
 } from 'src/utils/integration-access'
 import { useIntegrationStore } from 'stores/integrations'
+import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'IntegrationAccessPage' })
 
 const $q = useQuasar()
 const route = useRoute()
+const router = useRouter()
 const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
+const auth = useAuthStore()
 const access = ref(null)
 const defaultResourceKey = ref(null)
 const defaultTaskListKey = ref(null)
@@ -218,11 +246,20 @@ const savedPayload = ref('')
 let loadToken = 0
 
 const integrationId = computed(() => String(route.params.integrationId || ''))
+const scope = computed(() => (
+  route.query.scope === 'personal' ? 'personal' : (auth.isAdmin ? 'instance' : 'personal')
+))
 const integration = computed(() => [
   ...integrations.search.providers,
   ...integrations.calendar.accounts,
   ...integrations.knowledge.bases
 ].find((item) => item.id === integrationId.value))
+const personalBlocked = computed(() => (
+  scope.value === 'personal' && (
+    !integrations.personalIntegrationsEnabled
+    || (integration.value && !integrations.allowedPersonalAdapterTypes.includes(integration.value.providerType))
+  )
+))
 const dirty = computed(() => Boolean(
   access.value && JSON.stringify(requestPayload()) !== savedPayload.value
 ))
@@ -333,6 +370,9 @@ async function load() {
   loading.value = true
   loadFailed.value = false
   try {
+    integrations.selectScope(scope.value)
+    if (scope.value === 'personal' && !await integrations.fetchPersonalPolicy()) return
+    if (personalBlocked.value) return
     const value = await integrations.fetchAccess(id)
     if (token === loadToken && integrationId.value === id) assignAccess(value)
   } catch {
@@ -340,6 +380,13 @@ async function load() {
   } finally {
     if (token === loadToken) loading.value = false
   }
+}
+
+async function switchScope(value) {
+  const failure = await router.push({ name: 'settings-integrations', query: { scope: value } })
+  if (failure) return
+  integrations.selectScope(value)
+  await integrations.fetchAll().catch(() => {})
 }
 
 async function save() {
@@ -367,7 +414,7 @@ async function confirmDiscardedChanges() {
   )
 }
 
-watch(integrationId, load, { immediate: true })
+watch([integrationId, scope], load, { immediate: true })
 onBeforeRouteUpdate(confirmDiscardedChanges)
 onBeforeRouteLeave(confirmDiscardedChanges)
 </script>

@@ -467,7 +467,11 @@ const executionAgentMessage = computed(() => {
   if (selectedExecutionAgent.value.pairingState === 'pending') return 'Die Kopplung des ausgewählten Computers steht noch aus.'
   if (selectedExecutionAgent.value.pairingState === 'unpaired') return 'Der ausgewählte Computer ist nicht gekoppelt.'
   if (!selectedExecutionAgent.value.connected) return 'Der ausgewählte Computer ist offline. Es erfolgt kein automatischer Wechsel.'
-  if (!props.session?.preferredRootId) return ''
+  if (!selectedExecutionAgent.value.roots?.length) return 'Auf dem ausgewählten Computer sind keine Arbeitsbereiche verfügbar.'
+  if (!props.session?.preferredRootId) return 'Wähle im Datei-Explorer einen Arbeitsbereich aus.'
+  if (!selectedExecutionAgent.value.roots.some((root) => root.id === props.session.preferredRootId)) {
+    return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
+  }
   if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
   return ''
 })

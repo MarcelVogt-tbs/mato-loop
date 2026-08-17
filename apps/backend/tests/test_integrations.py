@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -59,6 +60,7 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    UserIntegrationSettings,
 )
 
 
@@ -101,6 +103,49 @@ async def test_bookstack_policy_cleanup_removes_resource_labels(monkeypatch) -> 
     )
 
     assert str(integration_id) not in tools.resource_labels
+
+
+async def test_nonadmin_cannot_read_instance_integration_or_use_credential_test(
+    monkeypatch,
+) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    load = AsyncMock(return_value=IntegrationSettings())
+    discover = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(integrations_route_module, "load_caldav_resources", discover)
+    db = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(ApiError, match="auth.adminRequired"):
+        await integrations_route_module.get_calendar_integrations(
+            db, scope="instance", user=user
+        )
+    with pytest.raises(ApiError, match="auth.adminRequired"):
+        await integrations_route_module.test_calendar_integration(
+            uuid4(), db, scope="instance", user=user
+        )
+
+    load.assert_not_awaited()
+    discover.assert_not_awaited()
+
+
+async def test_personal_policy_read_exposes_no_integration_configuration(
+    monkeypatch,
+) -> None:
+    settings = IntegrationSettings(
+        personal_integrations_enabled=False,
+        allowed_personal_adapter_types={"caldav", "git"},
+        instances=[_searxng()],
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+
+    result = await integrations_route_module.get_personal_integration_settings(
+        SimpleNamespace(id=uuid4(), is_admin=False), AsyncMock(spec=AsyncSession)
+    )
+
+    assert result == {
+        "enabled": False,
+        "allowedAdapterTypes": ["caldav", "git"],
+    }
 
 
 def _request(*, name: str = "SearXNG", enabled: bool = True) -> SearchIntegrationRequest:
@@ -187,6 +232,89 @@ def _resource_adapter(monkeypatch) -> None:
             resource_loader=load_resources,
         ),
     )
+
+
+async def test_revoked_personal_adapters_block_external_clients(monkeypatch) -> None:
+    _resource_adapter(monkeypatch)
+    resource_loader = AsyncMock(return_value=())
+    current = integration_registry._ADAPTERS[("search", "searxng")]
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("search", "searxng"),
+        replace(current, resource_loader=resource_loader),
+    )
+    search = _searxng()
+    calendar = IntegrationInstance(
+        name="Calendar",
+        integration_type="calendar",
+        adapter_type="caldav",
+    )
+    knowledge = IntegrationInstance(
+        name="Knowledge",
+        integration_type="knowledge",
+        adapter_type="bookstack",
+    )
+    openscad = IntegrationInstance(
+        name="OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
+        execution_agent_id=uuid4(),
+        config={"binary_path": "/usr/bin/openscad"},
+    )
+    instance = IntegrationSettings(allowed_personal_adapter_types=set())
+    personal = UserIntegrationSettings(
+        instances=[search, calendar, knowledge, openscad]
+    )
+
+    async def load(_db, settings_type, **_kwargs):
+        return instance if settings_type is IntegrationSettings else personal
+
+    search_client = AsyncMock()
+    calendar_client = AsyncMock()
+    knowledge_client = AsyncMock()
+    execution_client = Mock()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(
+        integrations_route_module, "search_with_provider", search_client
+    )
+    monkeypatch.setattr(
+        integrations_route_module, "load_caldav_resources", calendar_client
+    )
+    monkeypatch.setattr(
+        integrations_route_module, "load_bookstack_resources", knowledge_client
+    )
+    monkeypatch.setattr(
+        integrations_route_module, "_connected_client", execution_client
+    )
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    db = AsyncMock(spec=AsyncSession)
+    operations = (
+        integrations_route_module.test_search_integration(
+            search.id, db, scope="personal", user=user
+        ),
+        integrations_route_module.test_calendar_integration(
+            calendar.id, db, scope="personal", user=user
+        ),
+        integrations_route_module.test_knowledge_integration(
+            knowledge.id, db, scope="personal", user=user
+        ),
+        integrations_route_module.test_openscad_integration(
+            openscad.id, user, db, scope="personal"
+        ),
+        get_integration_access(
+            search.id, db, scope="personal", user=user
+        ),
+    )
+
+    for operation in operations:
+        with pytest.raises(ApiError, match="integration.personalAdapterDisabled"):
+            await operation
+
+    search_client.assert_not_awaited()
+    calendar_client.assert_not_awaited()
+    knowledge_client.assert_not_awaited()
+    execution_client.assert_not_called()
+    resource_loader.assert_not_awaited()
 
 
 def _restricted_resource_adapter(monkeypatch) -> ToolAction:
@@ -486,7 +614,7 @@ async def test_integration_access_replaces_only_its_resource_overrides(
     }
     assert load.await_args_list[-2].kwargs == {"for_update": True}
     assert load.await_args_list[-1].kwargs == {"for_update": True}
-    save.assert_awaited_once_with(db, tools)
+    save.assert_awaited_once_with(db, tools, user_id=None)
     db.commit.assert_awaited_once()
 
 
@@ -1234,6 +1362,7 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     settings = IntegrationSettings()
     tools = ToolSettings()
     db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = Mock(user_id=None)
     credential_ids = [uuid4(), uuid4(), uuid4()]
     store_credential = AsyncMock(
         side_effect=[Mock(id=credential_id) for credential_id in credential_ids]
@@ -1310,11 +1439,12 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     assert str(second.id) in tools.resource_policies
     assert store_credential.await_args_list[-1].args == (db,)
     assert store_credential.await_args_list[-1].kwargs == {
+        "owner_id": None,
         "kind": "caldav.password",
         "label": "Umbenannt",
         "payload": {"password": "new-secret"},
     }
-    assert db.execute.await_count == 1
+    assert db.delete.await_count == 1
 
     await update_calendar_integration(
         first.id,
@@ -1348,7 +1478,7 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     assert [instance.id for instance in settings.instances] == [second.id]
     assert tools.default_calendar.integration_id == second.id
     assert tools.default_task_list is None
-    assert db.execute.await_count == 2
+    assert db.delete.await_count == 2
 
 
 async def test_caldav_test_endpoint_maps_remote_failure_to_controlled_error(

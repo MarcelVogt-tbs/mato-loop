@@ -7,17 +7,48 @@
           Modelle für Agent-Läufe und automatische Hintergrundaufgaben festlegen.
         </p>
       </div>
-      <q-btn
-        color="primary"
-        unelevated
-        no-caps
-        icon="save"
-        label="Speichern"
-        :loading="saving"
-        :disable="!loaded || providers.loading || !changed"
-        @click="save"
-      />
+      <div class="row items-center q-gutter-sm">
+        <SettingsScopeToggle
+          :model-value="providers.scope"
+          :is-admin="auth.isAdmin"
+          :disable="providers.loading || saving || gateLoading"
+          @update:model-value="changeScope"
+        />
+        <q-btn
+          color="primary"
+          unelevated
+          no-caps
+          icon="save"
+          label="Speichern"
+          :loading="saving"
+          :disable="personalBlocked || !loaded || providers.loading || !changed"
+          @click="save"
+        />
+      </div>
     </header>
+
+    <q-card v-if="auth.isAdmin && providers.scope === 'instance'" flat class="app-surface-tonal q-mb-md">
+      <q-card-section class="row items-center justify-between q-gutter-md">
+        <div>
+          <div class="text-subtitle2 text-weight-bold">Persönliche Provider und Standardmodelle</div>
+          <div class="text-caption app-muted">Erlaubt benutzereigene Provider und Modellvorgaben.</div>
+        </div>
+        <q-toggle
+          :model-value="providers.personalProvidersEnabled"
+          color="primary"
+          label="Erlaubt"
+          :disable="gateLoading"
+          @update:model-value="togglePersonalProviders"
+        />
+      </q-card-section>
+    </q-card>
+
+    <q-banner v-if="providers.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
+      <template #avatar><q-icon name="person" color="primary" /></template>
+      {{ personalBlocked
+        ? 'Persönliche Provider-Einstellungen wurden für diese Instanz deaktiviert. Gespeicherte Vorgaben bleiben erhalten, können aber nicht bearbeitet werden.'
+        : 'Persönliche Standardmodelle überschreiben die Instanzvorgaben, wenn das gewählte Modell verfügbar ist.' }}
+    </q-banner>
 
     <q-banner v-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
       <template #avatar><q-icon name="error_outline" /></template>
@@ -32,7 +63,12 @@
       Es ist derzeit kein effektiv verfügbares Chatmodell eingerichtet. Aktiviere zuerst einen Provider und mindestens ein Chatmodell.
     </q-banner>
 
-    <q-card flat class="app-surface default-models-card">
+    <q-card
+      flat
+      class="app-surface default-models-card"
+      :class="{ disabled: personalBlocked }"
+      :inert="personalBlocked"
+    >
       <q-card-section class="default-model-setting">
         <q-avatar rounded color="primary" text-color="white" icon="smart_toy" />
         <div class="default-model-setting__description">
@@ -52,6 +88,7 @@
             label="Agentmodell"
             :display-value="form.defaultModelId ? undefined : 'Kein Standardmodell'"
             :options="providers.selectionOptions(form.defaultModelId, true)"
+            :disable="personalBlocked"
             hint="Agent-Läufe benötigen ein Modell mit Tool-Unterstützung."
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           />
@@ -79,6 +116,7 @@
             label="Modell für Skill-Erstellung"
             :display-value="form.skillCreationModelId ? undefined : 'Sessionmodell verwenden'"
             :options="providers.skillCreationModelOptions"
+            :disable="personalBlocked"
             hint="Nur verfügbare Chatmodelle mit Tool-Unterstützung."
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           />
@@ -106,6 +144,7 @@
             label="Videomodell"
             :display-value="form.videoModelId ? undefined : 'Kein Standardmodell'"
             :options="providers.videoModelOptions"
+            :disable="personalBlocked"
             hint="Das aktive Modell bleibt bevorzugt, wenn es dieselbe oder eine bessere Eingabefähigkeit besitzt."
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           />
@@ -133,6 +172,7 @@
             label="Visionmodell"
             :display-value="form.visionModelId ? undefined : 'Kein Standardmodell'"
             :options="providers.visionModelOptions"
+            :disable="personalBlocked"
             hint="Nur verfügbare Chatmodelle mit Bildeingabe."
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           />
@@ -160,6 +200,7 @@
             label="Komprimierungsmodell"
             :display-value="form.compactionModelId ? undefined : 'Sessionmodell verwenden'"
             :options="providers.selectionOptions(form.compactionModelId)"
+            :disable="personalBlocked"
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           />
         </div>
@@ -186,6 +227,7 @@
             label="Modell für Titel"
             :display-value="form.titleGenerationModelId ? undefined : 'Sessionmodell verwenden'"
             :options="providers.selectionOptions(form.titleGenerationModelId)"
+            :disable="personalBlocked"
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           />
         </div>
@@ -212,6 +254,7 @@
             label="Dreaming-Modell"
             :display-value="form.dreamingModelId ? undefined : 'Agentmodell verwenden'"
             :options="providers.selectionOptions(form.dreamingModelId, true)"
+            :disable="personalBlocked"
             hint="Das optionale Dreaming benötigt ein Modell mit Tool-Unterstützung."
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           />
@@ -238,6 +281,7 @@
               :label="setting.label"
               :display-value="form[setting.field] ? undefined : 'Kein Standardmodell'"
               :options="providers.capabilityOptions(setting.capability)"
+              :disable="personalBlocked"
               :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
             />
           </div>
@@ -252,15 +296,19 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
+import { useAuthStore } from 'stores/auth'
 import { useProviderStore } from 'stores/providers'
 
 defineOptions({ name: 'DefaultModelSettingsPage' })
 
 const $q = useQuasar()
 const providers = useProviderStore()
+const auth = useAuthStore()
 const loaded = ref(false)
 const loadFailed = ref(false)
 const saving = ref(false)
+const gateLoading = ref(false)
 const mediaSettings = [
   {
     field: 'imageGenerationModelId',
@@ -322,6 +370,9 @@ const changed = computed(() => (
   || form.skillCreationModelId !== providers.skillCreationModelId
   || mediaSettings.some((setting) => form[setting.field] !== providers[setting.field])
 ))
+const personalBlocked = computed(() => (
+  providers.scope === 'personal' && !providers.personalProvidersEnabled
+))
 
 function assignForm() {
   form.defaultModelId = providers.defaultModelId
@@ -345,6 +396,21 @@ async function load() {
   }
 }
 
+async function changeScope(scope) {
+  providers.selectScope(scope)
+  loaded.value = false
+  await load()
+}
+
+async function togglePersonalProviders(enabled) {
+  gateLoading.value = true
+  try {
+    await providers.setPersonalProvidersEnabled(enabled)
+  } finally {
+    gateLoading.value = false
+  }
+}
+
 async function save() {
   if (!loaded.value || !changed.value) return
   saving.value = true
@@ -357,5 +423,5 @@ async function save() {
   }
 }
 
-onMounted(load)
+onMounted(() => changeScope(auth.isAdmin ? 'instance' : 'personal'))
 </script>

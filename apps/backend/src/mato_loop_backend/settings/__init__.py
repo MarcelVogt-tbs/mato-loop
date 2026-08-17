@@ -1,3 +1,8 @@
+from mato_loop_backend.settings.effective import (
+    load_effective_ai,
+    load_effective_integrations,
+    load_effective_tools,
+)
 from mato_loop_backend.settings.models import (
     AgentIdentitySettings,
     AgentRuntimeSettings,
@@ -18,7 +23,10 @@ from mato_loop_backend.settings.models import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
+    UserAiSettings,
+    UserIntegrationSettings,
     UserPreferences,
+    UserToolSettings,
     WebFetchPolicy,
     WebFetchSettings,
     WebSearchToolSettings,
@@ -50,10 +58,16 @@ __all__ = [
     "ToolSettings",
     "TrustLevel",
     "UserPreferences",
+    "UserAiSettings",
+    "UserIntegrationSettings",
+    "UserToolSettings",
     "WebFetchPolicy",
     "WebFetchSettings",
     "WebSearchToolSettings",
     "effective_model_pseudonymization",
     "effective_model_trust",
+    "load_effective_ai",
+    "load_effective_integrations",
+    "load_effective_tools",
     "resolve_web_fetch_policy",
 ]

@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime
 from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.models import AgentRun, ChatSession, Message, UserAccount
 
@@ -191,3 +191,33 @@ async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
     assert run.pseudonymization_enabled is True
     db.commit.assert_awaited_once()
     schedule.assert_called_once_with(run)
+
+
+async def test_runtime_retry_rejects_unowned_or_revoked_execution_agent(
+    monkeypatch,
+) -> None:
+    from mato_loop_backend.settings import AiSettings, SettingsStore
+    from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="original")
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+    failed_run = AgentRun(
+        id=uuid4(),
+        session_id=session.id,
+        status="failed",
+        model_config_id=model.id,
+        execution_agent_id=uuid4(),
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [True, None]
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=AiSettings(providers=[provider], models=[model])),
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime.retry(db, session, failed_run)
+
+    assert exc_info.value.code == "executionAgent.unavailable"

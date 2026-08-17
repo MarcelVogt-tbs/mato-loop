@@ -88,7 +88,13 @@ class UserAccount(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     username: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -112,6 +118,9 @@ class Credential(Base):
     __tablename__ = "credentials"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     kind: Mapped[str] = mapped_column(String(80), nullable=False)
     label: Mapped[str] = mapped_column(String(160), nullable=False)
     encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -568,8 +577,13 @@ class MemoryRecord(Base):
         ),
         CheckConstraint("revision >= 1", name="revision_positive"),
         Index("ix_memories_search_vector", "search_vector", postgresql_using="gin"),
-        Index("ix_memories_category", "category"),
-        Index("uq_memories_normalized_content_hash", "normalized_content_hash", unique=True),
+        Index("ix_memories_user_category", "user_id", "category"),
+        Index(
+            "uq_memories_user_normalized_content_hash",
+            "user_id",
+            "normalized_content_hash",
+            unique=True,
+        ),
         Index(
             "uq_memories_tool_call_provenance",
             "source_run_id",
@@ -580,6 +594,9 @@ class MemoryRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     source_session_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True, index=True
     )

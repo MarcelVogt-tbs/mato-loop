@@ -110,7 +110,6 @@ from mato_loop_backend.memory.service import MemoryService, memory_reference_tim
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
-    Credential,
     MemoryCategory,
     Message,
     MessageAttachment,
@@ -125,10 +124,9 @@ from mato_loop_backend.providers.media import (
     ResolvedMediaModel,
     available_media_capabilities,
 )
-from mato_loop_backend.security import read_credential
+from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
-    AiSettings,
     IntegrationInstance,
     IntegrationSettings,
     ModelCapability,
@@ -138,6 +136,9 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
     WebFetchPolicy,
+    load_effective_ai,
+    load_effective_integrations,
+    load_effective_tools,
     resolve_web_fetch_policy,
 )
 from mato_loop_backend.settings.models import normalize_agent_display_name
@@ -150,7 +151,7 @@ from mato_loop_backend.skills import (
     serialize_skill_draft,
 )
 from mato_loop_backend.video_processing import MAX_VIDEO_BYTES, VideoAnalysisMode
-from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService, WorkspaceError
+from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 logger = logging.getLogger(__name__)
 AskHandler = Callable[[PermissionRequest], Awaitable[PermissionDecision]]
@@ -962,7 +963,9 @@ class ToolRegistry:
         async def integration_is_current(selected_id: str | None) -> bool:
             if selected_id is None:
                 return True
-            current_integrations = await SettingsStore.load(context.db, IntegrationSettings)
+            current_integrations = await load_effective_integrations(
+                context.db, context.session.user_id
+            )
             current_instance = next(
                 (
                     instance
@@ -995,8 +998,8 @@ class ToolRegistry:
         async def resolve_resource(
             selected_id: str, resource_key: str
         ) -> IntegrationResource | None:
-            current_integrations = await SettingsStore.load(
-                context.db, IntegrationSettings
+            current_integrations = await load_effective_integrations(
+                context.db, context.session.user_id
             )
             instance = next(
                 (
@@ -1015,7 +1018,11 @@ class ToolRegistry:
                 return None
             credential = None
             if instance.credential_id is not None:
-                record = await context.db.get(Credential, instance.credential_id)
+                record = await load_credential(
+                    context.db,
+                    instance.credential_id,
+                    owner_id=instance.owner_id,
+                )
                 if record is None:
                     return None
                 credential = read_credential(record)
@@ -1044,8 +1051,10 @@ class ToolRegistry:
         if definition.requires_memory_write and not context.memory_write_enabled:
             return ToolResult.error("tool.unavailable")
         if definition.required_capability is not None:
-            context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
-            ai_settings = await SettingsStore.load(context.db, AiSettings)
+            context.tool_settings = await load_effective_tools(
+                context.db, context.session.user_id
+            )
+            ai_settings = await load_effective_ai(context.db, context.session.user_id)
             if definition.required_capability not in effective_tool_capabilities(
                 context.tool_settings,
                 available_media_capabilities(
@@ -1190,7 +1199,6 @@ class ToolRegistry:
             RootFileError,
             SearchIntegrationError,
             WebFetchError,
-            WorkspaceError,
         ) as exc:
             return ToolResult.error(
                 exc.code,
@@ -2615,8 +2623,10 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
             == context.bound_options.get("fallback_provider_revision")
         )
 
-    current_integrations = await SettingsStore.load(context.db, IntegrationSettings)
-    current_tools = await SettingsStore.load(context.db, ToolSettings)
+    current_integrations = await load_effective_integrations(
+        context.db, context.session.user_id
+    )
+    current_tools = await load_effective_tools(context.db, context.session.user_id)
     primary_provider, fallback_provider = effective_search_providers(
         current_tools, current_integrations
     )
@@ -2624,8 +2634,10 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
         return ToolResult.error("tool.unavailable")
     if not await _allow(context, web_search_permission()):
         return ToolResult.error("permission.denied")
-    current_integrations = await SettingsStore.load(context.db, IntegrationSettings)
-    current_tools = await SettingsStore.load(context.db, ToolSettings)
+    current_integrations = await load_effective_integrations(
+        context.db, context.session.user_id
+    )
+    current_tools = await load_effective_tools(context.db, context.session.user_id)
     primary_provider, fallback_provider = effective_search_providers(
         current_tools, current_integrations
     )
@@ -2672,7 +2684,7 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 
 
 async def _ensure_webfetch_binding_is_current(context: ToolContext) -> None:
-    current_tools = await SettingsStore.load(context.db, ToolSettings)
+    current_tools = await load_effective_tools(context.db, context.session.user_id)
     revision = context.bound_options.get("settings_revision")
     if not current_tools.web_fetch.enabled or (
         revision is not None
@@ -2682,7 +2694,7 @@ async def _ensure_webfetch_binding_is_current(context: ToolContext) -> None:
     if revision is None and current_tools.web_fetch != context.tool_settings.web_fetch:
         raise WebFetchError("tool.unavailable")
     if context.model_id is not None:
-        current_ai = await SettingsStore.load(context.db, AiSettings)
+        current_ai = await load_effective_ai(context.db, context.session.user_id)
         current_model = next(
             (item for item in current_ai.models if item.id == context.model_id), None
         )
@@ -2956,7 +2968,9 @@ async def _authorize_media(
         )
         if not allowed:
             return ToolResult.error("permission.denied")
-        context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
+        context.tool_settings = await load_effective_tools(
+            context.db, context.session.user_id
+        )
         if (
             tool_execution_policy(
                 context.tool_settings,
@@ -2986,7 +3000,9 @@ def _media_target_matches_binding(
 async def _update_agent_identity(
     arguments: UpdateAgentIdentityArguments, context: ToolContext
 ) -> ToolResult:
-    context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
+    context.tool_settings = await load_effective_tools(
+        context.db, context.session.user_id
+    )
     policy = tool_execution_policy(
         context.tool_settings,
         "settings.agent_identity.update",
@@ -3008,8 +3024,8 @@ async def _update_agent_identity(
             return ToolResult.error("permission.denied")
         approval_received = True
 
-    context.tool_settings = await SettingsStore.load(
-        context.db, ToolSettings, for_update=True
+    context.tool_settings = await load_effective_tools(
+        context.db, context.session.user_id
     )
     current_policy = tool_execution_policy(
         context.tool_settings,
@@ -3055,7 +3071,9 @@ async def _save_skill_draft(
     name_hint: str | None = None,
     current_skill: SkillDefinition | None = None,
 ) -> ToolResult:
-    context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
+    context.tool_settings = await load_effective_tools(
+        context.db, context.session.user_id
+    )
     policy = tool_execution_policy(
         context.tool_settings, "skills.write", ToolExecutionPolicy.ASK
     )
@@ -3121,8 +3139,8 @@ async def _save_skill_draft(
             return ToolResult.error("permission.denied")
         approval_received = True
 
-    context.tool_settings = await SettingsStore.load(
-        context.db, ToolSettings, for_update=True
+    context.tool_settings = await load_effective_tools(
+        context.db, context.session.user_id
     )
     current_policy = tool_execution_policy(
         context.tool_settings, "skills.write", ToolExecutionPolicy.ASK
@@ -3216,7 +3234,9 @@ async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> To
             )
         return ToolResult.error("skill.alreadyActive")
 
-    context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
+    context.tool_settings = await load_effective_tools(
+        context.db, context.session.user_id
+    )
     policy = tool_execution_policy(
         context.tool_settings, "skills.load", ToolExecutionPolicy.AUTO
     )
@@ -3230,7 +3250,9 @@ async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> To
         ):
             return ToolResult.error("permission.denied")
         approval_received = True
-    context.tool_settings = await SettingsStore.load(context.db, ToolSettings)
+    context.tool_settings = await load_effective_tools(
+        context.db, context.session.user_id
+    )
     current_policy = tool_execution_policy(
         context.tool_settings, "skills.load", ToolExecutionPolicy.AUTO
     )
@@ -3257,6 +3279,7 @@ async def _generate_image(
         context.db,
         ModelCapability.IMAGE_GENERATION,
         active_model_id=context.model_id,
+        user_id=context.session.user_id,
     )
     if not _media_target_matches_binding(context, target):
         return ToolResult.error("tool.unavailable")
@@ -3278,6 +3301,7 @@ async def _generate_image(
         active_model_id=context.model_id,
         expected_model_id=target.model.id,
         expected_trust_level=target_trust_level,
+        user_id=context.session.user_id,
     )
     return ToolResult(
         "Image generated.",
@@ -3372,6 +3396,7 @@ async def _edit_image(
         context.db,
         ModelCapability.IMAGE_EDITING,
         active_model_id=context.model_id,
+        user_id=context.session.user_id,
     )
     if not _media_target_matches_binding(context, target):
         return ToolResult.error("tool.unavailable")
@@ -3448,6 +3473,7 @@ async def _edit_image(
         active_model_id=context.model_id,
         expected_model_id=target.model.id,
         expected_trust_level=target_trust_level,
+        user_id=context.session.user_id,
     )
     result.metadata["authorizationSourceAttachmentIds"] = [
         str(attachment_id) for attachment_id in authorization_source_ids
@@ -3479,6 +3505,7 @@ async def _generate_speech(
         voice=arguments.voice or "shimmer",
         speed=arguments.speed,
         timeout=context.tool_settings.generate_speech.timeout_seconds,
+        user_id=context.session.user_id,
     )
     return ToolResult(
         "Speech generated.",
@@ -3508,6 +3535,7 @@ async def _generate_audio(
         duration=arguments.duration_seconds,
         seed=arguments.seed,
         timeout=context.tool_settings.generate_audio.timeout_seconds,
+        user_id=context.session.user_id,
     )
     return ToolResult(
         "Audio generated.",
@@ -3550,6 +3578,7 @@ async def _transcribe_audio(
         audio=audio,
         language=arguments.language,
         timeout=context.tool_settings.transcribe_audio.timeout_seconds,
+        user_id=context.session.user_id,
     )
     return ToolResult(
         result.text,
@@ -4064,6 +4093,7 @@ async def _memory_write(
         assert arguments.expected_revision is not None
         result = await MemoryService.update_tool(
             context.db,
+            owner_id=context.session.user_id,
             memory_id=arguments.memory_id,
             expected_revision=arguments.expected_revision,
             content=arguments.content,
@@ -4090,6 +4120,7 @@ async def _memory_write(
         )
     result = await MemoryService.create_tool(
         context.db,
+        owner_id=context.session.user_id,
         content=arguments.content,
         category=arguments.category,
         trust_level=context.memory_write_trust_level,
@@ -4116,6 +4147,7 @@ async def _memory_retrieve(
         return ToolResult.error("permission.denied")
     result = await MemoryRetrievalService.retrieve(
         context.db,
+        owner_id=context.session.user_id,
         mode=MemoryRetrieveMode(arguments.mode),
         query=arguments.query,
         category=arguments.category,

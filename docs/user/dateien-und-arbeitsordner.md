@@ -8,9 +8,11 @@
 | Arbeitsordner | Optionaler relativer Unterordner innerhalb des Arbeitsbereichs |
 | Session-Dateien | Interner, dauerhaft zur Session gehörender Speicher |
 
-Neue Sessions besitzen zunächst keinen Computer und keinen Arbeitsbereich. Ohne einen gewählten und verbundenen Computer funktioniert der Chat weiter, lokale Arbeitsbereiche und lokale Integrationen stehen jedoch nicht zur Verfügung. Der getrennte Session-Speicher existiert immer im MatoLoop-Backend.
+Neue Sessions besitzen zunächst keinen Computer und keinen Arbeitsbereich. Jeder Arbeitsbereich ist eine Wurzel, die ein Computer bereitstellt und selbst besitzt; das Backend besitzt keinen eigenen Arbeitsbereich. Ohne einen gewählten Computer und eine seiner Wurzeln funktioniert der Chat weiter und die Session-Dateien bleiben verfügbar. Computer-Arbeitsbereiche und lokale Integrationen stehen dann jedoch nicht zur Verfügung.
 
-MatoLoop unterstützt mehrere Computer. Unter **Sessioneinstellungen** wählen Sie den Computer. Ein dort konfiguriertes Home-Verzeichnis wird als aktueller Ordner übernommen; ohne Home bleibt der Ordner leer. Arbeitsbereich und aktueller Ordner werden im Datei-Explorer gewählt. Die Auswahl ist die Vorgabe für den nächsten Lauf; ein bereits laufender Lauf behält unveränderlich seinen bisherigen Computer und Pfad. Wird der Computer getrennt, erfolgt kein automatischer Wechsel und keine automatische Wiederholung.
+MatoLoop unterstützt mehrere Computer. Unter **Sessioneinstellungen** wählen Sie den Computer. Dieser meldet eine oder mehrere Wurzeln und optional ein Home-Verzeichnis innerhalb einer Wurzel. Das Home ist nur die Vorgabe für neue Sessions. Danach speichert jede Session ihre gewählte Wurzel, ihren relativen Arbeitsordner und den dazugehörigen kanonischen aktuellen Ordner getrennt. Arbeitsbereich und aktueller Ordner werden im Datei-Explorer gewählt. Die Auswahl ist die Vorgabe für den nächsten Lauf; ein bereits laufender Lauf behält unveränderlich seinen bisherigen Computer und Pfad. Wird der Computer getrennt, erfolgt kein automatischer Wechsel und keine automatische Wiederholung.
+
+Computer gehören genau einem Benutzer und können nicht von anderen Konten ausgewählt werden. Diese Anwendungsgrenze ersetzt keine Trennung auf dem Betriebssystem des Computers. Dateien in dessen externem Arbeitsbereich werden beim Löschen des MatoLoop-Kontos nicht automatisch entfernt.
 
 ## Session-Speicher
 
@@ -40,7 +42,7 @@ Im Explorer können Sie:
 
 Von Tools zurückgegebene Dateien erscheinen als schreibgeschützte Session-Artefakte unter `generated`, heruntergeladene Originale unter `downloads` und erforderliche Medienableitungen unter `derived`. Reine Status-, JSON- und in Chatantworten eingebettete Ergebnisse erzeugen keine zusätzlichen Dateien.
 
-`root=session` bezeichnet immer den Backend-Speicher der Session, `root=workspace` den Arbeitsbereich des für den Lauf gewählten Computers. Kopien zwischen beiden Bereichen werden vom Backend vermittelt und anhand von Größe und SHA-256 geprüft. Der Computer darf verwendete Session-Dateien in einem begrenzten, unvollständigen Cache halten. Dieser Cache ist keine maßgebliche Kopie und kann jederzeit geleert werden.
+`root=session` bezeichnet immer den Backend-Speicher der Session. `root=workspace` bezeichnet immer eine Wurzel des für den Lauf gewählten, dem Benutzer gehörenden Computers. Ohne Computer und Wurzel ist nur dieser Workspace-Zugriff nicht verfügbar. Kopien zwischen beiden Bereichen werden vom Backend vermittelt und anhand von Größe und SHA-256 geprüft. Der Computer darf verwendete Session-Dateien in einem begrenzten, unvollständigen Cache halten. Dieser Cache ist keine maßgebliche Kopie und kann jederzeit geleert werden.
 
 Benötigt eine angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel bleibt eine getrennte, widerrufbare Session-Freigabe.
 

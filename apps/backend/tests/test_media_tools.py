@@ -1,6 +1,7 @@
 import json
 import wave
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -68,9 +69,7 @@ def context(tmp_path, call: ToolCall, decision=PermissionDecision.ALLOW) -> Tool
         run_id=uuid4(),
         session=session,
         tool_call=call,
-        root_files=RootFileService(
-            session.id, session_storage=storage, workspace_home=tmp_path
-        ),
+        root_files=RootFileService(session.id, session_storage=storage),
         integration_settings=IntegrationSettings(),
         ask_handler=AsyncMock(return_value=decision),
     )
@@ -172,7 +171,7 @@ async def test_disabled_media_tool_is_rejected_before_provider(
     assert json.loads(result.content) == {
         "error": {
             "code": "tool.unavailable",
-            "message": "The tool operation could not be completed.",
+                "message": "The tool is unavailable.",
         }
     }
     generate.assert_not_awaited()
@@ -429,7 +428,7 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     tool_context.model_id = chat.id
     tools = ToolSettings.model_validate({"editImage": {"policy": "ask"}})
     mock_settings_load(monkeypatch, tools, ai)
-    tool_context.db.get.return_value = object()
+    tool_context.db.get.return_value = SimpleNamespace(user_id=None)
     message = Message(
         id=uuid4(),
         session_id=tool_context.session.id,
@@ -508,7 +507,7 @@ async def test_edit_image_blocks_private_sources_for_public_target(
     tool_context.model_id = chat.id
     tools = ToolSettings.model_validate({"editImage": {"policy": "auto"}})
     mock_settings_load(monkeypatch, tools, ai)
-    tool_context.db.get.return_value = object()
+    tool_context.db.get.return_value = SimpleNamespace(user_id=None)
     message = Message(
         id=uuid4(),
         session_id=tool_context.session.id,

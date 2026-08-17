@@ -8,7 +8,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Sessions, messages, agent runs, approvals, and permission grants are persistent core data.
 - ChatGPT Codex and OpenAI-compatible APIs are LLM transports only.
 - MatoLoop controls tool execution, file access, memory, web search, and human-in-the-loop approvals.
-- New sessions start without a working directory. The first persisted message creates only the internal session storage under `/data/sessions`; it is not a workspace.
+- New sessions start without a working directory. The first persisted message creates only the owner-bound internal session tree under `/data/sessions`; it is not a workspace. Every workspace is a root owned and advertised by an owner-bound Execution Agent.
 
 ## Repository
 
@@ -62,7 +62,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Provider adapters transport messages, tool schemas, text deltas, and tool calls; they never execute tools.
 - All providers use the same MatoLoop agent and permission loop.
 - Model arguments must not bypass runtime policies or path boundaries.
-- Canonicalize file paths and constrain them to `/data/home`.
+- Constrain backend file access to the current owner-bound session tree under `/data/sessions`; dispatch `root=workspace` only through the selected owner-bound Execution Agent, its advertised root, and the session's current and working directories.
 - Symlinks must not bypass path boundaries.
 - Disallowed actions create persistent approval requests with `allow_once`, `allow_session`, or `deny`.
 - Never expose unfiltered external provider responses or exception text as API errors or toasts.

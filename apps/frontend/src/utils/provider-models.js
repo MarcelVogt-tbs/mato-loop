@@ -29,7 +29,9 @@ export function isModelPresent(model) {
 export function isProviderEffective(provider, codex = {}) {
   if (!provider?.enabled) return false
   if (provider.effectiveEnabled === false || provider.runtimeEnabled === false) return false
-  return provider.adapterType !== 'openai-codex' || codex.authenticated === true
+  return provider.adapterType !== 'openai-codex'
+    || provider.hasCredential === true
+    || codex.authenticated === true
 }
 
 export function isModelEffective(model, provider, codex = {}, runtimeEnabled = true) {

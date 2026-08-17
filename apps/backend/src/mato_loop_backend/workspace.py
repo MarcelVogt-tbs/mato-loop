@@ -14,17 +14,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO, TextIO
+from typing import BinaryIO, TextIO
 from uuid import UUID, uuid4
 
-from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
-
-
-class WorkspaceError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,7 +227,7 @@ def _replace_utf8_text_at(
 def _directory_descriptor(
     root: Path,
     parts: tuple[str, ...],
-    error: type[WorkspaceError] | type[RootFileError],
+    error: type[RootFileError],
 ) -> Iterator[int]:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor: int | None = None
@@ -243,16 +236,11 @@ def _directory_descriptor(
         for part in parts:
             metadata = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
             if stat.S_ISLNK(metadata.st_mode):
-                code = (
-                    "workspace.pathOutsideHome"
-                    if error is WorkspaceError
-                    else "file.symlinkForbidden"
-                )
-                raise error(code, "Symlinks are not followed")
+                raise error("file.symlinkForbidden", "Symlinks are not followed")
             child = os.open(part, flags, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
-    except (WorkspaceError, RootFileError):
+    except RootFileError:
         if descriptor is not None:
             os.close(descriptor)
             descriptor = None
@@ -261,8 +249,7 @@ def _directory_descriptor(
         if descriptor is not None:
             os.close(descriptor)
             descriptor = None
-        code = "workspace.parentNotFound" if error is WorkspaceError else "file.parentNotFound"
-        raise error(code, "Parent directory is missing") from exc
+        raise error("file.parentNotFound", "Parent directory is missing") from exc
     try:
         yield descriptor
     finally:
@@ -275,7 +262,7 @@ def _delete_at(
     name: str,
     *,
     recursive: bool,
-    error: type[WorkspaceError] | type[RootFileError],
+    error: type[RootFileError],
 ) -> None:
     try:
         metadata = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
@@ -300,40 +287,32 @@ def _delete_at(
             try:
                 os.rmdir(name, dir_fd=parent_descriptor)
             except OSError as exc:
-                code = (
-                    "workspace.pathNotFound"
-                    if error is WorkspaceError
-                    else "file.directoryNotEmpty"
-                )
-                raise error(code, "Directory could not be removed") from exc
+                raise error(
+                    "file.directoryNotEmpty", "Directory could not be removed"
+                ) from exc
         elif stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
             os.unlink(name, dir_fd=parent_descriptor)
         else:
-            code = "workspace.pathNotFound" if error is WorkspaceError else "file.unsupportedType"
-            raise error(code, "Unsupported file type")
+            raise error("file.unsupportedType", "Unsupported file type")
         os.fsync(parent_descriptor)
     except FileNotFoundError as exc:
-        code = "workspace.pathNotFound" if error is WorkspaceError else "file.pathNotFound"
-        raise error(code, "Path not found") from exc
+        raise error("file.pathNotFound", "Path not found") from exc
 
 
 def _rename_at(
     parent_descriptor: int,
     source: str,
     destination: str,
-    error: type[WorkspaceError] | type[RootFileError],
+    error: type[RootFileError],
 ) -> os.stat_result:
     try:
         metadata = os.stat(source, dir_fd=parent_descriptor, follow_symlinks=False)
     except FileNotFoundError as exc:
-        code = "workspace.pathNotFound" if error is WorkspaceError else "file.pathNotFound"
-        raise error(code, "Path not found") from exc
+        raise error("file.pathNotFound", "Path not found") from exc
     if stat.S_ISLNK(metadata.st_mode):
-        code = "workspace.pathNotFound" if error is WorkspaceError else "file.symlinkForbidden"
-        raise error(code, "Symlinks cannot be renamed")
+        raise error("file.symlinkForbidden", "Symlinks cannot be renamed")
     if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
-        code = "workspace.pathNotFound" if error is WorkspaceError else "file.unsupportedType"
-        raise error(code, "Unsupported file type")
+        raise error("file.unsupportedType", "Unsupported file type")
     if source == destination:
         return metadata
     if _RENAME_AT2 is None:
@@ -348,15 +327,9 @@ def _rename_at(
     if result != 0:
         error_number = ctypes.get_errno()
         if error_number == errno.EEXIST:
-            code = (
-                "workspace.pathAlreadyExists"
-                if error is WorkspaceError
-                else "file.pathAlreadyExists"
-            )
-            raise error(code, "Destination path already exists")
+            raise error("file.pathAlreadyExists", "Destination path already exists")
         if error_number == errno.ENOENT:
-            code = "workspace.pathNotFound" if error is WorkspaceError else "file.pathNotFound"
-            raise error(code, "Path not found")
+            raise error("file.pathNotFound", "Path not found")
         raise OSError(error_number, os.strerror(error_number))
     os.fsync(parent_descriptor)
     return os.stat(destination, dir_fd=parent_descriptor, follow_symlinks=False)
@@ -365,11 +338,10 @@ def _rename_at(
 def _open_regular_file(
     root: Path,
     parts: tuple[str, ...],
-    error: type[WorkspaceError] | type[RootFileError],
+    error: type[RootFileError],
 ) -> BinaryIO:
     if not parts:
-        code = "workspace.fileNotFound" if error is WorkspaceError else "file.fileNotFound"
-        raise error(code, "File not found")
+        raise error("file.fileNotFound", "File not found")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         with _directory_descriptor(root, parts[:-1], error) as parent_descriptor:
@@ -381,291 +353,28 @@ def _open_regular_file(
     except OSError as exc:
         if "descriptor" in locals():
             os.close(descriptor)
-        code = "workspace.fileNotFound" if error is WorkspaceError else "file.fileNotFound"
-        raise error(code, "File not found") from exc
+        raise error("file.fileNotFound", "File not found") from exc
 
 
-class WorkspaceService:
-    def __init__(self, home: Path | None = None) -> None:
-        self.home = (home or get_runtime_config().agent_home).resolve()
-        self.home.mkdir(parents=True, exist_ok=True)
-
-    def resolve(self, relative_path: str | None, *, base: str | None = None) -> Path:
-        raw = (relative_path or ".").strip()
-        if Path(raw).is_absolute():
-            raise WorkspaceError("workspace.absolutePathNotAllowed", "Absolute paths are not allowed")
-        root = self.home if not base else (self.home / base).resolve()
-        try:
-            root.relative_to(self.home)
-        except ValueError as exc:
-            raise WorkspaceError(
-                "workspace.invalidWorkingDirectory", "Invalid working directory"
-            ) from exc
-        raw_candidate = root / raw
-        candidate = Path(
-            os.path.normpath(raw_candidate.parent.resolve(strict=False) / raw_candidate.name)
-        )
-        try:
-            candidate.relative_to(self.home)
-        except ValueError as exc:
-            raise WorkspaceError(
-                "workspace.pathOutsideHome", "Path is outside agent home"
-            ) from exc
-        return candidate
-
-    def resolve_read_target(self, relative_path: str | None, *, base: str | None = None) -> Path:
-        candidate = self.resolve(relative_path, base=base)
-        try:
-            target = candidate.resolve(strict=False)
-        except (OSError, RuntimeError) as exc:
-            raise WorkspaceError("workspace.pathNotFound", "Path not found") from exc
-        try:
-            target.relative_to(self.home)
-        except ValueError as exc:
-            raise WorkspaceError(
-                "workspace.pathOutsideHome", "Path is outside agent home"
-            ) from exc
-        return target
-
-    def relative(self, path: Path) -> str:
-        value = path.absolute().relative_to(self.home)
-        return value.as_posix() if value.parts else "."
-
-    def list_entries(self, relative_path: str | None = None) -> list[dict[str, Any]]:
-        directory = self.resolve(relative_path)
-        resolved_directory = directory.resolve(strict=False)
-        try:
-            resolved_directory.relative_to(self.home)
-        except ValueError as exc:
-            raise WorkspaceError(
-                "workspace.pathOutsideHome", "Path is outside agent home"
-            ) from exc
-        entries = []
-        parts = resolved_directory.relative_to(self.home).parts
-        try:
-            with _directory_descriptor(self.home, parts, WorkspaceError) as descriptor:
-                for name in os.listdir(descriptor):
-                    metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-                    is_symlink = stat.S_ISLNK(metadata.st_mode)
-                    is_directory = stat.S_ISDIR(metadata.st_mode) and not is_symlink
-                    has_children = False
-                    if is_directory:
-                        flags = (
-                            os.O_RDONLY
-                            | getattr(os, "O_DIRECTORY", 0)
-                            | getattr(os, "O_NOFOLLOW", 0)
-                        )
-                        try:
-                            child_descriptor = os.open(name, flags, dir_fd=descriptor)
-                            try:
-                                has_children = bool(os.listdir(child_descriptor))
-                            finally:
-                                os.close(child_descriptor)
-                        except OSError:
-                            has_children = False
-                    entries.append(
-                        {
-                            "name": name,
-                            "path": self.relative(directory / name),
-                            "kind": (
-                                "directory"
-                                if is_directory
-                                else "symlink" if is_symlink else "file"
-                            ),
-                            "size": metadata.st_size if not is_directory else None,
-                            "modifiedAt": metadata.st_mtime,
-                            "hasChildren": has_children,
-                        }
-                    )
-        except WorkspaceError as exc:
-            raise WorkspaceError("workspace.directoryNotFound", "Directory not found") from exc
-        entries.sort(key=lambda item: (item["kind"] != "directory", item["name"].casefold()))
-        return entries
-
-    def create_directory(self, parent: str | None, name: str) -> dict[str, Any]:
-        clean_name = name.strip()
-        if not clean_name or clean_name in {".", ".."} or "/" in clean_name or "\\" in clean_name:
-            raise WorkspaceError("workspace.invalidDirectoryName", "Invalid directory name")
-        directory = self.resolve(clean_name, base=parent)
-        resolved_parent = self.resolve_read_target(parent)
-        parts = resolved_parent.relative_to(self.home).parts
-        with _directory_descriptor(self.home, parts, WorkspaceError) as descriptor:
-            os.mkdir(clean_name, mode=0o700, dir_fd=descriptor)
-            os.fsync(descriptor)
-        return {"name": directory.name, "path": self.relative(directory), "kind": "directory"}
-
-    def delete(self, relative_path: str) -> None:
-        target = self.resolve(relative_path)
-        if target == self.home:
-            raise WorkspaceError("workspace.homeDeleteForbidden", "Agent home cannot be deleted")
-        parts = target.relative_to(self.home).parts
-        with _directory_descriptor(self.home, parts[:-1], WorkspaceError) as descriptor:
-            _delete_at(
-                descriptor,
-                parts[-1],
-                recursive=True,
-                error=WorkspaceError,
-            )
-
-    def rename(self, relative_path: str, filename: str) -> dict[str, Any]:
-        try:
-            name = validate_upload_filename(filename)
-        except RootFileError as exc:
-            raise WorkspaceError("workspace.invalidFileName", "Invalid file name") from exc
-        target = self.resolve(relative_path)
-        if target == self.home:
-            raise WorkspaceError("workspace.homeMutationForbidden", "Agent home is immutable")
-        parts = target.relative_to(self.home).parts
-        with _directory_descriptor(self.home, parts[:-1], WorkspaceError) as descriptor:
-            metadata = _rename_at(descriptor, parts[-1], name, WorkspaceError)
-        renamed = target.parent / name
-        is_directory = stat.S_ISDIR(metadata.st_mode)
-        return {
-            "name": name,
-            "path": self.relative(renamed),
-            "kind": "directory" if is_directory else "file",
-            "size": None if is_directory else metadata.st_size,
-            "modifiedAt": metadata.st_mtime,
-            "hasChildren": False,
-        }
-
-    @staticmethod
-    def _read_bounded_line(handle: TextIO, max_line_length: int) -> tuple[str, bool] | None:
+def _read_bounded_line(handle: TextIO, max_line_length: int) -> tuple[str, bool] | None:
+    chunk = handle.readline(max_line_length + 2)
+    if chunk == "":
+        return None
+    has_newline = chunk.endswith("\n")
+    value = chunk[:-1] if has_newline else chunk
+    if value.endswith("\r"):
+        value = value[:-1]
+    truncated = len(value) > max_line_length
+    while not has_newline and len(chunk) == max_line_length + 2:
         chunk = handle.readline(max_line_length + 2)
         if chunk == "":
-            return None
+            break
         has_newline = chunk.endswith("\n")
-        value = chunk[:-1] if has_newline else chunk
-        if value.endswith("\r"):
-            value = value[:-1]
-        truncated = len(value) > max_line_length
-        display_value = value[:max_line_length]
-        while not has_newline and len(chunk) == max_line_length + 2:
-            chunk = handle.readline(max_line_length + 2)
-            if chunk == "":
-                break
-            has_newline = chunk.endswith("\n")
-        return display_value, truncated
-
-    def read_file(
-        self,
-        relative_path: str,
-        *,
-        base: str | None,
-        offset: int,
-        limit: int,
-        max_line_length: int = 2_000,
-    ) -> FileReadResult:
-        path = self.resolve(relative_path, base=base)
-        if not path.is_file() or path.is_symlink():
-            raise WorkspaceError("workspace.fileNotFound", "File not found")
-        lines: list[str] = []
-        truncated_lines: list[int] = []
-        try:
-            with path.open("r", encoding="utf-8") as handle:
-                for _ in range(1, offset):
-                    if self._read_bounded_line(handle, max_line_length) is None:
-                        break
-                for line_number in range(offset, offset + limit):
-                    line = self._read_bounded_line(handle, max_line_length)
-                    if line is None:
-                        break
-                    value, truncated = line
-                    lines.append(f"{line_number}: {value}")
-                    if truncated:
-                        truncated_lines.append(line_number)
-                has_more = self._read_bounded_line(handle, max_line_length) is not None
-        except UnicodeDecodeError as exc:
-            raise WorkspaceError(
-                "workspace.invalidEncoding", "File is not readable as UTF-8"
-            ) from exc
-        lines_read = len(lines)
-        return FileReadResult(
-            content="\n".join(lines),
-            lines_read=lines_read,
-            has_more=has_more,
-            next_offset=offset + lines_read if has_more else None,
-            truncated_lines=tuple(truncated_lines),
-        )
-
-    def write_file(self, relative_path: str, content: str, *, base: str | None) -> str:
-        path = self.resolve(relative_path, base=base)
-        if path.exists() and path.is_symlink():
-            raise WorkspaceError("workspace.symlinkWriteForbidden", "Symlinks cannot be written")
-        if not path.parent.exists():
-            raise WorkspaceError("workspace.parentNotFound", "Parent directory is missing")
-        path.write_text(content, encoding="utf-8")
-        return self.relative(path)
-
-    def replace_text_file(
-        self, relative_path: str, content: str, expected_revision: str
-    ) -> str:
-        target = self.resolve(relative_path)
-        if target == self.home:
-            raise WorkspaceError("file.notAFile", "Target is not a regular file")
-        parts = target.relative_to(self.home).parts
-        try:
-            with _directory_descriptor(self.home, (), RootFileError) as lock_descriptor:
-                fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-                try:
-                    with _directory_descriptor(
-                        self.home, parts[:-1], RootFileError
-                    ) as descriptor:
-                        return _replace_utf8_text_at(
-                            descriptor, parts[-1], content, expected_revision
-                        )
-                finally:
-                    fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-        except RootFileError as exc:
-            raise WorkspaceError(exc.code, str(exc)) from exc
-
-    def create_file(
-        self,
-        parent: str,
-        filename: str | None,
-        source: BinaryIO,
-        *,
-        max_bytes: int,
-    ) -> dict[str, Any]:
-        try:
-            name = validate_upload_filename(filename)
-        except RootFileError as exc:
-            raise WorkspaceError("workspace.invalidFileName", "Invalid file name") from exc
-        directory = self.resolve_read_target(parent)
-        if not directory.is_dir():
-            raise WorkspaceError("workspace.parentNotFound", "Parent directory is missing")
-        target = directory / name
-        try:
-            parent_parts = directory.relative_to(self.home).parts
-            with _directory_descriptor(self.home, parent_parts, WorkspaceError) as descriptor:
-                temporary, size = _stage_upload(
-                    descriptor, name, source, max_bytes=max_bytes
-                )
-                metadata = _publish_upload(descriptor, temporary, name)
-        except _UploadTooLarge as exc:
-            raise WorkspaceError("workspace.fileTooLarge", "File is too large") from exc
-        except FileExistsError as exc:
-            raise WorkspaceError("workspace.pathAlreadyExists", "Destination path already exists") from exc
-        return {
-            "name": name,
-            "path": self.relative(target),
-            "kind": "file",
-            "size": size,
-            "modifiedAt": metadata.st_mtime,
-            "hasChildren": False,
-        }
-
-    def open_file(self, relative_path: str) -> BinaryIO:
-        target = self.resolve_read_target(relative_path)
-        return _open_regular_file(self.home, target.relative_to(self.home).parts, WorkspaceError)
-
-    def read_bytes(self, relative_path: str, *, limit: int) -> bytes:
-        with self.open_file(relative_path) as handle:
-            return handle.read(limit + 1)
+    return value[:max_line_length], truncated
 
 
 class RootFileService:
-    """Access a session root and an optional selected working directory."""
+    """Access the backend-local root of one persisted session."""
 
     MAX_LIST_LIMIT = 1_000
     SESSION_QUOTA_BYTES = 500 * 1024 * 1024
@@ -677,15 +386,11 @@ class RootFileService:
         session_id: UUID,
         *,
         session_storage: SessionStorage | None = None,
-        workspace_home: Path | None = None,
-        working_directory: str | None = None,
     ) -> None:
         if not isinstance(session_id, UUID):
             raise TypeError("session_id must be supplied by the host as a UUID")
         self.session_id = session_id
         self.session_storage = session_storage or SessionStorage()
-        self.workspace_home = (workspace_home or get_runtime_config().agent_home).absolute()
-        self.working_directory = working_directory
 
     @staticmethod
     def _parts(relative_path: str) -> tuple[str, ...]:
@@ -714,12 +419,9 @@ class RootFileService:
         return self._parts(relative_path)
 
     def root_identity(self, root: FileRoot | str) -> str:
-        selected_root = self._selected_root(root)
-        self._root_path(selected_root)
-        if selected_root is FileRoot.SESSION:
-            return str(self.session_id)
-        assert self.working_directory is not None
-        return self.working_directory
+        self._selected_root(root)
+        self._root_path(FileRoot.SESSION)
+        return str(self.session_id)
 
     @staticmethod
     def _metadata(path: Path) -> os.stat_result:
@@ -765,65 +467,38 @@ class RootFileService:
                 raise RootFileError("file.pathNotFound", "Path not found")
         return current
 
-    def _workspace_root(self) -> Path:
-        if self.working_directory is None:
-            raise RootFileError(
-                "file.workspaceNotSelected", "No working directory is selected"
-            )
-        try:
-            parts = self._parts(self.working_directory)
-        except RootFileError as exc:
-            raise RootFileError(
-                "file.invalidWorkingDirectory", "Invalid working directory"
-            ) from exc
-        try:
-            return self._ensure_no_symlinks(self.workspace_home, parts)
-        except RootFileError as exc:
-            raise RootFileError(
-                "file.invalidWorkingDirectory", "Invalid working directory"
-            ) from exc
-
     def _root_path(self, root: FileRoot | str) -> Path:
-        selected_root = self._selected_root(root)
-        if selected_root is FileRoot.SESSION:
-            try:
-                return self.session_storage.session_path(self.session_id, require_exists=True)
-            except SessionStorageError as exc:
-                raise RootFileError("file.sessionNotProvisioned", "Session root is missing") from exc
-        return self._workspace_root()
+        self._selected_root(root)
+        try:
+            return self.session_storage.session_path(self.session_id, require_exists=True)
+        except SessionStorageError as exc:
+            raise RootFileError("file.sessionNotProvisioned", "Session root is missing") from exc
 
     def _anchored_parts(
         self, root: FileRoot | str, parts: tuple[str, ...]
     ) -> tuple[Path, tuple[str, ...]]:
-        selected_root = self._selected_root(root)
-        if selected_root is FileRoot.SESSION:
-            try:
-                session_root = self.session_storage.session_path(
-                    self.session_id, require_exists=True
-                )
-            except SessionStorageError as exc:
-                raise RootFileError(
-                    "file.sessionNotProvisioned", "Session root is missing"
-                ) from exc
-            return session_root, parts
-        if self.working_directory is None:
-            raise RootFileError(
-                "file.workspaceNotSelected", "No working directory is selected"
-            )
+        self._selected_root(root)
         try:
-            working_parts = self._parts(self.working_directory)
-        except RootFileError as exc:
+            session_root = self.session_storage.session_path(
+                self.session_id, require_exists=True
+            )
+        except SessionStorageError as exc:
             raise RootFileError(
-                "file.invalidWorkingDirectory", "Invalid working directory"
+                "file.sessionNotProvisioned", "Session root is missing"
             ) from exc
-        return self.workspace_home, (*working_parts, *parts)
+        return session_root, parts
 
     @staticmethod
     def _selected_root(root: FileRoot | str) -> FileRoot:
         try:
-            return FileRoot(root)
+            selected = FileRoot(root)
         except ValueError as exc:
             raise RootFileError("file.invalidRoot", "Invalid file root") from exc
+        if selected is FileRoot.WORKSPACE:
+            raise RootFileError(
+                "file.workspaceNotSelected", "No working directory is selected"
+            )
+        return selected
 
     @contextmanager
     def _session_operation_lock(
@@ -834,13 +509,7 @@ class RootFileService:
             | getattr(os, "O_DIRECTORY", 0)
             | getattr(os, "O_NOFOLLOW", 0)
         )
-        lock_paths: set[Path] = set()
-        for root in roots:
-            if root is FileRoot.SESSION:
-                lock_paths.add(self._root_path(FileRoot.SESSION))
-            else:
-                self._root_path(FileRoot.WORKSPACE)
-                lock_paths.add(self.workspace_home)
+        lock_paths = {self._root_path(root) for root in roots}
         descriptors: list[int] = []
         try:
             for path in sorted(lock_paths, key=str):
@@ -855,12 +524,9 @@ class RootFileService:
             for descriptor in reversed(descriptors):
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
                 os.close(descriptor)
-            code = (
-                "file.sessionNotProvisioned"
-                if FileRoot.SESSION in roots
-                else "file.invalidWorkingDirectory"
-            )
-            raise RootFileError(code, "File root is unavailable") from exc
+            raise RootFileError(
+                "file.sessionNotProvisioned", "File root is unavailable"
+            ) from exc
         try:
             yield
         finally:
@@ -1060,17 +726,17 @@ class RootFileService:
         try:
             with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
                 for _ in range(1, offset):
-                    if WorkspaceService._read_bounded_line(handle, max_line_length) is None:
+                    if _read_bounded_line(handle, max_line_length) is None:
                         break
                 for line_number in range(offset, offset + limit):
-                    line = WorkspaceService._read_bounded_line(handle, max_line_length)
+                    line = _read_bounded_line(handle, max_line_length)
                     if line is None:
                         break
                     value, truncated = line
                     lines.append(f"{line_number}: {value}")
                     if truncated:
                         truncated_lines.append(line_number)
-                has_more = WorkspaceService._read_bounded_line(handle, max_line_length) is not None
+                has_more = _read_bounded_line(handle, max_line_length) is not None
         except UnicodeDecodeError as exc:
             raise RootFileError("file.invalidEncoding", "File is not readable as UTF-8") from exc
         lines_read = len(lines)
@@ -1104,10 +770,9 @@ class RootFileService:
                 if not stat.S_ISREG(metadata.st_mode):
                     raise RootFileError("file.notAFile", "Target is not a regular file")
                 replaced_bytes = metadata.st_size
-            if selected_root is FileRoot.SESSION:
-                self._assert_session_quota(
-                    len(encoded_content), replaced_bytes=replaced_bytes
-                )
+            self._assert_session_quota(
+                len(encoded_content), replaced_bytes=replaced_bytes
+            )
 
             temporary = parent / f".{parts[-1]}.{uuid4().hex}.tmp"
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -1117,23 +782,20 @@ class RootFileService:
                     handle.write(encoded_content)
                     handle.flush()
                     os.fsync(handle.fileno())
-                if selected_root is FileRoot.SESSION:
-                    # The second check includes the temporary file and detects external growth.
-                    current_replaced_bytes = 0
-                    if target.exists() or target.is_symlink():
-                        current_metadata = self._metadata(target)
-                        if stat.S_ISLNK(current_metadata.st_mode):
-                            raise RootFileError(
-                                "file.symlinkForbidden", "Symlinks are not followed"
-                            )
-                        if not stat.S_ISREG(current_metadata.st_mode):
-                            raise RootFileError(
-                                "file.notAFile", "Target is not a regular file"
-                            )
-                        current_replaced_bytes = current_metadata.st_size
-                    self._assert_session_quota(
-                        0, replaced_bytes=current_replaced_bytes
-                    )
+                # The second check includes the temporary file and detects external growth.
+                current_replaced_bytes = 0
+                if target.exists() or target.is_symlink():
+                    current_metadata = self._metadata(target)
+                    if stat.S_ISLNK(current_metadata.st_mode):
+                        raise RootFileError(
+                            "file.symlinkForbidden", "Symlinks are not followed"
+                        )
+                    if not stat.S_ISREG(current_metadata.st_mode):
+                        raise RootFileError(
+                            "file.notAFile", "Target is not a regular file"
+                        )
+                    current_replaced_bytes = current_metadata.st_size
+                self._assert_session_quota(0, replaced_bytes=current_replaced_bytes)
                 os.replace(temporary, target)
                 target.chmod(0o600)
                 self._fsync_directory(parent)
@@ -1162,12 +824,8 @@ class RootFileService:
                     parts[-1],
                     content,
                     expected_revision,
-                    before_publish=(
-                        lambda replaced_bytes: self._assert_session_quota(
-                            0, replaced_bytes=replaced_bytes
-                        )
-                        if selected_root is FileRoot.SESSION
-                        else None
+                    before_publish=lambda replaced_bytes: self._assert_session_quota(
+                        0, replaced_bytes=replaced_bytes
                     ),
                 )
 
@@ -1200,8 +858,7 @@ class RootFileService:
                         max_bytes=max_bytes,
                     )
                     try:
-                        if selected_root is FileRoot.SESSION:
-                            self._assert_session_quota(0)
+                        self._assert_session_quota(0)
                         metadata = _publish_upload(
                             descriptor, temporary, parts[-1]
                         )
@@ -1260,8 +917,7 @@ class RootFileService:
                     os.mkdir(parts[-1], mode=0o700, dir_fd=descriptor)
                     created = True
                     try:
-                        if selected_root is FileRoot.SESSION:
-                            self._assert_session_quota(0)
+                        self._assert_session_quota(0)
                         os.fsync(descriptor)
                     except BaseException:
                         if created:

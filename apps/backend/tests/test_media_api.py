@@ -48,8 +48,9 @@ async def test_direct_transcription_obeys_policy_and_returns_text(monkeypatch) -
     transcribe = AsyncMock(return_value=TranscriptionResult("Gesprochener Text"))
     monkeypatch.setattr(MediaService, "transcribe_audio", transcribe)
     db = AsyncMock(spec=AsyncSession)
+    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
 
-    result = await create_transcription(upload(), db, "de")
+    result = await create_transcription(upload(), db, user, "de")
 
     assert result == {"text": "Gesprochener Text"}
     assert transcribe.await_args.kwargs["audio"] == wav_bytes()
@@ -75,7 +76,11 @@ async def test_direct_transcription_returns_structured_timeout(monkeypatch) -> N
     )
 
     with pytest.raises(ApiError) as exc_info:
-        await create_transcription(upload(), AsyncMock(spec=AsyncSession), None)
+        await create_transcription(
+            upload(),
+            AsyncMock(spec=AsyncSession),
+            UserAccount(id=uuid4(), username="test", password_hash="hash"),
+        )
 
     assert exc_info.value.status_code == 504
     assert exc_info.value.code == "provider.timeout"
@@ -88,7 +93,11 @@ async def test_direct_transcription_rejects_disabled_policy(monkeypatch) -> None
     monkeypatch.setattr(MediaService, "transcribe_audio", transcribe)
 
     with pytest.raises(ApiError) as exc_info:
-        await create_transcription(upload(), AsyncMock(spec=AsyncSession), None)
+        await create_transcription(
+            upload(),
+            AsyncMock(spec=AsyncSession),
+            UserAccount(id=uuid4(), username="test", password_hash="hash"),
+        )
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.code == "tool.unavailable"
@@ -167,6 +176,7 @@ async def test_runtime_cleans_stored_audio_when_transaction_fails(monkeypatch) -
         providers=[provider], models=[model], default_model_id=model.id
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
     attachment = MessageAttachment(
         id=uuid4(),
         message_id=uuid4(),
@@ -218,6 +228,7 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         providers=[provider], models=[model], default_model_id=model.id
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
     attachment = MessageAttachment(
         id=uuid4(),
         message_id=uuid4(),

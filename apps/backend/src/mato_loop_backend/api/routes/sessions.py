@@ -63,6 +63,7 @@ from mato_loop_backend.settings import (
     MemorySettings,
     SettingsStore,
     UserPreferences,
+    load_effective_ai,
 )
 from mato_loop_backend.settings.models import (
     ModelAvailability,
@@ -598,7 +599,7 @@ async def _session_payload(
             last_message_at=last_message_at,
             has_unread_messages=has_unread_messages,
         )
-    ai = await SettingsStore.load(db, AiSettings)
+    ai = await load_effective_ai(db, item.user_id)
     memory = await SettingsStore.load(db, MemorySettings, user_id=item.user_id)
     model_id = item.model_config_id or ai.default_model_id
     model = _model_for_session(ai, model_id) if _model_available(ai, model_id) else None
@@ -929,7 +930,7 @@ async def _create_session(
     content = payload.content.strip()
     if not content:
         raise ApiError(422, "validation.required", field="content")
-    ai = await SettingsStore.load(db, AiSettings)
+    ai = await load_effective_ai(db, user.id)
     model_id = payload.model_id or ai.default_model_id
     if not _model_available(ai, model_id):
         raise ApiError(409, "session.modelUnavailable", field="modelId")
@@ -1032,7 +1033,7 @@ async def session_defaults(
     model_id: Annotated[UUID | None, Query(alias="modelId")] = None,
     memory_mode: Annotated[MemoryMode, Query(alias="memoryMode")] = MemoryMode.FULL,
 ) -> dict:
-    ai = await SettingsStore.load(db, AiSettings)
+    ai = await load_effective_ai(db, user.id)
     memory = await SettingsStore.load(db, MemorySettings, user_id=user.id)
     preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
     selected_model_id = model_id or ai.default_model_id
@@ -1177,7 +1178,7 @@ async def update_session(
     if "pinned" in fields and payload.pinned is not None:
         item.is_pinned = payload.pinned
     if "model_id" in fields:
-        ai = await SettingsStore.load(db, AiSettings)
+        ai = await load_effective_ai(db, user.id)
         if payload.model_id is not None:
             if not _model_available(ai, payload.model_id):
                 raise ApiError(400, "session.modelUnavailable")
@@ -1191,7 +1192,7 @@ async def update_session(
         item.memory_mode = payload.memory_mode.value
     if "web_search_policy" in fields and payload.web_search_policy is not None:
         if payload.web_search_policy == WebSearchPolicy.REQUIRED:
-            ai = await SettingsStore.load(db, AiSettings)
+            ai = await load_effective_ai(db, user.id)
             model_id = item.model_config_id or ai.default_model_id
             if not _model_supports_tools(ai, model_id):
                 raise ApiError(409, "session.modelToolsUnavailable")
@@ -1416,7 +1417,7 @@ async def _send_message(
     )
     if active:
         raise ApiError(409, "session.runAlreadyActive")
-    ai = await SettingsStore.load(db, AiSettings)
+    ai = await load_effective_ai(db, user.id)
     model_id = item.model_config_id or ai.default_model_id
     if not _model_available(ai, model_id):
         raise ApiError(409, "session.modelUnavailable")

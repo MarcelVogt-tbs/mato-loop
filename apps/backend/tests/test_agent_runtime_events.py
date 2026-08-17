@@ -20,8 +20,18 @@ from mato_loop_backend.agent.runtime import (
 )
 from mato_loop_backend.events import RunEventBroker, run_events
 from mato_loop_backend.models import AgentRun, ChatSession, Message, TitleGenerationStatus
-from mato_loop_backend.providers.base import ProviderError, PublicReasoning, ToolCall
-from mato_loop_backend.settings import AiSettings, SettingsStore, TrustLevel
+from mato_loop_backend.providers.base import (
+    ProviderError,
+    ProviderResult,
+    PublicReasoning,
+    ToolCall,
+)
+from mato_loop_backend.settings import (
+    AgentRuntimeSettings,
+    AiSettings,
+    SettingsStore,
+    TrustLevel,
+)
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 
@@ -71,6 +81,14 @@ async def test_run_phase_event_has_stable_language_neutral_payload(monkeypatch) 
 async def test_unknown_run_phase_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown run phase"):
         await _publish_run_phase(uuid4(), "thinking_text")
+
+
+async def test_runtime_rejects_inactive_user() -> None:
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = False
+
+    with pytest.raises(AgentRunError, match="auth.accountDisabled"):
+        await AgentRuntime._ensure_user_active(db, uuid4())
 
 
 @pytest.mark.parametrize(
@@ -202,6 +220,7 @@ async def test_start_schedules_title_generation_next_to_agent_run(monkeypatch) -
     title_worker.assert_called_once_with(
         run_id, session.id, "Erste Nachricht", "Erste Nachricht"
     )
+    assert list(AgentRuntime._title_tasks.values()) == [session.user_id]
     AgentRuntime._tasks.pop(run_id, None)
     AgentRuntime._title_tasks.clear()
 
@@ -272,6 +291,23 @@ async def test_cancel_waits_when_run_is_already_finalizing() -> None:
             await asyncio.gather(task, return_exceptions=True)
 
 
+async def test_cancel_and_wait_user_title_tasks_only_cancels_owned_tasks() -> None:
+    user_id = uuid4()
+    other_user_id = uuid4()
+    owned = asyncio.create_task(asyncio.Event().wait())
+    other = asyncio.create_task(asyncio.Event().wait())
+    AgentRuntime._title_tasks[owned] = user_id
+    AgentRuntime._title_tasks[other] = other_user_id
+    try:
+        assert await AgentRuntime.cancel_and_wait_user_title_tasks(user_id) is True
+        assert owned.cancelled()
+        assert not other.done()
+    finally:
+        AgentRuntime._title_tasks.clear()
+        other.cancel()
+        await asyncio.gather(other, return_exceptions=True)
+
+
 class _SessionContext:
     def __init__(self, db) -> None:
         self.db = db
@@ -281,6 +317,48 @@ class _SessionContext:
 
     async def __aexit__(self, *_args) -> None:
         return None
+
+
+async def test_title_generation_rechecks_user_before_each_provider_request(
+    monkeypatch,
+) -> None:
+    user_id = uuid4()
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    settings = AiSettings(
+        providers=[provider], models=[model], title_generation_model_id=model.id
+    )
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user_id,
+        title="Initial title",
+        title_generation_status=TitleGenerationStatus.RUNNING.value,
+        model_config_id=model.id,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    ensure_active = AsyncMock(
+        side_effect=[None, AgentRunError("auth.accountDisabled")]
+    )
+    complete = AsyncMock(return_value=ProviderResult())
+    fail = AsyncMock()
+    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    monkeypatch.setattr(runtime_module, "load_effective_ai", AsyncMock(return_value=settings))
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=AgentRuntimeSettings())
+    )
+    monkeypatch.setattr(AgentRuntime, "_ensure_user_active", ensure_active)
+    monkeypatch.setattr(runtime_module.ProviderService, "complete", complete)
+    monkeypatch.setattr(AgentRuntime, "_fail_title_generation", fail)
+
+    await AgentRuntime._generate_title(
+        uuid4(), session.id, "Message", session.title
+    )
+
+    assert ensure_active.await_count == 2
+    assert all(call.args == (db, user_id) for call in ensure_active.await_args_list)
+    complete.assert_awaited_once()
+    fail.assert_awaited_once_with(db, session.id)
 
 
 def test_unknown_runtime_exception_has_safe_descriptor() -> None:

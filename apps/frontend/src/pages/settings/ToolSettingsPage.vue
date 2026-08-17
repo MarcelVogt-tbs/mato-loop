@@ -7,19 +7,65 @@
           Werkzeuge des Agents gruppiert und global steuern.
         </p>
       </div>
-      <q-btn
-        color="primary"
-        unelevated
-        no-caps
-        icon="save"
-        label="Speichern"
-        :loading="tools.saving"
-        :disable="tools.loading || !tools.loaded"
-        @click="save"
-      />
+      <div class="row items-center q-gutter-sm">
+        <SettingsScopeToggle
+          :model-value="tools.scope"
+          :is-admin="auth.isAdmin"
+          :disable="tools.loading || tools.saving || gateLoading"
+          @update:model-value="changeScope"
+        />
+        <q-btn
+          v-if="tools.scope === 'personal'"
+          outline
+          no-caps
+          color="primary"
+          icon="restart_alt"
+          label="Auf Instanzstandard zurücksetzen"
+          :disable="personalBlocked || tools.loading || tools.saving"
+          @click="resetPersonalSettings"
+        />
+        <q-btn
+          color="primary"
+          unelevated
+          no-caps
+          icon="save"
+          label="Speichern"
+          :loading="tools.saving"
+          :disable="personalBlocked || tools.loading || !tools.loaded"
+          @click="save"
+        />
+      </div>
     </header>
 
-    <q-form ref="formRef" @submit.prevent="save">
+    <q-card v-if="auth.isAdmin && tools.scope === 'instance'" flat class="app-surface-tonal q-mb-md">
+      <q-card-section class="row items-center justify-between q-gutter-md">
+        <div>
+          <div class="text-subtitle2 text-weight-bold">Persönliche Tool-Einstellungen</div>
+          <div class="text-caption app-muted">Erlaubt Benutzern eigene Tool-Richtlinien festzulegen.</div>
+        </div>
+        <q-toggle
+          :model-value="tools.personalSettingsEnabled"
+          color="primary"
+          label="Erlaubt"
+          :disable="gateLoading"
+          @update:model-value="togglePersonalSettings"
+        />
+      </q-card-section>
+    </q-card>
+
+    <q-banner v-if="tools.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
+      <template #avatar><q-icon name="person" color="primary" /></template>
+      {{ personalBlocked
+        ? 'Persönliche Tool-Einstellungen wurden für diese Instanz deaktiviert. Vorhandene Einstellungen bleiben gespeichert, können aber nicht bearbeitet werden.'
+        : 'Persönliche Tool-Richtlinien ersetzen die Instanzvorgaben. Technische Webfetch-Grenzen werden von der Instanz übernommen.' }}
+    </q-banner>
+
+    <q-form
+      ref="formRef"
+      :class="{ disabled: personalBlocked }"
+      :inert="personalBlocked"
+      @submit.prevent="save"
+    >
       <q-banner v-if="tools.loadFailed" rounded class="bg-negative text-white q-mb-md">
         <template #avatar><q-icon name="error_outline" /></template>
         Die Tool-Einstellungen konnten nicht geladen werden.
@@ -144,6 +190,7 @@
                 hint="Modelle mit „Globalen Standard übernehmen“ verwenden diese Policy."
               />
               <q-input
+                v-if="tools.scope === 'instance'"
                 v-model.trim="form.userAgent"
                 outlined
                 maxlength="512"
@@ -153,6 +200,7 @@
                 lazy-rules
               />
               <q-input
+                v-if="tools.scope === 'instance'"
                 v-model.number="form.maxResponseMiB"
                 outlined
                 type="number"
@@ -168,7 +216,7 @@
                 <template #avatar><q-icon name="warning_amber" color="warning" /></template>
                 Erlaubte private Origins können ohne einzelne Rückfrage abgerufen werden.
               </q-banner>
-              <div>
+              <div v-if="tools.scope === 'instance'">
                 <div class="text-subtitle2">Erlaubte private Origins</div>
                 <div class="text-caption app-muted q-mb-sm">
                   Nur vollständige Origins ohne Pfad oder Zugangsdaten. Gefährliche Adressen bleiben blockiert.
@@ -272,6 +320,9 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
+import { useConfirm } from 'src/composables/confirm'
+import { useAuthStore } from 'stores/auth'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import {
   DEFAULT_WEBFETCH_USER_AGENT,
@@ -282,8 +333,11 @@ import {
 defineOptions({ name: 'ToolSettingsPage' })
 
 const $q = useQuasar()
+const { confirm } = useConfirm()
 const tools = useToolSettingsStore()
+const auth = useAuthStore()
 const formRef = ref(null)
+const gateLoading = ref(false)
 const MEDIA_POLICY_OPTIONS = [
   { label: 'Deaktiviert', value: 'disabled' },
   { label: 'Nachfragen', value: 'ask' },
@@ -426,6 +480,9 @@ const form = reactive({
   transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
   analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 }
 })
+const personalBlocked = computed(() => (
+  tools.scope === 'personal' && !tools.personalSettingsEnabled
+))
 
 function assignForm(settings) {
   form.policies = { ...settings.policies }
@@ -583,5 +640,30 @@ async function load() {
   }
 }
 
-onMounted(load)
+async function changeScope(scope) {
+  tools.selectScope(scope)
+  await load()
+}
+
+async function togglePersonalSettings(enabled) {
+  gateLoading.value = true
+  try {
+    await tools.setPersonalSettingsEnabled(enabled)
+  } finally {
+    gateLoading.value = false
+  }
+}
+
+async function resetPersonalSettings() {
+  const accepted = await confirm(
+    'Deine persönlichen Tool-Einstellungen löschen und wieder die Instanzvorgaben verwenden?',
+    'Tool-Einstellungen zurücksetzen?',
+    { okLabel: 'Zurücksetzen' }
+  )
+  if (!accepted) return
+  assignForm(await tools.resetPersonalSettings())
+  $q.notify({ type: 'positive', message: 'Tool-Einstellungen zurückgesetzt' })
+}
+
+onMounted(() => changeScope(auth.isAdmin ? 'instance' : 'personal'))
 </script>

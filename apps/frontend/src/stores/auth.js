@@ -3,14 +3,19 @@ import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useChatStore } from 'src/stores/chat'
 
-function clearAttachmentDraftsAfterIdentityChange(previous, next) {
-  if (previous.authenticated && (
-    !next.authenticated
-    || previous.username !== next.username
-  )) {
-    useChatStore().clearAllAttachmentDrafts()
-    useAgentIdentityStore().resetIdentity()
+function identityFrom(data, authenticated = data.authenticated) {
+  return {
+    authenticated: Boolean(authenticated),
+    userId: data.userId ?? data.user_id ?? null,
+    username: data.username ?? null,
+    isAdmin: Boolean(data.isAdmin ?? data.is_admin)
   }
+}
+
+function hardReload(path) {
+  if (typeof window === 'undefined') return
+  if (path) window.location.replace(path)
+  else window.location.reload()
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -18,49 +23,80 @@ export const useAuthStore = defineStore('auth', {
     statusLoaded: false,
     setupRequired: false,
     authenticated: false,
-    username: null
+    userId: null,
+    username: null,
+    isAdmin: false
   }),
   actions: {
+    clearIdentityState() {
+      const chat = useChatStore()
+      chat.clearAllDrafts()
+      chat.setDraftOwner(null)
+      useAgentIdentityStore().resetIdentity()
+    },
+    applyIdentity(data, authenticated = data.authenticated) {
+      const previous = {
+        authenticated: this.authenticated,
+        userId: this.userId,
+        username: this.username,
+        isAdmin: this.isAdmin
+      }
+      const next = identityFrom(data, authenticated)
+      const accountChanged = previous.authenticated && (
+        !next.authenticated || previous.userId !== next.userId
+      )
+      if (accountChanged) this.clearIdentityState()
+      Object.assign(this, next)
+      useChatStore().setDraftOwner(next.authenticated ? next.userId : null)
+      if (accountChanged) {
+        hardReload(next.authenticated ? null : '/login')
+      } else if (previous.authenticated && previous.isAdmin !== next.isAdmin) {
+        hardReload()
+      }
+      return next
+    },
     async fetchStatus() {
       const { data } = await api.get('/auth/status')
-      const previousIdentity = { authenticated: this.authenticated, username: this.username }
       this.statusLoaded = true
-      this.setupRequired = data.setup_required
-      this.authenticated = data.authenticated
-      this.username = data.username
-      clearAttachmentDraftsAfterIdentityChange(previousIdentity, {
-        authenticated: this.authenticated,
-        username: this.username
-      })
+      this.setupRequired = data.setupRequired ?? data.setup_required
+      this.applyIdentity(data)
       return data
+    },
+    async fetchMe(config = null) {
+      const { data } = await api.get('/auth/me', config || undefined)
+      this.applyIdentity(data, true)
+      return data
+    },
+    invalidateSession() {
+      this.clearIdentityState()
+      this.authenticated = false
+      this.userId = null
+      this.username = null
+      this.isAdmin = false
+      hardReload('/login')
     },
     async setup(credentials) {
       const { data } = await api.post('/auth/setup', credentials)
-      const previousIdentity = { authenticated: this.authenticated, username: this.username }
       this.setupRequired = false
-      this.authenticated = true
-      this.username = data.username
-      clearAttachmentDraftsAfterIdentityChange(previousIdentity, {
-        authenticated: this.authenticated,
-        username: this.username
-      })
+      this.applyIdentity(data, true)
     },
     async login(credentials) {
       const { data } = await api.post('/auth/login', credentials)
-      const previousIdentity = { authenticated: this.authenticated, username: this.username }
-      this.authenticated = true
-      this.username = data.username
-      clearAttachmentDraftsAfterIdentityChange(previousIdentity, {
-        authenticated: this.authenticated,
-        username: this.username
-      })
+      this.applyIdentity(data, true)
+    },
+    async changePassword(payload) {
+      await api.put('/users/me/password', payload)
+      this.clearIdentityState()
+      hardReload('/login')
     },
     async logout() {
       await api.post('/auth/logout')
-      useChatStore().clearAllAttachmentDrafts()
-      useAgentIdentityStore().resetIdentity()
+      this.clearIdentityState()
       this.authenticated = false
+      this.userId = null
       this.username = null
+      this.isAdmin = false
+      hardReload('/login')
     }
   }
 })

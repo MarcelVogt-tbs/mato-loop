@@ -4,7 +4,7 @@ Status: deferred. Implement the prerequisite work selected by the user before st
 
 ## Goal
 
-Add projects as the persistent grouping above chat sessions. A project provides shared context and a default working directory. Standard projects use MatoLoop's local agent home. OpenCode projects use a configured OpenCode server for remote directory browsing, code-aware planning, and sequential plan execution.
+Add projects as the persistent grouping above chat sessions. A project provides shared context and may provide a default working directory. Standard project workspaces require an owner-bound Execution Agent and one of its advertised roots. OpenCode projects use a configured OpenCode server for remote directory browsing, code-aware planning, and sequential plan execution.
 
 OpenCode remains an integration. MatoLoop remains authoritative for users, projects, chat sessions, project context, plan files, execution queues, and UI state.
 
@@ -12,9 +12,9 @@ OpenCode remains an integration. MatoLoop remains authoritative for users, proje
 
 - A project groups multiple related MatoLoop sessions.
 - Sessions receive bounded, relevant context from other sessions in the same project.
-- A project defines a default working directory.
+- A project may define a default working directory only together with its workspace source.
 - A session inherits that directory and may switch at runtime to any directory from the same source.
-- Standard projects use directories below MatoLoop's `/data/home`.
+- Standard projects use an explicitly selected Execution Agent owned by the project owner and one advertised root from that agent. There is no backend-local project workspace.
 - OpenCode projects use directories below the configured OpenCode server root.
 - Normal chat continues to use the MatoLoop agent.
 - MatoLoop invokes OpenCode through project-bound planning and execution operations.
@@ -34,14 +34,17 @@ name                       varchar(240), required
 project_type               default | opencode
 integration_id             UUID, nullable
 default_working_directory  varchar(1000), nullable
+execution_agent_id         UUID, nullable
+execution_root_id          UUID, nullable
 created_at                 timestamptz
 updated_at                 timestamptz
 ```
 
 Constraints:
 
-- A default project has no integration ID.
+- A default project has no integration ID. Workspace-backed default projects require an Execution Agent and root owned by the same user; chat-only default projects keep all three workspace fields null.
 - An OpenCode project has an OpenCode integration ID and a default working directory.
+- OpenCode projects have no Execution Agent or Execution Agent root binding.
 - Project type and integration binding are immutable after creation. A different source requires a new project.
 - Project deletion is allowed only while the project has no sessions.
 - Disabling an OpenCode integration makes dependent projects unavailable but does not delete them.
@@ -55,14 +58,17 @@ effective working directory = session override or project default
 
 The project fixes the source, not the exact runtime directory:
 
-- A standard-project session may select another directory below `/data/home`.
+- A workspace-backed standard-project session may select another directory inside the same owned Execution Agent root.
+- A chat-only standard project has no workspace. Adding a workspace to it is deferred; create a workspace-backed project with an owned agent and root instead.
 - An OpenCode-project session may select another directory below that integration's server root.
-- A session cannot switch from local to OpenCode or between OpenCode integrations without moving to another project.
+- A session cannot switch between Execution Agents, roots, local and OpenCode sources, or OpenCode integrations without moving to another project.
 - Working-directory changes remain blocked while the session has an active run.
 
 Retain `chat_sessions.user_id`. Use a composite ownership constraint so a session cannot reference another user's project.
 
 ## Migration
+
+Implementation of this migration is deferred until the backfill groups existing session bindings by owned Execution Agent and root without inventing a backend-local source. The eventual migration must preserve sessions whose owners have no agent or root as chat-only.
 
 Generate the migration from SQLAlchemy metadata and review it completely.
 
@@ -70,7 +76,7 @@ The data migration must:
 
 1. Create one standard project named `Allgemein` for every existing user.
 2. Assign every existing session to its owner's project.
-3. Preserve every existing `chat_sessions.working_directory` as a session override.
+3. Preserve existing Execution Agent and root bindings with their `chat_sessions.working_directory` as session overrides. Do not infer a backend workspace or bind an agent from a host path.
 4. Make `chat_sessions.project_id` required only after backfilling.
 
 Create `Allgemein` during initial user setup for new installations.
@@ -121,10 +127,10 @@ class WorkingDirectoryAdapter(Protocol):
 
 Initial implementations:
 
-- `LocalWorkingDirectoryAdapter`
+- `ExecutionAgentWorkingDirectoryAdapter`
 - `OpenCodeWorkingDirectoryAdapter`
 
-Do not add mutation, Git, terminal, or agent-execution methods to this interface. Local mutations continue through the existing local file services. OpenCode working directories are initially read-only from MatoLoop; code changes occur only through OpenCode plan execution.
+Do not add mutation, Git, terminal, or agent-execution methods to this interface. Standard-project mutations continue through the existing Execution Agent workspace services. OpenCode working directories are initially read-only from MatoLoop; code changes occur only through OpenCode plan execution.
 
 Capabilities must independently describe listing, text reads, byte previews, downloads, and mutations. The frontend and agent tool schemas use the effective capability set instead of assuming every working directory is writable and downloadable.
 
@@ -340,7 +346,7 @@ Keep the existing workspace Pinia store for file state. Add separate project and
 
 - project default and session override resolution
 - active-run guards
-- local adapter around existing file services
+- Execution Agent adapter around existing workspace services
 - UI terminology changed to **Arbeitsverzeichnis**
 
 ### 3. OpenCode Integration and Remote Browsing

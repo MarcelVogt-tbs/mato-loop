@@ -311,6 +311,10 @@
                   <q-item-section avatar><q-icon name="tune" /></q-item-section>
                   <q-item-section>Einstellungen</q-item-section>
                 </q-item>
+                <q-item clickable v-ripple :to="{ name: 'settings-account' }" v-close-popup @click="closeDrawerOnMobile">
+                  <q-item-section avatar><q-icon name="manage_accounts" /></q-item-section>
+                  <q-item-section>Konto</q-item-section>
+                </q-item>
                 <q-item clickable v-ripple v-close-popup @click="$q.dark.toggle()">
                   <q-item-section avatar>
                     <q-icon :name="$q.dark.isActive ? 'light_mode' : 'dark_mode'" />
@@ -666,7 +670,6 @@ async function removeSession(id) {
 async function logout() {
   if (!await confirmDiscardedEdit()) return
   await auth.logout()
-  await router.replace({ name: 'login' })
 }
 
 async function confirmDiscardedEdit() {

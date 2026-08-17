@@ -43,6 +43,10 @@ function settingsPayload(state) {
   }
 }
 
+function scopeConfig(scope, config = {}) {
+  return { ...config, params: { ...(config.params || {}), scope } }
+}
+
 export const useToolSettingsStore = defineStore('tool-settings', {
   state: () => ({
     groups: [],
@@ -56,28 +60,63 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     transcribeAudio: defaultMediaPolicy(),
     analyzeVideo: defaultVideoAnalysisPolicy(),
     updateAgentIdentity: defaultAgentIdentityPolicy(),
+    scope: 'instance',
+    personalSettingsEnabled: true,
     loaded: false,
     loadFailed: false,
     loading: false,
-    saving: false
+    saving: false,
+    loadVersion: 0,
+    saveVersion: 0
   }),
   actions: {
-    async fetchSettings() {
+    selectScope(scope) {
+      const next = scope === 'personal' ? 'personal' : 'instance'
+      if (next === this.scope) return
+      this.scope = next
+      this.loadVersion += 1
+      this.saveVersion += 1
+      this.loading = false
+      this.saving = false
+    },
+    async fetchSettings(scope = this.scope) {
+      const selectedScope = this.scope
+      const loadVersion = ++this.loadVersion
       this.loading = true
       this.loadFailed = false
       try {
-        const { data } = await api.get('/tools/settings')
+        let policy = null
+        if (scope === 'personal') {
+          policy = (await api.get('/tools/personal-settings')).data
+          if (this.scope !== selectedScope || this.loadVersion !== loadVersion) return
+          this.personalSettingsEnabled = policy.enabled !== false
+          if (!this.personalSettingsEnabled) {
+            this.assignSettings({})
+            this.loaded = true
+            return settingsPayload(this)
+          }
+        }
+        const { data } = await api.get('/tools/settings', scopeConfig(scope))
+        if (this.scope !== selectedScope || this.loadVersion !== loadVersion) return
         this.assignSettings(data)
+        if (policy) this.personalSettingsEnabled = policy.enabled !== false
         this.loaded = true
         return settingsPayload(this)
       } catch (error) {
-        this.loadFailed = true
+        if (this.scope === selectedScope && this.loadVersion === loadVersion) {
+          this.loadFailed = true
+        }
         throw error
       } finally {
-        this.loading = false
+        if (this.scope === selectedScope && this.loadVersion === loadVersion) {
+          this.loading = false
+        }
       }
     },
     async saveSettings(settings) {
+      const scope = this.scope
+      const saveVersion = ++this.saveVersion
+      this.loadVersion += 1
       this.saving = true
       try {
         const policies = { ...this.policies, ...(settings.policies || {}) }
@@ -114,15 +153,38 @@ export const useToolSettingsStore = defineStore('tool-settings', {
             ...settings.updateAgentIdentity
           }
         }
-        const { data } = await api.put('/tools/settings', payload)
+        const { data } = await api.put('/tools/settings', payload, scopeConfig(scope))
+        if (this.scope !== scope || this.saveVersion !== saveVersion) return
         this.assignSettings(data)
         this.loaded = true
         return settingsPayload(this)
       } finally {
-        this.saving = false
+        if (this.saveVersion === saveVersion) this.saving = false
       }
     },
+    async resetPersonalSettings() {
+      const scope = this.scope
+      const saveVersion = ++this.saveVersion
+      this.loadVersion += 1
+      this.saving = true
+      try {
+        const { data } = await api.delete('/tools/settings', scopeConfig('personal'))
+        if (this.scope !== scope || this.saveVersion !== saveVersion) return
+        this.assignSettings(data)
+        this.loaded = true
+        return settingsPayload(this)
+      } finally {
+        if (this.saveVersion === saveVersion) this.saving = false
+      }
+    },
+    async setPersonalSettingsEnabled(enabled) {
+      await api.patch('/tools/personal-enabled', { enabled }, scopeConfig('instance'))
+      this.personalSettingsEnabled = enabled
+    },
     assignSettings(data) {
+      if ('personalSettingsEnabled' in (data || {})) {
+        this.personalSettingsEnabled = data.personalSettingsEnabled !== false
+      }
       this.groups = Array.isArray(data?.groups) ? data.groups : []
       this.policies = { ...(data?.policies || {}) }
       this.webSearch = { ...defaultWebSearch(), ...data?.webSearch }

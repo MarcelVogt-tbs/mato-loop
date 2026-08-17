@@ -15,13 +15,13 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
-from mato_loop_backend.models import ChatSession, Credential
+from mato_loop_backend.models import ChatSession, Credential, UserAccount
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.codex_oauth import (
     CodexOAuthError,
@@ -31,17 +31,26 @@ from mato_loop_backend.providers.codex_oauth import (
 )
 from mato_loop_backend.providers.media import media_model_available
 from mato_loop_backend.providers.service import ProviderService
-from mato_loop_backend.security import require_user, store_credential
+from mato_loop_backend.security import (
+    delete_credential,
+    load_credential,
+    require_user,
+    scoped_credentials,
+    store_credential,
+)
 from mato_loop_backend.settings import (
     AiSettings,
     ModelWebFetchPolicy,
     SettingsStore,
     ToolSettings,
+    UserAiSettings,
     effective_model_pseudonymization,
     effective_model_trust,
     resolve_web_fetch_policy,
 )
+from mato_loop_backend.settings.effective import load_effective_ai, load_effective_tools
 from mato_loop_backend.settings.models import (
+    AiSettingsBase,
     LlmProviderConfig,
     MemoryPolicy,
     ModelAvailability,
@@ -54,6 +63,39 @@ from mato_loop_backend.settings.models import (
 
 router = APIRouter(prefix="/providers", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
+SettingsApiScope = Literal["instance", "personal"]
+AiSettingsDocument = AiSettings | UserAiSettings
+
+
+async def _load_scoped_ai(
+    db: AsyncSession,
+    scope: SettingsApiScope,
+    user: UserAccount | None,
+    *,
+    for_update: bool = False,
+    mutation: bool = False,
+) -> tuple[AiSettingsDocument, UUID | None]:
+    if scope == "instance":
+        if user is not None and not getattr(user, "is_admin", False):
+            raise ApiError(403, "auth.adminRequired")
+        return await SettingsStore.load(db, AiSettings, for_update=for_update), None
+    if user is None:
+        raise ApiError(401, "auth.notAuthenticated")
+    instance = await SettingsStore.load(db, AiSettings)
+    if not instance.personal_providers_enabled:
+        raise ApiError(409, "provider.personalDisabled")
+    settings = await SettingsStore.load(
+        db, UserAiSettings, user_id=user.id, for_update=for_update
+    )
+    for provider in settings.providers:
+        provider.owner_id = user.id
+    return settings, user.id
+
+
+async def _save_scoped_ai(
+    db: AsyncSession, settings: AiSettingsDocument, owner_id: UUID | None
+) -> None:
+    await SettingsStore.save(db, settings, user_id=owner_id)
 
 
 def _to_camel(value: str) -> str:
@@ -233,14 +275,14 @@ class DefaultModelsRequest(ApiRequest):
     audio_transcription_model_id: UUID | None = None
 
 
-def _provider(settings: AiSettings, provider_id: UUID) -> LlmProviderConfig:
+def _provider(settings: AiSettingsBase, provider_id: UUID) -> LlmProviderConfig:
     provider = next((item for item in settings.providers if item.id == provider_id), None)
     if provider is None:
         raise ApiError(404, "provider.notFound")
     return provider
 
 
-def _model(settings: AiSettings, model_id: UUID) -> ModelConfig:
+def _model(settings: AiSettingsBase, model_id: UUID) -> ModelConfig:
     model = next((item for item in settings.models if item.id == model_id), None)
     if model is None:
         raise ApiError(404, "provider.modelMissing")
@@ -248,7 +290,7 @@ def _model(settings: AiSettings, model_id: UUID) -> ModelConfig:
 
 
 def _ensure_unique_model_id(
-    settings: AiSettings,
+    settings: AiSettingsBase,
     *,
     provider_id: UUID,
     model_id: str,
@@ -264,7 +306,7 @@ def _ensure_unique_model_id(
 
 
 def _available_model(
-    settings: AiSettings,
+    settings: AiSettingsBase,
     model_id: UUID | None,
     capability: ModelCapability | None = None,
 ) -> ModelConfig | None:
@@ -287,7 +329,7 @@ def _available_model(
     return model
 
 
-def _video_analysis_model_available(settings: AiSettings, model_id: UUID) -> bool:
+def _video_analysis_model_available(settings: AiSettingsBase, model_id: UUID) -> bool:
     model = _available_model(settings, model_id, ModelCapability.CHAT)
     if model is None:
         return False
@@ -301,7 +343,7 @@ def _video_analysis_model_available(settings: AiSettings, model_id: UUID) -> boo
     )
 
 
-def _clear_invalid_defaults(settings: AiSettings) -> None:
+def _clear_invalid_defaults(settings: AiSettingsBase) -> None:
     fields = {
         "default_model_id": ModelCapability.CHAT,
         "compaction_model_id": ModelCapability.CHAT,
@@ -317,6 +359,12 @@ def _clear_invalid_defaults(settings: AiSettings) -> None:
     }
     for field, capability in fields.items():
         model_id = getattr(settings, field)
+        if (
+            isinstance(settings, UserAiSettings)
+            and model_id is not None
+            and not any(model.id == model_id for model in settings.models)
+        ):
+            continue
         media_capability = capability != ModelCapability.CHAT
         if model_id is not None and (
             _available_model(settings, model_id, capability) is None
@@ -337,6 +385,24 @@ def _clear_invalid_defaults(settings: AiSettings) -> None:
             setattr(settings, field, None)
 
 
+def _clear_removed_defaults(settings: AiSettingsBase, model_ids: set[UUID]) -> None:
+    for field in (
+        "default_model_id",
+        "compaction_model_id",
+        "title_generation_model_id",
+        "skill_creation_model_id",
+        "dreaming_model_id",
+        "vision_model_id",
+        "video_model_id",
+        "image_generation_model_id",
+        "speech_generation_model_id",
+        "audio_generation_model_id",
+        "audio_transcription_model_id",
+    ):
+        if getattr(settings, field) in model_ids:
+            setattr(settings, field, None)
+
+
 def _provider_config_payload(config: dict[str, Any]) -> dict[str, Any]:
     payload = {key: value for key, value in config.items() if key not in {"base_url", "api_type"}}
     if "base_url" in config:
@@ -350,7 +416,12 @@ async def _provider_sync_fingerprint(
     db: AsyncSession, provider: LlmProviderConfig
 ) -> tuple[str, UUID | None, dict[str, Any], bytes | str | None]:
     credential = (
-        await db.get(Credential, provider.credential_id, populate_existing=True)
+        await load_credential(
+            db,
+            provider.credential_id,
+            owner_id=provider.owner_id,
+            populate_existing=True,
+        )
         if provider.credential_id
         else None
     )
@@ -366,13 +437,20 @@ async def _provider_sync_fingerprint(
 
 
 def _settings_payload(
-    settings: AiSettings,
+    settings: AiSettingsBase,
     tool_settings: ToolSettings | None = None,
+    *,
+    include_configuration: bool = True,
 ) -> dict[str, Any]:
     tool_settings = tool_settings or ToolSettings()
     providers_by_id = {provider.id: provider for provider in settings.providers}
     return {
         "enabled": settings.enabled,
+        **(
+            {"personalProvidersEnabled": settings.personal_providers_enabled}
+            if isinstance(settings, AiSettings)
+            else {}
+        ),
         "defaultModelId": str(settings.default_model_id) if settings.default_model_id else None,
         "compactionModelId": (
             str(settings.compaction_model_id) if settings.compaction_model_id else None
@@ -426,7 +504,11 @@ def _settings_payload(
                 "pseudonymizationEnabled": provider.pseudonymization_enabled,
                 "memoryPolicy": provider.memory_policy.value,
                 "hasCredential": provider.credential_id is not None,
-                "config": _provider_config_payload(provider.config),
+                "config": (
+                    _provider_config_payload(provider.config)
+                    if include_configuration
+                    else {}
+                ),
                 "modelsLastSyncedAt": (
                     provider.models_last_synced_at.isoformat()
                     if provider.models_last_synced_at
@@ -499,29 +581,45 @@ def _settings_payload(
     }
 
 
-async def _settings_response(db: AsyncSession, settings: AiSettings) -> dict[str, Any]:
-    tool_settings = await SettingsStore.load(db, ToolSettings)
-    return _settings_payload(settings, tool_settings)
+async def _settings_response(
+    db: AsyncSession,
+    settings: AiSettingsBase,
+    user_id: UUID | None = None,
+    *,
+    include_configuration: bool = True,
+) -> dict[str, Any]:
+    tool_settings = (
+        await load_effective_tools(db, user_id)
+        if user_id is not None
+        else await SettingsStore.load(db, ToolSettings)
+    )
+    return _settings_payload(
+        settings, tool_settings, include_configuration=include_configuration
+    )
 
 
 async def _save_openai_provider(
     db: AsyncSession,
-    settings: AiSettings,
+    settings: AiSettingsDocument,
     payload: OpenAIProviderRequest,
     provider: LlmProviderConfig | None = None,
+    owner_id: UUID | None = None,
 ) -> dict[str, Any]:
     credential_id = provider.credential_id if provider else None
     previous_config = dict(provider.config) if provider else None
     api_key = payload.api_key.strip() if payload.api_key else ""
     if payload.remove_api_key and credential_id:
-        existing = await db.get(Credential, credential_id)
-        if existing is not None:
-            await db.delete(existing)
+        await delete_credential(db, credential_id, owner_id=provider.owner_id)
         credential_id = None
     elif api_key:
-        existing = await db.get(Credential, credential_id) if credential_id else None
+        existing = (
+            await load_credential(db, credential_id, owner_id=provider.owner_id)
+            if credential_id
+            else None
+        )
         credential = await store_credential(
             db,
+            owner_id=provider.owner_id if provider else owner_id,
             kind="openai-compatible-api-key",
             label=payload.name,
             payload={"api_key": api_key},
@@ -530,6 +628,7 @@ async def _save_openai_provider(
         credential_id = credential.id
     if provider is None:
         provider = LlmProviderConfig(name=payload.name, adapter_type="openai-compatible")
+        provider.owner_id = owner_id
         settings.providers.append(provider)
     provider.name = payload.name
     provider.trust_level = payload.trust_level
@@ -548,28 +647,32 @@ async def _save_openai_provider(
             if model.provider_id == provider.id and model.origin == ModelOrigin.DISCOVERED:
                 model.availability = ModelAvailability.MISSING
         _clear_invalid_defaults(settings)
-    await SettingsStore.save(db, settings)
-    return await _settings_response(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
+    return await _settings_response(db, settings, owner_id)
 
 
 async def _save_lemonade_provider(
     db: AsyncSession,
-    settings: AiSettings,
+    settings: AiSettingsDocument,
     payload: LemonadeProviderRequest,
     provider: LlmProviderConfig | None = None,
+    owner_id: UUID | None = None,
 ) -> dict[str, Any]:
     credential_id = provider.credential_id if provider else None
     previous_config = dict(provider.config) if provider else None
     api_key = payload.api_key.strip() if payload.api_key else ""
     if payload.remove_api_key and credential_id:
-        existing = await db.get(Credential, credential_id)
-        if existing is not None:
-            await db.delete(existing)
+        await delete_credential(db, credential_id, owner_id=provider.owner_id)
         credential_id = None
     elif api_key:
-        existing = await db.get(Credential, credential_id) if credential_id else None
+        existing = (
+            await load_credential(db, credential_id, owner_id=provider.owner_id)
+            if credential_id
+            else None
+        )
         credential = await store_credential(
             db,
+            owner_id=provider.owner_id if provider else owner_id,
             kind="lemonade-api-key",
             label=payload.name,
             payload={"api_key": api_key},
@@ -578,6 +681,7 @@ async def _save_lemonade_provider(
         credential_id = credential.id
     if provider is None:
         provider = LlmProviderConfig(name=payload.name, adapter_type="lemonade")
+        provider.owner_id = owner_id
         settings.providers.append(provider)
     provider.name = payload.name
     provider.trust_level = payload.trust_level
@@ -593,25 +697,55 @@ async def _save_lemonade_provider(
             if model.provider_id == provider.id and model.origin == ModelOrigin.DISCOVERED:
                 model.availability = ModelAvailability.MISSING
         _clear_invalid_defaults(settings)
-    await SettingsStore.save(db, settings)
-    return await _settings_response(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.get("")
 async def list_providers(
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope | None = None,
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
+    if scope is None and user is not None and not user.is_admin:
+        return await _settings_response(
+            db,
+            await load_effective_ai(db, user.id),
+            user.id,
+            include_configuration=False,
+        )
+    settings, owner_id = await _load_scoped_ai(db, scope or "instance", user)
+    return await _settings_response(
+        db,
+        settings,
+        owner_id,
+        include_configuration=user is None or user.is_admin or scope == "personal",
+    )
+
+
+@router.get("/personal-policy")
+async def get_personal_provider_policy(
+    _user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, bool]:
     settings = await SettingsStore.load(db, AiSettings)
-    return await _settings_response(db, settings)
+    return {
+        "enabled": settings.enabled,
+        "personalProvidersEnabled": settings.personal_providers_enabled,
+    }
 
 
 @router.post("/openai-compatible", status_code=status.HTTP_201_CREATED)
 async def save_openai_provider(
     payload: OpenAIProviderRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
-    result = await _save_openai_provider(db, settings, payload)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
+    result = await _save_openai_provider(db, settings, payload, owner_id=owner_id)
     result["providerId"] = str(settings.providers[-1].id)
     await db.commit()
     return result
@@ -621,9 +755,13 @@ async def save_openai_provider(
 async def save_lemonade_provider(
     payload: LemonadeProviderRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
-    result = await _save_lemonade_provider(db, settings, payload)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
+    result = await _save_lemonade_provider(db, settings, payload, owner_id=owner_id)
     result["providerId"] = str(settings.providers[-1].id)
     await db.commit()
     return result
@@ -634,13 +772,19 @@ async def update_openai_provider(
     provider_id: UUID,
     payload: OpenAIProviderRequest | LemonadeProviderRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     provider = _provider(settings, provider_id)
     if provider.adapter_type == "openai-compatible":
         if not isinstance(payload, OpenAIProviderRequest):
             payload = OpenAIProviderRequest.model_validate(payload.model_dump(exclude_unset=True))
-        result = await _save_openai_provider(db, settings, payload, provider)
+        result = await _save_openai_provider(
+            db, settings, payload, provider, owner_id=owner_id
+        )
     elif provider.adapter_type == "lemonade":
         if not isinstance(payload, LemonadeProviderRequest):
             try:
@@ -649,7 +793,9 @@ async def update_openai_provider(
                 )
             except ValidationError as exc:
                 raise ApiError(400, "provider.configurationInvalid") from exc
-        result = await _save_lemonade_provider(db, settings, payload, provider)
+        result = await _save_lemonade_provider(
+            db, settings, payload, provider, owner_id=owner_id
+        )
     else:
         raise ApiError(404, "provider.notFound")
     await db.commit()
@@ -661,13 +807,17 @@ async def set_provider_enabled(
     provider_id: UUID,
     payload: EnabledRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     _provider(settings, provider_id).enabled = payload.enabled
     _clear_invalid_defaults(settings)
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
-    return await _settings_response(db, settings)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.patch("/configuration/{provider_id}/memory-policy")
@@ -675,12 +825,16 @@ async def set_provider_memory_policy(
     provider_id: UUID,
     payload: MemoryPolicyRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     _provider(settings, provider_id).memory_policy = payload.memory_policy
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
-    return await _settings_response(db, settings)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.patch("/configuration/{provider_id}/policy")
@@ -688,24 +842,48 @@ async def set_provider_policy(
     provider_id: UUID,
     payload: ProviderPolicyRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     provider = _provider(settings, provider_id)
     provider.trust_level = payload.trust_level
     provider.pseudonymization_enabled = payload.pseudonymization_enabled
     provider.memory_policy = payload.memory_policy
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
-    return await _settings_response(db, settings)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.patch("/enabled")
 async def set_ai_enabled(
     payload: EnabledRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     settings.enabled = payload.enabled
+    await _save_scoped_ai(db, settings, owner_id)
+    await db.commit()
+    return await _settings_response(db, settings, owner_id)
+
+
+@router.patch("/personal-enabled")
+async def set_personal_providers_enabled(
+    payload: EnabledRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, _owner_id = await _load_scoped_ai(
+        db, "instance", user, for_update=True, mutation=True
+    )
+    assert isinstance(settings, AiSettings)
+    settings.personal_providers_enabled = payload.enabled
     await SettingsStore.save(db, settings)
     await db.commit()
     return await _settings_response(db, settings)
@@ -715,8 +893,10 @@ async def set_ai_enabled(
 async def sync_provider_models(
     provider_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings)
+    settings, owner_id = await _load_scoped_ai(db, scope, user, mutation=True)
     provider = _provider(settings, provider_id).model_copy(deep=True)
     provider_snapshot = await _provider_sync_fingerprint(db, provider)
     try:
@@ -737,7 +917,11 @@ async def sync_provider_models(
         logger.exception("Unexpected provider model discovery failure")
         raise ApiError(502, "provider.requestFailed") from exc
 
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, current_owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
+    if current_owner_id != owner_id:
+        raise ApiError(409, "provider.configurationChanged")
     provider = _provider(settings, provider_id)
     if provider_snapshot != await _provider_sync_fingerprint(db, provider):
         raise ApiError(409, "provider.configurationChanged")
@@ -844,9 +1028,9 @@ async def sync_provider_models(
             model.availability = ModelAvailability.MISSING
     provider.models_last_synced_at = synced_at
     _clear_invalid_defaults(settings)
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
-    return await _settings_response(db, settings)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.post("/configuration/{provider_id}/models", status_code=status.HTTP_201_CREATED)
@@ -854,8 +1038,12 @@ async def create_manual_model(
     provider_id: UUID,
     payload: ModelRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     _provider(settings, provider_id)
     _ensure_unique_model_id(settings, provider_id=provider_id, model_id=payload.model_id)
     model_values = payload.model_dump(exclude={"enabled"})
@@ -867,9 +1055,9 @@ async def create_manual_model(
             **model_values,
         )
     )
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
-    return await _settings_response(db, settings)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.put("/models/{model_id}")
@@ -877,8 +1065,12 @@ async def update_model(
     model_id: UUID,
     payload: ModelRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     model = _model(settings, model_id)
     if model.origin == ModelOrigin.DISCOVERED and payload.model_id != model.model_id:
         raise ApiError(409, "provider.discoveredModelIdImmutable", field="modelId")
@@ -900,9 +1092,9 @@ async def update_model(
         raise ApiError(400, "provider.configurationInvalid") from exc
     settings.models[settings.models.index(model)] = validated
     _clear_invalid_defaults(settings)
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
-    return await _settings_response(db, settings)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.patch("/models/{model_id}/enabled")
@@ -910,35 +1102,47 @@ async def set_model_enabled(
     model_id: UUID,
     payload: EnabledRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     model = _model(settings, model_id)
     if payload.enabled and model.availability == ModelAvailability.MISSING:
         raise ApiError(409, "provider.modelUnavailable")
     model.enabled = payload.enabled
     _clear_invalid_defaults(settings)
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
-    return await _settings_response(db, settings)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.delete("/models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_model(
     model_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     model = _model(settings, model_id)
     if model.origin != ModelOrigin.MANUAL:
         raise ApiError(409, "provider.discoveredModelDeleteForbidden")
-    referenced = await db.scalar(
-        select(ChatSession.id).where(ChatSession.model_config_id == model.id).limit(1)
+    referenced_query = select(ChatSession.id).where(
+        ChatSession.model_config_id == model.id
     )
+    if owner_id is not None:
+        referenced_query = referenced_query.where(ChatSession.user_id == owner_id)
+    referenced = await db.scalar(referenced_query.limit(1))
     if referenced is not None:
         raise ApiError(409, "provider.modelInUse")
     settings.models.remove(model)
+    _clear_removed_defaults(settings, {model.id})
     _clear_invalid_defaults(settings)
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
 
 
@@ -946,8 +1150,10 @@ async def delete_model(
 async def test_model(
     model_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict[str, str]:
-    settings = await SettingsStore.load(db, AiSettings)
+    settings, _owner_id = await _load_scoped_ai(db, scope, user)
     model = _model(settings, model_id)
     provider = _provider(settings, model.provider_id)
     if ModelCapability.CHAT not in model.capabilities:
@@ -978,11 +1184,18 @@ async def test_model(
 async def set_default_model(
     payload: DefaultModelRequest | None,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     model_id = payload.model_id if payload else None
+    validation_settings = (
+        await load_effective_ai(db, owner_id) if owner_id is not None else settings
+    )
     if model_id is not None:
-        model = _available_model(settings, model_id)
+        model = _available_model(validation_settings, model_id)
         if model is None:
             raise ApiError(409, "provider.modelUnavailable")
         if ModelCapability.CHAT not in model.capabilities:
@@ -990,17 +1203,24 @@ async def set_default_model(
         if not model.supports_tools:
             raise ApiError(409, "session.modelToolsUnavailable")
     settings.default_model_id = model_id
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
-    return await _settings_response(db, settings)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.put("/default-models")
 async def set_default_models(
     payload: DefaultModelsRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
+    validation_settings = (
+        await load_effective_ai(db, owner_id) if owner_id is not None else settings
+    )
     fields = {
         "default_model_id": ("defaultModelId", ModelCapability.CHAT),
         "compaction_model_id": ("compactionModelId", ModelCapability.CHAT),
@@ -1030,7 +1250,7 @@ async def set_default_models(
         model_id = getattr(payload, field)
         if model_id is None:
             continue
-        model = _available_model(settings, model_id)
+        model = _available_model(validation_settings, model_id)
         if model is None:
             raise ApiError(409, "provider.modelUnavailable", field=api_field)
         if capability not in model.capabilities:
@@ -1045,13 +1265,13 @@ async def set_default_models(
             )
         if (
             field == "video_model_id"
-            and not _video_analysis_model_available(settings, model_id)
+            and not _video_analysis_model_available(validation_settings, model_id)
         ):
             raise ApiError(
                 409, "provider.modelCapabilityUnavailable", field=api_field
             )
         if capability != ModelCapability.CHAT and not media_model_available(
-            settings, capability, model_id
+            validation_settings, capability, model_id
         ):
             raise ApiError(
                 409, "provider.modelCapabilityUnavailable", field=api_field
@@ -1071,38 +1291,51 @@ async def set_default_models(
         if field in additive_fields and field not in payload.model_fields_set:
             continue
         setattr(settings, field, getattr(payload, field))
-    await SettingsStore.save(db, settings)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
-    return await _settings_response(db, settings)
+    return await _settings_response(db, settings, owner_id)
 
 
 @router.delete("/configuration/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_provider(
     provider_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     provider = _provider(settings, provider_id)
     removed_model_ids = {item.id for item in settings.models if item.provider_id == provider_id}
     settings.providers = [item for item in settings.providers if item.id != provider_id]
     settings.models = [item for item in settings.models if item.provider_id != provider_id]
+    _clear_removed_defaults(settings, removed_model_ids)
     if removed_model_ids:
-        await db.execute(
-            update(ChatSession)
-            .where(ChatSession.model_config_id.in_(removed_model_ids))
-            .values(model_config_id=None)
+        clear_sessions = update(ChatSession).where(
+            ChatSession.model_config_id.in_(removed_model_ids)
         )
+        if owner_id is not None:
+            clear_sessions = clear_sessions.where(ChatSession.user_id == owner_id)
+        await db.execute(clear_sessions.values(model_config_id=None))
     _clear_invalid_defaults(settings)
     if provider.credential_id:
-        await db.execute(delete(Credential).where(Credential.id == provider.credential_id))
-    await SettingsStore.save(db, settings)
+        await delete_credential(
+            db, provider.credential_id, owner_id=provider.owner_id
+        )
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
 
 
 @router.post("/codex/login")
-async def start_codex_login() -> dict[str, Any]:
+async def start_codex_login(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict[str, Any]:
+    _settings, owner_id = await _load_scoped_ai(db, scope, user, mutation=True)
     try:
-        attempt = await oauth_manager.start_login()
+        attempt = await oauth_manager.start_login(owner_id)
     except CodexOAuthError as exc:
         logger.warning("Codex device-code login could not be started: %s", exc.code)
         raise ApiError(502, exc.code) from exc
@@ -1119,9 +1352,12 @@ async def start_codex_login() -> dict[str, Any]:
 async def codex_login_status(
     login_id: str,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
+    _settings, owner_id = await _load_scoped_ai(db, scope, user, mutation=True)
     attempt, should_poll = oauth_manager.begin_poll(login_id)
-    if attempt is None:
+    if attempt is None or attempt.owner_id != owner_id:
         raise ApiError(404, "oauth.loginNotFound")
     if oauth_manager.expired(attempt):
         oauth_manager.finish(login_id)
@@ -1149,24 +1385,32 @@ async def codex_login_status(
             "error": describe_error("oauth.exchangeFailed").payload(),
         }
     try:
-        credential = await db.scalar(select(Credential).where(Credential.kind == "codex-oauth"))
+        credential = await db.scalar(
+            scoped_credentials(owner_id).where(Credential.kind == "codex-oauth")
+        )
         credential = await store_credential(
             db,
+            owner_id=owner_id,
             kind="codex-oauth",
             label="ChatGPT Codex",
             payload=token,
             metadata={"accountId": token.get("account_id")},
             credential=credential,
         )
-        settings = await SettingsStore.load(db, AiSettings, for_update=True)
+        settings, current_owner_id = await _load_scoped_ai(
+            db, scope, user, for_update=True, mutation=True
+        )
+        if current_owner_id != owner_id:
+            raise RuntimeError("Codex OAuth scope changed")
         provider = next(
             (item for item in settings.providers if item.adapter_type == "openai-codex"), None
         )
         if provider is None:
             provider = LlmProviderConfig(name="ChatGPT Codex", adapter_type="openai-codex")
+            provider.owner_id = owner_id
             settings.providers.append(provider)
         provider.credential_id = credential.id
-        await SettingsStore.save(db, settings)
+        await _save_scoped_ai(db, settings, owner_id)
         await db.commit()
     except Exception:
         logger.exception("Codex credential persistence failed")
@@ -1186,8 +1430,23 @@ async def codex_login_status(
 @router.get("/codex/status")
 async def codex_status(
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope | None = None,
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    credential = await db.scalar(select(Credential).where(Credential.kind == "codex-oauth"))
+    if scope is None and user is not None and not user.is_admin:
+        settings = await load_effective_ai(db, user.id)
+        return {
+            "authenticated": any(
+                provider.adapter_type == "openai-codex"
+                and provider.credential_id is not None
+                for provider in settings.providers
+            ),
+            "accountId": None,
+        }
+    _settings, owner_id = await _load_scoped_ai(db, scope or "instance", user)
+    credential = await db.scalar(
+        scoped_credentials(owner_id).where(Credential.kind == "codex-oauth")
+    )
     return {
         "authenticated": credential is not None,
         "accountId": credential.metadata_json.get("accountId") if credential else None,
@@ -1197,16 +1456,25 @@ async def codex_status(
 @router.delete("/codex/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def codex_logout(
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
     credentials = list(
-        (await db.scalars(select(Credential).where(Credential.kind == "codex-oauth"))).all()
+        (
+            await db.scalars(
+                scoped_credentials(owner_id).where(Credential.kind == "codex-oauth")
+            )
+        ).all()
     )
     credential_ids = {item.id for item in credentials}
-    settings = await SettingsStore.load(db, AiSettings, for_update=True)
     for provider in settings.providers:
         if provider.credential_id in credential_ids:
             provider.credential_id = None
     _clear_invalid_defaults(settings)
-    await db.execute(delete(Credential).where(Credential.kind == "codex-oauth"))
-    await SettingsStore.save(db, settings)
+    for credential in credentials:
+        await db.delete(credential)
+    await _save_scoped_ai(db, settings, owner_id)
     await db.commit()

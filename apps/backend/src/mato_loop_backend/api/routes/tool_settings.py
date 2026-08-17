@@ -1,4 +1,5 @@
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -11,6 +12,7 @@ from mato_loop_backend.integrations import (
     normalize_search_tool_settings,
     search_provider_options,
 )
+from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     IntegrationSettings,
@@ -19,11 +21,47 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    UserToolSettings,
     WebFetchSettings,
     WebSearchToolSettings,
+    load_effective_integrations,
+    load_effective_tools,
 )
 
 router = APIRouter(prefix="/tools", dependencies=[Depends(require_user)])
+SettingsApiScope = Literal["instance", "personal"]
+
+
+async def _load_scoped_tools(
+    db: AsyncSession,
+    scope: SettingsApiScope,
+    user: UserAccount | None,
+    *,
+    for_update: bool = False,
+    mutation: bool = False,
+) -> tuple[ToolSettings | UserToolSettings, UUID | None]:
+    instance = await SettingsStore.load(db, ToolSettings)
+    if scope == "instance":
+        if user is not None and not getattr(user, "is_admin", False):
+            raise ApiError(403, "auth.adminRequired")
+        settings = (
+            await SettingsStore.load(db, ToolSettings, for_update=True)
+            if for_update
+            else instance
+        )
+        return settings, None
+    if user is None:
+        raise ApiError(401, "auth.notAuthenticated")
+    if not instance.personal_settings_enabled:
+        raise ApiError(409, "tool.personalSettingsDisabled")
+    personal = await SettingsStore.load_optional(
+        db, UserToolSettings, user_id=user.id, for_update=for_update
+    )
+    if personal is None:
+        personal = UserToolSettings.model_validate(
+            instance.model_dump(exclude={"personal_settings_enabled"})
+        )
+    return personal, user.id
 
 
 class ToolSettingsRequest(BaseModel):
@@ -60,8 +98,17 @@ class ToolSettingsRequest(BaseModel):
     )
 
 
+class PersonalSettingsEnabledRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 def tool_settings_payload(
-    settings: ToolSettings, integrations: IntegrationSettings | None = None
+    settings: ToolSettings,
+    integrations: IntegrationSettings | None = None,
+    *,
+    include_private_origins: bool = True,
 ) -> dict:
     integration_settings = integrations or IntegrationSettings()
     effective_settings = settings.model_copy(deep=True)
@@ -76,6 +123,7 @@ def tool_settings_payload(
         if action["configurable"]
     }
     return {
+        "personalSettingsEnabled": settings.personal_settings_enabled,
         "groups": groups,
         "policies": policies,
         "webSearch": {
@@ -88,7 +136,11 @@ def tool_settings_payload(
             "userAgent": settings.web_fetch.user_agent,
             "maxResponseMiB": settings.web_fetch.max_response_mib,
             "defaultPolicy": settings.web_fetch.default_policy.value,
-            "allowedPrivateOrigins": settings.web_fetch.allowed_private_origins,
+            "allowedPrivateOrigins": (
+                settings.web_fetch.allowed_private_origins
+                if include_private_origins
+                else []
+            ),
         },
         "generateImage": {
             "policy": tool_execution_policy(
@@ -139,19 +191,50 @@ def tool_settings_payload(
 @router.get("/settings")
 async def get_tool_settings(
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    integrations = await SettingsStore.load(db, IntegrationSettings)
+    if scope == "personal":
+        if user is None:
+            raise ApiError(401, "auth.notAuthenticated")
+        settings = await load_effective_tools(db, user.id)
+        if not settings.personal_settings_enabled:
+            raise ApiError(409, "tool.personalSettingsDisabled")
+        integrations = await load_effective_integrations(db, user.id)
+    else:
+        settings, _owner_id = await _load_scoped_tools(db, scope, user)
+        integrations = await SettingsStore.load(db, IntegrationSettings)
+    return tool_settings_payload(
+        settings,
+        integrations,
+        include_private_origins=user is None or getattr(user, "is_admin", False),
+    )
+
+
+@router.get("/personal-settings")
+async def get_personal_tool_settings(
+    _user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, bool]:
     settings = await SettingsStore.load(db, ToolSettings)
-    return tool_settings_payload(settings, integrations)
+    return {"enabled": settings.personal_settings_enabled}
 
 
 @router.put("/settings")
 async def update_tool_settings(
     payload: ToolSettingsRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    integrations = await SettingsStore.load(db, IntegrationSettings, for_update=True)
-    settings = await SettingsStore.load(db, ToolSettings, for_update=True)
+    settings, owner_id = await _load_scoped_tools(
+        db, scope, user, for_update=True, mutation=True
+    )
+    integrations = (
+        await load_effective_integrations(db, owner_id)
+        if owner_id is not None
+        else await SettingsStore.load(db, IntegrationSettings, for_update=True)
+    )
     if payload.web_search is not None:
         available = {
             str(option["value"]) for option in search_provider_options(integrations)
@@ -168,7 +251,11 @@ async def update_tool_settings(
                 409, "integration.providerUnavailable", field="fallback_provider"
             )
         settings.web_search = payload.web_search
-    settings.web_fetch = payload.web_fetch
+    if owner_id is None:
+        settings.web_fetch = payload.web_fetch
+    else:
+        settings.web_fetch.enabled = payload.web_fetch.enabled
+        settings.web_fetch.default_policy = payload.web_fetch.default_policy
     for field_name in (
         "generate_image",
         "edit_image",
@@ -247,6 +334,51 @@ async def update_tool_settings(
         getattr(settings, field_name).policy = tool_execution_policy(
             settings, capability, getattr(settings, field_name).policy
         )
+    await SettingsStore.save(db, settings, user_id=owner_id)
+    await db.commit()
+    response_settings = (
+        await load_effective_tools(db, owner_id) if owner_id is not None else settings
+    )
+    return tool_settings_payload(
+        response_settings,
+        integrations,
+        include_private_origins=user is None or getattr(user, "is_admin", False),
+    )
+
+
+@router.delete("/settings")
+async def reset_personal_tool_settings(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "personal",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    if scope != "personal":
+        raise ApiError(400, "validation.invalidChoice", field="scope")
+    if user is None:
+        raise ApiError(401, "auth.notAuthenticated")
+    instance = await SettingsStore.load(db, ToolSettings)
+    if not instance.personal_settings_enabled:
+        raise ApiError(409, "tool.personalSettingsDisabled")
+    await SettingsStore.delete(db, UserToolSettings, user_id=user.id)
+    await db.commit()
+    return tool_settings_payload(
+        await load_effective_tools(db, user.id),
+        await load_effective_integrations(db, user.id),
+        include_private_origins=getattr(user, "is_admin", False),
+    )
+
+
+@router.patch("/personal-enabled")
+async def set_personal_tool_settings_enabled(
+    payload: PersonalSettingsEnabledRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict[str, bool]:
+    settings, _owner_id = await _load_scoped_tools(
+        db, "instance", user, for_update=True, mutation=True
+    )
+    assert isinstance(settings, ToolSettings)
+    settings.personal_settings_enabled = payload.enabled
     await SettingsStore.save(db, settings)
     await db.commit()
-    return tool_settings_payload(settings, integrations)
+    return {"enabled": settings.personal_settings_enabled}

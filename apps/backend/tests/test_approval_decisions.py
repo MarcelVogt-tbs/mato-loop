@@ -261,7 +261,7 @@ async def test_memory_approve_dispatches_service_outcomes(
             )
         assert exc_info.value.code == expected_code
 
-    resolver.assert_awaited_once_with(db, approval=approval, user_id=user.id)
+    resolver.assert_awaited_once_with(db, approval=approval, owner_id=user.id)
     assert approval.status == expected_status
     assert approval.resolved_at is not None
     db.commit.assert_awaited_once()

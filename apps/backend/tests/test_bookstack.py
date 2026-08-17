@@ -902,6 +902,7 @@ def _attachment(**overrides) -> BookStackAttachment:
 
 def _download_context(instance: IntegrationInstance, revision: str) -> SimpleNamespace:
     context = _context(instance, revision)
+    context.session = SimpleNamespace(user_id=uuid4())
     context.web_fetch_policy = WebFetchPolicy.AUTO_PUBLIC
     context.tool_settings = ToolSettings()
     context.allowed_private_origins = ()

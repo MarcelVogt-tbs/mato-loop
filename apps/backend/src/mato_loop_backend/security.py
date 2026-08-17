@@ -6,6 +6,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
+from uuid import UUID
 
 from cryptography.fernet import Fernet
 from fastapi import Cookie, Depends, status
@@ -34,6 +35,8 @@ def verify_password(password: str, hashed: str) -> bool:
 
 
 async def create_login_session(db: AsyncSession, user: UserAccount) -> tuple[str, datetime]:
+    if not user.is_active:
+        raise ApiError(status.HTTP_401_UNAUTHORIZED, "auth.accountDisabled")
     config = get_runtime_config()
     token = secrets.token_urlsafe(48)
     expires_at = datetime.now(UTC) + timedelta(days=config.session_duration_days)
@@ -61,7 +64,21 @@ async def require_user(
     user = await db.get(UserAccount, login.user_id)
     if user is None:
         raise ApiError(status.HTTP_401_UNAUTHORIZED, "auth.userMissing")
+    if not user.is_active:
+        raise ApiError(status.HTTP_401_UNAUTHORIZED, "auth.accountDisabled")
     return user
+
+
+async def require_admin(
+    user: Annotated[UserAccount, Depends(require_user)],
+) -> UserAccount:
+    if not user.is_admin:
+        raise ApiError(status.HTTP_403_FORBIDDEN, "auth.adminRequired")
+    return user
+
+
+async def revoke_login_sessions(db: AsyncSession, user_id: UUID) -> None:
+    await db.execute(delete(LoginSession).where(LoginSession.user_id == user_id))
 
 
 async def remove_login_session(db: AsyncSession, token: str | None) -> None:
@@ -98,6 +115,7 @@ class CredentialCipher:
 async def store_credential(
     db: AsyncSession,
     *,
+    owner_id: UUID | None,
     kind: str,
     label: str,
     payload: dict[str, Any],
@@ -107,6 +125,7 @@ async def store_credential(
     cipher = CredentialCipher()
     if credential is None:
         credential = Credential(
+            user_id=owner_id,
             kind=kind,
             label=label,
             encrypted_payload=cipher.encrypt(payload),
@@ -114,12 +133,49 @@ async def store_credential(
         )
         db.add(credential)
     else:
+        if credential.user_id != owner_id:
+            raise ValueError("Credential scope mismatch")
         credential.kind = kind
         credential.label = label
         credential.encrypted_payload = cipher.encrypt(payload)
         credential.metadata_json = metadata or {}
     await db.flush()
     return credential
+
+
+async def load_credential(
+    db: AsyncSession,
+    credential_id: UUID,
+    *,
+    owner_id: UUID | None,
+    populate_existing: bool = False,
+) -> Credential | None:
+    credential = await db.get(
+        Credential, credential_id, populate_existing=populate_existing
+    )
+    return (
+        credential
+        if credential is not None and getattr(credential, "user_id", object()) == owner_id
+        else None
+    )
+
+
+def scoped_credentials(owner_id: UUID | None):
+    return select(Credential).where(
+        Credential.user_id.is_(None)
+        if owner_id is None
+        else Credential.user_id == owner_id
+    )
+
+
+async def delete_credential(
+    db: AsyncSession, credential_id: UUID, *, owner_id: UUID | None
+) -> bool:
+    credential = await load_credential(db, credential_id, owner_id=owner_id)
+    if credential is None:
+        return False
+    await db.delete(credential)
+    return True
 
 
 def read_credential(credential: Credential) -> dict[str, Any]:

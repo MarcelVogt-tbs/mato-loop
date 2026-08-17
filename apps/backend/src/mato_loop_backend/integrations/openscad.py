@@ -43,9 +43,8 @@ from mato_loop_backend.integrations.contracts import (
 from mato_loop_backend.models import AgentRun
 from mato_loop_backend.settings import (
     IntegrationInstance,
-    IntegrationSettings,
-    SettingsStore,
     ToolExecutionPolicy,
+    load_effective_integrations,
 )
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
@@ -631,7 +630,9 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
 
     integration_id = context.bound_options.get("integration_id")
     expected_revision = context.bound_options.get("binding_revision")
-    settings = await SettingsStore.load(context.db, IntegrationSettings)
+    settings = await load_effective_integrations(
+        context.db, context.session.user_id
+    )
     instance = next(
         (
             item

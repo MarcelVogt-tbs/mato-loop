@@ -196,7 +196,8 @@ function close() {
 watch(() => props.modelValue, (open) => {
   if (open) {
     initialize()
-    if (!tools.loaded) tools.fetchSettings().catch(() => {})
+    tools.selectScope(providers.scope)
+    tools.fetchSettings().catch(() => {})
   }
 })
 </script>

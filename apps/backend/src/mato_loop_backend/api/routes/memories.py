@@ -31,11 +31,11 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
-    AiSettings,
     MemorySettings,
     SettingsStore,
     ToolExecutionPolicy,
     TrustLevel,
+    load_effective_ai,
 )
 
 router = APIRouter(prefix="/memories", dependencies=[Depends(require_user)])
@@ -148,9 +148,9 @@ def dream_run_payload(item: MemoryDreamRun) -> dict[str, Any]:
 
 
 async def settings_payload(
-    db: AsyncSession, settings: MemorySettings
+    db: AsyncSession, settings: MemorySettings, user_id: UUID
 ) -> dict[str, Any]:
-    ai = await SettingsStore.load(db, AiSettings)
+    ai = await load_effective_ai(db, user_id)
     automatic_enabled, automatic_reason = dreaming_availability(
         settings, ai, automatic=True
     )
@@ -181,7 +181,7 @@ async def get_memory_settings(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
     settings = await SettingsStore.load(db, MemorySettings, user_id=user.id)
-    return await settings_payload(db, settings)
+    return await settings_payload(db, settings, user.id)
 
 
 @router.patch("/settings")
@@ -197,7 +197,7 @@ async def put_memory_settings(
         setattr(settings, field, value)
     await SettingsStore.save(db, settings, user_id=user.id)
     await db.commit()
-    return await settings_payload(db, settings)
+    return await settings_payload(db, settings, user.id)
 
 
 @router.get("/dream-runs")
@@ -247,7 +247,7 @@ async def start_dream_runs(
     memory_settings = await SettingsStore.load(
         db, MemorySettings, user_id=user.id
     )
-    ai_settings = await SettingsStore.load(db, AiSettings)
+    ai_settings = await load_effective_ai(db, user.id)
     available, reason = dreaming_availability(
         memory_settings, ai_settings, automatic=False
     )
@@ -304,6 +304,7 @@ async def list_memories(
 ) -> dict[str, Any]:
     result = await MemoryService.list(
         db,
+        owner_id=user.id,
         query=query,
         source_type=source_type,
         category=category,
@@ -332,6 +333,7 @@ async def create_memory(
     try:
         item = await MemoryService.create_manual(
             db,
+            owner_id=user.id,
             content=content,
             category=payload.category,
             trust_level=payload.trust_level,
@@ -339,7 +341,7 @@ async def create_memory(
     except MemoryDuplicateError as exc:
         raise ApiError(409, "memory.duplicate") from exc
     await db.commit()
-    item = await MemoryService.get(db, item.id)
+    item = await MemoryService.get(db, owner_id=user.id, memory_id=item.id)
     if item is None:
         raise ApiError(500, "memory.persistFailed")
     return memory_payload(item)
@@ -348,9 +350,12 @@ async def create_memory(
 @router.post("/acknowledgements")
 async def acknowledge_memories(
     payload: MemoryAcknowledgementRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, int]:
-    acknowledged = await MemoryService.mark_seen(db, payload.memory_ids)
+    acknowledged = await MemoryService.mark_seen(
+        db, owner_id=user.id, memory_ids=payload.memory_ids
+    )
     await db.commit()
     return {"acknowledged": acknowledged}
 
@@ -361,7 +366,7 @@ async def get_memory(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
-    item = await MemoryService.get(db, memory_id)
+    item = await MemoryService.get(db, owner_id=user.id, memory_id=memory_id)
     if item is None:
         raise ApiError(404, "memory.notFound")
     return memory_payload(item)
@@ -374,7 +379,9 @@ async def update_memory(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
-    item = await MemoryService.get(db, memory_id, for_update=True)
+    item = await MemoryService.get(
+        db, owner_id=user.id, memory_id=memory_id, for_update=True
+    )
     if item is None:
         raise ApiError(404, "memory.notFound")
     content = payload.content.strip()
@@ -384,6 +391,7 @@ async def update_memory(
         await MemoryService.update(
             db,
             item,
+            owner_id=user.id,
             content=content,
             category=payload.category,
             trust_level=payload.trust_level,
@@ -393,7 +401,9 @@ async def update_memory(
     except MemoryDuplicateError as exc:
         raise ApiError(409, "memory.duplicate") from exc
     await db.commit()
-    refreshed = await MemoryService.get(db, item.id)
+    refreshed = await MemoryService.get(
+        db, owner_id=user.id, memory_id=item.id
+    )
     if refreshed is None:
         raise ApiError(404, "memory.notFound")
     return memory_payload(refreshed)
@@ -402,10 +412,11 @@ async def update_memory(
 @router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_memory(
     memory_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
-    item = await MemoryService.get(db, memory_id)
+    item = await MemoryService.get(db, owner_id=user.id, memory_id=memory_id)
     if item is None:
         raise ApiError(404, "memory.notFound")
-    await MemoryService.delete(db, item)
+    await MemoryService.delete(db, item, owner_id=user.id)
     await db.commit()

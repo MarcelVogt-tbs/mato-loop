@@ -175,8 +175,6 @@ def _context(
         root_files=RootFileService(
             session.id,
             session_storage=storage,
-            workspace_home=tmp_path,
-            working_directory=session.working_directory,
         ),
         integration_settings=IntegrationSettings(),
         ask_handler=AsyncMock(return_value=decision),
@@ -2342,6 +2340,7 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
         "cursor_id": str(item.id),
     }
     retrieve.assert_awaited_once()
+    assert retrieve.await_args.kwargs["owner_id"] == context.session.user_id
     assert "retrieval_level" not in retrieve.await_args.kwargs
     assert result.metadata["memoryWritePending"] is False
 
@@ -2450,7 +2449,6 @@ async def test_workspace_video_uses_execution_client_bytes(tmp_path) -> None:
     )
     context = _context(tmp_path, call)
     context.session.working_directory = "project"
-    context.root_files.working_directory = "project"
     context.execution_client = SimpleNamespace(
         agent_id=uuid4(),
         root_id=uuid4(),
@@ -2754,6 +2752,9 @@ async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) ->
     )
     disabled = ToolSettings.model_validate({"webFetch": {"enabled": False}})
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=disabled))
+    monkeypatch.setattr(
+        SettingsStore, "load_optional", AsyncMock(return_value=None)
+    )
     fetch = AsyncMock(side_effect=AssertionError("Disabled webfetch must not run"))
     monkeypatch.setattr(tools_module, "fetch_web", fetch)
     call = ToolCall(

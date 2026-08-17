@@ -10,6 +10,8 @@ Unter **Einstellungen > Tools** legen Sie fest, welche Werkzeuge verfügbar sind
 
 Hostseitige Sicherheitsgrenzen gelten auch bei **Automatisch** weiterhin.
 
+Administratoren wechseln mit **Persönlich** / **Instanz** zwischen den eigenen Tool-Einstellungen und den gemeinsamen Vorgaben. Sie können persönliche Tool-Einstellungen vollständig sperren. Persönliche Richtlinien ersetzen sonst die Instanzvorgaben; User-Agent, Größenlimit und erlaubte private Ursprünge von Webfetch bleiben technische Instanzgrenzen. Mit **Auf Instanzstandard zurücksetzen** werden die persönlichen Tool-Einstellungen gelöscht.
+
 Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Agent-Modus, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
 
 Direkte Aktionen, die Sie selbst in der Oberfläche auslösen, verwenden keine Agent-Freigabekarte. Dazu gehören insbesondere Dateiaktionen im Explorer und das Diktat über die Mikrofonschaltfläche.
@@ -29,6 +31,12 @@ MatoLoop bündelt Werkzeuge für:
 - 3D-Modellierung (OpenSCAD)
 
 Welche Tools tatsächlich erscheinen, hängt zusätzlich von Agent-Modus, Session-Einstellungen, Modellfähigkeiten und konfigurierten Standardmodellen ab.
+
+## Instanz und persönliche Integrationen
+
+Instanz-Integrationen und ihre externen Ressourcen sind bewusst gemeinsam: Alle Benutzer können sie entsprechend den Instanzrichtlinien verwenden. Persönliche Integrationen und Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet. Administratoren können persönliche Integrationen vollständig sperren und einzeln erlauben, welche fest eingebauten Typen persönlich konfiguriert werden dürfen: SearXNG, CalDAV, BookStack, Git und OpenSCAD. Konfigurationen können keine eigenen Tool-Schemas oder beliebigen ausführbaren Tools hinzufügen.
+
+Administratoren sehen den Umschalter **Persönlich** / **Instanz**. Normale Benutzer bearbeiten nur ihren persönlichen Bereich. Git und OpenSCAD werden immer persönlich an einen Computer des angemeldeten Benutzers gebunden.
 
 ## Lokale Funktionen
 
@@ -56,7 +64,7 @@ Unter **Einstellungen > Integrationen** können Sie mehrere CalDAV-Konten mit Se
 
 Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**. Serverseitig schreibgeschützte Kalender und Aufgabenlisten bleiben unabhängig von der MatoLoop-Richtlinie schreibgeschützt.
 
-Im gemeinsamen Bereich **Standardressourcen dieses Kontos** wählen Sie unabhängig einen **Standardkalender** und eine **Standard-Aufgabenliste**. Unspezifische Abfragen und neue Einträge verwenden die jeweilige installationsweite Auswahl automatisch. Wenn Sie ausdrücklich eine andere Ressource angeben, hat diese Vorrang. Pro Installation kann jeweils nur ein Standard aktiv sein.
+Im Bereich **Standardressourcen dieses Kontos** wählen Sie unabhängig einen **Standardkalender** und eine **Standard-Aufgabenliste**. Unspezifische Abfragen und neue Einträge verwenden die Auswahl des aktuellen Einstellungsbereichs automatisch. Wenn Sie ausdrücklich eine andere Ressource angeben, hat diese Vorrang. Pro Instanz- oder persönlichem Bereich kann jeweils nur ein Standard aktiv sein.
 
 Lesefreigaben können für die aktuelle Chat-Session gelten. Schreib- und Löschfreigaben gelten nur für den konkreten Vorgang. Wiederkehrende Termine und Termine mit Einladungs- oder unbekannten Eigenschaften können gelesen, aber in der ersten Version nicht verändert werden.
 

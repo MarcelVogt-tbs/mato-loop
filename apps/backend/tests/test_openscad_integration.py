@@ -47,6 +47,7 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     SettingsStore,
     ToolSettings,
+    UserIntegrationSettings,
 )
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
@@ -110,15 +111,19 @@ def _render_result(agent_id, session_id, output="preview") -> OpenScadRenderResu
 
 
 def _tool_context(instance: IntegrationInstance):
+    user_id = uuid4()
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = SimpleNamespace(
         execution_agent_id=instance.execution_agent_id,
         execution_operations=["integration.openscad.render", "cache.export"],
     )
+    db.scalars.return_value = SimpleNamespace(
+        all=lambda: [instance.execution_agent_id]
+    )
     return SimpleNamespace(
         db=db,
         run_id=uuid4(),
-        session=SimpleNamespace(id=uuid4()),
+        session=SimpleNamespace(id=uuid4(), user_id=user_id),
         root_files=RootFileService(uuid4()),
         execution_client=SimpleNamespace(
             agent_id=instance.execution_agent_id,
@@ -498,7 +503,8 @@ async def test_render_tool_rejects_oversized_artifact_before_export(
 
 
 async def test_openscad_crud_payload_and_ownership_shape(monkeypatch) -> None:
-    settings = IntegrationSettings()
+    settings = UserIntegrationSettings()
+    instance_settings = IntegrationSettings()
     tools = ToolSettings()
     agent_id = uuid4()
     user = SimpleNamespace(id=uuid4())
@@ -507,7 +513,13 @@ async def test_openscad_crud_payload_and_ownership_shape(monkeypatch) -> None:
     db.scalars.return_value = SimpleNamespace(all=lambda: [agent_id])
 
     async def load(_db, settings_type, **_kwargs):
-        return settings if settings_type is IntegrationSettings else tools
+        return (
+            instance_settings
+            if settings_type is IntegrationSettings
+            else settings
+            if settings_type is UserIntegrationSettings
+            else tools
+        )
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())

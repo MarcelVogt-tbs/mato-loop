@@ -83,8 +83,6 @@ def _root_files(tmp_path, session: ChatSession) -> RootFileService:
     return RootFileService(
         session.id,
         session_storage=storage,
-        workspace_home=tmp_path,
-        working_directory=session.working_directory,
     )
 
 
@@ -230,6 +228,109 @@ def test_memory_normalization_is_whitespace_and_case_stable() -> None:
     assert first_hash == second_hash
 
 
+async def test_memory_crud_and_dedupe_queries_bind_each_owner() -> None:
+    first_owner = uuid4()
+    second_owner = uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+
+    await MemoryService._duplicate_by_hash(
+        db, owner_id=first_owner, content_hash="same"
+    )
+    await MemoryService._duplicate_by_hash(
+        db, owner_id=second_owner, content_hash="same"
+    )
+    await MemoryService.get(
+        db, owner_id=first_owner, memory_id=uuid4()
+    )
+    await MemoryService.get(
+        db, owner_id=second_owner, memory_id=uuid4()
+    )
+
+    statements = [call.args[0] for call in db.scalar.await_args_list]
+    assert first_owner in statements[0].compile().params.values()
+    assert second_owner in statements[1].compile().params.values()
+    assert first_owner in statements[2].compile().params.values()
+    assert second_owner in statements[3].compile().params.values()
+    assert all("memories.user_id" in str(statement) for statement in statements)
+
+
+async def test_same_content_is_created_once_per_owner(monkeypatch) -> None:
+    first_owner = uuid4()
+    second_owner = uuid4()
+    db = AsyncMock(spec=AsyncSession)
+
+    @asynccontextmanager
+    async def nested():
+        yield
+
+    db.begin_nested = Mock(side_effect=nested)
+    duplicate = AsyncMock(return_value=None)
+    create = AsyncMock(
+        side_effect=lambda _db, *, owner_id, **_kwargs: MemoryRecord(
+            id=uuid4(), user_id=owner_id
+        )
+    )
+    monkeypatch.setattr(MemoryService, "_duplicate_by_hash", duplicate)
+    monkeypatch.setattr(MemoryService, "_create", create)
+
+    for owner_id in (first_owner, second_owner):
+        await MemoryService.create_manual(
+            db,
+            owner_id=owner_id,
+            content="Shared normalized content",
+            category=MemoryCategory.FACT,
+            trust_level=TrustLevel.PUBLIC,
+        )
+
+    assert [call.kwargs["owner_id"] for call in duplicate.await_args_list] == [
+        first_owner,
+        second_owner,
+    ]
+    assert [call.kwargs["owner_id"] for call in create.await_args_list] == [
+        first_owner,
+        second_owner,
+    ]
+
+
+async def test_memory_mutations_reject_another_owner() -> None:
+    owner_id = uuid4()
+    item = MemoryRecord(id=uuid4(), user_id=owner_id, pinned=False, revision=1)
+    db = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(ValueError, match="owner mismatch"):
+        await MemoryService.delete(db, item, owner_id=uuid4())
+    with pytest.raises(ValueError, match="owner mismatch"):
+        await MemoryService.set_pinned(
+            db, item, owner_id=uuid4(), pinned=True
+        )
+
+    db.delete.assert_not_awaited()
+    db.flush.assert_not_awaited()
+
+
+async def test_memory_evidence_rejects_foreign_owner_message() -> None:
+    owner_id = uuid4()
+    owned_message_id = uuid4()
+    foreign_message_id = uuid4()
+    rows = Mock()
+    rows.all.return_value = [owned_message_id]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = rows
+
+    with pytest.raises(ValueError, match="evidence owner mismatch"):
+        await MemoryService._validate_evidence_owner(
+            db,
+            owner_id=owner_id,
+            message_ids=[owned_message_id, foreign_message_id],
+        )
+
+    statement = db.scalars.await_args.args[0]
+    assert owner_id in statement.compile().params.values()
+    assert "chat_sessions.user_id" in str(statement)
+    db.execute.assert_not_awaited()
+
+
 def test_memory_reference_timestamps_distinguish_source_and_record_lifecycle() -> None:
     source_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
     created_at = datetime(2026, 7, 20, 11, tzinfo=UTC)
@@ -245,8 +346,9 @@ def test_memory_reference_timestamps_distinguish_source_and_record_lifecycle() -
 
 
 async def test_dreaming_create_uses_first_evidence_as_current_source(monkeypatch) -> None:
+    owner_id = uuid4()
     evidence_id = uuid4()
-    item = MemoryRecord(id=uuid4(), content="Dauerhafter Fakt")
+    item = MemoryRecord(id=uuid4(), user_id=owner_id, content="Dauerhafter Fakt")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = None
 
@@ -260,6 +362,7 @@ async def test_dreaming_create_uses_first_evidence_as_current_source(monkeypatch
 
     result = await MemoryService.create_dreaming(
         db,
+        owner_id=owner_id,
         content=item.content,
         category=MemoryCategory.FACT,
         trust_level=TrustLevel.PRIVATE,
@@ -272,9 +375,11 @@ async def test_dreaming_create_uses_first_evidence_as_current_source(monkeypatch
     assert create.await_args.kwargs["message_id"] == evidence_id
 
 
-async def test_private_dreaming_candidate_upgrades_public_duplicate() -> None:
+async def test_private_dreaming_candidate_upgrades_public_duplicate(monkeypatch) -> None:
+    owner_id = uuid4()
     existing = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_type="dreaming",
         pinned=False,
         trust_level="public",
@@ -287,9 +392,12 @@ async def test_private_dreaming_candidate_upgrades_public_duplicate() -> None:
     linked.all.return_value = []
     db.scalars.return_value = linked
     evidence_id = uuid4()
+    add_evidence = AsyncMock()
+    monkeypatch.setattr(MemoryService, "_add_evidence", add_evidence)
 
     created = await MemoryService.create_dreaming(
         db,
+        owner_id=owner_id,
         content="Dauerhafter Fakt",
         category=MemoryCategory.FACT,
         trust_level=TrustLevel.PRIVATE,
@@ -300,18 +408,19 @@ async def test_private_dreaming_candidate_upgrades_public_duplicate() -> None:
 
     assert created.duplicate is True
     assert existing.trust_level == "private"
-    evidence_insert = next(
-        call.args[0]
-        for call in db.execute.await_args_list
-        if "memory_source_messages" in str(call.args[0])
+    add_evidence.assert_awaited_once_with(
+        db,
+        owner_id=owner_id,
+        memory_id=existing.id,
+        message_ids=[evidence_id],
     )
-    assert evidence_insert.compile().params["memory_id_m0"] == existing.id
-    assert evidence_insert.compile().params["message_id_m0"] == evidence_id
 
 
 async def test_manual_memory_rejects_normalized_duplicate() -> None:
+    owner_id = uuid4()
     existing = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_type="manual",
         pinned=False,
         trust_level="public",
@@ -324,6 +433,7 @@ async def test_manual_memory_rejects_normalized_duplicate() -> None:
     with pytest.raises(MemoryDuplicateError):
         await MemoryService.create_manual(
             db,
+            owner_id=owner_id,
             content="  EIN\nFAKT ",
             category=MemoryCategory.FACT,
             trust_level=TrustLevel.PUBLIC,
@@ -336,7 +446,9 @@ async def test_manual_memory_update_loads_target_for_update() -> None:
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = None
 
-    await MemoryService.get(db, uuid4(), for_update=True)
+    await MemoryService.get(
+        db, owner_id=uuid4(), memory_id=uuid4(), for_update=True
+    )
 
     statement = db.scalar.await_args.args[0]
     assert "FOR UPDATE" in str(statement)
@@ -378,8 +490,10 @@ def test_memory_write_arguments_require_explicit_update_target() -> None:
 
 
 async def test_private_tool_update_upgrades_trust_and_adds_evidence(monkeypatch) -> None:
+    owner_id = uuid4()
     item = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_type="manual",
         pinned=False,
         trust_level="public",
@@ -391,10 +505,12 @@ async def test_private_tool_update_upgrades_trust_and_adds_evidence(monkeypatch)
     db.scalar.return_value = item
     update_memory = AsyncMock(return_value=item)
     monkeypatch.setattr(MemoryService, "update", update_memory)
+    monkeypatch.setattr(MemoryService, "_validate_source_references", AsyncMock())
     evidence_id = uuid4()
 
     result = await MemoryService.update_tool(
         db,
+        owner_id=owner_id,
         memory_id=item.id,
         expected_revision=3,
         content="Neuer Fakt",
@@ -413,8 +529,10 @@ async def test_private_tool_update_upgrades_trust_and_adds_evidence(monkeypatch)
 
 
 async def test_tool_update_rejects_stale_memory_snapshot(monkeypatch) -> None:
+    owner_id = uuid4()
     item = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_type="manual",
         pinned=False,
         trust_level="public",
@@ -426,9 +544,11 @@ async def test_tool_update_rejects_stale_memory_snapshot(monkeypatch) -> None:
     db.scalar.return_value = item
     update_memory = AsyncMock(return_value=item)
     monkeypatch.setattr(MemoryService, "update", update_memory)
+    monkeypatch.setattr(MemoryService, "_validate_source_references", AsyncMock())
 
     result = await MemoryService.update_tool(
         db,
+        owner_id=owner_id,
         memory_id=item.id,
         expected_revision=3,
         content="Veraltetes Update",
@@ -448,11 +568,13 @@ async def test_tool_update_rejects_stale_memory_snapshot(monkeypatch) -> None:
 async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     monkeypatch,
 ) -> None:
+    owner_id = uuid4()
     source_message_id = uuid4()
     linked_evidence_id = uuid4()
     current_evidence_id = uuid4()
     stale = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_message_id=source_message_id,
         source_type="dreaming",
         pinned=False,
@@ -463,6 +585,7 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     )
     canonical = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_type="tool_call",
         pinned=False,
         trust_level="public",
@@ -477,9 +600,13 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     db.scalars.return_value = linked
     update_memory = AsyncMock(side_effect=MemoryDuplicateError)
     monkeypatch.setattr(MemoryService, "update", update_memory)
+    monkeypatch.setattr(MemoryService, "_validate_source_references", AsyncMock())
+    add_evidence = AsyncMock()
+    monkeypatch.setattr(MemoryService, "_add_evidence", add_evidence)
 
     result = await MemoryService.update_tool(
         db,
+        owner_id=owner_id,
         memory_id=stale.id,
         expected_revision=1,
         content=canonical.content,
@@ -499,22 +626,13 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     assert canonical.revision == 3
     assert canonical.source_type == "tool_call"
     assert canonical.source_message_id == current_evidence_id
-    evidence_insert = next(
-        call.args[0]
-        for call in db.execute.await_args_list
-        if "memory_source_messages" in str(call.args[0])
-    )
-    evidence_params = evidence_insert.compile().params
-    assert {
-        evidence_params["message_id_m0"],
-        evidence_params["message_id_m1"],
-        evidence_params["message_id_m2"],
-    } == {linked_evidence_id, source_message_id, current_evidence_id}
-    assert {
-        evidence_params["memory_id_m0"],
-        evidence_params["memory_id_m1"],
-        evidence_params["memory_id_m2"],
-    } == {canonical.id}
+    assert set(add_evidence.await_args.kwargs["message_ids"]) == {
+        linked_evidence_id,
+        source_message_id,
+        current_evidence_id,
+    }
+    assert add_evidence.await_args.kwargs["owner_id"] == owner_id
+    assert add_evidence.await_args.kwargs["memory_id"] == canonical.id
     db.delete.assert_awaited_once_with(stale)
 
 
@@ -672,21 +790,25 @@ def test_memory_payload_uses_dream_run_provenance() -> None:
 
 
 async def test_memory_acknowledgement_marks_exact_ids_and_commits(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     memory_ids = [uuid4(), uuid4()]
     mark_seen = AsyncMock(return_value=2)
     monkeypatch.setattr(MemoryService, "mark_seen", mark_seen)
     db = AsyncMock(spec=AsyncSession)
 
     result = await acknowledge_memories(
-        MemoryAcknowledgementRequest(memoryIds=memory_ids), db
+        MemoryAcknowledgementRequest(memoryIds=memory_ids), user, db
     )
 
     assert result == {"acknowledged": 2}
-    mark_seen.assert_awaited_once_with(db, memory_ids)
+    mark_seen.assert_awaited_once_with(
+        db, owner_id=user.id, memory_ids=memory_ids
+    )
     db.commit.assert_awaited_once()
 
 
 async def test_mark_seen_updates_only_unseen_memories_without_touching_updated_at() -> None:
+    owner_id = uuid4()
     memory_ids = [uuid4(), uuid4()]
     rows = Mock()
     rows.all.return_value = memory_ids
@@ -694,13 +816,16 @@ async def test_mark_seen_updates_only_unseen_memories_without_touching_updated_a
     db.scalars.return_value = rows
 
     acknowledged = await MemoryService.mark_seen(
-        db, [memory_ids[0], memory_ids[1], memory_ids[0]]
+        db,
+        owner_id=owner_id,
+        memory_ids=[memory_ids[0], memory_ids[1], memory_ids[0]],
     )
 
     statement = db.scalars.await_args.args[0]
     sql = str(statement)
     assert acknowledged == 2
     assert "memories.seen_at IS NULL" in sql
+    assert "memories.user_id" in sql
     assert "updated_at=memories.updated_at" in sql
 
 
@@ -976,6 +1101,35 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
     assert retry_messages[-1]["role"] == "tool"
     assert "memory, category, and evidence" in retry_messages[-1]["content"]
     assert "usage attribution" not in retry_messages[-1]["content"]
+
+
+async def test_dreaming_stops_before_a_repair_when_user_becomes_inactive(
+    monkeypatch,
+) -> None:
+    evidence_id = uuid4()
+    provider = LlmProviderConfig(name="Lokal", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    complete = AsyncMock(return_value=ProviderResult(tool_calls=[]))
+    active_check = AsyncMock(
+        side_effect=[None, DreamingContractError("auth.accountDisabled")]
+    )
+    monkeypatch.setattr(ProviderService, "complete", complete)
+
+    with pytest.raises(DreamingContractError, match="auth.accountDisabled"):
+        await _extract_candidates(
+            AsyncMock(spec=AsyncSession),
+            provider=provider,
+            model=model,
+            system_prompt=DREAMING_SYSTEM_PROMPT,
+            source=f"MESSAGE {evidence_id} [USER]\nTest",
+            max_candidates=10,
+            evidence_ids={evidence_id},
+            user_evidence_ids={evidence_id},
+            active_check=active_check,
+        )
+
+    assert active_check.await_count == 2
+    complete.assert_awaited_once()
 
 
 async def test_dreaming_repairs_assistant_only_evidence(monkeypatch) -> None:
@@ -1417,6 +1571,9 @@ async def test_contract_exhaustion_fails_persistent_run_without_retry(monkeypatc
 
 @pytest.mark.parametrize("exact", [True, False], ids=["exact_duplicate", "unrelated_pinned"])
 async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) -> None:
+    monkeypatch.setattr(
+        DreamingService, "_cancel_if_inactive", AsyncMock(return_value=False)
+    )
     user_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=user_id, title="Test", memory_mode="full")
     user_message = Message(
@@ -1450,6 +1607,7 @@ async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) 
     _, content_hash = normalize_content(existing_content)
     existing = MemoryRecord(
         id=uuid4(),
+        user_id=user_id,
         source_type="manual",
         pinned=not exact,
         trust_level="public",
@@ -1490,14 +1648,16 @@ async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) 
             )
         ),
     )
+    reconciliation_candidates = AsyncMock(
+        return_value=[[existing] if exact else []]
+    )
     monkeypatch.setattr(
-        MemoryService,
-        "reconciliation_candidates",
-        AsyncMock(return_value=[[existing] if exact else []]),
+        MemoryService, "reconciliation_candidates", reconciliation_candidates
     )
     keep = AsyncMock(return_value=MemoryMutation(existing))
     created_item = MemoryRecord(
         id=uuid4(),
+        user_id=user_id,
         source_type="dreaming",
         pinned=False,
         trust_level="public",
@@ -1534,11 +1694,14 @@ async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) 
     await DreamingService._process(db, run.id)
 
     complete.assert_awaited_once()
+    assert reconciliation_candidates.await_args.kwargs["owner_id"] == user_id
     if exact:
         keep.assert_awaited_once()
+        assert keep.await_args.kwargs["owner_id"] == user_id
         create.assert_not_awaited()
     else:
         create.assert_awaited_once()
+        assert create.await_args.kwargs["owner_id"] == user_id
         keep.assert_not_awaited()
     pinned_context.assert_not_awaited()
     assert state.last_processed_message_id == assistant_message.id
@@ -1547,6 +1710,9 @@ async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) 
 
 @pytest.mark.parametrize("policy", list(ToolExecutionPolicy))
 async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) -> None:
+    monkeypatch.setattr(
+        DreamingService, "_cancel_if_inactive", AsyncMock(return_value=False)
+    )
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test", memory_mode="full")
     messages = [
         Message(
@@ -1579,6 +1745,7 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
     state = MemoryDreamState(session_id=session.id)
     existing = MemoryRecord(
         id=uuid4(),
+        user_id=session.user_id,
         source_type="manual",
         pinned=False,
         trust_level="public",
@@ -1611,8 +1778,9 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
         "mato_loop_backend.memory.dreaming._extract_candidates",
         AsyncMock(return_value=candidate),
     )
+    reconciliation_candidates = AsyncMock(return_value=[[existing]])
     monkeypatch.setattr(
-        MemoryService, "reconciliation_candidates", AsyncMock(return_value=[[existing]])
+        MemoryService, "reconciliation_candidates", reconciliation_candidates
     )
     reconciliation = DreamReconciliation.model_validate(
         {
@@ -1658,8 +1826,15 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
 
     await DreamingService._process(db, run.id)
 
+    assert (
+        reconciliation_candidates.await_args.kwargs["owner_id"]
+        == session.user_id
+    )
     assert update.await_count == (1 if policy == ToolExecutionPolicy.AUTO else 0)
     assert approval.await_count == (1 if policy == ToolExecutionPolicy.ASK else 0)
+    mutation = update if policy == ToolExecutionPolicy.AUTO else approval
+    if policy != ToolExecutionPolicy.DISABLED:
+        assert mutation.await_args.kwargs["owner_id"] == session.user_id
     assert run.status == "completed"
 
 
@@ -1696,12 +1871,14 @@ def test_memory_approval_payload_rejects_invalid_pin_and_unbounded_targets() -> 
 
 
 async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypatch) -> None:
+    owner_id = uuid4()
     first_source = uuid4()
     second_source = uuid4()
     current_evidence = uuid4()
     canonical = "Ich heiße Mara."
     first = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_message_id=first_source,
         source_type="manual",
         pinned=True,
@@ -1713,6 +1890,7 @@ async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypat
     )
     second = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_message_id=second_source,
         source_type="dreaming",
         pinned=False,
@@ -1734,9 +1912,13 @@ async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypat
     monkeypatch.setattr(
         "mato_loop_backend.memory.service.MemoryIndexService.enqueue", enqueue
     )
+    monkeypatch.setattr(MemoryService, "_validate_source_references", AsyncMock())
+    add_evidence = AsyncMock()
+    monkeypatch.setattr(MemoryService, "_add_evidence", add_evidence)
 
     mutation = await MemoryService.merge_dreaming(
         db,
+        owner_id=owner_id,
         memory_ids=[first.id, second.id],
         expected_revisions={first.id: 2, second.id: 4},
         expected_trust={first.id: TrustLevel.PUBLIC, second.id: TrustLevel.PRIVATE},
@@ -1755,20 +1937,19 @@ async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypat
     assert second.revision == 5
     db.delete.assert_awaited_once_with(first)
     enqueue.assert_not_awaited()
-    evidence_insert = next(
-        call.args[0]
-        for call in db.execute.await_args_list
-        if "memory_source_messages" in str(call.args[0])
-    )
-    params = evidence_insert.compile().params
-    assert {
-        value for key, value in params.items() if key.startswith("message_id_m")
-    } == {evidence_id, first_source, second_source, current_evidence}
+    assert set(add_evidence.await_args.kwargs["message_ids"]) == {
+        evidence_id,
+        first_source,
+        second_source,
+        current_evidence,
+    }
 
 
 async def test_merge_stale_snapshot_changes_nothing() -> None:
+    owner_id = uuid4()
     first = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_type="manual",
         pinned=False,
         trust_level="public",
@@ -1779,6 +1960,7 @@ async def test_merge_stale_snapshot_changes_nothing() -> None:
     )
     second = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_type="manual",
         pinned=False,
         trust_level="public",
@@ -1794,6 +1976,7 @@ async def test_merge_stale_snapshot_changes_nothing() -> None:
 
     mutation = await MemoryService.merge_dreaming(
         db,
+        owner_id=owner_id,
         memory_ids=[first.id, second.id],
         expected_revisions={first.id: 1, second.id: 3},
         expected_trust={first.id: TrustLevel.PUBLIC, second.id: TrustLevel.PUBLIC},
@@ -1821,6 +2004,7 @@ async def test_approved_update_is_restart_independent_and_does_not_commit(monkey
     evidence_id = uuid4()
     target = MemoryRecord(
         id=uuid4(),
+        user_id=user_id,
         source_type="manual",
         pinned=False,
         trust_level="public",
@@ -1888,7 +2072,7 @@ async def test_approved_update_is_restart_independent_and_does_not_commit(monkey
     monkeypatch.setattr(MemoryService, "update_dreaming", update)
 
     outcome = await MemoryService.apply_approved_change(
-        db, approval=approval, user_id=user_id
+        db, approval=approval, owner_id=user_id
     )
 
     assert outcome == "applied"
@@ -1898,8 +2082,10 @@ async def test_approved_update_is_restart_independent_and_does_not_commit(monkey
 
 
 async def test_auto_pin_stops_at_five(monkeypatch) -> None:
+    owner_id = uuid4()
     item = MemoryRecord(
         id=uuid4(),
+        user_id=owner_id,
         source_type="manual",
         pinned=False,
         trust_level="public",
@@ -1913,5 +2099,5 @@ async def test_auto_pin_stops_at_five(monkeypatch) -> None:
     set_pinned = AsyncMock(return_value=item)
     monkeypatch.setattr(MemoryService, "set_pinned", set_pinned)
 
-    assert await MemoryService.auto_pin(db, item) is False
+    assert await MemoryService.auto_pin(db, item, owner_id=owner_id) is False
     set_pinned.assert_not_awaited()

@@ -519,6 +519,8 @@ def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath]
     try:
         value = json.loads(resource_scope)
         root = FileRoot(value["root"])
+        if root is not FileRoot.SESSION:
+            return None
         identity = value["identity"]
         path = value["path"]
         if not isinstance(identity, str) or not isinstance(path, str):
@@ -675,12 +677,7 @@ class PermissionPolicy:
                     return PermissionDecision.DENY
                 if identity != current_identity:
                     return PermissionDecision.DENY
-                if root is FileRoot.SESSION and identity != str(chat_session.id):
-                    return PermissionDecision.DENY
-                if root is FileRoot.WORKSPACE and (
-                    chat_session.working_directory is None
-                    or root_files.working_directory != chat_session.working_directory
-                ):
+                if identity != str(chat_session.id):
                     return PermissionDecision.DENY
             if request.capability not in {
                 "filesystem.read",

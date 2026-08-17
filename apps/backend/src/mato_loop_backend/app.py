@@ -61,7 +61,6 @@ def _mount_documentation(target: FastAPI, docs_dir: Path) -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    runtime_config.agent_home.mkdir(parents=True, exist_ok=True)
     runtime_config.secrets_dir.mkdir(parents=True, exist_ok=True)
     try:
         async with AsyncSessionFactory() as db:

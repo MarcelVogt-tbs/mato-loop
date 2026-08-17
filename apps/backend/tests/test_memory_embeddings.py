@@ -212,6 +212,7 @@ async def test_memory_creation_enqueues_embedding_in_same_service_transaction(
 
     memory = await MemoryService._create(
         db,
+        owner_id=uuid4(),
         content="Ein neuer Fakt",
         category=MemoryCategory.FACT,
         source_type=MemorySourceType.MANUAL,
@@ -235,6 +236,7 @@ async def test_automatic_memory_creation_starts_unseen(
 
     memory = await MemoryService._create(
         db,
+        owner_id=uuid4(),
         content="Automatisch erkannter Fakt",
         category=MemoryCategory.FACT,
         source_type=source_type,

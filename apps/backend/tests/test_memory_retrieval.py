@@ -10,6 +10,7 @@ from mato_loop_backend.memory.retrieval import (
     MemoryRetrievalService,
     MemoryRetrievalStrategy,
     MemoryRetrieveMode,
+    _filters,
 )
 from mato_loop_backend.memory.service import MemoryService, memory_lexical_terms
 from mato_loop_backend.models import MemoryRecord
@@ -45,6 +46,28 @@ def test_memory_lexical_terms_are_safe_and_bounded() -> None:
     assert terms == ["first", *(f"term{index}" for index in range(19))]
 
 
+def test_retrieval_filters_bind_each_owner() -> None:
+    first_owner = uuid4()
+    second_owner = uuid4()
+
+    first = _filters(
+        owner_id=first_owner,
+        readable_by=TrustLevel.PRIVATE,
+        category=None,
+        pinned=None,
+    )[0]
+    second = _filters(
+        owner_id=second_owner,
+        readable_by=TrustLevel.PRIVATE,
+        category=None,
+        pinned=None,
+    )[0]
+
+    assert first.right.value == first_owner
+    assert second.right.value == second_owner
+    assert first.right.value != second.right.value
+
+
 async def test_hybrid_retrieval_boosts_candidates_found_by_both_strategies(
     monkeypatch,
 ) -> None:
@@ -68,8 +91,10 @@ async def test_hybrid_retrieval_boosts_candidates_found_by_both_strategies(
         AsyncMock(return_value=[1.0, *([0.0] * (EMBEDDING_DIMENSIONS - 1))]),
     )
 
+    owner_id = uuid4()
     result = await MemoryRetrievalService.retrieve(
         db,
+        owner_id=owner_id,
         mode=MemoryRetrieveMode.SEARCH,
         query="profile information",
         readable_by=TrustLevel.PUBLIC,
@@ -80,6 +105,8 @@ async def test_hybrid_retrieval_boosts_candidates_found_by_both_strategies(
     assert result.items[0].id == shared.id
     assert "memories.trust_level" in str(db.scalars.await_args_list[0].args[0])
     assert "memories.trust_level" in str(db.scalars.await_args_list[1].args[0])
+    assert "memories.user_id" in str(db.scalars.await_args_list[0].args[0])
+    assert "memories.user_id" in str(db.scalars.await_args_list[1].args[0])
 
 
 async def test_search_uses_lexical_fallback_when_embeddings_are_disabled(
@@ -97,6 +124,7 @@ async def test_search_uses_lexical_fallback_when_embeddings_are_disabled(
 
     result = await MemoryRetrievalService.retrieve(
         db,
+        owner_id=uuid4(),
         mode=MemoryRetrieveMode.SEARCH,
         query="Treffer",
         readable_by=TrustLevel.PRIVATE,
@@ -123,6 +151,7 @@ async def test_browse_returns_stable_cursor_for_the_last_visible_item(
 
     result = await MemoryRetrievalService.retrieve(
         AsyncMock(spec=AsyncSession),
+        owner_id=(owner_id := uuid4()),
         mode=MemoryRetrieveMode.BROWSE,
         query=None,
         readable_by=TrustLevel.PRIVATE,
@@ -138,3 +167,4 @@ async def test_browse_returns_stable_cursor_for_the_last_visible_item(
     assert list_memories.await_args.kwargs["cursor_updated_at"] == cursor_time
     assert list_memories.await_args.kwargs["cursor_id"] == cursor_id
     assert list_memories.await_args.kwargs["limit"] == 3
+    assert list_memories.await_args.kwargs["owner_id"] == owner_id

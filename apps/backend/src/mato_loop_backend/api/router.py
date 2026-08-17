@@ -14,11 +14,13 @@ from mato_loop_backend.api.routes.questions import router as questions_router
 from mato_loop_backend.api.routes.sessions import router as sessions_router
 from mato_loop_backend.api.routes.skills import router as skills_router
 from mato_loop_backend.api.routes.tool_settings import router as tool_settings_router
+from mato_loop_backend.api.routes.users import router as users_router
 from mato_loop_backend.api.routes.workspace import router as workspace_router
 
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["health"])
 api_router.include_router(auth_router, tags=["auth"])
+api_router.include_router(users_router, tags=["users"])
 api_router.include_router(execution_agents_router, tags=["execution-agents"])
 api_router.include_router(agent_identity_router, tags=["agent-identity"])
 api_router.include_router(providers_router, tags=["providers"])

@@ -33,6 +33,7 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    UserIntegrationSettings,
 )
 
 
@@ -199,7 +200,8 @@ def test_git_errors_are_controlled() -> None:
 
 
 async def test_git_crud_defaults_network_off_and_allows_offline_agent(monkeypatch) -> None:
-    settings = IntegrationSettings()
+    settings = UserIntegrationSettings()
+    instance_settings = IntegrationSettings()
     tools = ToolSettings()
     agent_id = uuid4()
     user = SimpleNamespace(id=uuid4())
@@ -207,7 +209,13 @@ async def test_git_crud_defaults_network_off_and_allows_offline_agent(monkeypatc
     db.scalar.return_value = agent_id
 
     async def load(_db, settings_type, **_kwargs):
-        return settings if settings_type is IntegrationSettings else tools
+        return (
+            instance_settings
+            if settings_type is IntegrationSettings
+            else settings
+            if settings_type is UserIntegrationSettings
+            else tools
+        )
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
@@ -259,7 +267,7 @@ async def test_get_git_rejects_an_unowned_binding(monkeypatch) -> None:
     db.scalar.return_value = None
 
     with pytest.raises(ApiError) as exc_info:
-        await get_git_integrations(SimpleNamespace(id=uuid4()), db)
+        await get_git_integrations(SimpleNamespace(id=uuid4(), is_admin=True), db)
 
     assert exc_info.value.code == "executionAgent.notFound"
 

@@ -16,7 +16,7 @@ Each session has a mutable `memoryMode`:
 - `read_only` authorizes automatic cross-session retrieval and `memory_retrieve`, but not writes or dreaming.
 - `disabled` removes automatic cross-session retrieval and both memory tools and disables dreaming.
 
-The user-scoped memory switch and the existing provider and model memory policies can further restrict these capabilities. A provider or model with memory policy `deny` disables memory even when the session mode permits it. Tool support affects memory tools and dreaming, but automatic retrieval itself does not require a model tool call.
+The owner-scoped memory switch and the effective instance or personal provider and model memory policies can further restrict these capabilities. A provider or model with memory policy `deny` disables memory even when the session mode permits it. Tool support affects memory tools and dreaming, but automatic retrieval itself does not require a model tool call.
 
 Every run persists its effective model trust snapshot. Durable memories and prior-session messages retain `public` or `private` provenance. For these cross-session sources, public models receive only public content; private models may receive both trust levels. Ownership, current-session exclusion, and trust restrictions are applied before retrieval limits. Local embeddings do not weaken these SQL release filters.
 
@@ -113,4 +113,4 @@ The redesign migration creates `message_search_chunks`, converts previously fixe
 
 ## Ownership Boundary
 
-The current product remains single-user, but sessions, settings, dream runs, and episodic retrieval already use persistent user ownership. Durable-memory storage and deduplication remain installation-wide and need an owner key before multiple accounts are supported. Trust levels are model data-release classifications, not user authorization.
+Durable memories, normalized deduplication, Dreaming state and runs, and episodic retrieval are scoped by the authenticated owner. Retrieval filters by owner before ranking or trust filtering, and memory APIs never provide an administrator override into another user's records. Account deletion cascades memories and derived embeddings with the rest of that user's relational data. Trust levels remain model data-release classifications inside one owner's data; they are not user authorization.

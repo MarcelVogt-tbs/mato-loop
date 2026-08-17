@@ -407,7 +407,7 @@ describe('Mermaid safety', () => {
 })
 
 describe('Markdown print requests', () => {
-  it('keeps only the authenticated file context and expected revision', () => {
+  it('keeps session file context only with a persisted session', () => {
     const revision = 'a'.repeat(64)
     expect(markdownPrintRequest({
       content: '# must not travel',
@@ -425,7 +425,66 @@ describe('Markdown print requests', () => {
         session_id: 'session-a'
       }
     })
+    expect(markdownPrintRequest({ path: 'files/report.md', scope: 'session' })).toBeNull()
     expect(markdownPrintRequest({ path: 'report.md', scope: 'invalid' })).toBeNull()
+  })
+
+  it('requires a complete computer context and preserves draft and historical references', () => {
+    expect(markdownPrintRequest({
+      path: 'report.md',
+      scope: 'filesystem',
+      execution_agent_id: 'agent-a',
+      root_id: 'root-a',
+      working_directory: 'project'
+    })).toEqual({
+      expectedRevision: null,
+      params: {
+        path: 'report.md',
+        scope: 'filesystem',
+        execution_agent_id: 'agent-a',
+        root_id: 'root-a',
+        working_directory: 'project'
+      }
+    })
+
+    const rootRevision = 'b'.repeat(64)
+    expect(markdownPrintRequest({
+      path: 'archive/report.md',
+      scope: 'filesystem',
+      session_id: 'session-a',
+      execution_agent_id: 'agent-a',
+      root_id: 'root-a',
+      root_identity: 'root-a',
+      root_revision: rootRevision,
+      working_directory: 'old-project'
+    })).toEqual({
+      expectedRevision: null,
+      params: {
+        path: 'archive/report.md',
+        scope: 'filesystem',
+        session_id: 'session-a',
+        execution_agent_id: 'agent-a',
+        root_id: 'root-a',
+        root_identity: 'root-a',
+        root_revision: rootRevision,
+        working_directory: 'old-project'
+      }
+    })
+
+    expect(markdownPrintRequest({ path: 'report.md', scope: 'filesystem' })).toBeNull()
+    expect(markdownPrintRequest({
+      path: 'report.md', scope: 'filesystem', working_directory: 'project'
+    })).toBeNull()
+    expect(markdownPrintRequest({
+      path: 'report.md', scope: 'filesystem', execution_agent_id: 'agent-a'
+    })).toBeNull()
+    expect(markdownPrintRequest({
+      path: 'report.md',
+      scope: 'filesystem',
+      execution_agent_id: 'agent-a',
+      root_id: 'root-a',
+      root_identity: 'root-a'
+    })).toBeNull()
   })
 })
 

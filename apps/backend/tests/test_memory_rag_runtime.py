@@ -251,7 +251,12 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
     assert kwargs["pinned"] is False
     assert kwargs["limit"] == AUTOMATIC_MEMORY_MAX_ITEMS
     assert kwargs["max_semantic_distance"] == AUTOMATIC_MEMORY_MAX_DISTANCE
+    assert kwargs["owner_id"] == db.get.return_value.user_id
     MemoryService.pinned_context.assert_awaited_once()
+    assert (
+        MemoryService.pinned_context.await_args.kwargs["owner_id"]
+        == db.get.return_value.user_id
+    )
     assert '"source": "retrieved"' in projections[0]["system_prompt"]
     assert relevant.content in projections[0]["system_prompt"]
     assert f'"sourceMessageAt": "{source_at.isoformat()}"' in projections[0][

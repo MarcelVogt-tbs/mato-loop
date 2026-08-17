@@ -54,6 +54,9 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
     vectors = await embedding_client.embed_documents(contents)
 
     async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"memory-{uuid4().hex}", password_hash="test")
+        db.add(user)
+        await db.flush()
         for content, trust_level, vector in zip(
             contents,
             ["public", "private", "public"],
@@ -63,6 +66,7 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
             _, content_hash = normalize_content(content)
             memory = MemoryRecord(
                 id=uuid4(),
+                user_id=user.id,
                 source_type="manual",
                 pinned=False,
                 trust_level=trust_level,
@@ -85,6 +89,7 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
 
         result = await MemoryRetrievalService.retrieve(
             db,
+            owner_id=user.id,
             mode=MemoryRetrieveMode.SEARCH,
             query="How does the user prefer answers while working?",
             readable_by=TrustLevel.PUBLIC,
@@ -214,8 +219,12 @@ async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
 
     monkeypatch.setattr(embedding_client, "embed_query", unavailable)
     async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"fallback-{uuid4().hex}", password_hash="test")
+        db.add(user)
+        await db.flush()
         memory = MemoryRecord(
             id=uuid4(),
+            user_id=user.id,
             source_type="manual",
             pinned=False,
             trust_level="public",
@@ -228,6 +237,7 @@ async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
 
         result = await MemoryRetrievalService.retrieve(
             db,
+            owner_id=user.id,
             mode=MemoryRetrieveMode.SEARCH,
             query=f"{'-' * 40} {query}",
             readable_by=TrustLevel.PUBLIC,
@@ -247,6 +257,9 @@ async def test_automatic_rag_distance_excludes_unrelated_memory() -> None:
     )
 
     async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"distance-{uuid4().hex}", password_hash="test")
+        db.add(user)
+        await db.flush()
         memory_ids = []
         for content, vector in zip(
             [relevant_content, unrelated_content], vectors, strict=True
@@ -254,6 +267,7 @@ async def test_automatic_rag_distance_excludes_unrelated_memory() -> None:
             _, content_hash = normalize_content(content)
             memory = MemoryRecord(
                 id=uuid4(),
+                user_id=user.id,
                 source_type="manual",
                 pinned=False,
                 trust_level="public",
@@ -277,6 +291,7 @@ async def test_automatic_rag_distance_excludes_unrelated_memory() -> None:
 
         result = await MemoryRetrievalService.retrieve(
             db,
+            owner_id=user.id,
             mode=MemoryRetrieveMode.SEARCH,
             query="Wie alt ist mein Sohn?",
             readable_by=TrustLevel.PUBLIC,
@@ -292,12 +307,16 @@ async def test_automatic_rag_distance_excludes_unrelated_memory() -> None:
 
 async def test_browse_lists_pinned_and_unpinned_memories() -> None:
     async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"browse-{uuid4().hex}", password_hash="test")
+        db.add(user)
+        await db.flush()
         created = []
         for pinned in [True, False, False]:
             content = f"Browse-{pinned}-{uuid4().hex}"
             _, content_hash = normalize_content(content)
             memory = MemoryRecord(
                 id=uuid4(),
+                user_id=user.id,
                 source_type="manual",
                 pinned=pinned,
                 trust_level="public",
@@ -312,6 +331,7 @@ async def test_browse_lists_pinned_and_unpinned_memories() -> None:
 
         result = await MemoryRetrievalService.retrieve(
             db,
+            owner_id=user.id,
             mode=MemoryRetrieveMode.BROWSE,
             readable_by=TrustLevel.PUBLIC,
             limit=2,
@@ -322,6 +342,7 @@ async def test_browse_lists_pinned_and_unpinned_memories() -> None:
         assert result.next_cursor_id is not None
         continued = await MemoryRetrievalService.retrieve(
             db,
+            owner_id=user.id,
             mode=MemoryRetrieveMode.BROWSE,
             readable_by=TrustLevel.PUBLIC,
             cursor_updated_at=result.next_cursor_updated_at,
@@ -373,6 +394,7 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
         db.add(agent_run)
         await db.flush()
         stale = MemoryRecord(
+            user_id=user.id,
             source_session_id=session.id,
             source_message_id=source_message.id,
             source_type="dreaming",
@@ -384,6 +406,7 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
             normalized_content_hash=stale_hash,
         )
         canonical = MemoryRecord(
+            user_id=user.id,
             source_session_id=session.id,
             source_message_id=correction_message.id,
             source_type="tool_call",
@@ -412,6 +435,7 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
 
         result = await MemoryService.update_tool(
             db,
+            owner_id=user.id,
             memory_id=stale.id,
             expected_revision=1,
             content=canonical_content,

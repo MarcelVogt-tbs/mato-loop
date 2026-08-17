@@ -82,8 +82,6 @@ def _context(tmp_path, call, client, *, decision=PermissionDecision.ALLOW):
         root_files=RootFileService(
             session.id,
             session_storage=storage,
-            workspace_home=tmp_path / "backend-home",
-            working_directory=session.working_directory,
         ),
         integration_settings=IntegrationSettings(),
         ask_handler=AsyncMock(return_value=decision),

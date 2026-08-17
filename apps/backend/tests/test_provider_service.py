@@ -3,6 +3,7 @@ import json
 import re
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -356,7 +357,7 @@ async def _append_async(items: list, value) -> None:
 
 async def test_codex_complete_uses_subscription_compatible_responses_payload(monkeypatch) -> None:
     credential_id = uuid4()
-    credential = object()
+    credential = SimpleNamespace(user_id=None)
     provider = LlmProviderConfig(
         name="Codex",
         adapter_type="openai-codex",
@@ -1161,7 +1162,7 @@ async def test_provider_discovery_uses_stored_api_key(monkeypatch) -> None:
         config={"base_url": "https://provider.test/v1"},
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = object()
+    db.get.return_value = SimpleNamespace(user_id=None)
     monkeypatch.setattr(service_module, "read_credential", lambda _credential: {"api_key": "stored"})
     remote_discovery = AsyncMock(return_value=[])
     monkeypatch.setattr(service_module.openai_compatible, "discover_models", remote_discovery)
@@ -1185,6 +1186,7 @@ async def test_provider_discovery_uses_codex_credential(monkeypatch) -> None:
             "kind": "codex-oauth",
             "label": "Codex",
             "metadata_json": {},
+            "user_id": None,
         },
     )()
     provider = LlmProviderConfig(

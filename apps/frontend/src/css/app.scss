@@ -1816,6 +1816,7 @@ body.body--dark .question-dock {
 .provider-list-card,
 .integration-list-card,
 .execution-agent-list-card,
+.user-list-card,
 .tool-settings-card,
 .default-models-card {
   position: relative;
@@ -1824,6 +1825,10 @@ body.body--dark .question-dock {
 
 .execution-agent-dialog {
   width: min(560px, calc(100vw - 32px));
+}
+
+.user-dialog {
+  width: min(520px, calc(100vw - 32px));
 }
 
 .default-model-setting {
@@ -1843,6 +1848,10 @@ body.body--dark .question-dock {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.settings-scope-toggle {
+  flex: 0 0 auto;
 }
 
 .provider-card {
@@ -2659,6 +2668,10 @@ body.body--dark .file-viewer .app-muted {
     width: 100%;
   }
 
+  .settings-scope-toggle .q-btn {
+    width: auto;
+  }
+
   .provider-settings-actions {
     width: 100%;
     align-items: stretch;
@@ -2669,11 +2682,13 @@ body.body--dark .file-viewer .app-muted {
     flex-wrap: wrap;
   }
 
-  .execution-agent-item {
+  .execution-agent-item,
+  .user-list-item {
     flex-wrap: wrap;
   }
 
-  .execution-agent-item__actions {
+  .execution-agent-item__actions,
+  .user-list-item__actions {
     width: 100%;
     align-items: flex-end;
     padding-top: 8px;

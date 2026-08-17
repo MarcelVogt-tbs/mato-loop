@@ -23,6 +23,7 @@ The backend container uses reload mode and mounts the source tree through `/work
 ## Structure
 
 - `src/mato_loop_backend/api`: routers, dependencies, and the central error contract
+- `src/mato_loop_backend/auth`: local authentication and external-identity account foundations
 - `src/mato_loop_backend/agent`: model and tool loop, permissions, and approvals
 - `src/mato_loop_backend/providers`: Codex and OpenAI-compatible transports
 - `src/mato_loop_backend/models`: relational SQLAlchemy models
@@ -34,7 +35,7 @@ The backend container uses reload mode and mounts the source tree through `/work
 - `src/mato_loop_backend/integrations/webfetch.py`: SSRF-protected fetching of concrete HTTP(S) URLs
 - `src/mato_loop_backend/attachments.py`: validated persistent image storage
 - `src/mato_loop_backend/memory`: durable-memory CRUD, optional dreaming, local indexing, and hybrid durable/episodic retrieval
-- `src/mato_loop_backend/workspace.py`: canonical paths and agent-home boundary
+- `src/mato_loop_backend/workspace.py`: session paths and Execution Agent workspace dispatch
 - `alembic`: migrations and Alembic runtime
 - `tests`: backend unit and contract tests
 
@@ -59,7 +60,17 @@ Review the generated diff completely. Adjust generated revisions manually for re
 
 The initial migration enables pgvector and creates `memory_embeddings` as vector storage and a persistent queue. The episodic-memory migration adds deterministic `message_search_chunks` with its own persistent vector queue. Existing memories and eligible prior-session text are indexed asynchronously after backend startup; migrations never call Infinity. The active profile uses `intfloat/multilingual-e5-small`, 384 dimensions, and the E5 prefixes `query: ` and `passage: `. Content hashes and profile fingerprints prevent stale vectors from being used.
 
+The multi-user migration promotes the earliest existing local account to administrator, adds account state and administrator roles, scopes memories and credentials, and introduces authentication-provider and external-identity records. The backend performs no workspace migration at startup.
+
 Infinity is not a hard readiness dependency. `/api/health` reports `degraded` when it is unavailable, while FTS, CRUD, and agent runs remain available. `./scripts/dev.sh doctor` displays the extension version, column type, queue states, and Infinity health.
+
+## Authentication and Ownership
+
+`UserAccount` is the canonical application principal. The first setup account is an administrator; administrator APIs manage local accounts, roles, activation, password resets, and deletion. Administrator authorization does not bypass owner filters and provides no impersonation or access to another user's content.
+
+`LocalAuthProvider` is the only implemented sign-in provider. `AuthenticationProvider`, `UserAuthIdentity`, and `AuthenticatedIdentity` are the foundation for future external providers; there is no external login route or UI yet. External identities are keyed by provider and opaque subject. Future providers may enable just-in-time account creation independently, while existing users link an identity explicitly from an authenticated session; username matching never links accounts.
+
+Sessions and their messages, runs, approvals, grants, notifications, and session trees are owner-bound. Memories, personal settings, credentials, and Execution Agent records are also owner-scoped. Account deletion cascades relational ownership and removes backend session trees, but it never deletes files, caches, durable state, or configuration owned by an Execution Agent or external service.
 
 ## Error Contract
 
@@ -102,7 +113,9 @@ Provider-specific data types must not enter the agent core. Technical provider e
 
 A provider can contain multiple model configurations. OpenAI-compatible discovery uses the server-side `/models` endpoint. ChatGPT Codex uses the private Codex model catalog after device-code authentication. Both paths normalize responses to a model ID and a bounded set of metadata. Synchronization preserves internal UUIDs and user settings, marks missing discovered models unavailable, and leaves manual models unchanged. Newly discovered models are not enabled automatically.
 
-Agent file access uses `RootFileService` with the explicit roots `session` and `workspace`. Current session storage is under `/data/sessions/<session-id>`; the optional workspace is under the selected path in `/data/home`. Absolute paths, parent segments, and symlink escapes are forbidden. The session root contains the flat directories `files`, `attachments`, `generated`, `downloads`, and `derived`. Only `files` is mutable; the four host-managed asset directories are readable and can be copy sources.
+AI, integration, and tool documents have instance and personal variants. Instance mutations require an administrator. Instance providers and integrations are shared effective resources; personal providers, integration credentials, and settings remain owner-scoped. Administrators gate personal providers, personal tool overrides, and personal integrations, including the allowed built-in adapter types. Effective settings merge instance and allowed personal providers and integrations; personal tool settings replace instance tool choices while retaining instance-controlled webfetch network limits.
+
+Agent file access uses `RootFileService` with the explicit roots `session` and `workspace`. `session` is the current owner-bound tree under `/data/sessions/<session-id>`; `workspace` always targets the selected owner-bound Execution Agent and one of its advertised roots. The backend has no `/data/home` workspace. Without an agent and root, workspace access is unavailable while chat and session-file access remain available. Absolute paths, parent segments, and symlink escapes are forbidden. The session root contains the flat directories `files`, `attachments`, `generated`, `downloads`, and `derived`. Only `files` is mutable; the four host-managed asset directories are readable and can be copy sources.
 
 Webfetch uses a dedicated pinned resolver and a network policy the model cannot override. Persistent downloads are stored under `downloads`, user uploads under `attachments`, and generated content under `generated`. Images are served through authenticated session URLs and embedded transiently only for explicitly image-capable models. Text, document, and audio derivatives are stored under `derived`.
 

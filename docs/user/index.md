@@ -4,7 +4,7 @@ MatoLoop ist eine selbst gehostete Arbeitsumgebung für KI-gestützte Chats und 
 
 ## Erste Schritte
 
-- [Schnellstart](schnellstart.md): Benutzer einrichten, Provider verbinden und die erste Session starten
+- [Schnellstart](schnellstart.md): erstes Administratorkonto einrichten, Provider verbinden und die erste Session starten
 - [Chat und Sessions](chat-und-sessions.md): Nachrichten, Agent-Modus, Modelle und Session-Verwaltung
 - [Dateien und Arbeitsordner](dateien-und-arbeitsordner.md): Computer, Arbeitsbereiche und Session-Dateien
 - [Freigaben und Datenfreigabe](freigaben-und-datenfreigabe.md): Entscheidungen über sensible Aktionen und externe Modelle
@@ -12,10 +12,9 @@ MatoLoop ist eine selbst gehostete Arbeitsumgebung für KI-gestützte Chats und 
 
 ## Administration
 
-Die Einstellungen erreichen Sie über das Benutzermenü unten in der Navigation. Dort verwalten Sie Provider, Modelle, Tools, Integrationen, Persona und Memory.
+Die Einstellungen erreichen Sie über das Benutzermenü unten in der Navigation. Dort verwalten Sie Konto, Provider, Modelle, Tools, Integrationen, Persona und Memory. Administratoren verwalten zusätzlich Benutzer und die gemeinsamen Instanzeinstellungen.
 
-!!! info "Single-User-Anwendung"
-    MatoLoop unterstützt derzeit genau einen lokalen Benutzer. Eine Benutzer- oder Rollenverwaltung ist nicht vorhanden.
+Persönliche Sessions, Dateien, Arbeitsbereiche, Erinnerungen und Zugangsdaten sind nach Benutzer getrennt. Gemeinsame Provider, Modelle und Integrationen der Instanz stehen dagegen absichtlich allen Benutzern nach den festgelegten Richtlinien zur Verfügung.
 
 ## Grundprinzip
 

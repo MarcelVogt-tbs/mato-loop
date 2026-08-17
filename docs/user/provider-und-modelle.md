@@ -2,7 +2,9 @@
 
 ## Provider verwalten
 
-Unter **Einstellungen > Provider** können Sie Provider hinzufügen, bearbeiten, aktivieren, testen und löschen. Der globale LLM-Schalter muss ebenfalls aktiviert sein.
+Unter **Einstellungen > Provider** können Sie Provider hinzufügen, bearbeiten, aktivieren, testen und löschen. Der LLM-Schalter des gewählten Bereichs muss ebenfalls aktiviert sein.
+
+Administratoren wechseln mit **Persönlich** / **Instanz** zwischen ihren eigenen und den gemeinsamen Einstellungen. Nur Administratoren dürfen die Instanz ändern und festlegen, ob persönliche Provider erlaubt sind. Normale Benutzer verwalten ausschließlich ihre persönliche Seite. Instanz-Provider und ihre Modelle stehen allen Benutzern zur Verfügung; persönliche Provider und ihre verschlüsselten Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet.
 
 ### ChatGPT Codex
 
@@ -37,4 +39,4 @@ Unter **Einstellungen > Standardmodelle** werden Modelle für verschiedene Aufga
 - Bild-, Sprach- und Audiogenerierung
 - Transkription
 
-Nicht jede Aufgabe muss konfiguriert sein. Fehlt jedoch das Agent-Standardmodell und ist in der Session kein Modell gewählt, kann kein Chatlauf starten.
+Nicht jede Aufgabe muss konfiguriert sein. Persönliche Standardmodelle überschreiben die Instanzvorgabe nur, wenn das gewählte Modell effektiv verfügbar ist. Fehlt jedoch das Agent-Standardmodell und ist in der Session kein Modell gewählt, kann kein Chatlauf starten.

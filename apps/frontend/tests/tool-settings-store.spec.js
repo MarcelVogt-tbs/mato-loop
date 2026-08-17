@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
-  api: { get: vi.fn(), put: vi.fn() }
+  api: { delete: vi.fn(), get: vi.fn(), patch: vi.fn(), put: vi.fn() }
 }))
 
 vi.mock('src/boot/axios', () => ({ api }))
@@ -64,7 +64,7 @@ describe('tool settings store', () => {
     await store.fetchSettings()
     await store.saveSettings(response)
 
-    expect(api.get).toHaveBeenCalledWith('/tools/settings')
+    expect(api.get).toHaveBeenCalledWith('/tools/settings', { params: { scope: 'instance' } })
     expect(api.put).toHaveBeenCalledWith('/tools/settings', expect.objectContaining({
       policies: expect.objectContaining({
         'filesystem.read': 'ask',
@@ -75,7 +75,7 @@ describe('tool settings store', () => {
         fallbackProvider: 'no_key'
       },
       webFetch: response.webFetch
-    }))
+    }), { params: { scope: 'instance' } })
     expect(store.webSearch).toEqual(response.webSearch)
     expect(store.webFetch).toEqual(response.webFetch)
     expect(store.groups).toEqual(response.groups)
@@ -129,7 +129,7 @@ describe('tool settings store', () => {
       transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
       analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 },
       updateAgentIdentity: { policy: 'ask' }
-    })
+    }, { params: { scope: 'instance' } })
   })
 
   it('keeps saving disabled after a failed initial load', async () => {
@@ -140,5 +140,55 @@ describe('tool settings store', () => {
 
     expect(store.loaded).toBe(false)
     expect(store.loadFailed).toBe(true)
+  })
+
+  it('loads personal effective settings and resets them with personal scope', async () => {
+    const instance = {
+      personalSettingsEnabled: true,
+      groups: [],
+      policies: {},
+      webFetch: { enabled: true, defaultPolicy: 'ask', allowedPrivateOrigins: [] }
+    }
+    api.get.mockImplementation((url) => Promise.resolve({
+      data: url === '/tools/personal-settings'
+        ? { enabled: true }
+        : { ...instance, webFetch: { ...instance.webFetch, enabled: false } }
+    }))
+    api.delete.mockResolvedValue({ data: instance })
+    const store = useToolSettingsStore()
+    store.selectScope('personal')
+
+    await store.fetchSettings()
+    await store.resetPersonalSettings()
+
+    expect(api.get).toHaveBeenCalledWith('/tools/personal-settings')
+    expect(api.get).toHaveBeenCalledWith('/tools/settings', { params: { scope: 'personal' } })
+    expect(api.get).not.toHaveBeenCalledWith('/tools/settings', { params: { scope: 'instance' } })
+    expect(api.delete).toHaveBeenCalledWith('/tools/settings', { params: { scope: 'personal' } })
+  })
+
+  it('discards a late response from the previous scope', async () => {
+    const requests = []
+    api.get.mockImplementation((url, config) => new Promise((resolve) => {
+      requests.push({ url, scope: config?.params?.scope, resolve })
+    }))
+    const store = useToolSettingsStore()
+
+    const instanceLoad = store.fetchSettings()
+    store.selectScope('personal')
+    const personalLoad = store.fetchSettings()
+    requests[1].resolve({
+      data: { enabled: true }
+    })
+    await vi.waitFor(() => expect(requests).toHaveLength(3))
+    requests[2].resolve({ data: { webFetch: { enabled: false } } })
+    await personalLoad
+    requests[0].resolve({ data: { webFetch: { enabled: true, maxResponseMiB: 12 } } })
+    await instanceLoad
+
+    expect(store.scope).toBe('personal')
+    expect(store.webFetch.enabled).toBe(false)
+    expect(store.webFetch.maxResponseMiB).toBe(64)
+    expect(store.loading).toBe(false)
   })
 })

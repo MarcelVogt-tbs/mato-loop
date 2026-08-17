@@ -29,6 +29,36 @@ const emptyOpenScad = () => ({
   instances: []
 })
 
+const PERSONAL_ADAPTER_TYPES = ['searxng', 'caldav', 'bookstack', 'git', 'openscad']
+
+function scopeConfig(scope, config = {}) {
+  return { ...config, params: { ...(config.params || {}), scope } }
+}
+
+function assignGate(store, data) {
+  if ('personalIntegrationsEnabled' in (data || {})) {
+    store.personalIntegrationsEnabled = data.personalIntegrationsEnabled !== false
+  }
+  const allowed = data?.allowedPersonalAdapterTypes || data?.allowedAdapterTypes
+  if (Array.isArray(allowed)) store.allowedPersonalAdapterTypes = allowed
+}
+
+function scopeContext(store) {
+  return { scope: store.scope, generation: store.scopeGeneration }
+}
+
+function contextIsCurrent(store, context) {
+  return store.scope === context.scope && store.scopeGeneration === context.generation
+}
+
+function clearIntegrations(store) {
+  store.search = emptySearch()
+  store.calendar = emptyCalendar()
+  store.knowledge = emptyKnowledge()
+  store.git = emptyGit()
+  store.openscad = emptyOpenScad()
+}
+
 export const useIntegrationStore = defineStore('integrations', {
   state: () => ({
     search: emptySearch(),
@@ -36,95 +66,155 @@ export const useIntegrationStore = defineStore('integrations', {
     knowledge: emptyKnowledge(),
     git: emptyGit(),
     openscad: emptyOpenScad(),
+    scope: 'instance',
+    personalIntegrationsEnabled: true,
+    allowedPersonalAdapterTypes: [...PERSONAL_ADAPTER_TYPES],
     accessByIntegration: {},
     pendingLoads: 0,
     loading: false,
     loaded: false,
-    loadFailed: false
+    loadFailed: false,
+    scopeGeneration: 0,
+    loadVersions: {},
+    effectiveLoadVersion: 0
   }),
+  getters: {
+    adapterAllowed: (state) => (adapterType) => state.scope === 'instance'
+      || state.allowedPersonalAdapterTypes.includes(adapterType)
+  },
   actions: {
-    async fetchSearch() {
+    selectScope(scope) {
+      const next = scope === 'personal' ? 'personal' : 'instance'
+      if (next === this.scope) return
+      this.scope = next
+      this.scopeGeneration += 1
+      this.loadVersions = {}
+      this.pendingLoads = 0
+      this.loading = false
+      this.loaded = false
+      this.loadFailed = false
+      this.accessByIntegration = {}
+      clearIntegrations(this)
+    },
+    async fetchPersonalPolicy() {
+      const context = scopeContext(this)
+      const { data } = await api.get('/integrations/personal-settings')
+      if (!contextIsCurrent(this, context)) return false
+      this.personalIntegrationsEnabled = data.enabled !== false
+      if (Array.isArray(data.allowedAdapterTypes)) {
+        this.allowedPersonalAdapterTypes = data.allowedAdapterTypes
+      }
+      return this.personalIntegrationsEnabled
+    },
+    async fetchAll() {
+      const context = scopeContext(this)
+      this.loadFailed = false
+      try {
+        if (context.scope === 'personal') {
+          await this.fetchPersonalPolicy()
+          if (!contextIsCurrent(this, context)) return
+          if (!this.personalIntegrationsEnabled) {
+            clearIntegrations(this)
+            this.loaded = true
+            this.loadFailed = false
+            return
+          }
+        }
+        await Promise.all([
+          this.fetchSearch(),
+          this.fetchCalendar(),
+          this.fetchKnowledge(),
+          this.fetchGit(),
+          this.fetchOpenScad()
+        ])
+      } catch (error) {
+        if (contextIsCurrent(this, context)) this.loadFailed = true
+        throw error
+      }
+    },
+    async fetchResource(field, path) {
+      const context = scopeContext(this)
+      const loadVersion = (this.loadVersions[field] || 0) + 1
+      this.loadVersions[field] = loadVersion
       this.pendingLoads += 1
       this.loading = true
       this.loadFailed = false
       try {
-        this.search = (await api.get('/integrations/search')).data
+        const data = (await api.get(path, scopeConfig(context.scope))).data
+        if (!contextIsCurrent(this, context) || this.loadVersions[field] !== loadVersion) return
+        this[field] = data
+        assignGate(this, data)
         this.loaded = true
+        return data
       } catch (error) {
-        this.loadFailed = true
+        if (contextIsCurrent(this, context) && this.loadVersions[field] === loadVersion) {
+          this.loadFailed = true
+        }
         throw error
       } finally {
-        this.pendingLoads -= 1
-        this.loading = this.pendingLoads > 0
+        if (contextIsCurrent(this, context)) {
+          this.pendingLoads = Math.max(0, this.pendingLoads - 1)
+          this.loading = this.pendingLoads > 0
+        }
       }
     },
+    fetchSearch() {
+      return this.fetchResource('search', '/integrations/search')
+    },
     async createSearch(payload) {
-      await api.post('/integrations/search/providers', payload)
-      await this.fetchSearch()
+      const context = scopeContext(this)
+      await api.post('/integrations/search/providers', payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchSearch()
     },
     async updateSearch(id, payload) {
-      await api.put(`/integrations/search/providers/${id}`, payload)
-      await this.fetchSearch()
+      const context = scopeContext(this)
+      await api.put(`/integrations/search/providers/${id}`, payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchSearch()
     },
     async removeSearch(id) {
-      await api.delete(`/integrations/search/providers/${id}`)
+      const context = scopeContext(this)
+      await api.delete(`/integrations/search/providers/${id}`, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return
       delete this.accessByIntegration[id]
       await this.fetchSearch()
     },
     async testSearch(id) {
-      return (await api.post(`/integrations/search/providers/${id}/test`)).data
+      const scope = this.scope
+      return (await api.post(`/integrations/search/providers/${id}/test`, null, scopeConfig(scope))).data
     },
-    async fetchCalendar() {
-      this.pendingLoads += 1
-      this.loading = true
-      this.loadFailed = false
-      try {
-        this.calendar = (await api.get('/integrations/calendar')).data
-        this.loaded = true
-      } catch (error) {
-        this.loadFailed = true
-        throw error
-      } finally {
-        this.pendingLoads -= 1
-        this.loading = this.pendingLoads > 0
-      }
+    fetchCalendar() {
+      return this.fetchResource('calendar', '/integrations/calendar')
     },
     async createCalendar(payload) {
-      await api.post('/integrations/calendar/accounts', payload)
-      await this.fetchCalendar()
+      const context = scopeContext(this)
+      await api.post('/integrations/calendar/accounts', payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchCalendar()
     },
     async updateCalendar(id, payload) {
       const request = { ...payload }
       if (request.password === '') delete request.password
-      await api.put(`/integrations/calendar/accounts/${id}`, request)
-      await this.fetchCalendar()
+      const context = scopeContext(this)
+      await api.put(`/integrations/calendar/accounts/${id}`, request, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchCalendar()
     },
     async removeCalendar(id) {
-      await api.delete(`/integrations/calendar/accounts/${id}`)
+      const context = scopeContext(this)
+      await api.delete(`/integrations/calendar/accounts/${id}`, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return
       delete this.accessByIntegration[id]
       await this.fetchCalendar()
     },
     async testCalendar(id) {
-      return (await api.post(`/integrations/calendar/accounts/${id}/test`)).data
+      const scope = this.scope
+      return (await api.post(`/integrations/calendar/accounts/${id}/test`, null, scopeConfig(scope))).data
     },
-    async fetchKnowledge() {
-      this.pendingLoads += 1
-      this.loading = true
-      this.loadFailed = false
-      try {
-        this.knowledge = (await api.get('/integrations/knowledge')).data
-        this.loaded = true
-      } catch (error) {
-        this.loadFailed = true
-        throw error
-      } finally {
-        this.pendingLoads -= 1
-        this.loading = this.pendingLoads > 0
-      }
+    fetchKnowledge() {
+      return this.fetchResource('knowledge', '/integrations/knowledge')
     },
     async createKnowledge(payload) {
-      await api.post('/integrations/knowledge/bases', payload)
-      await this.fetchKnowledge()
+      const context = scopeContext(this)
+      await api.post('/integrations/knowledge/bases', payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchKnowledge()
     },
     async updateKnowledge(id, payload) {
       const request = { ...payload }
@@ -132,87 +222,114 @@ export const useIntegrationStore = defineStore('integrations', {
         delete request.token_id
         delete request.token_secret
       }
-      await api.put(`/integrations/knowledge/bases/${id}`, request)
-      await this.fetchKnowledge()
+      const context = scopeContext(this)
+      await api.put(`/integrations/knowledge/bases/${id}`, request, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchKnowledge()
     },
     async removeKnowledge(id) {
-      await api.delete(`/integrations/knowledge/bases/${id}`)
+      const context = scopeContext(this)
+      await api.delete(`/integrations/knowledge/bases/${id}`, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return
       delete this.accessByIntegration[id]
       await this.fetchKnowledge()
     },
     async testKnowledge(id) {
-      return (await api.post(`/integrations/knowledge/bases/${id}/test`)).data
+      const scope = this.scope
+      return (await api.post(`/integrations/knowledge/bases/${id}/test`, null, scopeConfig(scope))).data
     },
-    async fetchGit() {
-      this.pendingLoads += 1
-      this.loading = true
-      this.loadFailed = false
-      try {
-        this.git = (await api.get('/integrations/git')).data
-        this.loaded = true
-      } catch (error) {
-        this.loadFailed = true
-        throw error
-      } finally {
-        this.pendingLoads -= 1
-        this.loading = this.pendingLoads > 0
-      }
+    fetchGit() {
+      return this.fetchResource('git', '/integrations/git')
     },
     async createGit(payload) {
-      await api.post('/integrations/git', payload)
-      await this.fetchGit()
+      const context = scopeContext(this)
+      await api.post('/integrations/git', payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchGit()
     },
     async updateGit(id, payload) {
-      await api.put(`/integrations/git/${id}`, payload)
-      await this.fetchGit()
+      const context = scopeContext(this)
+      await api.put(`/integrations/git/${id}`, payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchGit()
     },
     async removeGit(id) {
-      await api.delete(`/integrations/git/${id}`)
+      const context = scopeContext(this)
+      await api.delete(`/integrations/git/${id}`, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return
       delete this.accessByIntegration[id]
       await this.fetchGit()
     },
-    async fetchOpenScad() {
-      this.pendingLoads += 1
-      this.loading = true
-      this.loadFailed = false
-      try {
-        this.openscad = (await api.get('/integrations/openscad')).data
-        this.loaded = true
-      } catch (error) {
-        this.loadFailed = true
-        throw error
-      } finally {
-        this.pendingLoads -= 1
-        this.loading = this.pendingLoads > 0
-      }
+    fetchOpenScad() {
+      return this.fetchResource('openscad', '/integrations/openscad')
     },
     async createOpenScad(payload) {
-      await api.post('/integrations/openscad', payload)
-      await this.fetchOpenScad()
+      const context = scopeContext(this)
+      await api.post('/integrations/openscad', payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchOpenScad()
     },
     async updateOpenScad(id, payload) {
-      await api.put(`/integrations/openscad/${id}`, payload)
-      await this.fetchOpenScad()
+      const context = scopeContext(this)
+      await api.put(`/integrations/openscad/${id}`, payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchOpenScad()
     },
     async removeOpenScad(id) {
-      await api.delete(`/integrations/openscad/${id}`)
-      await this.fetchOpenScad()
+      const context = scopeContext(this)
+      await api.delete(`/integrations/openscad/${id}`, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchOpenScad()
     },
     async discoverOpenScad(executionAgentId) {
-      return (await api.post('/integrations/openscad/discover', { executionAgentId })).data
+      const scope = this.scope
+      return (await api.post(
+        '/integrations/openscad/discover',
+        { executionAgentId },
+        scopeConfig(scope)
+      )).data
     },
     async testOpenScad(id) {
-      return (await api.post(`/integrations/openscad/${id}/test`)).data
+      const scope = this.scope
+      return (await api.post(`/integrations/openscad/${id}/test`, null, scopeConfig(scope))).data
     },
     async fetchAccess(id) {
-      const { data } = await api.get(`/integrations/${id}/access`)
+      const context = scopeContext(this)
+      const { data } = await api.get(`/integrations/${id}/access`, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return null
       this.accessByIntegration[id] = data
       return data
     },
     async saveAccess(id, payload) {
-      const { data } = await api.put(`/integrations/${id}/access`, payload)
+      const context = scopeContext(this)
+      const { data } = await api.put(`/integrations/${id}/access`, payload, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return null
       this.accessByIntegration[id] = data
       return data
+    },
+    async savePersonalSettings(enabled, allowedAdapterTypes) {
+      const context = scopeContext(this)
+      const { data } = await api.put('/integrations/personal-settings', {
+        enabled,
+        allowedAdapterTypes
+      }, scopeConfig('instance'))
+      if (!contextIsCurrent(this, context)) return
+      this.personalIntegrationsEnabled = data.enabled !== false
+      this.allowedPersonalAdapterTypes = data.allowedAdapterTypes || allowedAdapterTypes
+    },
+    async fetchEffectiveSearch() {
+      const loadVersion = ++this.effectiveLoadVersion
+      this.loadFailed = false
+      try {
+        await this.fetchPersonalPolicy()
+        if (this.effectiveLoadVersion !== loadVersion) return
+        if (!this.personalIntegrationsEnabled) {
+          this.search = emptySearch()
+          this.loaded = true
+          return
+        }
+        const personal = (await api.get('/integrations/search', scopeConfig('personal'))).data
+        if (this.effectiveLoadVersion !== loadVersion) return
+        this.search = personal
+        this.loaded = true
+      } catch (error) {
+        if (this.effectiveLoadVersion === loadVersion) this.loadFailed = true
+        throw error
+      }
     }
   }
 })

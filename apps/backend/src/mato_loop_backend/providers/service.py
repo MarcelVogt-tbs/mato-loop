@@ -21,7 +21,6 @@ from mato_loop_backend.attachments import (
     ValidatedImage,
     validate_image,
 )
-from mato_loop_backend.models import Credential
 from mato_loop_backend.privacy import (
     PseudonymizationError,
     RequestPseudonymizer,
@@ -49,7 +48,7 @@ from mato_loop_backend.providers.openai_compatible import (
     chat_completions,
     responses_api,
 )
-from mato_loop_backend.security import read_credential
+from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelCapability,
@@ -386,7 +385,12 @@ class ProviderService:
         timeout: float = 30,
     ) -> list[DiscoveredModel]:
         credential = (
-            await db.get(Credential, provider.credential_id, populate_existing=True)
+            await load_credential(
+                db,
+                provider.credential_id,
+                owner_id=provider.owner_id,
+                populate_existing=True,
+            )
             if provider.credential_id
             else None
         )
@@ -395,7 +399,9 @@ class ProviderService:
                 raise ProviderError(
                     "ChatGPT Codex is not connected", code="provider.notConnected"
                 )
-            refreshed = await refresh_codex_credential(db, credential)
+            refreshed = await refresh_codex_credential(
+                db, credential, owner_id=provider.owner_id
+            )
             return await codex_oauth.discover_models(
                 access_token=refreshed["access"],
                 account_id=refreshed.get("account_id"),
@@ -491,7 +497,12 @@ class ProviderService:
             )
         )
         credential = (
-            await db.get(Credential, provider.credential_id, populate_existing=True)
+            await load_credential(
+                db,
+                provider.credential_id,
+                owner_id=provider.owner_id,
+                populate_existing=True,
+            )
             if provider.credential_id
             else None
         )
@@ -632,7 +643,9 @@ class ProviderService:
                 raise ProviderError(
                     "ChatGPT Codex is not connected", code="provider.notConnected"
                 )
-            refreshed = await refresh_codex_credential(db, credential)
+            refreshed = await refresh_codex_credential(
+                db, credential, owner_id=provider.owner_id
+            )
             headers = codex_headers(
                 refreshed,
                 accept="text/event-stream" if request.stream else "application/json",

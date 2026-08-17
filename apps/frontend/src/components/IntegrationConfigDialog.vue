@@ -198,7 +198,7 @@ const integrations = useIntegrationStore()
 const executionAgents = useExecutionAgentStore()
 const formRef = ref(null)
 const saving = ref(false)
-const integrationTypes = [
+const allIntegrationTypes = [
   { label: 'Websuche', value: 'search' },
   { label: 'Kalender & Aufgaben', value: 'calendar' },
   { label: 'Wissensdatenbank', value: 'knowledge' },
@@ -212,6 +212,11 @@ const PROVIDER_DEFAULTS = {
   git: { provider: 'git', label: 'Git', placeholder: '' },
   openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' }
 }
+const integrationTypes = computed(() => allIntegrationTypes.filter((type) => {
+  const adapterType = PROVIDER_DEFAULTS[type.value].provider
+  if (integrations.scope === 'instance') return !['git', 'openscad'].includes(adapterType)
+  return integrations.adapterAllowed(adapterType)
+}))
 const providerTypes = computed(() => {
   const preset = PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search
   return [{ label: preset.label, value: preset.provider }]
@@ -418,6 +423,10 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     binaryPath: props.integration.config?.binaryPath || '/usr/bin/openscad',
     enabled: props.integration.enabled
   } : {})
+  if (!props.integration && !integrationTypes.value.some(({ value }) => value === form.integration_type)) {
+    const firstType = integrationTypes.value[0]?.value
+    if (firstType) selectIntegrationType(firstType)
+  }
   if (['git', 'openscad'].includes(form.integration_type)) void fetchComputers()
 })
 </script>

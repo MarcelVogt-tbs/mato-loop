@@ -174,7 +174,7 @@ async def _decide_memory_change(
     resolver = getattr(MemoryService, "apply_approved_change", None)
     if resolver is None:
         raise ApiError(503, "memory.unavailable")
-    outcome = await resolver(db, approval=approval, user_id=user_id)
+    outcome = await resolver(db, approval=approval, owner_id=user_id)
     error_code = {
         "target_changed": "approval.targetChanged",
         "policy_changed": "approval.policyChanged",
