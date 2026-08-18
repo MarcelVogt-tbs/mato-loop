@@ -348,6 +348,48 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
     assert _assistant_messages(db)[-1].content == "Fertig gerendert."
 
 
+async def test_execution_agent_unavailable_stops_before_model_retry(monkeypatch) -> None:
+    agent_id = uuid4()
+    integration = IntegrationInstance(
+        name="OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
+        execution_agent_id=agent_id,
+        config={"binary_path": "/usr/bin/openscad"},
+    )
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="render",
+                        name="render_openscad",
+                        arguments={
+                            "root": "session",
+                            "path": "files/model.scad",
+                            "output": "preview",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        integration_settings=IntegrationSettings(instances=[integration]),
+        execution_agent_id=agent_id,
+        execution_operations=("integration.openscad.render", "cache.export"),
+        tool_result=ToolResult.error("executionAgent.unavailable"),
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "executionAgent.unavailable"
+    assert len(requests) == 1
+    assert tool_registry._execute_definition.await_count == 1
+
+
 async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkeypatch) -> None:
     agent_id = uuid4()
     integration = IntegrationInstance(

@@ -3592,6 +3592,8 @@ class AgentRuntime:
                         "metadata": metadata,
                     },
                 )
+                if error_code == "executionAgent.unavailable":
+                    raise AgentRunError(error_code)
                 updated_identity = metadata.get("agentIdentity")
                 if isinstance(updated_identity, dict):
                     await run_events.publish(
