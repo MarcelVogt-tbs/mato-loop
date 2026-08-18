@@ -33,7 +33,9 @@ An automatic episode is a bounded context reference, not permission to read its 
 
 On a normal user turn, MatoLoop builds one query from the latest user message. A short follow-up of at most 120 characters also includes up to 1,000 characters from the preceding user turn. The resulting query is limited to 2,000 characters.
 
-When local semantic search is available, the host computes the query embedding once and reuses it for durable-memory and episodic search. Both searches combine PostgreSQL full-text ranking with local E5 cosine ranking through reciprocal rank fusion. If query embedding or vector search fails, lexical retrieval remains available.
+When local semantic search is available, the host computes the active query embeddings in one batch and reuses them for durable-memory and episodic search. Both searches combine PostgreSQL full-text ranking with local E5 cosine ranking through reciprocal rank fusion. If query embedding or vector search fails, lexical retrieval remains available.
+
+The current user message is always the primary retrieval query. For a short turn, the host may also search the previous user turn plus the current message as a contextual query. Primary results keep all but one available slot when present; the contextual lane supplements rather than replaces them, and duplicate memories or source sessions are removed.
 
 Automatic retrieval is bounded as follows:
 

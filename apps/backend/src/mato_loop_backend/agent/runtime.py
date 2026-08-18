@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
@@ -641,15 +642,46 @@ def _model_for_id(ai_settings: AiSettings, model_id: UUID | None) -> ModelConfig
     )
 
 
-def _memory_rag_query(records: list[Message]) -> str | None:
+def _memory_rag_queries(records: list[Message]) -> tuple[str | None, str | None]:
     user_messages = [item.content.strip() for item in records if item.role == "user"]
     user_messages = [item for item in user_messages if item]
     if not user_messages:
-        return None
-    current = user_messages[-1]
-    if len(current) <= 120 and len(user_messages) > 1:
-        return (user_messages[-2][:1_000] + "\nFollow-up: " + current)[:2_000]
-    return current[:2_000]
+        return None, None
+    current = user_messages[-1][:2_000]
+    contextual = (
+        (user_messages[-2][:1_000] + "\nFollow-up: " + current)[:2_000]
+        if len(current) <= 120 and len(user_messages) > 1
+        else None
+    )
+    return current, contextual
+
+
+def _merge_contextual_results[T](
+    primary: list[T],
+    contextual: list[T],
+    *,
+    limit: int,
+    identity: Callable[[T], object],
+) -> list[T]:
+    if not contextual or limit <= 1:
+        return primary[:limit]
+    primary_limit = min(len(primary), limit - 1)
+    selected = primary[:primary_limit]
+    seen = {identity(item) for item in selected}
+    supplement = next(
+        (item for item in contextual if identity(item) not in seen),
+        None,
+    )
+    if supplement is not None:
+        selected.append(supplement)
+        seen.add(identity(supplement))
+    for item in (*primary[primary_limit:], *contextual):
+        if len(selected) == limit:
+            break
+        if identity(item) not in seen:
+            selected.append(item)
+            seen.add(identity(item))
+    return selected
 
 
 def _recent_episode_overview_requested(records: list[Message]) -> bool:
@@ -1813,20 +1845,31 @@ class AgentRuntime:
                         (memory_text, injected_memory_count, 0)
                     )
                 else:
-                    rag_query = _memory_rag_query(records)
+                    rag_query, contextual_rag_query = _memory_rag_queries(records)
                     if automatic_memories is None or automatic_episodes is None:
                         recent_episodes_requested = _recent_episode_overview_requested(
                             records
                         )
                         query_embedding = None
+                        contextual_query_embedding = None
                         semantic_enabled = get_runtime_config().embedding_enabled
                         if rag_query and semantic_enabled and not recent_episodes_requested:
                             try:
-                                query_embedding = await embedding_client.embed_query(rag_query)
+                                if contextual_rag_query:
+                                    (
+                                        query_embedding,
+                                        contextual_query_embedding,
+                                    ) = await embedding_client.embed_queries(
+                                        [rag_query, contextual_rag_query]
+                                    )
+                                else:
+                                    query_embedding = await embedding_client.embed_query(
+                                        rag_query
+                                    )
                             except EmbeddingError:
                                 semantic_enabled = False
                         if rag_query and not recent_episodes_requested:
-                            automatic_memories = (
+                            primary_memories = (
                                 await MemoryRetrievalService.retrieve(
                                     db,
                                     owner_id=chat_session.user_id,
@@ -1840,7 +1883,7 @@ class AgentRuntime:
                                     max_semantic_distance=AUTOMATIC_MEMORY_MAX_DISTANCE,
                                 )
                             ).items
-                            automatic_episodes = (
+                            primary_episodes = (
                                 await EpisodeRetrievalService.retrieve(
                                     db,
                                     owner_id=chat_session.user_id,
@@ -1853,6 +1896,48 @@ class AgentRuntime:
                                     max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
                                 )
                             ).references
+                            automatic_memories = primary_memories
+                            automatic_episodes = primary_episodes
+                            if contextual_rag_query:
+                                contextual_memories = (
+                                    await MemoryRetrievalService.retrieve(
+                                        db,
+                                        owner_id=chat_session.user_id,
+                                        mode=MemoryRetrieveMode.SEARCH,
+                                        query=contextual_rag_query,
+                                        readable_by=model_trust_level,
+                                        pinned=False,
+                                        limit=AUTOMATIC_MEMORY_MAX_ITEMS,
+                                        query_embedding=contextual_query_embedding,
+                                        semantic_enabled=semantic_enabled,
+                                        max_semantic_distance=AUTOMATIC_MEMORY_MAX_DISTANCE,
+                                    )
+                                ).items
+                                contextual_episodes = (
+                                    await EpisodeRetrievalService.retrieve(
+                                        db,
+                                        owner_id=chat_session.user_id,
+                                        current_session_id=chat_session.id,
+                                        readable_by=model_trust_level,
+                                        query=contextual_rag_query,
+                                        limit=AUTOMATIC_EPISODE_MAX_ITEMS,
+                                        query_embedding=contextual_query_embedding,
+                                        semantic_enabled=semantic_enabled,
+                                        max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
+                                    )
+                                ).references
+                                automatic_memories = _merge_contextual_results(
+                                    primary_memories,
+                                    contextual_memories,
+                                    limit=AUTOMATIC_MEMORY_MAX_ITEMS,
+                                    identity=lambda item: item.id,
+                                )
+                                automatic_episodes = _merge_contextual_results(
+                                    primary_episodes,
+                                    contextual_episodes,
+                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
+                                    identity=lambda item: item.session_id,
+                                )
                         elif recent_episodes_requested:
                             automatic_memories = []
                             automatic_episodes = (

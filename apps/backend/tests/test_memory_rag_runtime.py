@@ -213,6 +213,11 @@ async def _runtime_setup(
         ),
     )
     monkeypatch.setattr(embedding_client, "embed_query", AsyncMock(return_value=[0.0]))
+    monkeypatch.setattr(
+        embedding_client,
+        "embed_queries",
+        AsyncMock(return_value=[[0.0], [1.0]]),
+    )
     monkeypatch.setattr(EffectiveToolSet, "execute", execute_tool)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
     return db, run, requests, projections, retrieve, execute_tool
@@ -273,6 +278,91 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
     assert "15 total, 2 pinned" in projections[0]["system_prompt"]
     assert "0 prior-session episodes" in projections[0]["system_prompt"]
     assert requests[0]["tool_choice"] == "auto"
+
+
+async def test_short_turn_retrieval_prioritizes_current_query_before_context(
+    monkeypatch,
+) -> None:
+    session_id = uuid4()
+    previous = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="user",
+        content="Ich möchte mich als Techniker bewerben.",
+    )
+    current = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="user",
+        content="du hast dohc meine daten?",
+    )
+    primary = [
+        MemoryRecord(
+            id=uuid4(),
+            content=content,
+            category="identity",
+            pinned=False,
+            trust_level="private",
+            revision=1,
+        )
+        for content in (
+            "Der Benutzer heißt Viktor Stickel.",
+            "Der Benutzer wurde am 03.07.1989 geboren.",
+            "Der Benutzer kommt aus Ascholding.",
+        )
+    ]
+    contextual = [
+        MemoryRecord(
+            id=uuid4(),
+            content=content,
+            category="preference",
+            pinned=False,
+            trust_level="private",
+            revision=1,
+        )
+        for content in (
+            "Der Benutzer bevorzugt knappe technische Anforderungen.",
+            "Der Benutzer nutzt lokale KI.",
+            "Der Benutzer besitzt eine Grafikkarte.",
+        )
+    ]
+    db, run, _requests, projections, retrieve, _execute = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="Ja, deine Daten sind gespeichert.", finish_reason="stop")],
+        records=[previous, current],
+    )
+    contextual_query = previous.content + "\nFollow-up: " + current.content
+
+    async def retrieve_for_query(*_args, **kwargs):
+        items = primary if kwargs["query"] == current.content else contextual
+        return MemoryRetrieval(
+            items=items,
+            mode=MemoryRetrieveMode.SEARCH,
+            strategy=MemoryRetrievalStrategy.HYBRID,
+            readable_by=TrustLevel.PRIVATE,
+            offset=0,
+            limit=AUTOMATIC_MEMORY_MAX_ITEMS,
+            has_more=False,
+        )
+
+    retrieve.side_effect = retrieve_for_query
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [call.kwargs["query"] for call in retrieve.await_args_list] == [
+        current.content,
+        contextual_query,
+    ]
+    embedding_client.embed_queries.assert_awaited_once_with(
+        [current.content, contextual_query]
+    )
+    system_prompt = projections[0]["system_prompt"]
+    assert primary[0].content in system_prompt
+    assert primary[1].content in system_prompt
+    assert primary[2].content not in system_prompt
+    assert contextual[0].content in system_prompt
+    assert contextual[1].content not in system_prompt
+    assert "claim that no user data is stored while visible entries are reported" in system_prompt
 
 
 async def test_context_overflow_drops_automatic_memory_before_failing(
