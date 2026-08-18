@@ -109,7 +109,14 @@ case "${1:-}" in
         compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT status, count(*) FROM message_search_chunks GROUP BY status ORDER BY status;"'
         compose exec -T embedding python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:7997/health', timeout=5).read().decode())"
         ;;
-    db) shift; compose run --rm backend uv run alembic "$@" ;;
+    db)
+        shift
+        compose run --rm backend uv run alembic "$@"
+        if [[ "${1:-}" == "revision" ]]; then
+            compose run --rm --no-deps --workdir /workspace backend \
+                chown -R "$(id -u):$(id -g)" /workspace/apps/backend/alembic/versions
+        fi
+        ;;
     lock)
         case "${2:-}" in
             backend) compose run --rm --no-deps backend uv lock ;;
