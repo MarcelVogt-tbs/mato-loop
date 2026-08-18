@@ -19,6 +19,7 @@ from mato_loop_backend.agent.runtime import (
 )
 from mato_loop_backend.agent.tools import (
     ToolAttachment,
+    ToolDraftAction,
     ToolFileAction,
     ToolRegistry,
     ToolResult,
@@ -1588,6 +1589,59 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
         }
     }
     assert "download" not in str(tool_message.provider_data).casefold()
+
+
+async def test_runtime_persists_typed_draft_action_as_file_action(monkeypatch) -> None:
+    draft_id = uuid4()
+    db, run, *_ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="draft-1",
+                        name="create_draft",
+                        arguments={"filename": "plan.md", "content": "# Plan"},
+                    )
+                ]
+            ),
+            ProviderResult(content="Fertig", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        tool_result=ToolResult(
+            content="{}",
+            metadata={},
+            draft_action=ToolDraftAction(
+                "create",
+                draft_id,
+                1,
+                f"files/drafts/{draft_id}/plan.md",
+                "plan.md",
+                6,
+            ),
+        ),
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    tool_message = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message) and call.args[0].role == "tool"
+    )
+    assert tool_message.provider_data["_matoloop"]["fileActions"] == [
+        {
+            "operation": "write",
+            "root": "session",
+            "rootIdentity": str(run.session_id),
+            "path": f"files/drafts/{draft_id}/plan.md",
+            "filename": "plan.md",
+            "sizeBytes": 6,
+            "intent": "draft",
+            "draftId": str(draft_id),
+            "revision": 1,
+        }
+    ]
 
 
 async def test_cancelled_dispatched_workspace_write_commits_before_run_stops(

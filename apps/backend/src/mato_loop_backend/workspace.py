@@ -4,6 +4,7 @@ import ctypes
 import errno
 import fcntl
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -11,6 +12,7 @@ import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from io import BytesIO
 from pathlib import Path, PurePosixPath
@@ -56,6 +58,15 @@ class TreeUsage:
     bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class DraftFile:
+    draft_id: UUID
+    revision: int
+    path: str
+    filename: str
+    size: int
+
+
 class RootFileError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -66,7 +77,7 @@ class _UploadTooLarge(Exception):
     pass
 
 
-MAX_EDITABLE_TEXT_BYTES = 1024 * 1024
+MAX_EDITABLE_TEXT_BYTES = 10 * 1024 * 1024
 _RENAME_NOREPLACE = 1
 _RENAME_AT2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
 if _RENAME_AT2 is not None:
@@ -810,6 +821,233 @@ class RootFileService:
                 raise
         return self._relative_path(parts)
 
+    def create_text_draft(self, filename: str, content: str) -> DraftFile:
+        if not isinstance(content, str):
+            raise TypeError("content must be text")
+        encoded_content = content.encode("utf-8")
+        if len(encoded_content) > self.max_editable_text_bytes:
+            raise RootFileError("file.tooLarge", "File is too large")
+        if "\0" in content:
+            raise RootFileError("file.invalidEncoding", "File is not editable UTF-8 text")
+        return self.create_draft_file(filename, encoded_content)
+
+    def create_draft_file(self, filename: str, content: bytes) -> DraftFile:
+        name = validate_upload_filename(filename)
+        if not isinstance(content, bytes):
+            raise TypeError("content must be bytes")
+        if len(content) > self.MAX_OPERATION_BYTES:
+            raise RootFileError("file.tooLarge", "File is too large")
+
+        draft_id = uuid4()
+        revision = 1
+        draft_name = str(draft_id)
+        index = json.dumps(
+            {
+                "draftId": draft_name,
+                "filename": name,
+                "source": {
+                    "root": "session",
+                    "rootIdentity": str(self.session_id),
+                    "path": f"files/drafts/{draft_name}/{name}",
+                },
+                "currentRevision": revision,
+                "revisions": [
+                    {
+                        "revision": revision,
+                        "createdAt": datetime.now(UTC).isoformat(),
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                    }
+                ],
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        with self._session_operation_lock(FileRoot.SESSION):
+            session_root = self._root_path(FileRoot.SESSION)
+            files_drafts = session_root / "files" / "drafts"
+            derived_drafts = session_root / "derived" / "drafts"
+            for directory in (files_drafts, derived_drafts):
+                try:
+                    directory.mkdir(mode=0o700)
+                except FileExistsError:
+                    self._ensure_directory(directory)
+
+            current_staged = files_drafts / f".{draft_name}.tmp"
+            history_staged = derived_drafts / f".{draft_name}.tmp"
+            current = files_drafts / draft_name
+            history = derived_drafts / draft_name
+            current_published = False
+            history_published = False
+            try:
+                current_staged.mkdir(mode=0o700)
+                (history_staged / str(revision)).mkdir(mode=0o700, parents=True)
+                self._assert_session_quota(len(content) * 2 + len(index))
+                self._write_private_file(current_staged / name, content)
+                self._write_private_file(
+                    history_staged / str(revision) / name, content
+                )
+                self._write_private_file(history_staged / "index.json", index)
+                self._assert_session_quota(0)
+                history_staged.rename(history)
+                history_published = True
+                current_staged.rename(current)
+                current_published = True
+                self._fsync_directory(derived_drafts)
+                self._fsync_directory(files_drafts)
+            except BaseException:
+                cleanup = [current_staged, history_staged]
+                if current_published:
+                    cleanup.append(current)
+                if history_published:
+                    cleanup.append(history)
+                for path in cleanup:
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                raise
+
+        return DraftFile(
+            draft_id=draft_id,
+            revision=revision,
+            path=f"files/drafts/{draft_name}/{name}",
+            filename=name,
+            size=len(content),
+        )
+
+    def record_text_revisions(
+        self,
+        draft_id: UUID,
+        filename: str,
+        contents: tuple[str, ...],
+        source: dict[str, str],
+    ) -> int:
+        if not isinstance(draft_id, UUID):
+            raise TypeError("draft_id must be a UUID")
+        name = validate_upload_filename(filename)
+        encoded = []
+        for content in contents:
+            if not isinstance(content, str):
+                raise TypeError("content must be text")
+            data = content.encode("utf-8")
+            if len(data) > self.max_editable_text_bytes:
+                raise RootFileError("file.tooLarge", "File is too large")
+            if "\0" in content:
+                raise RootFileError(
+                    "file.invalidEncoding", "File is not editable UTF-8 text"
+                )
+            encoded.append(data)
+
+        draft_name = str(draft_id)
+        with self._session_operation_lock(FileRoot.SESSION):
+            session_root = self._root_path(FileRoot.SESSION)
+            drafts = session_root / "derived" / "drafts"
+            try:
+                drafts.mkdir(mode=0o700)
+            except FileExistsError:
+                self._ensure_directory(drafts)
+            history = drafts / draft_name
+            created_history = False
+            try:
+                history.mkdir(mode=0o700)
+                created_history = True
+            except FileExistsError:
+                self._ensure_directory(history)
+
+            index_path = history / "index.json"
+            old_index_size = 0
+            if index_path.exists() or index_path.is_symlink():
+                metadata = self._metadata(index_path)
+                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                    raise RootFileError("file.symlinkForbidden", "Invalid draft index")
+                old_index_size = metadata.st_size
+                if old_index_size > 1024 * 1024:
+                    raise RootFileError("file.operationTooLarge", "Draft index is too large")
+                try:
+                    with _open_regular_file(
+                        session_root,
+                        ("derived", "drafts", draft_name, "index.json"),
+                        RootFileError,
+                    ) as handle:
+                        index = json.loads(handle.read().decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise RootFileError("file.invalidEncoding", "Invalid draft index") from exc
+                if (
+                    index.get("draftId") != draft_name
+                    or index.get("filename") != name
+                    or index.get("source") != source
+                    or not isinstance(index.get("revisions"), list)
+                    or index.get("currentRevision") != len(index["revisions"])
+                ):
+                    raise RootFileError("file.invalidEncoding", "Invalid draft index")
+            else:
+                index = {
+                    "draftId": draft_name,
+                    "filename": name,
+                    "source": source,
+                    "currentRevision": 0,
+                    "revisions": [],
+                }
+
+            additions = []
+            last_sha = index["revisions"][-1].get("sha256") if index["revisions"] else None
+            for data in encoded:
+                digest = hashlib.sha256(data).hexdigest()
+                if digest == last_sha:
+                    continue
+                revision = len(index["revisions"]) + len(additions) + 1
+                additions.append((revision, data, digest))
+                last_sha = digest
+            if not additions:
+                return int(index["currentRevision"])
+
+            now = datetime.now(UTC).isoformat()
+            next_index = {
+                **index,
+                "currentRevision": additions[-1][0],
+                "revisions": [
+                    *index["revisions"],
+                    *[
+                        {"revision": revision, "createdAt": now, "sha256": digest}
+                        for revision, _data, digest in additions
+                    ],
+                ],
+            }
+            index_data = json.dumps(
+                next_index, ensure_ascii=True, separators=(",", ":")
+            ).encode("utf-8")
+            self._assert_session_quota(
+                sum(len(data) for _revision, data, _digest in additions)
+                + len(index_data),
+                replaced_bytes=old_index_size,
+            )
+            published = []
+            staged_paths = []
+            index_published = False
+            temporary_index = history / f".index.{uuid4().hex}.tmp"
+            try:
+                for revision, data, _digest in additions:
+                    staged = history / f".{revision}.{uuid4().hex}.tmp"
+                    staged.mkdir(mode=0o700)
+                    staged_paths.append(staged)
+                    self._write_private_file(staged / name, data)
+                    target = history / str(revision)
+                    staged.rename(target)
+                    published.append(target)
+                self._write_private_file(temporary_index, index_data)
+                os.replace(temporary_index, index_path)
+                index_published = True
+                self._fsync_directory(history)
+            except BaseException:
+                temporary_index.unlink(missing_ok=True)
+                if not index_published:
+                    for path in (*staged_paths, *published):
+                        if path.is_dir():
+                            shutil.rmtree(path)
+                    if created_history and not any(history.iterdir()):
+                        history.rmdir()
+                raise
+            return int(next_index["currentRevision"])
+
     def replace_text_file(
         self,
         root: FileRoot | str,
@@ -905,6 +1143,15 @@ class RootFileService:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+
+    @staticmethod
+    def _write_private_file(path: Path, content: bytes) -> None:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
 
     def create_directory(self, root: FileRoot | str, relative_path: str) -> str:
         selected_root = self._selected_root(root)

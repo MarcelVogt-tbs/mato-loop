@@ -92,6 +92,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "filesystem.read": "auto",
         "filesystem.write": "auto",
         "filesystem.delete": "auto",
+        "draft.create": "auto",
         "network.search": "auto",
         "media.generate.image": "disabled",
         "media.edit.image": "ask",

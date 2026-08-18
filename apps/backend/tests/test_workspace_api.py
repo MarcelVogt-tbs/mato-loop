@@ -187,7 +187,11 @@ async def test_session_preview_edit_and_image_validation(tmp_path: Path, monkeyp
     assert preview["revision"] == hashlib.sha256(markdown).hexdigest()
     assert image.media_type == "image/png"
     assert image.headers["cache-control"] == "private, no-store"
-    assert updated == {"revision": hashlib.sha256(b"updated").hexdigest()}
+    assert updated["revision"] == hashlib.sha256(b"updated").hexdigest()
+    assert updated["draftRevision"] == 2
+    history = root / "derived" / "drafts" / updated["draftId"]
+    assert (history / "1" / "readme.md").read_bytes() == markdown
+    assert (history / "2" / "readme.md").read_text(encoding="utf-8") == "updated"
     assert (root / "files" / "readme.md").read_text(encoding="utf-8") == "updated"
 
 

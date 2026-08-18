@@ -173,6 +173,31 @@ describe('persisted attachments', () => {
     expect(toolFileActions({ fileActions: [{ ...action, operation: 'delete' }] })).toEqual([])
   })
 
+  it('accepts only canonical draft metadata on session file actions', () => {
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const draftId = '550e8400-e29b-41d4-a716-446655440005'
+    const path = `files/drafts/${draftId}/plan.md`
+    const action = {
+      operation: 'write',
+      root: 'session',
+      rootIdentity: sessionId,
+      path,
+      filename: 'plan.md',
+      sizeBytes: 7,
+      intent: 'draft',
+      draftId,
+      revision: 1,
+      downloadUrl: `/api/workspace/files/download?path=${encodeURIComponent(path)}&scope=session&session_id=${sessionId}&root_identity=${sessionId}`
+    }
+
+    expect(toolFileActions({ fileActions: [action] })[0]).toMatchObject({
+      intent: 'draft', draftId, revision: 1, sessionId
+    })
+    expect(toolFileActions({ fileActions: [{ ...action, draftId: rootId }] })).toEqual([])
+    expect(toolFileActions({ fileActions: [{ ...action, revision: 0 }] })).toEqual([])
+    expect(toolFileActions({ fileActions: [{ ...action, intent: 'other' }] })).toEqual([])
+  })
+
   it('keeps supported image metadata and marks unsafe URLs', () => {
     const attachments = imageAttachments([
       { id: 'one', kind: 'image', mimeType: 'image/png', url, width: 10, height: 20, sizeBytes: 2048 },

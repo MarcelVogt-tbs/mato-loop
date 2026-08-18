@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from io import BytesIO
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import zxingcpp
 from PIL import Image
@@ -227,6 +227,16 @@ class ToolFileAction:
     working_directory: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ToolDraftAction:
+    operation: Literal["create", "revise"]
+    draft_id: UUID
+    revision: int
+    path: str
+    filename: str
+    size_bytes: int
+
+
 @dataclass(slots=True)
 class ToolResult:
     content: str
@@ -234,6 +244,7 @@ class ToolResult:
     is_error: bool = False
     attachments: tuple[ToolAttachment, ...] = ()
     file_actions: tuple[ToolFileAction, ...] = ()
+    draft_action: ToolDraftAction | None = None
     trust_level: TrustLevel | None = None
 
     @classmethod
@@ -1377,6 +1388,11 @@ class WriteFileArguments(ToolArguments):
     content: str = Field(max_length=1_000_000)
 
 
+class CreateDraftArguments(ToolArguments):
+    filename: str = Field(min_length=1, max_length=240)
+    content: str = Field(max_length=10 * 1024 * 1024)
+
+
 class CreateDirectoryArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
@@ -2272,6 +2288,53 @@ def _workspace_file_action(
     )
 
 
+async def _record_tool_text_revisions(
+    context: ToolContext,
+    root: Literal["session", "workspace"],
+    path: str,
+    contents: tuple[str, ...],
+) -> None:
+    if root == "session":
+        source = {
+            "root": "session",
+            "rootIdentity": str(context.session.id),
+            "path": path,
+        }
+        parts = path.split("/")
+        try:
+            draft_id = UUID(parts[2]) if len(parts) == 4 and parts[:2] == ["files", "drafts"] else None
+        except ValueError:
+            draft_id = None
+        if draft_id is None or str(draft_id) != parts[2]:
+            draft_id = uuid5(NAMESPACE_URL, json.dumps(source, sort_keys=True))
+    else:
+        client = _workspace_client(context)
+        source = {
+            "root": "workspace",
+            "executionAgentId": str(client.agent_id),
+            "rootId": str(client.root_id),
+            "rootRevision": client.root_revision,
+            "workingDirectory": client.working_directory,
+            "path": path,
+        }
+        draft_id = uuid5(NAMESPACE_URL, json.dumps(source, sort_keys=True))
+    try:
+        await asyncio.to_thread(
+            context.root_files.record_text_revisions,
+            draft_id,
+            path.rsplit("/", 1)[-1],
+            contents,
+            source,
+        )
+    except (OSError, RootFileError):
+        logger.warning(
+            "Could not record tool text revisions for session %s path %s",
+            context.session.id,
+            path,
+            exc_info=True,
+        )
+
+
 async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> ToolResult:
     request = _filesystem_permission(
         context,
@@ -2296,16 +2359,73 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
         )
         assert isinstance(result, WorkspaceWriteResult)
         _require_workspace_path(result.path, path)
+        await _record_tool_text_revisions(
+            context, "workspace", result.path, (arguments.content,)
+        )
         return ToolResult.json(
             {"root": arguments.root, "written": result.path},
             file_actions=_workspace_file_action(
                 context, "write", result.path, result.size
             ),
         )
-    written = context.root_files.write_file(arguments.root, arguments.path, arguments.content)
+    path = context.root_files.normalize_relative_path(arguments.path)
+    previous: tuple[str, ...] = ()
+    try:
+        data = context.root_files.read_bytes(
+            arguments.root,
+            path,
+            limit=context.root_files.max_editable_text_bytes,
+        )
+        if len(data) <= context.root_files.max_editable_text_bytes:
+            old_content = data.decode("utf-8", errors="strict")
+            if "\0" not in old_content:
+                previous = (old_content,)
+    except (RootFileError, UnicodeDecodeError):
+        pass
+    written = context.root_files.write_file(arguments.root, path, arguments.content)
+    await _record_tool_text_revisions(
+        context, "session", written, (*previous, arguments.content)
+    )
     return ToolResult.json(
         {"root": arguments.root, "written": written},
         file_actions=_regular_file_action(context, "write", arguments.root, written),
+    )
+
+
+async def _create_draft(
+    arguments: CreateDraftArguments, context: ToolContext
+) -> ToolResult:
+    if (
+        tool_execution_policy(
+            context.tool_settings,
+            "draft.create",
+            ToolExecutionPolicy.AUTO,
+            allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO),
+        )
+        != ToolExecutionPolicy.AUTO
+    ):
+        return ToolResult.error("tool.unavailable")
+    draft = context.root_files.create_text_draft(arguments.filename, arguments.content)
+    return ToolResult(
+        content=json.dumps(
+            {
+                "draftId": str(draft.draft_id),
+                "revision": draft.revision,
+                "path": draft.path,
+                "filename": draft.filename,
+                "sizeBytes": draft.size,
+            },
+            ensure_ascii=False,
+        ),
+        metadata={},
+        draft_action=ToolDraftAction(
+            operation="create",
+            draft_id=draft.draft_id,
+            revision=draft.revision,
+            path=draft.path,
+            filename=draft.filename,
+            size_bytes=draft.size,
+        ),
     )
 
 
@@ -3419,6 +3539,9 @@ async def _generate_image(
         expected_trust_level=target_trust_level,
         user_id=context.session.user_id,
     )
+    draft = await asyncio.to_thread(
+        context.root_files.create_draft_file, result.filename, result.data
+    )
     return ToolResult(
         "Image generated.",
         {},
@@ -3430,6 +3553,14 @@ async def _generate_image(
                 kind="image",
                 metadata=result.metadata,
             ),
+        ),
+        draft_action=ToolDraftAction(
+            "create",
+            draft.draft_id,
+            draft.revision,
+            draft.path,
+            draft.filename,
+            draft.size,
         ),
         trust_level=result.trust_level,
     )
@@ -3450,17 +3581,28 @@ def _qr_code_png(content: str) -> bytes:
 
 
 async def _generate_qr_code(
-    arguments: GenerateQrCodeArguments, _context: ToolContext
+    arguments: GenerateQrCodeArguments, context: ToolContext
 ) -> ToolResult:
     try:
         data = await asyncio.to_thread(_qr_code_png, arguments.content)
     except Exception:
         logger.exception("QR code generation failed")
         return ToolResult.error("tool.executionFailed")
+    draft = await asyncio.to_thread(
+        context.root_files.create_draft_file, "qr-code.png", data
+    )
     return ToolResult(
         "QR code generated.",
         {},
         attachments=(ToolAttachment(data, "image/png", "qr-code.png"),),
+        draft_action=ToolDraftAction(
+            "create",
+            draft.draft_id,
+            draft.revision,
+            draft.path,
+            draft.filename,
+            draft.size,
+        ),
     )
 
 
@@ -3594,6 +3736,9 @@ async def _edit_image(
     result.metadata["authorizationSourceAttachmentIds"] = [
         str(attachment_id) for attachment_id in authorization_source_ids
     ]
+    draft = await asyncio.to_thread(
+        context.root_files.create_draft_file, result.filename, result.data
+    )
     return ToolResult(
         "Image edited.",
         {},
@@ -3605,6 +3750,14 @@ async def _edit_image(
                 kind="image",
                 metadata=result.metadata,
             ),
+        ),
+        draft_action=ToolDraftAction(
+            "create",
+            draft.draft_id,
+            draft.revision,
+            draft.path,
+            draft.filename,
+            draft.size,
         ),
         trust_level=result.trust_level,
     )
@@ -4915,6 +5068,13 @@ _CHANGE_DIRECTORY = ToolAction(
     ToolExecutionPolicy.AUTO,
     allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO),
 )
+_DRAFT_CREATE = ToolAction(
+    "draft.create",
+    "Entwürfe erstellen",
+    ToolExecutionPolicy.AUTO,
+    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO),
+    mutates=True,
+)
 
 
 tool_registry = ToolRegistry(
@@ -4982,6 +5142,17 @@ tool_registry = ToolRegistry(
             label="Datei bereitstellen",
             icon="download",
             actions=(_FILESYSTEM_READ,),
+        ),
+        ToolDefinition(
+            "create_draft",
+            "Create one new editable UTF-8 artifact. Call this for requested reusable text, templates, "
+            "samples, Markdown, config, code, or OpenSCAD instead of returning the artifact only in chat.",
+            CreateDraftArguments,
+            _create_draft,
+            group="filesystem",
+            label="Entwurf erstellen",
+            icon="draft",
+            actions=(_DRAFT_CREATE,),
         ),
         ToolDefinition(
             "write_file",

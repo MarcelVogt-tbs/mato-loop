@@ -1116,6 +1116,107 @@ describe('chat drafts', () => {
     expect(refresh).toHaveBeenCalledOnce()
   })
 
+  it('opens a completed draft only when the viewer stayed clean and unchanged', async () => {
+    global.EventSource = EventSourceMock
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const draftId = '550e8400-e29b-41d4-a716-446655440005'
+    const path = `files/drafts/${draftId}/plan.md`
+    const fileAction = {
+      operation: 'write',
+      root: 'session',
+      rootIdentity: sessionId,
+      path,
+      filename: 'plan.md',
+      sizeBytes: 7,
+      intent: 'draft',
+      draftId,
+      revision: 1,
+      downloadUrl: `/api/workspace/files/download?path=${encodeURIComponent(path)}&scope=session&session_id=${sessionId}&root_identity=${sessionId}`
+    }
+    api.get
+      .mockResolvedValueOnce({
+        data: {
+          id: sessionId,
+          messages: [{ role: 'tool', toolCallId: 'draft-1', fileActions: [fileAction] }],
+          workingDirectory: null
+        }
+      })
+      .mockResolvedValueOnce({ data: { entries: [] } })
+    api.patch.mockResolvedValue({
+      data: {
+        controlCenter: {
+          tabs: [{ appId: 'files', pinned: false }],
+          activeAppId: 'files',
+          open: true,
+          fileView: {
+            scope: 'session',
+            selectedPath: path,
+            selectedKind: 'file',
+            viewedFilePath: path,
+            rootIdentity: null,
+            executionAgentId: null,
+            rootId: null,
+            rootRevision: null,
+            workingDirectory: null
+          }
+        }
+      }
+    })
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId })
+    const controlCenter = useControlCenterStore()
+    controlCenter.sessionId = sessionId
+    const chat = useChatStore()
+    chat.current = { id: sessionId, messages: [] }
+    chat.selectedSessionId = sessionId
+    chat.watchRun(sessionId, 'run-1', { status: 'running' })
+    const source = EventSourceMock.instances[0]
+
+    source.emit('run.phase', {
+      phase: 'processing_tool', tool: 'create_draft', toolCallId: 'draft-1'
+    })
+    source.emit('tool.completed', {
+      tool: 'create_draft', toolCallId: 'draft-1', metadata: {}, output: '{}'
+    })
+
+    await vi.waitFor(() => expect(workspace.viewedEntry?.path).toBe(path))
+    expect(controlCenter.open).toBe(true)
+  })
+
+  it('leaves a completed draft in chat when the editor is dirty', async () => {
+    global.EventSource = EventSourceMock
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    api.get.mockResolvedValue({
+      data: {
+        id: sessionId,
+        messages: [{
+          role: 'tool',
+          toolCallId: 'draft-1',
+          fileActions: [{ intent: 'draft' }]
+        }]
+      }
+    })
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId })
+    workspace.editorDirty = true
+    const openToolFile = vi.spyOn(workspace, 'openToolFile')
+    const chat = useChatStore()
+    chat.current = { id: sessionId, messages: [] }
+    chat.selectedSessionId = sessionId
+    chat.watchRun(sessionId, 'run-1', { status: 'running' })
+    const source = EventSourceMock.instances[0]
+
+    source.emit('run.phase', {
+      phase: 'processing_tool', tool: 'create_draft', toolCallId: 'draft-1'
+    })
+    source.emit('tool.completed', {
+      tool: 'create_draft', toolCallId: 'draft-1', metadata: {}, output: '{}'
+    })
+
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalled())
+    expect(openToolFile).not.toHaveBeenCalled()
+  })
+
   it('does not replace a newer run status with a stale session list', async () => {
     let resolveSessions
     api.get.mockImplementationOnce(() => new Promise((resolve) => {

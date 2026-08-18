@@ -153,6 +153,10 @@ export function toolFileActions(result) {
     const rootId = typeof action.rootId === 'string' ? action.rootId : ''
     const rootRevision = typeof action.rootRevision === 'string' ? action.rootRevision : ''
     const workingDirectory = typeof action.workingDirectory === 'string' ? action.workingDirectory : ''
+    const isDraft = action.intent === 'draft'
+    const draftId = typeof action.draftId === 'string' ? action.draftId : ''
+    const revision = Number(action.revision)
+    const hasDraftFields = ['intent', 'draftId', 'revision'].some((key) => Object.hasOwn(action, key))
     if (
       !safeUrl
       || !scope
@@ -161,6 +165,15 @@ export function toolFileActions(result) {
       || size < 0
       || filename !== path.split('/').at(-1)
       || filename.length > 255
+      || (hasDraftFields && !isDraft)
+      || (isDraft && (
+        action.root !== 'session'
+        || action.operation !== 'write'
+        || !UUID_PATTERN.test(draftId)
+        || !Number.isSafeInteger(revision)
+        || revision < 1
+        || path !== `files/drafts/${draftId}/${filename}`
+      ))
     ) return []
     const params = new URL(safeUrl, 'https://mato-loop.invalid').searchParams
     const sessionId = params.get('session_id')
@@ -190,6 +203,7 @@ export function toolFileActions(result) {
       ...(scope === 'filesystem'
         ? { executionAgentId, rootId, rootRevision, workingDirectory }
         : {}),
+      ...(isDraft ? { intent: 'draft', draftId, revision } : {}),
       downloadUrl: safeUrl
     }]
   })

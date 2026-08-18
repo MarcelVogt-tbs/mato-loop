@@ -872,6 +872,7 @@ async def test_read_only_mode_offers_only_read_tools_and_blocks_stale_mutations(
         "glob",
         "grep",
         "provide_file",
+        "create_draft",
         "write_file",
         "create_directory",
         "delete_path",
@@ -881,7 +882,13 @@ async def test_read_only_mode_offers_only_read_tools_and_blocks_stale_mutations(
     offered = {
         item["name"] for item in tool_registry.schemas(IntegrationSettings(), "read-only")
     }
-    assert offered & file_tools == {"read", "glob", "grep", "provide_file"}
+    assert offered & file_tools == {
+        "read",
+        "glob",
+        "grep",
+        "provide_file",
+        "create_draft",
+    }
 
     call = ToolCall(
         id="stale",
@@ -895,6 +902,28 @@ async def test_read_only_mode_offers_only_read_tools_and_blocks_stale_mutations(
 
     assert result.metadata == {"errorCode": "tool.writeDisabled"}
     context.root_files.write_file.assert_not_called()
+
+
+async def test_create_draft_is_available_in_read_mode_and_returns_typed_action(
+    tmp_path,
+) -> None:
+    call = ToolCall(
+        id="draft",
+        name="create_draft",
+        arguments={"filename": "plan.md", "content": "# Plan\n"},
+    )
+    context = _context(tmp_path, call)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.is_error is False
+    assert result.draft_action is not None
+    assert result.draft_action.operation == "create"
+    assert result.draft_action.revision == 1
+    assert result.draft_action.path.endswith("/plan.md")
+    assert context.root_files.read_bytes(
+        "session", result.draft_action.path, limit=100
+    ) == b"# Plan\n"
 
 
 def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:

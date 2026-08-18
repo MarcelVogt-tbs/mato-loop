@@ -1,4 +1,5 @@
 import hashlib
+import json
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -120,6 +121,26 @@ def test_mutations_are_atomic_and_limited_to_session_files(tmp_path: Path) -> No
             "file.rootMutationForbidden",
             "file.sessionMutationForbidden",
         }
+
+
+def test_text_draft_publishes_current_file_and_first_revision(tmp_path: Path) -> None:
+    service, root = make_service(tmp_path)
+
+    draft = service.create_text_draft("plan.md", "# Plan\n")
+
+    assert draft.revision == 1
+    assert draft.path == f"files/drafts/{draft.draft_id}/plan.md"
+    assert draft.size == 7
+    assert (root / draft.path).read_text(encoding="utf-8") == "# Plan\n"
+    assert (
+        root / "derived" / "drafts" / str(draft.draft_id) / "1" / "plan.md"
+    ).read_text(encoding="utf-8") == "# Plan\n"
+    index = json.loads(
+        (root / "derived" / "drafts" / str(draft.draft_id) / "index.json").read_text()
+    )
+    assert index["draftId"] == str(draft.draft_id)
+    assert index["currentRevision"] == 1
+    assert index["revisions"][0]["revision"] == 1
 
 
 def test_upload_replace_rename_copy_and_move_preserve_session_contract(

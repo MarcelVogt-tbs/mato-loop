@@ -993,7 +993,7 @@ def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
     assert "Workspace mode: read-only" in prompt
     assert 'switch "Agent-Modus" from "Lesen" to "Schreiben"' in prompt
     assert "do not describe it as a general MatoLoop limitation" in prompt
-    assert "explicit root and a relative POSIX path" in prompt
+    assert "explicit root and relative POSIX path" in prompt
     assert "path='.' means that root" in prompt
     assert "attachments, generated, downloads, and derived" in prompt
     assert "managed read-only assets" in prompt
@@ -1023,6 +1023,19 @@ def test_read_only_prompt_keeps_media_tools_available() -> None:
 
     assert "Workspace mode: read-only" in prompt
     assert "Media tools and generated attachments are unaffected" in prompt
+
+
+def test_draft_prompt_separates_artifacts_from_explanations_and_root_tools() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"create_draft"}),
+    )
+
+    assert "Draft artifact contract" in prompt
+    assert "reusable text, template, or sample" in prompt
+    assert "requested generic sample needs no more details" in prompt
+    assert "Do not create a draft for explanations" in prompt
+    assert "take an explicit root" not in prompt
 
 
 def test_read_write_system_prompt_does_not_request_a_mode_switch() -> None:

@@ -223,6 +223,30 @@ async def test_ask_denial_stops_before_media_service(tmp_path, monkeypatch) -> N
     )
 
 
+async def test_generated_image_is_also_published_as_a_draft(
+    tmp_path, monkeypatch
+) -> None:
+    settings = ToolSettings.model_validate({"generateImage": {"policy": "auto"}})
+    call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
+    tool_context = context(tmp_path, call)
+    ai = media_settings(ModelCapability.IMAGE_GENERATION)
+    tool_context.model_id = ai.models[0].id
+    mock_settings_load(monkeypatch, settings, ai)
+    monkeypatch.setattr(
+        MediaService,
+        "generate_image",
+        AsyncMock(return_value=MediaResult(b"image", "image/png", "generated.png")),
+    )
+
+    result = await tool_registry.execute(call, tool_context)
+
+    assert result.draft_action is not None
+    assert result.draft_action.filename == "generated.png"
+    assert tool_context.root_files.read_bytes(
+        "session", result.draft_action.path, limit=100
+    ) == b"image"
+
+
 def test_image_target_prefers_native_provider_model_over_global_default() -> None:
     codex = LlmProviderConfig(
         name="Codex",

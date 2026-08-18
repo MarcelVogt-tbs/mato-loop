@@ -572,7 +572,7 @@ class FileMediaSettings(SettingsDocument):
     max_message_upload_mib: int = Field(default=512, ge=1, le=512)
     session_quota_mib: int = Field(default=500, ge=1, le=102_400)
     max_image_preview_mib: int = Field(default=5, ge=1, le=64)
-    max_editable_text_mib: int = Field(default=1, ge=1, le=16)
+    max_editable_text_mib: int = Field(default=10, ge=1, le=16)
     max_audio_duration_seconds: int = Field(default=3_600, ge=1, le=3_600)
     max_video_duration_seconds: int = Field(default=900, ge=1, le=900)
     max_extracted_characters: int = Field(default=1_000_000, ge=1_000, le=10_000_000)

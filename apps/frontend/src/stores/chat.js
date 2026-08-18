@@ -4,11 +4,12 @@ import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
+import { useExecutionAgentStore } from 'src/stores/execution-agents'
 import { useFileMediaSettingsStore } from 'src/stores/file-media-settings'
 import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { agentActivityDisplayKey } from 'src/utils/agent-activity'
-import { safeAttachmentUrl } from 'src/utils/attachments'
+import { safeAttachmentUrl, toolFileActions } from 'src/utils/attachments'
 import { notifyError } from 'src/utils/notifications'
 
 const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
@@ -1239,6 +1240,7 @@ export const useChatStore = defineStore('chat', {
       if (!run.reconnecting) this.reconnectAttempts = 0
       this.eventSource?.close()
       const source = new EventSource(`/api/sessions/${sessionId}/runs/${runId}/events`)
+      const toolViewContexts = new Map()
       let finished = false
       this.eventSource = markRaw(source)
       this.runSessionId = sessionId
@@ -1274,6 +1276,13 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('run.phase', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
+        if (payload.phase === 'processing_tool' && payload.toolCallId) {
+          const workspace = useWorkspaceStore()
+          toolViewContexts.set(payload.toolCallId, {
+            clean: !workspace.editorDirty,
+            viewVersion: workspace.viewVersion
+          })
+        }
         this.setActivity(payload.phase, payload)
       })
       source.addEventListener('session.title.updated', (event) => {
@@ -1359,7 +1368,30 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('tool.completed', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
-        this.refreshSession(sessionId)
+        const refresh = this.refreshSession(sessionId)
+        void refresh?.then(async () => {
+          const start = toolViewContexts.get(payload.toolCallId)
+          toolViewContexts.delete(payload.toolCallId)
+          if (!start || this.current?.id !== sessionId) return
+          const result = this.current.messages?.find((message) => (
+            message.role === 'tool' && message.toolCallId === payload.toolCallId
+          ))
+          const action = toolFileActions(result).find((item) => item.intent === 'draft')
+          const workspace = useWorkspaceStore()
+          if (
+            !action
+            || !start.clean
+            || workspace.editorDirty
+            || workspace.viewVersion !== start.viewVersion
+          ) return
+          workspace.configure({
+            sessionId,
+            workingDirectory: this.current.workingDirectory,
+            workspaceContext: useExecutionAgentStore().workspaceContextFor(this.activeContext)
+          })
+          await workspace.openToolFile(action)
+          await useControlCenterStore().openApp('files')
+        }).catch(() => {})
         if (
           FILESYSTEM_MUTATION_TOOLS.has(payload.tool)
           && !payload.metadata?.errorCode

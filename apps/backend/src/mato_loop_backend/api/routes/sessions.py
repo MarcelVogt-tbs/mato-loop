@@ -168,6 +168,11 @@ class _StoredFileAction(BaseModel):
     path: str = Field(min_length=1, max_length=1_000)
     filename: str = Field(min_length=1, max_length=1_000)
     size_bytes: int = Field(alias="sizeBytes", ge=0)
+    intent: Literal["draft"] | None = None
+    draft_id: str | None = Field(
+        default=None, alias="draftId", min_length=36, max_length=36
+    )
+    revision: int | None = Field(default=None, ge=1)
     execution_agent_id: str | None = Field(
         default=None, alias="executionAgentId", min_length=1, max_length=36
     )
@@ -186,6 +191,25 @@ class _StoredFileAction(BaseModel):
             raise ValueError("path must be a normalized file path")
         if self.filename != self.path.rsplit("/", 1)[-1]:
             raise ValueError("filename must match path")
+        draft_fields = {"draft_id", "revision"}
+        if self.intent is None:
+            if self.model_fields_set & draft_fields:
+                raise ValueError("non-draft actions cannot contain draft fields")
+        else:
+            if any(getattr(self, field) is None for field in draft_fields):
+                raise ValueError("draft fields are required")
+            assert self.draft_id is not None
+            try:
+                canonical_draft_id = str(UUID(self.draft_id))
+            except ValueError as exc:
+                raise ValueError("draft ID must be a canonical UUID") from exc
+            if (
+                canonical_draft_id != self.draft_id
+                or self.root != "session"
+                or self.operation != "write"
+                or self.path != f"files/drafts/{self.draft_id}/{self.filename}"
+            ):
+                raise ValueError("invalid draft action")
         snapshot_fields = {
             "execution_agent_id",
             "root_id",

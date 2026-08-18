@@ -746,6 +746,34 @@ def test_message_payload_keeps_session_file_action_url_exact() -> None:
     }
 
 
+def test_message_payload_exposes_valid_draft_metadata() -> None:
+    session_id = uuid4()
+    draft_id = str(uuid4())
+    stored_action = {
+        "operation": "write",
+        "root": "session",
+        "rootIdentity": str(session_id),
+        "path": f"files/drafts/{draft_id}/plan.md",
+        "filename": "plan.md",
+        "sizeBytes": 7,
+        "intent": "draft",
+        "draftId": draft_id,
+        "revision": 1,
+    }
+    message = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="tool",
+        content="{}",
+        provider_data={"_matoloop": {"fileActions": [stored_action]}},
+    )
+
+    action = message_payload(message)["fileActions"][0]
+
+    action.pop("downloadUrl")
+    assert action == stored_action
+
+
 def test_message_payload_rejects_workspace_snapshot_fields_on_session_actions() -> None:
     session_id = uuid4()
     action = {

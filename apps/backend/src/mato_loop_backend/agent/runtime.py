@@ -960,7 +960,7 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
     if isinstance(content, str) and tool_name != "memory_write":
         safe["content"] = (
             {"characters": len(content), "redacted": True}
-            if tool_name in {"write_file", "generate_qr_code"}
+            if tool_name in {"write_file", "create_draft", "generate_qr_code"}
             else {"characters": len(content), "preview": content[:200]}
         )
     if tool_name == "webfetch" and isinstance(safe.get("url"), str):
@@ -2644,6 +2644,7 @@ class AgentRuntime:
                 await db.refresh(chat_session)
                 tool_attachments = ()
                 tool_file_actions = ()
+                tool_draft_action = None
                 image_handled_for_text_model = False
                 memory_available_now = True
                 memory_write_available_now = True
@@ -3368,6 +3369,7 @@ class AgentRuntime:
                         chat_session.private_integration_data_used = True
                     tool_attachments = tool_result.attachments
                     tool_file_actions = tool_result.file_actions
+                    tool_draft_action = tool_result.draft_action
                     tool_trust_level = (
                         TrustLevel.PRIVATE
                         if model_trust_level == TrustLevel.PRIVATE
@@ -3553,30 +3555,46 @@ class AgentRuntime:
                     provider_data=(
                         {
                             "_matoloop": {
-                                "fileActions": [
-                                    {
-                                        "operation": action.operation,
-                                        "root": action.root,
-                                        "rootIdentity": action.root_identity,
-                                        "path": action.path,
-                                        "filename": action.filename,
-                                        "sizeBytes": action.size_bytes,
-                                        **(
-                                            {
-                                                "executionAgentId": action.execution_agent_id,
-                                                "rootId": action.root_id,
-                                                "rootRevision": action.root_revision,
-                                                "workingDirectory": action.working_directory,
-                                            }
-                                            if action.root == "workspace"
-                                            else {}
-                                        ),
-                                    }
-                                    for action in tool_file_actions
-                                ]
+                                "fileActions": (
+                                    [
+                                        {
+                                            "operation": "write",
+                                            "root": "session",
+                                            "rootIdentity": str(chat_session.id),
+                                            "path": tool_draft_action.path,
+                                            "filename": tool_draft_action.filename,
+                                            "sizeBytes": tool_draft_action.size_bytes,
+                                            "intent": "draft",
+                                            "draftId": str(tool_draft_action.draft_id),
+                                            "revision": tool_draft_action.revision,
+                                        }
+                                    ]
+                                    if tool_draft_action is not None
+                                    else [
+                                        {
+                                            "operation": action.operation,
+                                            "root": action.root,
+                                            "rootIdentity": action.root_identity,
+                                            "path": action.path,
+                                            "filename": action.filename,
+                                            "sizeBytes": action.size_bytes,
+                                            **(
+                                                {
+                                                    "executionAgentId": action.execution_agent_id,
+                                                    "rootId": action.root_id,
+                                                    "rootRevision": action.root_revision,
+                                                    "workingDirectory": action.working_directory,
+                                                }
+                                                if action.root == "workspace"
+                                                else {}
+                                            ),
+                                        }
+                                        for action in tool_file_actions
+                                    ]
+                                )
                             }
                         }
-                        if tool_file_actions
+                        if tool_file_actions or tool_draft_action is not None
                         else {}
                     ),
                 )

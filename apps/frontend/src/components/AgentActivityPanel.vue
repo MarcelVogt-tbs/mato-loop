@@ -144,6 +144,12 @@
           >
             <q-icon name="draft" color="primary" size="24px" />
             <span class="col ellipsis text-weight-medium">{{ action.filename }}</span>
+            <q-badge
+              v-if="action.intent === 'draft'"
+              outline
+              color="primary"
+              label="Entwurf"
+            />
             <q-btn
               flat
               round

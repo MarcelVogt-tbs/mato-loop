@@ -457,10 +457,18 @@ def general_system_prompt(
         )
     if file_tools_available:
         parts.append(
-            "File tools take an explicit root and a relative POSIX path; path='.' means that root. Never "
+            "Root-based file tools take an explicit root and relative POSIX path; path='.' means that root. Never "
             "put a root name or absolute path in path. Session attachments, generated, downloads, and "
             "derived are managed read-only assets; only files/... is writable. Copy and move take an "
             "exact new destination and never overwrite."
+        )
+    if "create_draft" in offered_tool_names:
+        parts.append(
+            "Draft artifact contract: When the user asks to write, draft, formulate, rewrite, or provide "
+            "a reusable text, template, or sample, call create_draft with the complete artifact instead "
+            "of returning it only as assistant text. Ask required questions first; a requested generic "
+            "sample needs no more details. Do not create a draft for explanations. Use write_file only "
+            "to change an existing file."
         )
     if "read" in offered_tool_names:
         parts.append(

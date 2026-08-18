@@ -34,11 +34,11 @@
                   size="sm"
                   color="primary"
                   icon="visibility"
-                  :aria-label="`${action.filename} ansehen`"
+                  :aria-label="`${action.filename} ${action.intent === 'draft' ? 'als Entwurf öffnen' : 'ansehen'}`"
                   @click.stop="emit('open-file', action)"
                   @keydown.stop
                 >
-                  <q-tooltip>Datei ansehen</q-tooltip>
+                  <q-tooltip>{{ action.intent === 'draft' ? 'Entwurf öffnen' : 'Datei ansehen' }}</q-tooltip>
                 </q-btn>
                 <q-btn
                   flat
