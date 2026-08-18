@@ -2,6 +2,8 @@
 
 Integrations extend the MatoLoop harness without bypassing the provider-neutral agent loop or permission boundary. A persisted instance names an integration type and a host-known adapter. The adapter validates its configuration and produces only statically implemented contributions.
 
+The adapter registry is the availability catalog. Registered adapters default to `full`; administrators may set backend adapters to `instance_only` or `disabled`, while owner-bound agent adapters support only `full` or `disabled`. Availability changes retain configured instances, and deletion remains possible when other operations are blocked.
+
 ## Contribution Types
 
 An adapter can:

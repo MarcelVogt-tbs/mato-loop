@@ -48,12 +48,22 @@ from mato_loop_backend.integrations.openscad import (
     OpenScadDiscoverResult,
     OpenScadTestResult,
 )
-from mato_loop_backend.integrations.registry import integration_adapter
+from mato_loop_backend.integrations.registry import (
+    integration_adapter,
+    integration_adapter_type_registered,
+    integration_adapters,
+)
 from mato_loop_backend.models import ExecutionAgent, UserAccount
-from mato_loop_backend.security import load_credential, read_credential, require_user
+from mato_loop_backend.security import (
+    load_credential,
+    read_credential,
+    require_admin,
+    require_user,
+)
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
     DefaultTaskListSettings,
+    IntegrationAdapterAvailability,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -86,16 +96,20 @@ async def _load_scoped_integrations(
         settings = await SettingsStore.load(
             db, IntegrationSettings, for_update=for_update
         )
+        if adapter_type is not None and settings.availability_for(
+            adapter_type
+        ) == IntegrationAdapterAvailability.DISABLED:
+            raise ApiError(409, "integration.adapterDisabled")
         return settings, None
     if user is None:
         raise ApiError(401, "auth.notAuthenticated")
     instance = await SettingsStore.load(db, IntegrationSettings)
-    if not instance.personal_integrations_enabled:
-        raise ApiError(409, "integration.personalDisabled")
-    if (
-        adapter_type is not None
-        and adapter_type not in instance.allowed_personal_adapter_types
-    ):
+    availability = (
+        instance.availability_for(adapter_type) if adapter_type is not None else None
+    )
+    if availability == IntegrationAdapterAvailability.DISABLED:
+        raise ApiError(409, "integration.adapterDisabled")
+    if availability == IntegrationAdapterAvailability.INSTANCE_ONLY:
         raise ApiError(409, "integration.personalAdapterDisabled")
     settings = await SettingsStore.load(
         db, UserIntegrationSettings, user_id=user.id, for_update=for_update
@@ -121,17 +135,6 @@ async def _load_scoped_tools(
     instance = await SettingsStore.load(db, ToolSettings)
     return UserToolSettings.model_validate(
         instance.model_dump(exclude={"personal_settings_enabled"})
-    )
-
-
-class PersonalIntegrationSettingsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    enabled: bool
-    allowed_adapter_types: set[
-        Literal["searxng", "caldav", "bookstack", "mealie", "git", "openscad"]
-    ] = Field(
-        validation_alias=AliasChoices("allowedAdapterTypes", "allowed_adapter_types")
     )
 
 
@@ -278,6 +281,31 @@ class IntegrationAccessRequest(BaseModel):
             "defaultTaskListKey", "default_task_list_key"
         ),
     )
+
+
+class IntegrationCatalogUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    availability: IntegrationAdapterAvailability
+
+
+def _catalog_item(adapter, settings: IntegrationSettings) -> dict:
+    return {
+        "integrationType": adapter.integration_type,
+        "adapterType": adapter.adapter_type,
+        "executionLocation": adapter.execution_location,
+        "availability": settings.availability_for(adapter.adapter_type).value,
+    }
+
+
+def _personal_settings_payload(settings: IntegrationSettings) -> dict:
+    allowed = sorted(
+        adapter.adapter_type
+        for adapter in integration_adapters()
+        if settings.availability_for(adapter.adapter_type)
+        == IntegrationAdapterAvailability.FULL
+    )
+    return {"enabled": bool(allowed), "allowedAdapterTypes": allowed}
 
 
 def _provider_payload(provider: IntegrationInstance) -> dict:
@@ -491,10 +519,12 @@ def search_settings_payload(settings: IntegrationSettings) -> dict:
     return {
         **(
             {
-                "personalIntegrationsEnabled": settings.personal_integrations_enabled,
-                "allowedPersonalAdapterTypes": sorted(
-                    settings.allowed_personal_adapter_types
-                ),
+                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
+                    "enabled"
+                ],
+                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
+                    "allowedAdapterTypes"
+                ],
             }
             if isinstance(settings, IntegrationSettings)
             else {}
@@ -516,10 +546,12 @@ def calendar_settings_payload(settings: IntegrationSettings) -> dict:
     return {
         **(
             {
-                "personalIntegrationsEnabled": settings.personal_integrations_enabled,
-                "allowedPersonalAdapterTypes": sorted(
-                    settings.allowed_personal_adapter_types
-                ),
+                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
+                    "enabled"
+                ],
+                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
+                    "allowedAdapterTypes"
+                ],
             }
             if isinstance(settings, IntegrationSettings)
             else {}
@@ -539,10 +571,12 @@ def knowledge_settings_payload(settings: IntegrationSettings) -> dict:
     return {
         **(
             {
-                "personalIntegrationsEnabled": settings.personal_integrations_enabled,
-                "allowedPersonalAdapterTypes": sorted(
-                    settings.allowed_personal_adapter_types
-                ),
+                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
+                    "enabled"
+                ],
+                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
+                    "allowedAdapterTypes"
+                ],
             }
             if isinstance(settings, IntegrationSettings)
             else {}
@@ -561,10 +595,12 @@ def recipe_settings_payload(settings: IntegrationSettingsDocument) -> dict:
     return {
         **(
             {
-                "personalIntegrationsEnabled": settings.personal_integrations_enabled,
-                "allowedPersonalAdapterTypes": sorted(
-                    settings.allowed_personal_adapter_types
-                ),
+                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
+                    "enabled"
+                ],
+                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
+                    "allowedAdapterTypes"
+                ],
             }
             if isinstance(settings, IntegrationSettings)
             else {}
@@ -656,6 +692,46 @@ def _connected_client(agent_id: UUID) -> ExecutionClient:
     if snapshot is None:
         raise ApiError(503, "executionAgent.unavailable")
     return ExecutionClient(agent_id, None, None, None, snapshot[0])
+
+
+@router.get("/catalog")
+async def get_integration_catalog(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await SettingsStore.load(db, IntegrationSettings)
+    return {
+        "adapters": [
+            _catalog_item(adapter, settings)
+            for adapter in integration_adapters()
+        ]
+    }
+
+
+@router.put("/catalog/{adapter_type}")
+async def update_integration_catalog(
+    adapter_type: str,
+    payload: IntegrationCatalogUpdateRequest,
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    if not integration_adapter_type_registered(adapter_type):
+        raise ApiError(409, "integration.providerUnsupported")
+    adapter = next(
+        item for item in integration_adapters() if item.adapter_type == adapter_type
+    )
+    if (
+        adapter.execution_location == "agent"
+        and payload.availability == IntegrationAdapterAvailability.INSTANCE_ONLY
+    ):
+        raise ApiError(422, "validation.invalidChoice", field="availability")
+    settings = await SettingsStore.load(db, IntegrationSettings, for_update=True)
+    if payload.availability == IntegrationAdapterAvailability.FULL:
+        settings.adapter_availability.pop(adapter_type, None)
+    else:
+        settings.adapter_availability[adapter_type] = payload.availability
+    await SettingsStore.save(db, settings)
+    await db.commit()
+    return _catalog_item(adapter, settings)
 
 
 @router.get("/search")
@@ -751,7 +827,7 @@ async def delete_git_integration(
     scope: SettingsApiScope = "personal",
 ) -> None:
     _settings, owner_id = await _load_scoped_integrations(
-        db, scope, user, mutation=True, adapter_type="git"
+        db, scope, user, mutation=True
     )
     try:
         await GitIntegrationService.delete(
@@ -849,7 +925,7 @@ async def delete_openscad_integration(
     scope: SettingsApiScope = "personal",
 ) -> None:
     _settings, owner_id = await _load_scoped_integrations(
-        db, scope, user, mutation=True, adapter_type="openscad"
+        db, scope, user, mutation=True
     )
     try:
         await OpenScadIntegrationService.delete(
@@ -993,7 +1069,7 @@ async def delete_calendar_integration(
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
     _settings, owner_id = await _load_scoped_integrations(
-        db, scope, user, mutation=True, adapter_type="caldav"
+        db, scope, user, mutation=True
     )
     try:
         await CalDavIntegrationService.delete(db, integration_id, owner_id=owner_id)
@@ -1124,7 +1200,7 @@ async def delete_knowledge_integration(
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
     _settings, owner_id = await _load_scoped_integrations(
-        db, scope, user, mutation=True, adapter_type="bookstack"
+        db, scope, user, mutation=True
     )
     try:
         await BookStackIntegrationService.delete(db, integration_id, owner_id=owner_id)
@@ -1251,7 +1327,7 @@ async def delete_recipe_integration(
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
     _settings, owner_id = await _load_scoped_integrations(
-        db, scope, user, mutation=True, adapter_type="mealie"
+        db, scope, user, mutation=True
     )
     try:
         await MealieIntegrationService.delete(db, integration_id, owner_id=owner_id)
@@ -1321,10 +1397,9 @@ async def get_integration_access(
     instance = _integration(integrations, integration_id)
     if instance is None:
         raise ApiError(404, "integration.notFound")
-    if scope == "personal":
-        await _load_scoped_integrations(
-            db, scope, user, adapter_type=instance.adapter_type
-        )
+    await _load_scoped_integrations(
+        db, scope, user, adapter_type=instance.adapter_type
+    )
     resources = await _integration_resources(db, instance)
     tools = await _load_scoped_tools(db, owner_id)
     return _access_payload(instance, resources, tools)
@@ -1344,10 +1419,9 @@ async def update_integration_access(
     instance = _integration(integrations, integration_id)
     if instance is None:
         raise ApiError(404, "integration.notFound")
-    if scope == "personal":
-        await _load_scoped_integrations(
-            db, scope, user, mutation=True, adapter_type=instance.adapter_type
-        )
+    await _load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type=instance.adapter_type
+    )
     resources = await _integration_resources(db, instance)
     revision = instance.model_dump(mode="json")
     adapter = integration_adapter(instance.integration_type, instance.adapter_type)
@@ -1473,36 +1547,13 @@ async def update_integration_access(
     return _access_payload(current, resources, tools)
 
 
-@router.put("/personal-settings")
-async def update_personal_integration_settings(
-    payload: PersonalIntegrationSettingsRequest,
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    user: Annotated[UserAccount | None, Depends(require_user)] = None,
-) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(
-        db, "instance", user, for_update=True, mutation=True
-    )
-    assert isinstance(settings, IntegrationSettings)
-    settings.personal_integrations_enabled = payload.enabled
-    settings.allowed_personal_adapter_types = set(payload.allowed_adapter_types)
-    await SettingsStore.save(db, settings)
-    await db.commit()
-    return {
-        "enabled": settings.personal_integrations_enabled,
-        "allowedAdapterTypes": sorted(settings.allowed_personal_adapter_types),
-    }
-
-
 @router.get("/personal-settings")
 async def get_personal_integration_settings(
     _user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     settings = await SettingsStore.load(db, IntegrationSettings)
-    return {
-        "enabled": settings.personal_integrations_enabled,
-        "allowedAdapterTypes": sorted(settings.allowed_personal_adapter_types),
-    }
+    return _personal_settings_payload(settings)
 
 
 @router.post("/search/providers", status_code=status.HTTP_201_CREATED)
@@ -1562,7 +1613,7 @@ async def delete_search_integration(
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
     _settings, owner_id = await _load_scoped_integrations(
-        db, scope, user, mutation=True, adapter_type="searxng"
+        db, scope, user, mutation=True
     )
     try:
         await SearchIntegrationService.delete(db, integration_id, owner_id=owner_id)
@@ -1588,10 +1639,9 @@ async def test_search_integration(
     )
     if provider is None:
         raise ApiError(404, "integration.notFound")
-    if scope == "personal":
-        await _load_scoped_integrations(
-            db, scope, user, adapter_type=provider.adapter_type
-        )
+    await _load_scoped_integrations(
+        db, scope, user, adapter_type=provider.adapter_type
+    )
     try:
         await search_with_provider(provider, "MatoLoop Verbindungstest")
     except SearchIntegrationError as exc:

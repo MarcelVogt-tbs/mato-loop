@@ -34,18 +34,8 @@ const emptyOpenScad = () => ({
   instances: []
 })
 
-const PERSONAL_ADAPTER_TYPES = ['searxng', 'caldav', 'bookstack', 'mealie', 'git', 'openscad']
-
 function scopeConfig(scope, config = {}) {
   return { ...config, params: { ...(config.params || {}), scope } }
-}
-
-function assignGate(store, data) {
-  if ('personalIntegrationsEnabled' in (data || {})) {
-    store.personalIntegrationsEnabled = data.personalIntegrationsEnabled !== false
-  }
-  const allowed = data?.allowedPersonalAdapterTypes || data?.allowedAdapterTypes
-  if (Array.isArray(allowed)) store.allowedPersonalAdapterTypes = allowed
 }
 
 function scopeContext(store) {
@@ -74,9 +64,10 @@ export const useIntegrationStore = defineStore('integrations', {
     git: emptyGit(),
     openscad: emptyOpenScad(),
     scope: 'instance',
-    personalIntegrationsEnabled: true,
-    personalPolicyLoaded: false,
-    allowedPersonalAdapterTypes: [...PERSONAL_ADAPTER_TYPES],
+    catalog: [],
+    catalogLoading: false,
+    catalogLoaded: false,
+    catalogLoadFailed: false,
     accessByIntegration: {},
     pendingLoads: 0,
     loading: false,
@@ -87,8 +78,13 @@ export const useIntegrationStore = defineStore('integrations', {
     effectiveLoadVersion: 0
   }),
   getters: {
-    adapterAllowed: (state) => (adapterType) => state.scope === 'instance'
-      || state.allowedPersonalAdapterTypes.includes(adapterType)
+    adapterAvailable: (state) => (adapterType, scope = state.scope) => {
+      const adapter = state.catalog.find((item) => item.adapterType === adapterType)
+      if (!adapter || state.catalogLoadFailed) return false
+      if (scope === 'personal') return adapter.availability === 'full'
+      return adapter.executionLocation === 'backend'
+        && ['full', 'instance_only'].includes(adapter.availability)
+    }
   },
   actions: {
     selectScope(scope) {
@@ -101,45 +97,39 @@ export const useIntegrationStore = defineStore('integrations', {
       this.loading = false
       this.loaded = false
       this.loadFailed = false
-      this.personalPolicyLoaded = false
       this.accessByIntegration = {}
       clearIntegrations(this)
     },
-    async fetchPersonalPolicy() {
-      const context = scopeContext(this)
-      this.pendingLoads += 1
-      this.loading = true
-      this.personalPolicyLoaded = false
+    async fetchCatalog() {
+      this.catalogLoading = true
+      this.catalogLoadFailed = false
       try {
-        const { data } = await api.get('/integrations/personal-settings')
-        if (!contextIsCurrent(this, context)) return false
-        this.personalIntegrationsEnabled = data.enabled !== false
-        if (Array.isArray(data.allowedAdapterTypes)) {
-          this.allowedPersonalAdapterTypes = data.allowedAdapterTypes
-        }
-        this.personalPolicyLoaded = true
-        return this.personalIntegrationsEnabled
+        const { data } = await api.get('/integrations/catalog')
+        this.catalog = data.adapters
+        this.catalogLoaded = true
+        return this.catalog
+      } catch (error) {
+        this.catalogLoadFailed = true
+        throw error
       } finally {
-        if (contextIsCurrent(this, context)) {
-          this.pendingLoads = Math.max(0, this.pendingLoads - 1)
-          this.loading = this.pendingLoads > 0
-        }
+        this.catalogLoading = false
+      }
+    },
+    async setAdapterAvailability(adapterType, availability) {
+      this.catalogLoading = true
+      try {
+        const { data } = await api.put(`/integrations/catalog/${adapterType}`, { availability })
+        const index = this.catalog.findIndex((adapter) => adapter.adapterType === adapterType)
+        if (index !== -1) this.catalog[index] = data
+        return data
+      } finally {
+        this.catalogLoading = false
       }
     },
     async fetchAll() {
       const context = scopeContext(this)
       this.loadFailed = false
       try {
-        if (context.scope === 'personal') {
-          await this.fetchPersonalPolicy()
-          if (!contextIsCurrent(this, context)) return
-          if (!this.personalIntegrationsEnabled) {
-            clearIntegrations(this)
-            this.loaded = true
-            this.loadFailed = false
-            return
-          }
-        }
         await Promise.all([
           this.fetchSearch(),
           this.fetchCalendar(),
@@ -164,7 +154,6 @@ export const useIntegrationStore = defineStore('integrations', {
         const data = (await api.get(path, scopeConfig(context.scope))).data
         if (!contextIsCurrent(this, context) || this.loadVersions[field] !== loadVersion) return
         this[field] = data
-        assignGate(this, data)
         this.loaded = true
         return data
       } catch (error) {
@@ -348,30 +337,13 @@ export const useIntegrationStore = defineStore('integrations', {
       this.accessByIntegration[id] = data
       return data
     },
-    async savePersonalSettings(enabled, allowedAdapterTypes) {
-      const context = scopeContext(this)
-      const { data } = await api.put('/integrations/personal-settings', {
-        enabled,
-        allowedAdapterTypes
-      }, scopeConfig('instance'))
-      if (!contextIsCurrent(this, context)) return
-      this.personalIntegrationsEnabled = data.enabled !== false
-      this.allowedPersonalAdapterTypes = data.allowedAdapterTypes || allowedAdapterTypes
-    },
     async fetchEffectiveSearch() {
       const loadVersion = ++this.effectiveLoadVersion
       this.loadFailed = false
       try {
-        await this.fetchPersonalPolicy()
+        const personal = await api.get('/integrations/search', scopeConfig('personal'))
         if (this.effectiveLoadVersion !== loadVersion) return
-        if (!this.personalIntegrationsEnabled) {
-          this.search = emptySearch()
-          this.loaded = true
-          return
-        }
-        const personal = (await api.get('/integrations/search', scopeConfig('personal'))).data
-        if (this.effectiveLoadVersion !== loadVersion) return
-        this.search = personal
+        this.search = personal.data
         this.loaded = true
       } catch (error) {
         if (this.effectiveLoadVersion === loadVersion) this.loadFailed = true

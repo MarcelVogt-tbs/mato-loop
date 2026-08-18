@@ -179,6 +179,7 @@ const messages = {
   'git.notRepository': () => 'Das aktuelle Arbeitsverzeichnis ist kein Git-Repository.',
   'git.operationFailed': () => 'Die Git-Aktion ist fehlgeschlagen.',
   'integration.authenticationFailed': () => 'Die Integration hat die Zugangsdaten abgelehnt.',
+  'integration.adapterDisabled': () => 'Dieser Integrationstyp ist derzeit nicht verfügbar.',
   'integration.attachmentTooLarge': () => 'Die Datei ist zu groß für einen Anhang.',
   'integration.changed': () => 'Die Integration wurde zwischenzeitlich geändert. Lade sie erneut.',
   'integration.configurationInvalid': () => 'Die Integrationskonfiguration ist unvollständig.',

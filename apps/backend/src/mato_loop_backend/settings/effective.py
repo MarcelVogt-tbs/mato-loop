@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.models import ExecutionAgent
 from mato_loop_backend.settings.models import (
     AiSettings,
+    IntegrationAdapterAvailability,
     IntegrationSettings,
     ModelAvailability,
     ToolSettings,
@@ -72,16 +73,25 @@ async def load_effective_integrations(
     instance = (await SettingsStore.load(db, IntegrationSettings)).model_copy(deep=True)
     for item in instance.instances:
         item.owner_id = None
+    instance.instances = [
+        item
+        for item in instance.instances
+        if instance.availability_for(item.adapter_type)
+        != IntegrationAdapterAvailability.DISABLED
+    ]
 
     personal = await SettingsStore.load_optional(
         db, UserIntegrationSettings, user_id=user_id
     )
-    if not instance.personal_integrations_enabled or personal is None:
+    if personal is None:
         personal_instances = []
     else:
         personal_instances = personal.model_copy(deep=True).instances
     for item in personal_instances:
-        if item.adapter_type not in instance.allowed_personal_adapter_types:
+        if (
+            instance.availability_for(item.adapter_type)
+            != IntegrationAdapterAvailability.FULL
+        ):
             continue
         item.owner_id = user_id
         instance.instances.append(item)

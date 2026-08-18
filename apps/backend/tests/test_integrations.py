@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +18,7 @@ from mato_loop_backend.agent.tools import (
     ToolResult,
     available_tool_schemas,
 )
-from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes import integrations as integrations_route_module
 from mato_loop_backend.api.routes.integrations import (
     CalendarIntegrationRequest,
@@ -36,8 +38,10 @@ from mato_loop_backend.api.routes.tool_settings import (
     ToolSettingsRequest,
     update_tool_settings,
 )
+from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations import (
     SearchIntegrationError,
+    SearchIntegrationService,
     search_available,
     search_provider_options,
     search_web,
@@ -51,7 +55,8 @@ from mato_loop_backend.integrations.contracts import (
     ToolContribution,
 )
 from mato_loop_backend.integrations.service import BookStackIntegrationService
-from mato_loop_backend.models import Credential
+from mato_loop_backend.models import Credential, UserAccount
+from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
     DefaultTaskListSettings,
@@ -85,6 +90,148 @@ class _StreamResponse:
 
     async def aiter_raw(self):
         yield self.body
+
+
+def _catalog_app(db, user=None) -> FastAPI:
+    app = FastAPI()
+    register_error_handlers(app)
+    app.include_router(integrations_route_module.router, prefix="/api")
+
+    async def override_db():
+        yield db
+
+    app.dependency_overrides[get_db_session] = override_db
+    if user is not None:
+        app.dependency_overrides[require_user] = lambda: user
+    return app
+
+
+def test_integration_catalog_requires_authentication(monkeypatch) -> None:
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    load = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", load)
+
+    response = TestClient(_catalog_app(db)).get("/api/integrations/catalog")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "auth.notAuthenticated"
+    load.assert_not_awaited()
+
+
+def test_integration_catalog_read_and_admin_update(monkeypatch) -> None:
+    db = AsyncMock(spec=AsyncSession)
+    settings = IntegrationSettings(
+        adapter_availability={"caldav": "instance_only"}
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    user = UserAccount(
+        id=uuid4(),
+        username="test",
+        password_hash="hash",
+        is_admin=False,
+        is_active=True,
+    )
+    app = _catalog_app(db, user)
+
+    with TestClient(app) as client:
+        listed = client.get("/api/integrations/catalog")
+        forbidden = client.put(
+            "/api/integrations/catalog/caldav", json={"availability": "full"}
+        )
+        user.is_admin = True
+        invalid = client.put(
+            "/api/integrations/catalog/caldav", json={"availability": "sometimes"}
+        )
+        invalid_agent = client.put(
+            "/api/integrations/catalog/git", json={"availability": "instance_only"}
+        )
+        updated = client.put(
+            "/api/integrations/catalog/caldav", json={"availability": "full"}
+        )
+        unknown = client.put(
+            "/api/integrations/catalog/unknown", json={"availability": "disabled"}
+        )
+
+    adapters = listed.json()["adapters"]
+    assert listed.status_code == 200
+    assert [(item["integrationType"], item["adapterType"]) for item in adapters] == sorted(
+        (item["integrationType"], item["adapterType"]) for item in adapters
+    )
+    assert next(item for item in adapters if item["adapterType"] == "caldav") == {
+        "integrationType": "calendar",
+        "adapterType": "caldav",
+        "executionLocation": "backend",
+        "availability": "instance_only",
+    }
+    assert forbidden.status_code == 403
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "validation.invalidChoice"
+    assert invalid_agent.status_code == 422
+    assert invalid_agent.json()["error"] == {
+        "code": "validation.invalidChoice",
+        "message": "The selected value is invalid.",
+        "field": "availability",
+    }
+    assert updated.json() == {
+        "integrationType": "calendar",
+        "adapterType": "caldav",
+        "executionLocation": "backend",
+        "availability": "full",
+    }
+    assert unknown.status_code == 409
+    assert unknown.json()["error"]["code"] == "integration.providerUnsupported"
+    assert settings.adapter_availability == {}
+    save.assert_awaited_once_with(db, settings)
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize("scope", ["instance", "personal"])
+async def test_disabled_adapter_blocks_create_but_allows_delete(
+    monkeypatch, scope
+) -> None:
+    integration = _searxng()
+    global_settings = IntegrationSettings(
+        adapter_availability={"searxng": "disabled"},
+        instances=[integration] if scope == "instance" else [],
+    )
+    personal_settings = UserIntegrationSettings(instances=[integration])
+
+    async def load(_db, settings_type, **_kwargs):
+        return (
+            global_settings
+            if settings_type is IntegrationSettings
+            else personal_settings
+        )
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    create = AsyncMock()
+    delete = AsyncMock()
+    monkeypatch.setattr(SearchIntegrationService, "create", create)
+    monkeypatch.setattr(SearchIntegrationService, "delete", delete)
+    user = SimpleNamespace(id=uuid4(), is_admin=scope == "instance")
+    db = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(ApiError, match="integration.adapterDisabled"):
+        await create_search_integration(
+            _request(), db, scope=scope, user=user
+        )
+    listed = await integrations_route_module.get_search_integrations(
+        db, scope=scope, user=user
+    )
+    await delete_search_integration(
+        integration.id, db, scope=scope, user=user
+    )
+
+    assert listed["providers"][0]["id"] == str(integration.id)
+    create.assert_not_awaited()
+    delete.assert_awaited_once_with(
+        db,
+        integration.id,
+        owner_id=None if scope == "instance" else user.id,
+    )
 
 
 async def test_bookstack_policy_cleanup_removes_resource_labels(monkeypatch) -> None:
@@ -132,8 +279,12 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
     monkeypatch,
 ) -> None:
     settings = IntegrationSettings(
-        personal_integrations_enabled=False,
-        allowed_personal_adapter_types={"caldav", "git"},
+        adapter_availability={
+            "searxng": "instance_only",
+            "bookstack": "instance_only",
+            "mealie": "instance_only",
+            "openscad": "disabled",
+        },
         instances=[_searxng()],
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
@@ -143,7 +294,7 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
     )
 
     assert result == {
-        "enabled": False,
+        "enabled": True,
         "allowedAdapterTypes": ["caldav", "git"],
     }
 
@@ -261,7 +412,14 @@ async def test_revoked_personal_adapters_block_external_clients(monkeypatch) -> 
         execution_agent_id=uuid4(),
         config={"binary_path": "/usr/bin/openscad"},
     )
-    instance = IntegrationSettings(allowed_personal_adapter_types=set())
+    instance = IntegrationSettings(
+        adapter_availability={
+            "searxng": "instance_only",
+            "caldav": "instance_only",
+            "bookstack": "instance_only",
+            "openscad": "disabled",
+        }
+    )
     personal = UserIntegrationSettings(
         instances=[search, calendar, knowledge, openscad]
     )
@@ -306,8 +464,18 @@ async def test_revoked_personal_adapters_block_external_clients(monkeypatch) -> 
         ),
     )
 
-    for operation in operations:
-        with pytest.raises(ApiError, match="integration.personalAdapterDisabled"):
+    for operation, code in zip(
+        operations,
+        [
+            "integration.personalAdapterDisabled",
+            "integration.personalAdapterDisabled",
+            "integration.personalAdapterDisabled",
+            "integration.adapterDisabled",
+            "integration.personalAdapterDisabled",
+        ],
+        strict=True,
+    ):
+        with pytest.raises(ApiError, match=code):
             await operation
 
     search_client.assert_not_awaited()

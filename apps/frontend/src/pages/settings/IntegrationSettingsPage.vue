@@ -8,11 +8,11 @@
           Externe Dienste für zusätzliche Agent-Funktionen verwalten.
         </p>
       </div>
-      <div class="row items-center q-gutter-sm">
+      <div v-if="showInstances" class="row items-center q-gutter-sm">
         <SettingsScopeToggle
           :model-value="integrations.scope"
           :is-admin="auth.isAdmin"
-          :disable="integrations.loading || gateLoading || testingId !== null || removingId !== null"
+          :disable="integrations.loading || integrations.catalogLoading || testingId !== null || removingId !== null"
           @update:model-value="changeScope"
         />
         <q-btn
@@ -21,52 +21,113 @@
           no-caps
           icon="add"
           label="Integration hinzufügen"
-          :disable="personalBlocked || integrations.loading || !canCreateIntegration"
+          :disable="integrations.loading || integrations.catalogLoading || !canCreateIntegration"
           @click="openCreateDialog"
         />
       </div>
     </header>
 
-    <q-card v-if="auth.isAdmin && integrations.scope === 'instance'" flat class="app-surface-tonal q-mb-md">
-      <q-card-section>
-        <q-toggle
-          :model-value="integrations.personalIntegrationsEnabled"
-          color="primary"
-          label="Persönliche Integrationen erlauben"
-          :disable="gateLoading"
-          @update:model-value="togglePersonalIntegrations"
-        />
-        <div class="text-caption app-muted q-mt-sm q-mb-xs">Erlaubte persönliche Adapter</div>
-        <div class="row q-gutter-sm">
-          <q-toggle
-            v-for="adapter in adapterOptions"
-            :key="adapter.value"
-            :model-value="integrations.allowedPersonalAdapterTypes.includes(adapter.value)"
-            :label="adapter.label"
-            color="primary"
-            dense
-            :disable="gateLoading"
-            @update:model-value="toggleAllowedAdapter(adapter.value, $event)"
-          />
-        </div>
-      </q-card-section>
-    </q-card>
+    <q-tabs
+      v-if="auth.isAdmin"
+      v-model="section"
+      dense
+      no-caps
+      align="left"
+      active-color="primary"
+      indicator-color="primary"
+      class="q-mb-lg"
+    >
+      <q-tab name="catalog" icon="extension" label="Verfügbare Integrationen" />
+      <q-tab name="instances" icon="settings" label="Integrationsinstanzen" />
+    </q-tabs>
 
-    <q-banner v-if="integrations.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
+    <template v-if="auth.isAdmin && section === 'catalog'">
+      <q-banner v-if="integrations.catalogLoadFailed" rounded class="app-surface-tonal q-mb-md">
+        Die verfügbaren Integrationen konnten nicht geladen werden.
+        <template #action>
+          <q-btn flat no-caps color="primary" label="Erneut laden" @click="loadCatalog" />
+        </template>
+      </q-banner>
+
+      <q-card flat class="app-surface">
+        <q-list separator>
+          <q-item
+            v-if="integrations.catalogLoaded && !integrations.catalog.length"
+            class="q-py-lg"
+          >
+            <q-item-section avatar>
+              <q-avatar color="grey-7" text-color="white" icon="extension" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label>Keine Integrationsadapter registriert</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item v-for="adapter in integrations.catalog" :key="adapter.adapterType" class="q-py-md">
+            <q-item-section>
+              <div class="row items-center q-col-gutter-md">
+                <div class="col-12 col-sm">
+                  <div class="row items-center no-wrap q-gutter-sm">
+                    <q-avatar color="primary" text-color="white" :icon="typeIcon(adapter.integrationType)" />
+                    <div>
+                      <div class="row items-center q-gutter-sm">
+                        <q-item-label class="text-weight-medium">{{ providerLabel(adapter.adapterType) }}</q-item-label>
+                        <q-chip
+                          dense
+                          outline
+                          color="grey-6"
+                          :icon="executionLocationIcon(adapter.executionLocation)"
+                        >
+                          {{ executionLocationLabel(adapter.executionLocation) }}
+                        </q-chip>
+                      </div>
+                      <q-item-label caption>{{ typeLabel(adapter.integrationType) }}</q-item-label>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-12 col-sm-5">
+                  <q-select
+                    :model-value="adapter.availability"
+                    outlined
+                    dense
+                    emit-value
+                    map-options
+                    label="Verfügbarkeit"
+                    :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                    :options="availabilityOptions(adapter)"
+                    :disable="integrations.catalogLoading"
+                    :loading="integrations.catalogLoading"
+                    @update:model-value="setAdapterAvailability(adapter.adapterType, $event)"
+                  />
+                </div>
+              </div>
+            </q-item-section>
+          </q-item>
+        </q-list>
+        <q-inner-loading :showing="integrations.catalogLoading" />
+      </q-card>
+    </template>
+
+    <q-banner v-if="showInstances && integrations.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>
-      {{ personalBlocked
-        ? 'Persönliche Integrationen wurden für diese Instanz deaktiviert. Vorhandene Einstellungen bleiben gespeichert, können aber nicht bearbeitet werden.'
-        : 'Hier verwaltest du deine persönlichen Integrationen. Die Instanz legt fest, welche Adapter zulässig sind.' }}
+      Die Verfügbarkeit wird je Integrationstyp festgelegt. Nur persönlich verfügbare Typen können hinzugefügt oder bearbeitet werden. Vorhandene Integrationen anderer Typen bleiben sichtbar und können gelöscht werden.
     </q-banner>
 
-    <q-banner v-if="integrations.loadFailed" rounded class="app-surface-tonal q-mb-md">
+    <q-banner v-if="showInstances && integrations.loadFailed" rounded class="app-surface-tonal q-mb-md">
       Die Integrationen konnten nicht geladen werden.
       <template #action>
         <q-btn flat no-caps color="primary" label="Erneut laden" @click="reload" />
       </template>
     </q-banner>
 
-    <q-card flat class="app-surface integration-list-card">
+    <q-banner v-if="showInstances && integrations.catalogLoadFailed" rounded class="app-surface-tonal q-mb-md">
+      Die Verfügbarkeit der Integrationen konnte nicht geladen werden. Es können derzeit keine Integrationen bearbeitet oder hinzugefügt werden.
+      <template #action>
+        <q-btn flat no-caps color="primary" label="Erneut laden" @click="loadCatalog" />
+      </template>
+    </q-banner>
+
+    <q-card v-show="showInstances" flat class="app-surface integration-list-card">
       <q-list separator>
         <q-item v-if="integrations.loaded && !configuredIntegrations.length && !integrations.loading" class="q-py-lg">
           <q-item-section avatar>
@@ -89,8 +150,8 @@
           <q-item-section>
             <div class="row items-center q-gutter-sm">
               <q-item-label class="text-weight-medium">{{ integration.name }}</q-item-label>
-              <q-chip dense :color="integration.enabled ? 'positive' : 'grey-7'" text-color="white">
-                {{ integration.enabled ? 'Aktiv' : 'Deaktiviert' }}
+              <q-chip dense :color="integrationAvailable(integration) && integration.enabled ? 'positive' : 'grey-7'" text-color="white">
+                {{ integrationAvailable(integration) ? (integration.enabled ? 'Aktiv' : 'Deaktiviert') : 'Nicht verfügbar' }}
               </q-chip>
             </div>
             <q-item-label caption>
@@ -153,17 +214,18 @@
                 color="negative"
                 icon="delete"
                 :aria-label="`${integration.name} löschen`"
-                :disable="!canEditIntegration(integration)"
+                :loading="removingId === integration.id"
+                :disable="removingId !== null"
                 @click="removeIntegration(integration)"
               />
             </div>
           </q-item-section>
         </q-item>
       </q-list>
-      <q-inner-loading :showing="integrations.loading" />
+      <q-inner-loading :showing="integrations.loading || (integrations.catalogLoading && !integrations.catalogLoaded)" />
     </q-card>
 
-    <IntegrationConfigDialog v-model="dialogOpen" :integration="selectedIntegration" />
+    <IntegrationConfigDialog v-if="showInstances" v-model="dialogOpen" :integration="selectedIntegration" />
   </section>
 </template>
 
@@ -190,8 +252,9 @@ const dialogOpen = ref(false)
 const selectedIntegration = ref(null)
 const testingId = ref(null)
 const removingId = ref(null)
-const gateLoading = ref(false)
+const section = ref('instances')
 const showAccessPage = computed(() => route.name === 'settings-integration-access')
+const showInstances = computed(() => !auth.isAdmin || section.value === 'instances')
 const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)
 const knowledgeBases = computed(() => integrations.knowledge.bases)
@@ -208,53 +271,36 @@ const configuredIntegrations = computed(
     ...openScadInstances.value
   ]
 )
-const personalBlocked = computed(() => (
-  integrations.scope === 'personal' && !integrations.personalIntegrationsEnabled
-))
-const canCreateIntegration = computed(() => (
-  integrations.scope === 'instance'
-  || (
-    integrations.personalPolicyLoaded
-    && integrations.allowedPersonalAdapterTypes.length > 0
-  )
-))
-const adapterOptions = [
-  { label: 'SearXNG', value: 'searxng' },
-  { label: 'CalDAV', value: 'caldav' },
-  { label: 'BookStack', value: 'bookstack' },
-  { label: 'Mealie', value: 'mealie' },
-  { label: 'Git', value: 'git' },
-  { label: 'OpenSCAD', value: 'openscad' }
+const backendAvailabilityOptions = [
+  { label: 'Instanz und persönlich', value: 'full' },
+  { label: 'Nur Instanz', value: 'instance_only' },
+  { label: 'Nicht verfügbar', value: 'disabled' }
 ]
+const agentAvailabilityOptions = [
+  { label: 'Persönlich verfügbar', value: 'full' },
+  { label: 'Nicht verfügbar', value: 'disabled' }
+]
+const canCreateIntegration = computed(() => (
+  integrations.catalogLoaded
+  && integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType))
+))
+
+function availabilityOptions(adapter) {
+  return adapter.executionLocation === 'agent' ? agentAvailabilityOptions : backendAvailabilityOptions
+}
 
 function canEditIntegration(integration) {
-  return !personalBlocked.value && integrations.adapterAllowed(integration.providerType)
+  return integrationAvailable(integration)
+}
+
+function integrationAvailable(integration) {
+  return integrations.adapterAvailable(integration.providerType)
 }
 
 async function changeScope(scope) {
   dialogOpen.value = false
   integrations.selectScope(scope)
   await reload()
-}
-
-async function saveIntegrationGate(enabled, allowedAdapterTypes) {
-  gateLoading.value = true
-  try {
-    await integrations.savePersonalSettings(enabled, allowedAdapterTypes)
-  } finally {
-    gateLoading.value = false
-  }
-}
-
-function togglePersonalIntegrations(enabled) {
-  return saveIntegrationGate(enabled, integrations.allowedPersonalAdapterTypes)
-}
-
-function toggleAllowedAdapter(adapterType, enabled) {
-  const allowed = new Set(integrations.allowedPersonalAdapterTypes)
-  if (enabled) allowed.add(adapterType)
-  else allowed.delete(adapterType)
-  return saveIntegrationGate(integrations.personalIntegrationsEnabled, [...allowed])
 }
 
 function openCreateDialog() {
@@ -275,18 +321,31 @@ function providerLabel(providerType) {
 
 function typeLabel(integrationType) {
   return {
+    search: 'Websuche',
     calendar: 'Kalender & Aufgaben',
     knowledge: 'Wissensdatenbank',
     recipes: 'Rezepte & Essensplanung',
     git: 'Versionsverwaltung',
     openscad: '3D-Modellierung'
-  }[integrationType] || 'Websuche'
+  }[integrationType] || integrationType || 'Unbekannter Integrationstyp'
 }
 
 function typeIcon(integrationType) {
   return {
-    calendar: 'calendar_month', knowledge: 'menu_book', recipes: 'restaurant_menu', git: 'account_tree', openscad: 'view_in_ar'
-  }[integrationType] || 'travel_explore'
+    search: 'travel_explore', calendar: 'calendar_month', knowledge: 'menu_book', recipes: 'restaurant_menu', git: 'account_tree', openscad: 'view_in_ar'
+  }[integrationType] || 'extension'
+}
+
+function executionLocationLabel(executionLocation) {
+  if (executionLocation === 'agent') return 'Computer'
+  if (executionLocation === 'backend') return 'Backend'
+  return 'Unbekannt'
+}
+
+function executionLocationIcon(executionLocation) {
+  if (executionLocation === 'agent') return 'computer'
+  if (executionLocation === 'backend') return 'dns'
+  return 'help_outline'
 }
 
 function gitExecutionAgentId(integration) {
@@ -351,7 +410,27 @@ async function removeIntegration(integration) {
 
 async function reload() {
   try {
-    await Promise.all([integrations.fetchAll(), executionAgents.fetchAll()])
+    await Promise.all([
+      integrations.fetchCatalog(),
+      integrations.fetchAll(),
+      executionAgents.fetchAll()
+    ])
+  } catch {
+    // The central API interceptor displays the error as a toast.
+  }
+}
+
+async function loadCatalog() {
+  try {
+    await integrations.fetchCatalog()
+  } catch {
+    // The central API interceptor displays the error as a toast.
+  }
+}
+
+async function setAdapterAvailability(adapterType, availability) {
+  try {
+    await integrations.setAdapterAvailability(adapterType, availability)
   } catch {
     // The central API interceptor displays the error as a toast.
   }

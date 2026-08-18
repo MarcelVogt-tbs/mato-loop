@@ -89,6 +89,10 @@ def test_agent_tools_require_the_run_agent_and_advertised_operation(monkeypatch)
     )
     agent_id = uuid4()
     settings = IntegrationSettings(instances=[_instance(agent_id)])
+    disabled = IntegrationSettings(
+        instances=[_instance(agent_id)],
+        adapter_availability={"example": "disabled"},
+    )
 
     wrong_agent = effective_execution_integration_settings(
         settings, uuid4(), {"integration.example.run"}
@@ -97,12 +101,16 @@ def test_agent_tools_require_the_run_agent_and_advertised_operation(monkeypatch)
     effective = effective_execution_integration_settings(
         settings, agent_id, {"integration.example.run"}
     )
+    unavailable = effective_execution_integration_settings(
+        disabled, agent_id, {"integration.example.run"}
+    )
 
     assert effective_integration_contributions(wrong_agent).tools == ()
     assert effective_integration_contributions(missing_operation).tools == ()
     assert [tool.name for tool in effective_integration_contributions(effective).tools] == [
         "example_run"
     ]
+    assert effective_integration_contributions(unavailable).tools == ()
 
 
 async def test_agent_tool_delegates_validated_arguments_and_builds_tool_result() -> None:

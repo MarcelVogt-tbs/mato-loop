@@ -28,7 +28,7 @@
         :label="$q.screen.gt.xs ? 'Speichern' : undefined"
         aria-label="Zugriffsrichtlinien speichern"
         :loading="saving"
-        :disable="personalBlocked || loading || loadFailed || !access || !dirty"
+        :disable="adapterBlocked || loading || loadFailed || !access || !dirty"
         @click="save"
       />
     </q-toolbar>
@@ -44,9 +44,7 @@
 
     <q-banner v-if="scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>
-      {{ personalBlocked
-        ? 'Persönliche Integrationen wurden für diese Instanz deaktiviert. Gespeicherte Zugriffsregeln bleiben erhalten, können aber nicht bearbeitet werden.'
-        : 'Diese Zugriffsregeln gehören zu deiner persönlichen Integration.' }}
+      Die Verfügbarkeit wird je Integrationstyp festgelegt. Ist dieser Typ nicht persönlich verfügbar, bleiben gespeicherte Zugriffsregeln erhalten, können aber nicht bearbeitet werden.
     </q-banner>
 
     <q-banner v-if="loadFailed" rounded class="app-surface-tonal q-mb-md">
@@ -76,8 +74,8 @@
     <q-form
       v-else-if="access"
       class="q-gutter-md"
-      :class="{ disabled: personalBlocked }"
-      :inert="personalBlocked"
+      :class="{ disabled: adapterBlocked }"
+      :inert="adapterBlocked"
       @submit.prevent="save"
     >
       <q-card v-if="supportsDefaultResources" flat class="app-surface-tonal">
@@ -100,7 +98,7 @@
                 map-options
                 label="Standardkalender"
                 :options="defaultCalendarOptions"
-                :disable="personalBlocked"
+                :disable="adapterBlocked"
               />
             </div>
             <div v-if="taskListResourceList.length" class="col-12 col-md-6">
@@ -112,7 +110,7 @@
                 map-options
                 label="Standard-Aufgabenliste"
                 :options="defaultTaskListOptions"
-                :disable="personalBlocked"
+                :disable="adapterBlocked"
               />
             </div>
           </div>
@@ -137,7 +135,7 @@
                 :label="action.label"
                 :options="policyOptions(action, action.globalPolicy)"
                 :hint="`Wirksam: ${policyLabel(action.effectiveIntegrationPolicy)}`"
-                :disable="personalBlocked || action.globalPolicy === 'disabled'"
+                :disable="adapterBlocked || action.globalPolicy === 'disabled'"
                 persistent-hint
               />
             </div>
@@ -179,7 +177,7 @@
                   :label="action.label"
                   :options="policyOptions(action, action.effectiveIntegrationPolicy)"
                   :hint="effectiveHint(resource, action)"
-                  :disable="personalBlocked || action.globalPolicy === 'disabled' || resource.hardUnavailableCapabilities.includes(action.capability)"
+                  :disable="adapterBlocked || action.globalPolicy === 'disabled' || resource.hardUnavailableCapabilities.includes(action.capability)"
                   persistent-hint
                 />
               </div>
@@ -204,7 +202,7 @@
           icon="save"
           label="Speichern"
           :loading="saving"
-          :disable="personalBlocked || !dirty"
+          :disable="adapterBlocked || !dirty"
         />
       </div>
     </q-form>
@@ -254,11 +252,8 @@ const integration = computed(() => [
   ...integrations.calendar.accounts,
   ...integrations.knowledge.bases
 ].find((item) => item.id === integrationId.value))
-const personalBlocked = computed(() => (
-  scope.value === 'personal' && (
-    !integrations.personalIntegrationsEnabled
-    || (integration.value && !integrations.allowedPersonalAdapterTypes.includes(integration.value.providerType))
-  )
+const adapterBlocked = computed(() => (
+  !integration.value || !integrations.adapterAvailable(integration.value.providerType, scope.value)
 ))
 const dirty = computed(() => Boolean(
   access.value && JSON.stringify(requestPayload()) !== savedPayload.value
@@ -371,8 +366,8 @@ async function load() {
   loadFailed.value = false
   try {
     integrations.selectScope(scope.value)
-    if (scope.value === 'personal' && !await integrations.fetchPersonalPolicy()) return
-    if (personalBlocked.value) return
+    await Promise.all([integrations.fetchCatalog(), integrations.fetchAll()])
+    if (adapterBlocked.value) return
     const value = await integrations.fetchAccess(id)
     if (token === loadToken && integrationId.value === id) assignAccess(value)
   } catch {

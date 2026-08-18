@@ -100,6 +100,12 @@ class ToolExecutionPolicy(StrEnum):
     AUTO = "auto"
 
 
+class IntegrationAdapterAvailability(StrEnum):
+    FULL = "full"
+    INSTANCE_ONLY = "instance_only"
+    DISABLED = "disabled"
+
+
 class ModelWebFetchPolicy(StrEnum):
     INHERIT = "inherit"
     DISABLED = "disabled"
@@ -672,17 +678,55 @@ class IntegrationSettingsBase(SettingsDocument):
 class IntegrationSettings(IntegrationSettingsBase):
     settings_key = "integrations"
 
-    personal_integrations_enabled: bool = True
-    allowed_personal_adapter_types: set[str] = Field(
-        default_factory=lambda: {
-            "searxng",
-            "caldav",
-            "bookstack",
-            "mealie",
-            "git",
-            "openscad",
-        }
+    adapter_availability: dict[str, IntegrationAdapterAvailability] = Field(
+        default_factory=dict
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_availability(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        availability = dict(data.get("adapter_availability", {}))
+        backend_adapters = {"searxng", "caldav", "bookstack", "mealie"}
+        agent_adapters = {"git", "openscad"}
+        legacy_adapters = backend_adapters | agent_adapters
+        if (
+            "personal_integrations_enabled" in data
+            or "allowed_personal_adapter_types" in data
+        ):
+            enabled = data.pop("personal_integrations_enabled", True)
+            allowed = set(
+                data.pop("allowed_personal_adapter_types", legacy_adapters)
+            )
+            for adapter_type in legacy_adapters:
+                if enabled and adapter_type in allowed:
+                    continue
+                availability.setdefault(
+                    adapter_type,
+                    IntegrationAdapterAvailability.DISABLED
+                    if adapter_type in agent_adapters
+                    else IntegrationAdapterAvailability.INSTANCE_ONLY,
+                )
+        for adapter_type in data.pop("disabled_integration_adapter_types", set()):
+            availability[adapter_type] = IntegrationAdapterAvailability.DISABLED
+        data["adapter_availability"] = availability
+        return data
+
+    @model_validator(mode="after")
+    def remove_default_availability(self) -> Self:
+        self.adapter_availability = {
+            adapter_type: availability
+            for adapter_type, availability in self.adapter_availability.items()
+            if availability != IntegrationAdapterAvailability.FULL
+        }
+        return self
+
+    def availability_for(self, adapter_type: str) -> IntegrationAdapterAvailability:
+        return self.adapter_availability.get(
+            adapter_type, IntegrationAdapterAvailability.FULL
+        )
 
 
 class UserIntegrationSettings(IntegrationSettingsBase):

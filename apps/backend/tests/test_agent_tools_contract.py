@@ -1134,7 +1134,9 @@ async def test_effective_toolset_rejects_a_call_that_was_not_offered(tmp_path) -
 
 
 def test_inactive_capability_catalog_includes_installed_tools_without_schemas() -> None:
-    integrations = IntegrationSettings()
+    integrations = IntegrationSettings(
+        adapter_availability={"caldav": "disabled"}
+    )
     settings = ToolSettings()
     capabilities = tools_module.effective_tool_capabilities(settings)
     effective = tool_registry.effective(
@@ -1162,7 +1164,7 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     assert "generate_image" in catalog
     assert "memory_retrieve" in catalog
     assert "webfetch" in catalog
-    assert "calendar_create_event" in catalog
+    assert "calendar_create_event" not in catalog
     assert '"Einstellungen > Integrationen"' in catalog
     assert "question" not in catalog
     assert "parameters" not in catalog

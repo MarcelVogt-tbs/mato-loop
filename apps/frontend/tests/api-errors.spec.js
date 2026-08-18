@@ -16,6 +16,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'integration.permissionDenied' } })).toBe(
       'Der verbundene Dienst erlaubt diese Aktion nicht.'
     )
+    expect(apiErrorMessage({ error: { code: 'integration.adapterDisabled' } })).toBe(
+      'Dieser Integrationstyp ist derzeit nicht verfügbar.'
+    )
     expect(apiErrorMessage({ error: { code: 'provider.discoveryUnsupported' } })).toBe(
       'Dieser Provider unterstützt keine automatische Modellerkennung.'
     )

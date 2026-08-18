@@ -536,7 +536,7 @@ class ToolRegistry:
                 if definition.required_operation in execution_operations
             }
         )
-        for contribution in installed_integration_tools():
+        for contribution in installed_integration_tools(integration_settings):
             installed_definitions.setdefault(
                 contribution.name, self._contributed_definition(contribution)
             )

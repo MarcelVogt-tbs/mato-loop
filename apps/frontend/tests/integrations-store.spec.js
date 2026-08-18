@@ -104,10 +104,57 @@ const openScadResponse = {
   }]
 }
 
+const catalogResponse = {
+  adapters: [
+    {
+      integrationType: 'search',
+      adapterType: 'searxng',
+      executionLocation: 'backend',
+      availability: 'instance_only'
+    },
+    {
+      integrationType: 'git',
+      adapterType: 'git',
+      executionLocation: 'agent',
+      availability: 'disabled'
+    }
+  ]
+}
+
 describe('integration store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+  })
+
+  it('loads the integration catalog and applies availability by scope', async () => {
+    api.get.mockResolvedValue({ data: catalogResponse })
+    const store = useIntegrationStore()
+
+    await store.fetchCatalog()
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/catalog')
+    expect(store.catalog).toEqual(catalogResponse.adapters)
+    expect(store.catalogLoaded).toBe(true)
+    expect(store.catalogLoadFailed).toBe(false)
+    expect(store.adapterAvailable('searxng', 'instance')).toBe(true)
+    expect(store.adapterAvailable('searxng', 'personal')).toBe(false)
+    expect(store.adapterAvailable('git', 'instance')).toBe(false)
+  })
+
+  it('updates one catalog adapter from the server response', async () => {
+    const updated = { ...catalogResponse.adapters[1], availability: 'full' }
+    api.put.mockResolvedValue({ data: updated })
+    const store = useIntegrationStore()
+    store.catalog = [...catalogResponse.adapters]
+
+    await store.setAdapterAvailability('git', 'full')
+
+    expect(api.put).toHaveBeenCalledWith('/integrations/catalog/git', { availability: 'full' })
+    expect(store.catalog[1]).toEqual(updated)
+    expect(store.adapterAvailable('git', 'personal')).toBe(true)
+    expect(store.adapterAvailable('git', 'instance')).toBe(false)
+    expect(store.catalogLoading).toBe(false)
   })
 
   it('loads only configured external integrations', async () => {
@@ -303,30 +350,26 @@ describe('integration store', () => {
     )
   })
 
-  it('keeps personal integration creation blocked while its policy loads', async () => {
-    let resolvePolicy
-    api.get.mockImplementation(() => new Promise((resolve) => { resolvePolicy = resolve }))
+  it('loads retained personal integrations regardless of catalog availability', async () => {
+    const responses = {
+      '/integrations/search': searchResponse,
+      '/integrations/calendar': calendarResponse,
+      '/integrations/knowledge': knowledgeResponse,
+      '/integrations/recipes': recipesResponse,
+      '/integrations/git': gitResponse,
+      '/integrations/openscad': openScadResponse
+    }
+    api.get.mockImplementation((url) => Promise.resolve({ data: responses[url] }))
     const store = useIntegrationStore()
     store.selectScope('personal')
 
-    const loading = store.fetchPersonalPolicy()
+    await store.fetchAll()
 
-    expect(store.loading).toBe(true)
-    resolvePolicy({ data: { enabled: true, allowedAdapterTypes: ['mealie'] } })
-    await loading
-    expect(store.loading).toBe(false)
-    expect(store.adapterAllowed('mealie')).toBe(true)
-  })
-
-  it('keeps the personal policy closed after a failed load', async () => {
-    api.get.mockRejectedValue(new Error('offline'))
-    const store = useIntegrationStore()
-    store.selectScope('personal')
-
-    await expect(store.fetchPersonalPolicy()).rejects.toThrow('offline')
-
-    expect(store.loading).toBe(false)
-    expect(store.personalPolicyLoaded).toBe(false)
+    for (const path of Object.keys(responses)) {
+      expect(api.get).toHaveBeenCalledWith(path, { params: { scope: 'personal' } })
+    }
+    expect(store.search.providers).toHaveLength(1)
+    expect(store.git.instances).toHaveLength(1)
   })
 
   it('loads and dispatches Git instance operations with the Git payload', async () => {
@@ -441,20 +484,17 @@ describe('integration store', () => {
     expect(store.pendingLoads).toBe(0)
   })
 
-  it('gates personal integration reads through the safe policy endpoint', async () => {
-    api.get.mockImplementation((url) => Promise.resolve({
-      data: url === '/integrations/personal-settings'
-        ? { enabled: true, allowedAdapterTypes: ['searxng'] }
-        : searchResponse
-    }))
+  it('keeps no-key search available independently of personal adapter availability', async () => {
+    api.get.mockResolvedValue({ data: searchResponse })
     const store = useIntegrationStore()
     store.selectScope('personal')
 
     await store.fetchEffectiveSearch()
 
-    expect(api.get).toHaveBeenCalledWith('/integrations/personal-settings')
     expect(api.get).toHaveBeenCalledWith('/integrations/search', { params: { scope: 'personal' } })
     expect(api.get).not.toHaveBeenCalledWith('/integrations/search', { params: { scope: 'instance' } })
+    expect(store.search.providers).toHaveLength(1)
+    expect(store.search.effectiveEnabled).toBe(true)
   })
 
   it('loads and saves resource policies for one integration', async () => {

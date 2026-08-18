@@ -236,8 +236,7 @@ const PROVIDER_DEFAULTS = {
 }
 const integrationTypes = computed(() => allIntegrationTypes.filter((type) => {
   const adapterType = PROVIDER_DEFAULTS[type.value].provider
-  if (integrations.scope === 'instance') return !['git', 'openscad'].includes(adapterType)
-  return integrations.adapterAllowed(adapterType)
+  return integrations.adapterAvailable(adapterType)
 }))
 const providerTypes = computed(() => {
   const preset = PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search
@@ -366,16 +365,8 @@ function urlRule(value) {
 
 async function save() {
   if (!await formRef.value?.validate()) return
-  if (
-    integrations.scope === 'personal'
-    && (
-      !integrations.personalPolicyLoaded
-      ||
-      !integrations.personalIntegrationsEnabled
-      || !integrations.adapterAllowed(form.provider_type)
-    )
-  ) {
-    $q.notify({ type: 'warning', message: 'Dieser persönliche Integrationstyp ist nicht erlaubt.' })
+  if (!integrations.adapterAvailable(form.provider_type)) {
+    $q.notify({ type: 'warning', message: 'Dieser Integrationstyp ist nicht verfügbar.' })
     return
   }
   saving.value = true
@@ -463,9 +454,9 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     binaryPath: props.integration.config?.binaryPath || '/usr/bin/openscad',
     enabled: props.integration.enabled
   } : {})
-  if (!props.integration && !integrationTypes.value.some(({ value }) => value === form.integration_type)) {
-    const firstType = integrationTypes.value[0]?.value
-    if (firstType) selectIntegrationType(firstType)
+  if (!props.integration && integrationTypes.value.length) {
+    form.integration_type = integrationTypes.value[0].value
+    selectIntegrationType(form.integration_type)
   }
   if (['git', 'openscad'].includes(form.integration_type)) void fetchComputers()
 })

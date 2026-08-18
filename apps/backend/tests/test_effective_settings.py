@@ -9,6 +9,7 @@ from mato_loop_backend.api.routes.integrations import _load_scoped_integrations
 from mato_loop_backend.api.routes.tool_settings import _load_scoped_tools
 from mato_loop_backend.settings import (
     AiSettings,
+    IntegrationAdapterAvailability,
     IntegrationInstance,
     IntegrationSettings,
     SettingsScope,
@@ -27,19 +28,46 @@ from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 def test_personal_settings_models_and_instance_flags_have_safe_defaults() -> None:
     assert AiSettings().personal_providers_enabled is True
-    assert IntegrationSettings().personal_integrations_enabled is True
-    assert IntegrationSettings().allowed_personal_adapter_types == {
-        "searxng",
-        "caldav",
-        "bookstack",
-        "mealie",
-        "git",
-        "openscad",
-    }
+    integrations = IntegrationSettings(adapter_availability={"caldav": "full"})
+    assert integrations.adapter_availability == {}
+    assert (
+        integrations.availability_for("new-adapter")
+        == IntegrationAdapterAvailability.FULL
+    )
     assert ToolSettings().personal_settings_enabled is True
     assert UserAiSettings.settings_scope == SettingsScope.USER
     assert UserIntegrationSettings.settings_scope == SettingsScope.USER
     assert UserToolSettings.settings_scope == SettingsScope.USER
+
+
+def test_integration_settings_normalizes_legacy_availability() -> None:
+    disabled = IntegrationSettings.model_validate(
+        {
+            "personal_integrations_enabled": False,
+            "allowed_personal_adapter_types": ["caldav", "git"],
+            "disabled_integration_adapter_types": ["caldav"],
+        }
+    )
+    partially_allowed = IntegrationSettings.model_validate(
+        {"allowed_personal_adapter_types": ["caldav", "git"]}
+    )
+
+    assert disabled.availability_for("caldav") == IntegrationAdapterAvailability.DISABLED
+    assert (
+        disabled.availability_for("searxng")
+        == IntegrationAdapterAvailability.INSTANCE_ONLY
+    )
+    assert disabled.availability_for("git") == IntegrationAdapterAvailability.DISABLED
+    assert (
+        partially_allowed.availability_for("searxng")
+        == IntegrationAdapterAvailability.INSTANCE_ONLY
+    )
+    assert (
+        partially_allowed.availability_for("openscad")
+        == IntegrationAdapterAvailability.DISABLED
+    )
+    assert partially_allowed.availability_for("git") == IntegrationAdapterAvailability.FULL
+    assert set(disabled.model_dump()) == {"instances", "adapter_availability"}
 
 
 async def test_effective_ai_combines_providers_and_uses_only_effective_personal_defaults(
@@ -96,11 +124,13 @@ async def test_effective_integrations_adds_only_allowed_personal_instances(monke
         execution_agent_id=agent_id,
     )
     blocked = IntegrationInstance(
-        name="Personal Other",
-        integration_type="other",
-        adapter_type="other",
+        name="Personal Knowledge",
+        integration_type="knowledge",
+        adapter_type="bookstack",
     )
-    instance = IntegrationSettings(instances=[global_item])
+    instance = IntegrationSettings(
+        instances=[global_item], adapter_availability={"bookstack": "instance_only"}
+    )
     personal = UserIntegrationSettings(instances=[allowed, blocked])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
@@ -139,6 +169,36 @@ async def test_effective_integrations_excludes_unowned_agent_bindings(monkeypatc
     effective = await load_effective_integrations(db, user_id)
 
     assert effective.instances == []
+
+
+async def test_effective_integrations_excludes_globally_disabled_adapters(
+    monkeypatch,
+) -> None:
+    user_id = uuid4()
+    global_item = IntegrationInstance(
+        name="Global Search",
+        integration_type="search",
+        adapter_type="searxng",
+    )
+    personal_item = IntegrationInstance(
+        name="Personal Search",
+        integration_type="search",
+        adapter_type="searxng",
+    )
+    instance = IntegrationSettings(
+        instances=[global_item],
+        adapter_availability={"searxng": "disabled"},
+    )
+    personal = UserIntegrationSettings(instances=[personal_item])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
+
+    effective = await load_effective_integrations(
+        AsyncMock(spec=AsyncSession), user_id
+    )
+
+    assert effective.instances == []
+    assert personal.instances == [personal_item]
 
 
 async def test_effective_ai_personal_default_can_select_instance_model(monkeypatch) -> None:
@@ -194,8 +254,7 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
 async def test_scoped_management_enforces_admin_and_personal_gates(monkeypatch) -> None:
     user = type("User", (), {"id": uuid4(), "is_admin": False})()
     integrations = IntegrationSettings(
-        personal_integrations_enabled=True,
-        allowed_personal_adapter_types={"caldav"},
+        adapter_availability={"git": "instance_only"},
     )
     tools = ToolSettings(personal_settings_enabled=False)
 

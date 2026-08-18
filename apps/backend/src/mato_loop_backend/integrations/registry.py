@@ -16,7 +16,11 @@ from mato_loop_backend.integrations.contracts import (
 from mato_loop_backend.integrations.git import GIT_ADAPTER
 from mato_loop_backend.integrations.mealie import MEALIE_ADAPTER
 from mato_loop_backend.integrations.openscad import OPENSCAD_ADAPTER
-from mato_loop_backend.settings.models import IntegrationInstance, IntegrationSettings
+from mato_loop_backend.settings.models import (
+    IntegrationAdapterAvailability,
+    IntegrationInstance,
+    IntegrationSettings,
+)
 
 
 class SearxngConfig(BaseModel):
@@ -62,6 +66,14 @@ def integration_adapter(
     return _ADAPTERS.get((integration_type, adapter_type))
 
 
+def integration_adapters() -> tuple[IntegrationAdapterDefinition, ...]:
+    return tuple(_ADAPTERS[key] for key in sorted(_ADAPTERS))
+
+
+def integration_adapter_type_registered(adapter_type: str) -> bool:
+    return any(adapter.adapter_type == adapter_type for adapter in _ADAPTERS.values())
+
+
 def register_integration_adapter(adapter: IntegrationAdapterDefinition) -> None:
     key = (adapter.integration_type, adapter.adapter_type)
     if key in _ADAPTERS:
@@ -77,9 +89,15 @@ def register_integration_adapter(adapter: IntegrationAdapterDefinition) -> None:
         )
 
 
-def installed_integration_tools() -> tuple[ToolContribution, ...]:
+def installed_integration_tools(
+    settings: IntegrationSettings | None = None,
+) -> tuple[ToolContribution, ...]:
     tools: dict[str, ToolContribution] = {}
     for adapter in _ADAPTERS.values():
+        if settings is not None and settings.availability_for(
+            adapter.adapter_type
+        ) == IntegrationAdapterAvailability.DISABLED:
+            continue
         for tool in adapter.shared_tools:
             tools.setdefault(tool.name, tool)
     return tuple(tools.values())
@@ -103,6 +121,12 @@ def effective_execution_integration_settings(
 ) -> IntegrationSettings:
     effective = settings.model_copy(deep=True)
     for instance in effective.instances:
+        if (
+            effective.availability_for(instance.adapter_type)
+            == IntegrationAdapterAvailability.DISABLED
+        ):
+            instance.enabled = False
+            continue
         adapter = integration_adapter(instance.integration_type, instance.adapter_type)
         if adapter is None:
             continue
@@ -124,7 +148,11 @@ def effective_integration_contributions(
     prompt_fragments = []
     shared_instances: dict[tuple[str, str], list[IntegrationInstance]] = {}
     for instance in settings.instances:
-        if not instance.enabled:
+        if (
+            not instance.enabled
+            or settings.availability_for(instance.adapter_type)
+            == IntegrationAdapterAvailability.DISABLED
+        ):
             continue
         adapter = integration_adapter(instance.integration_type, instance.adapter_type)
         if adapter is None:
