@@ -21,10 +21,15 @@ from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.integrations import (
     BOOKSTACK_CREDENTIAL_KIND,
     CALDAV_CREDENTIAL_KIND,
+    MEALIE_CREDENTIAL_KIND,
     BookStackIntegrationService,
     CalDavIntegrationService,
     GitIntegrationService,
     IntegrationSettingsError,
+    MealieClient,
+    MealieConfig,
+    MealieError,
+    MealieIntegrationService,
     OpenScadIntegrationService,
     SearchIntegrationError,
     SearchIntegrationService,
@@ -32,6 +37,7 @@ from mato_loop_backend.integrations import (
     caldav_error_code,
     load_bookstack_resources,
     load_caldav_resources,
+    mealie_error_code,
     search_with_provider,
 )
 from mato_loop_backend.integrations.bookstack_client import BookStackError
@@ -122,7 +128,9 @@ class PersonalIntegrationSettingsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool
-    allowed_adapter_types: set[Literal["searxng", "caldav", "bookstack", "git", "openscad"]] = Field(
+    allowed_adapter_types: set[
+        Literal["searxng", "caldav", "bookstack", "mealie", "git", "openscad"]
+    ] = Field(
         validation_alias=AliasChoices("allowedAdapterTypes", "allowed_adapter_types")
     )
 
@@ -192,6 +200,26 @@ class KnowledgeIntegrationRequest(BaseModel):
 class KnowledgeIntegrationCreateRequest(KnowledgeIntegrationRequest):
     token_id: str = Field(min_length=1, max_length=10_000)
     token_secret: str = Field(min_length=1, max_length=10_000)
+
+
+class RecipeIntegrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    integration_type: Literal["recipes"] = "recipes"
+    provider_type: Literal["mealie"] = "mealie"
+    name: str = Field(min_length=1, max_length=160)
+    base_url: HttpUrl
+    token: str | None = Field(default=None, max_length=10_000)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_url(self) -> RecipeIntegrationRequest:
+        MealieConfig(base_url=self.base_url)
+        return self
+
+
+class RecipeIntegrationCreateRequest(RecipeIntegrationRequest):
+    token: str = Field(min_length=1, max_length=10_000)
 
 
 class GitIntegrationConfigRequest(BaseModel):
@@ -521,6 +549,28 @@ def knowledge_settings_payload(settings: IntegrationSettings) -> dict:
         ),
         "configured": bool(bases),
         "bases": [_provider_payload(base) for base in bases],
+    }
+
+
+def recipe_settings_payload(settings: IntegrationSettingsDocument) -> dict:
+    accounts = [
+        instance
+        for instance in settings.instances
+        if instance.integration_type == "recipes" and instance.adapter_type == "mealie"
+    ]
+    return {
+        **(
+            {
+                "personalIntegrationsEnabled": settings.personal_integrations_enabled,
+                "allowedPersonalAdapterTypes": sorted(
+                    settings.allowed_personal_adapter_types
+                ),
+            }
+            if isinstance(settings, IntegrationSettings)
+            else {}
+        ),
+        "configured": bool(accounts),
+        "accounts": [_provider_payload(account) for account in accounts],
     }
 
 
@@ -1129,6 +1179,133 @@ async def test_knowledge_integration(
     except Exception as exc:
         await db.rollback()
         logger.warning("BookStack integration test failed with %s", type(exc).__name__)
+        raise ApiError(502, "integration.unavailable") from exc
+    return {"status": "ok"}
+
+
+@router.get("/recipes")
+async def get_recipe_integrations(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    return recipe_settings_payload(settings)
+
+
+@router.post("/recipes/accounts", status_code=status.HTTP_201_CREATED)
+async def create_recipe_integration(
+    payload: RecipeIntegrationCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="mealie"
+    )
+    settings = await MealieIntegrationService.create(
+        db,
+        name=payload.name,
+        base_url=str(payload.base_url),
+        token=payload.token,
+        enabled=payload.enabled,
+        owner_id=owner_id,
+    )
+    return recipe_settings_payload(settings)
+
+
+@router.put("/recipes/accounts/{integration_id}")
+async def update_recipe_integration(
+    integration_id: UUID,
+    payload: RecipeIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="mealie"
+    )
+    try:
+        settings = await MealieIntegrationService.update(
+            db,
+            integration_id,
+            name=payload.name,
+            base_url=str(payload.base_url),
+            token=payload.token,
+            enabled=payload.enabled,
+            owner_id=owner_id,
+        )
+    except IntegrationSettingsError as exc:
+        status_code = 404 if exc.code == "integration.notFound" else 422
+        raise ApiError(status_code, exc.code, field="token") from exc
+    return recipe_settings_payload(settings)
+
+
+@router.delete(
+    "/recipes/accounts/{integration_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_recipe_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> None:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="mealie"
+    )
+    try:
+        await MealieIntegrationService.delete(db, integration_id, owner_id=owner_id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+
+
+@router.post("/recipes/accounts/{integration_id}/test")
+async def test_recipe_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict[str, str]:
+    settings, _owner_id = await _load_scoped_integrations(
+        db, scope, user, adapter_type="mealie"
+    )
+    account = MealieIntegrationService._find(settings, integration_id)
+    if account is None:
+        raise ApiError(404, "integration.notFound")
+    try:
+        if account.credential_id is None:
+            raise MealieError("mealie.authenticationFailed")
+        record = await load_credential(
+            db,
+            account.credential_id,
+            owner_id=account.owner_id,
+            populate_existing=True,
+        )
+        if record is None or record.kind != MEALIE_CREDENTIAL_KIND:
+            raise MealieError("mealie.authenticationFailed")
+        try:
+            credential = read_credential(record)
+        except Exception as exc:
+            raise MealieError("mealie.authenticationFailed") from exc
+        if (
+            not isinstance(credential, dict)
+            or set(credential) != {"token"}
+            or not isinstance(credential["token"], str)
+            or not credential["token"]
+        ):
+            raise MealieError("mealie.authenticationFailed")
+        config = MealieConfig.model_validate(account.config)
+        await db.rollback()
+        async with MealieClient(str(config.base_url), credential["token"]) as client:
+            await client.test_connection()
+    except MealieError as exc:
+        await db.rollback()
+        code = mealie_error_code(exc)
+        logger.warning("Mealie integration test failed: %s", code)
+        raise ApiError(502, code) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("Mealie integration test failed with %s", type(exc).__name__)
         raise ApiError(502, "integration.unavailable") from exc
     return {"status": "ok"}
 

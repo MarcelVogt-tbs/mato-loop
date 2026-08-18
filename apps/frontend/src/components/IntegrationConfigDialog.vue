@@ -57,6 +57,16 @@
               lazy-rules
               :rules="[requiredRule, urlRule]"
             />
+            <q-banner
+              v-if="form.integration_type === 'recipes' && form.base_url.trim().toLowerCase().startsWith('http://')"
+              dense
+              rounded
+              class="app-surface-tonal"
+              role="alert"
+            >
+              <template #avatar><q-icon name="warning_amber" color="warning" /></template>
+              HTTP überträgt den Mealie-Token unverschlüsselt. Verwende es nur in einem vertrauenswürdigen lokalen Netz.
+            </q-banner>
             <div v-if="['git', 'openscad'].includes(form.integration_type)" class="row items-start q-col-gutter-sm">
               <q-select
                 v-model="form.executionAgentId"
@@ -149,6 +159,16 @@
               :rules="isEditing ? [tokenPairRule] : [requiredRule]"
             />
             <q-input
+              v-if="form.integration_type === 'recipes'"
+              v-model="form.token"
+              outlined
+              type="password"
+              :label="integration?.hasCredential ? 'Neuer API-Token (optional)' : 'API-Token'"
+              :hint="integration?.hasCredential ? 'Leer lassen, um den gespeicherten API-Token beizubehalten.' : 'Langlebiger API-Token aus dem Mealie-Benutzerprofil.'"
+              lazy-rules
+              :rules="isEditing ? [] : [requiredRule]"
+            />
+            <q-input
               v-if="form.integration_type === 'knowledge'"
               v-model="form.token_secret"
               outlined
@@ -202,6 +222,7 @@ const allIntegrationTypes = [
   { label: 'Websuche', value: 'search' },
   { label: 'Kalender & Aufgaben', value: 'calendar' },
   { label: 'Wissensdatenbank', value: 'knowledge' },
+  { label: 'Rezepte & Essensplanung', value: 'recipes' },
   { label: 'Versionsverwaltung', value: 'git' },
   { label: '3D-Modellierung', value: 'openscad' }
 ]
@@ -209,6 +230,7 @@ const PROVIDER_DEFAULTS = {
   search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
   calendar: { provider: 'caldav', label: 'CalDAV', placeholder: 'https://calendar.example.com' },
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
+  recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
   git: { provider: 'git', label: 'Git', placeholder: '' },
   openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' }
 }
@@ -227,7 +249,7 @@ const baseUrlLabel = computed(
 const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
 )
-const requiresHttps = computed(() => form.integration_type !== 'search')
+const requiresHttps = computed(() => !['search', 'recipes'].includes(form.integration_type))
 const dialogIcon = computed(() => form.integration_type === 'openscad' ? 'view_in_ar' : 'extension')
 const executionAgentOptions = computed(() => {
   const options = executionAgents.items.map((agent) => ({ label: agent.name, value: agent.id }))
@@ -257,6 +279,7 @@ function defaultForm() {
     password: '',
     token_id: '',
     token_secret: '',
+    token: '',
     executionAgentId: null,
     allowNetwork: false,
     binaryPath: '/usr/bin/openscad',
@@ -343,6 +366,18 @@ function urlRule(value) {
 
 async function save() {
   if (!await formRef.value?.validate()) return
+  if (
+    integrations.scope === 'personal'
+    && (
+      !integrations.personalPolicyLoaded
+      ||
+      !integrations.personalIntegrationsEnabled
+      || !integrations.adapterAllowed(form.provider_type)
+    )
+  ) {
+    $q.notify({ type: 'warning', message: 'Dieser persönliche Integrationstyp ist nicht erlaubt.' })
+    return
+  }
   saving.value = true
   try {
     if (form.integration_type === 'git') {
@@ -388,6 +423,10 @@ async function save() {
       payload.token_secret = form.token_secret
       if (props.integration) await integrations.updateKnowledge(props.integration.id, payload)
       else await integrations.createKnowledge(payload)
+    } else if (form.integration_type === 'recipes') {
+      payload.token = form.token
+      if (props.integration) await integrations.updateRecipes(props.integration.id, payload)
+      else await integrations.createRecipes(payload)
     } else if (props.integration) await integrations.updateSearch(props.integration.id, payload)
     else await integrations.createSearch(payload)
     $q.notify({ type: 'positive', message: 'Integration gespeichert' })
@@ -414,6 +453,7 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     password: '',
     token_id: '',
     token_secret: '',
+    token: '',
     executionAgentId: props.integration.executionAgentId
       || props.integration.config?.executionAgentId
       || null,

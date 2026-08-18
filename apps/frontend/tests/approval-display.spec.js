@@ -145,6 +145,22 @@ describe('approval display', () => {
     }
   })
 
+  it('labels recipe and meal-plan grants', () => {
+    for (const [capability, label, icon] of [
+      ['mealie.accounts.read', 'Mealie-Konten auflisten', 'restaurant'],
+      ['recipes.read', 'Rezepte lesen', 'menu_book'],
+      ['meal_plan.read', 'Essensplan lesen', 'calendar_month'],
+      ['meal_plan.write', 'Essensplan ändern', 'edit_calendar'],
+      ['meal_plan.delete', 'Essensplan-Eintrag löschen', 'event_busy']
+    ]) {
+      expect(permissionGrantDisplay({
+        capability,
+        resourceType: 'integration_operation',
+        resourceDisplay: 'Mealie-Konto „Familienküche“'
+      })).toEqual({ label, value: 'Mealie-Konto „Familienküche“', icon })
+    }
+  })
+
   it('labels Git grants', () => {
     for (const [capability, label, icon] of [
       ['git.read', 'Git-Repository lesen', 'account_tree'],

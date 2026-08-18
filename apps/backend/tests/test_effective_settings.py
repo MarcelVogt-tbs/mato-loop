@@ -32,6 +32,7 @@ def test_personal_settings_models_and_instance_flags_have_safe_defaults() -> Non
         "searxng",
         "caldav",
         "bookstack",
+        "mealie",
         "git",
         "openscad",
     }

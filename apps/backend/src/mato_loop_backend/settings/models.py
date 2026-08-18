@@ -674,7 +674,14 @@ class IntegrationSettings(IntegrationSettingsBase):
 
     personal_integrations_enabled: bool = True
     allowed_personal_adapter_types: set[str] = Field(
-        default_factory=lambda: {"searxng", "caldav", "bookstack", "git", "openscad"}
+        default_factory=lambda: {
+            "searxng",
+            "caldav",
+            "bookstack",
+            "mealie",
+            "git",
+            "openscad",
+        }
     )
 
 

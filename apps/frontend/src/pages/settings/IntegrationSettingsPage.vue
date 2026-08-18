@@ -74,7 +74,7 @@
           </q-item-section>
           <q-item-section>
             <q-item-label>Noch keine Integration konfiguriert</q-item-label>
-            <q-item-label caption>Füge einen externen Dienst wie SearXNG, CalDAV oder BookStack hinzu.</q-item-label>
+            <q-item-label caption>Füge einen externen Dienst wie SearXNG, CalDAV, Mealie oder BookStack hinzu.</q-item-label>
           </q-item-section>
         </q-item>
 
@@ -195,6 +195,7 @@ const showAccessPage = computed(() => route.name === 'settings-integration-acces
 const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)
 const knowledgeBases = computed(() => integrations.knowledge.bases)
+const recipeAccounts = computed(() => integrations.recipes.accounts)
 const gitInstances = computed(() => integrations.git.instances)
 const openScadInstances = computed(() => integrations.openscad.instances)
 const configuredIntegrations = computed(
@@ -202,6 +203,7 @@ const configuredIntegrations = computed(
     ...searchProviders.value,
     ...calendarAccounts.value,
     ...knowledgeBases.value,
+    ...recipeAccounts.value,
     ...gitInstances.value,
     ...openScadInstances.value
   ]
@@ -210,12 +212,17 @@ const personalBlocked = computed(() => (
   integrations.scope === 'personal' && !integrations.personalIntegrationsEnabled
 ))
 const canCreateIntegration = computed(() => (
-  integrations.scope === 'instance' || integrations.allowedPersonalAdapterTypes.length > 0
+  integrations.scope === 'instance'
+  || (
+    integrations.personalPolicyLoaded
+    && integrations.allowedPersonalAdapterTypes.length > 0
+  )
 ))
 const adapterOptions = [
   { label: 'SearXNG', value: 'searxng' },
   { label: 'CalDAV', value: 'caldav' },
   { label: 'BookStack', value: 'bookstack' },
+  { label: 'Mealie', value: 'mealie' },
   { label: 'Git', value: 'git' },
   { label: 'OpenSCAD', value: 'openscad' }
 ]
@@ -262,7 +269,7 @@ function openEditDialog(integration) {
 
 function providerLabel(providerType) {
   return {
-    searxng: 'SearXNG', caldav: 'CalDAV', bookstack: 'BookStack', git: 'Git', openscad: 'OpenSCAD'
+    searxng: 'SearXNG', caldav: 'CalDAV', bookstack: 'BookStack', mealie: 'Mealie', git: 'Git', openscad: 'OpenSCAD'
   }[providerType] || providerType
 }
 
@@ -270,6 +277,7 @@ function typeLabel(integrationType) {
   return {
     calendar: 'Kalender & Aufgaben',
     knowledge: 'Wissensdatenbank',
+    recipes: 'Rezepte & Essensplanung',
     git: 'Versionsverwaltung',
     openscad: '3D-Modellierung'
   }[integrationType] || 'Websuche'
@@ -277,7 +285,7 @@ function typeLabel(integrationType) {
 
 function typeIcon(integrationType) {
   return {
-    calendar: 'calendar_month', knowledge: 'menu_book', git: 'account_tree', openscad: 'view_in_ar'
+    calendar: 'calendar_month', knowledge: 'menu_book', recipes: 'restaurant_menu', git: 'account_tree', openscad: 'view_in_ar'
   }[integrationType] || 'travel_explore'
 }
 
@@ -302,6 +310,7 @@ async function testIntegration(integration) {
     let result
     if (integration.integrationType === 'calendar') result = await integrations.testCalendar(integration.id)
     else if (integration.integrationType === 'knowledge') result = await integrations.testKnowledge(integration.id)
+    else if (integration.integrationType === 'recipes') result = await integrations.testRecipes(integration.id)
     else if (integration.integrationType === 'openscad') result = await integrations.testOpenScad(integration.id)
     else result = await integrations.testSearch(integration.id)
     if (integration.integrationType === 'openscad' && result?.headlessPreview === false) {
@@ -330,6 +339,7 @@ async function removeIntegration(integration) {
   try {
     if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
     else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
+    else if (integration.integrationType === 'recipes') await integrations.removeRecipes(integration.id)
     else if (integration.integrationType === 'git') await integrations.removeGit(integration.id)
     else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)
     else await integrations.removeSearch(integration.id)

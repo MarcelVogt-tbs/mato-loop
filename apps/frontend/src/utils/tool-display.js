@@ -35,9 +35,17 @@ const TOOL_DISPLAY = {
   tasks_list_lists: { label: 'Aufgabenlisten auflisten', activity: 'Aufgabenlisten werden geladen', icon: 'checklist' },
   tasks_query: { label: 'Aufgaben lesen', activity: 'Aufgaben werden gelesen', icon: 'task_alt' },
   tasks_create: { label: 'Aufgabe erstellen', activity: 'Aufgabe wird erstellt', icon: 'add_task' },
+  tasks_create_many: { label: 'Fehlende Aufgaben erstellen', activity: 'Aufgaben werden erstellt', icon: 'playlist_add' },
   tasks_update: { label: 'Aufgabe ändern', activity: 'Aufgabe wird geändert', icon: 'edit_note' },
   tasks_set_completed: { label: 'Aufgabenstatus ändern', activity: 'Aufgabenstatus wird geändert', icon: 'task_alt' },
   tasks_delete: { label: 'Aufgabe löschen', activity: 'Aufgabe wird gelöscht', icon: 'delete_outline' },
+  mealie_list_accounts: { label: 'Mealie-Konten auflisten', activity: 'Mealie-Konten werden geladen', icon: 'restaurant' },
+  recipes_search: { label: 'Rezepte suchen', activity: 'Rezepte werden gesucht', icon: 'search' },
+  recipe_get: { label: 'Rezept lesen', activity: 'Rezept wird gelesen', icon: 'menu_book' },
+  meal_plan_get: { label: 'Essensplan lesen', activity: 'Essensplan wird gelesen', icon: 'calendar_month' },
+  meal_plan_add: { label: 'Essensplan-Eintrag erstellen', activity: 'Essensplan-Eintrag wird erstellt', icon: 'event_available' },
+  meal_plan_update: { label: 'Essensplan-Eintrag ändern', activity: 'Essensplan-Eintrag wird geändert', icon: 'edit_calendar' },
+  meal_plan_delete: { label: 'Essensplan-Eintrag löschen', activity: 'Essensplan-Eintrag wird gelöscht', icon: 'event_busy' },
   session_read: { label: 'Session lesen', activity: 'Session wird gelesen', icon: 'forum' },
   session_tool_result_read: { label: 'Tool-Ergebnis lesen', activity: 'Tool-Ergebnis wird gelesen', icon: 'history' },
   session_browse: { label: 'Letzte Sessions anzeigen', activity: 'Letzte Sessions werden geladen', icon: 'view_list' },
@@ -126,6 +134,16 @@ function taskDisplayItems(tool) {
       ...(typeof args.description === 'string' && args.description
         ? [{ label: 'Notiz', value: args.description, format: 'text' }]
         : [])
+    ]
+  }
+  if (tool?.name === 'tasks_create_many') {
+    return [
+      { label: 'Aktion', value: 'Fehlende Aufgaben erstellen', format: 'text' },
+      {
+        label: 'Aufgaben',
+        value: Array.isArray(args.tasks) ? args.tasks.map((item) => item?.title).filter(Boolean) : [],
+        format: 'list'
+      }
     ]
   }
   if (tool?.name === 'tasks_update') {
@@ -234,6 +252,17 @@ export function toolSummary(tool) {
   if (tool?.name === 'tasks_create' && typeof argumentsValue.title === 'string') {
     return truncate(argumentsValue.title)
   }
+  if (tool?.name === 'tasks_create_many' && Array.isArray(argumentsValue.tasks)) {
+    return `${argumentsValue.tasks.length} Aufgaben`
+  }
+  if (tool?.name === 'meal_plan_get') {
+    return truncate([argumentsValue.start_date, argumentsValue.end_date].filter(Boolean).join(' – '))
+  }
+  if (tool?.name === 'meal_plan_add') {
+    return truncate(argumentsValue.title || argumentsValue.text || argumentsValue.date || 'Eintrag erstellen')
+  }
+  if (tool?.name === 'meal_plan_update') return truncate(argumentsValue.title || 'Eintrag ändern')
+  if (tool?.name === 'meal_plan_delete') return 'Eintrag löschen'
   if (tool?.name === 'tasks_query') {
     return argumentsValue.include_completed ? 'Offene und erledigte Aufgaben' : 'Offene Aufgaben'
   }

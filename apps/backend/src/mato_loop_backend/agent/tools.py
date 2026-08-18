@@ -758,7 +758,7 @@ class ToolRegistry:
                         "integration_id": str(default_calendar.integration_id),
                         "calendar_key": default_calendar.calendar_key,
                     }
-            if name in {"tasks_query", "tasks_create"}:
+            if name in {"tasks_query", "tasks_create", "tasks_create_many"}:
                 default_task_list = (
                     tool_settings.default_task_list if tool_settings else None
                 )
@@ -817,14 +817,14 @@ class ToolRegistry:
             )
         if any(
             tools[name].default_arguments
-            for name in ("tasks_query", "tasks_create")
+            for name in ("tasks_query", "tasks_create", "tasks_create_many")
             if name in tools
         ):
             prompt_fragments = (
                 *prompt_fragments,
                 "A default task list is configured. Unless the user requests discovery or another "
-                "task list, call tasks_query or tasks_create directly and omit integration_id and "
-                "task_list_key.",
+                "task list, call tasks_query, tasks_create, or tasks_create_many directly and omit "
+                "integration_id and task_list_key.",
             )
         if {
             "calendar_create_event",

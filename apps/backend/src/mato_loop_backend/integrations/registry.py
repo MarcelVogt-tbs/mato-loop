@@ -14,6 +14,7 @@ from mato_loop_backend.integrations.contracts import (
     ToolOptionContribution,
 )
 from mato_loop_backend.integrations.git import GIT_ADAPTER
+from mato_loop_backend.integrations.mealie import MEALIE_ADAPTER
 from mato_loop_backend.integrations.openscad import OPENSCAD_ADAPTER
 from mato_loop_backend.settings.models import IntegrationInstance, IntegrationSettings
 
@@ -49,6 +50,7 @@ _ADAPTERS = {
     ),
     ("calendar", "caldav"): CALDAV_ADAPTER,
     ("knowledge", "bookstack"): BOOKSTACK_ADAPTER,
+    ("recipes", "mealie"): MEALIE_ADAPTER,
     ("git", "git"): GIT_ADAPTER,
     ("openscad", "openscad"): OPENSCAD_ADAPTER,
 }

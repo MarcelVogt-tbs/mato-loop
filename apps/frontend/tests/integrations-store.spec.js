@@ -59,6 +59,22 @@ const knowledgeResponse = {
   ]
 }
 
+const recipesResponse = {
+  configured: true,
+  accounts: [
+    {
+      id: 'mealie-id',
+      name: 'Familienküche',
+      integrationType: 'recipes',
+      providerType: 'mealie',
+      enabled: true,
+      hasCredential: true,
+      supportsResourcePolicies: false,
+      config: { baseUrl: 'http://mealie.example.com' }
+    }
+  ]
+}
+
 const gitResponse = {
   configured: true,
   instances: [
@@ -239,6 +255,78 @@ describe('integration store', () => {
       { name: 'Wiki', enabled: true },
       { params: { scope: 'instance' } }
     )
+  })
+
+  it('loads and dispatches Mealie account operations', async () => {
+    api.get.mockResolvedValue({ data: recipesResponse })
+    api.post.mockResolvedValue({ data: { status: 'ok' } })
+    api.delete.mockResolvedValue({})
+    const store = useIntegrationStore()
+    const payload = {
+      integration_type: 'recipes',
+      provider_type: 'mealie',
+      name: 'Familienküche',
+      base_url: 'http://mealie.example.com',
+      token: 'secret',
+      enabled: true
+    }
+
+    await store.fetchRecipes()
+    await store.createRecipes(payload)
+    await store.testRecipes('mealie-id')
+    await store.removeRecipes('mealie-id')
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/recipes', { params: { scope: 'instance' } })
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/recipes/accounts', payload, { params: { scope: 'instance' } }
+    )
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/recipes/accounts/mealie-id/test', null, { params: { scope: 'instance' } }
+    )
+    expect(api.delete).toHaveBeenCalledWith(
+      '/integrations/recipes/accounts/mealie-id', { params: { scope: 'instance' } }
+    )
+    expect(store.recipes.accounts).toHaveLength(1)
+  })
+
+  it('keeps the stored Mealie token on a blank update', async () => {
+    api.get.mockResolvedValue({ data: recipesResponse })
+    api.put.mockResolvedValue({ data: recipesResponse })
+    const store = useIntegrationStore()
+
+    await store.updateRecipes('mealie-id', { name: 'Familienküche', token: '   ', enabled: true })
+
+    expect(api.put).toHaveBeenCalledWith(
+      '/integrations/recipes/accounts/mealie-id',
+      { name: 'Familienküche', enabled: true },
+      { params: { scope: 'instance' } }
+    )
+  })
+
+  it('keeps personal integration creation blocked while its policy loads', async () => {
+    let resolvePolicy
+    api.get.mockImplementation(() => new Promise((resolve) => { resolvePolicy = resolve }))
+    const store = useIntegrationStore()
+    store.selectScope('personal')
+
+    const loading = store.fetchPersonalPolicy()
+
+    expect(store.loading).toBe(true)
+    resolvePolicy({ data: { enabled: true, allowedAdapterTypes: ['mealie'] } })
+    await loading
+    expect(store.loading).toBe(false)
+    expect(store.adapterAllowed('mealie')).toBe(true)
+  })
+
+  it('keeps the personal policy closed after a failed load', async () => {
+    api.get.mockRejectedValue(new Error('offline'))
+    const store = useIntegrationStore()
+    store.selectScope('personal')
+
+    await expect(store.fetchPersonalPolicy()).rejects.toThrow('offline')
+
+    expect(store.loading).toBe(false)
+    expect(store.personalPolicyLoaded).toBe(false)
   })
 
   it('loads and dispatches Git instance operations with the Git payload', async () => {

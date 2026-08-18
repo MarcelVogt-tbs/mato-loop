@@ -19,6 +19,11 @@ const emptyKnowledge = () => ({
   bases: []
 })
 
+const emptyRecipes = () => ({
+  configured: false,
+  accounts: []
+})
+
 const emptyGit = () => ({
   configured: false,
   instances: []
@@ -29,7 +34,7 @@ const emptyOpenScad = () => ({
   instances: []
 })
 
-const PERSONAL_ADAPTER_TYPES = ['searxng', 'caldav', 'bookstack', 'git', 'openscad']
+const PERSONAL_ADAPTER_TYPES = ['searxng', 'caldav', 'bookstack', 'mealie', 'git', 'openscad']
 
 function scopeConfig(scope, config = {}) {
   return { ...config, params: { ...(config.params || {}), scope } }
@@ -55,6 +60,7 @@ function clearIntegrations(store) {
   store.search = emptySearch()
   store.calendar = emptyCalendar()
   store.knowledge = emptyKnowledge()
+  store.recipes = emptyRecipes()
   store.git = emptyGit()
   store.openscad = emptyOpenScad()
 }
@@ -64,10 +70,12 @@ export const useIntegrationStore = defineStore('integrations', {
     search: emptySearch(),
     calendar: emptyCalendar(),
     knowledge: emptyKnowledge(),
+    recipes: emptyRecipes(),
     git: emptyGit(),
     openscad: emptyOpenScad(),
     scope: 'instance',
     personalIntegrationsEnabled: true,
+    personalPolicyLoaded: false,
     allowedPersonalAdapterTypes: [...PERSONAL_ADAPTER_TYPES],
     accessByIntegration: {},
     pendingLoads: 0,
@@ -93,18 +101,30 @@ export const useIntegrationStore = defineStore('integrations', {
       this.loading = false
       this.loaded = false
       this.loadFailed = false
+      this.personalPolicyLoaded = false
       this.accessByIntegration = {}
       clearIntegrations(this)
     },
     async fetchPersonalPolicy() {
       const context = scopeContext(this)
-      const { data } = await api.get('/integrations/personal-settings')
-      if (!contextIsCurrent(this, context)) return false
-      this.personalIntegrationsEnabled = data.enabled !== false
-      if (Array.isArray(data.allowedAdapterTypes)) {
-        this.allowedPersonalAdapterTypes = data.allowedAdapterTypes
+      this.pendingLoads += 1
+      this.loading = true
+      this.personalPolicyLoaded = false
+      try {
+        const { data } = await api.get('/integrations/personal-settings')
+        if (!contextIsCurrent(this, context)) return false
+        this.personalIntegrationsEnabled = data.enabled !== false
+        if (Array.isArray(data.allowedAdapterTypes)) {
+          this.allowedPersonalAdapterTypes = data.allowedAdapterTypes
+        }
+        this.personalPolicyLoaded = true
+        return this.personalIntegrationsEnabled
+      } finally {
+        if (contextIsCurrent(this, context)) {
+          this.pendingLoads = Math.max(0, this.pendingLoads - 1)
+          this.loading = this.pendingLoads > 0
+        }
       }
-      return this.personalIntegrationsEnabled
     },
     async fetchAll() {
       const context = scopeContext(this)
@@ -124,6 +144,7 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchSearch(),
           this.fetchCalendar(),
           this.fetchKnowledge(),
+          this.fetchRecipes(),
           this.fetchGit(),
           this.fetchOpenScad()
         ])
@@ -236,6 +257,32 @@ export const useIntegrationStore = defineStore('integrations', {
     async testKnowledge(id) {
       const scope = this.scope
       return (await api.post(`/integrations/knowledge/bases/${id}/test`, null, scopeConfig(scope))).data
+    },
+    fetchRecipes() {
+      return this.fetchResource('recipes', '/integrations/recipes')
+    },
+    async createRecipes(payload) {
+      const context = scopeContext(this)
+      await api.post('/integrations/recipes/accounts', payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchRecipes()
+    },
+    async updateRecipes(id, payload) {
+      const request = { ...payload }
+      if (typeof request.token === 'string' && request.token.trim() === '') delete request.token
+      const context = scopeContext(this)
+      await api.put(`/integrations/recipes/accounts/${id}`, request, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchRecipes()
+    },
+    async removeRecipes(id) {
+      const context = scopeContext(this)
+      await api.delete(`/integrations/recipes/accounts/${id}`, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return
+      delete this.accessByIntegration[id]
+      await this.fetchRecipes()
+    },
+    async testRecipes(id) {
+      const scope = this.scope
+      return (await api.post(`/integrations/recipes/accounts/${id}/test`, null, scopeConfig(scope))).data
     },
     fetchGit() {
       return this.fetchResource('git', '/integrations/git')

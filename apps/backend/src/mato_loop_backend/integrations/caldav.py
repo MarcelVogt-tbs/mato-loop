@@ -267,6 +267,23 @@ class TaskCreateArguments(TaskResourceArguments):
         return value
 
 
+class TaskBatchItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=10_000)
+    due: date | datetime | None = None
+
+    @field_validator("due")
+    @classmethod
+    def validate_due(cls, value: date | datetime | None) -> date | datetime | None:
+        return TaskCreateArguments.validate_due(value)
+
+
+class TaskCreateManyArguments(TaskResourceArguments):
+    tasks: list[TaskBatchItem] = Field(min_length=1, max_length=50)
+
+
 class TaskTokenArguments(TaskResourceArguments):
     task_token: str = Field(min_length=1, max_length=50_000)
 
@@ -1144,6 +1161,72 @@ async def tasks_create(arguments: TaskCreateArguments, context: Any) -> Any:
         return _error(exc)
 
 
+def _normalized_task_title(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+async def tasks_create_many(
+    arguments: TaskCreateManyArguments, context: Any
+) -> Any:
+    created = []
+    created_titles = []
+    skipped = []
+    failed_title = None
+    try:
+        async with _selected_client(arguments.integration_id, context) as (
+            client,
+            revision,
+        ):
+            task_list = await _task_list(client, arguments.task_list_key, context)
+            existing = await client.query_tasks(task_list, include_completed=False)
+            known_titles = {_normalized_task_title(task.title) for task in existing}
+            namespace = context.assistant_message_id or context.run_id
+            for index, item in enumerate(arguments.tasks):
+                normalized = _normalized_task_title(item.title)
+                if normalized in known_titles:
+                    skipped.append(item.title)
+                    continue
+                failed_title = item.title
+                task = await client.create_task(
+                    task_list,
+                    _task_draft(
+                        title=item.title,
+                        description=item.description,
+                        due=item.due,
+                    ),
+                    uuid5(
+                        namespace,
+                        f"{context.tool_call.name}:{context.tool_call.id}:{index}",
+                    ),
+                )
+                known_titles.add(normalized)
+                created_titles.append(item.title)
+                created.append(
+                    _task_payload(
+                        task,
+                        arguments.integration_id,
+                        revision,
+                        arguments.task_list_key,
+                    )
+                )
+                failed_title = None
+        return _result({"created": created, "skippedExistingTitles": skipped})
+    except CalDavError as exc:
+        if created_titles:
+            from mato_loop_backend.agent.tools import ToolResult
+
+            return ToolResult.error(
+                "integration.outcomeUnknown",
+                params={
+                    "createdTitles": created_titles,
+                    "skippedExistingTitles": skipped,
+                    "failedTitle": failed_title,
+                    "causeCode": caldav_error_code(exc),
+                },
+            )
+        return _error(exc)
+
+
 async def tasks_update(arguments: TaskUpdateArguments, context: Any) -> Any:
     try:
         _instance, revision = _binding(context, arguments.integration_id)
@@ -1564,6 +1647,30 @@ def _task_create_permission(
     )
 
 
+def _tasks_create_many_permission(
+    arguments: TaskCreateManyArguments, context: Any
+) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
+    titles = tuple(_display_text(item.title) for item in arguments.tasks)
+    return _task_permission(
+        "tasks.write",
+        _operation_key("create-tasks", arguments),
+        arguments,
+        context,
+        title="Aufgaben gesammelt erstellen?",
+        summary=(
+            f"Der Agent möchte bis zu {len(arguments.tasks)} Aufgaben erstellen. "
+            "Gleichnamige offene Aufgaben werden übersprungen."
+        ),
+        resource=True,
+        display_items=(
+            PermissionDisplayItem("Aktion", "Fehlende Aufgaben erstellen"),
+            PermissionDisplayItem("Aufgaben", titles, format="list"),
+        ),
+    )
+
+
 def _task_update_permission(
     arguments: TaskUpdateArguments, context: Any
 ) -> tuple[Any, ...]:
@@ -1852,6 +1959,22 @@ CALDAV_SHARED_TOOLS = (
         instance_argument="integration_id",
         resource_argument="task_list_key",
         authorization_factory=_task_create_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="tasks_create_many",
+        description=(
+            "Create up to 50 CalDAV tasks in one list after skipping requested titles that "
+            "already exist as open tasks. Use this for a generated shopping list."
+        ),
+        arguments_model=TaskCreateManyArguments,
+        handler=tasks_create_many,
+        label="Fehlende Aufgaben gesammelt erstellen",
+        icon="playlist_add",
+        actions=(_TASKS_WRITE,),
+        instance_argument="integration_id",
+        resource_argument="task_list_key",
+        authorization_factory=_tasks_create_many_permission,
         releases_private_data=True,
     ),
     ToolContribution(

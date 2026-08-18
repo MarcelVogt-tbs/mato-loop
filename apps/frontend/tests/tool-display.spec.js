@@ -61,6 +61,25 @@ describe('tool display', () => {
     ])
   })
 
+  it('labels Mealie and batch shopping-list tools', () => {
+    expect(toolIdentity('recipes_search')).toEqual({ label: 'Rezepte suchen', icon: 'search' })
+    expect(toolIdentity('meal_plan_get')).toEqual({ label: 'Essensplan lesen', icon: 'calendar_month' })
+    expect(toolSummary({
+      name: 'meal_plan_get',
+      arguments: { start_date: '2026-08-17', end_date: '2026-08-23' }
+    })).toBe('2026-08-17 – 2026-08-23')
+    expect(toolPresentation({
+      name: 'tasks_create_many',
+      arguments: { tasks: [{ title: 'Milch' }, { title: 'Brot' }] }
+    })).toEqual({
+      summary: '2 Aufgaben',
+      items: [
+        { label: 'Aktion', value: 'Fehlende Aufgaben erstellen', format: 'text' },
+        { label: 'Aufgaben', value: ['Milch', 'Brot'], format: 'list' }
+      ]
+    })
+  })
+
   it('uses readable labels and concise resource summaries', () => {
     expect(toolIdentity('read_file')).toEqual({ label: 'Datei lesen', icon: 'description' })
     expect(toolIdentity('read')).toEqual({ label: 'Datei lesen', icon: 'description' })

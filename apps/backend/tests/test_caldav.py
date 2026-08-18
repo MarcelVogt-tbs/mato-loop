@@ -204,6 +204,7 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "tasks_list_lists",
         "tasks_query",
         "tasks_create",
+        "tasks_create_many",
         "tasks_update",
         "tasks_set_completed",
         "tasks_delete",
@@ -224,6 +225,7 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
     for name in (
         "tasks_query",
         "tasks_create",
+        "tasks_create_many",
         "tasks_update",
         "tasks_set_completed",
         "tasks_delete",
@@ -406,7 +408,7 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
     )
 
 
-def test_active_default_task_list_is_bound_only_to_query_and_create() -> None:
+def test_active_default_task_list_is_bound_to_query_and_create_tools() -> None:
     account = _account()
     disabled = _account(name="Aus")
     disabled.enabled = False
@@ -431,7 +433,7 @@ def test_active_default_task_list_is_bound_only_to_query_and_create() -> None:
         fragment.startswith("A default task list is configured.")
         for fragment in effective.prompt_fragments
     )
-    for name in ("tasks_query", "tasks_create"):
+    for name in ("tasks_query", "tasks_create", "tasks_create_many"):
         tool = effective.tools[name]
         assert tool.default_arguments == {
             "integration_id": str(account.id),
@@ -476,7 +478,7 @@ def test_active_default_task_list_is_bound_only_to_query_and_create() -> None:
             fragment.startswith("A default task list is configured.")
             for fragment in unbound.prompt_fragments
         )
-        for name in ("tasks_query", "tasks_create"):
+        for name in ("tasks_query", "tasks_create", "tasks_create_many"):
             assert unbound.tools[name].default_arguments == {}
             assert {"integration_id", "task_list_key"} <= set(
                 unbound.tools[name].schema()["parameters"]["required"]
@@ -649,6 +651,17 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
         ),
         context,
     )[0]
+    create_many = tools["tasks_create_many"].authorization_factory(
+        caldav_module.TaskCreateManyArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            tasks=[
+                caldav_module.TaskBatchItem(title="Milch"),
+                caldav_module.TaskBatchItem(title="Brot"),
+            ],
+        ),
+        context,
+    )[0]
     update = tools["tasks_update"].authorization_factory(
         caldav_module.TaskUpdateArguments(
             integration_id=account.id,
@@ -695,7 +708,7 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
     assert query.available_decisions == ("allow_once", "allow_session", "deny")
     assert create.capability == "tasks.write"
     assert delete.capability == "tasks.delete"
-    for permission in (create, update, completed, delete):
+    for permission in (create, create_many, update, completed, delete):
         assert json.loads(permission.resource_scope)["resourceKey"] == key
         assert permission.policy_resource_key == key
         assert permission.available_decisions == ("allow_once", "deny")
@@ -703,6 +716,10 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
         ("Aktion", "Aufgabe erstellen"),
         ("Aufgabe", "Bericht abgeben"),
         ("Fälligkeit", "Keine Fälligkeit"),
+    ]
+    assert [(item.label, item.value) for item in create_many.display_items] == [
+        ("Aktion", "Fehlende Aufgaben erstellen"),
+        ("Aufgaben", ("Milch", "Brot")),
     ]
     assert [(item.label, item.value) for item in update.display_items] == [
         ("Aktion", "Aufgabe ändern"),
@@ -892,6 +909,91 @@ async def test_task_create_uses_one_stable_host_idempotency_key(monkeypatch) -> 
         assistant_message_id, "tasks_create:call-1"
     )
     assert client.create_task.await_args.args[1].due == date(2026, 8, 8)
+
+
+async def test_task_create_many_skips_existing_and_duplicate_open_titles(
+    monkeypatch,
+) -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    assistant_message_id = uuid4()
+    client = AsyncMock()
+    client.query_tasks.return_value = (_task(title="Milch"),)
+    client.create_task.return_value = _task(uid="bread", title="Brot")
+    _mock_task_client(monkeypatch, client, revision)
+    context = _task_context(
+        account,
+        revision,
+        assistant_message_id=assistant_message_id,
+        run_id=uuid4(),
+        tool_call=SimpleNamespace(name="tasks_create_many", id="call-2"),
+    )
+
+    result = await caldav_module.tasks_create_many(
+        caldav_module.TaskCreateManyArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            tasks=[
+                caldav_module.TaskBatchItem(title="  MILCH "),
+                caldav_module.TaskBatchItem(title="Brot"),
+                caldav_module.TaskBatchItem(title=" brot "),
+            ],
+        ),
+        context,
+    )
+
+    payload = json.loads(result.content)
+    assert [task["title"] for task in payload["created"]] == ["Brot"]
+    assert payload["skippedExistingTitles"] == ["  MILCH ", " brot "]
+    client.query_tasks.assert_awaited_once_with(
+        caldav_module._task_list.return_value, include_completed=False
+    )
+    client.create_task.assert_awaited_once()
+    assert client.create_task.await_args.args[2] == uuid5(
+        assistant_message_id, "tasks_create_many:call-2:1"
+    )
+
+
+async def test_task_create_many_reports_known_partial_effects(monkeypatch) -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    client = AsyncMock()
+    client.query_tasks.return_value = ()
+    client.create_task.side_effect = [
+        _task(uid="milk", title="Milch"),
+        caldav_module.CalDavError("caldav.outcomeUnknown"),
+    ]
+    _mock_task_client(monkeypatch, client, revision)
+    context = _task_context(
+        account,
+        revision,
+        assistant_message_id=uuid4(),
+        run_id=uuid4(),
+        tool_call=SimpleNamespace(name="tasks_create_many", id="call-3"),
+    )
+
+    result = await caldav_module.tasks_create_many(
+        caldav_module.TaskCreateManyArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            tasks=[
+                caldav_module.TaskBatchItem(title="Milch"),
+                caldav_module.TaskBatchItem(title="Brot"),
+            ],
+        ),
+        context,
+    )
+
+    error = json.loads(result.content)["error"]
+    assert error["code"] == "integration.outcomeUnknown"
+    assert error["params"] == {
+        "createdTitles": ["Milch"],
+        "skippedExistingTitles": [],
+        "failedTitle": "Brot",
+        "causeCode": "integration.outcomeUnknown",
+    }
 
 
 async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(

@@ -58,15 +58,17 @@ The adapter discovers calendars live and maps DAV privileges to hard unavailable
 
 `ToolSettings.default_calendar` may select one installation-wide account and calendar resource. The effective query and create schemas then allow the model to omit both target arguments, and the system prompt requires this path unless the user explicitly names another calendar. Discovery tools are not used only to choose a target when the default applies. The bound host inserts the configured pair before validation, authorization, and live resource resolution. A complete explicit pair always wins; partial target arguments never mix with the default. Disabled or stale targets fail closed, and changing or deleting the selected integration removes the setting.
 
-`ToolSettings.default_task_list` similarly selects one installation-wide account and task-list resource. The host binds it by default to `tasks_query` and `tasks_create` when target arguments are omitted; an explicit complete target wins, with the same validation and fail-closed behavior as the default calendar.
+`ToolSettings.default_task_list` similarly selects one installation-wide account and task-list resource. The host binds it by default to `tasks_query`, `tasks_create`, and `tasks_create_many` when target arguments are omitted; an explicit complete target wins, with the same validation and fail-closed behavior as the default calendar.
 
 Shared integration schemas enumerate the active host-bound integration UUIDs. Runtime binding and revision checks remain authoritative when a model or provider ignores that schema constraint. Calendar create idempotency is derived from the persisted assistant message and tool call instead of being supplied by the model.
 
-Task tools list task collections, query one collection, and create, update, complete, reopen, or delete one task per call. They support a bounded title and note plus an optional `DUE` date or aware timestamp. Queries exclude completed tasks unless explicitly requested. The host returns encrypted task tokens instead of remote hrefs, UIDs, or ETags; mutations require the token, account, and task-list key from the same result. Creates use deterministic UIDs, updates and deletes use conditional ETags, and completion writes a UTC `COMPLETED` timestamp. Recurrence, relationships, alarms, and properties outside this initial field set remain readable but make updates unsupported.
+Task tools list task collections, query one collection, and create one or a bounded batch of tasks; update, complete, reopen, and delete remain single-task operations. They support a bounded title and note plus an optional `DUE` date or aware timestamp. Queries exclude completed tasks unless explicitly requested. The host returns encrypted task tokens instead of remote hrefs, UIDs, or ETags; mutations require the token, account, and task-list key from the same result. Creates use deterministic UIDs, updates and deletes use conditional ETags, and completion writes a UTC `COMPLETED` timestamp. Recurrence, relationships, alarms, and properties outside this initial field set remain readable but make updates unsupported.
 
 Validated resource discovery stores bounded resource labels in `ToolSettings.resource_labels` for later approval display. CalDAV approvals combine that label with the configured account name and summarize the requested event fields and timing. Missing labels fall back to the stable opaque resource key; labels remain display metadata and never replace the key in policy or grant matching.
 
 CalDAV tools release private integration data. A public model therefore needs an explicit session release in addition to the configured calendar action policy. This release is a data-transport boundary and cannot be replaced by `calendar.read=auto`.
+
+The `tasks_create_many` tool creates at most 50 tasks in one selected `VTODO` collection under one `tasks.write` approval. It reads the current open titles as a mutation precondition, compares whitespace-normalized titles case-insensitively, and skips matching existing or repeated requested titles. Completed tasks do not block a new item. Each created task retains a deterministic host-generated UID. The operation is additive only: it neither deletes nor rewrites existing tasks and therefore needs no synchronization state.
 
 ## BookStack
 
@@ -87,6 +89,18 @@ Attachments belong to pages. The adapter can list, create, and delete them and r
 BookStack offers no idempotency API, so creation tools do not ask the model for an idempotency key. A required key that nothing evaluates would cost tokens on every call and suggest protection against duplicate creation that does not exist.
 
 A failed download reports the underlying webfetch code, such as a timeout or a rejected request, instead of one opaque failure. The model then sees why the host refused and can fall back to a link attachment rather than guessing at an unrelated cause. Servers that label documents as `application/octet-stream` are accepted when the file name still names a supported type; the extension then decides the type, and image payloads are still signature checked.
+
+## Mealie
+
+Mealie is a backend recipe and meal-planning integration. Each configured server is one integration instance with an encrypted long-lived bearer token. Its fixed tools list accounts, search and read recipes, and read, create, update, or delete household meal-plan entries. Multiple active servers share one stable tool set and require an explicit integration UUID after account discovery. Mealie does not require or use an Execution Agent.
+
+The adapter accepts HTTP and HTTPS because private self-hosted installations commonly expose only HTTP. Requests remain on the configured origin and deployment path, append only fixed `/api` routes, reject redirects, ignore proxy environment variables, and bound streamed JSON responses. Operators are responsible for using HTTPS when the bearer token crosses an untrusted network.
+
+Models receive encrypted recipe and meal-plan tokens instead of Mealie recipe UUIDs or numeric plan IDs. Tokens bind the remote identity and observed fields to the integration UUID and canonical configuration revision. Before update or delete, MatoLoop reads the current entry and rejects a changed snapshot; Mealie offers no conditional write, so a race after that check remains possible. Failed mutations with an uncertain remote outcome are not retried automatically.
+
+Recipe and meal-plan data is private untrusted integration content. Search and detail results bound text and collection sizes. Meal-plan writes accept recipe tokens from the same binding or bounded free text. The static actions are `recipes.read`, `meal_plan.read`, `meal_plan.write`, and `meal_plan.delete`; writes default to approval and deletion cannot be automatic.
+
+MatoLoop composes Mealie with CalDAV through the normal agent tool loop rather than a direct service bridge. For a weekly shopping request, the agent reads the plan and recipes, combines only compatible ingredient quantities, and calls `tasks_create_many` on the configured CalDAV shopping task list. No cross-integration table or durable synchronization marker is stored.
 
 ## Git
 
