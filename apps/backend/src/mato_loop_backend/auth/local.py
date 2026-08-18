@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.models import UserAccount
@@ -13,7 +13,9 @@ class LocalAuthProvider:
         db: AsyncSession, username: str, password: str
     ) -> UserAccount | None:
         user = await db.scalar(
-            select(UserAccount).where(UserAccount.username == username.strip())
+            select(UserAccount).where(
+                func.lower(UserAccount.username) == func.lower(username.strip())
+            )
         )
         if user is None or user.password_hash is None:
             return None

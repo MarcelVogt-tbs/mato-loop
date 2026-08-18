@@ -3,7 +3,9 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import UniqueConstraint
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.schema import CreateIndex
 
 from mato_loop_backend.auth import (
     AuthenticatedIdentity,
@@ -99,10 +101,14 @@ async def test_resolve_external_identity_never_merges_on_username() -> None:
         await resolve_external_identity(
             db,
             _provider(auto_create=True),
-            AuthenticatedIdentity(subject="new-subject", username="existing"),
+            AuthenticatedIdentity(subject="new-subject", username="Existing"),
         )
 
     db.add.assert_not_called()
+    statement = db.scalar.await_args_list[1].args[0]
+    assert "lower(user_accounts.username) = lower(" in str(
+        statement.compile(dialect=postgresql.dialect())
+    )
 
 
 async def test_link_external_identity_rejects_subject_linked_elsewhere() -> None:
@@ -201,3 +207,16 @@ def test_identity_schema_enforces_both_uniqueness_rules() -> None:
 
     assert ("provider_id", "subject") in constraints
     assert ("user_id", "provider_id") in constraints
+
+
+def test_username_schema_enforces_case_insensitive_uniqueness() -> None:
+    index = next(
+        index
+        for index in UserAccount.__table__.indexes
+        if index.name == "uq_user_accounts_username_ci"
+    )
+
+    assert str(CreateIndex(index).compile(dialect=postgresql.dialect())) == (
+        "CREATE UNIQUE INDEX uq_user_accounts_username_ci "
+        "ON user_accounts (lower(username))"
+    )

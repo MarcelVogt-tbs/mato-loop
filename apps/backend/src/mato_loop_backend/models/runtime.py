@@ -90,7 +90,10 @@ class UserAccount(Base):
     __tablename__ = "user_accounts"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    username: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    username: Mapped[str] = mapped_column(String(120), nullable=False)
+    __table_args__ = (
+        Index("uq_user_accounts_username_ci", func.lower(username), unique=True),
+    )
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_admin: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")

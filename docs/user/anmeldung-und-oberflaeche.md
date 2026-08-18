@@ -4,7 +4,7 @@
 
 MatoLoop verwendet derzeit ausschließlich eine lokale, Cookie-basierte Anmeldung. Geschützte Seiten leiten automatisch zur Anmeldeseite weiter. Über **Abmelden** im Benutzermenü beenden Sie die Sitzung. Eine Anmeldung über einen externen OAuth- oder SSO-Anbieter ist noch nicht implementiert.
 
-Das erste bei der Ersteinrichtung angelegte lokale Konto erhält Administratorrechte. Unter **Einstellungen > Konto** ändern Sie Ihr eigenes Passwort; danach werden alle bestehenden Anmeldungen dieses Kontos beendet.
+Das erste bei der Ersteinrichtung angelegte lokale Konto erhält Administratorrechte. Über **Konto** im Benutzermenü ändern Sie Ihr eigenes Passwort; danach werden alle bestehenden Anmeldungen dieses Kontos beendet.
 
 Administratoren können unter **Einstellungen > Benutzer** lokale Konten anlegen, Passwörter zurücksetzen, Konten aktivieren oder deaktivieren und Administratorrechte zuweisen oder entziehen. Vor dem endgültigen Löschen muss ein Konto deaktiviert werden. Das eigene Konto kann nicht deaktiviert oder gelöscht werden; außerdem muss mindestens ein aktiver Administrator bestehen bleiben.
 

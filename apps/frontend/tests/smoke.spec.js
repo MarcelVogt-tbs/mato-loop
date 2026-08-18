@@ -20,7 +20,6 @@ describe('MatoLoop frontend scaffold', () => {
        'settings-automations',
       'settings-persona',
       'settings-memory',
-      'settings-account',
       'settings-users',
       'settings-files-media'
     ])
@@ -31,7 +30,7 @@ describe('MatoLoop frontend scaffold', () => {
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-files-media')?.meta.requiresAdmin).toBe(true)
-    expect(settingsRoutes.find((route) => route.name === 'settings-account')?.meta.requiresAdmin).toBeUndefined()
+    expect(settingsRoutes.some((route) => route.name === 'settings-account')).toBe(false)
     expect(settingsRoutes.find((route) => route.name === 'settings-approvals')?.redirect).toEqual({
       name: 'chat', query: { controlCenter: 'approvals' }
     })

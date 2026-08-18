@@ -66,12 +66,6 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Memory', settingsIcon: 'psychology' }
   },
   {
-    path: 'account',
-    name: 'settings-account',
-    component: () => import('pages/settings/AccountSettingsPage.vue'),
-    meta: { settingsLabel: 'Konto', settingsIcon: 'manage_accounts' }
-  },
-  {
     path: 'users',
     name: 'settings-users',
     component: () => import('pages/settings/UserSettingsPage.vue'),

@@ -29,6 +29,11 @@ class CredentialsRequest(BaseModel):
     password: str = Field(min_length=10, max_length=1024)
 
 
+class LoginRequest(BaseModel):
+    username: str = Field(max_length=120)
+    password: str = Field(max_length=1024)
+
+
 class AuthStatusResponse(BaseModel):
     setup_required: bool
     authenticated: bool
@@ -117,7 +122,7 @@ async def setup(
 
 @router.post("/login")
 async def login(
-    payload: CredentialsRequest,
+    payload: LoginRequest,
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str | bool]:

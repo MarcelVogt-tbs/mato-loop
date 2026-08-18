@@ -21,7 +21,7 @@ export default defineRouter(() => {
       return true
     }
     if (!auth.authenticated) return { name: 'login', query: { redirect: to.fullPath } }
-    if (to.meta.requiresAdmin && !auth.isAdmin) return { name: 'settings-account' }
+    if (to.meta.requiresAdmin && !auth.isAdmin) return { name: 'settings-providers' }
     return true
   })
 

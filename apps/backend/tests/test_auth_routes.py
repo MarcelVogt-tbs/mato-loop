@@ -4,10 +4,12 @@ from uuid import uuid4
 
 import pytest
 from fastapi import Response
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import auth as auth_routes
+from mato_loop_backend.auth import local as local_auth
 from mato_loop_backend.models import LoginSession, UserAccount
 from mato_loop_backend.security import create_login_session, require_admin, require_user
 
@@ -78,6 +80,36 @@ async def test_setup_lock_serializes_completed_setup() -> None:
     assert exc_info.value.code == "auth.setupCompleted"
     assert "pg_advisory_xact_lock" in str(db.execute.await_args.args[0])
     db.commit.assert_not_awaited()
+
+
+async def test_login_accepts_short_password_as_invalid_credentials(monkeypatch) -> None:
+    authenticate = AsyncMock(return_value=None)
+    monkeypatch.setattr(auth_routes.LocalAuthProvider, "authenticate", authenticate)
+    db = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(ApiError) as exc_info:
+        await auth_routes.login(
+            auth_routes.LoginRequest(username="test", password="short"),
+            Response(),
+            db,
+        )
+
+    assert exc_info.value.code == "auth.invalidCredentials"
+    authenticate.assert_awaited_once_with(db, "test", "short")
+
+
+async def test_local_login_matches_username_case_insensitively(monkeypatch) -> None:
+    user = _user()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = user
+    monkeypatch.setattr(local_auth, "verify_password", lambda _password, _hash: True)
+
+    assert await local_auth.LocalAuthProvider.authenticate(db, " TEST ", "password") is user
+
+    statement = db.scalar.await_args.args[0]
+    compiled = statement.compile(dialect=postgresql.dialect())
+    assert "lower(user_accounts.username) = lower(" in str(compiled)
+    assert "TEST" in compiled.params.values()
 
 
 async def test_session_issuance_rejects_inactive_user() -> None:

@@ -272,6 +272,7 @@
 
         <div class="drawer-user-area q-pa-sm">
           <q-btn
+            id="user-menu-trigger"
             unelevated
             no-caps
             class="full-width app-user-menu-trigger"
@@ -294,23 +295,11 @@
               class="app-user-popup app-action-menu"
             >
               <q-list padding>
-                <q-item
-                  clickable
-                  v-ripple
-                  v-close-popup
-                  @click="openControlCenterApp('approvals')"
-                >
-                  <q-item-section avatar><q-icon name="pending_actions" /></q-item-section>
-                  <q-item-section>Freigaben</q-item-section>
-                  <q-item-section v-if="attentionCount" side>
-                    <q-badge color="warning" text-color="dark" :label="attentionCount" />
-                  </q-item-section>
-                </q-item>
                 <q-item clickable v-ripple to="/settings" v-close-popup @click="closeDrawerOnMobile">
                   <q-item-section avatar><q-icon name="tune" /></q-item-section>
                   <q-item-section>Einstellungen</q-item-section>
                 </q-item>
-                <q-item clickable v-ripple :to="{ name: 'settings-account' }" v-close-popup @click="closeDrawerOnMobile">
+                <q-item clickable v-ripple v-close-popup @click="openAccountDialog">
                   <q-item-section avatar><q-icon name="manage_accounts" /></q-item-section>
                   <q-item-section>Konto</q-item-section>
                 </q-item>
@@ -394,6 +383,12 @@
       </q-btn>
     </div>
 
+    <AccountDialog
+      v-model="accountDialogOpen"
+      :before-password-change="confirmDiscardedEdit"
+      @closed="focusUserMenuTrigger"
+    />
+
     <q-dialog v-model="renameDialogOpen">
       <q-card class="session-rename-dialog app-surface">
         <q-form @submit.prevent="renameSession">
@@ -450,6 +445,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import AccountDialog from 'components/AccountDialog.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ControlCenterPanel from 'components/ControlCenterPanel.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
@@ -544,6 +540,7 @@ const userInitials = computed(() => {
   return `${first}${last}`.toUpperCase()
 })
 const userMenuLabel = computed(() => 'Benutzermenü öffnen')
+const accountDialogOpen = ref(false)
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
@@ -605,6 +602,16 @@ async function openSession(id) {
 
 function closeDrawerOnMobile() {
   if ($q.screen.lt.md) drawerOpen.value = false
+}
+
+function openAccountDialog() {
+  closeDrawerOnMobile()
+  accountDialogOpen.value = true
+}
+
+async function focusUserMenuTrigger() {
+  await nextTick()
+  document.getElementById(drawerOpen.value ? 'user-menu-trigger' : 'app-navigation-toggle')?.focus()
 }
 
 function openNavigation() {

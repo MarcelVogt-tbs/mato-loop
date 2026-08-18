@@ -48,7 +48,9 @@ async def resolve_external_identity(
     if not username or len(username) > 120:
         raise ExternalAccountUnavailableError
     if await db.scalar(
-        select(UserAccount.id).where(UserAccount.username == username)
+        select(UserAccount.id).where(
+            func.lower(UserAccount.username) == func.lower(username)
+        )
     ):
         raise ExternalAccountUnavailableError
 
