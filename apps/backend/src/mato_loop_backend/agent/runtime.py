@@ -100,6 +100,7 @@ from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
+    AutomationRun,
     ChatSession,
     ExecutionAgent,
     MemoryRecord,
@@ -1045,11 +1046,30 @@ class AgentRuntime:
         content: str,
         *,
         attachments: list[AttachmentInput] | None = None,
+        automation_run: AutomationRun | None = None,
+        model_id_override: UUID | None = None,
+        required_skill: SkillDefinition | None = None,
     ) -> AgentRun:
+        locked_session = await db.scalar(
+            select(ChatSession)
+            .where(ChatSession.id == chat_session.id)
+            .with_for_update()
+        )
+        if locked_session is None:
+            raise AgentRunError("session.notFound")
+        chat_session = locked_session
+        active_run = await db.scalar(
+            select(AgentRun.id).where(
+                AgentRun.session_id == chat_session.id,
+                AgentRun.status.in_(("queued", "running", "waiting_approval", "waiting_input")),
+            )
+        )
+        if active_run is not None:
+            raise AgentRunError("session.runAlreadyActive")
         await cls._ensure_user_active(db, chat_session.user_id)
         ai_settings = await load_effective_ai(db, chat_session.user_id)
         file_settings = await SettingsStore.load(db, FileMediaSettings)
-        model_id = chat_session.model_config_id or ai_settings.default_model_id
+        model_id = model_id_override or chat_session.model_config_id or ai_settings.default_model_id
         model = _model_for_id(ai_settings, model_id)
         if model is None:
             raise AgentRunError("session.modelUnavailable")
@@ -1165,6 +1185,9 @@ class AgentRuntime:
             working_directory_snapshot=effective_working_directory,
             current_directory_snapshot=current_directory,
             execution_operations=execution_operations,
+            required_skill=(
+                required_skill.model_dump(mode="json") if required_skill is not None else None
+            ),
         )
         db.add_all([message, run])
         generate_title = (
@@ -1196,6 +1219,11 @@ class AgentRuntime:
         try:
             await cls._ensure_user_active(db, chat_session.user_id)
             await db.flush()
+            run.input_message_id = message.id
+            if automation_run is not None:
+                automation_run.agent_run_id = run.id
+                automation_run.status = "running"
+                automation_run.started_at = datetime.now(UTC)
             await EpisodeIndexService.enqueue(db, message)
             for position, attachment in enumerate(attachments or []):
                 created_attachments.append(
@@ -1472,6 +1500,8 @@ class AgentRuntime:
                                 created_at=datetime.now(UTC),
                             )
                             db.add(interrupted_message)
+                            await db.flush()
+                            cancelled_run.result_message_id = interrupted_message.id
                         await db.commit()
                     if interrupted_message is not None:
                         await run_events.publish(
@@ -1555,6 +1585,14 @@ class AgentRuntime:
             db, SkillsSettings, user_id=chat_session.user_id
         )
         skill_state = RunSkillState.from_settings(skills_settings)
+        required_skill = (
+            SkillDefinition.model_validate(run.required_skill)
+            if run.required_skill is not None
+            else None
+        )
+        if required_skill is not None:
+            skill_state = RunSkillState(catalog={required_skill.id: required_skill})
+        required_skill_pending = required_skill is not None
         selected_execution_agent = (
             await db.get(ExecutionAgent, run.execution_agent_id)
             if run.execution_agent_id is not None
@@ -1942,7 +1980,9 @@ class AgentRuntime:
             if hide_skill_catalog_tools and effective_toolset is not None:
                 effective_toolset = effective_toolset.without("load_skill", "edit_skill")
             search_pending = required_search and not required_search_completed
-            if search_pending and effective_toolset is not None:
+            if required_skill_pending and effective_toolset is not None:
+                effective_toolset = effective_toolset.only("load_skill")
+            elif search_pending and effective_toolset is not None:
                 effective_toolset = effective_toolset.only(
                     "load_skill", "edit_skill", "web_search"
                 )
@@ -2255,7 +2295,10 @@ class AgentRuntime:
                 tools=schemas,
                 tool_choice=(
                     "required"
-                    if search_pending or memory_write_pending or openscad_render_pending
+                    if required_skill_pending
+                    or search_pending
+                    or memory_write_pending
+                    or openscad_render_pending
                     else "auto"
                 ),
                 on_delta=on_delta,
@@ -2280,6 +2323,10 @@ class AgentRuntime:
                 )
                 for call in result.tool_calls
             ]
+            if required_skill_pending and (
+                len(normalized_calls) != 1 or normalized_calls[0].name != "load_skill"
+            ):
+                raise AgentRunError("automation.skillActivationFailed")
             tool_batch_exceeds_budget = len(normalized_calls) > max(
                 0, runtime_settings.max_tool_calls - tool_calls_used
             )
@@ -2426,6 +2473,8 @@ class AgentRuntime:
             )
             db.add(assistant)
             await db.flush()
+            if not normalized_calls:
+                run.result_message_id = assistant.id
             await EpisodeIndexService.enqueue(db, assistant)
             await db.commit()
             if not normalized_calls:
@@ -3653,6 +3702,11 @@ class AgentRuntime:
                     required_search_retries += 1
                     if required_search_retries > REQUIRED_WEB_SEARCH_RETRIES:
                         raise AgentRunError("agent.requiredWebSearchMissing")
+            if required_skill_pending:
+                if required_skill_load_succeeded:
+                    required_skill_pending = False
+                elif required_skill_load_called:
+                    raise AgentRunError("automation.skillActivationFailed")
             if (
                 research_budget_reached
                 or research_tool_calls_used
@@ -3740,6 +3794,7 @@ class AgentRuntime:
             select(Message).where(Message.error_run_id == run.id).limit(1)
         )
         if existing is not None:
+            run.result_message_id = existing.id
             return existing
         message = Message(
             session_id=run.session_id,
@@ -3754,6 +3809,7 @@ class AgentRuntime:
         )
         db.add(message)
         await db.flush()
+        run.result_message_id = message.id
         return message
 
     @staticmethod

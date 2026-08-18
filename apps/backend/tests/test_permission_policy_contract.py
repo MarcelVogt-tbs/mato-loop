@@ -1,3 +1,4 @@
+from dataclasses import replace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -9,6 +10,8 @@ from mato_loop_backend.agent.permissions import (
     PermissionPolicy,
     PermissionRequest,
     agent_identity_permission,
+    automation_collection_scope,
+    automation_scope,
     execution_directory_permission,
     integration_operation_permission,
     media_permission,
@@ -138,6 +141,65 @@ def test_execution_directory_grant_matches_only_same_root_subtree(tmp_path) -> N
     )
     assert not PermissionPolicy.grant_matches(
         grant, _path_request(root_files, "docs/readme.md", root="session"), root_files
+    )
+
+
+async def test_automation_scopes_are_canonical_current_session_and_revision_exact(
+    tmp_path,
+) -> None:
+    session = _session(user_id=uuid4())
+    root_files = _root_files(tmp_path, session)
+    automation_id = uuid4()
+    request = PermissionRequest(
+        capability="automation.update",
+        resource_type="automation",
+        resource_scope=automation_scope(
+            automation_id, 4, session.user_id, session.id
+        ),
+        action_kind="edit_automation",
+        risk_level="medium",
+        title="Automation ändern?",
+        summary="Test",
+    )
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=request.capability,
+        resource_type=request.resource_type,
+        resource_scope=request.resource_scope,
+    )
+
+    assert PermissionPolicy.grant_matches(grant, request, root_files)
+    changed = replace(
+        request,
+        resource_scope=automation_scope(
+            automation_id, 5, session.user_id, session.id
+        ),
+    )
+    assert not PermissionPolicy.grant_matches(grant, changed, root_files)
+    wrong_session = replace(
+        request,
+        resource_scope=automation_scope(
+            automation_id, 4, session.user_id, uuid4()
+        ),
+    )
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant),
+        session,
+        wrong_session,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.DENY
+    malformed = replace(request, resource_scope='{"revision":4}')
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(),
+        session,
+        malformed,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.DENY
+    collection = automation_collection_scope(session.user_id, session.id)
+    assert collection == (
+        f'{{"sessionId":"{session.id}","userId":"{session.user_id}"}}'
     )
 
 

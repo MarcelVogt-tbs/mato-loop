@@ -25,17 +25,12 @@
 
         <section v-if="questions.pending.length" aria-labelledby="approval-questions-title" class="q-mb-lg">
           <div id="approval-questions-title" class="text-subtitle1 text-weight-bold q-mb-sm">Rückfragen</div>
-          <q-list bordered separator class="rounded-borders app-surface">
-            <q-item v-for="question in questions.pending" :key="question.id" clickable v-ripple @click="openSession(question.sessionId)">
-              <q-item-section avatar><q-avatar color="warning" text-color="dark" icon="help_outline" /></q-item-section>
-              <q-item-section>
-                <q-item-label class="text-weight-medium">{{ question.questions?.[0]?.header || 'Rückfrage des Agenten' }}</q-item-label>
-                <q-item-label caption>{{ question.questions?.[0]?.question || 'Der Agent benötigt eine Antwort.' }}</q-item-label>
-                <q-item-label caption class="q-mt-xs">{{ sessionTitle(question.sessionId) }} · {{ formatRelativeDateTime(question.createdAt) }}</q-item-label>
-              </q-item-section>
-              <q-item-section side><q-icon name="chevron_right" /></q-item-section>
-            </q-item>
-          </q-list>
+          <div v-for="question in questions.pending" :key="question.id" class="q-mb-md">
+            <div class="text-caption app-muted q-mb-xs">
+              {{ sessionTitle(question.sessionId) }} · {{ formatRelativeDateTime(question.createdAt) }}
+            </div>
+            <QuestionDock :request="question" :show-stop="false" />
+          </div>
         </section>
 
         <section aria-labelledby="approval-decisions-title">
@@ -74,6 +69,7 @@ import { computed, onMounted, ref } from 'vue'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
+import QuestionDock from 'components/QuestionDock.vue'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
@@ -102,7 +98,7 @@ const filteredApprovals = computed(() => selectedType.value === 'all'
   : approvals.pending.filter((item) => (item.requestType || 'agent_action') === selectedType.value))
 
 function sessionTitle(sessionId) {
-  return chat.sessions.find((session) => session.id === sessionId)?.title || 'Session öffnen'
+  return chat.sessions.find((session) => session.id === sessionId)?.title || 'Agent-Auftrag'
 }
 
 async function load() {

@@ -97,6 +97,12 @@ export function approvalResource(approval, sessions = []) {
       value: approval?.resourceDisplay ? `„${approval.resourceDisplay}“` : 'Persönliche Skills'
     }
   }
+  if (approval?.resourceType === 'automation_collection') {
+    return { label: 'Automationen', value: approval?.resourceDisplay || 'Eigene Automationen' }
+  }
+  if (approval?.resourceType === 'automation') {
+    return { label: 'Automation', value: approval?.resourceDisplay || 'Ausgewählte Automation' }
+  }
   return {
     label: 'Angeforderte Ressource',
     value: approval?.resourceDisplay || scope || 'Nicht angegeben'
@@ -158,6 +164,11 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'memory.read': { label: 'Memories lesen', icon: 'psychology' },
     'memory.write': { label: 'Memory speichern', icon: 'save' },
     'skills.write': { label: 'Skills erstellen', icon: 'auto_awesome' },
+    'automation.read': { label: 'Automationen anzeigen', icon: 'schedule' },
+    'automation.create': { label: 'Automation erstellen', icon: 'add_task' },
+    'automation.update': { label: 'Automation ändern', icon: 'edit_calendar' },
+    'automation.run': { label: 'Automation starten', icon: 'play_arrow' },
+    'automation.delete': { label: 'Automation löschen', icon: 'delete_forever' },
     'calendar.read': { label: 'Kalender lesen', icon: 'event' },
     'calendar.write': { label: 'Kalender ändern', icon: 'edit_calendar' },
     'calendar.delete': { label: 'Kalendereintrag löschen', icon: 'event_busy' },

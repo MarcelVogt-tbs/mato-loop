@@ -42,13 +42,13 @@
         <div v-else-if="notifications.loaded && !notifications.items.length" class="column items-center text-center q-pa-xl">
           <q-icon name="notifications_none" size="48px" color="grey-6" />
           <div class="text-subtitle1 text-weight-medium q-mt-sm">Noch keine Hinweise</div>
-          <div class="text-body2 app-muted q-mt-xs">Erinnerungen und Ergebnisse von Automationen erscheinen später hier.</div>
+          <div class="text-body2 app-muted q-mt-xs">Erinnerungen und Ergebnisse von Automationen erscheinen hier.</div>
         </div>
         <q-list v-else bordered separator class="rounded-borders app-surface">
           <q-item
             v-for="notification in notifications.items"
             :key="notification.id"
-            :clickable="!notification.readAt || notification.target?.type === 'session'"
+            :clickable="!notification.readAt || Boolean(notificationTargetRoute(notification.target))"
             :disable="!notification.readAt && Boolean(notifications.markingId || notifications.markingAll)"
             :class="['relative-position', { 'app-surface-tonal': !notification.readAt }]"
             @click="openNotification(notification)"
@@ -67,7 +67,7 @@
                 </time>
               </q-item-label>
             </q-item-section>
-            <q-item-section v-if="notification.target?.type === 'session'" side><q-icon name="chevron_right" /></q-item-section>
+            <q-item-section v-if="notificationTargetRoute(notification.target)" side><q-icon name="chevron_right" /></q-item-section>
             <q-inner-loading :showing="notifications.markingId === notification.id" />
           </q-item>
         </q-list>
@@ -87,6 +87,7 @@ import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vu
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
+import { notificationTargetRoute } from 'src/utils/notification-target'
 
 defineOptions({ name: 'NotificationCenterApp' })
 const emit = defineEmits(['close'])
@@ -108,15 +109,16 @@ async function refresh() {
 
 async function openNotification(notification) {
   if (!notification.readAt && (notifications.markingId || notifications.markingAll)) return
+  const target = notificationTargetRoute(notification.target)
+  if (target) {
+    const failure = await router.push(target)
+    if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
+    controlCenter.open = false
+  }
   try {
     if (!notification.readAt) await notifications.markRead(notification.id)
   } catch {
-    return
-  }
-  if (notification.target?.type === 'session') {
-    const failure = await router.push({ name: 'chat', query: { session: notification.target.sessionId } })
-    if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
-    controlCenter.open = false
+    // Navigation already succeeded; the unread notification remains available for retry.
   }
 }
 

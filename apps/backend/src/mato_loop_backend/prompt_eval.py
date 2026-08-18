@@ -65,8 +65,9 @@ OPENSCAD_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000002")
 OPENSCAD_AGENT_ID = UUID("90000000-0000-4000-8000-000000000003")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
+AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 20
+INVENTORY_VERSION = 21
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -658,6 +659,88 @@ CASES = (
         user="Ich bin nur heute für einen Termin in München.",
         tools=("memory_retrieve", "memory_write"),
         expected_no_tools=True,
+    ),
+    PromptCase(
+        id="automation_list_uses_bounded_tool",
+        kind="general",
+        user="Liste meine Automationen auf.",
+        tools=("list_automations",),
+        expected_tool="list_automations",
+    ),
+    PromptCase(
+        id="automation_get_uses_exact_id",
+        kind="general",
+        user=f"Zeige mir die vollständige Automation {AUTOMATION_ID}.",
+        tools=("get_automation",),
+        expected_tool="get_automation",
+        expected_arguments={"automation_id": str(AUTOMATION_ID)},
+    ),
+    PromptCase(
+        id="explicit_automation_create_uses_tool",
+        kind="general",
+        user=(
+            "Erstelle jetzt die aktive Automation Tagesbericht mit der Aufgabe "
+            '"Erstelle den Tagesbericht", täglich um 08:00 Uhr in Europe/Berlin. '
+            "Liefere das Ergebnis in diese Session; die Zustellung ist erforderlich."
+        ),
+        tools=("create_automation",),
+        expected_tool="create_automation",
+        expected_arguments={
+            "name": "Tagesbericht",
+            "task": "Erstelle den Tagesbericht",
+            "enabled": True,
+            "deliver_to_current_session": True,
+            "output_session_required": True,
+            "schedules": [
+                {"cron": "0 8 * * *", "timezone": "Europe/Berlin", "enabled": True}
+            ],
+        },
+    ),
+    PromptCase(
+        id="explicit_automation_edit_uses_revision",
+        kind="general",
+        user=(
+            f"Ändere jetzt Automation {AUTOMATION_ID} in Revision 3 vollständig: Name Tagesbericht, "
+            'Aufgabe "Erstelle den kompakten Tagesbericht", aktiv, kein Skill, täglich um 09:00 Uhr '
+            "in Europe/Berlin, Ausgabe in dieser Session erforderlich, Runtime nicht kopieren."
+        ),
+        tools=("edit_automation",),
+        expected_tool="edit_automation",
+        expected_arguments={
+            "automation_id": str(AUTOMATION_ID),
+            "expected_revision": 3,
+            "name": "Tagesbericht",
+            "task": "Erstelle den kompakten Tagesbericht",
+            "enabled": True,
+            "output_mode": "current",
+            "output_session_required": True,
+            "copy_runtime_from_current_session": False,
+            "schedules": [
+                {"cron": "0 9 * * *", "timezone": "Europe/Berlin", "enabled": True}
+            ],
+        },
+    ),
+    PromptCase(
+        id="explicit_automation_run_uses_revision",
+        kind="general",
+        user=f"Starte jetzt Automation {AUTOMATION_ID} in Revision 3.",
+        tools=("run_automation",),
+        expected_tool="run_automation",
+        expected_arguments={
+            "automation_id": str(AUTOMATION_ID),
+            "expected_revision": 3,
+        },
+    ),
+    PromptCase(
+        id="explicit_automation_delete_uses_revision",
+        kind="general",
+        user=f"Lösche jetzt Automation {AUTOMATION_ID} in Revision 3 endgültig.",
+        tools=("delete_automation",),
+        expected_tool="delete_automation",
+        expected_arguments={
+            "automation_id": str(AUTOMATION_ID),
+            "expected_revision": 3,
+        },
     ),
     PromptCase(
         id="explicit_identity_update_uses_tool",

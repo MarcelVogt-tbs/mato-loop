@@ -834,14 +834,26 @@ export const useChatStore = defineStore('chat', {
       )
       if (this.current?.id === id) this.current = { ...this.current, ...data }
     },
-    async deleteSession(id) {
-      await api.delete(`/sessions/${id}`)
+    async deleteSession(id, { automationMode = null, automationImpact = null, suppressErrorToast = false } = {}) {
+      const config = {
+        ...(suppressErrorToast ? { suppressErrorToast: true } : {}),
+        ...(automationMode ? { params: { automationMode, automationImpact } } : {})
+      }
+      if (Object.keys(config).length) await api.delete(`/sessions/${id}`, config)
+      else await api.delete(`/sessions/${id}`)
       this.sessions = this.sessions.filter((item) => item.id !== id)
       delete this.drafts.sessionMessages[id]
       this.clearAttachmentDraft(id)
       this.setAudioDictation(null, id)
       this.persistDrafts()
       if (this.current?.id === id) this.current = null
+    },
+    async sessionDeleteImpact(id, { suppressErrorToast = false } = {}) {
+      const { data } = await api.get(
+        `/sessions/${id}/delete-impact`,
+        suppressErrorToast ? { suppressErrorToast: true } : undefined
+      )
+      return data
     },
     clearRunTracking() {
       const sessionId = this.runSessionId

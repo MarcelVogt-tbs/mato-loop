@@ -153,6 +153,25 @@ async def test_skill_service_rejects_casefold_duplicate(monkeypatch) -> None:
     save.assert_not_awaited()
 
 
+async def test_skill_delete_is_blocked_while_automation_references_it(
+    monkeypatch,
+) -> None:
+    user_id = uuid4()
+    skill = SkillDefinition(name="Bericht", description="Erstellt Berichte", instructions="Pruefe Daten")
+    settings = SkillsSettings(skills=[skill])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = uuid4()
+
+    with pytest.raises(SkillError) as exc_info:
+        await SkillService.delete(db, user_id, skill.id)
+
+    assert exc_info.value.code == "skill.inUse"
+    save.assert_not_awaited()
+
+
 def test_authenticated_skill_api_creates_and_commits(monkeypatch) -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)

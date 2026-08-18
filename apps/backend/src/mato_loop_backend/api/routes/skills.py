@@ -20,6 +20,7 @@ _ERROR_STATUS = {
     "skill.duplicate": status.HTTP_409_CONFLICT,
     "skill.limitReached": status.HTTP_409_CONFLICT,
     "skill.notFound": status.HTTP_404_NOT_FOUND,
+    "skill.inUse": status.HTTP_409_CONFLICT,
 }
 
 

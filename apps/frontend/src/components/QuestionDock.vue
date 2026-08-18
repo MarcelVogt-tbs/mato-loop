@@ -36,6 +36,7 @@
         @click="draft.minimized = !draft.minimized"
       />
       <q-btn
+        v-if="showStop"
         flat
         round
         dense
@@ -194,7 +195,8 @@ defineOptions({ name: 'QuestionDock' })
 
 const props = defineProps({
   request: { type: Object, required: true },
-  stopping: Boolean
+  stopping: Boolean,
+  showStop: { type: Boolean, default: true }
 })
 const emit = defineEmits(['stop'])
 const questions = useQuestionStore()

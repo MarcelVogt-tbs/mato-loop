@@ -17,6 +17,7 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.request_body_limit import MediaRequestBodyLimitMiddleware
 from mato_loop_backend.api.router import api_router
+from mato_loop_backend.automations import AutomationScheduler, AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.memory.dreaming import DreamingScheduler, DreamingService
@@ -66,6 +67,7 @@ async def lifespan(_app: FastAPI):
         async with AsyncSessionFactory() as db:
             await AgentRuntime.recover(db)
             await db.commit()
+            await AutomationService.recover(db)
             await db.execute(
                 update(ApprovalRequest)
                 .where(
@@ -108,12 +110,14 @@ async def lifespan(_app: FastAPI):
     except Exception:
         logger.exception("Failed to clean up stale runs and interactions during startup")
     DreamingScheduler.start()
+    AutomationScheduler.start()
     MemoryIndexScheduler.start()
     EpisodeIndexScheduler.start()
     try:
         yield
     finally:
         await DreamingScheduler.stop()
+        await AutomationScheduler.stop()
         await MemoryIndexScheduler.stop()
         await EpisodeIndexScheduler.stop()
         await AgentRuntime.shutdown()

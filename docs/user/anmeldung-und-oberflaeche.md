@@ -32,7 +32,7 @@ Der Schließen-Button im Inhalts-Header klappt das gesamte Control Center zu, oh
 
 Die Glocke öffnet direkt **Benachrichtigungen**, ohne den Zustand einer Session zu verändern. Dauerhafte Hinweise können einzeln oder gemeinsam als gelesen markiert werden. **Freigaben** zeigt offene Entscheidungen und Agent-Rückfragen aus allen Sessions; Entscheidungen sind dort möglich, Rückfragen öffnen ihre Session zur Beantwortung im Chat. Die gleichen Freigaben und Rückfragen bleiben zusätzlich im zugehörigen Chat sichtbar.
 
-Normale Chat-Antworten erscheinen nicht zusätzlich als Benachrichtigung. Erinnerungen und Ergebnisse geplanter Automationen werden diese Zentrale später verwenden.
+Normale Chat-Antworten erscheinen nicht zusätzlich als Benachrichtigung. Ergebnisse und Fehler geplanter Automationen erscheinen dagegen dauerhaft in dieser Zentrale.
 
 ## Desktop und Mobilgeräte
 

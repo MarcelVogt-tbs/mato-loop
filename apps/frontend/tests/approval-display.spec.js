@@ -196,6 +196,18 @@ describe('approval display', () => {
     })
   })
 
+  it('labels automation resources and grants', () => {
+    expect(approvalResource({ resourceType: 'automation_collection' })).toEqual({
+      label: 'Automationen', value: 'Eigene Automationen'
+    })
+    expect(approvalResource({ resourceType: 'automation', resourceDisplay: 'Morgenbericht (Revision 2)' })).toEqual({
+      label: 'Automation', value: 'Morgenbericht (Revision 2)'
+    })
+    expect(permissionGrantDisplay({
+      capability: 'automation.run', resourceType: 'automation', resourceDisplay: 'Morgenbericht'
+    })).toEqual({ label: 'Automation starten', value: 'Morgenbericht', icon: 'play_arrow' })
+  })
+
   it('redacts sensitive and bounds large technical details', () => {
     const formatted = formatTechnicalDetails({
       path: 'Notizen/plan.md',

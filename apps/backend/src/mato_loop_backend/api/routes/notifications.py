@@ -20,11 +20,19 @@ from mato_loop_backend.security import require_user
 router = APIRouter(prefix="/notifications", dependencies=[Depends(require_user)])
 
 
-class NotificationTargetResponse(BaseModel):
+class SessionNotificationTargetResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["session"]
     session_id: UUID = Field(alias="sessionId")
+
+
+class AutomationNotificationTargetResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["automationRun"]
+    automation_id: UUID = Field(alias="automationId")
+    run_id: UUID = Field(alias="runId")
 
 
 class NotificationResponse(BaseModel):
@@ -34,7 +42,7 @@ class NotificationResponse(BaseModel):
     kind: str
     title: str
     body: str | None
-    target: NotificationTargetResponse | None
+    target: SessionNotificationTargetResponse | AutomationNotificationTargetResponse | None
     read_at: datetime | None = Field(alias="readAt")
     created_at: datetime = Field(alias="createdAt")
 
@@ -62,14 +70,21 @@ class NotificationsReadAllResponse(BaseModel):
 
 
 def _notification_payload(item: Notification) -> NotificationResponse:
+    automation = item.automation_run.automation if item.automation_run is not None else None
     return NotificationResponse(
         id=item.id,
         kind=item.kind,
         title=item.title,
         body=item.body,
         target=(
-            NotificationTargetResponse(type="session", sessionId=item.session_id)
+            SessionNotificationTargetResponse(type="session", sessionId=item.session_id)
             if item.session_id is not None
+            else AutomationNotificationTargetResponse(
+                type="automationRun",
+                automationId=automation.id,
+                runId=item.automation_run_id,
+            )
+            if automation is not None and item.automation_run_id is not None
             else None
         ),
         readAt=item.read_at,

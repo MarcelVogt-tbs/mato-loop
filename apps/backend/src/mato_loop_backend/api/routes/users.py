@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,13 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.memory.dreaming import DreamingService
-from mato_loop_backend.models import AgentRun, ChatSession, MemoryDreamRun, UserAccount
+from mato_loop_backend.models import (
+    AgentRun,
+    Automation,
+    ChatSession,
+    MemoryDreamRun,
+    UserAccount,
+)
 from mato_loop_backend.security import (
     hash_password,
     require_admin,
@@ -296,6 +302,7 @@ async def delete_user(
     try:
         for item in session_ids:
             trashed.append(await asyncio.to_thread(storage.trash_session, item))
+        await db.execute(delete(Automation).where(Automation.user_id == user.id))
         await db.delete(user)
         commit_task = asyncio.create_task(db.commit())
         await asyncio.shield(commit_task)

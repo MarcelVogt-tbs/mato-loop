@@ -431,6 +431,14 @@ wheels = [
 ]
 
 [[package]]
+name = "cronsim"
+version = "2.7"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/1a/02f105147f7f2e06ed4f734ff5a6439590bb275a53dd91fc73df6312298a/cronsim-2.7-py3-none-any.whl", hash = "sha256:1e1431fa08c51dc7f72e67e571c7c7a09af26420169b607badd4ca9677ffad1e", size = 14213, upload-time = "2025-10-21T16:38:20.431Z" },
+]
+
+[[package]]
 name = "cryptography"
 version = "49.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1011,6 +1019,7 @@ dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "beautifulsoup4" },
+    { name = "cronsim" },
     { name = "cryptography" },
     { name = "ddgs" },
     { name = "defusedxml" },
@@ -1031,6 +1040,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "python-pptx" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "yarl" },
     { name = "zxing-cpp" },
@@ -1052,6 +1062,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.16.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "beautifulsoup4", specifier = ">=4.13.0" },
+    { name = "cronsim", specifier = ">=2.7,<3.0" },
     { name = "cryptography", specifier = ">=45.0.0" },
     { name = "ddgs", specifier = ">=9.14.4,<10.0.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
@@ -1072,6 +1083,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "python-pptx", specifier = ">=1.0.2" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.41" },
+    { name = "tzdata", specifier = ">=2026.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35.0" },
     { name = "yarl", specifier = ">=1.20.0" },
     { name = "zxing-cpp", specifier = ">=3.1.1,<4.0.0" },

@@ -229,7 +229,7 @@ async def test_start_persists_live_executor_snapshot(monkeypatch) -> None:
         working_directory="project/subdir",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = agent
+    db.scalar.side_effect = [session, None, True, agent, True]
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(EpisodeIndexService, "enqueue", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_schedule_run", lambda _run: None)
@@ -284,7 +284,7 @@ async def test_start_preserves_live_operations_without_a_workspace(monkeypatch) 
         preferred_execution_agent_id=agent.id,
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = agent
+    db.scalar.side_effect = [session, None, True, agent, True]
     monkeypatch.setattr(
         SettingsStore,
         "load",
@@ -339,7 +339,7 @@ async def test_start_keeps_disconnected_executor_without_live_operations(monkeyp
         preferred_root_id=root.id,
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = agent
+    db.scalar.side_effect = [session, None, True, agent, True]
     monkeypatch.setattr(
         SettingsStore,
         "load",

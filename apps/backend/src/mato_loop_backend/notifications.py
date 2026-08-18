@@ -8,8 +8,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from mato_loop_backend.models import ChatSession, Notification, UserAccount
+from mato_loop_backend.models import (
+    Automation,
+    AutomationRun,
+    ChatSession,
+    Notification,
+    UserAccount,
+)
 
 
 class NotificationDraft(BaseModel):
@@ -21,6 +28,7 @@ class NotificationDraft(BaseModel):
     body: Annotated[str | None, Field(default=None, max_length=4_000)]
     deduplication_key: Annotated[str, Field(min_length=1, max_length=255)]
     session_id: UUID | None = None
+    automation_run_id: UUID | None = None
 
     @field_validator("title", "deduplication_key")
     @classmethod
@@ -56,6 +64,18 @@ class NotificationService:
             )
             if owned_session is None:
                 raise NotificationError("notification.targetNotFound")
+        if draft.automation_run_id is not None:
+            owned_run = await db.scalar(
+                select(AutomationRun.id)
+                .join(Automation, Automation.id == AutomationRun.automation_id)
+                .where(
+                    AutomationRun.id == draft.automation_run_id,
+                    Automation.user_id == draft.user_id,
+                )
+                .with_for_update()
+            )
+            if owned_run is None:
+                raise NotificationError("notification.targetNotFound")
         notification_id = uuid4()
         statement = (
             insert(Notification)
@@ -73,7 +93,15 @@ class NotificationService:
         page_size: int,
         cursor: tuple[datetime, UUID] | None = None,
     ) -> list[Notification]:
-        statement = select(Notification).where(Notification.user_id == user_id)
+        statement = (
+            select(Notification)
+            .options(
+                selectinload(Notification.automation_run).selectinload(
+                    AutomationRun.automation
+                )
+            )
+            .where(Notification.user_id == user_id)
+        )
         if cursor is not None:
             created_at, notification_id = cursor
             statement = statement.where(
@@ -115,6 +143,11 @@ class NotificationService:
         )
         item = await db.scalar(
             select(Notification)
+            .options(
+                selectinload(Notification.automation_run).selectinload(
+                    AutomationRun.automation
+                )
+            )
             .where(Notification.id == notification_id, Notification.user_id == user_id)
             .with_for_update()
         )

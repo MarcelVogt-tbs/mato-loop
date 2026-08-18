@@ -135,6 +135,7 @@ async def test_start_persists_effective_run_policy_snapshot(
         model_config_id=model.id,
     )
     db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, True, True]
 
     run = await AgentRuntime.start(db, session, "Nachricht")
 
@@ -168,6 +169,7 @@ async def test_start_rejects_unavailable_model_before_persisting(monkeypatch) ->
         model_config_id=missing_model_id,
     )
     db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, True]
 
     with pytest.raises(AgentRunError) as exc_info:
         await AgentRuntime.start(db, session, "Nachricht")
@@ -205,6 +207,7 @@ async def test_start_schedules_title_generation_next_to_agent_run(monkeypatch) -
     )
     run_id = uuid4()
     db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, True, True]
 
     def assign_run_id(items):
         next(item for item in items if isinstance(item, AgentRun)).id = run_id

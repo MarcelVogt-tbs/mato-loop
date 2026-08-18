@@ -132,6 +132,9 @@ describe('tool display', () => {
     expect(toolActivityLabel('write_file')).toBe('Datei wird geschrieben')
     expect(toolActivityLabel('shell_run')).toBe('Befehl wird ausgeführt')
     expect(toolActivityLabel('unknown_tool')).toBe('Tool wird ausgeführt')
+    expect(toolIdentity('create_automation')).toEqual({ label: 'Automation erstellen', icon: 'add_task' })
+    expect(toolActivityLabel('run_automation')).toBe('Automation wird gestartet')
+    expect(toolSummary({ name: 'create_automation', arguments: { name: 'Morgenbericht' } })).toBe('Morgenbericht')
     expect(toolSummary({ name: 'web_search', arguments: { query: 'Quasar Expansion Item' } }))
       .toBe('Quasar Expansion Item')
     expect(toolSummary({

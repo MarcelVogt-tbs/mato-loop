@@ -133,6 +133,18 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'skill.limitReached' } })).toBe(
       'Die maximale Anzahl persönlicher Skills ist erreicht.'
     )
+    expect(apiErrorMessage({ error: { code: 'skill.inUse' } })).toBe(
+      'Der Skill wird noch von einer Automation verwendet und kann nicht gelöscht werden.'
+    )
+    expect(apiErrorMessage({ error: { code: 'automation.scheduleInvalid' } })).toBe(
+      'Der Cron-Zeitplan ist ungültig.'
+    )
+    expect(apiErrorMessage({ error: { code: 'automation.alreadyRunning' } })).toBe(
+      'Für diese Automation läuft bereits ein Auftrag.'
+    )
+    expect(apiErrorMessage({
+      error: { code: 'session.automationOutputRequired', params: { automationCount: 2 } }
+    })).toBe('Die Session wird von 2 Automationen als Ausgabeziel benötigt.')
     expect(apiErrorMessage({ error: { code: 'privacy.pseudonymizationUnavailable' } })).toBe(
       'Die lokale Pseudonymisierung ist derzeit nicht verfügbar.'
     )

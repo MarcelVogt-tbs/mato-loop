@@ -13,6 +13,7 @@ The current implementation includes:
 - one shared model and tool loop for all providers
 - owner-isolated sessions, memory, credentials, and Execution Agents
 - persistent permission grants and approval decisions
+- scheduled automations with durable run history, notifications, and optional session output
 - built-in web search without an API key and additional SearXNG providers
 - CalDAV accounts with per-calendar read, write, and delete policies
 - language-neutral API error codes and human-readable frontend toasts

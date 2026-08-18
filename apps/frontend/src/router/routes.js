@@ -48,6 +48,12 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Skills', settingsIcon: 'school' }
   },
   {
+    path: 'automations',
+    name: 'settings-automations',
+    component: () => import('pages/settings/AutomationSettingsPage.vue'),
+    meta: { settingsLabel: 'Automationen', settingsIcon: 'schedule' }
+  },
+  {
     path: 'persona',
     name: 'settings-persona',
     component: () => import('pages/settings/AgentIdentitySettingsPage.vue'),

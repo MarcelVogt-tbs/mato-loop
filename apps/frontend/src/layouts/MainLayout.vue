@@ -454,6 +454,7 @@ import AppLogo from 'components/AppLogo.vue'
 import ControlCenterPanel from 'components/ControlCenterPanel.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
+import { useAutomationStore } from 'stores/automations'
 import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
@@ -461,6 +462,7 @@ import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
+import { notifyError } from 'src/utils/notifications'
 import { groupSessionsByRecency, sessionSidebarStatus } from 'src/utils/session-groups'
 
 defineOptions({ name: 'MainLayout' })
@@ -479,6 +481,7 @@ const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()
 const approvals = useApprovalStore()
+const automations = useAutomationStore()
 const notifications = useInAppNotificationStore()
 const questions = useQuestionStore()
 const sessionInfiniteScroll = ref(null)
@@ -680,8 +683,44 @@ function closeActionMenu(id) {
 }
 
 async function removeSession(id) {
-  if (!await confirmDiscardedEdit()) return
-  await chat.deleteSession(id)
+  let impact
+  try {
+    impact = await chat.sessionDeleteImpact(id, { suppressErrorToast: true })
+  } catch (error) {
+    notifyError(error)
+    return
+  }
+  let automationMode = null
+  if (impact.requiredAutomationCount) {
+    const count = impact.automationCount
+    const accepted = await confirm(
+      `Beim Fortfahren werden ${count} verknüpfte Automation${count === 1 ? '' : 'en'} samt Historie dauerhaft gelöscht.`,
+      'Abhängige Automationen löschen?',
+      { okLabel: 'Alles löschen' }
+    )
+    if (!accepted) return
+    automationMode = 'deleteAutomations'
+  } else if (impact.automationCount) {
+    const count = impact.automationCount
+    const accepted = await confirm(
+      `Die Session ist Ausgabeziel von ${count} Automation${count === 1 ? '' : 'en'}. Verknüpfung lösen und Session löschen?`,
+      'Verknüpfte Session löschen?',
+      { okLabel: 'Lösen und löschen' }
+    )
+    if (!accepted) return
+    automationMode = 'unlink'
+  }
+  if (workspace.sessionId === id && !await confirmDiscardedEdit({ discard: false })) return
+  try {
+    await chat.deleteSession(id, {
+      automationMode,
+      automationImpact: automationMode ? impact.automationImpact : null
+    })
+  } catch {
+    return
+  }
+  if (workspace.sessionId === id) workspace.discardEdit()
+  if (automationMode) void automations.fetchAutomations().catch(() => {})
   if (route.query.session === id) await router.push({ name: 'chat' })
 }
 
@@ -690,14 +729,14 @@ async function logout() {
   await auth.logout()
 }
 
-async function confirmDiscardedEdit() {
+async function confirmDiscardedEdit({ discard = true } = {}) {
   if (!workspace.editorDirty) return true
   const accepted = await confirm(
     'Sollen die ungespeicherten Änderungen verworfen werden?',
     'Änderungen verwerfen?',
     { okLabel: 'Verwerfen' }
   )
-  if (accepted) workspace.discardEdit()
+  if (accepted && discard) workspace.discardEdit()
   return accepted
 }
 

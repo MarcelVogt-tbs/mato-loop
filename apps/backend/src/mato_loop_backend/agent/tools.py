@@ -7,7 +7,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from io import BytesIO
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
@@ -41,6 +41,8 @@ from mato_loop_backend.agent.permissions import (
     PermissionPolicy,
     PermissionRequest,
     agent_identity_permission,
+    automation_collection_scope,
+    automation_scope,
     execution_directory_permission,
     media_permission,
     memory_read_permission,
@@ -67,6 +69,13 @@ from mato_loop_backend.agent.video_analysis import (
     video_analysis_available,
 )
 from mato_loop_backend.attachments import AttachmentError, AttachmentService
+from mato_loop_backend.automations import (
+    AutomationError,
+    AutomationScheduler,
+    AutomationService,
+    next_run_at,
+    runtime_snapshot,
+)
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
@@ -109,6 +118,7 @@ from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRet
 from mato_loop_backend.memory.service import MemoryService, memory_reference_timestamps
 from mato_loop_backend.models import (
     AgentRun,
+    Automation,
     ChatSession,
     MemoryCategory,
     Message,
@@ -304,6 +314,7 @@ TOOL_GROUPS = (
     {"id": "web", "label": "Web", "icon": "language"},
     {"id": "media", "label": "Medien", "icon": "perm_media"},
     {"id": "sessions", "label": "Sessions", "icon": "forum"},
+    {"id": "automations", "label": "Automationen", "icon": "schedule"},
     {"id": "memory", "label": "Memory", "icon": "psychology"},
     {"id": "agent", "label": "Agent", "icon": "smart_toy"},
     {"id": "integrations", "label": "Integrationen", "icon": "extension"},
@@ -1710,6 +1721,81 @@ class EditSkillArguments(ToolArguments):
 
 class LoadSkillArguments(ToolArguments):
     skill_id: UUID = Field(description="Exact ID copied from the available skill catalog.")
+
+
+class AutomationScheduleArguments(ToolArguments):
+    cron: str = Field(min_length=1, max_length=255)
+    timezone: str = Field(min_length=1, max_length=100)
+    enabled: bool = True
+
+    @field_validator("cron", "timezone")
+    @classmethod
+    def normalize_schedule_text(cls, value: str) -> str:
+        if not (cleaned := value.strip()):
+            raise ValueError("schedule value must not be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def schedule_is_valid(self) -> AutomationScheduleArguments:
+        next_run_at(self.cron, self.timezone, datetime.now(UTC))
+        return self
+
+
+class AutomationDefinitionArguments(ToolArguments):
+    name: str = Field(min_length=1, max_length=240)
+    task: str = Field(min_length=1, max_length=40_000)
+    skill_id: UUID | None = None
+    enabled: bool = True
+    schedules: list[AutomationScheduleArguments] = Field(min_length=1, max_length=50)
+    output_session_required: bool = False
+
+    @field_validator("name", "task")
+    @classmethod
+    def normalize_automation_text(cls, value: str) -> str:
+        if not (cleaned := value.strip()):
+            raise ValueError("automation text must not be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def schedules_are_unique(self) -> AutomationDefinitionArguments:
+        keys = [(item.cron, item.timezone) for item in self.schedules]
+        if len(keys) != len(set(keys)):
+            raise ValueError("automation schedules must be unique")
+        return self
+
+
+class ListAutomationsArguments(ToolArguments):
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class GetAutomationArguments(ToolArguments):
+    automation_id: UUID
+
+
+class CreateAutomationArguments(AutomationDefinitionArguments):
+    deliver_to_current_session: bool = False
+
+
+class EditAutomationArguments(AutomationDefinitionArguments):
+    automation_id: UUID
+    expected_revision: int = Field(ge=1)
+    output_mode: Literal["keep", "current", "none"] = "keep"
+    copy_runtime_from_current_session: bool = False
+
+    @model_validator(mode="after")
+    def required_output_is_possible(self) -> EditAutomationArguments:
+        if self.output_session_required and self.output_mode == "none":
+            raise ValueError("required output cannot use none")
+        return self
+
+
+class RunAutomationArguments(ToolArguments):
+    automation_id: UUID
+    expected_revision: int = Field(ge=1)
+
+
+class DeleteAutomationArguments(RunAutomationArguments):
+    pass
 
 
 async def _allow(context: ToolContext, request: PermissionRequest) -> bool:
@@ -3822,6 +3908,10 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
         select(ChatSession).where(
             ChatSession.id == target_id,
             ChatSession.user_id == context.session.user_id,
+            or_(
+                ChatSession.session_type == "chat",
+                ChatSession.id == context.session.id,
+            ),
         )
     )
     if target is None:
@@ -4016,6 +4106,7 @@ async def _session_browse(
             .where(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
+                ChatSession.session_type == "chat",
             )
             .order_by(messages.c.created_at.desc(), ChatSession.id.desc())
             .limit(arguments.limit)
@@ -4081,6 +4172,7 @@ async def _session_search(
             .where(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
+                ChatSession.session_type == "chat",
                 or_(*match_conditions),
             )
             .order_by(
@@ -4107,6 +4199,501 @@ async def _session_search(
             "contentIsUntrusted": True,
         }
     )
+
+
+def _automation_collection_permission(
+    context: ToolContext,
+    capability: str,
+    *,
+    action_kind: str,
+    title: str,
+    summary: str,
+    display_items: tuple[PermissionDisplayItem, ...] = (),
+    approval_details: dict[str, Any] | None = None,
+) -> PermissionRequest:
+    return PermissionRequest(
+        capability=capability,
+        resource_type="automation_collection",
+        resource_scope=automation_collection_scope(
+            context.session.user_id, context.session.id
+        ),
+        action_kind=action_kind,
+        risk_level="medium",
+        title=title,
+        summary=summary,
+        resource_display="Eigene Automationen",
+        display_items=display_items,
+        approval_details=approval_details,
+    )
+
+
+def _automation_permission(
+    context: ToolContext,
+    automation: Automation,
+    capability: str,
+    *,
+    action_kind: str,
+    title: str,
+    summary: str,
+    risk_level: str = "medium",
+    display_items: tuple[PermissionDisplayItem, ...] = (),
+    approval_details: dict[str, Any] | None = None,
+) -> PermissionRequest:
+    return PermissionRequest(
+        capability=capability,
+        resource_type="automation",
+        resource_scope=automation_scope(
+            automation.id,
+            automation.revision,
+            context.session.user_id,
+            context.session.id,
+        ),
+        action_kind=action_kind,
+        risk_level=risk_level,
+        title=title,
+        summary=summary,
+        resource_display=f"{automation.name} (Revision {automation.revision})",
+        display_items=display_items,
+        approval_details=approval_details,
+    )
+
+
+def _automation_schedules(
+    schedules: list[AutomationScheduleArguments],
+) -> list[dict[str, Any]]:
+    return [item.model_dump() for item in schedules]
+
+
+def _automation_schedule_lines(schedules: list[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(
+        f'{item["cron"]} | {item["timezone"]} | '
+        f'{"aktiv" if item["enabled"] else "inaktiv"}'
+        for item in schedules
+    )
+
+
+async def _automation_definition_payload(
+    db: AsyncSession, automation: Automation
+) -> dict[str, Any]:
+    execution_session = await db.get(ChatSession, automation.execution_session_id)
+    if execution_session is None:
+        raise AutomationError("automation.executionSessionMissing")
+    return {
+        "id": str(automation.id),
+        "name": automation.name,
+        "task": automation.task,
+        "skillId": str(automation.skill_id) if automation.skill_id else None,
+        "enabled": automation.enabled,
+        "revision": automation.revision,
+        "schedules": [
+            {
+                "cron": item.cron_expression,
+                "timezone": item.timezone,
+                "enabled": item.enabled,
+                "nextRunAt": item.next_run_at.isoformat(),
+            }
+            for item in automation.schedules
+        ],
+        "outputSessionId": (
+            str(automation.output_session_id) if automation.output_session_id else None
+        ),
+        "outputSessionRequired": automation.output_session_required,
+        "runtime": runtime_snapshot(execution_session),
+        "contentIsUntrusted": True,
+    }
+
+
+def _automation_tool_error(exc: AutomationError) -> ToolResult:
+    return ToolResult.error(exc.code, field=exc.field, params=exc.params)
+
+
+async def _list_automations(
+    arguments: ListAutomationsArguments, context: ToolContext
+) -> ToolResult:
+    permission = _automation_collection_permission(
+        context,
+        "automation.read",
+        action_kind="list_automations",
+        title="Automationen anzeigen?",
+        summary="Der Agent möchte die eigenen Automationen kompakt anzeigen.",
+    )
+    if not await _allow(context, permission):
+        return ToolResult.error("permission.denied")
+    rows = list(
+        (
+            await context.db.scalars(
+                select(Automation)
+                .options(selectinload(Automation.schedules))
+                .where(Automation.user_id == context.session.user_id)
+                .order_by(Automation.updated_at.desc(), Automation.id.desc())
+                .limit(arguments.limit + 1)
+            )
+        ).all()
+    )
+    items = rows[: arguments.limit]
+    return ToolResult.json(
+        {
+            "automations": [
+                {
+                    "id": str(item.id),
+                    "name": item.name,
+                    "enabled": item.enabled,
+                    "revision": item.revision,
+                    "scheduleCount": len(item.schedules),
+                    "nextRunAt": (
+                        min(
+                            schedule.next_run_at
+                            for schedule in item.schedules
+                            if schedule.enabled
+                        ).isoformat()
+                        if any(schedule.enabled for schedule in item.schedules)
+                        else None
+                    ),
+                }
+                for item in items
+            ],
+            "limit": arguments.limit,
+            "hasMore": len(rows) > arguments.limit,
+            "contentIsUntrusted": True,
+        }
+    )
+
+
+async def _get_automation(
+    arguments: GetAutomationArguments, context: ToolContext
+) -> ToolResult:
+    try:
+        automation = await AutomationService.owned(
+            context.db, arguments.automation_id, context.session.user_id
+        )
+        expected_revision = automation.revision
+        if not await _allow(
+            context,
+            _automation_permission(
+                context,
+                automation,
+                "automation.read",
+                action_kind="get_automation",
+                title="Automation anzeigen?",
+                summary=(
+                    f'Der Agent möchte „{automation.name}“ in Revision '
+                    f"{automation.revision} vollständig anzeigen."
+                ),
+            ),
+        ):
+            return ToolResult.error("permission.denied")
+        automation = await AutomationService.owned(
+            context.db, arguments.automation_id, context.session.user_id
+        )
+        if automation.revision != expected_revision:
+            raise AutomationError(
+                "automation.changed", params={"currentRevision": automation.revision}
+            )
+        return ToolResult.json(await _automation_definition_payload(context.db, automation))
+    except AutomationError as exc:
+        return _automation_tool_error(exc)
+
+
+async def _create_automation(
+    arguments: CreateAutomationArguments, context: ToolContext
+) -> ToolResult:
+    schedules = _automation_schedules(arguments.schedules)
+    deliver = arguments.deliver_to_current_session or arguments.output_session_required
+    try:
+        skill = await AutomationService.skill(
+            context.db, context.session.user_id, arguments.skill_id
+        )
+        preview = {
+            "name": arguments.name,
+            "task": arguments.task,
+            "skillId": str(arguments.skill_id) if arguments.skill_id else None,
+            "enabled": arguments.enabled,
+            "schedules": schedules,
+            "output": "current" if deliver else "none",
+            "outputSessionRequired": arguments.output_session_required,
+        }
+        permission = _automation_collection_permission(
+            context,
+            "automation.create",
+            action_kind="create_automation",
+            title="Automation erstellen?",
+            summary=(
+                f'Der Agent möchte die Automation „{arguments.name}“ erstellen und '
+                f'{"aktivieren" if arguments.enabled else "deaktiviert speichern"}.'
+            ),
+            display_items=(
+                PermissionDisplayItem("Aufgabe", arguments.task, "code"),
+                PermissionDisplayItem(
+                    "Zeitpläne", _automation_schedule_lines(schedules), "list"
+                ),
+                PermissionDisplayItem("Skill", skill.name if skill else "Keiner"),
+                PermissionDisplayItem(
+                    "Ausgabe",
+                    "Aktuelle Session" if deliver else "Keine Session",
+                ),
+            ),
+            approval_details={"automationPreview": preview},
+        )
+        if not await _allow(context, permission):
+            return ToolResult.error("permission.denied")
+        automation = await AutomationService.create(
+            context.db,
+            user_id=context.session.user_id,
+            name=arguments.name,
+            task=arguments.task,
+            skill_id=arguments.skill_id,
+            enabled=arguments.enabled,
+            source_session_id=context.session.id,
+            output_session_id=context.session.id if deliver else None,
+            output_session_required=arguments.output_session_required,
+            schedules=schedules,
+        )
+        await AutomationService.provision_and_commit(context.db, automation)
+        return ToolResult.json(
+            {
+                "id": str(automation.id),
+                "name": automation.name,
+                "revision": automation.revision,
+                "enabled": automation.enabled,
+                "created": True,
+            }
+        )
+    except AutomationError as exc:
+        await context.db.rollback()
+        return _automation_tool_error(exc)
+
+
+def _automation_edit_diff(
+    automation: Automation,
+    arguments: EditAutomationArguments,
+    schedules: list[dict[str, Any]],
+    output_session_id: UUID | None,
+) -> tuple[str, ...]:
+    before_schedules = [
+        {
+            "cron": item.cron_expression,
+            "timezone": item.timezone,
+            "enabled": item.enabled,
+        }
+        for item in automation.schedules
+    ]
+    changes = []
+    comparisons = (
+        ("Name", automation.name, arguments.name),
+        ("Aufgabe", automation.task, arguments.task),
+        (
+            "Skill",
+            str(automation.skill_id) if automation.skill_id else "Keiner",
+            str(arguments.skill_id) if arguments.skill_id else "Keiner",
+        ),
+        ("Aktiv", str(automation.enabled), str(arguments.enabled)),
+        ("Zeitpläne", json.dumps(before_schedules), json.dumps(schedules)),
+        (
+            "Ausgabe",
+            str(automation.output_session_id) if automation.output_session_id else "Keine",
+            str(output_session_id) if output_session_id else "Keine",
+        ),
+        (
+            "Ausgabe erforderlich",
+            str(automation.output_session_required),
+            str(arguments.output_session_required),
+        ),
+    )
+    for label, before, after in comparisons:
+        if before != after:
+            changes.append(f"{label}: {before} -> {after}")
+    if arguments.copy_runtime_from_current_session:
+        changes.append("Runtime: aus aktueller Session übernehmen")
+    return tuple(changes or ("Keine inhaltliche Änderung",))
+
+
+async def _edit_automation(
+    arguments: EditAutomationArguments, context: ToolContext
+) -> ToolResult:
+    schedules = _automation_schedules(arguments.schedules)
+    try:
+        automation = await AutomationService.owned(
+            context.db, arguments.automation_id, context.session.user_id
+        )
+        if automation.revision != arguments.expected_revision:
+            raise AutomationError(
+                "automation.changed", params={"currentRevision": automation.revision}
+            )
+        output_session_id = {
+            "keep": automation.output_session_id,
+            "current": context.session.id,
+            "none": None,
+        }[arguments.output_mode]
+        if arguments.output_session_required and output_session_id is None:
+            return ToolResult.error(
+                "tool.invalidArguments", field="output_session_required"
+            )
+        await AutomationService.skill(
+            context.db, context.session.user_id, arguments.skill_id
+        )
+        changes = _automation_edit_diff(
+            automation, arguments, schedules, output_session_id
+        )
+        if not await _allow(
+            context,
+            _automation_permission(
+                context,
+                automation,
+                "automation.update",
+                action_kind="edit_automation",
+                title="Automation ändern?",
+                summary=(
+                    f'Der Agent möchte „{automation.name}“ in Revision '
+                    f"{automation.revision} ändern."
+                ),
+                display_items=(PermissionDisplayItem("Änderungen", changes, "list"),),
+                approval_details={
+                    "automationChange": {
+                        "automationId": str(automation.id),
+                        "expectedRevision": automation.revision,
+                        "changes": list(changes),
+                    }
+                },
+            ),
+        ):
+            return ToolResult.error("permission.denied")
+        automation = await AutomationService.owned(
+            context.db,
+            arguments.automation_id,
+            context.session.user_id,
+            for_update=True,
+        )
+        automation = await AutomationService.replace(
+            context.db,
+            automation,
+            expected_revision=arguments.expected_revision,
+            name=arguments.name,
+            task=arguments.task,
+            skill_id=arguments.skill_id,
+            enabled=arguments.enabled,
+            source_session_id=(
+                context.session.id
+                if arguments.copy_runtime_from_current_session
+                else None
+            ),
+            output_session_id=output_session_id,
+            output_session_required=arguments.output_session_required,
+            schedules=schedules,
+        )
+        await context.db.commit()
+        return ToolResult.json(
+            {
+                "id": str(automation.id),
+                "name": automation.name,
+                "revision": automation.revision,
+                "enabled": automation.enabled,
+                "updated": True,
+            }
+        )
+    except AutomationError as exc:
+        await context.db.rollback()
+        return _automation_tool_error(exc)
+
+
+async def _run_automation(
+    arguments: RunAutomationArguments, context: ToolContext
+) -> ToolResult:
+    try:
+        automation = await AutomationService.owned(
+            context.db, arguments.automation_id, context.session.user_id
+        )
+        if automation.revision != arguments.expected_revision:
+            raise AutomationError(
+                "automation.changed", params={"currentRevision": automation.revision}
+            )
+        if not await _allow(
+            context,
+            _automation_permission(
+                context,
+                automation,
+                "automation.run",
+                action_kind="run_automation",
+                title="Automation jetzt starten?",
+                summary=(
+                    f'Der Agent möchte „{automation.name}“ in Revision '
+                    f"{automation.revision} einmalig einreihen."
+                ),
+                display_items=(
+                    PermissionDisplayItem("Auswirkung", "Ein Lauf wird eingereiht."),
+                ),
+            ),
+        ):
+            return ToolResult.error("permission.denied")
+        run = await AutomationService.enqueue_manual(
+            context.db,
+            automation.id,
+            context.session.user_id,
+            expected_revision=arguments.expected_revision,
+        )
+        asyncio.get_running_loop().call_soon(AutomationScheduler.start)
+        return ToolResult.json(
+            {
+                "automationId": str(automation.id),
+                "revision": run.automation_revision,
+                "runId": str(run.id),
+                "status": run.status,
+                "queued": True,
+            }
+        )
+    except AutomationError as exc:
+        await context.db.rollback()
+        return _automation_tool_error(exc)
+
+
+async def _delete_automation(
+    arguments: DeleteAutomationArguments, context: ToolContext
+) -> ToolResult:
+    try:
+        automation = await AutomationService.owned(
+            context.db, arguments.automation_id, context.session.user_id
+        )
+        if automation.revision != arguments.expected_revision:
+            raise AutomationError(
+                "automation.changed", params={"currentRevision": automation.revision}
+            )
+        if not await _allow(
+            context,
+            _automation_permission(
+                context,
+                automation,
+                "automation.delete",
+                action_kind="delete_automation",
+                title="Automation endgültig löschen?",
+                summary=(
+                    f'Der Agent möchte „{automation.name}“ in Revision '
+                    f"{automation.revision} samt Laufhistorie löschen."
+                ),
+                risk_level="high",
+                display_items=(
+                    PermissionDisplayItem(
+                        "Auswirkung",
+                        "Aktive Läufe werden beendet; Ausführungssession und Historie werden gelöscht.",
+                    ),
+                ),
+            ),
+        ):
+            return ToolResult.error("permission.denied")
+        await AutomationService.delete(
+            context.db,
+            automation.id,
+            context.session.user_id,
+            expected_revision=arguments.expected_revision,
+        )
+        return ToolResult.json(
+            {
+                "id": str(arguments.automation_id),
+                "revision": arguments.expected_revision,
+                "deleted": True,
+            }
+        )
+    except AutomationError as exc:
+        await context.db.rollback()
+        return _automation_tool_error(exc)
 
 
 async def _memory_write(
@@ -4271,6 +4858,33 @@ _WEB_FETCH = ToolAction(
 _SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.ASK)
 _SESSION_SEARCH = ToolAction(
     "session.search", "Sessions durchsuchen", ToolExecutionPolicy.ASK
+)
+_AUTOMATION_READ = ToolAction(
+    "automation.read", "Automationen lesen", ToolExecutionPolicy.ASK
+)
+_AUTOMATION_CREATE = ToolAction(
+    "automation.create",
+    "Automationen erstellen",
+    ToolExecutionPolicy.ASK,
+    mutates=True,
+)
+_AUTOMATION_UPDATE = ToolAction(
+    "automation.update",
+    "Automationen ändern",
+    ToolExecutionPolicy.ASK,
+    mutates=True,
+)
+_AUTOMATION_RUN = ToolAction(
+    "automation.run",
+    "Automationen starten",
+    ToolExecutionPolicy.ASK,
+    mutates=True,
+)
+_AUTOMATION_DELETE = ToolAction(
+    "automation.delete",
+    "Automationen löschen",
+    ToolExecutionPolicy.DISABLED,
+    mutates=True,
 )
 _SESSION_TOOL_RESULT_READ = ToolAction(
     "session.tool_result.read",
@@ -4628,6 +5242,66 @@ tool_registry = ToolRegistry(
             label="Sessions durchsuchen",
             icon="manage_search",
             actions=(_SESSION_SEARCH,),
+        ),
+        ToolDefinition(
+            "list_automations",
+            "List a bounded, compact page of the current user's automations.",
+            ListAutomationsArguments,
+            _list_automations,
+            group="automations",
+            label="Automationen anzeigen",
+            icon="view_list",
+            actions=(_AUTOMATION_READ,),
+        ),
+        ToolDefinition(
+            "get_automation",
+            "Get one complete owned automation definition, including its current revision, schedules, output, and runtime.",
+            GetAutomationArguments,
+            _get_automation,
+            group="automations",
+            label="Automation anzeigen",
+            icon="schedule",
+            actions=(_AUTOMATION_READ,),
+        ),
+        ToolDefinition(
+            "create_automation",
+            "Create an automation only after an explicit request in the latest user message. Runtime is copied from the current session; output can only target the current session or none.",
+            CreateAutomationArguments,
+            _create_automation,
+            group="automations",
+            label="Automation erstellen",
+            icon="add_task",
+            actions=(_AUTOMATION_CREATE,),
+        ),
+        ToolDefinition(
+            "edit_automation",
+            "Replace one owned automation at an exact revision only after an explicit request in the latest user message. Output mode is keep, current, or none; runtime can optionally be copied from the current session.",
+            EditAutomationArguments,
+            _edit_automation,
+            group="automations",
+            label="Automation ändern",
+            icon="edit_calendar",
+            actions=(_AUTOMATION_UPDATE,),
+        ),
+        ToolDefinition(
+            "run_automation",
+            "Queue one manual run of an owned automation at an exact revision only after an explicit request in the latest user message.",
+            RunAutomationArguments,
+            _run_automation,
+            group="automations",
+            label="Automation starten",
+            icon="play_arrow",
+            actions=(_AUTOMATION_RUN,),
+        ),
+        ToolDefinition(
+            "delete_automation",
+            "Permanently delete one owned automation and its execution history at an exact revision only after an explicit request in the latest user message.",
+            DeleteAutomationArguments,
+            _delete_automation,
+            group="automations",
+            label="Automation löschen",
+            icon="delete_forever",
+            actions=(_AUTOMATION_DELETE,),
         ),
         ToolDefinition(
             "memory_write",

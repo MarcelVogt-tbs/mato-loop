@@ -262,6 +262,7 @@ const actionIcon = computed(() => {
   if (props.approval.actionKind === 'edit_skill') return 'edit_note'
   if (props.approval.capability === 'skills.write' || props.approval.actionKind === 'build_skill') return 'auto_awesome'
   if (props.approval.capability === 'integration.private_data.release') return 'cloud_upload'
+  if (props.approval.capability?.startsWith('automation.')) return 'schedule'
   if (props.approval.resourceType === 'url') return 'language'
   if (props.approval.resourceType === 'session_collection') return 'folder_shared'
   if (props.approval.resourceType === 'session') return 'forum'

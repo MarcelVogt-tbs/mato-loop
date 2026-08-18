@@ -219,6 +219,7 @@ async def test_runtime_cleans_stored_audio_when_transaction_fails(monkeypatch) -
         title="Test",
         model_config_id=model.id,
     )
+    db.scalar.side_effect = [session, None, True, True]
 
     with pytest.raises(RuntimeError, match="commit failed"):
         await AgentRuntime.start(
@@ -289,6 +290,7 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         title="Test",
         model_config_id=model.id,
     )
+    db.scalar.side_effect = [session, None, True, True]
     task = asyncio.create_task(
         AgentRuntime.start(
             db,

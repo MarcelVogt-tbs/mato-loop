@@ -324,6 +324,69 @@ def session_browse_permission() -> PermissionRequest:
     )
 
 
+def automation_collection_scope(user_id: UUID, session_id: UUID) -> str:
+    return json.dumps(
+        {"sessionId": str(session_id), "userId": str(user_id)},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def automation_scope(
+    automation_id: UUID, revision: int, user_id: UUID, session_id: UUID
+) -> str:
+    if revision < 1:
+        raise ValueError("automation revision must be positive")
+    return json.dumps(
+        {
+            "automationId": str(automation_id),
+            "revision": revision,
+            "sessionId": str(session_id),
+            "userId": str(user_id),
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _automation_collection_scope(resource_scope: str) -> tuple[UUID, UUID] | None:
+    try:
+        value = json.loads(resource_scope)
+        if set(value) != {"sessionId", "userId"}:
+            return None
+        session_id = UUID(value["sessionId"])
+        user_id = UUID(value["userId"])
+        canonical = automation_collection_scope(user_id, session_id)
+        return (user_id, session_id) if canonical == resource_scope else None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _automation_scope(
+    resource_scope: str,
+) -> tuple[UUID, int, UUID, UUID] | None:
+    try:
+        value = json.loads(resource_scope)
+        if set(value) != {"automationId", "revision", "sessionId", "userId"}:
+            return None
+        automation_id = UUID(value["automationId"])
+        revision = value["revision"]
+        session_id = UUID(value["sessionId"])
+        user_id = UUID(value["userId"])
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            return None
+        canonical = automation_scope(automation_id, revision, user_id, session_id)
+        return (
+            (automation_id, revision, user_id, session_id)
+            if canonical == resource_scope
+            else None
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def memory_write_permission(session_id: UUID, action: str) -> PermissionRequest:
     updating = action == "update"
     return PermissionRequest(
@@ -628,6 +691,32 @@ class PermissionPolicy:
         root_files: RootFileService,
         policy: ToolExecutionPolicy | None = None,
     ) -> PermissionDecision:
+        if request.resource_type in {"automation_collection", "automation"}:
+            scope = (
+                _automation_collection_scope(request.resource_scope)
+                if request.resource_type == "automation_collection"
+                else _automation_scope(request.resource_scope)
+            )
+            user_id, session_id = (
+                scope if request.resource_type == "automation_collection" else scope[2:]
+            ) if scope is not None else (None, None)
+            valid_capability = request.capability in (
+                {"automation.read", "automation.create"}
+                if request.resource_type == "automation_collection"
+                else {
+                    "automation.read",
+                    "automation.update",
+                    "automation.run",
+                    "automation.delete",
+                }
+            )
+            if (
+                not valid_capability
+                or user_id != chat_session.user_id
+                or session_id != chat_session.id
+            ):
+                return PermissionDecision.DENY
+
         if request.resource_type == "session" and request.capability == "session.read":
             try:
                 if UUID(request.resource_scope) == chat_session.id:
@@ -780,6 +869,16 @@ class PermissionPolicy:
             return (
                 _integration_operation_scope(request.resource_scope) is not None
                 and _integration_operation_scope(grant.resource_scope) is not None
+                and request.resource_scope == grant.resource_scope
+            )
+        if request.resource_type == "automation_collection":
+            return (
+                _automation_collection_scope(request.resource_scope) is not None
+                and request.resource_scope == grant.resource_scope
+            )
+        if request.resource_type == "automation":
+            return (
+                _automation_scope(request.resource_scope) is not None
                 and request.resource_scope == grant.resource_scope
             )
         if request.resource_type in {

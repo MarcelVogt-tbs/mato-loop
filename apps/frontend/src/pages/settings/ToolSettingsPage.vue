@@ -467,7 +467,13 @@ const TOOL_DESCRIPTIONS = {
   git_diff: 'Zeigt Änderungen im Git-Arbeitsverzeichnis an.',
   git_log: 'Zeigt den Commit-Verlauf eines Git-Repositorys an.',
   git_add: 'Merkt Änderungen für den nächsten Git-Commit vor.',
-  git_commit: 'Erstellt einen Git-Commit aus den vorgemerkten Änderungen.'
+  git_commit: 'Erstellt einen Git-Commit aus den vorgemerkten Änderungen.',
+  list_automations: 'Listet die eigenen Automationen kompakt auf.',
+  get_automation: 'Liest die vollständige Definition einer Automation.',
+  create_automation: 'Erstellt eine Automation mit Zeitplänen und aktuellem Laufzeitkontext.',
+  edit_automation: 'Ersetzt die Definition einer Automation an einer exakten Revision.',
+  run_automation: 'Startet einen einmaligen Lauf einer Automation.',
+  delete_automation: 'Löscht eine Automation samt Laufhistorie dauerhaft.'
 }
 const form = reactive({
   policies: {},

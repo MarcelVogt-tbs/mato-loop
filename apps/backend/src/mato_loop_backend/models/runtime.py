@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
@@ -25,6 +25,9 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mato_loop_backend.db.base import Base
+
+if TYPE_CHECKING:
+    from mato_loop_backend.models.automation import AutomationRun
 from mato_loop_backend.settings.models import TrustLevel
 
 
@@ -151,6 +154,9 @@ class ChatSession(Base):
             "('pending', 'running', 'completed', 'failed', 'skipped')",
             name="title_generation_status_valid",
         ),
+        CheckConstraint(
+            "session_type IN ('chat', 'automation')", name="session_type_valid"
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -158,6 +164,9 @@ class ChatSession(Base):
         ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
     )
     title: Mapped[str] = mapped_column(String(240), nullable=False, default="Neue Session")
+    session_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="chat", server_default=text("'chat'")
+    )
     title_generation_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=TitleGenerationStatus.PENDING.value
     )
@@ -232,6 +241,11 @@ class Notification(Base):
     session_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    automation_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("automation_runs.id", ondelete="CASCADE", use_alter=True),
+        nullable=True,
+        index=True,
+    )
     kind: Mapped[str] = mapped_column(String(80), nullable=False)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -239,6 +253,10 @@ class Notification(Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    automation_run: Mapped[AutomationRun | None] = relationship(
+        foreign_keys=[automation_run_id]
     )
 
 
@@ -453,6 +471,13 @@ class AgentRun(Base):
         ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="queued", index=True)
+    input_message_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, unique=True
+    )
+    result_message_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, unique=True
+    )
+    required_skill: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     trust_level: Mapped[str] = mapped_column(

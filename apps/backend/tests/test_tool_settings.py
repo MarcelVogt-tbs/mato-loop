@@ -109,6 +109,11 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "system.info": "auto",
         "execution.directory": "auto",
         "process.execute": "ask",
+        "automation.read": "ask",
+        "automation.create": "ask",
+        "automation.update": "ask",
+        "automation.run": "ask",
+        "automation.delete": "disabled",
     }
     assert [group["id"] for group in result["groups"]] == [
         "filesystem",
@@ -116,6 +121,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "web",
         "media",
         "sessions",
+        "automations",
         "memory",
         "agent",
     ]

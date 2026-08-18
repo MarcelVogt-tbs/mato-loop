@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import logging
 from datetime import datetime
@@ -45,6 +46,8 @@ from mato_loop_backend.memory import effective_memory
 from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
     AgentRun,
+    Automation,
+    AutomationRun,
     ChatSession,
     ExecutionAgent,
     MemoryMode,
@@ -76,6 +79,16 @@ from mato_loop_backend.workspace import (
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
+
+
+def _automation_impact_token(automations: list[Automation]) -> str:
+    value = "|".join(
+        f"{item.id}:{item.revision}:{int(item.output_session_required)}"
+        for item in sorted(automations, key=lambda item: item.id)
+    )
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
 _LAST_MESSAGE_AT_UNSET = object()
 _VISIBLE_MESSAGE_ROLES = ("user", "assistant")
 
@@ -728,9 +741,17 @@ async def _owned_session(
 ) -> ChatSession | None:
     if not for_update:
         item = await db.get(ChatSession, session_id)
-        return item if item is not None and item.user_id == user_id else None
+        return (
+            item
+            if item is not None
+            and item.user_id == user_id
+            and item.session_type != "automation"
+            else None
+        )
     statement = select(ChatSession).where(
-        ChatSession.id == session_id, ChatSession.user_id == user_id
+        ChatSession.id == session_id,
+        ChatSession.user_id == user_id,
+        ChatSession.session_type == "chat",
     )
     if for_update:
         statement = statement.with_for_update()
@@ -942,7 +963,7 @@ async def list_sessions(
             activity_at.label("activity_at"),
         )
         .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
-        .where(ChatSession.user_id == user.id)
+        .where(ChatSession.user_id == user.id, ChatSession.session_type == "chat")
     )
     if cursor is not None:
         cursor_pinned, cursor_activity_at, cursor_id = _decode_session_cursor(
@@ -1320,15 +1341,104 @@ async def update_session(
     return await _session_payload(db, item)
 
 
+@router.get("/{session_id}/delete-impact")
+async def session_delete_impact(
+    session_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, int | str]:
+    if await _owned_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
+    linked = list(
+        (
+            await db.scalars(
+                select(Automation).where(
+                    Automation.user_id == user.id,
+                    Automation.output_session_id == session_id,
+                )
+            )
+        ).all()
+    )
+    return {
+        "automationCount": len(linked),
+        "requiredAutomationCount": sum(item.output_session_required for item in linked),
+        "automationImpact": _automation_impact_token(linked),
+    }
+
+
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_session(
     session_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    automation_mode: Annotated[
+        Literal["unlink", "deleteAutomations"] | None,
+        Query(alias="automationMode"),
+    ] = None,
+    automation_impact: Annotated[
+        str | None,
+        Query(alias="automationImpact", min_length=64, max_length=64),
+    ] = None,
 ) -> None:
-    item = await _owned_session(db, session_id, user.id, for_update=True)
+    item = await db.scalar(
+        select(ChatSession).where(
+            ChatSession.id == session_id,
+            ChatSession.user_id == user.id,
+            ChatSession.session_type == "chat",
+        )
+    )
     if item is None:
         raise ApiError(404, "session.notFound")
+    linked_automations = list(
+        (
+            await db.scalars(
+                select(Automation).where(
+                    Automation.user_id == user.id,
+                    Automation.output_session_id == session_id,
+                )
+            )
+        ).all()
+    )
+    required_count = sum(item.output_session_required for item in linked_automations)
+    if automation_mode is not None and automation_impact != _automation_impact_token(
+        linked_automations
+    ):
+        raise ApiError(409, "session.automationImpactChanged")
+    if required_count and automation_mode != "deleteAutomations":
+        raise ApiError(
+            409,
+            "session.automationOutputRequired",
+            params={
+                "automationCount": required_count,
+                "totalAutomationCount": len(linked_automations),
+            },
+        )
+    if linked_automations and automation_mode is None:
+        raise ApiError(
+            409,
+            "session.automationOutputLinked",
+            params={"automationCount": len(linked_automations)},
+        )
+    automation_agent_run_ids = (
+        list(
+            (
+                await db.scalars(
+                    select(AgentRun.id)
+                    .join(AutomationRun, AutomationRun.agent_run_id == AgentRun.id)
+                    .where(
+                        AutomationRun.automation_id.in_(
+                            [automation.id for automation in linked_automations]
+                        ),
+                        AgentRun.status.in_(
+                            ["queued", "running", "waiting_approval", "waiting_input"]
+                        ),
+                    )
+                )
+            ).all()
+        )
+        if automation_mode == "deleteAutomations" and linked_automations
+        else []
+    )
     active_runs = list(
         (
             await db.scalars(
@@ -1339,31 +1449,158 @@ async def delete_session(
             )
         ).all()
     )
-    for run in active_runs:
-        await AgentRuntime.cancel_and_wait(run.id)
+    if automation_agent_run_ids or active_runs:
+        await db.rollback()
+        for run_id in [*automation_agent_run_ids, *(run.id for run in active_runs)]:
+            await AgentRuntime.cancel_and_wait(run_id)
+    linked_automations = list(
+        (
+            await db.scalars(
+                select(Automation)
+                .where(
+                    Automation.user_id == user.id,
+                    Automation.output_session_id == session_id,
+                )
+                .with_for_update()
+            )
+        ).all()
+    )
+    item = await _owned_session(db, session_id, user.id, for_update=True)
+    if item is None:
+        raise ApiError(404, "session.notFound")
+    linked_automations = list(
+        (
+            await db.scalars(
+                select(Automation)
+                .where(
+                    Automation.user_id == user.id,
+                    Automation.output_session_id == session_id,
+                )
+                .with_for_update()
+            )
+        ).all()
+    )
+    required_count = sum(item.output_session_required for item in linked_automations)
+    if automation_mode is not None and automation_impact != _automation_impact_token(
+        linked_automations
+    ):
+        raise ApiError(409, "session.automationImpactChanged")
+    if required_count and automation_mode != "deleteAutomations":
+        raise ApiError(
+            409,
+            "session.automationOutputRequired",
+            params={
+                "automationCount": required_count,
+                "totalAutomationCount": len(linked_automations),
+            },
+        )
+    if linked_automations and automation_mode is None:
+        raise ApiError(
+            409,
+            "session.automationOutputLinked",
+            params={"automationCount": len(linked_automations)},
+        )
+    if automation_mode == "deleteAutomations" and linked_automations:
+        late_agent_run_ids = list(
+            (
+                await db.scalars(
+                    select(AgentRun.id)
+                    .join(AutomationRun, AutomationRun.agent_run_id == AgentRun.id)
+                    .where(
+                        AutomationRun.automation_id.in_(
+                            [automation.id for automation in linked_automations]
+                        ),
+                        AgentRun.status.in_(
+                            ["queued", "running", "waiting_approval", "waiting_input"]
+                        ),
+                    )
+                )
+            ).all()
+        )
+        if late_agent_run_ids:
+            await db.rollback()
+            for run_id in late_agent_run_ids:
+                await AgentRuntime.cancel_and_wait(run_id)
+            return await delete_session(
+                session_id,
+                user,
+                db,
+                automation_mode=automation_mode,
+                automation_impact=automation_impact,
+            )
+    if automation_mode == "unlink":
+        for automation in linked_automations:
+            automation.output_session_id = None
+            automation.revision += 1
+    execution_sessions = []
+    if automation_mode == "deleteAutomations":
+        execution_sessions = list(
+            (
+                await db.scalars(
+                    select(ChatSession).where(
+                        ChatSession.id.in_(
+                            [automation.execution_session_id for automation in linked_automations]
+                        )
+                    )
+                )
+            ).all()
+        )
     session_storage = SessionStorage()
+    storage_session_ids = [
+        session_id,
+        *(execution_session.id for execution_session in execution_sessions),
+    ]
+    trashed_trees = []
     try:
-        trashed = await asyncio.to_thread(session_storage.trash_session, session_id)
+        for storage_session_id in storage_session_ids:
+            trashed_trees.append(
+                await asyncio.to_thread(
+                    session_storage.trash_session, storage_session_id
+                )
+            )
     except (OSError, SessionStorageError) as exc:
+        for storage_session_id, trashed in zip(
+            storage_session_ids, trashed_trees, strict=False
+        ):
+            if trashed is not None:
+                try:
+                    await asyncio.to_thread(
+                        session_storage.restore_session, storage_session_id, trashed
+                    )
+                except Exception:
+                    logger.exception("Partially trashed session storage could not be restored")
         logger.exception("Session storage could not be moved to trash")
         raise ApiError(500, "session.storageUnavailable") from exc
 
     async def restore_tree() -> None:
-        if trashed is None:
-            return
-        try:
-            await asyncio.to_thread(session_storage.restore_session, session_id, trashed)
-        except Exception:
-            logger.exception("Session storage could not be restored after database failure")
+        for storage_session_id, trashed in zip(
+            storage_session_ids, trashed_trees, strict=False
+        ):
+            if trashed is None:
+                continue
+            try:
+                await asyncio.to_thread(
+                    session_storage.restore_session, storage_session_id, trashed
+                )
+            except Exception:
+                logger.exception("Session storage could not be restored after database failure")
 
     async def purge_tree() -> None:
-        try:
-            await asyncio.to_thread(session_storage.purge_trashed, trashed)
-        except Exception:
-            logger.exception("Deleted session storage could not be removed from trash")
+        for trashed in trashed_trees:
+            try:
+                await asyncio.to_thread(session_storage.purge_trashed, trashed)
+            except Exception:
+                logger.exception("Deleted session storage could not be removed from trash")
 
     commit_task: asyncio.Task[None] | None = None
     try:
+        for automation in linked_automations:
+            if automation_mode == "deleteAutomations":
+                await db.delete(automation)
+        if automation_mode == "deleteAutomations":
+            await db.flush()
+            for execution_session in execution_sessions:
+                await db.delete(execution_session)
         await db.delete(item)
         commit_task = asyncio.create_task(db.commit())
         await asyncio.shield(commit_task)
@@ -1394,6 +1631,8 @@ async def undo_user_message(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
+    if await _owned_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
     try:
         result = await ChatHistoryService.undo_user_message(
             db,
@@ -1419,6 +1658,8 @@ async def retry_failed_message(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
+    if await _owned_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
     try:
         result = await ChatHistoryService.retry_failed_message(
             db,
@@ -1455,7 +1696,12 @@ async def download_attachment(
             MessageAttachment.id == attachment_id,
             Message.id == message_id,
             Message.session_id == session_id,
-            Message.chat_session.has(ChatSession.user_id == user.id),
+            Message.chat_session.has(
+                and_(
+                    ChatSession.user_id == user.id,
+                    ChatSession.session_type == "chat",
+                )
+            ),
         )
     )
     if attachment is None:

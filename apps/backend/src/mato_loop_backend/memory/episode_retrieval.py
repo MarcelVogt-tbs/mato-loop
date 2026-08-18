@@ -82,6 +82,7 @@ def _candidate_filters(
     filters = [
         ChatSession.user_id == owner_id,
         ChatSession.id != current_session_id,
+        ChatSession.session_type == "chat",
         *_eligible_filters(),
     ]
     if readable_by == TrustLevel.PUBLIC:

@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from mato_loop_backend.api.routes.agent_identity import router as agent_identity_router
 from mato_loop_backend.api.routes.approvals import router as approvals_router
 from mato_loop_backend.api.routes.auth import router as auth_router
+from mato_loop_backend.api.routes.automations import router as automations_router
 from mato_loop_backend.api.routes.execution_agents import router as execution_agents_router
 from mato_loop_backend.api.routes.file_media_settings import router as file_media_settings_router
 from mato_loop_backend.api.routes.health import router as health_router
@@ -21,6 +22,7 @@ from mato_loop_backend.api.routes.workspace import router as workspace_router
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["health"])
 api_router.include_router(auth_router, tags=["auth"])
+api_router.include_router(automations_router, tags=["automations"])
 api_router.include_router(users_router, tags=["users"])
 api_router.include_router(execution_agents_router, tags=["execution-agents"])
 api_router.include_router(file_media_settings_router, tags=["file-media-settings"])

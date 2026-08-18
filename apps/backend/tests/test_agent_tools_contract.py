@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -43,7 +44,14 @@ from mato_loop_backend.memory.retrieval import (
     MemoryRetrievalStrategy,
     MemoryRetrieveMode,
 )
-from mato_loop_backend.models import ChatSession, MemoryRecord, Message, MessageAttachment
+from mato_loop_backend.models import (
+    Automation,
+    AutomationRun,
+    ChatSession,
+    MemoryRecord,
+    Message,
+    MessageAttachment,
+)
 from mato_loop_backend.providers import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
@@ -908,6 +916,208 @@ def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:
     assert all(
         "toolType" not in schema and "tool_type" not in schema
         for schema in tool_registry.schemas(IntegrationSettings(), "read-write")
+    )
+
+
+def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> None:
+    definitions = {
+        name: tool_registry._definitions[name]
+        for name in {
+            "list_automations",
+            "get_automation",
+            "create_automation",
+            "edit_automation",
+            "run_automation",
+            "delete_automation",
+        }
+    }
+    catalog = tool_registry.catalog(ToolSettings(), IntegrationSettings())
+    group = next(item for item in catalog if item["id"] == "automations")
+    catalog_tools = {item["name"]: item for item in group["tools"]}
+
+    assert set(catalog_tools) == set(definitions)
+    assert all(not definition.write for definition in definitions.values())
+    assert definitions["create_automation"].actions[0].mutates
+    assert definitions["edit_automation"].actions[0].mutates
+    assert definitions["run_automation"].actions[0].mutates
+    assert definitions["delete_automation"].actions[0].mutates
+    assert tool_registry.action_default("automation.read") == ToolExecutionPolicy.ASK
+    assert tool_registry.action_default("automation.create") == ToolExecutionPolicy.ASK
+    assert tool_registry.action_default("automation.update") == ToolExecutionPolicy.ASK
+    assert tool_registry.action_default("automation.run") == ToolExecutionPolicy.ASK
+    assert tool_registry.action_default("automation.delete") == ToolExecutionPolicy.DISABLED
+    for tool in catalog_tools.values():
+        assert tool["actions"][0]["allowedPolicies"] == ["disabled", "ask", "auto"]
+
+    create = definitions["create_automation"].schema()["parameters"]
+    assert "source_session_id" not in create["properties"]
+    assert "output_session_id" not in create["properties"]
+    assert create["properties"]["schedules"]["maxItems"] == 50
+    edit = definitions["edit_automation"].schema()["parameters"]
+    assert edit["properties"]["output_mode"]["enum"] == ["keep", "current", "none"]
+    assert "expected_revision" in edit["required"]
+
+
+async def test_automation_argument_validation_rejects_invalid_schedule_and_output_mode(
+    tmp_path,
+) -> None:
+    invalid_schedule = ToolCall(
+        "create-invalid",
+        "create_automation",
+        {
+            "name": "Test",
+            "task": "Do work",
+            "schedules": [
+                {"cron": "0 0 0 * * *", "timezone": "UTC", "enabled": True}
+            ],
+        },
+    )
+    invalid_output = ToolCall(
+        "edit-invalid",
+        "edit_automation",
+        {
+            "automation_id": str(uuid4()),
+            "expected_revision": 1,
+            "name": "Test",
+            "task": "Do work",
+            "schedules": [{"cron": "0 0 * * *", "timezone": "UTC"}],
+            "output_mode": "none",
+            "output_session_required": True,
+        },
+    )
+
+    first = await tool_registry.execute(
+        invalid_schedule, _context(tmp_path, invalid_schedule)
+    )
+    second = await tool_registry.execute(invalid_output, _context(tmp_path, invalid_output))
+
+    assert first.metadata == {"errorCode": "tool.invalidArguments"}
+    assert second.metadata == {"errorCode": "tool.invalidArguments"}
+
+
+async def test_create_automation_approval_uses_current_session_boundaries(
+    tmp_path, monkeypatch
+) -> None:
+    call = ToolCall(
+        "create",
+        "create_automation",
+        {
+            "name": "Bericht",
+            "task": "Erstelle den Bericht",
+            "enabled": True,
+            "schedules": [{"cron": "0 8 * * *", "timezone": "Europe/Berlin"}],
+            "deliver_to_current_session": False,
+            "output_session_required": True,
+        },
+    )
+    context = _context(tmp_path, call)
+    created = Automation(
+        id=uuid4(),
+        user_id=context.session.user_id,
+        execution_session_id=uuid4(),
+        name="Bericht",
+        task="Erstelle den Bericht",
+        revision=1,
+        enabled=True,
+    )
+    monkeypatch.setattr(
+        tools_module.AutomationService, "skill", AsyncMock(return_value=None)
+    )
+    create = AsyncMock(return_value=created)
+    monkeypatch.setattr(tools_module.AutomationService, "create", create)
+    monkeypatch.setattr(
+        tools_module.AutomationService, "provision_and_commit", AsyncMock()
+    )
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    permission = context.ask_handler.await_args.args[0]
+    assert permission.capability == "automation.create"
+    assert permission.title == "Automation erstellen?"
+    assert permission.approval_details["automationPreview"]["output"] == "current"
+    assert create.await_args.kwargs["source_session_id"] == context.session.id
+    assert create.await_args.kwargs["output_session_id"] == context.session.id
+
+
+async def test_run_automation_rechecks_revision_after_approval_and_queues_only(
+    tmp_path, monkeypatch
+) -> None:
+    automation_id = uuid4()
+    call = ToolCall(
+        "run",
+        "run_automation",
+        {"automation_id": str(automation_id), "expected_revision": 3},
+    )
+    context = _context(tmp_path, call)
+    automation = Automation(
+        id=automation_id,
+        user_id=context.session.user_id,
+        execution_session_id=uuid4(),
+        name="Bericht",
+        task="Bericht",
+        revision=3,
+    )
+    run = AutomationRun(
+        id=uuid4(),
+        automation_id=automation.id,
+        automation_revision=3,
+        trigger="manual",
+        status="queued",
+        definition_snapshot={},
+    )
+    monkeypatch.setattr(
+        tools_module.AutomationService, "owned", AsyncMock(return_value=automation)
+    )
+    enqueue = AsyncMock(return_value=run)
+    monkeypatch.setattr(tools_module.AutomationService, "enqueue_manual", enqueue)
+    start = Mock()
+    monkeypatch.setattr(tools_module.AutomationScheduler, "start", start)
+
+    result = await tool_registry.execute(call, context)
+    await asyncio.sleep(0)
+
+    assert not result.is_error
+    assert context.ask_handler.await_args.args[0].resource_type == "automation"
+    assert enqueue.await_args.kwargs["expected_revision"] == 3
+    start.assert_called_once_with()
+
+
+async def test_delete_automation_approval_calls_central_revision_checked_service(
+    tmp_path, monkeypatch
+) -> None:
+    automation_id = uuid4()
+    call = ToolCall(
+        "delete",
+        "delete_automation",
+        {"automation_id": str(automation_id), "expected_revision": 7},
+    )
+    context = _context(tmp_path, call)
+    automation = Automation(
+        id=automation_id,
+        user_id=context.session.user_id,
+        execution_session_id=uuid4(),
+        name="Alt",
+        task="Alt",
+        revision=7,
+    )
+    monkeypatch.setattr(
+        tools_module.AutomationService, "owned", AsyncMock(return_value=automation)
+    )
+    delete = AsyncMock()
+    monkeypatch.setattr(tools_module.AutomationService, "delete", delete)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    permission = context.ask_handler.await_args.args[0]
+    assert permission.capability == "automation.delete"
+    assert permission.risk_level == "high"
+    delete.assert_awaited_once_with(
+        context.db,
+        automation.id,
+        context.session.user_id,
+        expected_revision=7,
     )
 
 async def test_effective_toolset_rejects_a_call_that_was_not_offered(tmp_path) -> None:

@@ -101,12 +101,12 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     prompt_tokens = estimate_tokens(prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert len(schemas) == 35
+    assert len(schemas) == 41
     assert {"load_skill", "build_skill", "edit_skill"} <= {
         schema["name"] for schema in schemas
     }
     build_skill = next(schema for schema in schemas if schema["name"] == "build_skill")
     assert set(build_skill["parameters"]["properties"]) == {"brief", "name_hint"}
-    assert prompt_tokens <= 7_000, prompt_tokens
-    assert schema_tokens <= 6_250, schema_tokens
-    assert prompt_tokens + schema_tokens <= 13_250
+    assert prompt_tokens <= 7_100, prompt_tokens
+    assert schema_tokens <= 7_400, schema_tokens
+    assert prompt_tokens + schema_tokens <= 14_500

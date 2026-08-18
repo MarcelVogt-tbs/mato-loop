@@ -62,7 +62,13 @@ const TOOL_DISPLAY = {
   git_diff: { label: 'Git-Änderungen anzeigen', activity: 'Git-Änderungen werden gelesen', icon: 'difference' },
   git_log: { label: 'Git-Verlauf anzeigen', activity: 'Git-Verlauf wird gelesen', icon: 'history' },
   git_add: { label: 'Git-Änderungen vormerken', activity: 'Git-Änderungen werden vorgemerkt', icon: 'add_task' },
-  git_commit: { label: 'Git-Commit erstellen', activity: 'Git-Commit wird erstellt', icon: 'commit' }
+  git_commit: { label: 'Git-Commit erstellen', activity: 'Git-Commit wird erstellt', icon: 'commit' },
+  list_automations: { label: 'Automationen anzeigen', activity: 'Automationen werden geladen', icon: 'view_list' },
+  get_automation: { label: 'Automation anzeigen', activity: 'Automation wird geladen', icon: 'schedule' },
+  create_automation: { label: 'Automation erstellen', activity: 'Automation wird erstellt', icon: 'add_task' },
+  edit_automation: { label: 'Automation ändern', activity: 'Automation wird geändert', icon: 'edit_calendar' },
+  run_automation: { label: 'Automation starten', activity: 'Automation wird gestartet', icon: 'play_arrow' },
+  delete_automation: { label: 'Automation löschen', activity: 'Automation wird gelöscht', icon: 'delete_forever' }
 }
 
 function truncate(value, maxLength = 140) {
@@ -241,6 +247,13 @@ export function toolSummary(tool) {
     return argumentsValue.cursor_id ? 'Memory-Übersicht fortsetzen' : 'Memory-Übersicht'
   }
   if (tool?.name === 'session_browse') return 'Letzte Sessions'
+  if (tool?.name === 'list_automations') return 'Eigene Automationen'
+  if (['get_automation', 'run_automation', 'delete_automation'].includes(tool?.name)) {
+    return argumentsValue.automation_id ? `Automation ${truncate(argumentsValue.automation_id, 36)}` : ''
+  }
+  if (['create_automation', 'edit_automation'].includes(tool?.name)) {
+    return truncate(argumentsValue.name || argumentsValue.automation_id || '')
+  }
   if (['shell_run', 'shell.run'].includes(tool?.name)) {
     return truncate(argumentsValue.command)
   }
