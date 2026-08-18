@@ -84,7 +84,6 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
 import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
-import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 import { notificationTargetRoute } from 'src/utils/notification-target'
@@ -93,7 +92,6 @@ defineOptions({ name: 'NotificationCenterApp' })
 const emit = defineEmits(['close'])
 
 const router = useRouter()
-const controlCenter = useControlCenterStore()
 const notifications = useInAppNotificationStore()
 const timestampNow = ref(new Date())
 let timestampTimer = null
@@ -113,7 +111,6 @@ async function openNotification(notification) {
   if (target) {
     const failure = await router.push(target)
     if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
-    controlCenter.open = false
   }
   try {
     if (!notification.readAt) await notifications.markRead(notification.id)

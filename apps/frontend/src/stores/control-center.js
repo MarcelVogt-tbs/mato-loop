@@ -11,11 +11,21 @@ export const MAX_CONTROL_CENTER_SPLIT_RATIO = 70
 const SPLIT_STORAGE_KEY = 'matoLoopWorkspaceSplitRatio'
 
 function defaultState() {
-  return { tabs: [{ appId: 'files', pinned: false }], activeAppId: 'files' }
+  return {
+    tabs: [{ appId: 'files', pinned: false }],
+    activeAppId: 'files',
+    open: false,
+    fileView: null
+  }
 }
 
 function copyState(state) {
-  return { tabs: state.tabs.map((tab) => ({ ...tab })), activeAppId: state.activeAppId }
+  return {
+    tabs: state.tabs.map((tab) => ({ ...tab })),
+    activeAppId: state.activeAppId,
+    open: state.open === true,
+    fileView: state.fileView ? { ...state.fileView } : null
+  }
 }
 
 function validSplitRatio(value) {
@@ -51,22 +61,63 @@ function normalizeState(value) {
   const activeAppId = tabs.some((tab) => tab.appId === value?.activeAppId)
     ? value.activeAppId
     : tabs[0]?.appId || null
-  return { tabs, activeAppId }
+  const fileView = normalizeFileView(value?.fileView)
+  return { tabs, activeAppId, open: value?.open === true, fileView }
+}
+
+function normalizeFileView(value) {
+  if (!['session', 'filesystem'].includes(value?.scope)) return null
+  if (typeof value.selectedPath !== 'string' || !value.selectedPath) return null
+  if (!['file', 'directory'].includes(value.selectedKind)) return null
+  const viewedFilePath = typeof value.viewedFilePath === 'string' && value.viewedFilePath === value.selectedPath
+    ? value.viewedFilePath
+    : null
+  const rootIdentity = typeof value.rootIdentity === 'string' && value.rootIdentity
+    ? value.rootIdentity
+    : null
+  const snapshot = ['executionAgentId', 'rootId', 'rootRevision', 'workingDirectory']
+    .map((key) => typeof value[key] === 'string' && value[key] ? value[key] : null)
+  if (!rootIdentity && snapshot.some(Boolean)) return null
+  if (value.scope === 'session' && snapshot.some(Boolean)) return null
+  if (value.scope === 'filesystem' && rootIdentity && snapshot.some((item) => !item)) return null
+  return {
+    scope: value.scope,
+    selectedPath: value.selectedPath,
+    selectedKind: value.selectedKind,
+    viewedFilePath,
+    rootIdentity,
+    executionAgentId: snapshot[0],
+    rootId: snapshot[1],
+    rootRevision: snapshot[2],
+    workingDirectory: snapshot[3]
+  }
 }
 
 export function controlCenterRequestState(state) {
   return {
     tabs: state.tabs.map((tab) => ({ app_id: tab.appId, pinned: tab.pinned })),
-    active_app_id: state.activeAppId
+    active_app_id: state.activeAppId,
+    open: state.open === true,
+    file_view: state.fileView
+      ? {
+          scope: state.fileView.scope,
+          selected_path: state.fileView.selectedPath,
+          selected_kind: state.fileView.selectedKind,
+          viewed_file_path: state.fileView.viewedFilePath,
+          root_identity: state.fileView.rootIdentity,
+          execution_agent_id: state.fileView.executionAgentId,
+          root_id: state.fileView.rootId,
+          root_revision: state.fileView.rootRevision,
+          working_directory: state.fileView.workingDirectory
+        }
+      : null
   }
 }
 
 export const useControlCenterStore = defineStore('control-center', {
   state: () => ({
-    open: false,
     sessionId: null,
-    tabs: defaultState().tabs,
-    activeAppId: defaultState().activeAppId,
+    ...defaultState(),
     activeGlobalSectionId: null,
     splitRatio: storedSplitRatio(),
     ready: true,
@@ -84,9 +135,12 @@ export const useControlCenterStore = defineStore('control-center', {
       const state = normalizeState(value)
       this.tabs = state.tabs
       this.activeAppId = state.activeAppId
+      this.open = state.open
+      this.fileView = state.fileView
     },
     syncSession(session) {
       const sessionId = session?.id || null
+      if (this.sessionId !== sessionId) this.activeGlobalSectionId = null
       const requestedAppId = this.sessionId === sessionId ? this.requestedAppId : null
       this.requestGeneration += 1
       this.ready = true
@@ -104,7 +158,10 @@ export const useControlCenterStore = defineStore('control-center', {
       this.ready = false
       this.saving = false
       this.pendingState = null
-      if (this.sessionId !== sessionId) this.requestedAppId = null
+      if (this.sessionId !== sessionId) {
+        this.requestedAppId = null
+        this.activeGlobalSectionId = null
+      }
       this.sessionId = sessionId
       this.confirmedState = normalizeState(session?.controlCenter || defaultState())
       this.applyState(this.confirmedState)
@@ -176,29 +233,46 @@ export const useControlCenterStore = defineStore('control-center', {
     },
     async openApp(appId) {
       if (controlCenterGlobalSectionIds.has(appId)) {
-        this.open = true
         this.activeGlobalSectionId = appId
         this.requestedAppId = null
-        return
+        return this.setOpen(true)
       }
       if (!controlCenterIntegrationIds.has(appId)) return
-      this.open = true
       this.activeGlobalSectionId = null
       if (!this.ready) {
+        this.open = true
         this.requestedAppId = appId
         return null
       }
       const exists = this.tabs.some((tab) => tab.appId === appId)
       return this.save({
         tabs: exists ? this.tabs : [...this.tabs, { appId, pinned: false }],
-        activeAppId: appId
+        activeAppId: appId,
+        open: true,
+        fileView: this.fileView
+      })
+    },
+    setOpen(open) {
+      return this.save({
+        tabs: this.tabs,
+        activeAppId: this.activeAppId,
+        open,
+        fileView: this.fileView
+      })
+    },
+    setFileView(fileView) {
+      return this.save({
+        tabs: this.tabs,
+        activeAppId: this.activeAppId,
+        open: this.open,
+        fileView
       })
     },
     async activate(appId) {
       if (!this.tabs.some((tab) => tab.appId === appId)) return
       this.activeGlobalSectionId = null
       if (appId === this.activeAppId) return
-      return this.save({ tabs: this.tabs, activeAppId: appId })
+      return this.save({ tabs: this.tabs, activeAppId: appId, open: this.open, fileView: this.fileView })
     },
     async removeIntegration(appId) {
       const index = this.tabs.findIndex((tab) => tab.appId === appId)
@@ -207,7 +281,7 @@ export const useControlCenterStore = defineStore('control-center', {
       const activeAppId = this.activeAppId === appId
         ? this.tabs[index + 1]?.appId || this.tabs[index - 1]?.appId || null
         : this.activeAppId
-      return this.save({ tabs, activeAppId })
+      return this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
     },
     async reorderIntegration(appId, targetAppId, after = false) {
       if (appId === targetAppId) return
@@ -218,7 +292,7 @@ export const useControlCenterStore = defineStore('control-center', {
       const tabs = [...remaining]
       tabs.splice(targetIndex + (after ? 1 : 0), 0, moved)
       if (tabs.every((tab, index) => tab.appId === this.tabs[index]?.appId)) return
-      return this.save({ tabs, activeAppId: this.activeAppId })
+      return this.save({ tabs, activeAppId: this.activeAppId, open: this.open, fileView: this.fileView })
     },
     async moveIntegration(appId, offset) {
       const index = this.tabs.findIndex((tab) => tab.appId === appId)

@@ -34,6 +34,18 @@ function response(tabs, activeAppId) {
   return { data: { controlCenter: { tabs, activeAppId } } }
 }
 
+const sessionFileView = {
+  scope: 'session',
+  selectedPath: 'files/drafts/draft-1/plan.md',
+  selectedKind: 'file',
+  viewedFilePath: 'files/drafts/draft-1/plan.md',
+  rootIdentity: null,
+  executionAgentId: null,
+  rootId: null,
+  rootRevision: null,
+  workingDirectory: null
+}
+
 describe('control center store', () => {
   beforeEach(() => {
     delete globalThis.localStorage
@@ -53,6 +65,8 @@ describe('control center store', () => {
     expect(store.tabs).toEqual([tab('files')])
     expect(store.activeAppId).toBe('files')
     expect(store.activeContentId).toBe('files')
+    expect(store.open).toBe(false)
+    expect(store.fileView).toBeNull()
   })
 
   it('keeps global sections outside the integration manifest', () => {
@@ -80,7 +94,17 @@ describe('control center store', () => {
     expect(useControlCenterStore().splitRatio).toBe(DEFAULT_CONTROL_CENTER_SPLIT_RATIO)
   })
 
-  it('opens global sections without changing session state', async () => {
+  it('opens global sections while persisting the panel state', async () => {
+    api.patch.mockResolvedValue({
+      data: {
+        controlCenter: {
+          tabs: [tab('files')],
+          activeAppId: 'files',
+          open: true,
+          fileView: null
+        }
+      }
+    })
     const store = useControlCenterStore()
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
 
@@ -89,10 +113,10 @@ describe('control center store', () => {
     expect(store.activeGlobalSectionId).toBe('notifications')
     expect(store.activeContentId).toBe('notifications')
     expect(store.tabs).toEqual([tab('files')])
-    expect(api.patch).not.toHaveBeenCalled()
+    expect(api.patch).toHaveBeenCalledOnce()
 
     store.syncSession({ id: 'session-2', controlCenter: { tabs: [tab('calendar')], activeAppId: 'calendar' } })
-    expect(store.activeContentId).toBe('notifications')
+    expect(store.activeContentId).toBe('calendar')
     await store.activate('calendar')
     expect(store.activeGlobalSectionId).toBeNull()
     expect(store.activeContentId).toBe('calendar')
@@ -132,7 +156,9 @@ describe('control center store', () => {
           { app_id: 'files', pinned: false },
           { app_id: 'calendar', pinned: false }
         ],
-        active_app_id: 'calendar'
+        active_app_id: 'calendar',
+        open: true,
+        file_view: null
       }
     })
   })
@@ -220,10 +246,58 @@ describe('control center store', () => {
           { app_id: 'files', pinned: false },
           { app_id: 'calendar', pinned: false }
         ],
-        active_app_id: 'calendar'
+        active_app_id: 'calendar',
+        open: true,
+        file_view: null
       }
     })
     expect(state.activeAppId).toBe('calendar')
+  })
+
+  it('restores and persists the open file view as session state', async () => {
+    const store = useControlCenterStore()
+    store.syncSession({
+      id: 'session-1',
+      controlCenter: {
+        tabs: [tab('files')],
+        activeAppId: 'files',
+        open: true,
+        fileView: sessionFileView
+      }
+    })
+    api.patch.mockResolvedValue({
+      data: {
+        controlCenter: {
+          tabs: [tab('files')],
+          activeAppId: 'files',
+          open: false,
+          fileView: sessionFileView
+        }
+      }
+    })
+
+    await store.setOpen(false)
+
+    expect(store.open).toBe(false)
+    expect(store.fileView).toEqual(sessionFileView)
+    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
+      control_center: {
+        tabs: [{ app_id: 'files', pinned: false }],
+        active_app_id: 'files',
+        open: false,
+        file_view: {
+          scope: 'session',
+          selected_path: sessionFileView.selectedPath,
+          selected_kind: 'file',
+          viewed_file_path: sessionFileView.viewedFilePath,
+          root_identity: null,
+          execution_agent_id: null,
+          root_id: null,
+          root_revision: null,
+          working_directory: null
+        }
+      }
+    })
   })
 
   it('defers integration shortcuts until authoritative session state is loaded', async () => {

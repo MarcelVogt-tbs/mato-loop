@@ -72,7 +72,6 @@ import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vu
 import QuestionDock from 'components/QuestionDock.vue'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
-import { useControlCenterStore } from 'stores/control-center'
 import { useQuestionStore } from 'stores/questions'
 import { formatRelativeDateTime } from 'src/utils/date-time'
 
@@ -82,7 +81,6 @@ const emit = defineEmits(['close'])
 const router = useRouter()
 const approvals = useApprovalStore()
 const chat = useChatStore()
-const controlCenter = useControlCenterStore()
 const questions = useQuestionStore()
 const selectedType = ref('all')
 const typeOptions = [
@@ -109,7 +107,6 @@ async function openSession(sessionId) {
   if (!sessionId) return
   const failure = await router.push({ name: 'chat', query: { session: sessionId } })
   if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
-  controlCenter.open = false
 }
 
 onMounted(load)

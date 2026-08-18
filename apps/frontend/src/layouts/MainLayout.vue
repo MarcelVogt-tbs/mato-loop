@@ -756,11 +756,12 @@ async function openControlCenter() {
 }
 
 async function setControlCenterOpen(open) {
-  if (open) {
-    controlCenter.open = true
-    return
+  if (!open && !await confirmDiscardedEdit()) return
+  try {
+    await controlCenter.setOpen(open)
+  } catch {
+    // The central API interceptor displays the error and restores the previous state.
   }
-  if (await confirmDiscardedEdit()) controlCenter.open = false
 }
 
 watch(
@@ -769,10 +770,6 @@ watch(
     if (open && narrow) drawerOpen.value = false
   }
 )
-
-watch(() => route.name, (name) => {
-  if (name !== 'chat') controlCenter.open = false
-})
 
 onBeforeRouteUpdate(confirmDiscardedEdit)
 onBeforeRouteLeave(confirmDiscardedEdit)

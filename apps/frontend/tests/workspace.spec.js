@@ -18,6 +18,7 @@ import {
   withFileSuffix,
   useWorkspaceStore
 } from '../src/stores/workspace'
+import { useControlCenterStore } from '../src/stores/control-center'
 
 function liveContext(operations) {
   return {
@@ -248,6 +249,147 @@ describe('workspace store', () => {
     await expect(workspace.createDirectory('.', 'blocked')).rejects.toThrow('Tool file contexts are read-only')
     workspace.returnToCurrentContext()
     expect(workspace.rootIdentity).toBeNull()
+  })
+
+  it('tracks viewer changes independently from directory refreshes', async () => {
+    api.get.mockResolvedValue({ data: { entries: [] } })
+    const workspace = useWorkspaceStore()
+    const initialVersion = workspace.viewVersion
+
+    workspace.openEntry({ kind: 'file', name: 'one.txt', path: 'one.txt' })
+    const openedVersion = workspace.viewVersion
+    await workspace.refresh()
+    workspace.closeViewer()
+
+    expect(openedVersion).toBe(initialVersion + 1)
+    expect(workspace.viewVersion).toBe(openedVersion + 1)
+  })
+
+  it('restores a persisted session draft and records closing only the viewer', async () => {
+    const path = 'files/drafts/draft-1/plan.md'
+    const fileView = {
+      scope: 'session',
+      selectedPath: path,
+      selectedKind: 'file',
+      viewedFilePath: path,
+      rootIdentity: null,
+      executionAgentId: null,
+      rootId: null,
+      rootRevision: null,
+      workingDirectory: null
+    }
+    const controlCenter = useControlCenterStore()
+    controlCenter.syncSession({
+      id: 'session-a',
+      controlCenter: {
+        tabs: [{ appId: 'files', pinned: false }],
+        activeAppId: 'files',
+        open: true,
+        fileView
+      }
+    })
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a' })
+
+    workspace.restoreView(controlCenter.fileView)
+
+    expect(workspace.scope).toBe('session')
+    expect(workspace.selectedPath).toBe(path)
+    expect(workspace.selectedKind).toBe('file')
+    expect(workspace.viewedEntry).toEqual({ kind: 'file', name: 'plan.md', path })
+
+    api.patch.mockResolvedValue({
+      data: {
+        controlCenter: {
+          tabs: [{ appId: 'files', pinned: false }],
+          activeAppId: 'files',
+          open: true,
+          fileView: { ...fileView, viewedFilePath: null }
+        }
+      }
+    })
+    workspace.closeViewer()
+
+    await vi.waitFor(() => expect(api.patch).toHaveBeenCalledWith('/sessions/session-a', {
+      control_center: expect.objectContaining({
+        open: true,
+        file_view: expect.objectContaining({
+          selected_path: path,
+          viewed_file_path: null
+        })
+      })
+    }))
+  })
+
+  it('restores a historical workspace file with its snapshot context', () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a' })
+
+    workspace.restoreView({
+      scope: 'filesystem',
+      selectedPath: 'reports/result.txt',
+      selectedKind: 'file',
+      viewedFilePath: 'reports/result.txt',
+      rootIdentity: '550e8400-e29b-41d4-a716-446655440002',
+      executionAgentId: '550e8400-e29b-41d4-a716-446655440001',
+      rootId: '550e8400-e29b-41d4-a716-446655440002',
+      rootRevision: 'b'.repeat(64),
+      workingDirectory: 'project'
+    })
+
+    expect(workspace.viewedEntry?.path).toBe('reports/result.txt')
+    expect(workspace.rootIdentity).toBe('550e8400-e29b-41d4-a716-446655440002')
+    expect(workspace.toolContext).toEqual({
+      executionAgentId: '550e8400-e29b-41d4-a716-446655440001',
+      rootId: '550e8400-e29b-41d4-a716-446655440002',
+      rootRevision: 'b'.repeat(64),
+      workingDirectory: 'project'
+    })
+  })
+
+  it('restores a selected directory without opening the viewer', () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a' })
+
+    workspace.restoreView({
+      scope: 'session',
+      selectedPath: 'files/drafts',
+      selectedKind: 'directory',
+      viewedFilePath: null,
+      rootIdentity: null,
+      executionAgentId: null,
+      rootId: null,
+      rootRevision: null,
+      workingDirectory: null
+    })
+
+    expect(workspace.selectedPath).toBe('files/drafts')
+    expect(workspace.selectedKind).toBe('directory')
+    expect(workspace.viewedEntry).toBeNull()
+  })
+
+  it('opens a session draft in the current editable context', async () => {
+    api.get.mockResolvedValue({ data: { entries: [] } })
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a' })
+
+    await workspace.openToolFile({
+      root: 'session',
+      sessionId: 'session-a',
+      rootIdentity: 'session-a',
+      path: 'files/drafts/draft-1/plan.md',
+      filename: 'plan.md',
+      sizeBytes: 7,
+      intent: 'draft',
+      draftId: 'draft-1',
+      revision: 1
+    })
+
+    expect(workspace.rootIdentity).toBeNull()
+    expect(workspace.viewedEntry).toMatchObject({
+      path: 'files/drafts/draft-1/plan.md', intent: 'draft', draftId: 'draft-1'
+    })
+    expect(workspace.operationAvailable('workspace.write')).toBe(true)
   })
 
   it('keeps the historical workspace context for tool-file reads', async () => {

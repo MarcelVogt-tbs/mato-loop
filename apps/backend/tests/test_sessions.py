@@ -28,6 +28,7 @@ from mato_loop_backend.api.routes.sessions import (
     message_payload,
     send_message,
     session_defaults,
+    session_payload,
     stream_run_events,
     update_session,
 )
@@ -339,6 +340,8 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
             {"app_id": "notifications", "pinned": True},
         ],
         "active_app_id": "notifications",
+        "open": False,
+        "file_view": None,
     }
     assert session.title_generation_status == TitleGenerationStatus.PENDING.value
     start.assert_awaited_once_with(db, session, "Erste Nachricht")
@@ -460,12 +463,42 @@ async def test_session_payload_contains_active_run() -> None:
     assert result["controlCenter"] == {
         "tabs": [{"appId": "files", "pinned": False}],
         "activeAppId": "files",
+        "open": False,
+        "fileView": None,
     }
     assert result["activeRun"] == {
         "id": str(run.id),
         "status": "waiting_approval",
         "modelName": "Aktives Modell",
         "createdAt": created_at.isoformat(),
+    }
+
+
+def test_session_payload_ignores_invalid_persisted_file_view() -> None:
+    session = ChatSession(
+        id=uuid4(),
+        user_id=uuid4(),
+        title="Test",
+        memory_mode="disabled",
+        control_center={
+            "tabs": [{"app_id": "files", "pinned": False}],
+            "active_app_id": "files",
+            "open": True,
+            "file_view": {
+                "scope": "session",
+                "selected_path": "files/drafts/draft-1/plan.md",
+                "viewed_file_path": "files/drafts/draft-1/plan.md",
+            },
+        },
+    )
+
+    result = session_payload(session)
+
+    assert result["controlCenter"] == {
+        "tabs": [{"appId": "files", "pinned": False}],
+        "activeAppId": "files",
+        "open": False,
+        "fileView": None,
     }
 
 
@@ -1283,6 +1316,18 @@ async def test_control_center_state_can_be_replaced() -> None:
             {"app_id": "terminal_2", "pinned": False},
         ],
         "active_app_id": "terminal_2",
+        "open": True,
+        "file_view": {
+            "scope": "session",
+            "selected_path": "files/drafts/draft-id/plan.md",
+            "selected_kind": "file",
+            "viewed_file_path": "files/drafts/draft-id/plan.md",
+            "root_identity": None,
+            "execution_agent_id": None,
+            "root_id": None,
+            "root_revision": None,
+            "working_directory": None,
+        },
     }
 
     result = await update_session(
@@ -1296,6 +1341,18 @@ async def test_control_center_state_can_be_replaced() -> None:
             {"appId": "terminal_2", "pinned": False},
         ],
         "activeAppId": "terminal_2",
+        "open": True,
+        "fileView": {
+            "scope": "session",
+            "selectedPath": "files/drafts/draft-id/plan.md",
+            "selectedKind": "file",
+            "viewedFilePath": "files/drafts/draft-id/plan.md",
+            "rootIdentity": None,
+            "executionAgentId": None,
+            "rootId": None,
+            "rootRevision": None,
+            "workingDirectory": None,
+        },
     }
     db.commit.assert_awaited_once()
 
@@ -1309,6 +1366,25 @@ async def test_control_center_state_can_be_replaced() -> None:
                 {"app_id": "files", "pinned": True},
             ],
             "active_app_id": "files",
+        },
+        {
+            "tabs": [{"app_id": "files", "pinned": False}],
+            "active_app_id": "files",
+            "file_view": {
+                "scope": "session",
+                "selected_path": "files/../secret.txt",
+                "selected_kind": "file",
+            },
+        },
+        {
+            "tabs": [{"app_id": "files", "pinned": False}],
+            "active_app_id": "files",
+            "file_view": {
+                "scope": "filesystem",
+                "selected_path": "report.txt",
+                "selected_kind": "file",
+                "viewed_file_path": "other.txt",
+            },
         },
         {
             "tabs": [{"app_id": "../files", "pinned": False}],
@@ -1352,8 +1428,18 @@ async def test_control_center_state_can_be_empty() -> None:
         db,
     )
 
-    assert session.control_center == {"tabs": [], "active_app_id": None}
-    assert result["controlCenter"] == {"tabs": [], "activeAppId": None}
+    assert session.control_center == {
+        "tabs": [],
+        "active_app_id": None,
+        "open": False,
+        "file_view": None,
+    }
+    assert result["controlCenter"] == {
+        "tabs": [],
+        "activeAppId": None,
+        "open": False,
+        "fileView": None,
+    }
 
 
 async def test_control_center_state_can_change_during_active_run() -> None:

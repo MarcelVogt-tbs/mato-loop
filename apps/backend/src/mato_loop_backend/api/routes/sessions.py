@@ -314,11 +314,78 @@ class ControlCenterTabState(BaseModel):
     pinned: bool
 
 
+class ControlCenterFileView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    scope: Literal["session", "filesystem"]
+    selected_path: str = Field(min_length=1, max_length=1_000)
+    selected_kind: Literal["file", "directory"]
+    viewed_file_path: str | None = Field(default=None, min_length=1, max_length=1_000)
+    root_identity: str | None = Field(default=None, min_length=1, max_length=1_000)
+    execution_agent_id: str | None = Field(default=None, min_length=36, max_length=36)
+    root_id: str | None = Field(default=None, min_length=36, max_length=36)
+    root_revision: str | None = Field(default=None, min_length=64, max_length=64)
+    working_directory: str | None = Field(default=None, min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def validate_view(self) -> ControlCenterFileView:
+        service = RootFileService(UUID(int=0))
+        if service.normalize_relative_path(self.selected_path) != self.selected_path:
+            raise ValueError("selected path must be normalized")
+        if self.selected_path == "." and self.selected_kind != "directory":
+            raise ValueError("the root path must be a directory")
+        if self.viewed_file_path is not None:
+            if (
+                self.selected_kind != "file"
+                or self.viewed_file_path == "."
+                or service.normalize_relative_path(self.viewed_file_path)
+                != self.viewed_file_path
+                or self.viewed_file_path != self.selected_path
+            ):
+                raise ValueError("viewed file path must match the selected file")
+        snapshot_fields = (
+            self.execution_agent_id,
+            self.root_id,
+            self.root_revision,
+            self.working_directory,
+        )
+        if self.root_identity is None:
+            if any(value is not None for value in snapshot_fields):
+                raise ValueError("snapshot fields require a root identity")
+            return self
+        if self.scope == "session":
+            if any(value is not None for value in snapshot_fields):
+                raise ValueError("session views cannot contain workspace snapshot fields")
+            return self
+        if any(value is None for value in snapshot_fields):
+            raise ValueError("historical workspace views require snapshot fields")
+        assert self.execution_agent_id is not None
+        assert self.root_id is not None
+        assert self.root_revision is not None
+        assert self.working_directory is not None
+        try:
+            valid_ids = all(
+                str(UUID(value)) == value
+                for value in (self.execution_agent_id, self.root_id)
+            )
+        except ValueError:
+            valid_ids = False
+        if not valid_ids or self.root_identity != self.root_id:
+            raise ValueError("workspace identifiers must match canonical UUIDs")
+        if any(character not in "0123456789abcdef" for character in self.root_revision):
+            raise ValueError("root revision must be a lowercase SHA-256 digest")
+        if service.normalize_relative_path(self.working_directory) != self.working_directory:
+            raise ValueError("working directory must be normalized")
+        return self
+
+
 class ControlCenterState(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     tabs: list[ControlCenterTabState] = Field(max_length=20)
     active_app_id: str | None = Field(max_length=64, pattern=r"^[a-z][a-z0-9_-]*$")
+    open: bool = False
+    file_view: ControlCenterFileView | None = None
 
     @model_validator(mode="after")
     def validate_tabs(self) -> ControlCenterState:
@@ -600,10 +667,13 @@ def session_payload(
     last_message_at: datetime | None | object = _LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
-    control_center = item.control_center or {
-        "tabs": [{"app_id": "files", "pinned": False}],
-        "active_app_id": "files",
-    }
+    try:
+        control_center = ControlCenterState.model_validate(
+            item.control_center or default_control_center_state()
+        ).model_dump(mode="json")
+    except (RootFileError, ValidationError):
+        control_center = default_control_center_state().model_dump(mode="json")
+    file_view = control_center.get("file_view")
     payload = {
         "id": str(item.id),
         "title": item.title,
@@ -615,6 +685,22 @@ def session_payload(
                 for tab in control_center["tabs"]
             ],
             "activeAppId": control_center["active_app_id"],
+            "open": bool(control_center.get("open", False)),
+            "fileView": (
+                {
+                    "scope": file_view["scope"],
+                    "selectedPath": file_view["selected_path"],
+                    "selectedKind": file_view["selected_kind"],
+                    "viewedFilePath": file_view.get("viewed_file_path"),
+                    "rootIdentity": file_view.get("root_identity"),
+                    "executionAgentId": file_view.get("execution_agent_id"),
+                    "rootId": file_view.get("root_id"),
+                    "rootRevision": file_view.get("root_revision"),
+                    "workingDirectory": file_view.get("working_directory"),
+                }
+                if isinstance(file_view, dict)
+                else None
+            ),
         },
         "modelId": str(item.model_config_id) if item.model_config_id else None,
         "memoryMode": item.memory_mode,

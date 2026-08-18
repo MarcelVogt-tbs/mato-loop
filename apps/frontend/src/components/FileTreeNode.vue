@@ -149,15 +149,17 @@ function cachedSubtreeMatches(entry) {
 }
 
 function activate() {
-  workspace.selectedPath = props.entry.path
-  if (props.entry.kind === 'directory') toggle()
+  if (props.entry.kind === 'directory') {
+    workspace.selectPath(props.entry.path, props.entry.kind)
+    toggle()
+  }
   else if (props.entry.kind === 'file' && workspace.operationAvailable('workspace.read')) {
     emit('open-file', { entry: props.entry })
-  }
+  } else workspace.selectPath(props.entry.path, props.entry.kind)
 }
 
 function selectOnly() {
-  workspace.selectedPath = props.entry.path
+  workspace.selectPath(props.entry.path, props.entry.kind)
 }
 
 async function toggle() {

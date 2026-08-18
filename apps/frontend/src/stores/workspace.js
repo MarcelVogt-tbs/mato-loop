@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { useControlCenterStore } from 'src/stores/control-center'
 
 export const MAX_WORKSPACE_UPLOADS = 4
 export const MAX_WORKSPACE_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -42,6 +43,20 @@ function replaceCachedEntry(store, entry) {
 
 function requireWritableContext(store) {
   if (store.rootIdentity) throw new Error('Tool file contexts are read-only')
+}
+
+function persistedFileView(store) {
+  return {
+    scope: store.scope,
+    selectedPath: store.selectedPath,
+    selectedKind: store.selectedKind,
+    viewedFilePath: store.viewedEntry?.path || null,
+    rootIdentity: store.rootIdentity,
+    executionAgentId: store.toolContext?.executionAgentId || null,
+    rootId: store.toolContext?.rootId || null,
+    rootRevision: store.toolContext?.rootRevision || null,
+    workingDirectory: store.toolContext?.workingDirectory || null
+  }
 }
 
 export function supportsWorkspaceOperation(context, operation) {
@@ -88,12 +103,14 @@ export const useWorkspaceStore = defineStore('workspace', {
     nextOffset: {},
     uploading: false,
     selectedPath: '.',
+    selectedKind: 'directory',
     viewedEntry: null,
     filePreviews: {},
     previewVersions: {},
     editorActive: false,
     editorDirty: false,
     editorDraft: null,
+    viewVersion: 0,
     filter: '',
     contextVersion: 0
   }),
@@ -113,8 +130,41 @@ export const useWorkspaceStore = defineStore('workspace', {
     )
   },
   actions: {
+    persistView() {
+      const controlCenter = useControlCenterStore()
+      if (
+        !this.sessionId
+        || !controlCenter.ready
+        || controlCenter.sessionId !== this.sessionId
+      ) return
+      void controlCenter.setFileView(persistedFileView(this)).catch(() => {})
+    },
+    restoreView(view) {
+      this.reset(false)
+      if (!view || (view.scope === 'session' && !this.sessionId)) return
+      this.scope = view.scope
+      this.rootIdentity = view.rootIdentity || null
+      this.toolContext = view.scope === 'filesystem' && view.rootIdentity
+        ? {
+            executionAgentId: view.executionAgentId,
+            rootId: view.rootId,
+            rootRevision: view.rootRevision,
+            workingDirectory: view.workingDirectory
+          }
+        : null
+      this.selectedPath = view.selectedPath
+      this.selectedKind = view.selectedKind
+      this.viewedEntry = view.viewedFilePath
+        ? {
+            kind: 'file',
+            name: view.viewedFilePath.split('/').at(-1),
+            path: view.viewedFilePath
+          }
+        : null
+    },
     returnToCurrentContext() {
       if (this.rootIdentity) this.reset()
+      this.persistView()
       return this.load('.')
     },
     configure({ sessionId = null, workingDirectory = null, workspaceContext = null } = {}) {
@@ -137,10 +187,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (scope === this.scope && !this.rootIdentity) return
       this.scope = scope
       this.reset(false)
+      this.persistView()
       return this.load('.')
     },
     reset(fallbackToSession = true) {
       this.contextVersion += 1
+      this.viewVersion += 1
       this.entries = {}
       this.hasMore = {}
       this.loading = {}
@@ -148,6 +200,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.loadErrors = {}
       this.nextOffset = {}
       this.selectedPath = '.'
+      this.selectedKind = 'directory'
       this.viewedEntry = null
       this.filePreviews = {}
       this.previewVersions = {}
@@ -178,9 +231,10 @@ export const useWorkspaceStore = defineStore('workspace', {
           || !action.workingDirectory
         ))
       ) return
+      const editableDraft = action.intent === 'draft' && action.root === 'session'
       this.reset(false)
       this.scope = action.root === 'session' ? 'session' : 'filesystem'
-      this.rootIdentity = action.rootIdentity
+      this.rootIdentity = editableDraft ? null : action.rootIdentity
       this.toolContext = action.root === 'workspace'
         ? {
           executionAgentId: action.executionAgentId,
@@ -190,12 +244,17 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
         : null
       this.selectedPath = action.path
+      this.selectedKind = 'file'
       this.viewedEntry = {
         kind: 'file',
         name: action.filename,
         path: action.path,
-        size: action.sizeBytes
+        size: action.sizeBytes,
+        ...(editableDraft
+          ? { intent: 'draft', draftId: action.draftId, revision: action.revision }
+          : {})
       }
+      this.persistView()
       return this.load('.')
     },
     openApprovalDraft(action) {
@@ -217,17 +276,27 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     openEntry(entry, edit = false) {
       if (entry?.kind !== 'file') return
+      this.viewVersion += 1
       this.selectedPath = entry.path
+      this.selectedKind = 'file'
       this.viewedEntry = entry
       this.editorActive = edit
       this.editorDirty = false
       this.editorDraft = null
+      this.persistView()
+    },
+    selectPath(path, kind = 'directory') {
+      this.selectedPath = path
+      this.selectedKind = kind
+      this.persistView()
     },
     closeViewer() {
+      this.viewVersion += 1
       this.viewedEntry = null
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
+      this.persistView()
     },
     startEdit(content) {
       this.editorActive = true
@@ -342,6 +411,8 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.viewedEntry = null
       }
       this.selectedPath = parentPath(path)
+      this.selectedKind = 'directory'
+      this.persistView()
       await this.load(this.selectedPath)
     },
     async renameEntry(path, name) {
@@ -360,12 +431,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       const destination = data.entry.path
       clearCachedSubtree(this, path)
       this.selectedPath = renamedPath(this.selectedPath, path, destination)
+      if (this.selectedPath === destination) this.selectedKind = data.entry.kind
       if (this.viewedEntry) {
         const viewedPath = renamedPath(this.viewedEntry.path, path, destination)
         this.viewedEntry = viewedPath === destination
           ? data.entry
           : { ...this.viewedEntry, path: viewedPath }
       }
+      this.persistView()
       await this.load(parentPath(path))
       return data.entry
     },

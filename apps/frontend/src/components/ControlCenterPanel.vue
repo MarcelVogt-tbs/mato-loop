@@ -189,7 +189,12 @@ async function confirmDiscardedEdit() {
 
 async function closePanel() {
   if (!await confirmDiscardedEdit()) return
-  controlCenter.open = false
+  try {
+    await controlCenter.setOpen(false)
+  } catch {
+    // The central API interceptor displays the error and restores the open panel.
+    return
+  }
   emit('close')
   await nextTick()
   document.getElementById('control-center-toggle')?.focus()

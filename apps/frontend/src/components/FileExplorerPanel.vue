@@ -173,7 +173,7 @@
           aria-expanded="true"
           :aria-selected="workspace.selectedPath === '.'"
           :aria-current="workspace.selectedPath === '.' ? 'true' : undefined"
-          @click="workspace.selectedPath = '.'"
+          @click="workspace.selectPath('.')"
           @focus="treeFocusPath = '.'"
         >
           <span class="file-tree-spacer" />
@@ -430,11 +430,7 @@ const fileTypeOptions = [
 ]
 const createFileName = computed(() => withFileSuffix(createName.value, createSuffix.value))
 const integrationIndex = computed(() => controlCenter.tabs.findIndex((tab) => tab.appId === 'files'))
-const selectedEntry = computed(() => {
-  if (workspace.selectedPath === '.') return { kind: 'directory', path: '.' }
-  return Object.values(workspace.entries).flat().find((item) => item.path === workspace.selectedPath)
-})
-const selectedIsDirectory = computed(() => selectedEntry.value?.kind === 'directory')
+const selectedIsDirectory = computed(() => workspace.selectedKind === 'directory')
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
 ))
@@ -683,7 +679,7 @@ function handleTreeKeydown(event) {
 }
 
 function navigateSelection(path) {
-  workspace.selectedPath = path
+  workspace.selectPath(path)
   treeFocusPath.value = path
   focusPath(path)
 }
@@ -752,7 +748,7 @@ async function selectRoot(value) {
 }
 
 function openRenameDialog(entry) {
-  workspace.selectedPath = entry.path
+  workspace.selectPath(entry.path, entry.kind)
   renameTarget.value = entry
   renameName.value = entry.name
   renameDialogOpen.value = true
@@ -774,7 +770,7 @@ async function renameEntry() {
 }
 
 async function removeEntry(entry) {
-  workspace.selectedPath = entry.path
+  workspace.selectPath(entry.path, entry.kind)
   const accepted = await confirm(
     entry.kind === 'directory'
       ? `Soll der Ordner „${entry.name}“ einschließlich aller enthaltenen Dateien und Ordner gelöscht werden?`
@@ -787,7 +783,7 @@ async function removeEntry(entry) {
     ? entry.path.slice(0, entry.path.lastIndexOf('/'))
     : '.'
   await workspace.deleteEntry(entry.path)
-  workspace.selectedPath = parent
+  workspace.selectPath(parent)
   if (permissionsDialogOpen.value) await loadPermissions()
   await focusPath(parent)
 }
@@ -815,7 +811,9 @@ watch(
     () => chat.current?.id || null,
     () => chat.current?.workingDirectory || null,
     () => chat.activeContext?.workingDirectory || null,
-    () => workspaceContextKey(activeWorkspaceContext.value)
+    () => workspaceContextKey(activeWorkspaceContext.value),
+    () => controlCenter.requestGeneration,
+    () => controlCenter.ready
   ],
   ([selectedSessionId, currentSessionId, currentWorkingDirectory, draftWorkingDirectory]) => {
     const sessionId = selectedSessionId || currentSessionId
@@ -823,6 +821,12 @@ watch(
       ? currentWorkingDirectory
       : sessionId ? null : draftWorkingDirectory
     workspace.configure({ sessionId, workingDirectory, workspaceContext: activeWorkspaceContext.value })
+    if (
+      sessionId
+      && currentSessionId === sessionId
+      && controlCenter.sessionId === sessionId
+      && controlCenter.ready
+    ) workspace.restoreView(controlCenter.fileView)
     workspace.load('.')
     if (permissionsDialogOpen.value) loadPermissions()
   },
