@@ -354,6 +354,32 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
                 ],
                 finish_reason="tool_calls",
             ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="wrong-review",
+                        name="read",
+                        arguments={
+                            "root": "session",
+                            "path": "files/other.scad",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="review",
+                        name="read",
+                        arguments={
+                            "root": "session",
+                            "path": "files/cube.scad",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
             ProviderResult(content="Fertig gerendert.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
@@ -370,9 +396,12 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
         "required",
         "required",
         "required",
+        "required",
+        "required",
         "auto",
     ]
     assert "has not been rendered successfully" in projections[1]["system_prompt"]
+    assert "must be reviewed before finalizing" in projections[4]["system_prompt"]
     assert not any(
         "cube(1)" in message.content for message in _assistant_messages(db)
     )
@@ -462,13 +491,32 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
                 finish_reason="tool_calls",
             ),
             ProviderResult(
-                content="Verdict: PASS\nFindings:\n- No defect.\nUncertainty:\n- None.",
+                content=json.dumps(
+                    {
+                        "verdict": "pass",
+                        "findings": ["No defect."],
+                        "uncertainty": ["Rear geometry is hidden."],
+                    }
+                ),
                 finish_reason="stop",
+            ),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="review",
+                        name="read",
+                        arguments={
+                            "root": "session",
+                            "path": "files/model.scad",
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
             ),
             ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
-        max_steps=3,
+        max_steps=2,
         active_supports_image_input=True,
         workspace_access="read-write",
         integration_settings=IntegrationSettings(instances=[integration]),
@@ -512,6 +560,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
                         ToolAttachment(b"png", "image/png", "model-views.png"),
                     ),
                 ),
+                ToolResult.json({"content": "cube(1);"}),
             ]
         ),
     )
@@ -519,6 +568,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
     await AgentRuntime._execute_loop(db, run)
 
     assert [request["model"].model_id for request in requests] == [
+        "local-model",
         "local-model",
         "local-model",
         "local-model",
@@ -534,14 +584,18 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
         b"drawing-page-2.jpg",
     ]
     verifier_prompt = verifier["messages"][0]["content"]
-    assert "Verdict: <PASS|FAIL|UNCERTAIN>" in verifier_prompt
-    assert "Findings:" in verifier_prompt
-    assert "Uncertainty:" in verifier_prompt
+    assert '"verdict":"pass|fail|uncertain"' in verifier_prompt
+    assert "Pass requires an empty uncertainty list" in verifier_prompt
     assert "Do not infer hidden geometry" in verifier_prompt
     verifier_data = json.loads(verifier["messages"][1]["content"])
     assert verifier_data == {
         "imageOrder": {"contactSheet": 1, "referenceImages": [2, 3]},
-        "currentRequest": "Aktuelle Frage",
+        "recentRequests": [
+            {
+                "messageId": verifier_data["recentRequests"][0]["messageId"],
+                "content": "Aktuelle Frage",
+            }
+        ],
         "previewLayout": ["isometric", "front", "right", "top"],
         "geometryMetadata": {"triangleCount": 12},
         "referenceImages": [
@@ -564,8 +618,11 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
     )
     assert json.loads(render_message.content)["visualVerification"] == {
         "status": "completed",
+        "scope": "visible_geometry",
+        "verdict": "uncertain",
+        "findings": ["No defect."],
+        "uncertainty": ["Rear geometry is hidden."],
         "referenceImageCount": 2,
-        "analysis": "Verdict: PASS\nFindings:\n- No defect.\nUncertainty:\n- None.",
     }
     assert _assistant_messages(db)[-1].content == "Visuell verglichen."
 
@@ -611,10 +668,31 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
     if vision_fallback:
         results.append(
             ProviderResult(
-                content="Verdict: PASS\nFindings:\n- Geometry matches.\nUncertainty:\n- None.",
+                content=json.dumps(
+                    {
+                        "verdict": "pass",
+                        "findings": ["Geometry matches."],
+                        "uncertainty": [],
+                    }
+                ),
                 finish_reason="stop",
             )
         )
+    results.append(
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    id="review",
+                    name="read",
+                    arguments={
+                        "root": "session",
+                        "path": "files/model.scad",
+                    },
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+    )
     results.append(ProviderResult(content="Fertig.", finish_reason="stop"))
     db, run, requests, _projections, _events = await _runtime_setup(
         monkeypatch,
@@ -663,6 +741,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
                     {},
                     attachments=(ToolAttachment(b"png", "image/png", "model-views.png"),),
                 ),
+                ToolResult.json({"content": "cube(1);"}),
             ]
         ),
     )
@@ -670,9 +749,9 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
     await AgentRuntime._execute_loop(db, run)
 
     assert [request["model"].model_id for request in requests] == (
-        ["local-model", "local-model", "vision-model", "local-model"]
+        ["local-model", "local-model", "vision-model", "local-model", "local-model"]
         if vision_fallback
-        else ["local-model", "local-model", "local-model"]
+        else ["local-model", "local-model", "local-model", "local-model"]
     )
     if vision_fallback:
         assert [image.data for image in requests[2]["image_inputs"]] == [
@@ -684,8 +763,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
             "contactSheet": 1,
             "referenceImages": [2, 3, 4, 5, 6, 7, 8],
         }
-        assert len(verifier_data["currentRequest"]) == 4_000
-        assert "middle omitted" in verifier_data["currentRequest"]
+        assert len(verifier_data["recentRequests"][0]["content"]) == 4_000
         assert verifier_data["previewLayout"] == [
             "isometric",
             "front",
@@ -708,8 +786,11 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
     assert verification == (
         {
             "status": "completed",
+            "scope": "visible_geometry",
+            "verdict": "pass",
+            "findings": ["Geometry matches."],
+            "uncertainty": [],
             "referenceImageCount": 7,
-            "analysis": "Verdict: PASS\nFindings:\n- Geometry matches.\nUncertainty:\n- None.",
         }
         if vision_fallback
         else {"status": "unavailable"}
@@ -739,7 +820,13 @@ async def test_private_openscad_source_uses_configured_vision_release(monkeypatc
                 finish_reason="tool_calls",
             ),
             ProviderResult(
-                content="Verdict: PASS\nFindings:\n- None visible.\nUncertainty:\n- None."
+                content=json.dumps(
+                    {
+                        "verdict": "pass",
+                        "findings": ["None visible."],
+                        "uncertainty": [],
+                    }
+                )
             ),
             ProviderResult(content="Fertig.", finish_reason="stop"),
         ],
@@ -903,7 +990,13 @@ async def test_each_successful_openscad_preview_runs_a_verifier(monkeypatch) -> 
                 ]
             ),
             ProviderResult(
-                content="Verdict: PASS\nFindings:\n- First inspection.\nUncertainty:\n- None."
+                content=json.dumps(
+                    {
+                        "verdict": "pass",
+                        "findings": ["First inspection."],
+                        "uncertainty": [],
+                    }
+                )
             ),
             ProviderResult(
                 tool_calls=[
@@ -979,8 +1072,11 @@ async def test_each_successful_openscad_preview_runs_a_verifier(monkeypatch) -> 
     assert verifications == [
         {
             "status": "completed",
+            "scope": "visible_geometry",
+            "verdict": "pass",
+            "findings": ["First inspection."],
+            "uncertainty": [],
             "referenceImageCount": 0,
-            "analysis": "Verdict: PASS\nFindings:\n- First inspection.\nUncertainty:\n- None.",
         },
         {"status": "unavailable"},
     ]

@@ -283,6 +283,7 @@ def general_system_prompt(
     web_search_retry: int = 0,
     response_repair_required: bool = False,
     openscad_render_pending: bool = False,
+    openscad_source_review_pending: tuple[str, str] | None = None,
     memory_write_pending: bool = False,
     memory_write_outcome: str | None = None,
     tool_call_limit: int | None = None,
@@ -524,6 +525,12 @@ def general_system_prompt(
         runtime_parts.append(
             "OpenSCAD source was generated but has not been rendered successfully. Call "
             "render_openscad before answering. If rendering fails, correct the source and rerender."
+        )
+    elif openscad_source_review_pending is not None:
+        root, path = openscad_source_review_pending
+        runtime_parts.append(
+            "The rendered OpenSCAD source must be reviewed before finalizing. Call read exactly with "
+            f"root={root} and path={path}. Treat that file as authoritative for every numerical claim."
         )
     if memory_write_pending:
         runtime_parts.append(

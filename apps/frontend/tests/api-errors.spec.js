@@ -109,6 +109,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'agent.requiredMemoryWriteMissing' } })).toBe(
       'Das Modell hat den begonnenen Memory-Schreibvorgang auch nach mehreren Versuchen nicht abgeschlossen.'
     )
+    expect(apiErrorMessage({ error: { code: 'agent.requiredOpenScadSourceReviewMissing' } })).toBe(
+      'Das Modell hat die gerenderte OpenSCAD-Datei auch nach mehreren Versuchen nicht geprüft.'
+    )
     expect(apiErrorMessage({ error: { code: 'agent.researchSourcesInvalid' } })).toBe(
       'Die recherchierte Antwort konnte nicht ausreichend mit aktuellen Quellen belegt werden.'
     )

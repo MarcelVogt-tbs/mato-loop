@@ -17,6 +17,7 @@ _MESSAGES = {
     "agent.requiredWebSearchUnsupported": "The selected model cannot perform the required web search.",
     "agent.requiredMemoryWriteMissing": "The model did not complete the required memory write.",
     "agent.requiredOpenScadRenderMissing": "The model did not render the generated OpenSCAD source.",
+    "agent.requiredOpenScadSourceReviewMissing": "The model did not review the rendered OpenSCAD source.",
     "agent.researchSourcesInvalid": "The researched answer could not be supported by valid current sources.",
     "agent.researchBudgetReached": "The current-turn research budget has been reached.",
     "agent.repeatedToolCall": "The model repeated a failed tool call without changing its arguments.",
