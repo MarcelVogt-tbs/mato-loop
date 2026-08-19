@@ -359,6 +359,7 @@ class ToolDefinition:
     authorization_factory: (
         Callable[[Any, ToolContext], tuple[PermissionRequest, ...]] | None
     ) = None
+    prompt_fragments: tuple[str, ...] = ()
 
     def schema(self) -> dict[str, Any]:
         schema = self.arguments_model.model_json_schema()
@@ -409,6 +410,52 @@ class BoundTool:
         return schema
 
 
+def _tool_prompt_fragments(tools: dict[str, BoundTool]) -> tuple[str, ...]:
+    fragments = [
+        fragment
+        for tool in tools.values()
+        for fragment in tool.definition.prompt_fragments
+    ]
+    if any(
+        tools[name].default_arguments
+        for name in ("calendar_query_events", "calendar_create_event")
+        if name in tools
+    ):
+        fragments.append(
+            "A default calendar is configured. Unless the user requests discovery or another "
+            "calendar, call calendar_query_events or calendar_create_event directly and omit "
+            "integration_id and calendar_key."
+        )
+    if any(
+        tools[name].default_arguments
+        for name in ("tasks_query", "tasks_create", "tasks_create_many")
+        if name in tools
+    ):
+        fragments.append(
+            "A default task list is configured. Unless the user requests discovery or another "
+            "task list, call tasks_query, tasks_create, or tasks_create_many directly and omit "
+            "integration_id and task_list_key."
+        )
+    if {
+        "calendar_create_event",
+        "calendar_update_event",
+        "calendar_delete_event",
+    } & tools.keys():
+        fragments.append(
+            "For calendar_update_event and calendar_delete_event, copy eventToken, integrationId, "
+            "and calendarKey from the same returned event. A mutation succeeds only when its result "
+            "confirms the event or deleted=true. Present returned localTiming exactly; otherwise "
+            "convert canonical timestamps once to the local timezone in the system prompt."
+        )
+    if {"tasks_update", "tasks_set_completed", "tasks_delete"} & tools.keys():
+        fragments.append(
+            "For tasks_update, tasks_set_completed, and tasks_delete, copy taskToken, "
+            "integrationId, and taskListKey from the same returned task. A mutation succeeds "
+            "only when its result confirms the task or deleted=true."
+        )
+    return tuple(fragments)
+
+
 @dataclass(frozen=True, slots=True)
 class EffectiveToolSet:
     registry: ToolRegistry
@@ -420,12 +467,12 @@ class EffectiveToolSet:
 
     def only(self, *names: str) -> EffectiveToolSet:
         selected = {name: self.tools[name] for name in names if name in self.tools}
-        return EffectiveToolSet(self.registry, selected)
+        return EffectiveToolSet(self.registry, selected, _tool_prompt_fragments(selected))
 
     def without(self, *names: str) -> EffectiveToolSet:
         excluded = set(names)
         selected = {name: tool for name, tool in self.tools.items() if name not in excluded}
-        return EffectiveToolSet(self.registry, selected, self.prompt_fragments)
+        return EffectiveToolSet(self.registry, selected, _tool_prompt_fragments(selected))
 
     async def execute(self, call: ToolCall, context: ToolContext) -> ToolResult:
         tool = self.tools.get(call.name)
@@ -500,7 +547,16 @@ class ToolRegistry:
                     if str(instance.id) in contribution.integration_ids
                 ),
             )
-        return definitions, sources, contributions.prompt_fragments
+        attached_fragments = {
+            fragment
+            for contribution in contributions.tools
+            for fragment in contribution.prompt_fragments
+        }
+        return definitions, sources, tuple(
+            fragment
+            for fragment in contributions.prompt_fragments
+            if fragment not in attached_fragments
+        )
 
     @staticmethod
     def _contributed_definition(contribution: ToolContribution) -> ToolDefinition:
@@ -524,6 +580,7 @@ class ToolRegistry:
             resource_argument=contribution.resource_argument,
             releases_private_data=contribution.releases_private_data,
             authorization_factory=contribution.authorization_factory,
+            prompt_fragments=contribution.prompt_fragments,
         )
 
     def inactive_capability_groups(
@@ -829,48 +886,11 @@ class ToolRegistry:
             for name, definition in definitions.items()
             if name in available_names
         }
-        if any(
-            tools[name].default_arguments
-            for name in ("calendar_query_events", "calendar_create_event")
-            if name in tools
-        ):
-            prompt_fragments = (
-                *prompt_fragments,
-                "A default calendar is configured. Unless the user requests discovery or another "
-                "calendar, call calendar_query_events or calendar_create_event directly and omit "
-                "integration_id and calendar_key.",
-            )
-        if any(
-            tools[name].default_arguments
-            for name in ("tasks_query", "tasks_create", "tasks_create_many")
-            if name in tools
-        ):
-            prompt_fragments = (
-                *prompt_fragments,
-                "A default task list is configured. Unless the user requests discovery or another "
-                "task list, call tasks_query, tasks_create, or tasks_create_many directly and omit "
-                "integration_id and task_list_key.",
-            )
-        if {
-            "calendar_create_event",
-            "calendar_update_event",
-            "calendar_delete_event",
-        } & tools.keys():
-            prompt_fragments = (
-                *prompt_fragments,
-                "For calendar_update_event and calendar_delete_event, copy eventToken, integrationId, "
-                "and calendarKey from the same returned event. A mutation succeeds only when its result "
-                "confirms the event or deleted=true. Present returned localTiming exactly; otherwise "
-                "convert canonical timestamps once to the local timezone in the system prompt.",
-            )
-        if {"tasks_update", "tasks_set_completed", "tasks_delete"} & tools.keys():
-            prompt_fragments = (
-                *prompt_fragments,
-                "For tasks_update, tasks_set_completed, and tasks_delete, copy taskToken, "
-                "integrationId, and taskListKey from the same returned task. A mutation succeeds "
-                "only when its result confirms the task or deleted=true.",
-            )
-        return EffectiveToolSet(self, tools, prompt_fragments)
+        return EffectiveToolSet(
+            self,
+            tools,
+            (*prompt_fragments, *_tool_prompt_fragments(tools)),
+        )
 
     def catalog(
         self, tool_settings: ToolSettings, integration_settings: IntegrationSettings

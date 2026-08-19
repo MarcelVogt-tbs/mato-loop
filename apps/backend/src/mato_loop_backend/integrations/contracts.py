@@ -68,6 +68,7 @@ class ToolContribution:
     execution_config_arguments: tuple[str, ...] = ()
     required_execution_operations: tuple[str, ...] = ()
     result_model: type[BaseModel] | None = None
+    prompt_fragments: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

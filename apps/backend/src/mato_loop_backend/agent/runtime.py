@@ -24,6 +24,7 @@ from mato_loop_backend.agent.context import (
     ContextManager,
     SummaryResult,
     compaction_messages,
+    estimate_tokens,
     general_system_prompt,
 )
 from mato_loop_backend.agent.coordinator import approval_coordinator, question_coordinator
@@ -2138,6 +2139,7 @@ class AgentRuntime:
                 effective_toolset = effective_toolset.only("read")
             elif research_budget_exhausted and effective_toolset is not None:
                 effective_toolset = effective_toolset.without("web_search", "webfetch")
+            effective_tool_count = len(effective_toolset.tools) if effective_toolset else 0
             if effective_toolset is not None:
                 effective_toolset = with_media_prompt_profiles(
                     effective_toolset,
@@ -2239,6 +2241,9 @@ class AgentRuntime:
             if model_requests >= runtime_settings.max_model_requests:
                 raise AgentRunError("agent.modelRequestLimitReached")
             schemas = effective_toolset.schemas() if effective_toolset else []
+            tool_schema_tokens = (
+                estimate_tokens(schemas, model.characters_per_token) if schemas else 0
+            )
             if tool_budget_exhausted:
                 if search_pending or memory_write_pending:
                     raise AgentRunError("agent.toolCallLimitReached")
@@ -2590,6 +2595,10 @@ class AgentRuntime:
                 **runtime_state,
                 "performance": {
                     "modelRequest": model_requests,
+                    "effectiveToolCount": effective_tool_count,
+                    "offeredToolCount": len(schemas),
+                    "offeredToolNames": [schema["name"] for schema in schemas],
+                    "toolSchemaTokens": tool_schema_tokens,
                     "estimatedInputTokens": projection.estimated_input_tokens,
                     "inputBudgetTokens": projection.input_budget_tokens,
                     "contextPreparationMs": max(

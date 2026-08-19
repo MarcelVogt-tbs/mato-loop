@@ -165,7 +165,14 @@ def effective_integration_contributions(
             (instance.integration_type, instance.adapter_type), []
         ).append(instance)
         tools.extend(
-            replace(tool, integration_id=str(instance.id))
+            replace(
+                tool,
+                integration_id=str(instance.id),
+                prompt_fragments=(
+                    *tool.prompt_fragments,
+                    *contribution.prompt_fragments,
+                ),
+            )
             for tool in contribution.tools
         )
         options.extend(contribution.tool_options)
