@@ -2675,7 +2675,6 @@ SCHEMA_AB_CASES = tuple(_SCHEMA_AB_CASES_BY_ID[case_id] for case_id in _SCHEMA_A
         expected_arguments={
             "integration_id": None,
             "task_list_key": None,
-            "include_completed": False,
         },
     ),
     PromptCase(
@@ -4008,17 +4007,12 @@ def _validate_tool_calls(
     return failures
 
 
-def _validated_arguments(call: ToolCall, bound_tool: Any | None = None) -> dict[str, Any]:
-    definition = bound_tool.definition if bound_tool is not None else tool_registry._definitions.get(call.name)
+def _validated_arguments(call: ToolCall) -> dict[str, Any]:
+    definition = tool_registry._definitions.get(call.name)
     if definition is None:
         return call.arguments
     try:
-        return definition.arguments_model.model_validate(
-            {
-                **(bound_tool.default_arguments if bound_tool is not None else {}),
-                **call.arguments,
-            }
-        ).model_dump(mode="json")
+        return definition.arguments_model.model_validate(call.arguments).model_dump(mode="json")
     except ValidationError:
         return call.arguments
 
@@ -4078,7 +4072,7 @@ def evaluate(
             failures.append(f"forbidden tool called: {name}")
     if case.expected_arguments and case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
-        arguments = _validated_arguments(call, effective_tools.get(call.name))
+        arguments = _validated_arguments(call)
         for key, value in case.expected_arguments.items():
             if arguments.get(key) != value:
                 failures.append(
@@ -4086,7 +4080,7 @@ def evaluate(
                 )
     if case.argument_options and case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
-        arguments = _validated_arguments(call, effective_tools.get(call.name))
+        arguments = _validated_arguments(call)
         for key, options in case.argument_options.items():
             if arguments.get(key) not in options:
                 failures.append(
@@ -4095,7 +4089,7 @@ def evaluate(
                 )
     if case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
-        arguments = _validated_arguments(call, effective_tools.get(call.name))
+        arguments = _validated_arguments(call)
         for key, values in case.argument_contains.items():
             actual = str(arguments.get(key, ""))
             for value in values:
