@@ -96,7 +96,7 @@ const filteredApprovals = computed(() => selectedType.value === 'all'
   : approvals.pending.filter((item) => (item.requestType || 'agent_action') === selectedType.value))
 
 function sessionTitle(sessionId) {
-  return chat.sessions.find((session) => session.id === sessionId)?.title || 'Agent-Auftrag'
+  return chat.cachedSessions.find((session) => session.id === sessionId)?.title || 'Agent-Auftrag'
 }
 
 async function load() {

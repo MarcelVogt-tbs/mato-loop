@@ -120,9 +120,61 @@ function optionsFromSession(session) {
 }
 
 function emptyDrafts() {
+  const newSession = { message: '', options: defaultSessionOptions() }
   return {
-    newSession: { message: '', options: defaultSessionOptions() },
+    newSession,
+    newSessions: { standalone: newSession },
     sessionMessages: {}
+  }
+}
+
+function sessionScopeKey(projectId) {
+  return projectId || 'standalone'
+}
+
+function emptySessionList() {
+  return {
+    items: [],
+    loaded: false,
+    loading: false,
+    loadFailed: false,
+    nextCursor: null,
+    loadingMore: false,
+    loadMoreFailed: false,
+    loadRequest: null,
+    pageRequest: null,
+    version: 0
+  }
+}
+
+function normalizedNewSessionDraft(value) {
+  const options = value?.options || {}
+  return {
+    message: typeof value?.message === 'string' ? value.message : '',
+    options: sanitizedSessionOptions({
+      modelId: typeof options.modelId === 'string' ? options.modelId : null,
+      memoryMode: ['full', 'read_only', 'disabled'].includes(options.memoryMode)
+        ? options.memoryMode
+        : 'full',
+      effectiveMemoryMode: ['full', 'read_only', 'disabled'].includes(options.effectiveMemoryMode)
+        ? options.effectiveMemoryMode
+        : 'full',
+      memoryToolsAvailable: options.memoryToolsAvailable !== false,
+      memoryUnavailableReason: typeof options.memoryUnavailableReason === 'string'
+        ? options.memoryUnavailableReason
+        : null,
+      webSearchPolicy: ['required', 'available', 'disabled'].includes(options.webSearchPolicy)
+        ? options.webSearchPolicy
+        : (options.forceWebSearch === true ? 'required' : 'available'),
+      preferredExecutionAgentId: typeof options.preferredExecutionAgentId === 'string'
+        ? options.preferredExecutionAgentId
+        : null,
+      preferredRootId: typeof options.preferredRootId === 'string' ? options.preferredRootId : null,
+      workingDirectory: typeof options.workingDirectory === 'string' ? options.workingDirectory : null,
+      currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
+      workspaceAccess: options.workspaceAccess === 'read-write' ? 'read-write' : 'read-only',
+      workspaceContext: null
+    })
   }
 }
 
@@ -148,6 +200,10 @@ function sortSessions(sessions) {
     const rightLastMessageAt = Date.parse(right.lastMessageAt || right.createdAt || '') || 0
     return rightLastMessageAt - leftLastMessageAt
   })
+}
+
+function sessionScopeParams(projectId) {
+  return projectId ? { projectId } : { standalone: true }
 }
 
 function lastVisibleMessageAt(messages) {
@@ -201,35 +257,17 @@ function loadDrafts(ownerUserId) {
     const sessionMessages = Object.fromEntries(
       Object.entries(stored.sessionMessages || {}).filter(([, value]) => typeof value === 'string')
     )
-    const options = stored.newSession?.options || {}
+    const newSessions = Object.fromEntries(
+      Object.entries(stored.newSessions || {}).map(([key, value]) => [
+        key,
+        normalizedNewSessionDraft(value)
+      ])
+    )
+    const newSession = newSessions.standalone || normalizedNewSessionDraft(stored.newSession)
+    newSessions.standalone = newSession
     return {
-      newSession: {
-        message: typeof stored.newSession?.message === 'string' ? stored.newSession.message : '',
-        options: sanitizedSessionOptions({
-          modelId: typeof options.modelId === 'string' ? options.modelId : null,
-          memoryMode: ['full', 'read_only', 'disabled'].includes(options.memoryMode)
-            ? options.memoryMode
-            : 'full',
-          effectiveMemoryMode: ['full', 'read_only', 'disabled'].includes(options.effectiveMemoryMode)
-            ? options.effectiveMemoryMode
-            : 'full',
-          memoryToolsAvailable: options.memoryToolsAvailable !== false,
-          memoryUnavailableReason: typeof options.memoryUnavailableReason === 'string'
-            ? options.memoryUnavailableReason
-            : null,
-          webSearchPolicy: ['required', 'available', 'disabled'].includes(options.webSearchPolicy)
-            ? options.webSearchPolicy
-            : (options.forceWebSearch === true ? 'required' : 'available'),
-          preferredExecutionAgentId: typeof options.preferredExecutionAgentId === 'string'
-            ? options.preferredExecutionAgentId
-            : null,
-          preferredRootId: typeof options.preferredRootId === 'string' ? options.preferredRootId : null,
-          workingDirectory: typeof options.workingDirectory === 'string' ? options.workingDirectory : null,
-          currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
-          workspaceAccess: options.workspaceAccess === 'read-write' ? 'read-write' : 'read-only',
-          workspaceContext: null
-        })
-      },
+      newSession,
+      newSessions,
       sessionMessages
     }
   } catch {
@@ -239,7 +277,10 @@ function loadDrafts(ownerUserId) {
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
-    sessions: [],
+    sessionLists: { standalone: emptySessionList() },
+    sessionCatalog: [],
+    sessionCatalogVersion: 0,
+    sessionsProjectId: null,
     current: null,
     loading: false,
     running: false,
@@ -257,12 +298,6 @@ export const useChatStore = defineStore('chat', {
     reconnectAttempts: 0,
     activity: emptyActivity(),
     sessionLoadVersion: 0,
-    sessionListVersion: 0,
-    sessionsLoaded: false,
-    sessionsNextCursor: null,
-    sessionsLoadingMore: false,
-    sessionsLoadMoreFailed: false,
-    sessionPageRequest: null,
     historyActionPending: false,
     sessionSettingsPending: 0,
     sessionRequestController: null,
@@ -272,14 +307,43 @@ export const useChatStore = defineStore('chat', {
     drafts: emptyDrafts(),
     attachmentDrafts: {
       newSession: [],
+      newSessions: { standalone: [] },
       sessionMessages: {}
     },
     audioDictations: {
       newSession: null,
+      newSessions: { standalone: null },
       sessionMessages: {}
     }
   }),
   getters: {
+    activeSessionList: (state) => state.sessionLists[sessionScopeKey(state.sessionsProjectId)]
+      || emptySessionList(),
+    sessions() {
+      return this.activeSessionList.items
+    },
+    sessionsLoaded() {
+      return this.activeSessionList.loaded
+    },
+    sessionsNextCursor() {
+      return this.activeSessionList.nextCursor
+    },
+    sessionsLoadingMore() {
+      return this.activeSessionList.loadingMore
+    },
+    sessionsLoadMoreFailed() {
+      return this.activeSessionList.loadMoreFailed
+    },
+    cachedSessions: (state) => {
+      const sessions = new Map(state.sessionCatalog.map((session) => [session.id, session]))
+      for (const list of Object.values(state.sessionLists)) {
+        for (const session of list.items) sessions.set(session.id, session)
+      }
+      return [...sessions.values()]
+    },
+    sessionList: (state) => (projectId = null) => (
+      state.sessionLists[sessionScopeKey(projectId)] || null
+    ),
     activeContext: (state) => state.current || state.drafts.newSession.options,
     activeDraft: (state) => state.current
       ? state.drafts.sessionMessages[state.current.id] || ''
@@ -289,6 +353,49 @@ export const useChatStore = defineStore('chat', {
       : state.attachmentDrafts.newSession
   },
   actions: {
+    ensureSessionList(projectId = null) {
+      const scope = sessionScopeKey(projectId)
+      if (!this.sessionLists[scope]) this.sessionLists[scope] = emptySessionList()
+      return this.sessionLists[scope]
+    },
+    findCachedSession(id) {
+      return this.cachedSessions.find((session) => session.id === id) || null
+    },
+    updateCachedSession(id, update) {
+      for (const list of Object.values(this.sessionLists)) {
+        const index = list.items.findIndex((session) => session.id === id)
+        if (index < 0) continue
+        list.version += 1
+        list.items[index] = update(list.items[index])
+        list.items = sortSessions(list.items)
+      }
+      const catalogIndex = this.sessionCatalog.findIndex((session) => session.id === id)
+      if (catalogIndex >= 0) {
+        this.sessionCatalogVersion += 1
+        this.sessionCatalog[catalogIndex] = update(this.sessionCatalog[catalogIndex])
+        this.sessionCatalog = sortSessions(this.sessionCatalog)
+      }
+    },
+    removeCachedSession(id) {
+      for (const list of Object.values(this.sessionLists)) {
+        if (!list.items.some((session) => session.id === id)) continue
+        list.version += 1
+        list.items = list.items.filter((session) => session.id !== id)
+      }
+      if (this.sessionCatalog.some((session) => session.id === id)) this.sessionCatalogVersion += 1
+      this.sessionCatalog = this.sessionCatalog.filter((session) => session.id !== id)
+    },
+    removeProjectScope(projectId) {
+      const scope = sessionScopeKey(projectId)
+      for (const attachment of this.attachmentDrafts.newSessions[scope] || []) {
+        if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
+      }
+      delete this.sessionLists[scope]
+      delete this.drafts.newSessions[scope]
+      delete this.attachmentDrafts.newSessions[scope]
+      delete this.audioDictations.newSessions[scope]
+      this.persistDrafts()
+    },
     setActivity(phase, details = {}) {
       const nextActivity = {
         phase,
@@ -318,6 +425,7 @@ export const useChatStore = defineStore('chat', {
     persistDrafts() {
       if (!this.draftOwnerUserId || typeof window === 'undefined') return
       try {
+        this.drafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = this.drafts.newSession
         window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({
           ownerUserId: this.draftOwnerUserId,
           ...this.drafts
@@ -332,6 +440,15 @@ export const useChatStore = defineStore('chat', {
       this.clearAllAttachmentDrafts()
       this.draftOwnerUserId = ownerUserId
       this.drafts = loadDrafts(ownerUserId)
+      const scope = sessionScopeKey(this.sessionsProjectId)
+      if (!this.drafts.newSessions[scope]) {
+        this.drafts.newSessions[scope] = normalizedNewSessionDraft(null)
+      }
+      this.drafts.newSession = this.drafts.newSessions[scope]
+      if (!this.attachmentDrafts.newSessions[scope]) this.attachmentDrafts.newSessions[scope] = []
+      this.attachmentDrafts.newSession = this.attachmentDrafts.newSessions[scope]
+      this.audioDictations.newSessions[scope] = null
+      this.audioDictations.newSession = this.audioDictations.newSessions[scope]
       if (ownerUserId) this.persistDrafts()
     },
     async fetchDefaults() {
@@ -416,7 +533,7 @@ export const useChatStore = defineStore('chat', {
         }
       }
       const draftBytes = [
-        ...this.attachmentDrafts.newSession,
+        ...Object.values(this.attachmentDrafts.newSessions).flat(),
         ...Object.values(this.attachmentDrafts.sessionMessages).flat()
       ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
       if (draftBytes + incomingBytes > MAX_ATTACHMENT_DRAFT_BYTES) {
@@ -455,21 +572,39 @@ export const useChatStore = defineStore('chat', {
         if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
       }
       if (sessionId) delete this.attachmentDrafts.sessionMessages[sessionId]
-      else this.attachmentDrafts.newSession = []
+      else {
+        const target = []
+        this.attachmentDrafts.newSession = target
+        this.attachmentDrafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = target
+      }
     },
     clearAllAttachmentDrafts() {
+      const newSessionAttachments = [...new Set([
+        ...Object.values(this.attachmentDrafts.newSessions || {}),
+        this.attachmentDrafts.newSession
+      ])]
       for (const attachment of [
-        ...this.attachmentDrafts.newSession,
+        ...newSessionAttachments.flat(),
         ...Object.values(this.attachmentDrafts.sessionMessages).flat()
       ]) {
         if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
       }
       this.attachmentDrafts = { newSession: [], sessionMessages: {} }
-      this.audioDictations = { newSession: null, sessionMessages: {} }
+      this.attachmentDrafts.newSessions = { standalone: this.attachmentDrafts.newSession }
+      this.audioDictations = { newSession: null, newSessions: { standalone: null }, sessionMessages: {} }
     },
     clearAllDrafts() {
       this.clearAllAttachmentDrafts()
       this.drafts = emptyDrafts()
+      const scope = sessionScopeKey(this.sessionsProjectId)
+      if (scope !== 'standalone') {
+        this.drafts.newSessions[scope] = normalizedNewSessionDraft(null)
+        this.drafts.newSession = this.drafts.newSessions[scope]
+        this.attachmentDrafts.newSessions[scope] = []
+        this.attachmentDrafts.newSession = this.attachmentDrafts.newSessions[scope]
+        this.audioDictations.newSessions[scope] = null
+        this.audioDictations.newSession = null
+      }
       if (typeof window !== 'undefined') window.localStorage.removeItem(DRAFT_STORAGE_KEY)
     },
     attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
@@ -498,7 +633,7 @@ export const useChatStore = defineStore('chat', {
           : [])
       ]
       const currentBytes = [
-        ...this.attachmentDrafts.newSession,
+        ...Object.values(this.attachmentDrafts.newSessions).flat(),
         ...Object.values(this.attachmentDrafts.sessionMessages).flat()
       ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
       const replacedBytes = replaced.reduce(
@@ -519,7 +654,10 @@ export const useChatStore = defineStore('chat', {
         objectUrl: attachmentPreviewUrl(file)
       }))
       if (sessionId) this.attachmentDrafts.sessionMessages[sessionId] = target
-      else this.attachmentDrafts.newSession = target
+      else {
+        this.attachmentDrafts.newSession = target
+        this.attachmentDrafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = target
+      }
     },
     getAudioDictation(sessionId = null) {
       return sessionId
@@ -533,90 +671,190 @@ export const useChatStore = defineStore('chat', {
         else delete this.audioDictations.sessionMessages[sessionId]
       } else {
         this.audioDictations.newSession = value
+        this.audioDictations.newSessions[sessionScopeKey(this.sessionsProjectId)] = value
       }
     },
-    resetNewDraft() {
-      this.clearAttachmentDraft(null)
-      this.drafts.newSession = {
+    resetNewDraft(projectId = this.sessionsProjectId) {
+      const scope = sessionScopeKey(projectId)
+      for (const attachment of this.attachmentDrafts.newSessions[scope] || []) {
+        if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
+      }
+      const draft = {
         message: '',
         options: sanitizedSessionOptions(this.sessionDefaults)
       }
+      this.drafts.newSessions[scope] = draft
+      this.attachmentDrafts.newSessions[scope] = []
+      this.audioDictations.newSessions[scope] = null
+      if (scope === sessionScopeKey(this.sessionsProjectId)) {
+        this.drafts.newSession = draft
+        this.attachmentDrafts.newSession = this.attachmentDrafts.newSessions[scope]
+        this.audioDictations.newSession = null
+      }
       this.persistDrafts()
     },
-    async fetchSessions(config = null) {
-      const version = ++this.sessionListVersion
-      const response = await api.get('/sessions', {
-        ...(config || {}),
-        params: { ...(config?.params || {}), pageSize: SESSION_PAGE_SIZE }
-      })
-      if (version !== this.sessionListVersion) return
-      this.sessions = sortSessions(response.data.items)
-      this.sessionsNextCursor = response.data.nextCursor
-      this.sessionsLoaded = true
-      this.sessionsLoadMoreFailed = false
-      if (this.sessionsNextCursor) return
-      this.pruneOrphanedSessionState()
+    async setSessionScope(projectId = null) {
+      const normalizedProjectId = projectId || null
+      const targetList = this.ensureSessionList(normalizedProjectId)
+      if (this.sessionsProjectId === normalizedProjectId && targetList.loaded) return
+      if (
+        this.sessionsProjectId !== normalizedProjectId
+        && !this.current
+        && this.selectedSessionId === null
+      ) {
+        this.sessionRequestController?.abort()
+        this.sessionLoadVersion += 1
+        if (this.running && !this.runId) {
+          this.running = false
+          this.stopping = false
+          this.cancelRequested = false
+          this.clearActivity()
+        }
+      }
+      const previousScope = sessionScopeKey(this.sessionsProjectId)
+      this.drafts.newSessions[previousScope] = this.drafts.newSession
+      this.attachmentDrafts.newSessions[previousScope] = this.attachmentDrafts.newSession
+      this.audioDictations.newSessions[previousScope] = this.audioDictations.newSession
+      this.sessionsProjectId = normalizedProjectId
+      const scope = sessionScopeKey(normalizedProjectId)
+      if (!this.drafts.newSessions[scope]) {
+        this.drafts.newSessions[scope] = {
+          message: '',
+          options: sanitizedSessionOptions(this.sessionDefaults)
+        }
+      }
+      this.drafts.newSession = this.drafts.newSessions[scope]
+      if (!this.attachmentDrafts.newSessions[scope]) this.attachmentDrafts.newSessions[scope] = []
+      this.attachmentDrafts.newSession = this.attachmentDrafts.newSessions[scope]
+      if (!Object.hasOwn(this.audioDictations.newSessions, scope)) {
+        this.audioDictations.newSessions[scope] = null
+      }
+      this.audioDictations.newSession = this.audioDictations.newSessions[scope]
+      this.persistDrafts()
+      if (!targetList.loaded) await this.fetchSessions(null, normalizedProjectId)
     },
-    async refreshSessions(config = null) {
-      if (!this.sessionsLoaded) return this.fetchSessions(config)
-      const version = ++this.sessionListVersion
-      const targetCount = Math.max(SESSION_PAGE_SIZE, this.sessions.length)
+    async fetchSessions(config = null, projectId = this.sessionsProjectId) {
+      const list = this.ensureSessionList(projectId)
+      if (list.loadRequest) return list.loadRequest
+      const version = ++list.version
+      list.loading = true
+      list.loadFailed = false
+      const request = (async () => {
+        const response = await api.get('/sessions', {
+          ...(config || {}),
+          params: {
+            ...(config?.params || {}),
+            ...sessionScopeParams(projectId),
+            pageSize: SESSION_PAGE_SIZE
+          }
+        })
+        if (version !== list.version) return
+        list.items = sortSessions(response.data.items)
+        list.nextCursor = response.data.nextCursor
+        list.loaded = true
+        list.loadMoreFailed = false
+      })()
+      list.loadRequest = markRaw(request)
+      try {
+        await request
+      } catch (error) {
+        if (version === list.version) list.loadFailed = true
+        throw error
+      } finally {
+        if (list.loadRequest === request) {
+          list.loadRequest = null
+          list.loading = false
+        }
+      }
+    },
+    async refreshSessions(config = null, projectId = this.sessionsProjectId) {
+      const list = this.ensureSessionList(projectId)
+      if (!list.loaded) return this.fetchSessions(config, projectId)
+      const version = ++list.version
+      const targetCount = Math.max(SESSION_PAGE_SIZE, list.items.length)
       const sessions = []
       let cursor = null
       do {
         const pageSize = Math.min(100, targetCount - sessions.length)
         const response = await api.get('/sessions', {
           ...(config || {}),
-          params: { ...(config?.params || {}), pageSize, cursor: cursor || undefined }
+          params: {
+            ...(config?.params || {}),
+            ...sessionScopeParams(projectId),
+            pageSize,
+            cursor: cursor || undefined
+          }
         })
-        if (version !== this.sessionListVersion) return
+        if (version !== list.version) return
         sessions.push(...response.data.items)
         cursor = response.data.nextCursor
       } while (cursor && sessions.length < targetCount)
-      this.sessions = sortSessions([...new Map(sessions.map((session) => [session.id, session])).values()])
-      this.sessionsNextCursor = cursor
-      this.sessionsLoadMoreFailed = false
-      if (!cursor) this.pruneOrphanedSessionState()
+      list.items = sortSessions([...new Map(sessions.map((session) => [session.id, session])).values()])
+      list.nextCursor = cursor
+      list.loadMoreFailed = false
     },
-    async fetchMoreSessions(config = null) {
-      const cursor = this.sessionsNextCursor
+    async fetchMoreSessions(config = null, projectId = this.sessionsProjectId) {
+      const list = this.ensureSessionList(projectId)
+      const cursor = list.nextCursor
       if (!cursor) return
-      if (this.sessionPageRequest) return this.sessionPageRequest
-      const version = ++this.sessionListVersion
-      this.sessionsLoadingMore = true
-      this.sessionsLoadMoreFailed = false
+      if (list.pageRequest) return list.pageRequest
+      const version = ++list.version
+      list.loadingMore = true
+      list.loadMoreFailed = false
       const request = (async () => {
         const response = await api.get('/sessions', {
           ...(config || {}),
-          params: { ...(config?.params || {}), pageSize: SESSION_PAGE_SIZE, cursor }
+          params: {
+            ...(config?.params || {}),
+            ...sessionScopeParams(projectId),
+            pageSize: SESSION_PAGE_SIZE,
+            cursor
+          }
         })
-        if (version !== this.sessionListVersion || cursor !== this.sessionsNextCursor) return
-        const sessions = new Map(this.sessions.map((session) => [session.id, session]))
+        if (version !== list.version || cursor !== list.nextCursor) return
+        const sessions = new Map(list.items.map((session) => [session.id, session]))
         for (const session of response.data.items) sessions.set(session.id, session)
-        this.sessions = sortSessions([...sessions.values()])
-        this.sessionsNextCursor = response.data.nextCursor
-        if (!this.sessionsNextCursor) this.pruneOrphanedSessionState()
+        list.items = sortSessions([...sessions.values()])
+        list.nextCursor = response.data.nextCursor
       })()
-      this.sessionPageRequest = markRaw(request)
+      list.pageRequest = markRaw(request)
       try {
         await request
       } catch (error) {
-        if (version === this.sessionListVersion) this.sessionsLoadMoreFailed = true
+        if (version === list.version) list.loadMoreFailed = true
         throw error
       } finally {
-        if (this.sessionPageRequest === request) this.sessionPageRequest = null
-        this.sessionsLoadingMore = false
+        if (list.pageRequest === request) list.pageRequest = null
+        list.loadingMore = false
       }
     },
-    async fetchAllSessions(config = null) {
-      if (!this.sessionsLoaded) await this.fetchSessions(config)
-      while (this.sessionsNextCursor) await this.fetchMoreSessions(config)
+    async fetchAllSessions(config = null, projectId = this.sessionsProjectId) {
+      const list = this.ensureSessionList(projectId)
+      if (!list.loaded) await this.fetchSessions(config, projectId)
+      while (list.nextCursor) await this.fetchMoreSessions(config, projectId)
     },
-    retrySessionPagination() {
-      this.sessionsLoadMoreFailed = false
+    async fetchSessionCatalog(config = null) {
+      const version = ++this.sessionCatalogVersion
+      const sessions = []
+      let cursor = null
+      do {
+        const response = await api.get('/sessions', {
+          ...(config || {}),
+          params: { ...(config?.params || {}), pageSize: 100, cursor: cursor || undefined }
+        })
+        sessions.push(...response.data.items)
+        cursor = response.data.nextCursor
+      } while (cursor)
+      if (version !== this.sessionCatalogVersion) return this.sessionCatalog
+      this.sessionCatalog = sortSessions(sessions)
+      this.pruneOrphanedSessionState()
+      return this.sessionCatalog
+    },
+    retrySessionPagination(projectId = this.sessionsProjectId) {
+      this.ensureSessionList(projectId).loadMoreFailed = false
     },
     pruneOrphanedSessionState() {
-      const sessionIds = new Set(this.sessions.map((session) => session.id))
+      const sessionIds = new Set(this.sessionCatalog.map((session) => session.id))
       for (const id of Object.keys(this.drafts.sessionMessages)) {
         if (!sessionIds.has(id)) delete this.drafts.sessionMessages[id]
       }
@@ -633,14 +871,14 @@ export const useChatStore = defineStore('chat', {
         await new Promise((resolve) => setTimeout(resolve, delay))
         const localSession = this.current?.id === sessionId
           ? this.current
-          : this.sessions.find((item) => item.id === sessionId)
+          : this.findCachedSession(sessionId)
         if (!ACTIVE_TITLE_GENERATION_STATUSES.has(localSession?.titleGenerationStatus)) return
         try {
-          await this.refreshSessions()
+          await this.refreshSessions(null, localSession?.projectId || null)
         } catch {
           continue
         }
-        const session = this.sessions.find((item) => item.id === sessionId)
+        const session = this.findCachedSession(sessionId)
         if (!session) continue
         if (this.current?.id === sessionId) {
           this.current.title = session.title
@@ -660,11 +898,11 @@ export const useChatStore = defineStore('chat', {
       this.loadError = null
       const controlCenter = useControlCenterStore()
       if (id) {
-        controlCenter.bindSession(this.sessions.find((session) => session.id === id) || { id })
+        controlCenter.bindSession(this.findCachedSession(id) || { id })
       } else {
         controlCenter.resetDraft()
       }
-      if (this.runSessionId !== id) {
+      if (this.runSessionId !== id || (!id && this.running && !this.runId)) {
         clearTimeout(this.reconnectTimer)
         this.reconnectTimer = null
         this.reconnectAttempts = 0
@@ -814,8 +1052,7 @@ export const useChatStore = defineStore('chat', {
         if (this.current?.id === session.id && this.selectedSessionId === session.id) {
           this.current = { ...session, ...data }
         }
-        const index = this.sessions.findIndex((item) => item.id === data.id)
-        if (index >= 0) this.sessions[index] = { ...this.sessions[index], ...data }
+        this.updateCachedSession(data.id, (item) => ({ ...item, ...data }))
         return data
       } finally {
         this.sessionSettingsPending = Math.max(0, this.sessionSettingsPending - 1)
@@ -823,16 +1060,35 @@ export const useChatStore = defineStore('chat', {
     },
     async renameSession(id, title) {
       const { data } = await api.patch(`/sessions/${id}`, { title })
-      this.sessions = sortSessions(
-        this.sessions.map((session) => session.id === id ? { ...session, ...data } : session)
-      )
+      this.updateCachedSession(id, (session) => ({ ...session, ...data }))
       if (this.current?.id === id) this.current = { ...this.current, ...data }
+    },
+    async moveSession(id, projectId) {
+      const catalogHadSession = this.sessionCatalog.some((session) => session.id === id)
+      const { data } = await api.patch(`/sessions/${id}`, { project_id: projectId || null })
+      this.removeCachedSession(id)
+      const targetList = this.sessionLists[sessionScopeKey(projectId)]
+      if (targetList?.loadRequest) {
+        try {
+          await targetList.loadRequest
+        } catch {
+          // The destination remains retryable when its independent list request failed.
+        }
+      }
+      if (targetList?.loaded) {
+        targetList.version += 1
+        targetList.items = sortSessions([data, ...targetList.items])
+      }
+      if (catalogHadSession) {
+        this.sessionCatalogVersion += 1
+        this.sessionCatalog = sortSessions([data, ...this.sessionCatalog])
+      }
+      if (this.current?.id === id) this.current = { ...this.current, ...data }
+      return data
     },
     async setSessionPinned(id, pinned) {
       const { data } = await api.patch(`/sessions/${id}`, { pinned })
-      this.sessions = sortSessions(
-        this.sessions.map((session) => session.id === id ? { ...session, ...data } : session)
-      )
+      this.updateCachedSession(id, (session) => ({ ...session, ...data }))
       if (this.current?.id === id) this.current = { ...this.current, ...data }
     },
     async deleteSession(id, { automationMode = null, automationImpact = null, suppressErrorToast = false } = {}) {
@@ -842,7 +1098,7 @@ export const useChatStore = defineStore('chat', {
       }
       if (Object.keys(config).length) await api.delete(`/sessions/${id}`, config)
       else await api.delete(`/sessions/${id}`)
-      this.sessions = this.sessions.filter((item) => item.id !== id)
+      this.removeCachedSession(id)
       delete this.drafts.sessionMessages[id]
       this.clearAttachmentDraft(id)
       this.setAudioDictation(null, id)
@@ -876,18 +1132,19 @@ export const useChatStore = defineStore('chat', {
       if (sessionId) this.setSessionRunStatus(sessionId, null)
     },
     setSessionRunStatus(sessionId, status) {
-      this.sessionListVersion += 1
-      const session = this.sessions.find((item) => item.id === sessionId)
-      if (session) session.activeRunStatus = status
+      this.updateCachedSession(sessionId, (session) => ({ ...session, activeRunStatus: status }))
     },
     updateSessionSummary(session) {
       const summary = { ...session }
       delete summary.messages
       delete summary.activeRun
-      const existing = this.sessions.some((item) => item.id === session.id)
-      this.sessions = sortSessions(existing
-        ? this.sessions.map((item) => item.id === session.id ? { ...item, ...summary } : item)
-        : [...this.sessions, summary])
+      const list = this.sessionLists[sessionScopeKey(summary.projectId)]
+      if (!list?.loaded) return
+      const existing = list.items.some((item) => item.id === session.id)
+      list.version += 1
+      list.items = sortSessions(existing
+        ? list.items.map((item) => item.id === session.id ? { ...item, ...summary } : item)
+        : [...list.items, summary])
     },
     applySessionResult(session) {
       this.current = session
@@ -902,10 +1159,8 @@ export const useChatStore = defineStore('chat', {
         { throughMessageId: message.id },
         { suppressErrorToast: true }
       )
-      this.sessionListVersion += 1
       if (this.current?.id === session.id) this.current.hasUnreadMessages = false
-      const summary = this.sessions.find((item) => item.id === session.id)
-      if (summary) summary.hasUnreadMessages = false
+      this.updateCachedSession(session.id, (summary) => ({ ...summary, hasUnreadMessages: false }))
     },
     async undoUserMessage(message) {
       const session = this.current
@@ -984,7 +1239,7 @@ export const useChatStore = defineStore('chat', {
         this.clearAttachmentDraft(session.id)
         this.setAudioDictation(null, session.id)
         if (data.sessionDeleted) {
-          this.sessions = this.sessions.filter((item) => item.id !== session.id)
+          this.removeCachedSession(session.id)
           if (stillSelected) {
             this.current = null
             this.selectedSessionId = null
@@ -1098,6 +1353,7 @@ export const useChatStore = defineStore('chat', {
     async startSession(content, attachments = []) {
       const sessionLoadVersion = this.sessionLoadVersion
       const selectedSessionId = this.selectedSessionId
+      const projectId = this.sessionsProjectId
       this.running = true
       this.streamContent = ''
       this.streamReasoning = null
@@ -1108,6 +1364,7 @@ export const useChatStore = defineStore('chat', {
       try {
         const payload = {
           content,
+          project_id: projectId,
           model_id: options.modelId,
           memory_mode: options.memoryMode,
           web_search_policy: options.webSearchPolicy,
@@ -1147,8 +1404,20 @@ export const useChatStore = defineStore('chat', {
           && this.sessionLoadVersion === sessionLoadVersion
           && this.selectedSessionId === selectedSessionId
           && !this.current
-        this.sessions = [data.session, ...this.sessions.filter((item) => item.id !== session.id)]
-        this.resetNewDraft()
+        const list = this.ensureSessionList(data.session.projectId)
+        if (list.loadRequest) {
+          try {
+            await list.loadRequest
+          } catch {
+            // The created session remains canonical even if the independent list load failed.
+          }
+        }
+        list.version += 1
+        list.items = sortSessions([
+          data.session,
+          ...list.items.filter((item) => item.id !== session.id)
+        ])
+        this.resetNewDraft(projectId)
         if (stillSelected) {
           this.current = session
           this.selectedSessionId = session.id
@@ -1198,11 +1467,10 @@ export const useChatStore = defineStore('chat', {
           if (index >= 0) session.messages[index] = data.message
           if (data.message.createdAt) {
             session.lastMessageAt = data.message.createdAt
-            this.sessions = sortSessions(
-              this.sessions.map((item) => item.id === session.id
-                ? { ...item, lastMessageAt: data.message.createdAt }
-                : item)
-            )
+            this.updateCachedSession(session.id, (item) => ({
+              ...item,
+              lastMessageAt: data.message.createdAt
+            }))
           }
         }
         this.clearAttachmentDraft(session.id)
@@ -1292,14 +1560,11 @@ export const useChatStore = defineStore('chat', {
           this.current.title = payload.title
           this.current.titleGenerationStatus = 'completed'
         }
-        const index = this.sessions.findIndex((session) => session.id === payload.sessionId)
-        if (index >= 0) {
-          this.sessions[index] = {
-            ...this.sessions[index],
-            title: payload.title,
-            titleGenerationStatus: 'completed'
-          }
-        }
+        this.updateCachedSession(payload.sessionId, (session) => ({
+          ...session,
+          title: payload.title,
+          titleGenerationStatus: 'completed'
+        }))
       })
       source.addEventListener('agent.identity.updated', (event) => {
         if (this.eventSource !== source) return

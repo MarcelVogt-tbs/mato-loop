@@ -61,6 +61,10 @@ class RuntimeConfig(BaseSettings):
     def sessions_dir(self) -> Path:
         return self.data_dir / "sessions"
 
+    @property
+    def projects_dir(self) -> Path:
+        return self.data_dir / "projects"
+
 
 @lru_cache
 def get_runtime_config() -> RuntimeConfig:

@@ -225,6 +225,68 @@ def path_permission(
     )
 
 
+def project_session_path_permission(
+    *,
+    project_id: UUID,
+    session_id: UUID,
+    relative_path: str,
+    action_kind: str,
+    action_label: str,
+) -> PermissionRequest:
+    scope = json.dumps(
+        {
+            "path": RootFileService(UUID(int=0)).normalize_relative_path(relative_path),
+            "projectId": str(project_id),
+            "sessionId": str(session_id),
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return PermissionRequest(
+        capability="filesystem.read",
+        resource_type="project_session_path",
+        resource_scope=scope,
+        action_kind=action_kind,
+        risk_level="medium",
+        title=f"{action_label} erlauben?",
+        summary="Der Agent möchte Dateien einer Session im aktuellen Projekt lesen.",
+        resource_display=f"Projekt-Session:{relative_path}",
+    )
+
+
+def _project_session_path_scope(
+    resource_scope: str,
+) -> tuple[UUID, UUID, str] | None:
+    try:
+        value = json.loads(resource_scope)
+        if not isinstance(value, dict) or set(value) != {
+            "path",
+            "projectId",
+            "sessionId",
+        }:
+            return None
+        project_id = UUID(value["projectId"])
+        session_id = UUID(value["sessionId"])
+        path = RootFileService(UUID(int=0)).normalize_relative_path(value["path"])
+        canonical = json.dumps(
+            value,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        if (
+            canonical != resource_scope
+            or str(project_id) != value["projectId"]
+            or str(session_id) != value["sessionId"]
+            or path != value["path"]
+        ):
+            return None
+        return project_id, session_id, path
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, RootFileError):
+        return None
+
+
 def execution_directory_scope(
     agent_id: UUID, path: str, root_id: UUID, root_revision: str
 ) -> str:
@@ -719,7 +781,21 @@ class PermissionPolicy:
 
         if request.resource_type == "session" and request.capability == "session.read":
             try:
-                if UUID(request.resource_scope) == chat_session.id:
+                target_id = UUID(request.resource_scope)
+                if target_id == chat_session.id:
+                    return (
+                        PermissionDecision.DENY
+                        if policy == ToolExecutionPolicy.DISABLED
+                        else PermissionDecision.ALLOW
+                    )
+                target = await db.get(ChatSession, target_id)
+                if (
+                    chat_session.project_id is not None
+                    and target is not None
+                    and target.user_id == chat_session.user_id
+                    and target.project_id == chat_session.project_id
+                    and target.session_type == "chat"
+                ):
                     return (
                         PermissionDecision.DENY
                         if policy == ToolExecutionPolicy.DISABLED
@@ -727,6 +803,37 @@ class PermissionPolicy:
                     )
             except ValueError:
                 return PermissionDecision.DENY
+
+        if request.resource_type == "session_collection":
+            if request.resource_scope != "all":
+                return PermissionDecision.DENY
+            if chat_session.project_id is not None:
+                return (
+                    PermissionDecision.DENY
+                    if policy == ToolExecutionPolicy.DISABLED
+                    else PermissionDecision.ALLOW
+                )
+
+        if request.resource_type == "project_session_path":
+            scope = _project_session_path_scope(request.resource_scope)
+            if scope is None or request.capability != "filesystem.read":
+                return PermissionDecision.DENY
+            project_id, target_id, _path = scope
+            target = await db.get(ChatSession, target_id)
+            if (
+                chat_session.project_id is None
+                or project_id != chat_session.project_id
+                or target is None
+                or target.user_id != chat_session.user_id
+                or target.project_id != project_id
+                or target.session_type != "chat"
+            ):
+                return PermissionDecision.DENY
+            return (
+                PermissionDecision.DENY
+                if policy == ToolExecutionPolicy.DISABLED
+                else PermissionDecision.ALLOW
+            )
 
         if request.resource_type == "execution_directory":
             if _execution_directory_scope(request.resource_scope) is None:
@@ -861,6 +968,8 @@ class PermissionPolicy:
                 return False
         if request.resource_type == "session_collection":
             return request.resource_scope == grant.resource_scope == "all"
+        if request.resource_type == "project_session_path":
+            return False
         if request.resource_type == "url":
             return request.resource_scope == grant.resource_scope
         if request.resource_type == "shell_command":

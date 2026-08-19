@@ -1888,6 +1888,7 @@ class AgentRuntime:
                                     db,
                                     owner_id=chat_session.user_id,
                                     current_session_id=chat_session.id,
+                                    project_id=chat_session.project_id,
                                     readable_by=model_trust_level,
                                     query=rag_query,
                                     limit=AUTOMATIC_EPISODE_MAX_ITEMS,
@@ -1918,6 +1919,7 @@ class AgentRuntime:
                                         db,
                                         owner_id=chat_session.user_id,
                                         current_session_id=chat_session.id,
+                                        project_id=chat_session.project_id,
                                         readable_by=model_trust_level,
                                         query=contextual_rag_query,
                                         limit=AUTOMATIC_EPISODE_MAX_ITEMS,
@@ -1945,6 +1947,7 @@ class AgentRuntime:
                                     db,
                                     owner_id=chat_session.user_id,
                                     current_session_id=chat_session.id,
+                                    project_id=chat_session.project_id,
                                     readable_by=model_trust_level,
                                     limit=AUTOMATIC_EPISODE_MAX_ITEMS,
                                 )

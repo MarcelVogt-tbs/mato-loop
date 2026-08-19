@@ -2,7 +2,9 @@
 
 ## Neue und vorhandene Sessions
 
-Eine neue Session entsteht serverseitig erst mit der ersten Nachricht. Nicht gesendeter Text wird im Browser getrennt je Session gespeichert. Vorhandene Sessions können geöffnet, angepinnt, umbenannt und gelöscht werden.
+Eine neue Session entsteht serverseitig erst mit der ersten Nachricht. Nicht gesendeter Text wird im Browser getrennt je Session und Projekt gespeichert. Vorhandene Sessions können geöffnet, angepinnt, umbenannt, zwischen Projekten verschoben und gelöscht werden.
+
+Projekte gruppieren zusammengehörige Sessions in der Seitenleiste. Ein Projektordner kann unabhängig von anderen Projekten aufgeklappt werden. Der Stift am Projekt startet eine neue Session in diesem Projekt; Sessions ohne Projekt stehen darunter im Bereich **Sessions**.
 
 ## Session-Einstellungen
 

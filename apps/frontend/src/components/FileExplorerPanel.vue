@@ -552,7 +552,7 @@ function parentPath(path) {
 }
 
 function grantDisplay(grant) {
-  return permissionGrantDisplay(grant, chat.sessions)
+  return permissionGrantDisplay(grant, chat.cachedSessions)
 }
 
 async function loadPermissions() {

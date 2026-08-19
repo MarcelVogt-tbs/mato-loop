@@ -17,6 +17,7 @@ from mato_loop_backend.agent.permissions import (
     media_permission,
     memory_write_permission,
     path_permission,
+    project_session_path_permission,
     session_browse_permission,
     session_permission,
     session_search_permission,
@@ -735,6 +736,36 @@ async def test_other_session_read_requires_approval_without_matching_grant(tmp_p
 
     assert decision == PermissionDecision.ASK
     db.scalars.assert_awaited_once()
+
+
+async def test_same_project_session_reads_are_automatic_but_can_be_disabled(tmp_path) -> None:
+    project_id = uuid4()
+    session = _session(user_id=uuid4(), project_id=project_id, session_type="chat")
+    target = _session(user_id=session.user_id, project_id=project_id, session_type="chat")
+    db = _db_with_grants()
+    db.get.return_value = target
+    root_files = _root_files(tmp_path, session)
+    path_request = project_session_path_permission(
+        project_id=project_id,
+        session_id=target.id,
+        relative_path="files/notes.txt",
+        action_kind="read",
+        action_label="Datei lesen",
+    )
+
+    assert await PermissionPolicy.evaluate(
+        db, session, session_permission(target.id), root_files
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        db, session, path_request, root_files
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        path_request,
+        root_files,
+        ToolExecutionPolicy.DISABLED,
+    ) == PermissionDecision.DENY
 
 
 async def test_session_grant_only_allows_its_exact_target(tmp_path) -> None:

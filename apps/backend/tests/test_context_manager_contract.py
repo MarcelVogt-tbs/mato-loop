@@ -793,6 +793,16 @@ def test_general_system_prompt_exposes_mermaid_rendering() -> None:
     assert "Never wrap the complete response in a `markdown` code fence" in prompt
 
 
+def test_general_system_prompt_keeps_permission_denials_host_scoped() -> None:
+    prompt = general_system_prompt(
+        _session(), offered_tool_names=frozenset({"calendar_query_events"})
+    )
+
+    assert "permission.denied is from MatoLoop" in prompt
+    assert "not an external service" in prompt
+    assert "do not guess why" in prompt
+
+
 def test_general_system_prompt_reports_selected_offline_computer() -> None:
     prompt = general_system_prompt(
         _session(),

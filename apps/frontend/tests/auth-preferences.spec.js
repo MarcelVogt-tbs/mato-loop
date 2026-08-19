@@ -91,8 +91,16 @@ describe('auth store', () => {
 
     await auth.logout()
 
-    expect(chat.attachmentDrafts).toEqual({ newSession: [], sessionMessages: {} })
-    expect(chat.audioDictations).toEqual({ newSession: null, sessionMessages: {} })
+    expect(chat.attachmentDrafts).toEqual({
+      newSession: [],
+      newSessions: { standalone: [] },
+      sessionMessages: {}
+    })
+    expect(chat.audioDictations).toEqual({
+      newSession: null,
+      newSessions: { standalone: null },
+      sessionMessages: {}
+    })
     expect(chat.activeDraft).toBe('')
     expect(identity.displayName).toBe('MatoLoop')
     expect(identity.loaded).toBe(false)

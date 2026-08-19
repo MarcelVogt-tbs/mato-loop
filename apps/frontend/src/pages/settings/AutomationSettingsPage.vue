@@ -377,7 +377,7 @@ const form = reactive({
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 const cronRule = (value) => String(value || '').trim().split(/\s+/).length === 5 || 'Cron muss genau fünf Felder enthalten.'
 const sessionOptions = computed(() => {
-  const options = chat.sessions.map((session) => ({ label: session.title, value: session.id }))
+  const options = chat.sessionCatalog.map((session) => ({ label: session.title, value: session.id }))
   for (const id of [form.outputSessionId, automations.detail?.outputSessionId]) {
     if (id && !options.some((option) => option.value === id)) {
       options.push({ label: 'Session nicht verfügbar', value: id })
@@ -622,14 +622,14 @@ function statusTextColor(color) {
 }
 
 function sessionTitle(id) {
-  return chat.sessions.find((session) => session.id === id)?.title
+  return chat.sessionCatalog.find((session) => session.id === id)?.title
 }
 
 async function loadSessions() {
   sessionsLoading.value = true
   sessionLoadFailed.value = false
   try {
-    await chat.fetchAllSessions({ suppressErrorToast: true })
+    await chat.fetchSessionCatalog({ suppressErrorToast: true })
   } catch {
     sessionLoadFailed.value = true
   } finally {

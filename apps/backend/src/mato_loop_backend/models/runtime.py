@@ -12,6 +12,7 @@ from sqlalchemy import (
     Computed,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -28,6 +29,7 @@ from mato_loop_backend.db.base import Base
 
 if TYPE_CHECKING:
     from mato_loop_backend.models.automation import AutomationRun
+    from mato_loop_backend.models.project import Project
 from mato_loop_backend.settings.models import TrustLevel
 
 
@@ -160,12 +162,22 @@ class ChatSession(Base):
         CheckConstraint(
             "session_type IN ('chat', 'automation')", name="session_type_valid"
         ),
+        CheckConstraint(
+            "project_id IS NULL OR session_type = 'chat'",
+            name="project_chat_sessions_only",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "user_id"],
+            ["projects.id", "projects.user_id"],
+            name="fk_chat_sessions_project_owner",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    project_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(240), nullable=False, default="Neue Session")
     session_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default="chat", server_default=text("'chat'")
@@ -221,6 +233,7 @@ class ChatSession(Base):
     context_summaries: Mapped[list[ContextSummary]] = relationship(
         back_populates="chat_session", cascade="all, delete-orphan", passive_deletes=True
     )
+    project: Mapped[Project | None] = relationship()
 
 
 class Notification(Base):

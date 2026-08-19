@@ -49,6 +49,7 @@ from mato_loop_backend.agent.permissions import (
     memory_write_permission,
     path_permission,
     private_integration_data_release_permission,
+    project_session_path_permission,
     session_browse_permission,
     session_permission,
     session_search_permission,
@@ -1357,15 +1358,24 @@ def validate_question_answers(
     return validated
 
 
-class ReadArguments(ToolArguments):
+class SessionFileReadArguments(ToolArguments):
     root: Literal["session", "workspace"]
+    session_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def session_target_requires_session_root(self) -> SessionFileReadArguments:
+        if self.session_id is not None and self.root != "session":
+            raise ValueError("session_id requires root=session")
+        return self
+
+
+class ReadArguments(SessionFileReadArguments):
     path: str = Field(min_length=1, max_length=1_000)
     offset: int = Field(default=1, ge=1)
     limit: int = Field(default=1_000, ge=1, le=1_000)
 
 
-class GlobArguments(ToolArguments):
-    root: Literal["session", "workspace"]
+class GlobArguments(SessionFileReadArguments):
     pattern: str = Field(min_length=1, max_length=1_000, pattern=r"^[^\x00]+$")
     path: str = Field(default=".", max_length=1_000)
 
@@ -1377,8 +1387,7 @@ class GrepArguments(GlobArguments):
     )
 
 
-class ProvideFileArguments(ToolArguments):
-    root: Literal["session", "workspace"]
+class ProvideFileArguments(SessionFileReadArguments):
     path: str = Field(min_length=1, max_length=1_000)
 
 
@@ -1842,6 +1851,8 @@ def _filesystem_permission(
     capability: str,
     action_kind: str,
     action_label: str,
+    root_files: RootFileService | None = None,
+    target_session_id: UUID | None = None,
 ) -> PermissionRequest:
     if FileRoot(root) is FileRoot.WORKSPACE:
         client = _workspace_client(context)
@@ -1868,8 +1879,18 @@ def _filesystem_permission(
             summary=f"Der Agent möchte workspace:{normalized_path} verwenden.",
             resource_display=f"workspace:{normalized_path}",
         )
+    selected_files = root_files or context.root_files
+    if target_session_id is not None and target_session_id != context.session.id:
+        assert context.session.project_id is not None
+        return project_session_path_permission(
+            project_id=context.session.project_id,
+            session_id=target_session_id,
+            relative_path=path,
+            action_kind=action_kind,
+            action_label=action_label,
+        )
     return path_permission(
-        root_files=context.root_files,
+        root_files=selected_files,
         root=root,
         capability=capability,
         relative_path=path,
@@ -1984,7 +2005,44 @@ async def _workspace_request(
     return await _workspace_client(context).request(operation, arguments, result_model)
 
 
+async def _project_read_files(
+    arguments: SessionFileReadArguments,
+    context: ToolContext,
+) -> tuple[RootFileService, UUID] | None:
+    target_id = arguments.session_id or context.session.id
+    if arguments.root == "workspace" or target_id == context.session.id:
+        return context.root_files, context.session.id
+    if (
+        context.session.project_id is None
+        or context.model_trust_level == TrustLevel.PUBLIC
+    ):
+        return None
+    target = await context.db.scalar(
+        select(ChatSession).where(
+            ChatSession.id == target_id,
+            ChatSession.user_id == context.session.user_id,
+            ChatSession.project_id == context.session.project_id,
+            ChatSession.session_type == "chat",
+        )
+    )
+    if target is None:
+        return None
+    return (
+        RootFileService(
+            target.id,
+            session_storage=context.root_files.session_storage,
+            session_quota_bytes=context.root_files.SESSION_QUOTA_BYTES,
+            max_editable_text_bytes=context.root_files.max_editable_text_bytes,
+        ),
+        target.id,
+    )
+
+
 async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
+    selected = await _project_read_files(arguments, context)
+    if selected is None:
+        return ToolResult.error("permission.denied")
+    root_files, target_session_id = selected
     request = _filesystem_permission(
         context,
         root=arguments.root,
@@ -1992,10 +2050,12 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         capability="filesystem.read",
         action_kind="read",
         action_label="Pfad lesen",
+        root_files=root_files,
+        target_session_id=target_session_id,
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
-    normalized_path = context.root_files.normalize_relative_path(arguments.path)
+    normalized_path = root_files.normalize_relative_path(arguments.path)
     kind: str
     if arguments.root == "workspace":
         stat_result = await _workspace_request(
@@ -2006,7 +2066,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         )
         kind = stat_result.kind
     else:
-        kind = context.root_files.path_kind(arguments.root, normalized_path)
+        kind = root_files.path_kind(arguments.root, normalized_path)
     if kind == "directory":
         if arguments.root == "workspace":
             result = await _workspace_request(
@@ -2020,7 +2080,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
                 WorkspaceListResult,
             )
         else:
-            result = context.root_files.list_directory(
+            result = root_files.list_directory(
                 arguments.root,
                 arguments.path,
                 offset=arguments.offset - 1,
@@ -2029,6 +2089,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         return ToolResult.json(
             {
                 "root": arguments.root,
+                "sessionId": str(target_session_id),
                 "path": arguments.path,
                 "entries": [
                     {
@@ -2049,7 +2110,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         )
     if kind != "file":
         return ToolResult.error("file.unsupportedType")
-    if arguments.root == "session":
+    if arguments.root == "session" and target_session_id == context.session.id:
         filters = [
             MessageAttachment.storage_path == normalized_path,
             MessageAttachment.kind == "image",
@@ -2091,7 +2152,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             WorkspaceReadResult,
         )
     else:
-        result = context.root_files.read_file(
+        result = root_files.read_file(
             arguments.root,
             arguments.path,
             offset=arguments.offset,
@@ -2112,6 +2173,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         content,
         {
             "root": arguments.root,
+            "sessionId": str(target_session_id),
             "path": arguments.path,
             "offset": arguments.offset,
             "limit": arguments.limit,
@@ -2124,6 +2186,10 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
 
 
 async def _glob(arguments: GlobArguments, context: ToolContext) -> ToolResult:
+    selected = await _project_read_files(arguments, context)
+    if selected is None:
+        return ToolResult.error("permission.denied")
+    root_files, target_session_id = selected
     request = _filesystem_permission(
         context,
         root=arguments.root,
@@ -2131,6 +2197,8 @@ async def _glob(arguments: GlobArguments, context: ToolContext) -> ToolResult:
         capability="filesystem.read",
         action_kind="glob",
         action_label="Dateien suchen",
+        root_files=root_files,
+        target_session_id=target_session_id,
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
@@ -2146,13 +2214,24 @@ async def _glob(arguments: GlobArguments, context: ToolContext) -> ToolResult:
         )
         payload = result.model_dump(mode="json", by_alias=True)
     else:
-        payload = await RootFileSearch(context.root_files).glob(
+        payload = await RootFileSearch(root_files).glob(
             arguments.root, arguments.path, arguments.pattern
         )
-    return ToolResult.json({"root": arguments.root, "path": arguments.path, **payload})
+    return ToolResult.json(
+        {
+            "root": arguments.root,
+            "sessionId": str(target_session_id),
+            "path": arguments.path,
+            **payload,
+        }
+    )
 
 
 async def _grep(arguments: GrepArguments, context: ToolContext) -> ToolResult:
+    selected = await _project_read_files(arguments, context)
+    if selected is None:
+        return ToolResult.error("permission.denied")
+    root_files, target_session_id = selected
     request = _filesystem_permission(
         context,
         root=arguments.root,
@@ -2160,6 +2239,8 @@ async def _grep(arguments: GrepArguments, context: ToolContext) -> ToolResult:
         capability="filesystem.read",
         action_kind="grep",
         action_label="Dateiinhalte durchsuchen",
+        root_files=root_files,
+        target_session_id=target_session_id,
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
@@ -2176,15 +2257,26 @@ async def _grep(arguments: GrepArguments, context: ToolContext) -> ToolResult:
         )
         payload = result.model_dump(mode="json", by_alias=True)
     else:
-        payload = await RootFileSearch(context.root_files).grep(
+        payload = await RootFileSearch(root_files).grep(
             arguments.root, arguments.path, arguments.pattern, arguments.include
         )
-    return ToolResult.json({"root": arguments.root, "path": arguments.path, **payload})
+    return ToolResult.json(
+        {
+            "root": arguments.root,
+            "sessionId": str(target_session_id),
+            "path": arguments.path,
+            **payload,
+        }
+    )
 
 
 async def _provide_file(
     arguments: ProvideFileArguments, context: ToolContext
 ) -> ToolResult:
+    selected = await _project_read_files(arguments, context)
+    if selected is None:
+        return ToolResult.error("permission.denied")
+    root_files, target_session_id = selected
     request = _filesystem_permission(
         context,
         root=arguments.root,
@@ -2192,10 +2284,12 @@ async def _provide_file(
         capability="filesystem.read",
         action_kind="provide_file",
         action_label="Datei bereitstellen",
+        root_files=root_files,
+        target_session_id=target_session_id,
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
-    path = context.root_files.normalize_relative_path(arguments.path)
+    path = root_files.normalize_relative_path(arguments.path)
     if arguments.root == "workspace":
         client = _workspace_client(context)
         result = await client.request(
@@ -2206,17 +2300,17 @@ async def _provide_file(
             return ToolResult.error("file.notAFile", field="path")
         size = result.size
     else:
-        with context.root_files.open_file(arguments.root, path) as handle:
+        with root_files.open_file(arguments.root, path) as handle:
             size = os.fstat(handle.fileno()).st_size
     scope = "session" if arguments.root == "session" else "filesystem"
     query = {
         "path": path,
         "scope": scope,
-        "session_id": str(context.session.id),
+        "session_id": str(target_session_id),
         "root_identity": (
             str(_workspace_client(context).root_id)
             if arguments.root == "workspace"
-            else context.root_files.root_identity(arguments.root)
+            else root_files.root_identity(arguments.root)
         ),
     }
     if arguments.root == "workspace":
@@ -2231,6 +2325,7 @@ async def _provide_file(
     return ToolResult.json(
         {
             "root": arguments.root,
+            "sessionId": str(target_session_id),
             "path": path,
             "filename": path.rsplit("/", 1)[-1],
             "sizeBytes": size,
@@ -4069,6 +4164,12 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
     )
     if target is None:
         return ToolResult.error("session.notFound")
+    if (
+        target.id != context.session.id
+        and context.memory_trust_level == TrustLevel.PUBLIC
+        and target.private_integration_data_used
+    ):
+        return ToolResult.error("permission.denied")
     records = list(
         (
             await context.db.scalars(
@@ -4260,6 +4361,12 @@ async def _session_browse(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
+                ChatSession.project_id == context.session.project_id,
+                *(
+                    [ChatSession.private_integration_data_used.is_(False)]
+                    if context.memory_trust_level == TrustLevel.PUBLIC
+                    else []
+                ),
             )
             .order_by(messages.c.created_at.desc(), ChatSession.id.desc())
             .limit(arguments.limit)
@@ -4326,6 +4433,12 @@ async def _session_search(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
+                ChatSession.project_id == context.session.project_id,
+                *(
+                    [ChatSession.private_integration_data_used.is_(False)]
+                    if context.memory_trust_level == TrustLevel.PUBLIC
+                    else []
+                ),
                 or_(*match_conditions),
             )
             .order_by(

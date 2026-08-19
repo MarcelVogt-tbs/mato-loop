@@ -268,7 +268,7 @@ const actionIcon = computed(() => {
   if (props.approval.resourceType === 'session') return 'forum'
   return 'approval'
 })
-const resource = computed(() => approvalResource(props.approval, chat.sessions))
+const resource = computed(() => approvalResource(props.approval, chat.cachedSessions))
 const skillDraftApproval = computed(() => (
   props.approval.actionKind === 'build_skill' || props.approval.actionKind === 'edit_skill'
 ))

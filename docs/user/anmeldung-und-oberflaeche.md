@@ -17,12 +17,12 @@ Beim Löschen entfernt MatoLoop die zugehörigen Datenbankdaten und Session-Bäu
 Die linke Seitenleiste enthält:
 
 - Benachrichtigungsglocke als direkter Zugang zu **Benachrichtigungen** im Control Center
-- Schaltfläche für eine neue Session
-- gruppierte Liste vorhandener Sessions
+- aufklappbare Projekte mit ihren Sessions und einer Schaltfläche für eine neue Projekt-Session
+- Bereich **Sessions** für Unterhaltungen ohne Projekt
 - Statushinweise für aktive Läufe und offene Freigaben
 - Benutzermenü mit Einstellungen, Dokumentation, Farbschema und Abmeldung
 
-Sessions werden in **Angepinnt**, **Heute**, **Gestern**, **Letzte 7 Tage** und **Älter** gruppiert. Weitere Einträge lädt MatoLoop beim Scrollen automatisch nach. Nach einem Ladefehler kann **Weitere Sessions laden** verwendet werden.
+Projektordner laden ihre Sessions erst beim Aufklappen. **Mehr anzeigen** lädt innerhalb des jeweiligen Projekts oder im Bereich **Sessions** weitere Einträge. Ladefehler können direkt an der betroffenen Liste erneut versucht werden.
 
 ## Control Center
 

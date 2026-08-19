@@ -54,6 +54,7 @@ from mato_loop_backend.models import (
     Message,
     MessageAttachment,
     PermissionGrant,
+    Project,
     TitleGenerationStatus,
     UserAccount,
     WebSearchPolicy,
@@ -94,17 +95,21 @@ _VISIBLE_MESSAGE_ROLES = ("user", "assistant")
 
 
 def _encode_session_cursor(
-    user_id: UUID, pinned: bool, activity_at: datetime, session_id: UUID
+    user_id: UUID,
+    scope: str,
+    pinned: bool,
+    activity_at: datetime,
+    session_id: UUID,
 ) -> str:
     value = json.dumps(
-        [str(user_id), pinned, activity_at.isoformat(), str(session_id)],
+        [str(user_id), scope, pinned, activity_at.isoformat(), str(session_id)],
         separators=(",", ":"),
     ).encode()
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
 
 
 def _decode_session_cursor(
-    value: str, user_id: UUID
+    value: str, user_id: UUID, scope: str
 ) -> tuple[bool, datetime, UUID]:
     try:
         decoded = base64.b64decode(
@@ -113,16 +118,20 @@ def _decode_session_cursor(
         payload = json.loads(decoded)
         if not (
             isinstance(payload, list)
-            and len(payload) == 4
-            and all(isinstance(item, str) for item in (payload[0], payload[2], payload[3]))
-            and type(payload[1]) is bool
+            and len(payload) == 5
+            and all(
+                isinstance(item, str)
+                for item in (payload[0], payload[1], payload[3], payload[4])
+            )
+            and payload[1] == scope
+            and type(payload[2]) is bool
             and UUID(payload[0]) == user_id
         ):
             raise ValueError
-        activity_at = datetime.fromisoformat(payload[2])
+        activity_at = datetime.fromisoformat(payload[3])
         if activity_at.tzinfo is None:
             raise ValueError
-        return payload[1], activity_at, UUID(payload[3])
+        return payload[2], activity_at, UUID(payload[4])
     except (binascii.Error, UnicodeDecodeError, ValueError, TypeError) as exc:
         raise ApiError(400, "validation.invalid", field="cursor") from exc
 
@@ -432,6 +441,7 @@ def default_control_center_state() -> ControlCenterState:
 
 class SessionCreateRequest(BaseModel):
     content: str = Field(min_length=1, max_length=200_000)
+    project_id: UUID | None = None
     model_id: UUID | None = None
     memory_mode: MemoryMode = MemoryMode.FULL
     web_search_policy: WebSearchPolicy = WebSearchPolicy.AVAILABLE
@@ -445,6 +455,7 @@ class SessionCreateRequest(BaseModel):
 class SessionUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=240)
     pinned: bool | None = None
+    project_id: UUID | None = None
     model_id: UUID | None = None
     memory_mode: MemoryMode | None = None
     web_search_policy: WebSearchPolicy | None = None
@@ -700,6 +711,7 @@ def session_payload(
     file_view = control_center.get("file_view")
     payload = {
         "id": str(item.id),
+        "projectId": str(item.project_id) if item.project_id else None,
         "title": item.title,
         "titleGenerationStatus": item.title_generation_status,
         "pinned": bool(item.is_pinned),
@@ -1035,7 +1047,18 @@ async def list_sessions(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
     cursor: Annotated[str | None, Query()] = None,
+    project_id: Annotated[UUID | None, Query(alias="projectId")] = None,
+    standalone: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
+    if project_id is not None and standalone:
+        raise ApiError(400, "validation.invalid", field="projectId")
+    if project_id is not None:
+        owned_project = await db.scalar(
+            select(Project.id).where(Project.id == project_id, Project.user_id == user.id)
+        )
+        if owned_project is None:
+            raise ApiError(404, "project.notFound", field="projectId")
+    scope = str(project_id) if project_id is not None else "standalone" if standalone else "all"
     active_run_status = (
         select(AgentRun.status)
         .where(
@@ -1075,9 +1098,13 @@ async def list_sessions(
         .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
         .where(ChatSession.user_id == user.id, ChatSession.session_type == "chat")
     )
+    if project_id is not None:
+        statement = statement.where(ChatSession.project_id == project_id)
+    elif standalone:
+        statement = statement.where(ChatSession.project_id.is_(None))
     if cursor is not None:
         cursor_pinned, cursor_activity_at, cursor_id = _decode_session_cursor(
-            cursor, user.id
+            cursor, user.id, scope
         )
         activity_tail = or_(
             activity_at < cursor_activity_at,
@@ -1122,7 +1149,7 @@ async def list_sessions(
     if len(rows) > page_size:
         item, _last_message_at, _last_assistant_message_at, _active_status, item_activity_at = page[-1]
         next_cursor = _encode_session_cursor(
-            user.id, bool(item.is_pinned), item_activity_at, item.id
+            user.id, scope, bool(item.is_pinned), item_activity_at, item.id
         )
     return {"items": items, "nextCursor": next_cursor}
 
@@ -1136,6 +1163,14 @@ async def _create_session(
     content = payload.content.strip()
     if not content:
         raise ApiError(422, "validation.required", field="content")
+    if payload.project_id is not None:
+        project = await db.scalar(
+            select(Project.id)
+            .where(Project.id == payload.project_id, Project.user_id == user.id)
+            .with_for_update()
+        )
+        if project is None:
+            raise ApiError(404, "project.notFound", field="projectId")
     ai = await load_effective_ai(db, user.id)
     model_id = payload.model_id or ai.default_model_id
     if not _model_available(ai, model_id):
@@ -1152,6 +1187,7 @@ async def _create_session(
     item = ChatSession(
         id=uuid4(),
         user_id=user.id,
+        project_id=payload.project_id,
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
         model_config_id=model_id,
@@ -1176,7 +1212,7 @@ async def _create_session(
     await db.flush()
     session_storage = SessionStorage()
     try:
-        await asyncio.to_thread(session_storage.provision, item.id)
+        await asyncio.to_thread(session_storage.provision, item.id, item.project_id)
         run = (
             await AgentRuntime.start(db, item, content, attachments=attachments)
             if attachments
@@ -1189,14 +1225,18 @@ async def _create_session(
     except AgentRunError as exc:
         await db.rollback()
         try:
-            await asyncio.to_thread(session_storage.remove_session, item.id)
+            await asyncio.to_thread(
+                session_storage.remove_session, item.id, item.project_id
+            )
         except Exception:
             logger.exception("Unpersisted session storage could not be removed")
         raise ApiError(409, exc.code, params=exc.params) from exc
     except Exception:
         await db.rollback()
         try:
-            await asyncio.to_thread(session_storage.remove_session, item.id)
+            await asyncio.to_thread(
+                session_storage.remove_session, item.id, item.project_id
+            )
         except Exception:
             logger.exception("Unpersisted session storage could not be removed")
         raise
@@ -1359,6 +1399,7 @@ async def update_session(
         "working_directory",
     }
     policy_fields = {
+        "project_id",
         "memory_mode",
         "model_id",
         "web_search_policy",
@@ -1385,6 +1426,18 @@ async def update_session(
         )
         if active is not None:
             raise ApiError(409, "session.runAlreadyActive")
+    source_project_id = item.project_id
+    target_project_id = (
+        payload.project_id if "project_id" in fields else source_project_id
+    )
+    if target_project_id is not None and target_project_id != source_project_id:
+        project = await db.scalar(
+            select(Project.id)
+            .where(Project.id == target_project_id, Project.user_id == user.id)
+            .with_for_update()
+        )
+        if project is None:
+            raise ApiError(404, "project.notFound", field="projectId")
     if "title" in fields and payload.title is not None:
         item.title = payload.title
         item.title_generation_status = TitleGenerationStatus.SKIPPED.value
@@ -1445,9 +1498,56 @@ async def update_session(
         )
     if "workspace_access" in fields and payload.workspace_access is not None:
         item.workspace_access = payload.workspace_access
-    await db.flush()
-    await db.refresh(item)
-    await db.commit()
+    storage = SessionStorage()
+    moved = False
+
+    async def restore_storage() -> None:
+        if not moved:
+            return
+        try:
+            await asyncio.to_thread(
+                storage.move_session,
+                item.id,
+                target_project_id,
+                source_project_id,
+            )
+        except BaseException:
+            logger.exception("Session storage could not be restored after project move")
+
+    commit_task: asyncio.Task[None] | None = None
+    try:
+        if target_project_id != source_project_id:
+            await asyncio.to_thread(
+                storage.move_session,
+                item.id,
+                source_project_id,
+                target_project_id,
+            )
+            moved = True
+            item.project_id = target_project_id
+        await db.flush()
+        await db.refresh(item)
+        commit_task = asyncio.create_task(db.commit())
+        await asyncio.shield(commit_task)
+    except asyncio.CancelledError:
+        if commit_task is None:
+            await db.rollback()
+            await restore_storage()
+            raise
+        try:
+            await commit_task
+        except BaseException:
+            await db.rollback()
+            await restore_storage()
+        raise
+    except (OSError, SessionStorageError) as exc:
+        await db.rollback()
+        await restore_storage()
+        raise ApiError(500, "session.storageUnavailable") from exc
+    except BaseException:
+        await db.rollback()
+        await restore_storage()
+        raise
     return await _session_payload(db, item)
 
 
@@ -1656,26 +1756,29 @@ async def delete_session(
             ).all()
         )
     session_storage = SessionStorage()
-    storage_session_ids = [
-        session_id,
-        *(execution_session.id for execution_session in execution_sessions),
+    storage_sessions = [
+        (session_id, item.project_id),
+        *((execution_session.id, None) for execution_session in execution_sessions),
     ]
     trashed_trees = []
     try:
-        for storage_session_id in storage_session_ids:
+        for storage_session_id, project_id in storage_sessions:
             trashed_trees.append(
                 await asyncio.to_thread(
-                    session_storage.trash_session, storage_session_id
+                    session_storage.trash_session, storage_session_id, project_id
                 )
             )
     except (OSError, SessionStorageError) as exc:
-        for storage_session_id, trashed in zip(
-            storage_session_ids, trashed_trees, strict=False
+        for (storage_session_id, project_id), trashed in zip(
+            storage_sessions, trashed_trees, strict=False
         ):
             if trashed is not None:
                 try:
                     await asyncio.to_thread(
-                        session_storage.restore_session, storage_session_id, trashed
+                        session_storage.restore_session,
+                        storage_session_id,
+                        trashed,
+                        project_id,
                     )
                 except Exception:
                     logger.exception("Partially trashed session storage could not be restored")
@@ -1683,14 +1786,17 @@ async def delete_session(
         raise ApiError(500, "session.storageUnavailable") from exc
 
     async def restore_tree() -> None:
-        for storage_session_id, trashed in zip(
-            storage_session_ids, trashed_trees, strict=False
+        for (storage_session_id, project_id), trashed in zip(
+            storage_sessions, trashed_trees, strict=False
         ):
             if trashed is None:
                 continue
             try:
                 await asyncio.to_thread(
-                    session_storage.restore_session, storage_session_id, trashed
+                    session_storage.restore_session,
+                    storage_session_id,
+                    trashed,
+                    project_id,
                 )
             except Exception:
                 logger.exception("Session storage could not be restored after database failure")

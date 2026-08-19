@@ -187,7 +187,9 @@ class ChatHistoryService:
     @staticmethod
     async def _delete_session(db: AsyncSession, session: ChatSession) -> None:
         storage = SessionStorage()
-        trash_task = asyncio.create_task(asyncio.to_thread(storage.trash_session, session.id))
+        trash_task = asyncio.create_task(
+            asyncio.to_thread(storage.trash_session, session.id, session.project_id)
+        )
         try:
             trashed = await asyncio.shield(trash_task)
         except asyncio.CancelledError:
@@ -197,7 +199,12 @@ class ChatHistoryService:
                 raise
             if trashed is not None:
                 try:
-                    await asyncio.to_thread(storage.restore_session, session.id, trashed)
+                    await asyncio.to_thread(
+                        storage.restore_session,
+                        session.id,
+                        trashed,
+                        session.project_id,
+                    )
                 except BaseException:
                     logger.exception("Could not restore session storage after cancelled undo")
             raise
@@ -208,7 +215,12 @@ class ChatHistoryService:
             if trashed is None:
                 return
             try:
-                await asyncio.to_thread(storage.restore_session, session.id, trashed)
+                await asyncio.to_thread(
+                    storage.restore_session,
+                    session.id,
+                    trashed,
+                    session.project_id,
+                )
             except BaseException:
                 logger.exception("Could not restore session storage after undo failure")
 

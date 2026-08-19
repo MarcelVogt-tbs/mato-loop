@@ -77,12 +77,17 @@ def _title_trust():
 
 
 def _candidate_filters(
-    *, owner_id: UUID, current_session_id: UUID, readable_by: TrustLevel
+    *,
+    owner_id: UUID,
+    current_session_id: UUID,
+    project_id: UUID | None,
+    readable_by: TrustLevel,
 ) -> list[object]:
     filters = [
         ChatSession.user_id == owner_id,
         ChatSession.id != current_session_id,
         ChatSession.session_type == "chat",
+        ChatSession.project_id == project_id,
         *_eligible_filters(),
     ]
     if readable_by == TrustLevel.PUBLIC:
@@ -130,6 +135,7 @@ class EpisodeRetrievalService:
         *,
         owner_id: UUID,
         current_session_id: UUID,
+        project_id: UUID | None = None,
         readable_by: TrustLevel,
         limit: int = 2,
         excerpt_messages: int = 6,
@@ -153,6 +159,7 @@ class EpisodeRetrievalService:
                 *_candidate_filters(
                     owner_id=owner_id,
                     current_session_id=current_session_id,
+                    project_id=project_id,
                     readable_by=readable_by,
                 )
             )
@@ -195,6 +202,7 @@ class EpisodeRetrievalService:
         *,
         owner_id: UUID,
         current_session_id: UUID,
+        project_id: UUID | None = None,
         readable_by: TrustLevel,
         query: str,
         limit: int = 5,
@@ -213,6 +221,7 @@ class EpisodeRetrievalService:
         filters = _candidate_filters(
             owner_id=owner_id,
             current_session_id=current_session_id,
+            project_id=project_id,
             readable_by=readable_by,
         )
         title_trust = _title_trust().label("title_trust")

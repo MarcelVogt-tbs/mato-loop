@@ -107,6 +107,7 @@ def test_episode_ranking_deduplicates_sessions_and_applies_public_filter() -> No
         for item in _candidate_filters(
             owner_id=uuid4(),
             current_session_id=uuid4(),
+            project_id=None,
             readable_by=TrustLevel.PUBLIC,
         )
     )
@@ -115,6 +116,7 @@ def test_episode_ranking_deduplicates_sessions_and_applies_public_filter() -> No
         for item in _candidate_filters(
             owner_id=uuid4(),
             current_session_id=uuid4(),
+            project_id=None,
             readable_by=TrustLevel.PRIVATE,
         )
     )

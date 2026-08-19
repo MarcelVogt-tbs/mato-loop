@@ -232,6 +232,60 @@ async def test_session_list_rejects_malformed_cursor() -> None:
     db.execute.assert_not_awaited()
 
 
+async def test_session_list_scopes_projects_and_standalone_sessions() -> None:
+    user = _user()
+    project_id = uuid4()
+    result = MagicMock()
+    result.all.return_value = []
+    project_db = AsyncMock(spec=AsyncSession)
+    project_db.scalar.return_value = project_id
+    project_db.execute.return_value = result
+
+    await list_sessions(user, project_db, project_id=project_id)
+
+    project_statement = project_db.execute.await_args.args[0]
+    assert project_id in project_statement.compile().params.values()
+    owner_statement = project_db.scalar.await_args.args[0]
+    assert user.id in owner_statement.compile().params.values()
+
+    standalone_db = AsyncMock(spec=AsyncSession)
+    standalone_db.execute.return_value = result
+    await list_sessions(user, standalone_db, standalone=True)
+    assert "chat_sessions.project_id IS NULL" in str(
+        standalone_db.execute.await_args.args[0]
+    )
+
+
+async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Move", project_id=None)
+    target_project_id = uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session.id, None, target_project_id]
+    db.commit.side_effect = RuntimeError("commit failed")
+    storage = MagicMock()
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
+    monkeypatch.setattr(
+        sessions_route, "_owned_session", AsyncMock(return_value=session)
+    )
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await update_session(
+            session.id,
+            SessionUpdateRequest(project_id=target_project_id),
+            user,
+            db,
+        )
+
+    assert [entry.args for entry in storage.move_session.call_args_list] == [
+        (session.id, None, target_project_id),
+        (session.id, target_project_id, None),
+    ]
+    db.rollback.assert_awaited_once()
+
+
 async def test_mark_session_read_uses_owned_assistant_message_monotonically() -> None:
     user = _user()
     session = ChatSession(
@@ -352,7 +406,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert result["runId"] == str(run.id)
     assert result["modelName"] == "Test"
     assert result["message"]["id"] == str(persisted_message.id)
-    storage.provision.assert_called_once_with(session.id)
+    storage.provision.assert_called_once_with(session.id, None)
 
 
 async def test_session_defaults_report_effective_memory_state(monkeypatch) -> None:

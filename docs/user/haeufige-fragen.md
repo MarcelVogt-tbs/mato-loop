@@ -30,7 +30,7 @@ Nein. Bilder aus MatoLoop-Anhängen werden lokal geladen. Für externe Bildurspr
 
 ## Wo liegen meine Dateien?
 
-Arbeitsdateien liegen in den Wurzeln des jeweiligen Computers. Beim Compose-Computer ist dies standardmäßig das Host-Verzeichnis `./data/home`, das nur dort als `/workspace` eingebunden wird, oder der über `MATO_EXECUTION_AGENT_WORKSPACE` gesetzte Pfad. Das Backend greift nicht auf diesen Host-Pfad zu. Jede dauerhaft angelegte Session besitzt getrennten Backend-Speicher unter `/data/sessions/<session-id>`, der auch ohne Computer verfügbar bleibt.
+Arbeitsdateien liegen in den Wurzeln des jeweiligen Computers. Beim Compose-Computer ist dies standardmäßig das Host-Verzeichnis `./data/home`, das nur dort als `/workspace` eingebunden wird, oder der über `MATO_EXECUTION_AGENT_WORKSPACE` gesetzte Pfad. Das Backend greift nicht auf diesen Host-Pfad zu. Jede dauerhaft angelegte Session besitzt getrennten Backend-Speicher, der auch ohne Computer verfügbar bleibt. Sessions ohne Projekt liegen unter `/data/sessions/<session-id>`, Projekt-Sessions unter `/data/projects/<project-id>/sessions/<session-id>`.
 
 ## Ist die Dokumentation nur nach Anmeldung erreichbar?
 

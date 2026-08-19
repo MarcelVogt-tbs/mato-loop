@@ -589,7 +589,7 @@ const resultRange = computed(() => {
   if (!memories.total) return '0'
   return `${memories.offset + 1}-${Math.min(memories.offset + memories.items.length, memories.total)}`
 })
-const sessionOptions = computed(() => chat.sessions.map((session) => ({
+const sessionOptions = computed(() => chat.sessionCatalog.map((session) => ({
   label: session.title,
   value: session.id,
   disable: session.memoryMode !== 'full'
@@ -887,7 +887,7 @@ onMounted(() => {
   void loadMemories(0)
   void loadSettings()
   void refreshDreamRuns()
-  void chat.fetchAllSessions().catch(() => {})
+  void chat.fetchSessionCatalog().catch(() => {})
 })
 </script>
 

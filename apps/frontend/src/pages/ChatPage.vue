@@ -369,6 +369,7 @@ import {
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
+import { useProjectStore } from 'stores/projects'
 import { useQuestionStore } from 'stores/questions'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
@@ -398,6 +399,7 @@ const executionAgents = useExecutionAgentStore()
 const instanceLimits = useInstanceLimitsStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
+const projects = useProjectStore()
 const toolSettings = useToolSettingsStore()
 const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
@@ -422,6 +424,9 @@ const liveWorkHistory = computed(() => ({
 const emptyProcessOutputs = {}
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
+))
+const routeProjectId = computed(() => (
+  typeof route.query.project === 'string' ? route.query.project : null
 ))
 let resizeObserver = null
 let scrollFrame = null
@@ -595,7 +600,11 @@ async function undoMessage(message) {
   try {
     const result = await chat.undoUserMessage(message)
     if (result?.sessionDeleted && routeSessionId.value === sessionId) {
-      await router.replace({ name: 'chat' })
+      if (routeProjectId.value) void projects.fetchAll().catch(() => {})
+      await router.replace({
+        name: 'chat',
+        query: routeProjectId.value ? { project: routeProjectId.value } : {}
+      })
     }
     await nextTick()
     composer.value?.focus()
@@ -629,6 +638,7 @@ async function loadRouteSession() {
   await composer.value?.cancelAudioActivity?.()
   await request
   if (chat.selectedSessionId !== sessionId || chat.loadError) return
+  await reconcileRouteProject()
   const requestedApp = typeof route.query.controlCenter === 'string'
     ? route.query.controlCenter
     : null
@@ -641,6 +651,24 @@ async function loadRouteSession() {
   }
   await nextTick()
   composer.value?.focus()
+}
+
+async function reconcileRouteProject() {
+  if (
+    !chat.current
+    || chat.current.id !== routeSessionId.value
+    || (chat.current.projectId || null) === routeProjectId.value
+  ) return
+  await router.replace({
+    name: 'chat',
+    query: {
+      ...(chat.current.projectId ? { project: chat.current.projectId } : {}),
+      session: chat.current.id,
+      ...(typeof route.query.controlCenter === 'string'
+        ? { controlCenter: route.query.controlCenter }
+        : {})
+    }
+  })
 }
 
 async function loadBackgroundData() {
@@ -675,7 +703,14 @@ async function send(content) {
   scheduleFollowScroll()
   const result = await request
   if (result?.created) {
-    await router.replace({ name: 'chat', query: { session: result.sessionId } })
+    if (routeProjectId.value) void projects.fetchAll().catch(() => {})
+    await router.replace({
+      name: 'chat',
+      query: {
+        ...(routeProjectId.value ? { project: routeProjectId.value } : {}),
+        session: result.sessionId
+      }
+    })
   }
 }
 
@@ -805,6 +840,7 @@ function chatPageStyle(offset, height) {
 }
 
 watch(routeSessionId, () => void loadRouteSession(), { immediate: true })
+watch(routeProjectId, () => void reconcileRouteProject())
 watch(
   () => runPresentation.value.announcement,
   (value) => {

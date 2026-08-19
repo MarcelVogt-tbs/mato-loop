@@ -200,8 +200,11 @@ async def test_delete_removes_database_and_storage(monkeypatch, tmp_path: Path) 
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = target
     session_result = MagicMock()
-    session_result.all.return_value = [uuid4()]
-    db.scalars.return_value = session_result
+    session_result.all.return_value = [(uuid4(), None)]
+    db.execute.return_value = session_result
+    project_result = MagicMock()
+    project_result.all.return_value = []
+    db.scalars.return_value = project_result
     session_storage = MagicMock()
     session_storage.trash_session.return_value = tmp_path / "session-trash"
     quiesce = AsyncMock()
@@ -222,12 +225,15 @@ async def test_delete_restores_earlier_storage_when_later_trash_fails(
     admin = _user(admin=True)
     target = _user(active=False)
     original_user_id = target.id
-    session_ids = [uuid4(), uuid4()]
+    sessions = [(uuid4(), uuid4()), (uuid4(), None)]
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = target
     session_result = MagicMock()
-    session_result.all.return_value = session_ids
-    db.scalars.return_value = session_result
+    session_result.all.return_value = sessions
+    db.execute.return_value = session_result
+    project_result = MagicMock()
+    project_result.all.return_value = []
+    db.scalars.return_value = project_result
     session_storage = MagicMock()
     first_trash = tmp_path / "first-trash"
     session_storage.trash_session.side_effect = [first_trash, OSError("storage failed")]
@@ -243,7 +249,9 @@ async def test_delete_restores_earlier_storage_when_later_trash_fails(
         await user_routes.delete_user(original_user_id, admin, db)
 
     db.rollback.assert_awaited_once()
-    session_storage.restore_session.assert_called_once_with(session_ids[0], first_trash)
+    session_storage.restore_session.assert_called_once_with(
+        sessions[0][0], first_trash, sessions[0][1]
+    )
 
 
 async def test_delete_does_not_restore_storage_when_cancelled_commit_succeeds(
@@ -255,7 +263,10 @@ async def test_delete_does_not_restore_storage_when_cancelled_commit_succeeds(
     db.scalar.return_value = target
     session_result = MagicMock()
     session_result.all.return_value = []
-    db.scalars.return_value = session_result
+    db.execute.return_value = session_result
+    project_result = MagicMock()
+    project_result.all.return_value = []
+    db.scalars.return_value = project_result
     commit_started = asyncio.Event()
     finish_commit = asyncio.Event()
 

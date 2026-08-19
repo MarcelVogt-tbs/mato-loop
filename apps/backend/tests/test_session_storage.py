@@ -16,6 +16,7 @@ def test_runtime_config_derives_sessions_directory_from_data_directory(tmp_path:
     config = RuntimeConfig(data_dir=tmp_path)
 
     assert config.sessions_dir == tmp_path / "sessions"
+    assert config.projects_dir == tmp_path / "projects"
 
 
 def test_session_storage_provisions_complete_private_tree_atomically(tmp_path: Path) -> None:
@@ -118,3 +119,58 @@ def test_reconciliation_restores_uncommitted_delete_from_trash(tmp_path: Path) -
     assert result.restored == (session_id,)
     assert storage.session_path(session_id).joinpath("files/important.txt").read_text() == "Inhalt"
     assert list(storage.trash_dir.iterdir()) == []
+
+
+def test_project_session_storage_moves_complete_tree_atomically(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    first_project_id = uuid4()
+    second_project_id = uuid4()
+    stored_file = storage.provision(session_id) / "files" / "important.txt"
+    stored_file.write_text("Inhalt", encoding="utf-8")
+
+    target = storage.move_session(session_id, None, first_project_id)
+
+    assert target == (
+        tmp_path / "projects" / str(first_project_id) / "sessions" / str(session_id)
+    )
+    assert storage.session_path(session_id, require_exists=True) == target
+    assert target.joinpath("files/important.txt").read_text() == "Inhalt"
+
+    second = storage.move_session(session_id, first_project_id, second_project_id)
+    standalone = storage.move_session(session_id, second_project_id, None)
+
+    assert not second.exists()
+    assert standalone == tmp_path / "sessions" / str(session_id)
+    assert standalone.joinpath("files/important.txt").read_text() == "Inhalt"
+
+
+def test_reconciliation_relocates_session_to_database_project(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    project_id = uuid4()
+    stored_file = storage.provision(session_id) / "files" / "important.txt"
+    stored_file.write_text("Inhalt", encoding="utf-8")
+
+    result = storage.reconcile({session_id: project_id}, stale_staging_after_seconds=0)
+
+    assert result.provisioned == ()
+    target = storage.session_path(
+        session_id, project_id=project_id, require_exists=True
+    )
+    assert target.joinpath("files/important.txt").read_text() == "Inhalt"
+    assert not storage.session_path(session_id, project_id=None).exists()
+
+
+def test_project_storage_rejects_symlinked_project_root(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.prepare()
+    project_id = uuid4()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (storage.projects_dir / str(project_id)).symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SessionStorageError) as symlinked:
+        storage.provision(uuid4(), project_id)
+
+    assert symlinked.value.code == "sessionStorage.invalidDirectory"

@@ -91,9 +91,13 @@ async def lifespan(_app: FastAPI):
             )
             await DreamingService.recover(db)
             await db.commit()
-            session_ids = set((await db.scalars(select(ChatSession.id))).all())
+            session_locations = dict(
+                (await db.execute(select(ChatSession.id, ChatSession.project_id))).all()
+            )
             reconciliation = await asyncio.to_thread(
-                SessionStorage().reconcile, session_ids, stale_staging_after_seconds=0
+                SessionStorage().reconcile,
+                session_locations,
+                stale_staging_after_seconds=0,
             )
             if reconciliation.provisioned or reconciliation.restored or reconciliation.trashed:
                 logger.info(

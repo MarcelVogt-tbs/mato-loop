@@ -32,6 +32,9 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     attachments = Mock()
     attachments.all.return_value = []
     db.scalars.return_value = attachments
+    rows = Mock()
+    rows.all.return_value = []
+    db.execute.return_value = rows
     engine = Mock(dispose=AsyncMock())
     monkeypatch.setattr(app_module, "AsyncSessionFactory", lambda: _SessionContext(db))
     recover_runs = AsyncMock()

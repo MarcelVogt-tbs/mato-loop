@@ -21,6 +21,7 @@ from mato_loop_backend.models import (
     Automation,
     ChatSession,
     MemoryDreamRun,
+    Project,
     UserAccount,
 )
 from mato_loop_backend.security import (
@@ -276,18 +277,29 @@ async def delete_user(
     user = await _user(db, user_id, for_update=True)
     if user.is_active:
         raise ApiError(409, "user.deactivateBeforeDelete")
-    session_ids = list(
-        (await db.scalars(select(ChatSession.id).where(ChatSession.user_id == user.id))).all()
+    sessions = list(
+        (
+            await db.execute(
+                select(ChatSession.id, ChatSession.project_id).where(
+                    ChatSession.user_id == user.id
+                )
+            )
+        ).all()
+    )
+    project_ids = list(
+        (await db.scalars(select(Project.id).where(Project.user_id == user.id))).all()
     )
     storage = SessionStorage()
     trashed = []
 
     async def restore_storage() -> None:
-        for session_id, path in zip(session_ids, trashed, strict=False):
+        for (session_id, project_id), path in zip(sessions, trashed, strict=False):
             if path is None:
                 continue
             try:
-                await asyncio.to_thread(storage.restore_session, session_id, path)
+                await asyncio.to_thread(
+                    storage.restore_session, session_id, path, project_id
+                )
             except Exception:
                 logger.exception("User session storage could not be restored")
 
@@ -297,11 +309,20 @@ async def delete_user(
                 await asyncio.to_thread(storage.purge_trashed, path)
             except Exception:
                 logger.exception("Deleted user session storage could not be purged")
+        for project_id in project_ids:
+            try:
+                await asyncio.to_thread(storage.remove_project, project_id)
+            except Exception:
+                logger.exception("Deleted user project storage could not be purged")
 
     commit_task: asyncio.Task[None] | None = None
     try:
-        for item in session_ids:
-            trashed.append(await asyncio.to_thread(storage.trash_session, item))
+        for session_id, project_id in sessions:
+            trashed.append(
+                await asyncio.to_thread(
+                    storage.trash_session, session_id, project_id
+                )
+            )
         await db.execute(delete(Automation).where(Automation.user_id == user.id))
         await db.delete(user)
         commit_task = asyncio.create_task(db.commit())

@@ -34,6 +34,12 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'openscad.renderFailed' } })).toBe(
       'Das OpenSCAD-Modell konnte nicht gerendert werden.'
     )
+    expect(apiErrorMessage({ error: { code: 'project.notFound' } })).toBe(
+      'Das Projekt wurde nicht gefunden.'
+    )
+    expect(apiErrorMessage({ error: { code: 'project.notEmpty' } })).toBe(
+      'Das Projekt enthält noch Sessions.'
+    )
     for (const code of [
       'cache.exportFailed',
       'cache.invalidContent',

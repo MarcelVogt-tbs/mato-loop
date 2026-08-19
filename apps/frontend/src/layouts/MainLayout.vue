@@ -66,142 +66,93 @@
         <q-separator class="lt-md" />
 
         <div class="col column no-wrap drawer-navigation q-py-sm">
-          <section class="col drawer-section drawer-section--sessions" aria-labelledby="sessions-heading">
-            <q-item dense tag="div" class="q-px-md q-py-xs">
-              <q-item-section>
-                <q-item-label
-                  id="sessions-heading"
-                  header
-                  class="q-pa-none text-subtitle2 text-weight-medium"
-                  :class="$q.dark.isActive ? 'text-grey-5' : 'text-grey-7'"
-                >
-                  Sessions
-                </q-item-label>
-              </q-item-section>
-              <q-item-section side>
-                <q-btn
-                  flat
-                  round
-                  dense
-                  size="sm"
-                  icon="add_comment"
-                  class="drawer-section__action"
-                  :color="$q.dark.isActive ? 'grey-6' : 'grey-7'"
-                  aria-label="Neue Session"
-                  @click="openNewSession"
-                >
-                  <q-tooltip>Neue Session</q-tooltip>
-                </q-btn>
-              </q-item-section>
-            </q-item>
-
-            <div class="drawer-section__body column no-wrap">
-              <q-scroll-area
-                class="col session-scroll-area"
-                visible
-                tabindex="0"
-                aria-label="Session-Liste"
+          <q-scroll-area
+            class="col session-scroll-area"
+            visible
+            tabindex="0"
+            aria-label="Projekte und Sessions"
+          >
+            <section aria-labelledby="projects-heading">
+              <q-item
+                clickable
+                dense
+                tag="div"
+                class="q-px-md q-py-xs"
+                aria-controls="project-list"
+                :aria-expanded="projectsSectionOpen"
+                @click="projectsSectionOpen = !projectsSectionOpen"
               >
-                <q-infinite-scroll
-                  ref="sessionInfiniteScroll"
-                  :offset="40"
-                  :disable="!chat.sessionsNextCursor || chat.sessionsLoadMoreFailed"
-                  @load="loadMoreSessions"
-                >
-                <q-list id="session-list" class="session-list q-px-sm">
-                <q-item v-if="chat.sessionsLoaded && !chat.sessions.length" dense class="q-px-sm q-py-xs">
-                  <q-item-section>
-                    <q-item-label class="text-body2">Noch keine Sessions</q-item-label>
-                    <q-item-label caption class="text-caption">Starte eine neue Unterhaltung.</q-item-label>
-                  </q-item-section>
-                </q-item>
-                <template v-for="group in groupedSessions" :key="group.key">
+                <q-item-section>
                   <q-item-label
+                    id="projects-heading"
                     header
-                    class="q-px-sm q-pt-md q-pb-xs text-caption text-weight-medium"
+                    class="q-pa-none text-subtitle2 text-weight-medium"
                     :class="$q.dark.isActive ? 'text-grey-5' : 'text-grey-7'"
                   >
-                    {{ group.label }}
+                    Projekte
+                    <q-icon :name="projectsSectionOpen ? 'expand_more' : 'chevron_right'" size="18px" />
                   </q-item-label>
-                  <q-item
-                    v-for="session in group.sessions"
-                    :key="session.id"
-                    clickable
+                </q-item-section>
+                <q-item-section side>
+                  <q-btn
+                    flat
+                    round
                     dense
-                    v-ripple
-                    class="session-list-item items-center rounded-borders q-px-sm q-py-xs q-my-xs"
-                    :class="{ 'session-list-item--menu-open': openActionMenuSessionId === session.id }"
-                    :active="route.query.session === session.id"
-                    :active-class="$q.dark.isActive ? 'bg-grey-9 text-white' : 'bg-grey-3 text-dark'"
-                    @click="openSession(session.id)"
+                    size="sm"
+                    icon="create_new_folder"
+                    class="drawer-section__action"
+                    aria-label="Projekt erstellen"
+                    @click.stop="openProjectDialog('create')"
                   >
-                    <q-item-section class="session-list-item__content">
-                      <q-item-label
-                        lines="1"
-                        class="session-list-item__title text-body2"
-                        :class="{
-                          'text-weight-bold': session.hasUnreadMessages,
-                          'text-weight-medium': !session.hasUnreadMessages && route.query.session === session.id
-                        }"
-                      >
-                        {{ session.title }}
-                        <span v-if="session.hasUnreadMessages" class="app-sr-only">, ungelesene Nachrichten</span>
-                      </q-item-label>
-                      <q-tooltip
-                        v-if="$q.platform.is.mobile !== true"
-                        :delay="700"
-                        anchor="bottom middle"
-                        self="top middle"
-                        :offset="[0, 8]"
-                        class="session-title-tooltip"
-                      >
-                        <div>{{ session.title }}</div>
-                        <div v-if="session.currentDirectory || session.workingDirectory" class="q-mt-xs text-grey-4">
-                          {{ session.currentDirectory || session.workingDirectory }}
-                        </div>
-                      </q-tooltip>
+                    <q-tooltip>Projekt erstellen</q-tooltip>
+                  </q-btn>
+                </q-item-section>
+              </q-item>
+
+              <q-list id="project-list" v-show="projectsSectionOpen" class="project-list q-px-sm">
+                <div v-if="projects.loading && !projects.loaded" class="row justify-center q-pa-sm" aria-label="Projekte werden geladen">
+                  <q-spinner-dots color="primary" size="24px" />
+                </div>
+                <div v-else-if="projects.loadFailed && !projects.loaded" class="q-pa-sm">
+                  <q-btn
+                    flat
+                    dense
+                    no-caps
+                    class="full-width"
+                    color="primary"
+                    icon-right="refresh"
+                    label="Projekte erneut laden"
+                    @click="loadProjects"
+                  />
+                </div>
+                <q-expansion-item
+                  v-for="project in projects.items"
+                  :key="project.id"
+                  v-model="expandedProjects[project.id]"
+                  hide-expand-icon
+                  class="project-list-item rounded-borders q-my-xs"
+                  header-class="project-list-item__header"
+                  @show="loadProjectSessions(project.id)"
+                >
+                  <template #header>
+                    <q-item-section avatar>
+                      <q-icon :name="expandedProjects[project.id] ? mdiFolderOpenOutline : mdiFolderOutline" size="22px" />
                     </q-item-section>
-                    <q-item-section side class="session-list-item__actions row no-wrap items-center self-center">
-                      <span
-                        v-if="sessionStatuses.get(session.id)"
-                        class="session-list-item__status-slot row items-center justify-center q-mr-xs"
-                        role="status"
-                        :aria-label="sessionStatuses.get(session.id)?.label"
-                      >
-                        <template v-if="sessionStatuses.get(session.id)?.kind === 'approval'">
-                          <q-icon name="pending_actions" color="warning" size="18px" />
-                          <q-badge
-                            v-if="sessionStatuses.get(session.id).count > 1"
-                            floating
-                            rounded
-                            color="warning"
-                            text-color="dark"
-                            :label="sessionStatuses.get(session.id).count"
-                          />
-                        </template>
-                        <q-spinner-dots
-                          v-else-if="sessionStatuses.get(session.id)?.kind === 'active'"
-                          color="primary"
-                          size="18px"
-                        />
-                        <q-tooltip v-if="sessionStatuses.get(session.id) && $q.platform.is.mobile !== true">
-                          {{ sessionStatuses.get(session.id).label }}
-                        </q-tooltip>
-                      </span>
+                    <q-item-section>
+                      <q-item-label lines="1" class="text-body2 text-weight-medium">{{ project.name }}</q-item-label>
+                    </q-item-section>
+                    <q-item-section side class="project-list-item__actions row no-wrap items-center">
                       <q-btn
                         flat
                         round
                         dense
                         size="sm"
-                        icon="push_pin"
-                        class="session-list-item__action session-list-item__pin-button"
-                        :class="{ 'session-list-item__pin-button--pinned': session.pinned }"
-                        :color="session.pinned ? 'primary' : ($q.dark.isActive ? 'grey-5' : 'grey-7')"
-                        :loading="pinningSessionId === session.id"
-                        :aria-label="session.pinned ? `${session.title} nicht mehr anheften` : `${session.title} anheften`"
-                        @click.stop="toggleSessionPinned(session)"
+                        icon="add"
+                        class="project-list-item__action"
+                        :aria-label="`Neue Session in ${project.name}`"
+                        @click.stop="openNewSession(project.id)"
                       >
-                        <q-tooltip>{{ session.pinned ? 'Nicht mehr anheften' : 'Anheften' }}</q-tooltip>
+                        <q-tooltip>Neue Session</q-tooltip>
                       </q-btn>
                       <q-btn
                         flat
@@ -209,65 +160,98 @@
                         dense
                         size="sm"
                         icon="more_horiz"
-                        class="session-list-item__action session-list-item__menu-button"
-                        :color="$q.dark.isActive ? 'grey-5' : 'grey-7'"
-                        :aria-label="`Aktionen für ${session.title}`"
+                        class="project-list-item__action"
+                        :aria-label="`Aktionen für ${project.name}`"
                         @click.stop
                       >
-                        <q-menu
-                          anchor="bottom right"
-                          self="top right"
-                          :offset="[0, 8]"
-                          class="app-action-menu"
-                          @before-show="openActionMenuSessionId = session.id"
-                          @hide="closeActionMenu(session.id)"
-                        >
-                          <q-list padding class="session-actions-menu">
-                            <q-item clickable v-ripple v-close-popup @click="openRenameDialog(session)">
+                        <q-menu class="app-action-menu">
+                          <q-list padding>
+                            <q-item clickable v-ripple v-close-popup @click="openProjectDialog('rename', project)">
                               <q-item-section avatar><q-icon name="edit" /></q-item-section>
                               <q-item-section>Umbenennen</q-item-section>
                             </q-item>
-                            <q-separator class="q-my-xs" />
                             <q-item
                               clickable
                               v-ripple
                               v-close-popup
                               class="text-negative"
-                              v-confirm="{ message: `Session „${session.title}“ löschen?`, title: 'Session löschen', okLabel: 'Löschen' }"
-                              @click="removeSession(session.id)"
+                              :disable="project.sessionCount > 0"
+                              @click="deleteProject(project)"
                             >
                               <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
-                              <q-item-section>Löschen</q-item-section>
+                              <q-item-section>Leeres Projekt löschen</q-item-section>
                             </q-item>
                           </q-list>
                         </q-menu>
                       </q-btn>
                     </q-item-section>
-                  </q-item>
-                </template>
-                </q-list>
-                  <template #loading>
-                    <div class="row justify-center" aria-label="Weitere Sessions werden geladen">
-                      <q-spinner-dots color="primary" size="24px" />
-                    </div>
                   </template>
-                </q-infinite-scroll>
-                <div v-if="chat.sessionsLoadMoreFailed" class="q-px-md q-pb-sm">
+                  <SidebarSessionList
+                    :list="projectSessionList(project.id)"
+                    :active-session-id="routeSessionId"
+                    :statuses="sessionStatuses"
+                    :pinning-session-id="pinningSessionId"
+                    nested
+                    @open="openSession"
+                    @rename="openRenameDialog"
+                    @move="openMoveDialog"
+                    @delete="removeSession"
+                    @toggle-pin="toggleSessionPinned"
+                    @load-more="loadMoreSessions(project.id)"
+                    @retry-more="retrySessionPagination(project.id)"
+                    @retry="loadProjectSessions(project.id, true)"
+                  />
+                </q-expansion-item>
+                <q-item v-if="projects.loaded && !projects.items.length" dense class="q-px-sm">
+                  <q-item-section><q-item-label caption>Noch keine Projekte</q-item-label></q-item-section>
+                </q-item>
+              </q-list>
+            </section>
+
+            <section class="q-mt-md" aria-labelledby="sessions-heading">
+              <q-item dense tag="div" class="q-px-md q-py-xs">
+                <q-item-section>
+                  <q-item-label
+                    id="sessions-heading"
+                    header
+                    class="q-pa-none text-subtitle2 text-weight-medium"
+                    :class="$q.dark.isActive ? 'text-grey-5' : 'text-grey-7'"
+                  >
+                    Sessions
+                  </q-item-label>
+                </q-item-section>
+                <q-item-section side>
                   <q-btn
                     flat
+                    round
                     dense
-                    no-caps
-                    class="full-width"
-                    color="primary"
-                    label="Weitere Sessions laden"
-                    icon-right="refresh"
-                    @click="retrySessionPagination"
-                  />
-                </div>
-              </q-scroll-area>
-            </div>
-          </section>
-
+                    size="sm"
+                    icon="add_comment"
+                    class="drawer-section__action"
+                    aria-label="Neue Session"
+                    @click="openNewSession(null)"
+                  >
+                    <q-tooltip>Neue Session</q-tooltip>
+                  </q-btn>
+                </q-item-section>
+              </q-item>
+              <SidebarSessionList
+                :list="standaloneSessionList"
+                :active-session-id="routeSessionId"
+                :statuses="sessionStatuses"
+                :pinning-session-id="pinningSessionId"
+                show-groups
+                @open="openSession"
+                @rename="openRenameDialog"
+                @move="openMoveDialog"
+                @delete="removeSession"
+                @toggle-pin="toggleSessionPinned"
+                @load-more="loadMoreSessions(null)"
+                @retry-more="retrySessionPagination(null)"
+                @retry="loadStandaloneSessions(true)"
+              />
+            </section>
+          </q-scroll-area>
         </div>
 
         <div class="drawer-user-area q-pa-sm">
@@ -421,6 +405,63 @@
       </q-card>
     </q-dialog>
 
+    <q-dialog v-model="projectDialogOpen">
+      <q-card class="session-rename-dialog app-surface">
+        <q-form @submit.prevent="saveProject">
+          <q-card-section>
+            <div class="text-h6">{{ projectDialogMode === 'create' ? 'Projekt erstellen' : 'Projekt umbenennen' }}</div>
+          </q-card-section>
+          <q-card-section class="q-pt-none">
+            <q-input
+              v-model="projectName"
+              outlined
+              autofocus
+              label="Name"
+              maxlength="240"
+              lazy-rules
+              :rules="[requiredRule]"
+            />
+          </q-card-section>
+          <q-card-actions align="right" class="q-pa-md q-pt-none">
+            <q-btn flat no-caps label="Abbrechen" :disable="projectSaving" v-close-popup />
+            <q-btn unelevated no-caps color="primary" label="Speichern" type="submit" :loading="projectSaving" />
+          </q-card-actions>
+        </q-form>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="moveDialogOpen">
+      <q-card class="session-rename-dialog app-surface">
+        <q-form @submit.prevent="moveSession">
+          <q-card-section>
+            <div class="text-h6">Session verschieben</div>
+          </q-card-section>
+          <q-card-section class="q-pt-none">
+            <q-select
+              v-model="moveProjectId"
+              outlined
+              emit-value
+              map-options
+              label="Ziel"
+              :options="projectOptions"
+            />
+          </q-card-section>
+          <q-card-actions align="right" class="q-pa-md q-pt-none">
+            <q-btn flat no-caps label="Abbrechen" :disable="movingSession" v-close-popup />
+            <q-btn
+              unelevated
+              no-caps
+              color="primary"
+              label="Verschieben"
+              type="submit"
+              :loading="movingSession"
+              :disable="moveProjectId === moveSourceProjectId"
+            />
+          </q-card-actions>
+        </q-form>
+      </q-card>
+    </q-dialog>
+
     <q-dialog
       v-if="route.name === 'chat' && $q.screen.lt.md"
       :model-value="controlCenter.open"
@@ -442,12 +483,14 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { mdiFolderOpenOutline, mdiFolderOutline } from '@quasar/extras/mdi-v7'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import AccountDialog from 'components/AccountDialog.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ControlCenterPanel from 'components/ControlCenterPanel.vue'
+import SidebarSessionList from 'components/SidebarSessionList.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
 import { useAutomationStore } from 'stores/automations'
@@ -456,10 +499,11 @@ import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
+import { useProjectStore } from 'stores/projects'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import { notifyError } from 'src/utils/notifications'
-import { groupSessionsByRecency, sessionSidebarStatus } from 'src/utils/session-groups'
+import { sessionSidebarStatus } from 'src/utils/session-groups'
 
 defineOptions({ name: 'MainLayout' })
 
@@ -480,9 +524,21 @@ const approvals = useApprovalStore()
 const automations = useAutomationStore()
 const notifications = useInAppNotificationStore()
 const questions = useQuestionStore()
-const sessionInfiniteScroll = ref(null)
-const groupedSessions = computed(() => groupSessionsByRecency(chat.sessions))
-const sessionStatuses = computed(() => new Map(chat.sessions.map((session) => [
+const projects = useProjectStore()
+const projectsSectionOpen = ref(true)
+const expandedProjects = reactive({})
+const selectedProjectId = computed(() => (
+  typeof route.query.project === 'string' ? route.query.project : null
+))
+const routeSessionId = computed(() => (
+  typeof route.query.session === 'string' ? route.query.session : null
+))
+const projectOptions = computed(() => [
+  { label: 'Ohne Projekt', value: null },
+  ...projects.items.map((project) => ({ label: project.name, value: project.id }))
+])
+const standaloneSessionList = computed(() => chat.sessionList(null) || emptySidebarList)
+const sessionStatuses = computed(() => new Map(chat.cachedSessions.map((session) => [
   session.id,
   sessionSidebarStatus(
     session,
@@ -519,7 +575,16 @@ const renameSessionId = ref(null)
 const renameTitle = ref('')
 const renaming = ref(false)
 const pinningSessionId = ref(null)
-const openActionMenuSessionId = ref(null)
+const projectDialogOpen = ref(false)
+const projectDialogMode = ref('create')
+const projectDialogTarget = ref(null)
+const projectName = ref('')
+const projectSaving = ref(false)
+const moveDialogOpen = ref(false)
+const moveSessionId = ref(null)
+const moveSourceProjectId = ref(null)
+const moveProjectId = ref(null)
+const movingSession = ref(false)
 let sessionActivityTimer = null
 let sessionActivityRefreshPending = false
 const visualViewportHeight = ref(null)
@@ -541,6 +606,15 @@ const userInitials = computed(() => {
 })
 const userMenuLabel = computed(() => 'Benutzermenü öffnen')
 const accountDialogOpen = ref(false)
+const emptySidebarList = Object.freeze({
+  items: [],
+  loaded: false,
+  loading: false,
+  loadFailed: false,
+  nextCursor: null,
+  loadingMore: false,
+  loadMoreFailed: false
+})
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
@@ -558,6 +632,136 @@ function openRenameDialog(session) {
   renameSessionId.value = session.id
   renameTitle.value = session.title
   renameDialogOpen.value = true
+}
+
+function chatQuery(sessionId = null, projectId = selectedProjectId.value, extra = {}) {
+  return {
+    ...(projectId ? { project: projectId } : {}),
+    ...(sessionId ? { session: sessionId } : {}),
+    ...extra
+  }
+}
+
+function projectSessionList(projectId) {
+  return chat.sessionList(projectId) || emptySidebarList
+}
+
+async function loadProjectSessions(projectId, force = false) {
+  const list = chat.ensureSessionList(projectId)
+  if (!force && (list.loaded || list.loading)) return
+  try {
+    await chat.fetchSessions(null, projectId)
+  } catch {
+    // The central API interceptor displays the error and the folder exposes a retry action.
+  }
+}
+
+async function loadStandaloneSessions(force = false) {
+  const list = chat.ensureSessionList(null)
+  if (!force && (list.loaded || list.loading)) return
+  try {
+    await chat.fetchSessions(null, null)
+  } catch {
+    // The central API interceptor displays the error and the list exposes a retry action.
+  }
+}
+
+async function loadProjects() {
+  try {
+    await projects.fetchAll()
+  } catch {
+    // The central API interceptor displays the error and the section exposes a retry action.
+  }
+}
+
+function openProjectDialog(mode, project = null) {
+  projectDialogMode.value = mode
+  projectDialogTarget.value = project
+  projectName.value = mode === 'rename' ? project?.name || '' : ''
+  projectDialogOpen.value = true
+}
+
+async function saveProject() {
+  const name = projectName.value.trim()
+  if (!name) return
+  projectSaving.value = true
+  try {
+    if (projectDialogMode.value === 'create') {
+      const project = await projects.create(name)
+      projectDialogOpen.value = false
+      $q.notify({ type: 'positive', message: 'Projekt erstellt.' })
+      expandedProjects[project.id] = true
+      await openNewSession(project.id)
+    } else if (projectDialogTarget.value) {
+      await projects.update(projectDialogTarget.value.id, name)
+      projectDialogOpen.value = false
+      $q.notify({ type: 'positive', message: 'Projekt umbenannt.' })
+    }
+  } catch {
+    // The central API interceptor displays the error; the dialog remains open.
+  } finally {
+    projectSaving.value = false
+  }
+}
+
+async function deleteProject(project) {
+  if (!project || project.sessionCount > 0) return
+  const accepted = await confirm(
+    `Projekt „${project.name}“ löschen?`,
+    'Leeres Projekt löschen?',
+    { okLabel: 'Löschen' }
+  )
+  if (!accepted) return
+  try {
+    await projects.remove(project.id)
+    delete expandedProjects[project.id]
+    $q.notify({ type: 'positive', message: 'Projekt gelöscht.' })
+    if (selectedProjectId.value === project.id) {
+      try {
+        await chat.setSessionScope(null)
+      } catch {
+        // Navigation still leaves the deleted scope; the standalone list keeps its retry state.
+      }
+      await router.push({ name: 'chat' })
+    }
+    chat.removeProjectScope(project.id)
+  } catch {
+    // The central API interceptor displays the error.
+  }
+}
+
+function openMoveDialog(session) {
+  moveSessionId.value = session.id
+  moveSourceProjectId.value = session.projectId || null
+  moveProjectId.value = moveSourceProjectId.value
+  moveDialogOpen.value = true
+}
+
+async function moveSession() {
+  if (!moveSessionId.value || moveProjectId.value === moveSourceProjectId.value) return
+  const sessionId = moveSessionId.value
+  const targetProjectId = moveProjectId.value || null
+  if (route.query.session === sessionId && !await confirmDiscardedEdit()) return
+  movingSession.value = true
+  try {
+    await chat.moveSession(sessionId, targetProjectId)
+    moveDialogOpen.value = false
+    $q.notify({ type: 'positive', message: 'Session verschoben.' })
+    if (route.query.session === sessionId) {
+      await router.push({
+        name: 'chat',
+        query: {
+          ...(targetProjectId ? { project: targetProjectId } : {}),
+          session: sessionId
+        }
+      })
+    }
+    void projects.fetchAll().catch(() => {})
+  } catch {
+    // The central API interceptor displays the error; the dialog remains open.
+  } finally {
+    movingSession.value = false
+  }
 }
 
 async function renameSession() {
@@ -588,16 +792,24 @@ async function toggleSessionPinned(session) {
   }
 }
 
-async function openNewSession() {
+async function openNewSession(projectId = null) {
   if (!await confirmDiscardedEdit()) return
   if ($q.screen.lt.md) drawerOpen.value = false
+  try {
+    await chat.setSessionScope(projectId)
+  } catch {
+    // The new-session draft remains usable while the sidebar offers a list retry.
+  }
   await chat.loadSession(null)
-  await router.push({ name: 'chat' })
+  await router.push({ name: 'chat', query: chatQuery(null, projectId) })
 }
 
-async function openSession(id) {
+async function openSession(session) {
   if ($q.screen.lt.md) drawerOpen.value = false
-  await router.push({ name: 'chat', query: { session: id } })
+  await router.push({
+    name: 'chat',
+    query: chatQuery(session.id, session.projectId || null)
+  })
 }
 
 function closeDrawerOnMobile() {
@@ -623,7 +835,7 @@ async function openControlCenterApp(appId) {
   if (route.name !== 'chat') {
     await router.push({
       name: 'chat',
-      query: chat.current?.id ? { session: chat.current.id, controlCenter: appId } : { controlCenter: appId }
+      query: chatQuery(chat.current?.id, selectedProjectId.value, { controlCenter: appId })
     })
     return
   }
@@ -642,7 +854,10 @@ async function closeNavigation() {
 
 function refreshSessionsWhenVisible() {
   if (document.visibilityState !== 'visible') return
-  void chat.refreshSessions().catch(() => {})
+  if (projects.loadFailed) void loadProjects()
+  for (const [scope, list] of Object.entries(chat.sessionLists)) {
+    if (list.loaded) void chat.refreshSessions(null, scope === 'standalone' ? null : scope).catch(() => {})
+  }
   void approvals.fetchPending({ suppressErrorToast: true }).catch(() => {})
   void questions.fetchPending({ suppressErrorToast: true }).catch(() => {})
   void notifications.fetchLatest({ suppressErrorToast: true }).catch(() => {})
@@ -659,8 +874,13 @@ async function refreshActiveSessions() {
       approvals.fetchPending({ suppressErrorToast: true }),
       questions.fetchPending({ suppressErrorToast: true })
     ]
-    if (chat.sessions.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))) {
-      requests.push(chat.refreshSessions({ suppressErrorToast: true }))
+    for (const [scope, list] of Object.entries(chat.sessionLists)) {
+      if (list.items.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))) {
+        requests.push(chat.refreshSessions(
+          { suppressErrorToast: true },
+          scope === 'standalone' ? null : scope
+        ))
+      }
     }
     await Promise.all(requests)
   } catch {
@@ -670,26 +890,24 @@ async function refreshActiveSessions() {
   }
 }
 
-async function loadMoreSessions(_index, done) {
+async function loadMoreSessions(projectId) {
   try {
-    await chat.fetchMoreSessions()
-    done(!chat.sessionsNextCursor)
+    await chat.fetchMoreSessions(null, projectId)
   } catch {
-    done(true)
+    // The central API interceptor displays the error and the list exposes a retry action.
   }
 }
 
-async function retrySessionPagination() {
-  chat.retrySessionPagination()
-  await nextTick()
-  sessionInfiniteScroll.value?.resume()
+async function retrySessionPagination(projectId) {
+  chat.retrySessionPagination(projectId)
+  await loadMoreSessions(projectId)
 }
 
-function closeActionMenu(id) {
-  if (openActionMenuSessionId.value === id) openActionMenuSessionId.value = null
-}
-
-async function removeSession(id) {
+async function removeSession(session) {
+  const id = typeof session === 'string' ? session : session.id
+  const sourceProjectId = typeof session === 'string'
+    ? chat.findCachedSession(id)?.projectId || null
+    : session.projectId || null
   let impact
   try {
     impact = await chat.sessionDeleteImpact(id, { suppressErrorToast: true })
@@ -723,12 +941,15 @@ async function removeSession(id) {
       automationMode,
       automationImpact: automationMode ? impact.automationImpact : null
     })
+    if (sourceProjectId) void projects.fetchAll().catch(() => {})
   } catch {
     return
   }
   if (workspace.sessionId === id) workspace.discardEdit()
   if (automationMode) void automations.fetchAutomations().catch(() => {})
-  if (route.query.session === id) await router.push({ name: 'chat' })
+  if (route.query.session === id) {
+    await router.push({ name: 'chat', query: chatQuery(null, sourceProjectId) })
+  }
 }
 
 async function logout() {
@@ -771,6 +992,18 @@ watch(
   }
 )
 
+watch(
+  selectedProjectId,
+  (projectId) => {
+    if (projectId) {
+      projectsSectionOpen.value = true
+      expandedProjects[projectId] = true
+    }
+    void chat.setSessionScope(projectId).catch(() => {})
+  },
+  { immediate: true }
+)
+
 onBeforeRouteUpdate(confirmDiscardedEdit)
 onBeforeRouteLeave(confirmDiscardedEdit)
 
@@ -782,14 +1015,13 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
   sessionActivityTimer = window.setInterval(refreshActiveSessions, SESSION_ACTIVITY_REFRESH_MS)
   await Promise.allSettled([
-    chat.fetchSessions(),
+    loadProjects(),
+    loadStandaloneSessions(),
     approvals.fetchPending(),
     questions.fetchPending(),
     notifications.fetchLatest({ suppressErrorToast: true }),
     identity.fetchIdentity()
   ])
-  await nextTick()
-  sessionInfiniteScroll.value?.resume()
 })
 
 onBeforeUnmount(() => {

@@ -34,6 +34,13 @@ function sessionPage(items = [], nextCursor = null) {
   return { data: { items, nextCursor } }
 }
 
+function setSessions(chat, items, { loaded = true, nextCursor = null } = {}) {
+  const list = chat.ensureSessionList()
+  list.items = items
+  list.loaded = loaded
+  list.nextCursor = nextCursor
+}
+
 class EventSourceMock {
   static instances = []
 
@@ -263,6 +270,30 @@ describe('chat drafts', () => {
     expect(await creating).toEqual({ created: false, sessionId: 'created-session' })
     expect(chat.current).toBeNull()
     expect(chat.selectedSessionId).toBe('other-session')
+  })
+
+  it('clears only the submitted project draft after switching to another new chat', async () => {
+    let resolveCreate
+    api.post.mockReturnValue(new Promise((resolve) => { resolveCreate = resolve }))
+    api.get.mockResolvedValue(sessionPage([]))
+    const chat = useChatStore()
+    chat.setDraft('Entwurf ohne Projekt')
+
+    const creating = chat.startSession('Absenden')
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalled())
+    await chat.setSessionScope('project-2')
+    chat.setDraft('Projektentwurf behalten')
+    resolveCreate({
+      data: {
+        session: { id: 'created-session', projectId: null, messages: [] },
+        runId: 'run-1'
+      }
+    })
+
+    expect(await creating).toEqual({ created: false, sessionId: 'created-session' })
+    expect(chat.activeDraft).toBe('Projektentwurf behalten')
+    expect(chat.drafts.newSessions.standalone.message).toBe('')
+    expect(chat.running).toBe(false)
   })
 
   it('creates a session without a computer or backend-local working directory', async () => {
@@ -614,8 +645,16 @@ describe('chat drafts', () => {
 
     chat.clearAllAttachmentDrafts()
 
-    expect(chat.attachmentDrafts).toEqual({ newSession: [], sessionMessages: {} })
-    expect(chat.audioDictations).toEqual({ newSession: null, sessionMessages: {} })
+    expect(chat.attachmentDrafts).toEqual({
+      newSession: [],
+      newSessions: { standalone: [] },
+      sessionMessages: {}
+    })
+    expect(chat.audioDictations).toEqual({
+      newSession: null,
+      newSessions: { standalone: null },
+      sessionMessages: {}
+    })
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:new')
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:old')
   })
@@ -628,7 +667,11 @@ describe('chat drafts', () => {
     chat.clearAllDrafts()
 
     expect(chat.activeDraft).toBe('')
-    expect(chat.attachmentDrafts).toEqual({ newSession: [], sessionMessages: {} })
+    expect(chat.attachmentDrafts).toEqual({
+      newSession: [],
+      newSessions: { standalone: [] },
+      sessionMessages: {}
+    })
     expect(window.localStorage.getItem('matoLoopChatDrafts')).toBeNull()
   })
 
@@ -784,7 +827,7 @@ describe('chat drafts', () => {
     })
     api.post.mockResolvedValue({ data: { read: true } })
     const chat = useChatStore()
-    chat.sessions = [{ id: 'session-1', hasUnreadMessages: true }]
+    setSessions(chat, [{ id: 'session-1', hasUnreadMessages: true }])
 
     await chat.loadSession('session-1')
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith(
@@ -808,7 +851,7 @@ describe('chat drafts', () => {
     })
     api.post.mockRejectedValue(new Error('network'))
     const chat = useChatStore()
-    chat.sessions = [{ id: 'session-1', hasUnreadMessages: true }]
+    setSessions(chat, [{ id: 'session-1', hasUnreadMessages: true }])
 
     await chat.loadSession('session-1')
     await vi.waitFor(() => expect(api.post).toHaveBeenCalled())
@@ -878,10 +921,10 @@ describe('chat drafts', () => {
     })
     const chat = useChatStore()
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
-    chat.sessions = [
+    setSessions(chat, [
       { id: 'session-2', lastMessageAt: '2026-07-24T14:00:00Z' },
       { id: 'session-1', lastMessageAt: '2026-07-20T12:00:00Z' }
-    ]
+    ])
     chat.current = {
       id: 'session-1',
       lastMessageAt: '2026-07-20T12:00:00Z',
@@ -995,7 +1038,7 @@ describe('chat drafts', () => {
     api.get.mockResolvedValue(sessionPage())
     const chat = useChatStore()
     chat.current = { id: 'session-1', messages: [] }
-    chat.sessions = [{ id: 'session-1', title: 'Erste Nachricht' }]
+    setSessions(chat, [{ id: 'session-1', title: 'Erste Nachricht' }])
     chat.selectedSessionId = 'session-1'
 
     chat.watchRun('session-1', 'run-1', {
@@ -1223,7 +1266,7 @@ describe('chat drafts', () => {
       resolveSessions = resolve
     }))
     const chat = useChatStore()
-    chat.sessions = [{ id: 'session-1', title: 'Test', activeRunStatus: null }]
+    setSessions(chat, [{ id: 'session-1', title: 'Test', activeRunStatus: null }])
 
     const request = chat.fetchSessions()
     chat.setSessionRunStatus('session-1', 'running')
@@ -1254,7 +1297,48 @@ describe('chat drafts', () => {
     expect(chat.sessions[1].title).toBe('Aktualisiert')
     expect(chat.sessionsNextCursor).toBeNull()
     expect(api.get).toHaveBeenNthCalledWith(2, '/sessions', {
-      params: { pageSize: 10, cursor: 'cursor-1' }
+      params: { standalone: true, pageSize: 10, cursor: 'cursor-1' }
+    })
+  })
+
+  it('preserves an in-flight list page when a new session is created', async () => {
+    let resolveList
+    api.get.mockReturnValue(new Promise((resolve) => { resolveList = resolve }))
+    api.post.mockResolvedValue({
+      data: {
+        session: { id: 'new-session', projectId: null, title: 'Neu', messages: [] },
+        runId: 'run-1'
+      }
+    })
+    const chat = useChatStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+
+    const loading = chat.fetchSessions()
+    const creating = chat.startSession('Neue Session')
+    resolveList(sessionPage([{ id: 'old-session', projectId: null }], 'next-page'))
+    await Promise.all([loading, creating])
+
+    expect(chat.sessions.map((session) => session.id)).toEqual(['new-session', 'old-session'])
+    expect(chat.sessionsNextCursor).toBe('next-page')
+  })
+
+  it('scopes session lists and new-session drafts by project', async () => {
+    api.get.mockResolvedValue(sessionPage([]))
+    const chat = useChatStore()
+    chat.setDraft('Ohne Projekt')
+
+    await chat.setSessionScope('project-1')
+    chat.setDraft('Projektentwurf')
+    await chat.setSessionScope(null)
+
+    expect(chat.activeDraft).toBe('Ohne Projekt')
+    await chat.setSessionScope('project-1')
+    expect(chat.activeDraft).toBe('Projektentwurf')
+    expect(api.get).toHaveBeenNthCalledWith(1, '/sessions', {
+      params: { projectId: 'project-1', pageSize: 10 }
+    })
+    expect(api.get).toHaveBeenNthCalledWith(2, '/sessions', {
+      params: { standalone: true, pageSize: 10 }
     })
   })
 
@@ -1262,9 +1346,7 @@ describe('chat drafts', () => {
     let resolvePage
     api.get.mockReturnValue(new Promise((resolve) => { resolvePage = resolve }))
     const chat = useChatStore()
-    chat.sessions = [{ id: 'session-1' }]
-    chat.sessionsLoaded = true
-    chat.sessionsNextCursor = 'cursor-1'
+    setSessions(chat, [{ id: 'session-1' }], { nextCursor: 'cursor-1' })
 
     const loadingPage = chat.fetchMoreSessions()
     const loadingAll = chat.fetchAllSessions()
@@ -1279,8 +1361,7 @@ describe('chat drafts', () => {
   it('replaces stale loaded summaries when refreshing the visible depth', async () => {
     api.get.mockResolvedValue(sessionPage([{ id: 'session-1', title: 'Aktuell' }]))
     const chat = useChatStore()
-    chat.sessions = [{ id: 'session-1', title: 'Alt' }, { id: 'deleted' }]
-    chat.sessionsLoaded = true
+    setSessions(chat, [{ id: 'session-1', title: 'Alt' }, { id: 'deleted' }])
 
     await chat.refreshSessions()
 
@@ -1350,11 +1431,11 @@ describe('chat drafts', () => {
       titleGenerationStatus: 'running',
       messages: []
     }
-    chat.sessions = [{
+    setSessions(chat, [{
       id: 'session-1',
       title: 'Default Models einbauen',
       titleGenerationStatus: 'running'
-    }]
+    }])
 
     const refresh = chat.refreshGeneratedTitle('session-1')
     await vi.advanceTimersByTimeAsync(1000)
@@ -1362,7 +1443,9 @@ describe('chat drafts', () => {
 
     expect(chat.current.title).toBe('Standardmodelle konfigurieren')
     expect(chat.current.titleGenerationStatus).toBe('completed')
-    expect(api.get).toHaveBeenCalledWith('/sessions', { params: { pageSize: 10 } })
+    expect(api.get).toHaveBeenCalledWith('/sessions', {
+      params: { standalone: true, pageSize: 10 }
+    })
   })
 
   it('stops generated title polling after a terminal failure', async () => {
@@ -1379,11 +1462,11 @@ describe('chat drafts', () => {
       titleGenerationStatus: 'running',
       messages: []
     }
-    chat.sessions = [{
+    setSessions(chat, [{
       id: 'session-1',
       title: 'Lokaler Titel',
       titleGenerationStatus: 'running'
-    }]
+    }])
 
     const refresh = chat.refreshGeneratedTitle('session-1')
     await vi.advanceTimersByTimeAsync(1000)
@@ -1402,10 +1485,10 @@ describe('chat drafts', () => {
       }
     })
     const chat = useChatStore()
-    chat.sessions = [
+    setSessions(chat, [
       { id: 'session-2', title: 'Andere Session', lastMessageAt: '2026-07-20T13:00:00Z' },
       { id: 'session-1', title: 'Alter Titel', lastMessageAt: '2026-07-19T13:00:00Z' }
-    ]
+    ])
     chat.current = { id: 'session-1', title: 'Alter Titel', messages: [] }
 
     await chat.renameSession('session-1', 'Neuer Titel')
@@ -1413,6 +1496,45 @@ describe('chat drafts', () => {
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', { title: 'Neuer Titel' })
     expect(chat.sessions.map((session) => session.id)).toEqual(['session-2', 'session-1'])
     expect(chat.current.title).toBe('Neuer Titel')
+  })
+
+  it('moves a session out of the visible scope after the server succeeds', async () => {
+    api.patch.mockResolvedValue({
+      data: { id: 'session-1', title: 'Session', projectId: 'project-2' }
+    })
+    const chat = useChatStore()
+    setSessions(chat, [{ id: 'session-1', title: 'Session', projectId: 'project-1' }])
+    chat.current = { id: 'session-1', title: 'Session', projectId: 'project-1', messages: [] }
+
+    await chat.moveSession('session-1', 'project-2')
+
+    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
+      project_id: 'project-2'
+    })
+    expect(chat.sessions).toEqual([])
+    expect(chat.current.projectId).toBe('project-2')
+  })
+
+  it('does not let a stale destination refresh erase a moved session', async () => {
+    let resolveRefresh
+    api.get.mockReturnValue(new Promise((resolve) => { resolveRefresh = resolve }))
+    api.patch.mockResolvedValue({
+      data: { id: 'session-1', title: 'Verschoben', projectId: 'project-2' }
+    })
+    const chat = useChatStore()
+    const source = chat.ensureSessionList('project-1')
+    source.loaded = true
+    source.items = [{ id: 'session-1', title: 'Verschieben', projectId: 'project-1' }]
+    const target = chat.ensureSessionList('project-2')
+    target.loaded = true
+    target.items = [{ id: 'session-2', title: 'Vorhanden', projectId: 'project-2' }]
+
+    const refreshing = chat.refreshSessions(null, 'project-2')
+    await chat.moveSession('session-1', 'project-2')
+    resolveRefresh(sessionPage([{ id: 'session-2', title: 'Alt', projectId: 'project-2' }]))
+    await refreshing
+
+    expect(target.items.map((session) => session.id)).toEqual(['session-1', 'session-2'])
   })
 
   it('pins a session and moves it ahead of unpinned sessions', async () => {
@@ -1424,10 +1546,10 @@ describe('chat drafts', () => {
       }
     })
     const chat = useChatStore()
-    chat.sessions = [
+    setSessions(chat, [
       { id: 'session-2', pinned: false, lastMessageAt: '2026-07-20T14:00:00Z' },
       { id: 'session-1', pinned: false, lastMessageAt: '2026-07-20T12:00:00Z' }
-    ]
+    ])
     chat.current = { id: 'session-1', pinned: false, messages: [] }
 
     await chat.setSessionPinned('session-1', true)
@@ -1474,7 +1596,7 @@ describe('chat drafts', () => {
         : { items: [{ id: 'session-1', title: 'Test', activeRunStatus: null }], nextCursor: null }
     }))
     const chat = useChatStore()
-    chat.sessions = [{ id: 'session-1', title: 'Test' }]
+    setSessions(chat, [{ id: 'session-1', title: 'Test' }])
     chat.current = { id: 'session-1', messages: [] }
     chat.selectedSessionId = 'session-1'
     chat.watchRun('session-1', 'run-1', { status: 'running' })
@@ -1640,7 +1762,7 @@ describe('chat drafts', () => {
       }
     })
     const chat = useChatStore()
-    chat.sessions = [{ id: 'session-1', title: 'Test' }]
+    setSessions(chat, [{ id: 'session-1', title: 'Test' }])
     chat.current = {
       id: 'session-1',
       title: 'Test',
@@ -1672,7 +1794,7 @@ describe('chat drafts', () => {
       : Promise.resolve({ data: {} }))
     const chat = useChatStore()
     const message = { id: 'user-1', role: 'user', content: 'Noch einmal', attachments: [] }
-    chat.sessions = [{ id: 'session-1', title: 'Test', activeRunStatus: 'running' }]
+    setSessions(chat, [{ id: 'session-1', title: 'Test', activeRunStatus: 'running' }])
     chat.current = { id: 'session-1', title: 'Test', messages: [message] }
     chat.selectedSessionId = 'session-1'
     chat.watchRun('session-1', 'run-1', { status: 'running' })
@@ -1764,7 +1886,7 @@ describe('chat drafts', () => {
     api.get.mockResolvedValue(sessionPage())
     const chat = useChatStore()
     const message = { id: 'user-2', role: 'user', content: 'Später bearbeiten', attachments: [] }
-    chat.sessions = [{ id: 'session-1' }, { id: 'session-2' }]
+    setSessions(chat, [{ id: 'session-1' }, { id: 'session-2' }])
     chat.current = {
       id: 'session-1',
       messages: [{ id: 'user-1', role: 'user', content: 'Bleibt' }, message]

@@ -16,6 +16,7 @@ SESSION_DIRECTORIES = (
     "downloads",
     "derived",
 )
+_AUTO_LOCATION = object()
 
 
 class SessionStorageError(ValueError):
@@ -36,8 +37,17 @@ class ReconciliationResult:
 class SessionStorage:
     """Manage the filesystem lifecycle of session directories."""
 
-    def __init__(self, sessions_dir: Path | None = None) -> None:
-        self.sessions_dir = (sessions_dir or get_runtime_config().sessions_dir).absolute()
+    def __init__(
+        self,
+        sessions_dir: Path | None = None,
+        projects_dir: Path | None = None,
+    ) -> None:
+        config = get_runtime_config()
+        self.sessions_dir = (sessions_dir or config.sessions_dir).absolute()
+        self.projects_dir = (
+            projects_dir
+            or (self.sessions_dir.parent / "projects" if sessions_dir else config.projects_dir)
+        ).absolute()
         self.staging_dir = self.sessions_dir / ".staging"
         self.trash_dir = self.sessions_dir / ".trash"
 
@@ -58,6 +68,20 @@ class SessionStorage:
         return normalized
 
     @staticmethod
+    def normalize_project_id(project_id: UUID | str) -> UUID:
+        try:
+            normalized = project_id if isinstance(project_id, UUID) else UUID(project_id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise SessionStorageError(
+                "sessionStorage.invalidProjectId", "Invalid project ID"
+            ) from exc
+        if isinstance(project_id, str) and str(normalized) != project_id:
+            raise SessionStorageError(
+                "sessionStorage.invalidProjectId", "Invalid project ID"
+            )
+        return normalized
+
+    @staticmethod
     def _prepare_directory(directory: Path) -> None:
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
@@ -74,12 +98,80 @@ class SessionStorage:
 
     def prepare(self) -> None:
         self._prepare_directory(self.sessions_dir)
+        self._prepare_directory(self.projects_dir)
         self._prepare_directory(self.staging_dir)
         self._prepare_directory(self.trash_dir)
 
-    def session_path(self, session_id: UUID | str, *, require_exists: bool = False) -> Path:
+    @staticmethod
+    def _validate_directory(directory: Path) -> None:
+        if not directory.exists() and not directory.is_symlink():
+            return
+        metadata = directory.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise SessionStorageError(
+                "sessionStorage.invalidDirectory", "Invalid storage directory"
+            )
+
+    def _project_sessions_dir(
+        self, project_id: UUID | str, *, prepare: bool = False
+    ) -> Path:
+        normalized = self.normalize_project_id(project_id)
+        project_root = self.projects_dir / str(normalized)
+        sessions = project_root / "sessions"
+        if prepare:
+            self._prepare_directory(self.projects_dir)
+            self._prepare_directory(project_root)
+            self._prepare_directory(sessions)
+        else:
+            self._validate_directory(self.projects_dir)
+            self._validate_directory(project_root)
+            self._validate_directory(sessions)
+        return sessions
+
+    def _exact_path(
+        self, session_id: UUID | str, project_id: UUID | str | None
+    ) -> Path:
         normalized = self.normalize_session_id(session_id)
-        target = self.sessions_dir / str(normalized)
+        if project_id is None:
+            return self.sessions_dir / str(normalized)
+        return self._project_sessions_dir(project_id) / str(normalized)
+
+    def _located_paths(self, session_id: UUID | str) -> list[Path]:
+        normalized = self.normalize_session_id(session_id)
+        paths = []
+        standalone = self.sessions_dir / str(normalized)
+        if standalone.exists() or standalone.is_symlink():
+            paths.append(standalone)
+        self._validate_directory(self.projects_dir)
+        if self.projects_dir.exists():
+            for project_root in self.projects_dir.iterdir():
+                if project_root.is_symlink() or not project_root.is_dir():
+                    continue
+                try:
+                    self.normalize_project_id(project_root.name)
+                except SessionStorageError:
+                    continue
+                candidate = project_root / "sessions" / str(normalized)
+                if candidate.exists() or candidate.is_symlink():
+                    paths.append(candidate)
+        return paths
+
+    def session_path(
+        self,
+        session_id: UUID | str,
+        *,
+        project_id: UUID | str | None | object = _AUTO_LOCATION,
+        require_exists: bool = False,
+    ) -> Path:
+        if project_id is _AUTO_LOCATION:
+            located = self._located_paths(session_id)
+            if len(located) > 1:
+                raise SessionStorageError(
+                    "sessionStorage.duplicateSessionTree", "Duplicate session storage"
+                )
+            target = located[0] if located else self._exact_path(session_id, None)
+        else:
+            target = self._exact_path(session_id, project_id)
         if require_exists:
             self._validate_tree(target)
         return target
@@ -110,10 +202,14 @@ class SessionStorage:
                 )
             directory.chmod(0o700)
 
-    def provision(self, session_id: UUID | str) -> Path:
+    def provision(
+        self, session_id: UUID | str, project_id: UUID | str | None = None
+    ) -> Path:
         normalized = self.normalize_session_id(session_id)
         self.prepare()
-        target = self.sessions_dir / str(normalized)
+        if project_id is not None:
+            self._project_sessions_dir(project_id, prepare=True)
+        target = self._exact_path(normalized, project_id)
         if target.exists() or target.is_symlink():
             self._validate_tree(target)
             return target
@@ -140,17 +236,25 @@ class SessionStorage:
         elif target.is_dir():
             shutil.rmtree(target)
 
-    def remove_session(self, session_id: UUID | str) -> bool:
-        target = self.session_path(session_id)
+    def remove_session(
+        self,
+        session_id: UUID | str,
+        project_id: UUID | str | None | object = _AUTO_LOCATION,
+    ) -> bool:
+        target = self.session_path(session_id, project_id=project_id)
         if not target.exists() and not target.is_symlink():
             return False
         self._remove_path(target)
         return True
 
-    def trash_session(self, session_id: UUID | str) -> Path | None:
+    def trash_session(
+        self,
+        session_id: UUID | str,
+        project_id: UUID | str | None | object = _AUTO_LOCATION,
+    ) -> Path | None:
         normalized = self.normalize_session_id(session_id)
         self.prepare()
-        target = self.sessions_dir / str(normalized)
+        target = self.session_path(normalized, project_id=project_id)
         if not target.exists() and not target.is_symlink():
             return None
         self._validate_tree(target)
@@ -158,19 +262,67 @@ class SessionStorage:
         target.rename(trashed)
         return trashed
 
-    def restore_session(self, session_id: UUID | str, trashed: Path) -> Path:
+    def restore_session(
+        self,
+        session_id: UUID | str,
+        trashed: Path,
+        project_id: UUID | str | None = None,
+    ) -> Path:
         normalized = self.normalize_session_id(session_id)
         self.prepare()
         if trashed.parent != self.trash_dir or not trashed.name.startswith(f"{normalized}."):
             raise SessionStorageError("sessionStorage.invalidTrashEntry", "Invalid trash entry")
         self._validate_tree(trashed)
-        target = self.sessions_dir / str(normalized)
+        if project_id is not None:
+            self._project_sessions_dir(project_id, prepare=True)
+        target = self._exact_path(normalized, project_id)
         if target.exists() or target.is_symlink():
             raise SessionStorageError(
                 "sessionStorage.sessionAlreadyExists", "Session storage already exists"
             )
         trashed.rename(target)
         return target
+
+    def move_session(
+        self,
+        session_id: UUID | str,
+        source_project_id: UUID | str | None,
+        target_project_id: UUID | str | None,
+    ) -> Path:
+        normalized = self.normalize_session_id(session_id)
+        self.prepare()
+        source = self._exact_path(normalized, source_project_id)
+        target = self._exact_path(normalized, target_project_id)
+        if source == target:
+            self._validate_tree(source)
+            return source
+        self._validate_tree(source)
+        if target.exists() or target.is_symlink():
+            raise SessionStorageError(
+                "sessionStorage.sessionAlreadyExists", "Session storage already exists"
+            )
+        if target_project_id is not None:
+            self._project_sessions_dir(target_project_id, prepare=True)
+        source.rename(target)
+        return target
+
+    def remove_project(self, project_id: UUID | str) -> bool:
+        normalized = self.normalize_project_id(project_id)
+        project_root = self.projects_dir / str(normalized)
+        if not project_root.exists() and not project_root.is_symlink():
+            return False
+        if project_root.is_symlink() or not project_root.is_dir():
+            raise SessionStorageError(
+                "sessionStorage.invalidDirectory", "Invalid project storage"
+            )
+        sessions = project_root / "sessions"
+        self._validate_directory(sessions)
+        if sessions.exists() and any(sessions.iterdir()):
+            raise SessionStorageError(
+                "sessionStorage.projectNotEmpty", "Project storage is not empty"
+            )
+        self._remove_path(project_root)
+        return True
 
     def purge_trashed(self, trashed: Path | None) -> bool:
         if trashed is None:
@@ -207,19 +359,43 @@ class SessionStorage:
 
     def reconcile(
         self,
-        session_ids: set[UUID] | list[UUID] | tuple[UUID, ...],
+        sessions: (
+            dict[UUID, UUID | None]
+            | set[UUID]
+            | list[UUID]
+            | tuple[UUID, ...]
+        ),
         *,
         stale_staging_after_seconds: float = 3_600,
     ) -> ReconciliationResult:
         if stale_staging_after_seconds < 0:
             raise ValueError("stale_staging_after_seconds must not be negative")
-        normalized_ids = {self.normalize_session_id(item) for item in session_ids}
+        if isinstance(sessions, dict):
+            expected = {
+                self.normalize_session_id(session_id): (
+                    self.normalize_project_id(project_id)
+                    if project_id is not None
+                    else None
+                )
+                for session_id, project_id in sessions.items()
+            }
+        else:
+            expected = {self.normalize_session_id(item): None for item in sessions}
         self.prepare()
 
         provisioned: list[UUID] = []
         restored: list[UUID] = []
-        for session_id in sorted(normalized_ids, key=str):
-            target = self.session_path(session_id)
+        for session_id, project_id in sorted(expected.items(), key=lambda item: str(item[0])):
+            target = self._exact_path(session_id, project_id)
+            located = self._located_paths(session_id)
+            if len(located) > 1:
+                raise SessionStorageError(
+                    "sessionStorage.duplicateSessionTree", "Duplicate session storage"
+                )
+            if located and located[0] != target:
+                if project_id is not None:
+                    self._project_sessions_dir(project_id, prepare=True)
+                located[0].rename(target)
             if not target.exists() and not target.is_symlink():
                 trash_candidates = sorted(
                     (
@@ -233,14 +409,14 @@ class SessionStorage:
                 recovered = False
                 for candidate in trash_candidates:
                     try:
-                        self.restore_session(session_id, candidate)
+                        self.restore_session(session_id, candidate, project_id)
                     except SessionStorageError:
                         continue
                     restored.append(session_id)
                     recovered = True
                     break
                 if not recovered:
-                    self.provision(session_id)
+                    self.provision(session_id, project_id)
                     provisioned.append(session_id)
             else:
                 self._validate_tree(target)
@@ -253,9 +429,28 @@ class SessionStorage:
                 session_id = self.normalize_session_id(entry.name)
             except SessionStorageError:
                 continue
-            if session_id not in normalized_ids:
-                self.trash_session(session_id)
+            if session_id not in expected:
+                self.trash_session(session_id, None)
                 trashed.append(session_id)
+
+        for project_root in self.projects_dir.iterdir():
+            if project_root.is_symlink() or not project_root.is_dir():
+                continue
+            try:
+                project_id = self.normalize_project_id(project_root.name)
+            except SessionStorageError:
+                continue
+            project_sessions = project_root / "sessions"
+            if not project_sessions.is_dir() or project_sessions.is_symlink():
+                continue
+            for entry in list(project_sessions.iterdir()):
+                try:
+                    session_id = self.normalize_session_id(entry.name)
+                except SessionStorageError:
+                    continue
+                if expected.get(session_id, _AUTO_LOCATION) != project_id:
+                    self.trash_session(session_id, project_id)
+                    trashed.append(session_id)
 
         return ReconciliationResult(
             provisioned=tuple(provisioned),
