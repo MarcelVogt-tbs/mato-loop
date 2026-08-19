@@ -1142,11 +1142,24 @@ def test_general_system_prompt_separates_session_discovery_and_reading() -> None
         ),
     )
 
-    assert "only when missing prior-conversation details are needed" in prompt
+    assert "only when no supplied prior-session reference covers" in prompt
     assert "session_browse for recency" in prompt
-    assert "session_search for a supplied topic" in prompt
-    assert "Never search just because" in prompt
+    assert "session_search for a topic" in prompt
+    assert "Never search merely because" in prompt
     assert "exact sessionReadArguments" in prompt
+
+
+def test_general_system_prompt_marks_episode_payloads_as_discovery_pointers() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        memory_text='{"priorSessionEpisodes": []}',
+        injected_episode_count=1,
+        offered_tool_names=frozenset({"session_read"}),
+    )
+
+    assert "compact discovery pointers" in prompt
+    assert "call session_read with its exact sessionReadArguments" in prompt
+    assert "not verified facts or complete conversations" in prompt
 
 
 @pytest.mark.parametrize(

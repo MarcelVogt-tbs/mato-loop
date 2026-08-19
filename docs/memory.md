@@ -3,10 +3,10 @@
 MatoLoop has three distinct context layers:
 
 1. Current-session working context: canonical messages, a compacted summary when needed, and recent original history.
-2. Episodic context: bounded excerpts retrieved automatically from prior sessions.
+2. Episodic context: compact discovery references retrieved automatically from prior sessions.
 3. Durable memory: explicit records created manually, by `memory_write`, or by optional dreaming.
 
-Episodic retrieval provides immediate session-crossing recall without first converting a conversation into durable memory. A relevant turn can retrieve prior-session excerpts as soon as their source messages are committed. Starting a session does not automatically hand off, summarize, or inject the previous session; retrieval is driven by the current turn or by an explicit request about recent sessions. Dreaming is not required for either episodic or durable retrieval.
+Episodic retrieval provides immediate session-crossing discovery without first converting a conversation into durable memory. A relevant turn can retrieve a prior-session anchor as soon as its source message is committed. The first turn of a new memory-enabled session also receives a pointer to the newest trust-visible prior session; this is not a summary or complete handoff. Dreaming is not required for either episodic or durable retrieval.
 
 ## Access and Trust
 
@@ -20,14 +20,14 @@ The owner-scoped memory switch and the effective instance or personal provider a
 
 Every run persists its effective model trust snapshot. Durable memories and prior-session messages retain `public` or `private` provenance. For these cross-session sources, public models receive only public content; private models may receive both trust levels. Ownership, current-session exclusion, and trust restrictions are applied before retrieval limits. Local embeddings do not weaken these SQL release filters.
 
-Durable memories and prior-session episodes are explicitly untrusted data, never instructions. Conflict priority is:
+Durable memories and prior-session references are explicitly untrusted data, never instructions. Conflict priority is:
 
 1. Current user message
 2. Pinned durable memory
 3. Retrieved durable memory
-4. Historical episode
+4. A transcript read from a historical-session reference
 
-An automatic episode is a bounded context reference, not permission to read its complete source session. `session_read` remains separately controlled: the current session is host-allowed, while another session requires the normal exact `session.read` grant or approval. Public session tools also retain their public-only release boundary.
+An automatic episode contains only session metadata, one bounded anchor preview, and exact `sessionReadArguments`. It is a discovery pointer, not complete conversation evidence or permission to read its source session. The model calls `session_read` before relying on omitted details. `session_read` remains separately controlled: the current session is host-allowed, while another session requires the normal exact `session.read` grant or approval. Public session tools also retain their public-only release boundary.
 
 ## Automatic Context
 
@@ -40,13 +40,13 @@ The current user message is always the primary retrieval query. For a short turn
 Automatic retrieval is bounded as follows:
 
 - At most three unpinned durable results, with at most 2,500 total memory-content characters.
-- At most two prior-session episodes, with one anchor per source session.
+- At most two prior-session references, with one anchor per source session.
 - Semantic cosine-distance thresholds of `0.21` for durable memory and `0.25` for episodes.
 - A shared automatic-context character budget derived from `min(1,536 tokens, 10% of usable model input)` using the selected model's characters-per-token estimate. Usable input is the context window minus maximum output and the safety reserve.
 
-Pinned memories are injected in stable creation order whenever read access and trust allow it. They are not displaced by the automatic retrieval budget and are limited only by the selected model's final context projection. Retrieved unpinned memories consume the memory-content cap and automatic budget first; episode excerpts use the remaining automatic budget. The final context manager still guarantees that the complete request fits the selected model.
+Pinned memories are injected in stable creation order whenever read access and trust allow it. They are not displaced by the automatic retrieval budget and are limited only by the selected model's final context projection. When prior-session candidates exist, their small anchor-preview budget is reserved before retrieved unpinned memories. The final context manager still guarantees that the complete request fits the selected model and drops unpinned memories before session references during overflow fallback.
 
-Explicit intent about the latest or previous session uses recency retrieval instead of semantic retrieval. This is query-triggered retrieval, not an automatic handoff when a new session starts. Explicit durable-memory overview intent uses a bounded memory browse prefetch and continuation state while still including every visible pinned memory in full. `memory_retrieve`, `session_browse`, `session_search`, and `session_read` remain available for deliberate retrieval beyond the automatic references, subject to their own policies and permissions.
+Explicit intent about the latest or previous session uses recency retrieval instead of semantic retrieval. Independently, a new session's first turn receives the newest prior-session pointer; neither path injects a complete transcript. Explicit durable-memory overview intent uses a bounded memory browse prefetch and continuation state while still including every visible pinned memory in full. `memory_retrieve`, `session_browse`, `session_search`, and `session_read` remain available for deliberate retrieval beyond the automatic references, subject to their own policies and permissions.
 
 The model-facing prompt reports visible durable-memory totals and the counts injected into the request. Assistant provider metadata records `durableMemoryReferences` and `priorSessionEpisodes` under `_matoloop.performance`, alongside context preparation and provider timing; it does not duplicate retrieved content.
 

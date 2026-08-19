@@ -229,6 +229,7 @@ AUTOMATIC_MEMORY_MAX_CHARACTERS = 2_500
 AUTOMATIC_MEMORY_MAX_DISTANCE = 0.21
 AUTOMATIC_EPISODE_MAX_ITEMS = 2
 AUTOMATIC_EPISODE_MAX_DISTANCE = 0.25
+AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS = 320
 AUTOMATIC_CONTEXT_MAX_TOKENS = 1_536
 AUTOMATIC_CONTEXT_BUDGET_RATIO = 0.1
 MEMORY_OVERVIEW_MAX_ITEMS = 50
@@ -851,40 +852,28 @@ def _bounded_episode_payload(
         share = remaining_budget // (len(selected) - index)
         if share <= 0:
             break
-        matched_text = reference.anchor_content[:share]
-        local_used = len(matched_text)
-        messages = []
-        for message in reference.excerpt:
-            if message.id == reference.anchor_message_id:
-                continue
-            remaining = share - local_used
-            if remaining <= 0:
-                break
-            content = message.content[:remaining]
-            if not content:
-                continue
-            messages.append(
-                {
-                    "role": message.role,
-                    "content": content,
-                    "at": message.created_at.isoformat(),
-                }
-            )
-            local_used += len(content)
+        matched_text = reference.anchor_content[
+            : min(share, AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS)
+        ]
         if not matched_text:
             continue
         payload.append(
             {
                 "sessionId": str(reference.session_id),
                 "title": reference.session_title,
-                "anchorMessageId": str(reference.anchor_message_id),
-                "observedAt": reference.anchor_created_at.isoformat(),
-                "matchedRole": reference.anchor_role,
-                "matchedText": matched_text,
-                "messages": messages,
+                "anchorMessage": {
+                    "id": str(reference.anchor_message_id),
+                    "role": reference.anchor_role,
+                    "createdAt": reference.anchor_created_at.isoformat(),
+                    "preview": matched_text,
+                },
+                "sessionReadArguments": {
+                    "session_id": str(reference.session_id),
+                    "around_message_id": str(reference.anchor_message_id),
+                },
             }
         )
-        remaining_budget -= local_used
+        remaining_budget -= len(matched_text)
     return payload
 
 
@@ -1918,8 +1907,27 @@ class AgentRuntime:
                                     query_embedding=query_embedding,
                                     semantic_enabled=semantic_enabled,
                                     max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
+                                    excerpt_messages=1,
+                                    max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
                                 )
                             ).references
+                            if sum(item.role == "user" for item in records) == 1:
+                                latest_episode = await EpisodeRetrievalService.recent(
+                                    db,
+                                    owner_id=chat_session.user_id,
+                                    current_session_id=chat_session.id,
+                                    project_id=chat_session.project_id,
+                                    readable_by=model_trust_level,
+                                    limit=1,
+                                    excerpt_messages=1,
+                                    max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
+                                )
+                                primary_episodes = _merge_contextual_results(
+                                    latest_episode.references,
+                                    primary_episodes,
+                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
+                                    identity=lambda item: item.session_id,
+                                )
                             automatic_memories = primary_memories
                             automatic_episodes = primary_episodes
                             if contextual_rag_query:
@@ -1949,6 +1957,8 @@ class AgentRuntime:
                                         query_embedding=contextual_query_embedding,
                                         semantic_enabled=semantic_enabled,
                                         max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
+                                        excerpt_messages=1,
+                                        max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
                                     )
                                 ).references
                                 automatic_memories = _merge_contextual_results(
@@ -1973,6 +1983,8 @@ class AgentRuntime:
                                     project_id=chat_session.project_id,
                                     readable_by=model_trust_level,
                                     limit=AUTOMATIC_EPISODE_MAX_ITEMS,
+                                    excerpt_messages=1,
+                                    max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
                                 )
                             ).references
                         else:
@@ -1981,12 +1993,18 @@ class AgentRuntime:
                     automatic_budget = _automatic_context_character_budget(
                         model, runtime_settings
                     )
+                    episode_reserve = (
+                        min(AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS, automatic_budget)
+                        if automatic_episodes
+                        else 0
+                    )
                     selected_memory_references = _bounded_memory_references(
                         pinned_memories,
                         automatic_memories,
                         relevant_max_items=AUTOMATIC_MEMORY_MAX_ITEMS,
                         relevant_max_characters=min(
-                            AUTOMATIC_MEMORY_MAX_CHARACTERS, automatic_budget
+                            AUTOMATIC_MEMORY_MAX_CHARACTERS,
+                            automatic_budget - episode_reserve,
                         ),
                     )
                     retrieved_characters = sum(
@@ -2010,6 +2028,23 @@ class AgentRuntime:
                             injected_episode_count,
                         )
                     )
+                    pinned_references = [
+                        reference
+                        for reference in selected_memory_references
+                        if reference[0] == "pinned"
+                    ]
+                    if episode_payload and len(pinned_references) != len(
+                        selected_memory_references
+                    ):
+                        memory_prompt_candidates.append(
+                            (
+                                _cross_session_context_text(
+                                    pinned_references, episode_payload
+                                ),
+                                len(pinned_references),
+                                injected_episode_count,
+                            )
+                        )
                     if episode_payload:
                         memory_prompt_candidates.append(
                             (
@@ -2020,11 +2055,6 @@ class AgentRuntime:
                                 0,
                             )
                         )
-                    pinned_references = [
-                        reference
-                        for reference in selected_memory_references
-                        if reference[0] == "pinned"
-                    ]
                     if len(pinned_references) != len(selected_memory_references):
                         memory_prompt_candidates.append(
                             (

@@ -82,7 +82,7 @@ def test_recent_episode_overview_intent_is_host_detected() -> None:
     )
 
 
-def test_episode_budget_keeps_the_matched_text_from_each_session() -> None:
+def test_episode_budget_keeps_a_compact_pointer_for_each_session() -> None:
     now = datetime.now(UTC)
     references = [
         EpisodeReference(
@@ -104,8 +104,12 @@ def test_episode_budget_keeps_the_matched_text_from_each_session() -> None:
     payload = _bounded_episode_payload(references, max_characters=40)
 
     assert len(payload) == 2
-    assert payload[0]["matchedText"] == "a" * 20
-    assert payload[1]["matchedText"] == "b" * 20
+    assert payload[0]["anchorMessage"]["preview"] == "a" * 20
+    assert payload[1]["anchorMessage"]["preview"] == "b" * 20
+    assert payload[0]["sessionReadArguments"] == {
+        "session_id": str(references[0].session_id),
+        "around_message_id": str(references[0].anchor_message_id),
+    }
 
 
 async def _runtime_setup(
@@ -222,6 +226,15 @@ async def _runtime_setup(
             )
         ),
     )
+    monkeypatch.setattr(
+        EpisodeRetrievalService,
+        "recent",
+        AsyncMock(
+            return_value=EpisodeRetrieval(
+                references=[], strategy=MemoryRetrievalStrategy.BROWSE
+            )
+        ),
+    )
     monkeypatch.setattr(embedding_client, "embed_query", AsyncMock(return_value=[0.0]))
     monkeypatch.setattr(
         embedding_client,
@@ -286,8 +299,43 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
         "system_prompt"
     ]
     assert "15 total, 2 pinned" in projections[0]["system_prompt"]
-    assert "0 prior-session episodes" in projections[0]["system_prompt"]
+    assert "0 prior-session references" in projections[0]["system_prompt"]
     assert requests[0]["tool_choice"] == "auto"
+
+
+async def test_first_turn_includes_a_pointer_to_the_latest_session(monkeypatch) -> None:
+    session_id = uuid4()
+    previous_session_id = uuid4()
+    anchor_message_id = uuid4()
+    created_at = datetime(2026, 8, 19, 10, tzinfo=UTC)
+    reference = EpisodeReference(
+        session_id=previous_session_id,
+        session_title="Vorheriger Chat",
+        anchor_message_id=anchor_message_id,
+        anchor_created_at=created_at,
+        anchor_role="assistant",
+        anchor_content="Wir haben das Deployment vorbereitet.",
+        excerpt=(),
+    )
+    user = Message(
+        id=uuid4(), session_id=session_id, role="user", content="Machen wir weiter."
+    )
+    db, run, _requests, projections, _retrieve, _execute = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="Gern.", finish_reason="stop")],
+        records=[user],
+    )
+    EpisodeRetrievalService.recent.return_value = EpisodeRetrieval(
+        references=[reference], strategy=MemoryRetrievalStrategy.BROWSE
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    EpisodeRetrievalService.recent.assert_awaited_once()
+    prompt = projections[0]["system_prompt"]
+    assert '"title": "Vorheriger Chat"' in prompt
+    assert f'"session_id": "{previous_session_id}"' in prompt
+    assert f'"around_message_id": "{anchor_message_id}"' in prompt
 
 
 async def test_short_turn_retrieval_prioritizes_current_query_before_context(
