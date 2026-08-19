@@ -147,7 +147,7 @@
                         round
                         dense
                         size="sm"
-                        icon="add"
+                        icon="add_comment"
                         class="project-list-item__action"
                         :aria-label="`Neue Session in ${project.name}`"
                         @click.stop="openNewSession(project.id)"

@@ -13,7 +13,7 @@ import { safeAttachmentUrl, toolFileActions } from 'src/utils/attachments'
 import { notifyError } from 'src/utils/notifications'
 
 const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
-const SESSION_PAGE_SIZE = 10
+const SESSION_PAGE_SIZE = 20
 const ACTIVE_TITLE_GENERATION_STATUSES = new Set(['pending', 'running'])
 const FILESYSTEM_MUTATION_TOOLS = new Set([
   'write_file',

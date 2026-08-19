@@ -1,7 +1,7 @@
 <template>
   <div class="sidebar-session-list" :class="{ 'sidebar-session-list--nested': nested }">
-    <div v-if="list.loading && !list.loaded" class="row justify-center q-pa-sm" aria-label="Sessions werden geladen">
-      <q-spinner-dots color="primary" size="24px" />
+    <div v-if="list.loading && !list.loaded" class="q-px-sm" role="status" aria-label="Sessions werden geladen">
+      <q-skeleton v-for="index in 3" :key="index" type="text" height="32px" class="q-my-xs" />
     </div>
     <div v-else-if="list.loadFailed && !list.loaded" class="q-pa-sm">
       <q-btn
@@ -157,13 +157,15 @@
         </q-item>
       </template>
     </q-list>
-    <div v-if="list.nextCursor || list.loadMoreFailed" class="q-px-sm q-pb-xs">
+    <div v-if="list.loadingMore" class="q-px-sm q-pb-xs" role="status" aria-label="Weitere Sessions werden geladen">
+      <q-skeleton v-for="index in 3" :key="index" type="text" height="32px" class="q-my-xs" />
+    </div>
+    <div v-else-if="list.nextCursor || list.loadMoreFailed" class="q-px-sm q-pb-xs">
       <q-btn
         flat
         dense
         no-caps
         color="primary"
-        :loading="list.loadingMore"
         :icon-right="list.loadMoreFailed ? 'refresh' : undefined"
         :label="list.loadMoreFailed ? 'Erneut versuchen' : 'Mehr anzeigen'"
         @click="emit(list.loadMoreFailed ? 'retry-more' : 'load-more')"
