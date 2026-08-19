@@ -274,7 +274,9 @@ function openAttachment(attachment) {
 }
 
 function attachmentDownloadUrl(attachment) {
-  return attachment.draftAction?.downloadUrl || attachment.safeUrl
+  return attachment.draftRole === 'download'
+    ? attachment.safeUrl
+    : attachment.draftAction?.downloadUrl || attachment.safeUrl
 }
 
 function modelFormat(attachment) {

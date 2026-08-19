@@ -285,7 +285,9 @@ async def test_generate_qr_code_returns_scannable_png(tmp_path) -> None:
     assert result.attachments[0].mime_type == "image/png"
     assert result.attachments[0].filename == "qr-code.png"
     assert result.draft_action is not None
-    assert result.draft_action.attachment_position == 0
+    assert [(item.attachment_position, item.role) for item in result.draft_action.representations] == [
+        (0, "preview")
+    ]
     with Image.open(BytesIO(result.attachments[0].data)) as image:
         decoded = zxingcpp.read_barcode(
             image,
@@ -926,6 +928,37 @@ async def test_create_draft_is_available_in_read_mode_and_returns_typed_action(
     assert context.root_files.read_bytes(
         "session", result.draft_action.path, limit=100
     ) == b"# Plan\n"
+
+
+async def test_write_file_revises_the_canonical_draft(tmp_path) -> None:
+    create_call = ToolCall(
+        id="draft",
+        name="create_draft",
+        arguments={"filename": "model.scad", "content": "cube(1);\n"},
+    )
+    context = _context(tmp_path, create_call)
+    created = await tool_registry.execute(create_call, context)
+    assert created.draft_action is not None
+
+    write_call = ToolCall(
+        id="revise",
+        name="write_file",
+        arguments={
+            "root": "session",
+            "path": created.draft_action.path,
+            "content": "cube(2);\n",
+        },
+    )
+    context.session.workspace_access = "read-write"
+    context.tool_call = write_call
+
+    revised = await tool_registry.execute(write_call, context)
+
+    assert revised.draft_action is not None
+    assert revised.draft_action.operation == "revise"
+    assert revised.draft_action.draft_id == created.draft_action.draft_id
+    assert revised.draft_action.revision == 2
+    assert revised.draft_action.path == created.draft_action.path
 
 
 def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:

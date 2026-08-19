@@ -20,6 +20,7 @@ from mato_loop_backend.agent.runtime import (
 from mato_loop_backend.agent.tools import (
     ToolAttachment,
     ToolDraftAction,
+    ToolDraftRepresentation,
     ToolFileAction,
     ToolRegistry,
     ToolResult,
@@ -1768,7 +1769,7 @@ async def test_runtime_persists_typed_draft_action_as_file_action(monkeypatch) -
                 f"files/drafts/{draft_id}/plan.md",
                 "plan.md",
                 6,
-                attachment_position=0,
+                representations=(ToolDraftRepresentation(0, "preview"),),
             ),
         ),
     )
@@ -1791,7 +1792,8 @@ async def test_runtime_persists_typed_draft_action_as_file_action(monkeypatch) -
             "intent": "draft",
             "draftId": str(draft_id),
             "revision": 1,
-            "attachmentPosition": 0,
+            "draftOperation": "create",
+            "representations": [{"attachmentPosition": 0, "role": "preview"}],
         }
     ]
 

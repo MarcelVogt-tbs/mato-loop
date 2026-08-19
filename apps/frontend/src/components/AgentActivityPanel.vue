@@ -185,7 +185,7 @@ import AgentActivityEntry from 'components/AgentActivityEntry.vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import {
-  mergeDraftOutputs,
+  mergeDraftOutputEntries,
   toolOutputAttachments,
   toolFileActions,
   toolFileAttachment
@@ -277,7 +277,7 @@ const errorLabel = computed(() => (
 const warningLabel = computed(() => (
   `${warningItems.value.length} ${warningItems.value.length === 1 ? 'Warnung' : 'Warnungen'}`
 ))
-const outputs = computed(() => items.value.flatMap((item) => {
+const outputs = computed(() => mergeDraftOutputEntries(items.value.flatMap((item) => {
   const providedFile = toolFileAttachment(
     item.tool,
     item.result,
@@ -287,11 +287,11 @@ const outputs = computed(() => items.value.flatMap((item) => {
     ...(item.result?.attachments || []),
     ...(providedFile ? [providedFile] : [])
   ])
-  const output = mergeDraftOutputs(attachments, toolFileActions(item.result))
-  return output.attachments.length || output.fileActions.length
-    ? [{ key: `output-${item.key}`, ...output }]
+  const fileActions = toolFileActions(item.result)
+  return attachments.length || fileActions.length
+    ? [{ key: `output-${item.key}`, attachments, fileActions }]
     : []
-}))
+})))
 
 function updateTimer(running) {
   clearInterval(timer)

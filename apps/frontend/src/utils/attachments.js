@@ -156,9 +156,21 @@ export function toolFileActions(result) {
     const isDraft = action.intent === 'draft'
     const draftId = typeof action.draftId === 'string' ? action.draftId : ''
     const revision = Number(action.revision)
-    const attachmentId = typeof action.attachmentId === 'string' ? action.attachmentId : ''
-    const hasAttachmentId = Object.hasOwn(action, 'attachmentId')
-    const hasDraftFields = ['intent', 'draftId', 'revision'].some((key) => Object.hasOwn(action, key))
+    const draftOperation = ['create', 'revise', 'present'].includes(action.draftOperation)
+      ? action.draftOperation
+      : ''
+    const rawRepresentations = Array.isArray(action.representations) ? action.representations : null
+    const representations = rawRepresentations?.flatMap((representation) => (
+      representation
+      && typeof representation === 'object'
+      && UUID_PATTERN.test(representation.attachmentId || '')
+      && ['preview', 'download', 'internal'].includes(representation.role)
+        ? [{ attachmentId: representation.attachmentId, role: representation.role }]
+        : []
+    )) || []
+    const hasDraftFields = [
+      'intent', 'draftId', 'revision', 'draftOperation', 'representations'
+    ].some((key) => Object.hasOwn(action, key))
     if (
       !safeUrl
       || !scope
@@ -168,7 +180,12 @@ export function toolFileActions(result) {
       || filename !== path.split('/').at(-1)
       || filename.length > 255
       || (hasDraftFields && !isDraft)
-      || (hasAttachmentId && (!isDraft || !UUID_PATTERN.test(attachmentId)))
+      || (isDraft && (
+        !draftOperation
+        || !rawRepresentations
+        || rawRepresentations.length !== representations.length
+        || new Set(representations.map((item) => item.attachmentId)).size !== representations.length
+      ))
       || (isDraft && (
         action.root !== 'session'
         || action.operation !== 'write'
@@ -207,7 +224,7 @@ export function toolFileActions(result) {
         ? { executionAgentId, rootId, rootRevision, workingDirectory }
         : {}),
       ...(isDraft
-        ? { intent: 'draft', draftId, revision, ...(attachmentId ? { attachmentId } : {}) }
+        ? { intent: 'draft', draftId, revision, draftOperation, representations }
         : {}),
       downloadUrl: safeUrl
     }]
@@ -215,20 +232,65 @@ export function toolFileActions(result) {
 }
 
 export function mergeDraftOutputs(attachments, fileActions) {
-  const actionsByAttachment = new Map(fileActions.flatMap((action) => (
-    action.intent === 'draft' && action.attachmentId ? [[action.attachmentId, action]] : []
-  )))
-  const mergedActionIds = new Set()
-  const mergedAttachments = attachments.map((attachment) => {
-    const action = actionsByAttachment.get(attachment.id)
-    if (!action) return attachment
-    mergedActionIds.add(action.draftId)
-    return { ...attachment, draftAction: action }
-  })
+  const entries = mergeDraftOutputEntries([{ key: 'output', attachments, fileActions }])
   return {
-    attachments: mergedAttachments,
-    fileActions: fileActions.filter((action) => !mergedActionIds.has(action.draftId))
+    attachments: entries.flatMap((entry) => entry.attachments),
+    fileActions: entries.flatMap((entry) => entry.fileActions)
   }
+}
+
+export function mergeDraftOutputEntries(entries) {
+  const attachments = new Map(entries.flatMap((entry) => entry.attachments).map((item) => [item.id, item]))
+  const claimedAttachmentIds = new Set()
+  const drafts = new Map()
+  entries.forEach((entry, index) => {
+    entry.fileActions.filter((action) => action.intent === 'draft').forEach((action) => {
+      const represented = action.representations.flatMap((representation) => {
+        const attachment = attachments.get(representation.attachmentId)
+        if (!attachment) return []
+        claimedAttachmentIds.add(attachment.id)
+        return [{ attachment, role: representation.role }]
+      })
+      const visible = represented.find((item) => item.role === 'preview')
+        || represented.find((item) => item.role === 'download')
+      const previous = drafts.get(action.draftId)
+      drafts.set(action.draftId, {
+        index: previous?.index ?? index,
+        action,
+        visible
+      })
+    })
+  })
+  const output = entries.flatMap((entry, index) => {
+    const remaining = {
+      key: entry.key,
+      index,
+      attachments: entry.attachments.filter((item) => !claimedAttachmentIds.has(item.id)),
+      fileActions: entry.fileActions.filter((action) => action.intent !== 'draft')
+    }
+    return remaining.attachments.length || remaining.fileActions.length ? [remaining] : []
+  })
+  for (const [draftId, draft] of drafts) {
+    output.push({
+      key: `draft-${draftId}`,
+      index: draft.index,
+      attachments: draft.visible
+        ? [{
+            ...draft.visible.attachment,
+            ...(draft.visible.role === 'preview' ? { filename: draft.action.filename } : {}),
+            draftAction: draft.action,
+            draftRole: draft.visible.role
+          }]
+        : [],
+      fileActions: draft.visible ? [] : [draft.action]
+    })
+  }
+  return output.sort((left, right) => left.index - right.index)
+    .map((entry) => ({
+      key: entry.key,
+      attachments: entry.attachments,
+      fileActions: entry.fileActions
+    }))
 }
 
 export function imageAttachments(attachments) {

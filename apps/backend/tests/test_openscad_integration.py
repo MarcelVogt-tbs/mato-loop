@@ -228,10 +228,13 @@ def test_openscad_prompt_fragment_covers_the_source_render_verify_workflow() -> 
         "render output=preview",
         "file tools",
         "source in assistant text is not a file",
+        "create each new .scad model with create_draft",
+        "revise the exact returned draft path",
         "exact .scad basename",
         "source entrypoint must end in .scad",
-        "own concise directory under session files",
-        "pass it as projectpath",
+        "render a new draft directly",
+        "parent directory as projectpath",
+        "never copy a draft merely to render it",
         "keep the project self-contained",
         "relative use/include files",
         "unspecified units as millimeters",
@@ -548,6 +551,51 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
         ] == colors
         label = sheet.crop((0, 0, 800, 40))
         assert ImageChops.difference(label, Image.new("RGB", label.size, "white")).getbbox()
+
+
+async def test_render_tool_presents_the_current_session_draft(
+    monkeypatch, tmp_path: Path
+) -> None:
+    instance = _instance()
+    context = _tool_context(instance)
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(context.session.id)
+    context.root_files = RootFileService(
+        context.session.id,
+        session_storage=storage,
+    )
+    draft = context.root_files.create_text_draft("model.scad", "cube(1);\n")
+    rendered = _render_result(instance.execution_agent_id, context.session.id)
+    off = b"OFF\n3 1 0\n0 0 0\n2 0 0\n0 3 4\n3 0 1 2\n"
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=IntegrationSettings(instances=[instance])),
+    )
+    monkeypatch.setattr(openscad_module, "render_project", AsyncMock(return_value=rendered))
+    monkeypatch.setattr(
+        openscad_module,
+        "export_artifact",
+        AsyncMock(side_effect=[off, *(_png((1, 2, 3)) for _ in rendered.previews)]),
+    )
+
+    result = await render_openscad(
+        OpenScadRenderArguments(
+            root="session",
+            path=draft.path,
+            projectPath=str(Path(draft.path).parent).replace("\\", "/"),
+        ),
+        context,
+    )
+
+    assert result.draft_action is not None
+    assert result.draft_action.operation == "present"
+    assert result.draft_action.draft_id == draft.draft_id
+    assert result.draft_action.revision == 1
+    assert [
+        (item.attachment_position, item.role)
+        for item in result.draft_action.representations
+    ] == [(0, "preview"), (1, "internal")]
 
 
 async def test_render_tool_exposes_only_controlled_syntax_diagnostics(

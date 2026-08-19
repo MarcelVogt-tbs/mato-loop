@@ -143,6 +143,14 @@ def test_text_draft_publishes_current_file_and_first_revision(tmp_path: Path) ->
     assert index["revisions"][0]["revision"] == 1
 
 
+def test_draft_reference_returns_only_a_canonical_current_draft(tmp_path: Path) -> None:
+    service, _root = make_service(tmp_path)
+    draft = service.create_text_draft("model.scad", "cube(1);\n")
+
+    assert service.draft_reference(draft.path) == draft
+    assert service.draft_reference("files/model.scad") is None
+
+
 def test_upload_replace_rename_copy_and_move_preserve_session_contract(
     tmp_path: Path,
 ) -> None:

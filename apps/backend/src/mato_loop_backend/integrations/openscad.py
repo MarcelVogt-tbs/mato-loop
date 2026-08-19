@@ -700,7 +700,12 @@ def _diagnostic_params(exc: ExecutionClientError) -> dict[str, Any] | None:
 
 
 async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
-    from mato_loop_backend.agent.tools import ToolAttachment, ToolResult
+    from mato_loop_backend.agent.tools import (
+        ToolAttachment,
+        ToolDraftAction,
+        ToolDraftRepresentation,
+        ToolResult,
+    )
 
     integration_id = context.bound_options.get("integration_id")
     expected_revision = context.bound_options.get("binding_revision")
@@ -733,6 +738,11 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
     ):
         return ToolResult.error("tool.unavailable")
     try:
+        draft = (
+            context.root_files.draft_reference(arguments.path)
+            if arguments.root == "session"
+            else None
+        )
         config = OpenScadConfig.model_validate(instance.config)
         rendered = await render_project(
             context.execution_client,
@@ -808,6 +818,28 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
                 else ()
             ),
         ),
+        draft_action=(
+            ToolDraftAction(
+                operation="present",
+                draft_id=draft.draft_id,
+                revision=draft.revision,
+                path=draft.path,
+                filename=draft.filename,
+                size_bytes=draft.size,
+                representations=(
+                    ToolDraftRepresentation(
+                        0, "preview" if arguments.output == "preview" else "download"
+                    ),
+                    *(
+                        (ToolDraftRepresentation(1, "internal"),)
+                        if contact_sheet is not None
+                        else ()
+                    ),
+                ),
+            )
+            if draft is not None
+            else None
+        ),
     )
 
 
@@ -843,15 +875,15 @@ def _contributions(_instance: IntegrationInstance) -> IntegrationContributions:
     return IntegrationContributions(
         prompt_fragments=(
             "OpenSCAD file workflow:\n"
-            "- Use render_openscad, not shell_run or process_exec, for every render. Create or edit "
-            "the .scad source with file tools first; source in assistant text is not a file.\n"
+            "- Use render_openscad, not shell_run or process_exec, for every render. Create each new "
+            ".scad model with create_draft and use file tools for revisions; source in assistant text is not a file. Revise the exact "
+            "returned draft path with write_file instead of creating versioned copies.\n"
             "- Use the user's explicit safe path and exact .scad basename. The source entrypoint must "
             "end in .scad. Append it when no extension was given; when another output extension was "
             "given, use its stem.\n"
-            "- Unless the user chose a path, create each new model in its own concise directory under "
-            "session files. Reuse the exact root-relative directory returned by the file tool, including "
-            "the files/ prefix, and pass it as projectPath. Use workspace only when requested or when "
-            "editing an existing workspace project.\n"
+            "- Render a new draft directly from its returned files/drafts/<draft-id>/... path. Pass its "
+            "parent directory as projectPath; never copy a draft merely to render it. Use workspace only "
+            "when requested or when editing an existing workspace project.\n"
             "OpenSCAD source rules:\n"
             "- Keep the project self-contained. Use OpenSCAD built-ins or relative use/include files "
             "inside projectPath, never optional external libraries or network resources.\n"

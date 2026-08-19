@@ -3693,13 +3693,14 @@ class AgentRuntime:
                                             "intent": "draft",
                                             "draftId": str(tool_draft_action.draft_id),
                                             "revision": tool_draft_action.revision,
-                                            **(
+                                            "draftOperation": tool_draft_action.operation,
+                                            "representations": [
                                                 {
-                                                    "attachmentPosition": tool_draft_action.attachment_position
+                                                    "attachmentPosition": representation.attachment_position,
+                                                    "role": representation.role,
                                                 }
-                                                if tool_draft_action.attachment_position is not None
-                                                else {}
-                                            ),
+                                                for representation in tool_draft_action.representations
+                                            ],
                                         }
                                     ]
                                     if tool_draft_action is not None
@@ -3850,16 +3851,31 @@ class AgentRuntime:
                                 )
                                 openscad_source_review_retries = 0
                     elif (
-                        call.name == "write_file"
-                        and isinstance(call.arguments.get("path"), str)
-                        and call.arguments["path"].casefold().endswith(".scad")
+                        (
+                            call.name == "write_file"
+                            and isinstance(call.arguments.get("path"), str)
+                            and call.arguments["path"].casefold().endswith(".scad")
+                        )
+                        or (
+                            call.name == "create_draft"
+                            and tool_draft_action is not None
+                            and tool_draft_action.path.casefold().endswith(".scad")
+                        )
                     ):
                         openscad_render_pending = True
-                        root = call.arguments.get("root")
-                        if isinstance(root, str):
-                            openscad_pending_paths.add(
-                                (root, call.arguments["path"])
-                            )
+                        root = (
+                            "session"
+                            if call.name == "create_draft"
+                            else call.arguments.get("root")
+                        )
+                        path = (
+                            tool_draft_action.path
+                            if call.name == "create_draft"
+                            and tool_draft_action is not None
+                            else call.arguments.get("path")
+                        )
+                        if isinstance(root, str) and isinstance(path, str):
+                            openscad_pending_paths.add((root, path))
                         openscad_source_review_pending = None
                         openscad_preview_image_id = None
                     elif call.name == "read" and (

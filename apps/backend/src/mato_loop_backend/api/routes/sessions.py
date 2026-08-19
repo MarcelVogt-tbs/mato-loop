@@ -169,6 +169,13 @@ def _public_research_payload(item: Message) -> dict[str, Any] | None:
     return {"policy": policy, "used": used, "linkedSources": linked_sources}
 
 
+class _StoredDraftRepresentation(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    attachment_position: int = Field(alias="attachmentPosition", ge=0)
+    role: Literal["preview", "download", "internal"]
+
+
 class _StoredFileAction(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -183,6 +190,12 @@ class _StoredFileAction(BaseModel):
         default=None, alias="draftId", min_length=36, max_length=36
     )
     revision: int | None = Field(default=None, ge=1)
+    draft_operation: Literal["create", "revise", "present"] = Field(
+        default="create", alias="draftOperation"
+    )
+    representations: list[_StoredDraftRepresentation] = Field(
+        default_factory=list, max_length=8
+    )
     attachment_position: int | None = Field(
         default=None, alias="attachmentPosition", ge=0
     )
@@ -205,8 +218,13 @@ class _StoredFileAction(BaseModel):
         if self.filename != self.path.rsplit("/", 1)[-1]:
             raise ValueError("filename must match path")
         draft_fields = {"draft_id", "revision"}
+        optional_draft_fields = {
+            "draft_operation",
+            "representations",
+            "attachment_position",
+        }
         if self.intent is None:
-            if self.model_fields_set & (draft_fields | {"attachment_position"}):
+            if self.model_fields_set & (draft_fields | optional_draft_fields):
                 raise ValueError("non-draft actions cannot contain draft fields")
         else:
             if any(getattr(self, field) is None for field in draft_fields):
@@ -223,6 +241,9 @@ class _StoredFileAction(BaseModel):
                 or self.path != f"files/drafts/{self.draft_id}/{self.filename}"
             ):
                 raise ValueError("invalid draft action")
+            positions = [item.attachment_position for item in self.representations]
+            if len(positions) != len(set(positions)):
+                raise ValueError("draft representation positions must be unique")
         snapshot_fields = {
             "execution_agent_id",
             "root_id",
@@ -290,13 +311,18 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
                     mode="json",
                     by_alias=True,
                     exclude_none=True,
-                    exclude={"attachment_position"},
+                    exclude={
+                        "attachment_position",
+                        "draft_operation",
+                        "representations",
+                    },
                 ),
                 **(
-                    {"attachmentId": str(attachment.id)}
-                    if (
-                        attachment := _draft_action_attachment(item, action)
-                    ) is not None
+                    {
+                        "draftOperation": action.draft_operation,
+                        "representations": _draft_action_representations(item, action),
+                    }
+                    if action.intent == "draft"
                     else {}
                 ),
                 "downloadUrl": "/api/workspace/files/download?"
@@ -306,11 +332,23 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
     return actions
 
 
-def _draft_action_attachment(
+def _draft_action_representations(
     item: Message, action: _StoredFileAction
-) -> MessageAttachment | None:
+) -> list[dict[str, str]]:
     if action.intent != "draft":
-        return None
+        return []
+    if action.representations:
+        attachments = {attachment.position: attachment for attachment in item.attachments}
+        linked = []
+        for representation in action.representations:
+            attachment = attachments.get(representation.attachment_position)
+            if not _is_generated_artifact(attachment):
+                return []
+            assert attachment is not None
+            linked.append(
+                {"attachmentId": str(attachment.id), "role": representation.role}
+            )
+        return linked
     if action.attachment_position is not None:
         attachment = next(
             (
@@ -320,22 +358,37 @@ def _draft_action_attachment(
             ),
             None,
         )
-        return attachment if _matches_draft_attachment(attachment, action) else None
+        return (
+            [{"attachmentId": str(attachment.id), "role": "preview"}]
+            if _matches_legacy_draft_attachment(attachment, action)
+            else []
+        )
     matches = [
         attachment
         for attachment in item.attachments
-        if _matches_draft_attachment(attachment, action)
+        if _matches_legacy_draft_attachment(attachment, action)
     ]
-    return matches[0] if len(matches) == 1 else None
+    return (
+        [{"attachmentId": str(matches[0].id), "role": "preview"}]
+        if len(matches) == 1
+        else []
+    )
 
 
-def _matches_draft_attachment(
-    attachment: MessageAttachment | None, action: _StoredFileAction
-) -> bool:
+def _is_generated_artifact(attachment: MessageAttachment | None) -> bool:
     return bool(
         attachment
         and attachment.category == "generated"
         and attachment.purpose == "artifact"
+    )
+
+
+def _matches_legacy_draft_attachment(
+    attachment: MessageAttachment | None, action: _StoredFileAction
+) -> bool:
+    return bool(
+        _is_generated_artifact(attachment)
+        and attachment is not None
         and attachment.filename == action.filename
         and attachment.size_bytes == action.size_bytes
     )

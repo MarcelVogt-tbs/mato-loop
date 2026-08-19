@@ -230,14 +230,20 @@ class ToolFileAction:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolDraftRepresentation:
+    attachment_position: int
+    role: Literal["preview", "download", "internal"]
+
+
+@dataclass(frozen=True, slots=True)
 class ToolDraftAction:
-    operation: Literal["create", "revise"]
+    operation: Literal["create", "revise", "present"]
     draft_id: UUID
     revision: int
     path: str
     filename: str
     size_bytes: int
-    attachment_position: int | None = None
+    representations: tuple[ToolDraftRepresentation, ...] = ()
 
 
 @dataclass(slots=True)
@@ -2422,7 +2428,7 @@ async def _record_tool_text_revisions(
     root: Literal["session", "workspace"],
     path: str,
     contents: tuple[str, ...],
-) -> None:
+) -> tuple[UUID, int] | None:
     if root == "session":
         source = {
             "root": "session",
@@ -2448,13 +2454,14 @@ async def _record_tool_text_revisions(
         }
         draft_id = uuid5(NAMESPACE_URL, json.dumps(source, sort_keys=True))
     try:
-        await asyncio.to_thread(
+        revision = await asyncio.to_thread(
             context.root_files.record_text_revisions,
             draft_id,
             path.rsplit("/", 1)[-1],
             contents,
             source,
         )
+        return draft_id, revision
     except (OSError, RootFileError):
         logger.warning(
             "Could not record tool text revisions for session %s path %s",
@@ -2462,6 +2469,7 @@ async def _record_tool_text_revisions(
             path,
             exc_info=True,
         )
+        return None
 
 
 async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> ToolResult:
@@ -2512,9 +2520,30 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
     except (RootFileError, UnicodeDecodeError):
         pass
     written = context.root_files.write_file(arguments.root, path, arguments.content)
-    await _record_tool_text_revisions(
+    draft_revision = await _record_tool_text_revisions(
         context, "session", written, (*previous, arguments.content)
     )
+    parts = written.split("/")
+    is_draft = (
+        draft_revision is not None
+        and len(parts) == 4
+        and parts[:2] == ["files", "drafts"]
+        and str(draft_revision[0]) == parts[2]
+    )
+    if is_draft:
+        draft_id, revision = draft_revision
+        return ToolResult(
+            content=json.dumps({"root": arguments.root, "written": written}),
+            metadata={},
+            draft_action=ToolDraftAction(
+                operation="revise",
+                draft_id=draft_id,
+                revision=revision,
+                path=written,
+                filename=parts[-1],
+                size_bytes=len(arguments.content.encode("utf-8")),
+            ),
+        )
     return ToolResult.json(
         {"root": arguments.root, "written": written},
         file_actions=_regular_file_action(context, "write", arguments.root, written),
@@ -3707,7 +3736,7 @@ async def _generate_image(
             draft.path,
             draft.filename,
             draft.size,
-            attachment_position=0,
+            representations=(ToolDraftRepresentation(0, "preview"),),
         ),
         trust_level=result.trust_level,
     )
@@ -3749,7 +3778,7 @@ async def _generate_qr_code(
             draft.path,
             draft.filename,
             draft.size,
-            attachment_position=0,
+            representations=(ToolDraftRepresentation(0, "preview"),),
         ),
     )
 
@@ -3906,7 +3935,7 @@ async def _edit_image(
             draft.path,
             draft.filename,
             draft.size,
-            attachment_position=0,
+            representations=(ToolDraftRepresentation(0, "preview"),),
         ),
         trust_level=result.trust_level,
     )

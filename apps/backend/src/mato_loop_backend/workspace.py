@@ -914,6 +914,47 @@ class RootFileService:
             size=len(content),
         )
 
+    def draft_reference(self, path: str) -> DraftFile | None:
+        normalized = self.normalize_relative_path(path)
+        parts = normalized.split("/")
+        if len(parts) != 4 or parts[:2] != ["files", "drafts"]:
+            return None
+        try:
+            draft_id = UUID(parts[2])
+        except ValueError:
+            return None
+        if str(draft_id) != parts[2]:
+            return None
+        filename = validate_upload_filename(parts[3])
+        index_path = f"derived/drafts/{draft_id}/index.json"
+        try:
+            index = json.loads(
+                self.read_bytes(FileRoot.SESSION, index_path, limit=1024 * 1024).decode(
+                    "utf-8"
+                )
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RootFileError("file.invalidEncoding", "Invalid draft index") from exc
+        expected_source = {
+            "root": "session",
+            "rootIdentity": str(self.session_id),
+            "path": normalized,
+        }
+        revision = index.get("currentRevision")
+        if (
+            index.get("draftId") != str(draft_id)
+            or index.get("filename") != filename
+            or index.get("source") != expected_source
+            or not isinstance(revision, int)
+            or revision < 1
+            or not isinstance(index.get("revisions"), list)
+            or len(index["revisions"]) != revision
+        ):
+            raise RootFileError("file.invalidEncoding", "Invalid draft index")
+        with self.open_file(FileRoot.SESSION, normalized) as handle:
+            size = os.fstat(handle.fileno()).st_size
+        return DraftFile(draft_id, revision, normalized, filename, size)
+
     def record_text_revisions(
         self,
         draft_id: UUID,

@@ -1192,6 +1192,8 @@ describe('chat drafts', () => {
       intent: 'draft',
       draftId,
       revision: 1,
+      draftOperation: 'create',
+      representations: [],
       downloadUrl: `/api/workspace/files/download?path=${encodeURIComponent(path)}&scope=session&session_id=${sessionId}&root_identity=${sessionId}`
     }
     api.get

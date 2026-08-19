@@ -828,7 +828,11 @@ def test_message_payload_exposes_valid_draft_metadata() -> None:
     action = message_payload(message)["fileActions"][0]
 
     action.pop("downloadUrl")
-    assert action == stored_action
+    assert action == {
+        **stored_action,
+        "draftOperation": "create",
+        "representations": [],
+    }
 
 
 @pytest.mark.parametrize("attachment_position", [None, 0])
@@ -881,7 +885,10 @@ def test_message_payload_links_draft_action_to_generated_attachment(
 
     action = message_payload(message)["fileActions"][0]
 
-    assert action["attachmentId"] == str(attachment_id)
+    assert action["representations"] == [
+        {"attachmentId": str(attachment_id), "role": "preview"}
+    ]
+    assert action["draftOperation"] == "create"
     assert "attachmentPosition" not in action
 
 
