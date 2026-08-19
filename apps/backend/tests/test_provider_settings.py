@@ -1016,7 +1016,9 @@ async def test_provider_deletion_clears_sessions_and_credentials_in_its_scope(
 
 def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
     provider = LlmProviderConfig(
-        name="Local", adapter_type="openai-compatible", trust_level="private"
+        name="Local",
+        adapter_type="openai-compatible",
+        trust_level="private",
     )
     model = ModelConfig.model_validate(
         {

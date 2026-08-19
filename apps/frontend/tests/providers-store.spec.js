@@ -448,7 +448,11 @@ describe('provider store', () => {
 
     expect(api.patch).toHaveBeenCalledWith(
       '/providers/configuration/p1/policy',
-      { trustLevel: 'private', pseudonymizationEnabled: true, memoryPolicy: 'deny' },
+      {
+        trustLevel: 'private',
+        pseudonymizationEnabled: true,
+        memoryPolicy: 'deny'
+      },
       { params: { scope: 'instance' } }
     )
   })
