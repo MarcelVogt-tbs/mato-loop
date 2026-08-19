@@ -41,6 +41,7 @@ from mato_loop_backend.integrations.service import (
 from mato_loop_backend.integrations.webfetch import (
     PdfVisionHandler,
     WebFetchError,
+    WebFetchImage,
     WebFetchResult,
     canonicalize_url,
     fetch_web,
@@ -69,6 +70,7 @@ __all__ = [
     "PdfVisionHandler",
     "SearchIntegrationService",
     "WebFetchError",
+    "WebFetchImage",
     "WebFetchResult",
     "canonicalize_url",
     "bookstack_error_code",

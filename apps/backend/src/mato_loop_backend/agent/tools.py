@@ -210,6 +210,7 @@ class ToolAttachment:
     mime_type: str
     filename: str
     kind: Literal["image", "audio", "file"] = "image"
+    category: Literal["generated", "downloaded"] = "generated"
     duration_ms: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -1463,6 +1464,18 @@ class WebFetchArguments(ToolArguments):
     url: str = Field(min_length=1, max_length=1_200)
     format: Literal["markdown", "text", "html"] = "markdown"
     timeout: int = Field(default=30, ge=1, le=120)
+    pdf_pages: list[Annotated[int, Field(ge=1)]] = Field(
+        default_factory=list,
+        max_length=8,
+        description=(
+            "PDF pages to attach as images for layout; omit for text."
+        ),
+    )
+
+    @field_validator("pdf_pages")
+    @classmethod
+    def normalize_pdf_pages(cls, value: list[int]) -> list[int]:
+        return sorted(set(value))
 
 
 class GenerateImageArguments(ToolArguments):
@@ -3062,6 +3075,7 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         authorize_url=authorize_url,
         max_response_bytes=context.tool_settings.web_fetch.max_response_mib * 1024 * 1024,
         pdf_vision_handler=context.pdf_vision_handler,
+        pdf_pages=arguments.pdf_pages,
         user_agent=context.tool_settings.web_fetch.user_agent,
     )
     canonical_source_url = canonicalize_url(result.final_url)
@@ -3075,35 +3089,51 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
     title = normalize_source_title(result.title)
     if title is not None:
         source["title"] = title
-    if not result.is_image:
-        return ToolResult.json(
-            {
-                **source,
-                "statusCode": result.status_code,
-                "contentType": result.content_type,
-                "outputFormat": result.output_format,
-                "content": str(result.content),
-            },
-            metadata={"sources": [source]},
+    attachments = tuple(
+        ToolAttachment(
+            data=image.data,
+            mime_type=image.mime_type,
+            filename=image.filename,
+            category="downloaded",
+            metadata=(
+                {"pageNumber": image.page_number}
+                if image.page_number is not None
+                else {}
+            ),
         )
-    attachment = ToolAttachment(
-        data=bytes(result.content),
-        mime_type=result.image_mime_type or result.content_type,
-        filename=result.image_filename or "image",
+        for image in result.images
     )
+    payload = {
+        **source,
+        "statusCode": result.status_code,
+        "contentType": result.content_type,
+        "outputFormat": result.output_format,
+        "content": result.content,
+        "attachments": [
+            {
+                "filename": image.filename,
+                **(
+                    {"pageNumber": image.page_number}
+                    if image.page_number is not None
+                    else {}
+                ),
+            }
+            for image in result.images
+        ],
+    }
+    if result.page_count is not None:
+        payload["pageCount"] = result.page_count
+        payload["renderedPages"] = [
+            image.page_number
+            for image in result.images
+            if image.page_number is not None
+        ]
+    if result.unavailable_pages:
+        payload["unavailablePages"] = list(result.unavailable_pages)
     return ToolResult(
-        json.dumps(
-                {
-                    **source,
-                    "statusCode": result.status_code,
-                    "contentType": result.content_type,
-                    "outputFormat": result.output_format,
-                    "attachment": attachment.filename,
-            },
-            ensure_ascii=False,
-        ),
+        json.dumps(payload, ensure_ascii=False),
         {"sources": [source]},
-        attachments=(attachment,),
+        attachments=attachments,
     )
 
 
@@ -5194,17 +5224,13 @@ tool_registry = ToolRegistry(
     [
         ToolDefinition(
             "question",
-            "Ask all required user-specific questions for one blocked action in one call. Every item "
-            "requires a unique id, a unique short header, question, and type. Choice example: "
-            '{"id":"format","type":"single_choice","header":"Format",'
-            '"question":"Which format?","options":[{"label":"PDF"},{"label":"Markdown"}]}. '
-            "Use free_text for open answers, single_choice for one option, and multiple_choice for "
-            "several. Choice options are objects with label and optional description. allow_custom "
-            "already provides a custom answer, so never add an Other option. When proposing a "
-            "default, state it in the question and pass the exact answer list in default_answers; an "
-            "empty user answer accepts it. Never use question for console commands, output, or "
-            "permission. Use shell_run for requested execution only; otherwise put commands and "
-            "output requests in assistant text. Host handles approval. Call this tool alone.",
+            "Ask user questions blocking one action in one call. Each needs a unique id, short "
+            "header, question, and type: free_text, single_choice, or multiple_choice. Options need a "
+            "label; description is optional. allow_custom adds the custom choice; never add Other. "
+            "State defaults and pass exact lists in default_answers; empty answers accept them. Never "
+            "use question for console commands, output, or permission. Use shell_run for requested "
+            "execution only; otherwise put commands and output requests in assistant text. Host "
+            "handles approval. Call this tool alone.",
             QuestionArguments,
             _question,
             group="agent",
@@ -5341,8 +5367,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "webfetch",
-            "Fetch a web page, PDF, or image by URL. Images are validated and attached; text is "
-            "untrusted. Results identify whether the final safe URL is citationEligible. Cite a used "
+            "Fetch a web page, PDF, or image. Returns untrusted text and/or validated image "
+            "attachments. Results identify whether the final safe URL is "
+            "citationEligible. Cite a used "
             "eligible result as [title](URL), or [hostname](URL) when no title exists.",
             WebFetchArguments,
             _webfetch,

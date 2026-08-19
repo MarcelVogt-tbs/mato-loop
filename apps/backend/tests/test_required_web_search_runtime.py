@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.runtime as runtime_module
 import mato_loop_backend.agent.video_analysis as video_analysis
-from mato_loop_backend.agent.context import ContextManager, ContextProjection
+from mato_loop_backend.agent.context import ContextManager, ContextProjection, message_dict
 from mato_loop_backend.agent.permissions import PermissionDecision
 from mato_loop_backend.agent.runtime import (
     AgentRunError,
@@ -101,6 +101,7 @@ async def _runtime_setup(
     execution_operations: tuple[str, ...] = (),
     user_image: bool = False,
     user_image_count: int = 1,
+    downloaded_image: bool = False,
     user_content: str = "Aktuelle Frage",
     user_trust_level: TrustLevel | None = None,
 ):
@@ -184,6 +185,32 @@ async def _runtime_setup(
             )
             for position in range(user_image_count)
         ]
+    if downloaded_image:
+        tool_message = Message(
+            id=uuid4(),
+            session_id=session.id,
+            role="tool",
+            content='{"attachments":[{"filename":"drawing-page-2.jpg","pageNumber":2}]}',
+            tool_call_id="fetch",
+            trust_level=TrustLevel.PUBLIC.value,
+        )
+        tool_message.attachments = [
+            MessageAttachment(
+                id=uuid4(),
+                message_id=tool_message.id,
+                position=0,
+                kind="image",
+                category="downloaded",
+                purpose="artifact",
+                mime_type="image/jpeg",
+                size_bytes=100,
+                sha256="b" * 64,
+                storage_path=f"downloads/{uuid4()}/drawing-page-2.jpg",
+                filename="drawing-page-2.jpg",
+                metadata_json={"pageNumber": 2},
+            )
+        ]
+        records.append(tool_message)
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     if execution_agent_id is not None:
@@ -208,7 +235,10 @@ async def _runtime_setup(
         return ContextProjection(
             messages=[
                 {"role": "system", "content": kwargs["system_prompt"]},
-                {"role": "user", "content": user.content},
+                *[
+                    message_dict(record, include_attachment_markers=False)
+                    for record in records
+                ],
             ],
             estimated_input_tokens=100,
             input_budget_tokens=1_000,
@@ -445,6 +475,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
         user_image=True,
+        downloaded_image=True,
     )
     generated_id = uuid4()
 
@@ -459,7 +490,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
             return None
 
         async def read_image(self, attachment, _session_id):
-            return f"reference-{attachment.position}".encode()
+            return (attachment.filename or "image").encode()
 
     monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
     monkeypatch.setattr(
@@ -499,7 +530,8 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
     assert verifier["max_output_tokens"] == 512
     assert [image.data for image in verifier["image_inputs"]] == [
         b"png",
-        b"reference-0",
+        b"reference-0.png",
+        b"drawing-page-2.jpg",
     ]
     verifier_prompt = verifier["messages"][0]["content"]
     assert "Verdict: <PASS|FAIL|UNCERTAIN>" in verifier_prompt
@@ -508,11 +540,18 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
     assert "Do not infer hidden geometry" in verifier_prompt
     verifier_data = json.loads(verifier["messages"][1]["content"])
     assert verifier_data == {
-        "imageOrder": {"contactSheet": 1, "referenceImages": [2]},
+        "imageOrder": {"contactSheet": 1, "referenceImages": [2, 3]},
         "currentRequest": "Aktuelle Frage",
         "previewLayout": ["isometric", "front", "right", "top"],
         "geometryMetadata": {"triangleCount": 12},
-        "referenceImages": [{"image": 2, "filename": "reference-0.png"}],
+        "referenceImages": [
+            {"image": 2, "filename": "reference-0.png"},
+            {
+                "image": 3,
+                "filename": "drawing-page-2.jpg",
+                "pageNumber": 2,
+            },
+        ],
     }
     assert requests[3]["required_image_ids"] == (str(generated_id),)
     assert projections[2]["required_image_ids"] == (str(generated_id),)
@@ -525,7 +564,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
     )
     assert json.loads(render_message.content)["visualVerification"] == {
         "status": "completed",
-        "referenceImageCount": 1,
+        "referenceImageCount": 2,
         "analysis": "Verdict: PASS\nFindings:\n- No defect.\nUncertainty:\n- None.",
     }
     assert _assistant_messages(db)[-1].content == "Visuell verglichen."

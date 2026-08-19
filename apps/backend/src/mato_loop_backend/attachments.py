@@ -264,6 +264,7 @@ def _safe_metadata(metadata: dict | None) -> dict:
             "background",
             "modelId",
             "modelName",
+            "pageNumber",
             "providerAdapter",
             "providerName",
             "quality",

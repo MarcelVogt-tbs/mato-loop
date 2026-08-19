@@ -31,7 +31,7 @@ from mato_loop_backend.agent.tools import (
     tool_registry,
 )
 from mato_loop_backend.attachments import AttachmentService, AttachmentStorage
-from mato_loop_backend.integrations import WebFetchError, WebFetchResult
+from mato_loop_backend.integrations import WebFetchError, WebFetchImage, WebFetchResult
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
@@ -823,7 +823,7 @@ def test_webfetch_schema_describes_verified_image_attachments() -> None:
     schemas = tool_registry.schemas(IntegrationSettings(), "read-only", webfetch_enabled=True)
     webfetch = next(item for item in schemas if item["name"] == "webfetch")
 
-    assert "Images are validated and attached" in webfetch["description"]
+    assert "validated image attachments" in webfetch["description"]
     assert "citationEligible" in webfetch["description"]
     assert "[title](URL)" in webfetch["description"]
 
@@ -2974,7 +2974,6 @@ async def test_webfetch_applies_the_effective_policy(
             final_url=url,
             content_type="text/plain",
             content="Inhalt",
-            is_image=False,
             status_code=200,
             output_format="markdown",
             title="  Example   page  ",
@@ -3008,6 +3007,7 @@ async def test_webfetch_applies_the_effective_policy(
         "contentType": "text/plain",
         "outputFormat": "markdown",
         "content": "Inhalt",
+        "attachments": [],
     }
     assert payload["sourceId"].startswith("src-")
     assert result.metadata == {
@@ -3024,6 +3024,7 @@ async def test_webfetch_applies_the_effective_policy(
     assert context.ask_handler.await_count == expected_asks
     assert fetch_kwargs["max_response_bytes"] == 64 * 1024 * 1024
     assert fetch_kwargs["pdf_vision_handler"] is None
+    assert fetch_kwargs["pdf_pages"] == []
     assert fetch_kwargs["user_agent"] == "ConfiguredBrowser/1.0"
     if expected_asks:
         request = context.ask_handler.await_args.args[0]
@@ -3094,7 +3095,6 @@ async def test_webfetch_source_ids_distinguish_redacted_query_values(
             final_url=url,
             content_type="text/plain",
             content="Inhalt",
-            is_image=False,
             status_code=200,
             output_format="markdown",
         )
@@ -3135,12 +3135,10 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
         return WebFetchResult(
             final_url=url,
             content_type="image/png",
-            content=image,
-            is_image=True,
+            content="",
             status_code=200,
             output_format="image",
-            image_mime_type="image/png",
-            image_filename="diagram.png",
+            images=(WebFetchImage(image, "image/png", "diagram.png"),),
         )
 
     monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
@@ -3159,10 +3157,75 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
     assert payload["statusCode"] == 200
     assert payload["contentType"] == "image/png"
     assert payload["outputFormat"] == "image"
-    assert payload["attachment"] == "diagram.png"
+    assert payload["content"] == ""
+    assert payload["attachments"] == [{"filename": "diagram.png"}]
     assert result.metadata["sources"][0]["sourceId"] == payload["sourceId"]
     assert result.attachments == (
-        ToolAttachment(data=image, mime_type="image/png", filename="diagram.png"),
+        ToolAttachment(
+            data=image,
+            mime_type="image/png",
+            filename="diagram.png",
+            category="downloaded",
+        ),
+    )
+
+
+async def test_webfetch_returns_pdf_text_and_selected_page_images(
+    tmp_path, monkeypatch
+) -> None:
+    images = (
+        WebFetchImage(b"page-1", "image/jpeg", "drawing-page-1.jpg", 1),
+        WebFetchImage(b"page-2", "image/jpeg", "drawing-page-2.jpg", 2),
+    )
+    fetch_kwargs = {}
+
+    async def fake_fetch(url, **kwargs):
+        fetch_kwargs.update(kwargs)
+        return WebFetchResult(
+            final_url=url,
+            content_type="application/pdf",
+            content="--- Page 1 ---\nDimensions",
+            status_code=200,
+            output_format="text",
+            images=images,
+            page_count=3,
+            unavailable_pages=(4,),
+        )
+
+    monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
+    call = ToolCall(
+        id="fetch",
+        name="webfetch",
+        arguments={
+            "url": "https://example.com/drawing.pdf",
+            "pdf_pages": [2, 1, 2, 4],
+        },
+    )
+
+    result = await tool_registry.execute(
+        call,
+        _context(tmp_path, call, web_fetch_policy=WebFetchPolicy.AUTO_PUBLIC),
+    )
+
+    payload = json.loads(result.content)
+    assert fetch_kwargs["pdf_pages"] == [1, 2, 4]
+    assert payload["content"] == "--- Page 1 ---\nDimensions"
+    assert payload["pageCount"] == 3
+    assert payload["renderedPages"] == [1, 2]
+    assert payload["unavailablePages"] == [4]
+    assert payload["attachments"] == [
+        {"filename": "drawing-page-1.jpg", "pageNumber": 1},
+        {"filename": "drawing-page-2.jpg", "pageNumber": 2},
+    ]
+    assert result.attachments == tuple(
+        ToolAttachment(
+            image.data,
+            image.mime_type,
+            image.filename,
+            category="downloaded",
+            metadata={"pageNumber": image.page_number},
+        )
+        for image in images
     )
 
 

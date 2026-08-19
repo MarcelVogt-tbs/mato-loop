@@ -8,7 +8,7 @@ import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from io import BytesIO
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
@@ -427,11 +427,12 @@ async def test_supported_image_returns_bytes_and_safe_filename() -> None:
             f"{_origin(port)}/fallback.png", allowed_private_origins=(_origin(port),)
         )
 
-    assert result.content == image
     assert result.content_type == "image/png"
-    assert result.is_image is True
-    assert result.image_mime_type == "image/png"
-    assert result.image_filename == "payload.png"
+    assert result.content == ""
+    assert len(result.images) == 1
+    assert result.images[0].data == image
+    assert result.images[0].mime_type == "image/png"
+    assert result.images[0].filename == "payload.png"
 
 
 async def test_text_pdf_is_extracted_without_vision(monkeypatch) -> None:
@@ -455,12 +456,46 @@ async def test_text_pdf_is_extracted_without_vision(monkeypatch) -> None:
     assert result.content_type == "application/pdf"
     assert result.output_format == "text"
     assert result.content == "--- Page 1 ---\nManual text"
+    assert result.page_count == 1
+    assert result.images == ()
     vision.assert_not_awaited()
 
 
-async def test_scan_pdf_requires_vision_and_uses_rendered_pages() -> None:
+async def test_text_pdf_can_return_selected_page_images(monkeypatch) -> None:
+    image = b"\xff\xd8\xffpage"
+    render = Mock(return_value=image)
+    monkeypatch.setattr(
+        webfetch,
+        "extract_pdf_pages",
+        lambda _data: (["Diagram labels", "Notes"], {"pageCount": 2, "imagePages": []}),
+    )
+    monkeypatch.setattr(webfetch, "_render_pdf_page", render)
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(b"%PDF-1.7 fake", headers={"Content-Type": "application/pdf"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(
+            f"{_origin(port)}/drawing.pdf",
+            allowed_private_origins=(_origin(port),),
+            pdf_pages=(3, 2, 1, 2),
+        )
+
+    assert result.page_count == 2
+    assert [item.page_number for item in result.images] == [1, 2]
+    assert [item.filename for item in result.images] == [
+        "drawing-page-1.jpg",
+        "drawing-page-2.jpg",
+    ]
+    assert result.unavailable_pages == (3,)
+    assert render.call_count == 2
+
+
+async def test_scan_pdf_requires_vision_and_uses_rendered_pages(monkeypatch) -> None:
     document = _scan_pdf()
     seen: list[tuple[int, bytes]] = []
+    render = Mock(wraps=webfetch._render_pdf_page)
+    monkeypatch.setattr(webfetch, "_render_pdf_page", render)
 
     async def responder(target: str, headers: dict[str, str]) -> bytes:
         return _response(document, headers={"Content-Type": "application/pdf"})
@@ -482,12 +517,15 @@ async def test_scan_pdf_requires_vision_and_uses_rendered_pages() -> None:
             url,
             allowed_private_origins=allowed,
             pdf_vision_handler=vision,
+            pdf_pages=(1,),
         )
 
     assert len(seen) == 1
     assert seen[0][0] == 1
     assert seen[0][1].startswith(b"\xff\xd8\xff")
     assert result.content == "--- Page 1 ---\nRecognized scan text"
+    assert result.images[0].data == seen[0][1]
+    assert render.call_count == 1
 
 
 async def test_blank_pdf_does_not_require_vision() -> None:

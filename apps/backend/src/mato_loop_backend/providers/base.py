@@ -89,11 +89,21 @@ def select_provider_images(
     *,
     target_trust_level: str,
     required_image_ids: tuple[str, ...] = (),
+    allowed_categories: frozenset[str] | None = None,
+    max_images: int = MAX_PROVIDER_IMAGES,
+    max_bytes: int = MAX_PROVIDER_IMAGE_BYTES,
 ) -> list[ProviderImageSelection]:
     references: list[tuple[int, int, dict[str, Any]]] = []
     for message_index, message in enumerate(messages):
         for attachment_index, attachment in enumerate(message.get("attachments") or []):
-            if isinstance(attachment, dict) and attachment.get("kind") == "image":
+            if (
+                isinstance(attachment, dict)
+                and attachment.get("kind") == "image"
+                and (
+                    allowed_categories is None
+                    or attachment.get("category") in allowed_categories
+                )
+            ):
                 references.append((message_index, attachment_index, attachment))
     if not references:
         return []
@@ -163,7 +173,7 @@ def select_provider_images(
     selected: list[tuple[int, int, int, ProviderImageSelection]] = []
     selected_bytes = 0
     for group, _priority, message_index, source_order, attachment in candidates:
-        if len(selected) >= MAX_PROVIDER_IMAGES:
+        if len(selected) >= max_images:
             break
         source_trust = attachment.get("trust_level")
         allow_raw = target_trust_level == "private" or source_trust == "public"
@@ -173,7 +183,7 @@ def select_provider_images(
                 not isinstance(size_bytes, int)
                 or isinstance(size_bytes, bool)
                 or size_bytes <= 0
-                or selected_bytes + size_bytes > MAX_PROVIDER_IMAGE_BYTES
+                or selected_bytes + size_bytes > max_bytes
             ):
                 continue
             selected_bytes += size_bytes

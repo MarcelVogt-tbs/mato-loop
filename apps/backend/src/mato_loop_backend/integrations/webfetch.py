@@ -34,6 +34,8 @@ MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_REDIRECTS = 5
 PDF_RENDER_TIMEOUT_SECONDS = 30
 PDF_VISION_BATCH_PAGES = 4
+MAX_PDF_PAGE_IMAGES = 8
+MAX_PDF_PAGE_IMAGE_BYTES = 20 * 1024 * 1024
 
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _IMAGE_TYPES = {
@@ -126,16 +128,24 @@ class WebFetchError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class WebFetchImage:
+    data: bytes
+    mime_type: str
+    filename: str
+    page_number: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WebFetchResult:
     final_url: str
     content_type: str
-    content: str | bytes
-    is_image: bool
+    content: str
     status_code: int
     output_format: str
     title: str | None = None
-    image_mime_type: str | None = None
-    image_filename: str | None = None
+    images: tuple[WebFetchImage, ...] = ()
+    page_count: int | None = None
+    unavailable_pages: tuple[int, ...] = ()
 
 
 PdfVisionHandler = Callable[
@@ -634,7 +644,8 @@ async def _convert_pdf(
     vision_handler: PdfVisionHandler | None,
     *,
     private_content: bool,
-) -> str:
+    requested_pages: tuple[int, ...],
+) -> tuple[str, int, tuple[tuple[int, bytes], ...], tuple[int, ...]]:
     if b"%PDF-" not in body[:1_024]:
         raise _error("contentTypeMismatch")
     try:
@@ -646,14 +657,20 @@ async def _convert_pdf(
         for number in metadata.get("imagePages", [])
         if isinstance(number, int) and 1 <= number <= len(pages)
     ]
+    rendered_pages: dict[int, bytes] = {}
+
+    async def render(number: int) -> bytes:
+        image = rendered_pages.get(number)
+        if image is None:
+            image = await asyncio.to_thread(_render_pdf_page, body, number)
+            rendered_pages[number] = image
+        return image
+
     if missing and vision_handler is None:
         raise _error("pdfVisionUnavailable")
     for offset in range(0, len(missing), PDF_VISION_BATCH_PAGES):
         batch_numbers = missing[offset : offset + PDF_VISION_BATCH_PAGES]
-        rendered = []
-        for number in batch_numbers:
-            image = await asyncio.to_thread(_render_pdf_page, body, number)
-            rendered.append((number, image))
+        rendered = [(number, await render(number)) for number in batch_numbers]
         assert vision_handler is not None
         extracted = await vision_handler(rendered, private_content)
         if set(extracted) != set(batch_numbers) or any(
@@ -666,8 +683,24 @@ async def _convert_pdf(
             format_pdf_pages(pages)
         except AttachmentProcessingError as exc:
             raise _error("pdfInvalid") from exc
+    available_pages = [number for number in requested_pages if number <= len(pages)]
+    unavailable_pages = [number for number in requested_pages if number > len(pages)]
+    selected: list[tuple[int, bytes]] = []
+    selected_bytes = 0
+    for number in available_pages:
+        image = await render(number)
+        if selected_bytes + len(image) > MAX_PDF_PAGE_IMAGE_BYTES:
+            unavailable_pages.append(number)
+            continue
+        selected.append((number, image))
+        selected_bytes += len(image)
     try:
-        return format_pdf_pages(pages)
+        return (
+            format_pdf_pages(pages),
+            len(pages),
+            tuple(selected),
+            tuple(sorted(unavailable_pages)),
+        )
     except AttachmentProcessingError as exc:
         raise _error("pdfInvalid") from exc
 
@@ -692,11 +725,19 @@ def _image_filename(url: URL, content_disposition: str | None, content_type: str
     return filename
 
 
+def _pdf_page_filename(url: URL, page_number: int) -> str:
+    stem = PurePosixPath(unquote(url.path)).stem
+    stem = re.sub(r"[\x00-\x1f\x7f]", "", stem.replace("\\", "/"))
+    stem = PurePosixPath(stem).name.strip(" .")[:220] or "document"
+    return f"{stem}-page-{page_number}.jpg"
+
+
 async def _build_result(
     target: _Target,
     response: _Response,
     format: str,
     vision_handler: PdfVisionHandler | None,
+    pdf_pages: tuple[int, ...],
 ) -> WebFetchResult:
     if response.content_type in _IMAGE_TYPES:
         if not _valid_image_signature(response.content_type, response.body):
@@ -704,27 +745,43 @@ async def _build_result(
         return WebFetchResult(
             final_url=str(target.url),
             content_type=response.content_type,
-            content=response.body,
-            is_image=True,
+            content="",
             status_code=response.status,
             output_format="image",
-            image_mime_type=response.content_type,
-            image_filename=_image_filename(
-                target.url, response.content_disposition, response.content_type
+            images=(
+                WebFetchImage(
+                    response.body,
+                    response.content_type,
+                    _image_filename(
+                        target.url, response.content_disposition, response.content_type
+                    ),
+                ),
             ),
         )
     if response.content_type == _PDF_TYPE:
+        content, page_count, rendered, unavailable_pages = await _convert_pdf(
+            response.body,
+            vision_handler,
+            private_content=_target_is_private(target),
+            requested_pages=pdf_pages,
+        )
         return WebFetchResult(
             final_url=str(target.url),
             content_type=response.content_type,
-            content=await _convert_pdf(
-                response.body,
-                vision_handler,
-                private_content=_target_is_private(target),
-            ),
-            is_image=False,
+            content=content,
             status_code=response.status,
             output_format="text",
+            images=tuple(
+                WebFetchImage(
+                    image,
+                    "image/jpeg",
+                    _pdf_page_filename(target.url, page_number),
+                    page_number,
+                )
+                for page_number, image in rendered
+            ),
+            page_count=page_count,
+            unavailable_pages=unavailable_pages,
         )
     if response.content_type not in _TEXT_TYPES:
         raise _error("contentTypeUnsupported")
@@ -735,7 +792,6 @@ async def _build_result(
         final_url=str(target.url),
         content_type=response.content_type,
         content=content,
-        is_image=False,
         status_code=response.status,
         output_format=format,
         title=title,
@@ -893,10 +949,20 @@ async def fetch_web(
     authorize_url: Callable[[str], Awaitable[None]] | None = None,
     max_response_bytes: int = MAX_RESPONSE_BYTES,
     pdf_vision_handler: PdfVisionHandler | None = None,
+    pdf_pages: tuple[int, ...] | list[int] = (),
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
 ) -> WebFetchResult:
     if format not in {"html", "markdown", "text"}:
         raise _error("formatUnsupported")
+    if (
+        len(pdf_pages) > MAX_PDF_PAGE_IMAGES
+        or any(
+            isinstance(number, bool) or not isinstance(number, int) or number < 1
+            for number in pdf_pages
+        )
+    ):
+        raise ValueError("pdf_pages must contain at most eight positive integers")
+    normalized_pdf_pages = tuple(sorted(set(pdf_pages)))
     _validate_fetch_limits(timeout, max_response_bytes)
     origins = _allowed_origins(allowed_private_origins)
     try:
@@ -912,7 +978,11 @@ async def fetch_web(
         try:
             async with asyncio.timeout(max(remaining, 0.001)):
                 result = await _build_result(
-                    target, response, format, pdf_vision_handler
+                    target,
+                    response,
+                    format,
+                    pdf_vision_handler,
+                    normalized_pdf_pages,
                 )
             return result
         except WebFetchError as exc:

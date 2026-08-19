@@ -330,12 +330,12 @@ def general_system_prompt(
     if offered_tool_names:
         parts.extend(
             [
-                "Callable tools are exactly the schemas supplied by MatoLoop. Use one when facts or "
+                "Only supplied schemas are callable. Use one when facts or "
                 "actions require it.",
-                "Emit a chosen tool call in the same response; never merely announce future tool use "
-                "or ask the user to wait.",
-                "Claim success only after a successful result, and never repeat a denied or failed "
+                "Emit a chosen tool call in the same response; never merely announce future tool use.",
+                "Claim success only after success; never repeat a denied or failed "
                 "call unchanged.",
+                "permission.denied is from MatoLoop, not an external service; do not guess why.",
             ]
         )
     if inactive_capability_groups:
@@ -394,8 +394,8 @@ def general_system_prompt(
                 "Once a relevant URL is known, fetch that exact URL instead of searching again about the "
                 "same candidate. Fetch exact pages for prices, availability, compatibility, variants, and "
                 "specifications; do not merge similar model codes. Qualify or omit claims absent from the page.",
-                "Never invent or guess external image URLs. Fetch an exact image URL before presenting it, prefer "
-                "the resulting attachment, and do not repeat its remote URL.",
+                "Never invent or guess external image URLs. Fetch an exact image URL before use, prefer "
+                "the resulting attachment, and do not repeat its remote URL. For PDF layouts, request pdf_pages.",
             ]
         )
     if {"web_search", "webfetch"} <= offered_tool_names:
