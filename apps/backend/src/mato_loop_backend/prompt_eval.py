@@ -67,7 +67,7 @@ CALENDAR_KEY = f"calendar:{'a' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 21
+INVENTORY_VERSION = 22
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -1567,6 +1567,14 @@ CASES = (
         argument_contains={"query": ("Aurora",)},
     ),
     PromptCase(
+        id="self_contained_topic_avoids_session_discovery",
+        kind="general",
+        user="Vergleiche PostgreSQL und MariaDB für eine neue Webanwendung.",
+        tools=("session_browse", "session_search", "session_read"),
+        expected_no_tools=True,
+        forbidden_tools=("session_browse", "session_search", "session_read"),
+    ),
+    PromptCase(
         id="memory_retrieve_uses_context_search",
         kind="general",
         user="Was weißt du über mein Klavierspiel? Suche im Langzeitgedächtnis.",
@@ -2780,6 +2788,14 @@ _SEMANTIC_CONTRACTS = (
         "session.search_query",
         "session",
         ("session_search_uses_query",),
+    ),
+    ContractCoverage(
+        "session.discovery_requires_prior_context",
+        "session",
+        (
+            "self_contained_topic_avoids_session_discovery",
+            "session_search_uses_query",
+        ),
     ),
     ContractCoverage("session.uuid_fields", "session", ("session_read_uses_session_uuid",)),
     ContractCoverage(

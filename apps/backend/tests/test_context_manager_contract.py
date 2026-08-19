@@ -1142,8 +1142,10 @@ def test_general_system_prompt_separates_session_discovery_and_reading() -> None
         ),
     )
 
-    assert "session_browse for recent conversations" in prompt
-    assert "session_search for a specific topic" in prompt
+    assert "only when missing prior-conversation details are needed" in prompt
+    assert "session_browse for recency" in prompt
+    assert "session_search for a supplied topic" in prompt
+    assert "Never search just because" in prompt
     assert "exact sessionReadArguments" in prompt
 
 

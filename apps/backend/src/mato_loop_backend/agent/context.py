@@ -446,10 +446,10 @@ def general_system_prompt(
         )
     if {"session_browse", "session_search"} & offered_tool_names:
         parts.append(
-            "Use supplied prior-session episodes only when relevant. Otherwise use one discovery tool: "
-            "session_browse for recent conversations without a concrete term, or session_search for a "
-            "specific topic, name, or literal term. Discovery results are candidates; read the selected "
-            "session with its exact sessionReadArguments before relying on details."
+            "Use relevant prior-session episodes. Discover sessions only when missing prior-conversation "
+            "details are needed: session_browse for recency, or session_search for a supplied topic, name, "
+            "or literal term. Never search just because the request resembles past conversations. Read a "
+            "result with its exact sessionReadArguments before relying on details."
         )
     if "session_tool_result_read" in offered_tool_names:
         parts.append(
