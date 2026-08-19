@@ -26,7 +26,7 @@ Bei Providern ohne Modellerkennung kann eine Modell-ID manuell eingetragen werde
 
 ## Laufzeiteinstellungen
 
-Je Modell können unter anderem Kontextfenster, Ausgabelimit, Streaming, Tool-Unterstützung, Bildunterstützung, Datenfreigabe, Memory-Policy, Webfetch und Reasoning-Zusammenfassungen konfiguriert werden. Verwenden Sie manuelle Overrides nur, wenn die tatsächlichen Fähigkeiten des Zielservers bekannt sind.
+Je Modell können unter anderem Kontextfenster, Ausgabelimit, Streaming, Tool-Unterstützung, Bildunterstützung, Datenfreigabe, Memory-Policy, Webfetch, Reasoning-Aufwand und Reasoning-Zusammenfassungen konfiguriert werden. Welche Aufwandsstufen wirken, hängt vom Modell und Provider ab; „Aus“ deaktiviert das Denken bei unterstützten OpenAI- und llama.cpp-Modellen. Verwenden Sie manuelle Overrides nur, wenn die tatsächlichen Fähigkeiten des Zielservers bekannt sind.
 
 ## Standardmodelle
 

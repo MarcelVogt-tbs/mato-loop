@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from mato_loop_backend.error_contract import safe_provider_error_code
+from mato_loop_backend.settings.models import ReasoningEffort
 
 DeltaCallback = Callable[[str], Awaitable[None]]
 ReasoningDeltaCallback = Callable[[str, str], Awaitable[None]]
@@ -213,6 +214,8 @@ class ProviderRequest:
     temperature: float | None = None
     timeout: float = 300
     reasoning_summary: bool = False
+    reasoning_effort: ReasoningEffort | None = None
+    enable_thinking: bool | None = None
     prompt_cache_key: str | None = None
     continuation_scope: dict[str, str | None] = field(default_factory=dict)
     media: list[ProviderMedia] = field(default_factory=list)

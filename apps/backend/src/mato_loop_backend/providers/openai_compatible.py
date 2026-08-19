@@ -231,6 +231,10 @@ def _chat_body(request: ProviderRequest) -> dict[str, Any]:
         body["max_tokens"] = request.max_output_tokens
     if request.temperature is not None:
         body["temperature"] = request.temperature
+    if request.reasoning_effort is not None:
+        body["reasoning_effort"] = request.reasoning_effort.value
+    if request.enable_thinking is not None:
+        body["chat_template_kwargs"] = {"enable_thinking": request.enable_thinking}
     if request.tools:
         body["tools"] = _tools_payload(request.tools)
         body["tool_choice"] = request.tool_choice
@@ -378,8 +382,13 @@ def _responses_body(
         body["tool_choice"] = request.tool_choice
         if request.supports_parallel_tool_calls:
             body["parallel_tool_calls"] = True
+    reasoning = {}
     if request.reasoning_summary:
-        body["reasoning"] = {"summary": "auto"}
+        reasoning["summary"] = "auto"
+    if request.reasoning_effort is not None:
+        reasoning["effort"] = request.reasoning_effort.value
+    if reasoning:
+        body["reasoning"] = reasoning
     if request.prompt_cache_key:
         body["prompt_cache_key"] = request.prompt_cache_key
     body["include"] = ["reasoning.encrypted_content"]

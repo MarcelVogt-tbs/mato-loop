@@ -72,6 +72,7 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.models import (
     ModelAvailability,
     ModelCapability,
+    ReasoningEffort,
 )
 from mato_loop_backend.workspace import (
     RootFileError,
@@ -493,6 +494,7 @@ class SessionCreateRequest(BaseModel):
     content: str = Field(min_length=1, max_length=200_000)
     project_id: UUID | None = None
     model_id: UUID | None = None
+    reasoning_effort: ReasoningEffort | None = None
     memory_mode: MemoryMode = MemoryMode.FULL
     web_search_policy: WebSearchPolicy = WebSearchPolicy.AVAILABLE
     preferred_execution_agent_id: UUID | None = None
@@ -507,6 +509,7 @@ class SessionUpdateRequest(BaseModel):
     pinned: bool | None = None
     project_id: UUID | None = None
     model_id: UUID | None = None
+    reasoning_effort: ReasoningEffort | None = None
     memory_mode: MemoryMode | None = None
     web_search_policy: WebSearchPolicy | None = None
     preferred_execution_agent_id: UUID | None = None
@@ -789,6 +792,7 @@ def session_payload(
             ),
         },
         "modelId": str(item.model_config_id) if item.model_config_id else None,
+        "reasoningEffort": item.reasoning_effort,
         "memoryMode": item.memory_mode,
         "webSearchPolicy": item.web_search_policy,
         "preferredExecutionAgentId": (
@@ -1241,6 +1245,9 @@ async def _create_session(
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
         model_config_id=model_id,
+        reasoning_effort=(
+            payload.reasoning_effort.value if payload.reasoning_effort else None
+        ),
         memory_mode=payload.memory_mode.value,
         web_search_policy=payload.web_search_policy.value,
         preferred_execution_agent_id=payload.preferred_execution_agent_id,
@@ -1369,6 +1376,7 @@ async def session_defaults(
             )
     return {
         "modelId": str(selected_model_id) if selected_model_id else None,
+        "reasoningEffort": None,
         "modelAvailable": bool(model and model.supports_tools),
         "modelUnavailableReason": (
             None
@@ -1452,6 +1460,7 @@ async def update_session(
         "project_id",
         "memory_mode",
         "model_id",
+        "reasoning_effort",
         "web_search_policy",
         "preferred_execution_agent_id",
         "preferred_root_id",
@@ -1506,6 +1515,10 @@ async def update_session(
         if not _model_supports_tools(ai, effective_model_id):
             raise ApiError(409, "session.modelToolsUnavailable")
         item.model_config_id = payload.model_id
+    if "reasoning_effort" in fields:
+        item.reasoning_effort = (
+            payload.reasoning_effort.value if payload.reasoning_effort else None
+        )
     if "memory_mode" in fields and payload.memory_mode is not None:
         item.memory_mode = payload.memory_mode.value
     if "web_search_policy" in fields and payload.web_search_policy is not None:

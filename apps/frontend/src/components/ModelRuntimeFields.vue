@@ -54,6 +54,16 @@
         :rules="[positiveNumberRule]"
       />
       <q-select
+        v-model="form.reasoningEffort"
+        outlined
+        hide-bottom-space
+        emit-value
+        map-options
+        label="Reasoning-Aufwand"
+        :options="REASONING_EFFORT_OPTIONS"
+        hint="Providerstandard übernimmt das Modellverhalten; unterstützte Stufen hängen vom Modell ab."
+      />
+      <q-select
         :model-value="form.trustLevel ?? 'inherit'"
         outlined
         hide-bottom-space
@@ -158,6 +168,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { REASONING_EFFORT_OPTIONS } from 'src/utils/model-runtime'
 import { WEBFETCH_POLICY_OPTIONS, webfetchPolicyLabel } from 'src/utils/webfetch'
 
 defineOptions({ name: 'ModelRuntimeFields' })

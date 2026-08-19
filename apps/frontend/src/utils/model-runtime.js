@@ -1,5 +1,19 @@
 import { normalizeModelCapabilities } from 'src/utils/provider-models'
 
+export const REASONING_EFFORT_OPTIONS = Object.freeze([
+  { label: 'Providerstandard', value: null },
+  { label: 'Aus', value: 'none' },
+  { label: 'Minimal', value: 'minimal' },
+  { label: 'Niedrig', value: 'low' },
+  { label: 'Mittel', value: 'medium' },
+  { label: 'Hoch', value: 'high' },
+  { label: 'Sehr hoch', value: 'xhigh' }
+])
+
+export function reasoningEffortLabel(value) {
+  return REASONING_EFFORT_OPTIONS.find((option) => option.value === value)?.label || 'Providerstandard'
+}
+
 export const DEFAULT_MODEL_RUNTIME = Object.freeze({
   capabilities: Object.freeze(['chat']),
   inputModalities: Object.freeze(['text']),
@@ -18,7 +32,8 @@ export const DEFAULT_MODEL_RUNTIME = Object.freeze({
   memoryPolicy: 'inherit',
   webfetchPolicy: 'inherit',
   effectiveWebfetchPolicy: null,
-  reasoningSummary: false
+  reasoningSummary: false,
+  reasoningEffort: null
 })
 
 function modelValue(model, camelKey, snakeKey) {
@@ -70,7 +85,8 @@ export function modelRuntimeForm(model) {
     memoryPolicy: modelValue(model, 'memoryPolicy', 'memory_policy'),
     webfetchPolicy: modelValue(model, 'webfetchPolicy', 'webfetch_policy'),
     effectiveWebfetchPolicy: modelValue(model, 'effectiveWebfetchPolicy', 'effective_webfetch_policy'),
-    reasoningSummary: modelValue(model, 'reasoningSummary', 'reasoning_summary')
+    reasoningSummary: modelValue(model, 'reasoningSummary', 'reasoning_summary'),
+    reasoningEffort: modelValue(model, 'reasoningEffort', 'reasoning_effort')
   }
 }
 
@@ -95,6 +111,7 @@ export function modelRuntimePayload(form) {
     pseudonymization_enabled: form.pseudonymizationEnabled ?? null,
     memory_policy: form.memoryPolicy || 'inherit',
     webfetch_policy: form.webfetchPolicy || 'inherit',
-    reasoning_summary: Boolean(form.reasoningSummary)
+    reasoning_summary: Boolean(form.reasoningSummary),
+    reasoning_effort: form.reasoningEffort || null
   }
 }

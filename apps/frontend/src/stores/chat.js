@@ -75,6 +75,7 @@ export function buildAttachmentFormData(payload, attachments) {
 function defaultSessionOptions() {
   return {
     modelId: null,
+    reasoningEffort: null,
     memoryMode: 'full',
     effectiveMemoryMode: 'full',
     memoryToolsAvailable: true,
@@ -105,6 +106,7 @@ function sanitizedSessionOptions(options) {
 function optionsFromSession(session) {
   return sanitizedSessionOptions({
     modelId: session.modelId,
+    reasoningEffort: session.reasoningEffort ?? null,
     memoryMode: session.memoryMode,
     effectiveMemoryMode: session.effectiveMemoryMode,
     memoryToolsAvailable: session.memoryToolsAvailable,
@@ -153,6 +155,9 @@ function normalizedNewSessionDraft(value) {
     message: typeof value?.message === 'string' ? value.message : '',
     options: sanitizedSessionOptions({
       modelId: typeof options.modelId === 'string' ? options.modelId : null,
+      reasoningEffort: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(options.reasoningEffort)
+        ? options.reasoningEffort
+        : null,
       memoryMode: ['full', 'read_only', 'disabled'].includes(options.memoryMode)
         ? options.memoryMode
         : 'full',
@@ -977,6 +982,7 @@ export const useChatStore = defineStore('chat', {
       const options = this.drafts.newSession.options
       const fields = {
         model_id: 'modelId',
+        reasoning_effort: 'reasoningEffort',
         memory_mode: 'memoryMode',
         web_search_policy: 'webSearchPolicy',
         preferred_execution_agent_id: 'preferredExecutionAgentId',
@@ -1366,6 +1372,7 @@ export const useChatStore = defineStore('chat', {
           content,
           project_id: projectId,
           model_id: options.modelId,
+          reasoning_effort: options.reasoningEffort,
           memory_mode: options.memoryMode,
           web_search_policy: options.webSearchPolicy,
           preferred_execution_agent_id: options.preferredExecutionAgentId,

@@ -31,6 +31,7 @@ _MODEL_RUNTIME_KEYS = {
     "input_modalities": "inputModalities",
     "supports_image_input": "supportsImageInput",
     "reasoning_summary": "reasoningSummary",
+    "reasoning_effort": "reasoningEffort",
     "trust_level": "trustLevel",
     "pseudonymization_enabled": "pseudonymizationEnabled",
 }
@@ -140,6 +141,15 @@ class ModelInputModality(StrEnum):
     VIDEO = "video"
 
 
+class ReasoningEffort(StrEnum):
+    NONE = "none"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+
+
 class LlmProviderConfig(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str
@@ -244,6 +254,10 @@ class ModelConfig(BaseModel):
     reasoning_summary: bool = Field(
         default=False,
         validation_alias=AliasChoices("reasoning_summary", "reasoningSummary"),
+    )
+    reasoning_effort: ReasoningEffort | None = Field(
+        default=None,
+        validation_alias=AliasChoices("reasoning_effort", "reasoningEffort"),
     )
     @model_validator(mode="before")
     @classmethod

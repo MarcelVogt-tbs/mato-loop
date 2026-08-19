@@ -4,6 +4,7 @@ import httpx
 
 from mato_loop_backend.providers.base import ProviderRequest
 from mato_loop_backend.providers.openai_compatible import (
+    _chat_body,
     _chat_messages,
     _chat_result,
     _responses_body,
@@ -16,6 +17,7 @@ from mato_loop_backend.providers.reasoning import (
     TaggedReasoningStream,
     split_tagged_reasoning,
 )
+from mato_loop_backend.settings.models import ReasoningEffort
 
 
 class _OpenAfterTerminalEvent(httpx.AsyncByteStream):
@@ -207,6 +209,23 @@ def test_responses_summary_request_and_scoped_replay() -> None:
 
     assert matching[0]["type"] == "reasoning"
     assert all(item.get("type") != "reasoning" for item in foreign)
+
+
+def test_reasoning_effort_uses_native_openai_and_llama_cpp_fields() -> None:
+    request = ProviderRequest(
+        model="reasoning-model",
+        messages=[],
+        reasoning_summary=True,
+        reasoning_effort=ReasoningEffort.NONE,
+        enable_thinking=False,
+    )
+
+    assert _chat_body(request)["reasoning_effort"] == "none"
+    assert _chat_body(request)["chat_template_kwargs"] == {"enable_thinking": False}
+    assert _responses_body(request)["reasoning"] == {
+        "summary": "auto",
+        "effort": "none",
+    }
 
 
 async def test_chat_stream_routes_tagged_reasoning_separately(monkeypatch) -> None:

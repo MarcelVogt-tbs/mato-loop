@@ -1319,7 +1319,11 @@ async def test_lemonade_complete_explicitly_uses_chat_completions(monkeypatch) -
         pseudonymization_enabled=False,
         config={"base_url": "http://lemonade.test/v1", "api_type": "responses"},
     )
-    model = ModelConfig(provider_id=provider.id, model_id="chat")
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="chat",
+        reasoning_effort="high",
+    )
     transport = AsyncMock(return_value=ProviderResult(content="OK"))
     responses = AsyncMock(side_effect=AssertionError("Responses API must not be used"))
     monkeypatch.setattr(service_module, "chat_completions", transport)
@@ -1331,12 +1335,15 @@ async def test_lemonade_complete_explicitly_uses_chat_completions(monkeypatch) -
         model=model,
         messages=[{"role": "user", "content": "Test"}],
         tools=[],
+        reasoning_effort="none",
     )
 
     assert result.content == "OK"
     transport.assert_awaited_once()
     responses.assert_not_awaited()
     assert transport.await_args.kwargs["request"].include_usage is True
+    assert transport.await_args.kwargs["request"].reasoning_effort == "none"
+    assert transport.await_args.kwargs["request"].enable_thinking is False
 
 
 async def test_openai_compatible_stream_does_not_request_usage(monkeypatch) -> None:

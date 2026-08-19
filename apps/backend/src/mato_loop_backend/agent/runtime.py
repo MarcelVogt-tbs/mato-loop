@@ -2431,6 +2431,7 @@ class AgentRuntime:
                 pseudonymization_enabled=run_pseudonymization_enabled,
                 prompt_cache_key=str(chat_session.id),
                 required_image_ids=required_image_ids,
+                reasoning_effort=chat_session.reasoning_effort,
             )
             openscad_preview_image_id = None
             provider_duration_ms = max(

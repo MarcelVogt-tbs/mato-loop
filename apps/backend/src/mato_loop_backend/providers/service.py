@@ -54,6 +54,7 @@ from mato_loop_backend.settings.models import (
     ModelCapability,
     ModelConfig,
     ModelInputModality,
+    ReasoningEffort,
     TrustLevel,
     effective_model_pseudonymization,
     effective_model_trust,
@@ -455,6 +456,7 @@ class ProviderService:
         media_inputs: list[ProviderMediaInput] | None = None,
         prompt_cache_key: str | None = None,
         required_image_ids: tuple[str, ...] = (),
+        reasoning_effort: ReasoningEffort | str | None = None,
     ) -> ProviderResult:
         if model.provider_id != provider.id:
             raise ProviderError(
@@ -507,6 +509,11 @@ class ProviderService:
             else None
         )
         is_codex = provider.adapter_type == "openai-codex"
+        effective_reasoning_effort = (
+            ReasoningEffort(reasoning_effort)
+            if reasoning_effort is not None
+            else model.reasoning_effort
+        )
         payload = read_credential(credential) if credential and not is_codex else {}
         endpoint = (
             codex_oauth.CODEX_RESPONSES_URL
@@ -560,6 +567,13 @@ class ProviderService:
             temperature=None if is_codex else _temperature_option(model.config),
             timeout=timeout,
             reasoning_summary=is_codex or model.reasoning_summary,
+            reasoning_effort=effective_reasoning_effort,
+            enable_thinking=(
+                effective_reasoning_effort != ReasoningEffort.NONE
+                if provider.adapter_type == "lemonade"
+                and effective_reasoning_effort is not None
+                else None
+            ),
             prompt_cache_key=prompt_cache_key if is_codex else None,
             continuation_scope=continuation_scope,
             media=media,

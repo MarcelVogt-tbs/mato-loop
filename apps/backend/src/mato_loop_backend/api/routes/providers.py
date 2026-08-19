@@ -58,6 +58,7 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     ModelInputModality,
     ModelOrigin,
+    ReasoningEffort,
     TrustLevel,
 )
 
@@ -147,6 +148,7 @@ class ModelRuntimeRequest(ApiRequest):
     supports_image_input: bool = False
     webfetch_policy: ModelWebFetchPolicy = ModelWebFetchPolicy.INHERIT
     reasoning_summary: bool = False
+    reasoning_effort: ReasoningEffort | None = None
     trust_level: TrustLevel | None = None
     pseudonymization_enabled: bool | None = None
     memory_policy: MemoryPolicy = MemoryPolicy.INHERIT
@@ -566,6 +568,9 @@ def _settings_payload(
                     tool_settings, model
                 ).value,
                 "reasoningSummary": model.reasoning_summary,
+                "reasoningEffort": (
+                    model.reasoning_effort.value if model.reasoning_effort else None
+                ),
                 "trustLevel": model.trust_level.value if model.trust_level else None,
                 "effectiveTrustLevel": effective_model_trust(
                     providers_by_id[model.provider_id], model

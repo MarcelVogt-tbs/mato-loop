@@ -31,6 +31,8 @@ Antworten werden während der Erzeugung angezeigt. MatoLoop stellt Arbeitsphasen
 
 Reasoning-Zusammenfassungen werden nur angezeigt, wenn das Modell sie liefert und die Modellkonfiguration sie erlaubt. Sie sind nicht mit vollständigen internen Gedankengängen gleichzusetzen.
 
+Der Reasoning-Aufwand wird standardmäßig aus der Modellkonfiguration übernommen. In den Sessioneinstellungen kann er für den aktuellen Chat überschrieben oder wieder auf den Modellstandard zurückgesetzt werden.
+
 ## Nachrichtenaktionen
 
 - **Erneut versuchen** startet nach einer fehlgeschlagenen letzten Antwort einen neuen Versuch.

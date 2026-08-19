@@ -503,6 +503,7 @@ async def test_manual_model_crud_toggles_and_default(monkeypatch) -> None:
                 "maxOutputTokens": 4_000,
                 "supportsImageInput": True,
                 "webfetchPolicy": "auto_allowed",
+                "reasoningEffort": "low",
             }
         ),
         db,
@@ -511,6 +512,7 @@ async def test_manual_model_crud_toggles_and_default(monkeypatch) -> None:
     assert model.origin == ModelOrigin.MANUAL
     assert model.supports_image_input is True
     assert model.webfetch_policy == "auto_allowed"
+    assert model.reasoning_effort == "low"
     assert settings.default_model_id is None
 
     await set_default_model(DefaultModelRequest.model_validate(str(model.id)), db)

@@ -104,6 +104,7 @@ async def _runtime_setup(
     downloaded_image: bool = False,
     user_content: str = "Aktuelle Frage",
     user_trust_level: TrustLevel | None = None,
+    reasoning_effort: str | None = None,
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -152,6 +153,7 @@ async def _runtime_setup(
         memory_mode="disabled",
         web_search_policy=search_policy.value,
         workspace_access=workspace_access,
+        reasoning_effort=reasoning_effort,
     )
     run = AgentRun(
         id=uuid4(),
@@ -298,6 +300,19 @@ async def test_completed_response_persists_canonical_markdown(monkeypatch) -> No
     assert _assistant_messages(db)[0].content == expected
     completed = next(event for event in events if event.get("type") == "message.completed")
     assert completed["message"]["content"] == expected
+
+
+async def test_session_reasoning_effort_reaches_primary_model_request(monkeypatch) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="Antwort", finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        reasoning_effort="low",
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert requests[0]["reasoning_effort"] == "low"
 
 
 async def test_generated_openscad_source_requires_a_successful_render(monkeypatch) -> None:

@@ -235,6 +235,24 @@
                       </q-banner>
 
                       <q-select
+                        :model-value="session?.reasoningEffort ?? null"
+                        :options="reasoningEffortOptions"
+                        emit-value
+                        map-options
+                        outlined
+                        :dense="$q.screen.gt.xs"
+                        options-dense
+                        label="Reasoning-Aufwand"
+                        hint="Überschreibt den Modellstandard nur für diese Session."
+                        persistent-hint
+                        popup-content-class="app-menu-popup"
+                        :disable="interactionDisabled"
+                        @update:model-value="update({ reasoning_effort: $event })"
+                      >
+                        <template #prepend><q-icon name="psychology" /></template>
+                      </q-select>
+
+                      <q-select
                         :model-value="session?.memoryMode"
                         :options="memoryModeOptions"
                         emit-value
@@ -363,6 +381,7 @@ import { recorderErrorMessage, useAudioRecorder } from 'src/composables/audio-re
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { clipboardAttachmentFiles } from 'src/utils/attachment-drafts'
 import { formatAttachmentDuration } from 'src/utils/attachments'
+import { REASONING_EFFORT_OPTIONS, reasoningEffortLabel } from 'src/utils/model-runtime'
 
 defineOptions({ name: 'ChatComposer' })
 
@@ -483,6 +502,13 @@ const selectedModelConfig = computed(() => providers.models.find((model) => (
   model.id === effectiveModelId.value
 )))
 const selectedModelTrustIcon = computed(() => selectedModelConfig.value?.effectiveTrustLevel === 'private' ? 'lock' : 'public')
+const reasoningEffortOptions = computed(() => [
+  {
+    label: `Modellstandard (${reasoningEffortLabel(selectedModelConfig.value?.reasoningEffort)})`,
+    value: null
+  },
+  ...REASONING_EFFORT_OPTIONS.filter((option) => option.value !== null)
+])
 const modelSupportsTools = computed(() => selectedModelConfig.value?.supportsTools !== false)
 const transcriptionModelAvailable = computed(() => (
   Boolean(providers.audioTranscriptionModelId)

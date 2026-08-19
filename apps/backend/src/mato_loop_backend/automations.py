@@ -70,6 +70,7 @@ def next_run_at(cron_expression: str, timezone: str, after: datetime) -> datetim
 def runtime_snapshot(session: ChatSession) -> dict[str, Any]:
     return {
         "modelId": str(session.model_config_id) if session.model_config_id else None,
+        "reasoningEffort": session.reasoning_effort,
         "memoryMode": session.memory_mode,
         "webSearchPolicy": session.web_search_policy,
         "preferredExecutionAgentId": (
@@ -87,6 +88,7 @@ def runtime_snapshot(session: ChatSession) -> dict[str, Any]:
 def copy_runtime(source: ChatSession, target: ChatSession) -> None:
     for name in (
         "model_config_id",
+        "reasoning_effort",
         "memory_mode",
         "web_search_policy",
         "preferred_execution_agent_id",

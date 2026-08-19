@@ -228,6 +228,24 @@ describe('chat drafts', () => {
     }))
   })
 
+  it('persists and sends the session reasoning override', async () => {
+    api.post.mockResolvedValue({
+      data: {
+        session: { id: 'session-1', reasoningEffort: 'low', messages: [] },
+        runId: 'run-1'
+      }
+    })
+    const chat = useChatStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+
+    await chat.updateActive({ reasoning_effort: 'low' })
+    await chat.startSession('Kurz nachdenken')
+
+    expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
+      reasoning_effort: 'low'
+    }))
+  })
+
   it('does not reselect a created session after switching during tab reconciliation', async () => {
     let resolveTabs
     api.post.mockResolvedValue({

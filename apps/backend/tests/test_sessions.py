@@ -368,6 +368,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     result = await create_session(
         SessionCreateRequest(
             content="  Erste Nachricht  ",
+            reasoning_effort="low",
             workspace_access="read-write",
             control_center={
                 "tabs": [
@@ -383,6 +384,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
 
     session = db.add.call_args.args[0]
     assert session.model_config_id == model.id
+    assert session.reasoning_effort == "low"
     assert session.user_id == user.id
     assert session.memory_mode == "full"
     assert session.web_search_policy == "available"
@@ -402,6 +404,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert result["session"]["id"] == str(session.id)
     assert result["session"]["titleGenerationStatus"] == "pending"
     assert result["session"]["webSearchPolicy"] == "available"
+    assert result["session"]["reasoningEffort"] == "low"
     assert "trustLevel" not in result["session"]
     assert result["runId"] == str(run.id)
     assert result["modelName"] == "Test"
@@ -1314,6 +1317,29 @@ async def test_session_can_switch_to_public_model(monkeypatch) -> None:
     )
 
     assert session.model_config_id == public_model.id
+
+
+async def test_session_can_override_reasoning_effort() -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Test",
+        memory_mode="disabled",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    db.scalar.return_value = None
+
+    result = await update_session(
+        session.id,
+        SessionUpdateRequest(reasoning_effort="high"),
+        user,
+        db,
+    )
+
+    assert session.reasoning_effort == "high"
+    assert result["reasoningEffort"] == "high"
 
 
 async def test_workspace_mode_is_preserved_without_workdir() -> None:

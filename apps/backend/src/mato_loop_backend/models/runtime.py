@@ -155,6 +155,11 @@ class ChatSession(Base):
             name="memory_mode_valid",
         ),
         CheckConstraint(
+            "reasoning_effort IS NULL OR reasoning_effort IN "
+            "('none', 'minimal', 'low', 'medium', 'high', 'xhigh')",
+            name="reasoning_effort_valid",
+        ),
+        CheckConstraint(
             "title_generation_status IN "
             "('pending', 'running', 'completed', 'failed', 'skipped')",
             name="title_generation_status_valid",
@@ -201,6 +206,7 @@ class ChatSession(Base):
         ),
     )
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    reasoning_effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     memory_mode: Mapped[str] = mapped_column(
         String(20), nullable=False, default=MemoryMode.FULL.value
     )

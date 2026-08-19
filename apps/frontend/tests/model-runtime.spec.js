@@ -26,7 +26,8 @@ describe('model runtime configuration', () => {
       memoryPolicy: 'deny',
       webfetchPolicy: 'auto_public',
       effectiveWebfetchPolicy: 'disabled',
-      reasoningSummary: false
+      reasoningSummary: false,
+      reasoningEffort: 'low'
     })).toEqual({
       capabilities: ['chat'],
       inputModalities: ['text', 'image'],
@@ -45,7 +46,8 @@ describe('model runtime configuration', () => {
       memoryPolicy: 'deny',
       webfetchPolicy: 'auto_public',
       effectiveWebfetchPolicy: 'disabled',
-      reasoningSummary: false
+      reasoningSummary: false,
+      reasoningEffort: 'low'
     })
   })
 
@@ -65,7 +67,8 @@ describe('model runtime configuration', () => {
       pseudonymizationEnabled: null,
       memoryPolicy: 'allow',
       webfetchPolicy: 'auto_allowed',
-      reasoningSummary: false
+      reasoningSummary: false,
+      reasoningEffort: 'high'
     })).toEqual({
       capabilities: ['chat', 'image_generation'],
       input_modalities: ['text', 'image', 'audio', 'video'],
@@ -81,7 +84,8 @@ describe('model runtime configuration', () => {
       pseudonymization_enabled: null,
       memory_policy: 'allow',
       webfetch_policy: 'auto_allowed',
-      reasoning_summary: false
+      reasoning_summary: false,
+      reasoning_effort: 'high'
     })
   })
 
