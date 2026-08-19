@@ -986,6 +986,11 @@ async def calendar_query_events(
             events = await client.query_events(calendar, arguments.start, arguments.end)
         return _result(
             {
+                "calendar": {
+                    "integrationId": str(arguments.integration_id),
+                    "calendarKey": arguments.calendar_key,
+                    "name": _label(calendar.name),
+                },
                 "events": [
                     _event_payload(
                         event,

@@ -760,6 +760,47 @@ async def test_account_list_uses_only_bound_active_caldav_snapshot() -> None:
     }
 
 
+async def test_calendar_query_identifies_empty_selected_calendar(monkeypatch) -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"calendar:{'a' * 32}"
+    calendar = CalDavCalendar(
+        "a" * 32,
+        "https://calendar.example.com/home/private/",
+        "Privat",
+        frozenset({"read"}),
+    )
+    client = AsyncMock()
+    client.query_events.return_value = ()
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, revision
+
+    monkeypatch.setattr(caldav_module, "_selected_client", selected_client)
+    monkeypatch.setattr(caldav_module, "_calendar", AsyncMock(return_value=calendar))
+
+    result = await caldav_module.calendar_query_events(
+        caldav_module.CalendarQueryEventsArguments(
+            integration_id=account.id,
+            calendar_key=key,
+            start=datetime(2026, 8, 19, tzinfo=UTC),
+            end=datetime(2026, 8, 20, tzinfo=UTC),
+        ),
+        SimpleNamespace(),
+    )
+
+    assert json.loads(result.content) == {
+        "calendar": {
+            "integrationId": str(account.id),
+            "calendarKey": key,
+            "name": "Privat",
+        },
+        "events": [],
+        "contentIsUntrusted": True,
+    }
+
+
 async def test_create_uses_a_stable_host_generated_idempotency_key(monkeypatch) -> None:
     account = _account()
     revision = _revision(account)
