@@ -14,6 +14,7 @@ from mato_loop_backend.agent.runtime import (
     _bounded_episode_payload,
     _bounded_memory_overview,
     _memory_overview_requested,
+    _merge_contextual_results,
     _recent_episode_overview_requested,
 )
 from mato_loop_backend.agent.tools import EffectiveToolSet, ToolResult
@@ -48,6 +49,15 @@ from mato_loop_backend.settings import (
     TrustLevel,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+
+
+def test_contextual_duplicate_does_not_displace_primary_result() -> None:
+    assert _merge_contextual_results(
+        ["shared", "primary"],
+        ["shared", "contextual"],
+        limit=2,
+        identity=lambda item: item,
+    ) == ["shared", "primary"]
 
 
 def test_recent_episode_overview_intent_is_host_detected() -> None:

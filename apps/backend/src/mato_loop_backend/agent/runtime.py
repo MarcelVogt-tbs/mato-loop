@@ -680,10 +680,7 @@ def _merge_contextual_results[T](
     primary_limit = min(len(primary), limit - 1)
     selected = primary[:primary_limit]
     seen = {identity(item) for item in selected}
-    supplement = next(
-        (item for item in contextual if identity(item) not in seen),
-        None,
-    )
+    supplement = contextual[0] if identity(contextual[0]) not in seen else None
     if supplement is not None:
         selected.append(supplement)
         seen.add(identity(supplement))
