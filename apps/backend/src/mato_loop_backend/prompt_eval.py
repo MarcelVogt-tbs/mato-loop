@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import hashlib
 import json
 import re
 import time
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -44,7 +45,11 @@ from mato_loop_backend.privacy import RequestPseudonymizer
 from mato_loop_backend.providers.base import ProviderRequest, ProviderResult, ToolCall
 from mato_loop_backend.providers.openai_compatible import chat_completions
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings, ToolSettings
-from mato_loop_backend.settings.models import AgentIdentitySettings, SkillDefinition
+from mato_loop_backend.settings.models import (
+    AgentIdentitySettings,
+    ReasoningEffort,
+    SkillDefinition,
+)
 
 DEFAULT_MODELS = (
     "Gemma-4-26B-A4B-it-MTP-GGUF",
@@ -64,6 +69,7 @@ CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
 OPENSCAD_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000002")
 OPENSCAD_AGENT_ID = UUID("90000000-0000-4000-8000-000000000003")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
+TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
@@ -73,6 +79,71 @@ TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
     4_096,
     ProviderResult(usage={"reasoning_tokens": 512}),
+)
+
+SchemaVariant = Literal["production", "narrow", "grouped"]
+SCHEMA_GROUPS: dict[str, tuple[tuple[str, str], ...]] = {
+    "filesystem_action": (
+        ("read", "read"),
+        ("glob", "glob"),
+        ("grep", "grep"),
+        ("provide_file", "provide_file"),
+        ("create_draft", "create_draft"),
+        ("write_file", "write_file"),
+        ("create_directory", "create_directory"),
+        ("delete_path", "delete_path"),
+        ("copy_path", "copy_path"),
+        ("move_path", "move_path"),
+    ),
+    "automation_action": (
+        ("list", "list_automations"),
+        ("get", "get_automation"),
+        ("create", "create_automation"),
+        ("edit", "edit_automation"),
+        ("run", "run_automation"),
+        ("delete", "delete_automation"),
+    ),
+    "calendar_action": (
+        ("list_accounts", "calendar_list_accounts"),
+        ("list_calendars", "calendar_list_calendars"),
+        ("query_events", "calendar_query_events"),
+        ("create_event", "calendar_create_event"),
+        ("update_event", "calendar_update_event"),
+        ("delete_event", "calendar_delete_event"),
+    ),
+    "tasks_action": (
+        ("list_accounts", "tasks_list_accounts"),
+        ("list_lists", "tasks_list_lists"),
+        ("query", "tasks_query"),
+        ("create", "tasks_create"),
+        ("create_many", "tasks_create_many"),
+        ("update", "tasks_update"),
+        ("set_completed", "tasks_set_completed"),
+        ("delete", "tasks_delete"),
+    ),
+}
+SCHEMA_GROUP_BY_TOOL = {
+    tool_name: (group_name, action)
+    for group_name, actions in SCHEMA_GROUPS.items()
+    for action, tool_name in actions
+}
+SCHEMA_AB_DISTRACTORS = (
+    "question",
+    "web_search",
+    "webfetch",
+    "session_browse",
+    "session_search",
+    "session_read",
+    "session_tool_result_read",
+    "memory_retrieve",
+    "memory_write",
+    "generate_qr_code",
+    "generate_image",
+    "update_agent_identity",
+)
+SCHEMA_AB_TOOL_NAMES = (
+    *(tool_name for actions in SCHEMA_GROUPS.values() for _action, tool_name in actions),
+    *SCHEMA_AB_DISTRACTORS,
 )
 
 # These prompts are inline in production callbacks/routes and cannot be imported. Drift tests
@@ -2566,6 +2637,57 @@ CASES = (
     ),
 )
 
+_SCHEMA_AB_BASE_CASE_IDS = (
+    "automation_list_uses_bounded_tool",
+    "automation_get_uses_exact_id",
+    "explicit_automation_create_uses_tool",
+    "explicit_automation_delete_uses_revision",
+    "workspace_read_uses_exact_root",
+    "grep_uses_session_root_path_and_include",
+    "readwrite_write_uses_tool",
+    "delete_path_uses_recursive_field",
+    "move_path_uses_exact_destination",
+    "calendar_missing_details_uses_question",
+    "complete_calendar_event_skips_question",
+    "calendar_information_request_skips_question",
+    "stable_knowledge_avoids_search",
+    "application_explanation_stays_in_chat",
+    "readonly_write_requests_mode_change",
+)
+_SCHEMA_AB_CASES_BY_ID = {case.id: case for case in CASES}
+SCHEMA_AB_CASES = tuple(_SCHEMA_AB_CASES_BY_ID[case_id] for case_id in _SCHEMA_AB_BASE_CASE_IDS) + (
+    PromptCase(
+        id="schema_ab_calendar_query_default",
+        kind="general",
+        user="Welche Termine stehen morgen in meinem Standardkalender an?",
+        expected_tool="calendar_query_events",
+        expected_arguments={"integration_id": None, "calendar_key": None},
+        argument_contains={
+            "start": ("2026-07-28",),
+            "end": ("2026-07-29",),
+        },
+    ),
+    PromptCase(
+        id="schema_ab_tasks_query_default",
+        kind="general",
+        user="Liste meine offenen Aufgaben aus der Standard-Aufgabenliste auf.",
+        expected_tool="tasks_query",
+        expected_arguments={
+            "integration_id": None,
+            "task_list_key": None,
+            "include_completed": False,
+        },
+    ),
+    PromptCase(
+        id="schema_ab_tasks_create_many_default",
+        kind="general",
+        user="Erstelle in meiner Standard-Aufgabenliste eine Einkaufsliste mit Milch, Brot und Äpfeln.",
+        expected_tool="tasks_create_many",
+        expected_arguments={"integration_id": None, "task_list_key": None},
+        argument_contains={"tasks": ("Milch", "Brot", "Äpfel")},
+    ),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ContractCoverage:
@@ -3371,7 +3493,11 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
                 "defaultCalendar": {
                     "integrationId": str(CALENDAR_INTEGRATION_ID),
                     "calendarKey": CALENDAR_KEY,
-                }
+                },
+                "defaultTaskList": {
+                    "integrationId": str(CALENDAR_INTEGRATION_ID),
+                    "taskListKey": TASK_LIST_KEY,
+                },
             }
         )
     if case.openscad_fixture:
@@ -3400,22 +3526,122 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
     )
 
 
-def _general_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _prefixed_schema_refs(value: Any, prefix: str) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: (
+                f"#/$defs/{prefix}{item.removeprefix('#/$defs/')}"
+                if key == "$ref" and isinstance(item, str) and item.startswith("#/$defs/")
+                else _prefixed_schema_refs(item, prefix)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_prefixed_schema_refs(item, prefix) for item in value]
+    return value
+
+
+def grouped_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_name = {tool["name"]: tool for tool in tools}
+    grouped: list[dict[str, Any]] = []
+    emitted_groups: set[str] = set()
+    for tool in tools:
+        mapping = SCHEMA_GROUP_BY_TOOL.get(tool["name"])
+        if mapping is None:
+            grouped.append(tool)
+            continue
+        group_name, _action = mapping
+        if group_name in emitted_groups:
+            continue
+        emitted_groups.add(group_name)
+        branches = []
+        definitions: dict[str, Any] = {}
+        available_actions = []
+        for action, tool_name in SCHEMA_GROUPS[group_name]:
+            original = by_name.get(tool_name)
+            if original is None:
+                continue
+            available_actions.append(action)
+            prefix = f"{action}__"
+            parameters = copy.deepcopy(original["parameters"])
+            branch_definitions = parameters.pop("$defs", {})
+            parameters = _prefixed_schema_refs(parameters, prefix)
+            definitions.update(
+                {
+                    f"{prefix}{name}": _prefixed_schema_refs(definition, prefix)
+                    for name, definition in branch_definitions.items()
+                }
+            )
+            properties = parameters.setdefault("properties", {})
+            if "action" in properties:
+                raise ValueError(f"Grouped evaluator tool {tool_name} already has an action field")
+            parameters["properties"] = {
+                "action": {
+                    "type": "string",
+                    "enum": [action],
+                    "description": f"Select the {tool_name} operation.",
+                },
+                **properties,
+            }
+            parameters["required"] = ["action", *parameters.get("required", [])]
+            parameters["description"] = original["description"]
+            branches.append(parameters)
+        if not branches:
+            continue
+        parameters: dict[str, Any] = {"type": "object", "oneOf": branches}
+        if definitions:
+            parameters["$defs"] = definitions
+        grouped.append(
+            {
+                "name": group_name,
+                "description": (
+                    "Select exactly one operation with action. Available actions: "
+                    + ", ".join(available_actions)
+                    + ". Use only fields from that action branch."
+                ),
+                "parameters": parameters,
+            }
+        )
+    return grouped
+
+
+def _grouped_prompt(prompt: str) -> str:
+    replacements = {
+        tool_name: f'{group_name} with action="{action}"'
+        for tool_name, (group_name, action) in SCHEMA_GROUP_BY_TOOL.items()
+    }
+    for tool_name in sorted(replacements, key=len, reverse=True):
+        prompt = prompt.replace(tool_name, replacements[tool_name])
+    return prompt
+
+
+def _general_case(
+    case: PromptCase,
+    schema_variant: SchemaVariant = "production",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    tool_case = (
+        replace(case, tools=SCHEMA_AB_TOOL_NAMES, calendar_fixture=True)
+        if schema_variant in {"narrow", "grouped"}
+        else case
+    )
     session = ChatSession(
         id=SESSION_ID,
         user_id=USER_ID,
         title="Prompt evaluation",
         memory_mode=(
-            "full" if {"memory_retrieve", "memory_write"} & set(case.tools) else "disabled"
+            "full"
+            if {"memory_retrieve", "memory_write"} & set(tool_case.tools)
+            else "disabled"
         ),
         web_search_policy="required" if case.web_search_required else "available",
         workspace_access=case.workspace_access,
         working_directory=case.working_directory,
     )
-    offered = _general_offered_tools(case)
-    effective = offered.only(*case.tools)
-    tools = effective.schemas()
-    offered_names = frozenset(tool["name"] for tool in tools)
+    offered = _general_offered_tools(tool_case)
+    effective = offered.only(*tool_case.tools)
+    narrow_tools = effective.schemas()
+    tools = grouped_tool_schemas(narrow_tools) if schema_variant == "grouped" else narrow_tools
+    offered_names = frozenset(tool["name"] for tool in narrow_tools)
     system_options = dict(case.system_options)
     if "skill_catalog" in system_options:
         system_options["skill_catalog"] = tuple(
@@ -3459,6 +3685,8 @@ def _general_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[str
     )
     if case.expected_marker:
         prompt += "\n\n" + PRIVACY_MARKER_INSTRUCTION
+    if schema_variant == "grouped":
+        prompt = _grouped_prompt(prompt)
     messages = [{"role": "system", "content": prompt}]
     if case.compacted_summary is not None:
         messages.append(
@@ -3632,9 +3860,12 @@ def _reconciliation_case(
     return messages, [_reconciliation_tool(1)]
 
 
-def build_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def build_case(
+    case: PromptCase,
+    schema_variant: SchemaVariant = "production",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if case.kind == "general":
-        return _general_case(case)
+        return _general_case(case, schema_variant)
     if case.kind == "title":
         messages = [
             {"role": "system", "content": TITLE_SYSTEM_PROMPT},
@@ -3667,18 +3898,74 @@ def case_output_limit(case: PromptCase, default_limit: int) -> int:
     return min(case.output_limit, default_limit)
 
 
-def _validate_tool_calls(case: PromptCase, calls: list[ToolCall]) -> list[str]:
+def normalize_grouped_result(result: ProviderResult) -> tuple[ProviderResult, list[str]]:
     failures = []
-    effective_tools = (
-        _general_offered_tools(case).only(*case.tools).tools
-        if case.kind == "general"
-        else {}
+    calls = []
+    for call in result.tool_calls:
+        if call.name in SCHEMA_GROUPS:
+            if not isinstance(call.arguments, dict):
+                failures.append(f"{call.name} returned non-object arguments")
+                calls.append(call)
+                continue
+            arguments = dict(call.arguments)
+            action = arguments.pop("action", None)
+            tool_name = next(
+                (
+                    candidate
+                    for candidate_action, candidate in SCHEMA_GROUPS[call.name]
+                    if candidate_action == action
+                ),
+                None,
+            )
+            if tool_name is None:
+                failures.append(f"{call.name} returned unknown action {action!r}")
+                calls.append(call)
+                continue
+            calls.append(ToolCall(call.id, tool_name, arguments))
+            continue
+        if call.name in SCHEMA_GROUP_BY_TOOL:
+            failures.append(f"grouped variant called unavailable narrow tool {call.name}")
+        calls.append(call)
+    return (
+        ProviderResult(
+            content=result.content,
+            tool_calls=calls,
+            provider_data=result.provider_data,
+            usage=result.usage,
+            finish_reason=result.finish_reason,
+            reasoning=result.reasoning,
+        ),
+        failures,
     )
+
+
+def _evaluation_tools(case: PromptCase, schema_variant: SchemaVariant) -> dict[str, Any]:
+    if case.kind != "general":
+        return {}
+    tool_case = (
+        replace(case, tools=SCHEMA_AB_TOOL_NAMES, calendar_fixture=True)
+        if schema_variant in {"narrow", "grouped"}
+        else case
+    )
+    return _general_offered_tools(tool_case).only(*tool_case.tools).tools
+
+
+def _validate_tool_calls(
+    case: PromptCase,
+    calls: list[ToolCall],
+    schema_variant: SchemaVariant = "production",
+    effective_tools: dict[str, Any] | None = None,
+) -> list[str]:
+    failures = []
+    effective_tools = effective_tools or _evaluation_tools(case, schema_variant)
     if any(call.name == "question" for call in calls) and len(calls) != 1:
         failures.append("question must be the only tool call")
     if any(call.name == "load_skill" for call in calls) and len(calls) != 1:
         failures.append("load_skill must be the only tool call")
     for call in calls:
+        if not isinstance(call.arguments, dict):
+            failures.append(f"{call.name} returned non-object arguments")
+            continue
         bound_tool = effective_tools.get(call.name)
         definition = (
             bound_tool.definition
@@ -3721,12 +4008,17 @@ def _validate_tool_calls(case: PromptCase, calls: list[ToolCall]) -> list[str]:
     return failures
 
 
-def _validated_arguments(call: ToolCall) -> dict[str, Any]:
-    definition = tool_registry._definitions.get(call.name)
+def _validated_arguments(call: ToolCall, bound_tool: Any | None = None) -> dict[str, Any]:
+    definition = bound_tool.definition if bound_tool is not None else tool_registry._definitions.get(call.name)
     if definition is None:
         return call.arguments
     try:
-        return definition.arguments_model.model_validate(call.arguments).model_dump(mode="json")
+        return definition.arguments_model.model_validate(
+            {
+                **(bound_tool.default_arguments if bound_tool is not None else {}),
+                **call.arguments,
+            }
+        ).model_dump(mode="json")
     except ValidationError:
         return call.arguments
 
@@ -3740,8 +4032,18 @@ def _previous_call_signatures(case: PromptCase) -> set[str]:
     }
 
 
-def evaluate(case: PromptCase, result: ProviderResult) -> list[str]:
-    failures = _validate_tool_calls(case, result.tool_calls)
+def evaluate(
+    case: PromptCase,
+    result: ProviderResult,
+    schema_variant: SchemaVariant = "production",
+) -> list[str]:
+    effective_tools = _evaluation_tools(case, schema_variant)
+    failures = _validate_tool_calls(
+        case,
+        result.tool_calls,
+        schema_variant,
+        effective_tools,
+    )
     names = [call.name for call in result.tool_calls]
     required_tools = set(case.expected_tools)
     uncertainty_reported = bool(_UNCERTAINTY.search(result.content))
@@ -3776,7 +4078,7 @@ def evaluate(case: PromptCase, result: ProviderResult) -> list[str]:
             failures.append(f"forbidden tool called: {name}")
     if case.expected_arguments and case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
-        arguments = _validated_arguments(call)
+        arguments = _validated_arguments(call, effective_tools.get(call.name))
         for key, value in case.expected_arguments.items():
             if arguments.get(key) != value:
                 failures.append(
@@ -3784,7 +4086,7 @@ def evaluate(case: PromptCase, result: ProviderResult) -> list[str]:
                 )
     if case.argument_options and case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
-        arguments = _validated_arguments(call)
+        arguments = _validated_arguments(call, effective_tools.get(call.name))
         for key, options in case.argument_options.items():
             if arguments.get(key) not in options:
                 failures.append(
@@ -3793,7 +4095,7 @@ def evaluate(case: PromptCase, result: ProviderResult) -> list[str]:
                 )
     if case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
-        arguments = _validated_arguments(call)
+        arguments = _validated_arguments(call, effective_tools.get(call.name))
         for key, values in case.argument_contains.items():
             actual = str(arguments.get(key, ""))
             for value in values:
@@ -4017,6 +4319,7 @@ def report_payload(
             not contract.id.startswith("case.") for contract in CONTRACT_INVENTORY
         ),
         "contractCount": len(CONTRACT_INVENTORY),
+        "schemaAb": any(record.get("schemaVariant") in {"narrow", "grouped"} for record in records),
         "sourceFingerprints": fingerprints,
         "evaluatorFingerprint": {
             "source": EVALUATOR_SOURCE_FILE,
@@ -4057,11 +4360,13 @@ def markdown_report(payload: dict[str, Any]) -> str:
     by_kind: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_scope: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_variant: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         by_model[str(record.get("model", "unknown"))].append(record)
         by_kind[str(record.get("kind", "unknown"))].append(record)
         by_scope[str(record.get("scope", "unknown"))].append(record)
         by_case[str(record.get("case", "unknown"))].append(record)
+        by_variant[str(record.get("schemaVariant", "production"))].append(record)
     lines = [
         "# MatoLoop Prompt Evaluation",
         "",
@@ -4076,6 +4381,17 @@ def markdown_report(payload: dict[str, Any]) -> str:
         "| Model | Passed |",
         "| --- | ---: |",
         *[f"| {model.replace('|', '\\|')} | {totals(rows)} |" for model, rows in sorted(by_model.items())],
+        "",
+        "## Per-schema variant totals",
+        "",
+        "| Variant | Passed | Average schema tokens | Input tokens |",
+        "| --- | ---: | ---: | ---: |",
+        *[
+            f"| {variant} | {totals(rows)} | "
+            f"{sum(int(row.get('schemaEstimatedTokens', 0)) for row in rows) / len(rows):.0f} | "
+            f"{_usage_total(rows, 'input')} |"
+            for variant, rows in sorted(by_variant.items())
+        ],
         "",
         "## Per-kind totals",
         "",
@@ -4164,11 +4480,51 @@ def _write_reports(
     report.write_text(markdown_report(payload), encoding="utf-8")
 
 
+async def _request_case(
+    args: argparse.Namespace,
+    case: PromptCase,
+    model: str,
+    schema_variant: SchemaVariant,
+) -> tuple[ProviderResult, ProviderResult, list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+    messages, tools = build_case(case, schema_variant)
+    reasoning_effort = (
+        ReasoningEffort(args.reasoning_effort) if args.reasoning_effort else None
+    )
+    raw_result = await chat_completions(
+        base_url=args.base_url,
+        api_key=args.api_key,
+        request=ProviderRequest(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice=case.tool_choice,
+            stream=False,
+            supports_parallel_tool_calls=False,
+            max_output_tokens=case_output_limit(case, args.max_output_tokens),
+            timeout=args.timeout,
+            reasoning_effort=reasoning_effort,
+            enable_thinking=(
+                reasoning_effort != ReasoningEffort.NONE
+                if reasoning_effort is not None
+                else None
+            ),
+        ),
+        on_delta=None,
+    )
+    result, grouping_failures = (
+        normalize_grouped_result(raw_result)
+        if schema_variant == "grouped"
+        else (raw_result, [])
+    )
+    return raw_result, result, grouping_failures, messages, tools
+
+
 async def run(args: argparse.Namespace) -> int:
     validate_inventory()
     selected_ids = set(args.case or [])
-    cases = [case for case in CASES if not selected_ids or case.id in selected_ids]
-    unknown = selected_ids - {case.id for case in CASES}
+    available_cases = SCHEMA_AB_CASES if args.schema_ab else CASES
+    cases = [case for case in available_cases if not selected_ids or case.id in selected_ids]
+    unknown = selected_ids - {case.id for case in available_cases}
     if unknown:
         raise SystemExit(f"Unknown cases: {', '.join(sorted(unknown))}")
     baseline = source_fingerprints()
@@ -4194,71 +4550,112 @@ async def run(args: argparse.Namespace) -> int:
             and record.get("case") in selected_case_ids
             and record.get("model") in args.model
             and record.get("run") in range(1, args.runs + 1)
+            and (
+                record.get("schemaVariant") in {"narrow", "grouped"}
+                if args.schema_ab
+                else record.get("schemaVariant", "production") == "production"
+            )
         ]
         print(f"Resuming with {len(records)} completed requests from {output}.", flush=True)
     completed = {
-        (record.get("run"), record.get("case"), record.get("model")) for record in records
+        (
+            record.get("run"),
+            record.get("case"),
+            record.get("model"),
+            record.get("schemaVariant", "production"),
+        )
+        for record in records
     }
-    for run_number in range(1, args.runs + 1):
-        for case in cases:
-            messages, tools = build_case(case)
-            for model in args.model:
-                if (run_number, case.id, model) in completed:
-                    continue
+    if args.schema_ab and not records:
+        warmup_case = next(
+            case for case in SCHEMA_AB_CASES if case.id == "stable_knowledge_avoids_search"
+        )
+        for model in args.model:
+            for schema_variant in ("narrow", "grouped", "grouped", "narrow"):
                 verify_source_fingerprints(baseline)
                 started = time.monotonic()
-                try:
-                    result = await chat_completions(
-                        base_url=args.base_url,
-                        api_key=args.api_key,
-                        request=ProviderRequest(
-                            model=model,
-                            messages=messages,
-                            tools=tools,
-                            tool_choice=case.tool_choice,
-                            stream=False,
-                            supports_parallel_tool_calls=False,
-                            max_output_tokens=case_output_limit(case, args.max_output_tokens),
-                            timeout=args.timeout,
-                        ),
-                        on_delta=None,
-                    )
-                    failures = evaluate(case, result)
-                    record = {
-                        "case": case.id,
-                        "kind": case.kind,
-                        "scope": case.scope,
-                        "model": model,
-                        "run": run_number,
-                        "passed": not failures,
-                        "failures": failures,
-                        "elapsedSeconds": round(time.monotonic() - started, 3),
-                        "content": result.content,
-                        "reasoning": result.reasoning.text if result.reasoning else None,
-                        "toolCalls": [asdict(call) for call in result.tool_calls],
-                        "finishReason": result.finish_reason,
-                        "usage": result.usage,
-                    }
-                except Exception as exc:
-                    record = {
-                        "case": case.id,
-                        "kind": case.kind,
-                        "scope": case.scope,
-                        "model": model,
-                        "run": run_number,
-                        "passed": False,
-                        "failures": [f"request failed: {type(exc).__name__}: {exc}"],
-                        "elapsedSeconds": round(time.monotonic() - started, 3),
-                    }
-                records.append(record)
-                state = "PASS" if record["passed"] else "FAIL"
+                await _request_case(args, warmup_case, model, schema_variant)
                 print(
-                    f"{state} run={run_number} case={case.id} model={model} "
-                    f"seconds={record['elapsedSeconds']}",
+                    f"WARMUP variant={schema_variant} model={model} "
+                    f"seconds={time.monotonic() - started:.3f}",
                     flush=True,
                 )
-                for failure in record["failures"]:
-                    print(f"  {failure}", flush=True)
+    for run_number in range(1, args.runs + 1):
+        for case_index, case in enumerate(cases):
+            variants: tuple[SchemaVariant, ...] = (
+                (("narrow", "grouped") if (run_number + case_index) % 2 else ("grouped", "narrow"))
+                if args.schema_ab
+                else ("production",)
+            )
+            for schema_variant in variants:
+                for model in args.model:
+                    if (run_number, case.id, model, schema_variant) in completed:
+                        continue
+                    verify_source_fingerprints(baseline)
+                    started = time.monotonic()
+                    try:
+                        raw_result, result, grouping_failures, messages, tools = (
+                            await _request_case(args, case, model, schema_variant)
+                        )
+                        failures = [
+                            *grouping_failures,
+                            *evaluate(case, result, schema_variant),
+                        ]
+                        schema_json = json.dumps(
+                            tools,
+                            ensure_ascii=True,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        message_json = json.dumps(
+                            messages,
+                            ensure_ascii=True,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        record = {
+                            "case": case.id,
+                            "kind": case.kind,
+                            "scope": case.scope,
+                            "model": model,
+                            "run": run_number,
+                            "schemaVariant": schema_variant,
+                            "passed": not failures,
+                            "failures": failures,
+                            "groupingFailures": grouping_failures,
+                            "elapsedSeconds": round(time.monotonic() - started, 3),
+                            "content": result.content,
+                            "reasoning": result.reasoning.text if result.reasoning else None,
+                            "rawToolCalls": [asdict(call) for call in raw_result.tool_calls],
+                            "toolCalls": [asdict(call) for call in result.tool_calls],
+                            "finishReason": result.finish_reason,
+                            "usage": result.usage,
+                            "schemaBytes": len(schema_json.encode()),
+                            "schemaEstimatedTokens": round(len(schema_json) / 4),
+                            "schemaFingerprint": hashlib.sha256(schema_json.encode()).hexdigest(),
+                            "messagesFingerprint": hashlib.sha256(message_json.encode()).hexdigest(),
+                        }
+                    except Exception as exc:
+                        record = {
+                            "case": case.id,
+                            "kind": case.kind,
+                            "scope": case.scope,
+                            "model": model,
+                            "run": run_number,
+                            "schemaVariant": schema_variant,
+                            "passed": False,
+                            "failures": [f"request failed: {type(exc).__name__}: {exc}"],
+                            "elapsedSeconds": round(time.monotonic() - started, 3),
+                        }
+                    records.append(record)
+                    state = "PASS" if record["passed"] else "FAIL"
+                    print(
+                        f"{state} run={run_number} case={case.id} model={model} "
+                        f"variant={schema_variant} seconds={record['elapsedSeconds']}",
+                        flush=True,
+                    )
+                    for failure in record["failures"]:
+                        print(f"  {failure}", flush=True)
         verify_source_fingerprints(baseline)
         _write_reports(records, baseline, output, report)
     verify_source_fingerprints(baseline)
@@ -4274,6 +4671,15 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--api-key")
     value.add_argument("--model", action="append", default=[])
     value.add_argument("--case", action="append")
+    value.add_argument(
+        "--schema-ab",
+        action="store_true",
+        help="Compare current narrow tools with evaluator-only grouped action schemas.",
+    )
+    value.add_argument(
+        "--reasoning-effort",
+        choices=[effort.value for effort in ReasoningEffort],
+    )
     value.add_argument("--runs", type=int, default=1)
     value.add_argument("--max-output-tokens", type=int, default=16_384)
     value.add_argument("--timeout", type=float, default=600)
@@ -4290,7 +4696,7 @@ def main() -> None:
     args = parser().parse_args()
     validate_inventory()
     if args.list_cases:
-        for case in CASES:
+        for case in SCHEMA_AB_CASES if args.schema_ab else CASES:
             print(f"{case.id}\t{case.kind}\t{case.scope}\t{case.output_limit}")
         return
     if not args.model:

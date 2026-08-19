@@ -19,12 +19,15 @@ from mato_loop_backend.prompt_eval import (
     PRIVACY_MARKER,
     PRIVACY_MARKER_INSTRUCTION,
     PROVIDER_OK_PROMPT,
+    SCHEMA_AB_CASES,
+    SCHEMA_GROUPS,
     SOURCE_FILES,
     TITLE_REPAIR_PROMPT,
     build_case,
     case_output_limit,
     evaluate,
     markdown_report,
+    normalize_grouped_result,
     report_payload,
     source_fingerprints,
     validate_inventory,
@@ -93,9 +96,19 @@ def test_inventory_is_complete_and_versioned() -> None:
 
 
 def test_evaluator_parser_supports_resume() -> None:
-    args = prompt_eval.parser().parse_args(["--resume", "--resume-allow-source-drift"])
+    args = prompt_eval.parser().parse_args(
+        [
+            "--resume",
+            "--resume-allow-source-drift",
+            "--schema-ab",
+            "--reasoning-effort",
+            "none",
+        ]
+    )
     assert args.resume is True
     assert args.resume_allow_source_drift is True
+    assert args.schema_ab is True
+    assert args.reasoning_effort == "none"
 
 
 def test_inventory_names_all_host_only_contracts_with_precise_reasons() -> None:
@@ -205,6 +218,95 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     create_required = calendar_tools[1]["parameters"]["required"]
     assert "integration_id" not in create_required
     assert "calendar_key" not in create_required
+
+
+def test_schema_ab_groups_full_tool_families_without_changing_production_registry() -> None:
+    case = next(case for case in SCHEMA_AB_CASES if case.id == "readwrite_write_uses_tool")
+    narrow_messages, narrow = build_case(case, "narrow")
+    grouped_messages, grouped = build_case(case, "grouped")
+    narrow_names = {tool["name"] for tool in narrow}
+    grouped_names = {tool["name"] for tool in grouped}
+
+    assert len(SCHEMA_AB_CASES) == 18
+    assert set(SCHEMA_GROUPS) <= grouped_names
+    assert set(SCHEMA_GROUPS).isdisjoint(narrow_names)
+    assert {"read", "write_file", "calendar_create_event", "tasks_query"} <= narrow_names
+    assert {"read", "write_file", "calendar_create_event", "tasks_query"}.isdisjoint(
+        grouped_names
+    )
+    assert narrow_messages[-1] == grouped_messages[-1]
+    assert "calendar_create_event" not in grouped_messages[0]["content"]
+    assert 'calendar_action with action="create_event"' in grouped_messages[0]["content"]
+    assert set(tool_registry._definitions).isdisjoint(SCHEMA_GROUPS)
+
+
+def test_grouped_schema_keeps_action_branches_and_resolvable_definitions() -> None:
+    case = next(case for case in SCHEMA_AB_CASES if case.id == "complete_calendar_event_skips_question")
+    _messages, tools = build_case(case, "grouped")
+    calendar = next(tool for tool in tools if tool["name"] == "calendar_action")
+    parameters = calendar["parameters"]
+    actions = {
+        branch["properties"]["action"]["enum"][0]
+        for branch in parameters["oneOf"]
+    }
+    refs = {
+        value
+        for branch in parameters["oneOf"]
+        for value in _schema_values(branch, "$ref")
+    }
+
+    assert actions == {action for action, _tool_name in SCHEMA_GROUPS["calendar_action"]}
+    assert all(reference.removeprefix("#/$defs/") in parameters["$defs"] for reference in refs)
+    assert all(branch["additionalProperties"] is False for branch in parameters["oneOf"])
+
+
+def _schema_values(value, target):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == target:
+                yield item
+            yield from _schema_values(item, target)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _schema_values(item, target)
+
+
+def test_grouped_result_normalizes_to_existing_tool_contract() -> None:
+    case = next(case for case in SCHEMA_AB_CASES if case.id == "automation_get_uses_exact_id")
+    raw = ProviderResult(
+        tool_calls=[
+            ToolCall(
+                "grouped",
+                "automation_action",
+                {"action": "get", "automation_id": str(prompt_eval.AUTOMATION_ID)},
+            )
+        ]
+    )
+
+    normalized, failures = normalize_grouped_result(raw)
+
+    assert failures == []
+    assert normalized.tool_calls == [
+        ToolCall(
+            "grouped",
+            "get_automation",
+            {"automation_id": str(prompt_eval.AUTOMATION_ID)},
+        )
+    ]
+    assert evaluate(case, normalized, "grouped") == []
+
+
+def test_grouped_result_rejects_unknown_action() -> None:
+    normalized, failures = normalize_grouped_result(
+        ProviderResult(
+            tool_calls=[
+                ToolCall("grouped", "automation_action", {"action": "destroy_everything"})
+            ]
+        )
+    )
+
+    assert normalized.tool_calls[0].name == "automation_action"
+    assert failures == ["automation_action returned unknown action 'destroy_everything'"]
 
     continuation_messages, _tools = build_case(
         _case("answered_calendar_questions_continue_action")
