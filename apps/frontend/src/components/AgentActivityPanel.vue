@@ -135,6 +135,7 @@
         <MessageAttachments
           v-if="output.attachments.length"
           :attachments="output.attachments"
+          @open-file="emit('open-file', $event)"
         />
         <div v-if="output.fileActions.length" class="work-history__file-outputs">
           <div
@@ -184,6 +185,7 @@ import AgentActivityEntry from 'components/AgentActivityEntry.vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import {
+  mergeDraftOutputs,
   toolOutputAttachments,
   toolFileActions,
   toolFileAttachment
@@ -285,9 +287,9 @@ const outputs = computed(() => items.value.flatMap((item) => {
     ...(item.result?.attachments || []),
     ...(providedFile ? [providedFile] : [])
   ])
-  const fileActions = toolFileActions(item.result)
-  return attachments.length || fileActions.length
-    ? [{ key: `output-${item.key}`, attachments, fileActions }]
+  const output = mergeDraftOutputs(attachments, toolFileActions(item.result))
+  return output.attachments.length || output.fileActions.length
+    ? [{ key: `output-${item.key}`, ...output }]
     : []
 }))
 

@@ -7,6 +7,7 @@ import {
   audioAttachments,
   formatAttachmentDuration,
   imageAttachments,
+  mergeDraftOutputs,
   safeAttachmentUrl,
   safeFileDownloadUrl,
   supportedAttachments,
@@ -197,6 +198,37 @@ describe('persisted attachments', () => {
     expect(toolFileActions({ fileActions: [{ ...action, revision: 0 }] })).toEqual([])
     expect(toolFileActions({ fileActions: [{ ...action, intent: 'other' }] })).toEqual([])
   })
+
+  it.each(['image', 'audio', 'video', 'file'])(
+    'merges a correlated %s attachment and draft into one output',
+    (kind) => {
+      const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+      const attachmentId = '550e8400-e29b-41d4-a716-446655440002'
+      const draftId = '550e8400-e29b-41d4-a716-446655440005'
+      const path = `files/drafts/${draftId}/generated.bin`
+      const action = toolFileActions({
+        fileActions: [{
+          operation: 'write',
+          root: 'session',
+          rootIdentity: sessionId,
+          path,
+          filename: 'generated.bin',
+          sizeBytes: 7,
+          intent: 'draft',
+          draftId,
+          revision: 1,
+          attachmentId,
+          downloadUrl: `/api/workspace/files/download?path=${encodeURIComponent(path)}&scope=session&session_id=${sessionId}&root_identity=${sessionId}`
+        }]
+      })[0]
+
+      const output = mergeDraftOutputs([{ id: attachmentId, kind }], [action])
+
+      expect(output.fileActions).toEqual([])
+      expect(output.attachments).toEqual([{ id: attachmentId, kind, draftAction: action }])
+      expect(mergeDraftOutputs([{ id: 'other', kind }], [action]).fileActions).toEqual([action])
+    }
+  )
 
   it('keeps supported image metadata and marks unsafe URLs', () => {
     const attachments = imageAttachments([

@@ -828,6 +828,60 @@ def test_message_payload_exposes_valid_draft_metadata() -> None:
     assert action == stored_action
 
 
+@pytest.mark.parametrize("attachment_position", [None, 0])
+def test_message_payload_links_draft_action_to_generated_attachment(
+    attachment_position,
+) -> None:
+    session_id = uuid4()
+    message_id = uuid4()
+    attachment_id = uuid4()
+    draft_id = str(uuid4())
+    path = f"files/drafts/{draft_id}/generated.bin"
+    stored_action = {
+        "operation": "write",
+        "root": "session",
+        "rootIdentity": str(session_id),
+        "path": path,
+        "filename": "generated.bin",
+        "sizeBytes": 7,
+        "intent": "draft",
+        "draftId": draft_id,
+        "revision": 1,
+        **(
+            {"attachmentPosition": attachment_position}
+            if attachment_position is not None
+            else {}
+        ),
+    }
+    message = Message(
+        id=message_id,
+        session_id=session_id,
+        role="tool",
+        content="{}",
+        provider_data={"_matoloop": {"fileActions": [stored_action]}},
+    )
+    message.attachments = [
+        MessageAttachment(
+            id=attachment_id,
+            message_id=message_id,
+            position=0,
+            kind="file",
+            category="generated",
+            purpose="artifact",
+            mime_type="application/octet-stream",
+            size_bytes=7,
+            sha256="a" * 64,
+            storage_path=f"generated/{attachment_id}/generated.bin",
+            filename="generated.bin",
+        )
+    ]
+
+    action = message_payload(message)["fileActions"][0]
+
+    assert action["attachmentId"] == str(attachment_id)
+    assert "attachmentPosition" not in action
+
+
 def test_message_payload_rejects_workspace_snapshot_fields_on_session_actions() -> None:
     session_id = uuid4()
     action = {

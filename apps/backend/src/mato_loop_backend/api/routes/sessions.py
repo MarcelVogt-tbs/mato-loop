@@ -182,6 +182,9 @@ class _StoredFileAction(BaseModel):
         default=None, alias="draftId", min_length=36, max_length=36
     )
     revision: int | None = Field(default=None, ge=1)
+    attachment_position: int | None = Field(
+        default=None, alias="attachmentPosition", ge=0
+    )
     execution_agent_id: str | None = Field(
         default=None, alias="executionAgentId", min_length=1, max_length=36
     )
@@ -202,7 +205,7 @@ class _StoredFileAction(BaseModel):
             raise ValueError("filename must match path")
         draft_fields = {"draft_id", "revision"}
         if self.intent is None:
-            if self.model_fields_set & draft_fields:
+            if self.model_fields_set & (draft_fields | {"attachment_position"}):
                 raise ValueError("non-draft actions cannot contain draft fields")
         else:
             if any(getattr(self, field) is None for field in draft_fields):
@@ -282,12 +285,59 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
             )
         actions.append(
             {
-                **action.model_dump(mode="json", by_alias=True, exclude_none=True),
+                **action.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                    exclude={"attachment_position"},
+                ),
+                **(
+                    {"attachmentId": str(attachment.id)}
+                    if (
+                        attachment := _draft_action_attachment(item, action)
+                    ) is not None
+                    else {}
+                ),
                 "downloadUrl": "/api/workspace/files/download?"
                 + urlencode(query),
             }
         )
     return actions
+
+
+def _draft_action_attachment(
+    item: Message, action: _StoredFileAction
+) -> MessageAttachment | None:
+    if action.intent != "draft":
+        return None
+    if action.attachment_position is not None:
+        attachment = next(
+            (
+                attachment
+                for attachment in item.attachments
+                if attachment.position == action.attachment_position
+            ),
+            None,
+        )
+        return attachment if _matches_draft_attachment(attachment, action) else None
+    matches = [
+        attachment
+        for attachment in item.attachments
+        if _matches_draft_attachment(attachment, action)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _matches_draft_attachment(
+    attachment: MessageAttachment | None, action: _StoredFileAction
+) -> bool:
+    return bool(
+        attachment
+        and attachment.category == "generated"
+        and attachment.purpose == "artifact"
+        and attachment.filename == action.filename
+        and attachment.size_bytes == action.size_bytes
+    )
 
 
 def _model_available(ai: AiSettings, model_id: UUID | None) -> bool:

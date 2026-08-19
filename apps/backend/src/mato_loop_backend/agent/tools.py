@@ -237,6 +237,7 @@ class ToolDraftAction:
     path: str
     filename: str
     size_bytes: int
+    attachment_position: int | None = None
 
 
 @dataclass(slots=True)
@@ -3686,6 +3687,7 @@ async def _generate_image(
             draft.path,
             draft.filename,
             draft.size,
+            attachment_position=0,
         ),
         trust_level=result.trust_level,
     )
@@ -3727,6 +3729,7 @@ async def _generate_qr_code(
             draft.path,
             draft.filename,
             draft.size,
+            attachment_position=0,
         ),
     )
 
@@ -3883,6 +3886,7 @@ async def _edit_image(
             draft.path,
             draft.filename,
             draft.size,
+            attachment_position=0,
         ),
         trust_level=result.trust_level,
     )

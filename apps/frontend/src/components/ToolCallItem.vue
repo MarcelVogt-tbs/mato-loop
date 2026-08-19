@@ -137,6 +137,7 @@
       class="tool-call__outputs"
       :attachments="attachments"
       label="Ausgabe"
+      @open-file="emit('open-file', $event)"
     />
   </div>
 </template>
@@ -146,7 +147,7 @@ import { computed, ref, watch } from 'vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
-import { toolFileActions, toolFileAttachment, toolOutputAttachments } from 'src/utils/attachments'
+import { mergeDraftOutputs, toolFileActions, toolFileAttachment, toolOutputAttachments } from 'src/utils/attachments'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 import {
   parseToolResult,
@@ -182,18 +183,20 @@ const resultData = computed(() => ({
   ...parseToolResult(props.result?.content, props.tool.name),
   ...(props.processOutput || {})
 }))
-const attachments = computed(() => {
+const output = computed(() => {
   const providedFile = toolFileAttachment(
     props.tool,
     props.result,
     instanceLimits.maxImagePreviewBytes
   )
-  return toolOutputAttachments(props.tool, [
+  const attachments = toolOutputAttachments(props.tool, [
     ...(props.result?.attachments || []),
     ...(providedFile ? [providedFile] : [])
   ])
+  return mergeDraftOutputs(attachments, toolFileActions(props.result))
 })
-const fileActions = computed(() => toolFileActions(props.result))
+const attachments = computed(() => output.value.attachments)
+const fileActions = computed(() => output.value.fileActions)
 const status = computed(() => toolStatus(props))
 const exceptionalStatus = computed(() => (
   ['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name)

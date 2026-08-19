@@ -3606,6 +3606,13 @@ class AgentRuntime:
                                             "intent": "draft",
                                             "draftId": str(tool_draft_action.draft_id),
                                             "revision": tool_draft_action.revision,
+                                            **(
+                                                {
+                                                    "attachmentPosition": tool_draft_action.attachment_position
+                                                }
+                                                if tool_draft_action.attachment_position is not None
+                                                else {}
+                                            ),
                                         }
                                     ]
                                     if tool_draft_action is not None

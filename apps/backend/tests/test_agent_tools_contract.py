@@ -284,6 +284,8 @@ async def test_generate_qr_code_returns_scannable_png(tmp_path) -> None:
     assert result.content == "QR code generated."
     assert result.attachments[0].mime_type == "image/png"
     assert result.attachments[0].filename == "qr-code.png"
+    assert result.draft_action is not None
+    assert result.draft_action.attachment_position == 0
     with Image.open(BytesIO(result.attachments[0].data)) as image:
         decoded = zxingcpp.read_barcode(
             image,

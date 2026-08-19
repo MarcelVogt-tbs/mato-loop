@@ -156,6 +156,8 @@ export function toolFileActions(result) {
     const isDraft = action.intent === 'draft'
     const draftId = typeof action.draftId === 'string' ? action.draftId : ''
     const revision = Number(action.revision)
+    const attachmentId = typeof action.attachmentId === 'string' ? action.attachmentId : ''
+    const hasAttachmentId = Object.hasOwn(action, 'attachmentId')
     const hasDraftFields = ['intent', 'draftId', 'revision'].some((key) => Object.hasOwn(action, key))
     if (
       !safeUrl
@@ -166,6 +168,7 @@ export function toolFileActions(result) {
       || filename !== path.split('/').at(-1)
       || filename.length > 255
       || (hasDraftFields && !isDraft)
+      || (hasAttachmentId && (!isDraft || !UUID_PATTERN.test(attachmentId)))
       || (isDraft && (
         action.root !== 'session'
         || action.operation !== 'write'
@@ -203,10 +206,29 @@ export function toolFileActions(result) {
       ...(scope === 'filesystem'
         ? { executionAgentId, rootId, rootRevision, workingDirectory }
         : {}),
-      ...(isDraft ? { intent: 'draft', draftId, revision } : {}),
+      ...(isDraft
+        ? { intent: 'draft', draftId, revision, ...(attachmentId ? { attachmentId } : {}) }
+        : {}),
       downloadUrl: safeUrl
     }]
   })
+}
+
+export function mergeDraftOutputs(attachments, fileActions) {
+  const actionsByAttachment = new Map(fileActions.flatMap((action) => (
+    action.intent === 'draft' && action.attachmentId ? [[action.attachmentId, action]] : []
+  )))
+  const mergedActionIds = new Set()
+  const mergedAttachments = attachments.map((attachment) => {
+    const action = actionsByAttachment.get(attachment.id)
+    if (!action) return attachment
+    mergedActionIds.add(action.draftId)
+    return { ...attachment, draftAction: action }
+  })
+  return {
+    attachments: mergedAttachments,
+    fileActions: fileActions.filter((action) => !mergedActionIds.has(action.draftId))
+  }
 }
 
 export function imageAttachments(attachments) {

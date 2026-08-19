@@ -242,6 +242,7 @@ async def test_generated_image_is_also_published_as_a_draft(
 
     assert result.draft_action is not None
     assert result.draft_action.filename == "generated.png"
+    assert result.draft_action.attachment_position == 0
     assert tool_context.root_files.read_bytes(
         "session", result.draft_action.path, limit=100
     ) == b"image"

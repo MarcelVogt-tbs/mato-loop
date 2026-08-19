@@ -1657,6 +1657,7 @@ async def test_runtime_persists_typed_draft_action_as_file_action(monkeypatch) -
                 f"files/drafts/{draft_id}/plan.md",
                 "plan.md",
                 6,
+                attachment_position=0,
             ),
         ),
     )
@@ -1679,6 +1680,7 @@ async def test_runtime_persists_typed_draft_action_as_file_action(monkeypatch) -
             "intent": "draft",
             "draftId": str(draft_id),
             "revision": 1,
+            "attachmentPosition": 0,
         }
     ]
 

@@ -30,8 +30,21 @@
         </button>
         <div class="attachment-preview__meta">
           <strong class="ellipsis" :title="attachment.filename || 'Bild'">{{ attachment.filename || 'Bild' }}</strong>
-          <div v-if="attachment.safeUrl" class="attachment-preview__actions row items-center no-wrap">
+          <q-badge v-if="attachment.draftAction" outline color="primary" label="Entwurf" />
+          <div v-if="attachment.safeUrl || attachment.draftAction" class="attachment-preview__actions row items-center no-wrap">
             <q-btn
+              v-if="attachment.draftAction"
+              flat
+              round
+              dense
+              icon="visibility"
+              :aria-label="`${attachment.filename || 'Bild'} als Entwurf ansehen`"
+              @click="emit('open-file', attachment.draftAction)"
+            >
+              <q-tooltip>Entwurf ansehen</q-tooltip>
+            </q-btn>
+            <q-btn
+              v-if="attachment.safeUrl"
               flat
               round
               dense
@@ -44,11 +57,12 @@
               <q-tooltip>In neuem Tab öffnen</q-tooltip>
             </q-btn>
             <q-btn
+              v-if="attachmentDownloadUrl(attachment)"
               flat
               round
               dense
               icon="download"
-              :href="attachment.safeUrl"
+              :href="attachmentDownloadUrl(attachment)"
               :download="attachment.filename || 'bild'"
               :aria-label="`${attachment.filename || 'Bild'} herunterladen`"
             >
@@ -67,13 +81,25 @@
             <div class="text-weight-medium ellipsis">{{ attachment.filename || 'Audioaufnahme' }}</div>
             <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
           </div>
+          <q-badge v-if="attachment.draftAction" outline color="primary" label="Entwurf" />
           <q-btn
-            v-if="attachment.safeUrl"
+            v-if="attachment.draftAction"
+            flat
+            round
+            dense
+            icon="visibility"
+            :aria-label="`${attachment.filename || 'Audio'} als Entwurf ansehen`"
+            @click="emit('open-file', attachment.draftAction)"
+          >
+            <q-tooltip>Entwurf ansehen</q-tooltip>
+          </q-btn>
+          <q-btn
+            v-if="attachmentDownloadUrl(attachment)"
             flat
             round
             dense
             icon="download"
-            :href="attachment.safeUrl"
+            :href="attachmentDownloadUrl(attachment)"
             :download="attachment.filename || 'audio.wav'"
             aria-label="Audio herunterladen"
           >
@@ -101,13 +127,25 @@
             <div class="text-weight-medium ellipsis">{{ attachment.filename || 'Video' }}</div>
             <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
           </div>
+          <q-badge v-if="attachment.draftAction" outline color="primary" label="Entwurf" />
           <q-btn
-            v-if="attachment.safeUrl"
+            v-if="attachment.draftAction"
+            flat
+            round
+            dense
+            icon="visibility"
+            :aria-label="`${attachment.filename || 'Video'} als Entwurf ansehen`"
+            @click="emit('open-file', attachment.draftAction)"
+          >
+            <q-tooltip>Entwurf ansehen</q-tooltip>
+          </q-btn>
+          <q-btn
+            v-if="attachmentDownloadUrl(attachment)"
             flat
             round
             dense
             icon="download"
-            :href="attachment.safeUrl"
+            :href="attachmentDownloadUrl(attachment)"
             :download="attachment.filename || 'video'"
             aria-label="Video herunterladen"
           >
@@ -140,6 +178,18 @@
           <div class="text-weight-medium ellipsis">{{ attachment.filename || 'Dateianhang' }}</div>
           <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
         </div>
+        <q-badge v-if="attachment.draftAction" outline color="primary" label="Entwurf" />
+        <q-btn
+          v-if="attachment.draftAction"
+          flat
+          round
+          dense
+          icon="visibility"
+          :aria-label="`${attachment.filename || 'Datei'} als Entwurf ansehen`"
+          @click="emit('open-file', attachment.draftAction)"
+        >
+          <q-tooltip>Entwurf ansehen</q-tooltip>
+        </q-btn>
         <q-btn
           v-if="attachment.safeUrl && isModel(attachment)"
           flat
@@ -152,12 +202,12 @@
           @click="openAttachment(attachment)"
         />
         <q-btn
-          v-if="attachment.safeUrl"
+          v-if="attachmentDownloadUrl(attachment)"
           flat
           round
           dense
           icon="download"
-          :href="attachment.safeUrl"
+          :href="attachmentDownloadUrl(attachment)"
           :download="attachment.filename || 'datei'"
           :aria-label="`${attachment.filename || 'Datei'} herunterladen`"
         >
@@ -204,6 +254,7 @@ const props = defineProps({
   attachments: { type: Array, default: () => [] },
   label: { type: String, default: '' }
 })
+const emit = defineEmits(['open-file'])
 
 const items = computed(() => supportedAttachments(props.attachments))
 const images = computed(() => items.value.filter((attachment) => attachment.kind === 'image'))
@@ -220,6 +271,10 @@ function openAttachment(attachment) {
   if (!attachment.safeUrl || loadErrors[attachment.id]) return
   selectedAttachment.value = attachment
   attachmentDialog.value = true
+}
+
+function attachmentDownloadUrl(attachment) {
+  return attachment.draftAction?.downloadUrl || attachment.safeUrl
 }
 
 function modelFormat(attachment) {
