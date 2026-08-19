@@ -21,7 +21,7 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-persona',
       'settings-memory',
       'settings-users',
-      'settings-files-media'
+      'settings-instance-limits'
     ])
     expect(
       settingsRoute.children.find((route) => route.name === 'settings-integrations').children
@@ -29,7 +29,7 @@ describe('MatoLoop frontend scaffold', () => {
     ).toEqual(['settings-integration-access'])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
-    expect(settingsRoutes.find((route) => route.name === 'settings-files-media')?.meta.requiresAdmin).toBe(true)
+    expect(settingsRoutes.find((route) => route.name === 'settings-instance-limits')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.some((route) => route.name === 'settings-account')).toBe(false)
     expect(settingsRoutes.find((route) => route.name === 'settings-approvals')?.redirect).toEqual({
       name: 'chat', query: { controlCenter: 'approvals' }

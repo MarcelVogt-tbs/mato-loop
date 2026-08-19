@@ -54,7 +54,7 @@ from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGran
 from mato_loop_backend.safe_svg import MAX_SAFE_SVG_BYTES, validate_svg
 from mato_loop_backend.security import hash_token, require_user
 from mato_loop_backend.settings import (
-    FileMediaSettings,
+    InstanceLimits,
     SettingsStore,
     load_effective_integrations,
 )
@@ -147,7 +147,7 @@ class _FileContext:
     agent_root_revision: str | None = None
     agent_writable: bool = True
     agent_operations: frozenset[str] = frozenset()
-    file_settings: FileMediaSettings = field(default_factory=FileMediaSettings)
+    instance_limits: InstanceLimits = field(default_factory=InstanceLimits)
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -256,9 +256,9 @@ async def _file_context(
     root_id: UUID | None = None,
     root_revision: str | None = None,
     for_update: bool = False,
-    file_settings: FileMediaSettings | None = None,
+    instance_limits: InstanceLimits | None = None,
 ) -> _FileContext:
-    file_settings = file_settings or await SettingsStore.load(db, FileMediaSettings)
+    instance_limits = instance_limits or await SettingsStore.load(db, InstanceLimits)
     session = None
     if session_id is not None:
         if for_update:
@@ -280,11 +280,11 @@ async def _file_context(
         return _FileContext(
             root_files=RootFileService(
                 session.id,
-                session_quota_bytes=file_settings.session_quota_bytes,
-                max_editable_text_bytes=file_settings.max_editable_text_bytes,
+                session_quota_bytes=instance_limits.session_quota_bytes,
+                max_editable_text_bytes=instance_limits.max_editable_text_bytes,
             ),
             root=FileRoot.SESSION,
-            file_settings=file_settings,
+            instance_limits=instance_limits,
         )
     if root_revision is not None:
         if (
@@ -304,7 +304,7 @@ async def _file_context(
                 writable=session is None or session.workspace_access == "read-write",
                 expected_revision=root_revision,
             ),
-            file_settings=file_settings,
+            instance_limits=instance_limits,
         )
     if session is not None:
         selected_agent_id = session.preferred_execution_agent_id
@@ -325,7 +325,7 @@ async def _file_context(
                 root_identity,
                 writable=session.workspace_access == "read-write",
             ),
-            file_settings=file_settings,
+            instance_limits=instance_limits,
         )
     if execution_agent_id is not None or root_id is not None:
         if execution_agent_id is None or root_id is None:
@@ -339,7 +339,7 @@ async def _file_context(
                 working_directory,
                 root_identity,
             ),
-            file_settings=file_settings,
+            instance_limits=instance_limits,
         )
     raise ApiError(400, "file.workspaceNotSelected")
 
@@ -493,8 +493,8 @@ def _text_revision_target(
         return None
     root_files = context.root_files or RootFileService(
         session_id,
-        session_quota_bytes=context.file_settings.session_quota_bytes,
-        max_editable_text_bytes=context.file_settings.max_editable_text_bytes,
+        session_quota_bytes=context.instance_limits.session_quota_bytes,
+        max_editable_text_bytes=context.instance_limits.max_editable_text_bytes,
     )
     if context.root is FileRoot.SESSION:
         source = {
@@ -960,7 +960,7 @@ async def upload_file(
         root_id=root_id,
         for_update=session_id is not None,
     )
-    max_upload_bytes = context.file_settings.max_upload_bytes
+    max_upload_bytes = context.instance_limits.max_upload_bytes
     try:
         if context.agent_id is not None:
             if request is None:
@@ -1047,8 +1047,8 @@ async def preview_file(
         root_id=root_id,
         root_revision=root_revision,
     )
-    image_preview_bytes = context.file_settings.max_image_preview_bytes
-    text_preview_bytes = context.file_settings.max_editable_text_bytes
+    image_preview_bytes = context.instance_limits.max_image_preview_bytes
+    text_preview_bytes = context.instance_limits.max_editable_text_bytes
     suffix = PurePosixPath(path).suffix.casefold()
     file_preview_bytes = (
         min(image_preview_bytes, MAX_SAFE_SVG_BYTES)
@@ -1173,7 +1173,7 @@ async def update_file(
         root_id=root_id,
         for_update=session_id is not None,
     )
-    if len(payload.content.encode("utf-8")) > context.file_settings.max_editable_text_bytes:
+    if len(payload.content.encode("utf-8")) > context.instance_limits.max_editable_text_bytes:
         raise ApiError(413, "file.tooLarge")
     if context.agent_id is not None:
         path = _normalize_agent_path(payload.path)
@@ -1184,7 +1184,7 @@ async def update_file(
                     context,
                     path,
                     request,
-                    max_bytes=context.file_settings.max_editable_text_bytes,
+                    max_bytes=context.instance_limits.max_editable_text_bytes,
                 )
                 if old_revision != payload.expected_revision:
                     old_content = None
@@ -1245,9 +1245,9 @@ async def update_file(
             _read_context,
             context,
             payload.path,
-            context.file_settings.max_editable_text_bytes,
+            context.instance_limits.max_editable_text_bytes,
         )
-        if len(old_data) > context.file_settings.max_editable_text_bytes:
+        if len(old_data) > context.instance_limits.max_editable_text_bytes:
             raise RootFileError("file.tooLarge", "File is too large")
         try:
             old_content = old_data.decode("utf-8", errors="strict")
@@ -1311,7 +1311,7 @@ async def preview_image(
         root_revision=root_revision,
     )
     suffix = PurePosixPath(path).suffix.casefold()
-    image_preview_bytes = context.file_settings.max_image_preview_bytes
+    image_preview_bytes = context.instance_limits.max_image_preview_bytes
     max_bytes = _STL_PREVIEW_BYTES if suffix == ".stl" else image_preview_bytes
     if suffix == ".svg":
         max_bytes = min(max_bytes, MAX_SAFE_SVG_BYTES)

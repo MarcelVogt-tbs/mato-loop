@@ -371,7 +371,7 @@ import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
 import { useQuestionStore } from 'stores/questions'
 import { useToolSettingsStore } from 'stores/tool-settings'
-import { useFileMediaSettingsStore } from 'stores/file-media-settings'
+import { useInstanceLimitsStore } from 'stores/instance-limits'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import { agentRunPresentation } from 'src/utils/agent-activity'
@@ -395,7 +395,7 @@ const identity = useAgentIdentityStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
 const executionAgents = useExecutionAgentStore()
-const fileMediaSettings = useFileMediaSettingsStore()
+const instanceLimits = useInstanceLimitsStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
@@ -651,7 +651,7 @@ async function loadBackgroundData() {
     questions.fetchPending(),
     chat.fetchDefaults(),
     toolSettings.fetchSettings('personal'),
-    fileMediaSettings.fetchSettings()
+    instanceLimits.fetchSettings()
   ])
   if (
     providerResult.status === 'fulfilled'

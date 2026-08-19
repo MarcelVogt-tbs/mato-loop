@@ -21,7 +21,7 @@ from mato_loop_backend.api.routes.workspace import (
 from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.settings import FileMediaSettings
+from mato_loop_backend.settings import InstanceLimits
 from mato_loop_backend.workspace import FileRoot, RootFileService
 
 
@@ -84,7 +84,7 @@ async def test_file_context_hides_foreign_sessions() -> None:
             foreign.id,
             user,
             db,
-            file_settings=FileMediaSettings(),
+            instance_limits=InstanceLimits(),
         )
 
     assert exc_info.value.status_code == 404
@@ -98,7 +98,7 @@ async def test_filesystem_scope_without_agent_context_is_rejected() -> None:
             None,
             _user(),
             AsyncMock(spec=AsyncSession),
-            file_settings=FileMediaSettings(),
+            instance_limits=InstanceLimits(),
         )
 
     assert exc_info.value.status_code == 400

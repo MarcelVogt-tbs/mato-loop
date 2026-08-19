@@ -7,9 +7,9 @@ const { api } = vi.hoisted(() => ({
 
 vi.mock('src/boot/axios', () => ({ api }))
 
-import { useFileMediaSettingsStore } from '../src/stores/file-media-settings'
+import { useInstanceLimitsStore } from '../src/stores/instance-limits'
 
-describe('file media settings store', () => {
+describe('instance limits store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
@@ -18,7 +18,7 @@ describe('file media settings store', () => {
   it('loads effective limits for every user and persists admin updates', async () => {
     api.get.mockResolvedValue({ data: { maxUploadMib: 32, maxAttachmentsPerMessage: 4 } })
     api.put.mockResolvedValue({ data: { maxUploadMib: 48, maxAttachmentsPerMessage: 6 } })
-    const settings = useFileMediaSettingsStore()
+    const settings = useInstanceLimitsStore()
 
     await settings.fetchSettings()
     expect(settings.maxUploadBytes).toBe(32 * 1024 * 1024)
@@ -26,7 +26,7 @@ describe('file media settings store', () => {
     await settings.saveSettings({ maxUploadMib: 48 })
     expect(settings.maxUploadMib).toBe(48)
     expect(settings.maxAttachmentsPerMessage).toBe(6)
-    expect(api.get).toHaveBeenCalledWith('/file-media-settings')
-    expect(api.put).toHaveBeenCalledWith('/file-media-settings', { maxUploadMib: 48 })
+    expect(api.get).toHaveBeenCalledWith('/instance-limits')
+    expect(api.put).toHaveBeenCalledWith('/instance-limits', { maxUploadMib: 48 })
   })
 })

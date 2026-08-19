@@ -355,7 +355,7 @@ import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useChatStore } from 'stores/chat'
-import { useFileMediaSettingsStore } from 'stores/file-media-settings'
+import { useInstanceLimitsStore } from 'stores/instance-limits'
 import { useProviderStore } from 'stores/providers'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { api } from 'src/boot/axios'
@@ -380,7 +380,7 @@ const $q = useQuasar()
 const identity = useAgentIdentityStore()
 const integrations = useIntegrationStore()
 const chat = useChatStore()
-const fileMediaSettings = useFileMediaSettingsStore()
+const instanceLimits = useInstanceLimitsStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
 const input = ref(null)
@@ -665,11 +665,11 @@ async function transcribeDictation(file, key) {
   transcriptionRequest = { controller, key }
   chat.setAudioDictation({ file, status: 'transcribing', message: '' }, key)
   try {
-    if (file.size > fileMediaSettings.maxUploadBytes) {
+    if (file.size > instanceLimits.maxUploadBytes) {
       chat.setAudioDictation({
         file,
         status: 'failed',
-        message: `Das Diktat ist größer als ${fileMediaSettings.maxUploadMib} MiB und kann nicht übertragen werden.`
+        message: `Das Diktat ist größer als ${instanceLimits.maxUploadMib} MiB und kann nicht übertragen werden.`
       }, key)
       return
     }

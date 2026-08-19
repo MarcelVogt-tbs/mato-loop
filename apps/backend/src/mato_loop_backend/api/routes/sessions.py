@@ -62,7 +62,7 @@ from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
     AiSettings,
-    FileMediaSettings,
+    InstanceLimits,
     MemorySettings,
     SettingsStore,
     UserPreferences,
@@ -624,9 +624,9 @@ def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
 
 
 async def _attachment_uploads(
-    files: list[UploadFile], settings: FileMediaSettings | None = None
+    files: list[UploadFile], settings: InstanceLimits | None = None
 ) -> list[AttachmentInput]:
-    settings = settings or FileMediaSettings()
+    settings = settings or InstanceLimits()
     if not files:
         raise ApiError(422, "validation.required", field="attachments")
     attachments = []
@@ -1230,12 +1230,12 @@ async def create_session_with_attachments(
 ) -> dict:
     request = _multipart_payload(payload, SessionCreateRequest)
     assert isinstance(request, SessionCreateRequest)
-    file_settings = await SettingsStore.load(db, FileMediaSettings)
+    instance_limits = await SettingsStore.load(db, InstanceLimits)
     return await _create_session(
         request,
         user,
         db,
-        await _attachment_uploads(attachments, file_settings),
+        await _attachment_uploads(attachments, instance_limits),
     )
 
 
@@ -1899,13 +1899,13 @@ async def send_message_with_attachments(
 ) -> dict[str, Any]:
     request = _multipart_payload(payload, SendMessageRequest)
     assert isinstance(request, SendMessageRequest)
-    file_settings = await SettingsStore.load(db, FileMediaSettings)
+    instance_limits = await SettingsStore.load(db, InstanceLimits)
     return await _send_message(
         session_id,
         request,
         user,
         db,
-        await _attachment_uploads(attachments, file_settings),
+        await _attachment_uploads(attachments, instance_limits),
     )
 
 

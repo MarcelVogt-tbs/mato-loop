@@ -195,7 +195,7 @@ import {
   reasoningHistoryPresentation
 } from 'src/utils/reasoning-display'
 import { toolStatus, toolUsageSummary } from 'src/utils/tool-display'
-import { useFileMediaSettingsStore } from 'stores/file-media-settings'
+import { useInstanceLimitsStore } from 'stores/instance-limits'
 
 defineOptions({ name: 'AgentActivityPanel' })
 
@@ -208,7 +208,7 @@ const props = defineProps({
   running: Boolean
 })
 const emit = defineEmits(['open-file', 'open-approval-draft', 'expanded'])
-const fileMediaSettings = useFileMediaSettingsStore()
+const instanceLimits = useInstanceLimitsStore()
 const panel = ref(null)
 const now = ref(Date.now())
 const historyExpanded = ref(false)
@@ -279,7 +279,7 @@ const outputs = computed(() => items.value.flatMap((item) => {
   const providedFile = toolFileAttachment(
     item.tool,
     item.result,
-    fileMediaSettings.maxImagePreviewBytes
+    instanceLimits.maxImagePreviewBytes
   )
   const attachments = toolOutputAttachments(item.tool, [
     ...(item.result?.attachments || []),

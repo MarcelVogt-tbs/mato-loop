@@ -5,7 +5,7 @@ import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useExecutionAgentStore } from 'src/stores/execution-agents'
-import { useFileMediaSettingsStore } from 'src/stores/file-media-settings'
+import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { agentActivityDisplayKey } from 'src/utils/agent-activity'
@@ -391,7 +391,7 @@ export const useChatStore = defineStore('chat', {
       this.persistDrafts()
     },
     addAttachmentFiles(files) {
-      const limits = useFileMediaSettingsStore()
+      const limits = useInstanceLimitsStore()
       const incoming = Array.from(files || [])
       if (this.activeAttachmentDraft.length + incoming.length > limits.maxAttachmentsPerMessage) {
         return { added: 0, error: `Du kannst höchstens ${limits.maxAttachmentsPerMessage} Dateien pro Nachricht anhängen.` }
@@ -473,7 +473,7 @@ export const useChatStore = defineStore('chat', {
       if (typeof window !== 'undefined') window.localStorage.removeItem(DRAFT_STORAGE_KEY)
     },
     attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
-      const limits = useFileMediaSettingsStore()
+      const limits = useInstanceLimitsStore()
       if (files.length > limits.maxAttachmentsPerMessage) {
         return `Du kannst höchstens ${limits.maxAttachmentsPerMessage} Dateien pro Nachricht anhängen.`
       }

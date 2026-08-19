@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
-export const FILE_MEDIA_DEFAULTS = {
+export const INSTANCE_LIMIT_DEFAULTS = {
   maxUploadMib: 64,
   maxAttachmentsPerMessage: 8,
   maxMessageUploadMib: 512,
@@ -21,9 +21,9 @@ export const FILE_MEDIA_DEFAULTS = {
   maxArchiveCompressionRatio: 200
 }
 
-export const useFileMediaSettingsStore = defineStore('file-media-settings', {
+export const useInstanceLimitsStore = defineStore('instance-limits', {
   state: () => ({
-    ...FILE_MEDIA_DEFAULTS,
+    ...INSTANCE_LIMIT_DEFAULTS,
     loaded: false,
     loading: false,
     loadFailed: false,
@@ -36,7 +36,7 @@ export const useFileMediaSettingsStore = defineStore('file-media-settings', {
   },
   actions: {
     assignSettings(data) {
-      for (const key of Object.keys(FILE_MEDIA_DEFAULTS)) {
+      for (const key of Object.keys(INSTANCE_LIMIT_DEFAULTS)) {
         if (Number.isFinite(Number(data?.[key]))) this[key] = Number(data[key])
       }
     },
@@ -44,7 +44,7 @@ export const useFileMediaSettingsStore = defineStore('file-media-settings', {
       this.loading = true
       this.loadFailed = false
       try {
-        const { data } = await api.get('/file-media-settings')
+        const { data } = await api.get('/instance-limits')
         this.assignSettings(data)
         this.loaded = true
         return data
@@ -58,7 +58,7 @@ export const useFileMediaSettingsStore = defineStore('file-media-settings', {
     async saveSettings(settings) {
       this.saving = true
       try {
-        const { data } = await api.put('/file-media-settings', settings)
+        const { data } = await api.put('/instance-limits', settings)
         this.assignSettings(data)
         this.loaded = true
         return data

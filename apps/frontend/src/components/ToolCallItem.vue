@@ -147,7 +147,7 @@ import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
 import { toolFileActions, toolFileAttachment, toolOutputAttachments } from 'src/utils/attachments'
-import { useFileMediaSettingsStore } from 'stores/file-media-settings'
+import { useInstanceLimitsStore } from 'stores/instance-limits'
 import {
   parseToolResult,
   toolArgumentsDisplay,
@@ -169,7 +169,7 @@ const props = defineProps({
   technicalOnly: Boolean
 })
 const emit = defineEmits(['open-file'])
-const fileMediaSettings = useFileMediaSettingsStore()
+const instanceLimits = useInstanceLimitsStore()
 
 const identity = computed(() => toolIdentity(props.tool.name))
 const presentation = computed(() => toolPresentation(
@@ -186,7 +186,7 @@ const attachments = computed(() => {
   const providedFile = toolFileAttachment(
     props.tool,
     props.result,
-    fileMediaSettings.maxImagePreviewBytes
+    instanceLimits.maxImagePreviewBytes
   )
   return toolOutputAttachments(props.tool, [
     ...(props.result?.attachments || []),

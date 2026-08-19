@@ -2,7 +2,7 @@
   <section>
     <header class="settings-section-header">
       <div>
-        <h2 class="text-h6 text-weight-bold q-my-none">Dateien und Medien</h2>
+        <h2 class="text-h6 text-weight-bold q-my-none">Instanzlimits</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
           Globale Upload-, Speicher-, Vorschau- und Verarbeitungsgrenzen verwalten.
         </p>
@@ -21,7 +21,7 @@
 
     <q-banner v-if="settings.loadFailed" rounded class="bg-negative text-white q-mb-md">
       <template #avatar><q-icon name="error_outline" /></template>
-      Die Datei- und Medieneinstellungen konnten nicht geladen werden.
+      Die Instanzlimits konnten nicht geladen werden.
       <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="load" /></template>
     </q-banner>
 
@@ -80,20 +80,20 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
-import { FILE_MEDIA_DEFAULTS, useFileMediaSettingsStore } from 'stores/file-media-settings'
+import { INSTANCE_LIMIT_DEFAULTS, useInstanceLimitsStore } from 'stores/instance-limits'
 
-defineOptions({ name: 'FileMediaSettingsPage' })
+defineOptions({ name: 'InstanceLimitsPage' })
 
 const $q = useQuasar()
-const settings = useFileMediaSettingsStore()
+const settings = useInstanceLimitsStore()
 const formRef = ref(null)
-const form = reactive({ ...FILE_MEDIA_DEFAULTS })
+const form = reactive({ ...INSTANCE_LIMIT_DEFAULTS })
 const range = (minimum, maximum) => (value) => (
   Number.isInteger(Number(value)) && Number(value) >= minimum && Number(value) <= maximum
 ) || `Wert zwischen ${minimum.toLocaleString('de')} und ${maximum.toLocaleString('de')} erforderlich.`
 
 function assignForm(data) {
-  for (const key of Object.keys(FILE_MEDIA_DEFAULTS)) form[key] = Number(data[key])
+  for (const key of Object.keys(INSTANCE_LIMIT_DEFAULTS)) form[key] = Number(data[key])
 }
 
 async function load() {
@@ -108,7 +108,7 @@ async function save() {
   if (!await formRef.value?.validate()) return
   try {
     assignForm(await settings.saveSettings({ ...form }))
-    $q.notify({ type: 'positive', message: 'Datei- und Medienlimits gespeichert.' })
+    $q.notify({ type: 'positive', message: 'Instanzlimits gespeichert.' })
   } catch {
     // The central API interceptor displays the error.
   }

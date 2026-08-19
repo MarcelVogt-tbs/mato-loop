@@ -19,7 +19,7 @@ from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.providers import TranscriptionResult
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService
-from mato_loop_backend.settings import FileMediaSettings, SettingsStore, ToolSettings
+from mato_loop_backend.settings import InstanceLimits, SettingsStore, ToolSettings
 
 
 def wav_bytes() -> bytes:
@@ -47,7 +47,7 @@ async def test_direct_transcription_obeys_policy_and_returns_text(monkeypatch) -
     monkeypatch.setattr(
         SettingsStore,
         "load",
-        AsyncMock(side_effect=[settings, FileMediaSettings()]),
+        AsyncMock(side_effect=[settings, InstanceLimits()]),
     )
     transcribe = AsyncMock(return_value=TranscriptionResult("Gesprochener Text"))
     monkeypatch.setattr(MediaService, "transcribe_audio", transcribe)
@@ -69,7 +69,7 @@ async def test_direct_transcription_returns_structured_timeout(monkeypatch) -> N
     monkeypatch.setattr(
         SettingsStore,
         "load",
-        AsyncMock(side_effect=[settings, FileMediaSettings()]),
+        AsyncMock(side_effect=[settings, InstanceLimits()]),
     )
     monkeypatch.setattr(
         MediaService,
@@ -120,7 +120,7 @@ async def test_session_multipart_routes_forward_classified_attachments(monkeypat
     monkeypatch.setattr(sessions_route, "_create_session", create)
     monkeypatch.setattr(sessions_route, "_send_message", send)
     monkeypatch.setattr(
-        SettingsStore, "load", AsyncMock(return_value=FileMediaSettings())
+        SettingsStore, "load", AsyncMock(return_value=InstanceLimits())
     )
     create_payload = json.dumps({"content": "Bitte transkribieren"})
     send_payload = json.dumps({"content": "Noch eine Aufnahme"})
@@ -191,7 +191,7 @@ async def test_runtime_cleans_stored_audio_when_transaction_fails(monkeypatch) -
         "load",
         AsyncMock(
             side_effect=lambda _db, settings_type, **_kwargs: (
-                settings if settings_type is AiSettings else FileMediaSettings()
+                settings if settings_type is AiSettings else InstanceLimits()
             )
         ),
     )
@@ -252,7 +252,7 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         "load",
         AsyncMock(
             side_effect=lambda _db, settings_type, **_kwargs: (
-                settings if settings_type is AiSettings else FileMediaSettings()
+                settings if settings_type is AiSettings else InstanceLimits()
             )
         ),
     )

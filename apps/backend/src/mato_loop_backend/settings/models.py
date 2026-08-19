@@ -559,8 +559,8 @@ def _camel_case(value: str) -> str:
     return first + "".join(part.capitalize() for part in rest)
 
 
-class FileMediaSettings(SettingsDocument):
-    settings_key = "file-media"
+class InstanceLimits(SettingsDocument):
+    settings_key = "instance-limits"
     model_config = ConfigDict(
         alias_generator=_camel_case,
         populate_by_name=True,
@@ -586,7 +586,7 @@ class FileMediaSettings(SettingsDocument):
     max_archive_compression_ratio: int = Field(default=200, ge=1, le=500)
 
     @model_validator(mode="after")
-    def validate_file_limits(self) -> Self:
+    def validate_related_limits(self) -> Self:
         if self.max_upload_mib > self.max_message_upload_mib:
             raise ValueError("max_upload_mib must not exceed max_message_upload_mib")
         if self.max_upload_mib > self.session_quota_mib:

@@ -72,10 +72,10 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Benutzer', settingsIcon: 'group', requiresAdmin: true }
   },
   {
-    path: 'files-media',
-    name: 'settings-files-media',
-    component: () => import('pages/settings/FileMediaSettingsPage.vue'),
-    meta: { settingsLabel: 'Dateien und Medien', settingsIcon: 'perm_media', requiresAdmin: true }
+    path: 'instance-limits',
+    name: 'settings-instance-limits',
+    component: () => import('pages/settings/InstanceLimitsPage.vue'),
+    meta: { settingsLabel: 'Instanzlimits', settingsIcon: 'tune', requiresAdmin: true }
   }
 ]
 

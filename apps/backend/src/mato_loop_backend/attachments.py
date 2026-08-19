@@ -35,7 +35,7 @@ from mato_loop_backend.attachment_processing import (
 )
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
-from mato_loop_backend.settings import FileMediaSettings
+from mato_loop_backend.settings import InstanceLimits
 from mato_loop_backend.video_processing import (
     VideoProcessingError,
     probe_media,
@@ -291,7 +291,7 @@ def _safe_metadata(metadata: dict | None) -> dict:
     return safe
 
 
-def processing_limits(settings: FileMediaSettings) -> AttachmentProcessingLimits:
+def processing_limits(settings: InstanceLimits) -> AttachmentProcessingLimits:
     return AttachmentProcessingLimits(
         max_media_bytes=settings.max_upload_bytes,
         max_extracted_characters=settings.max_extracted_characters,
@@ -583,7 +583,7 @@ class AttachmentService:
         self,
         storage: AttachmentStorage | None = None,
         *,
-        settings: FileMediaSettings | None = None,
+        settings: InstanceLimits | None = None,
     ) -> None:
         self.storage = storage or AttachmentStorage()
         self.settings = settings

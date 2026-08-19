@@ -126,7 +126,7 @@ from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentRuntimeSettings,
     AiSettings,
-    FileMediaSettings,
+    InstanceLimits,
     IntegrationSettings,
     MemorySettings,
     SettingsStore,
@@ -1100,7 +1100,7 @@ class AgentRuntime:
             raise AgentRunError("session.runAlreadyActive")
         await cls._ensure_user_active(db, chat_session.user_id)
         ai_settings = await load_effective_ai(db, chat_session.user_id)
-        file_settings = await SettingsStore.load(db, FileMediaSettings)
+        instance_limits = await SettingsStore.load(db, InstanceLimits)
         model_id = model_id_override or chat_session.model_config_id or ai_settings.default_model_id
         model = _model_for_id(ai_settings, model_id)
         if model is None:
@@ -1232,7 +1232,7 @@ class AgentRuntime:
         if generate_title:
             chat_session.title_generation_status = TitleGenerationStatus.RUNNING.value
         created_attachments = []
-        attachment_service = AttachmentService(settings=file_settings)
+        attachment_service = AttachmentService(settings=instance_limits)
 
         async def rollback_and_discard() -> None:
             try:
@@ -1606,7 +1606,7 @@ class AgentRuntime:
         await cls._ensure_user_active(db, chat_session.user_id)
         ai_settings = await load_effective_ai(db, chat_session.user_id)
         runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
-        file_settings = await SettingsStore.load(db, FileMediaSettings)
+        instance_limits = await SettingsStore.load(db, InstanceLimits)
         integration_settings = await load_effective_integrations(
             db, chat_session.user_id
         )
@@ -1713,7 +1713,7 @@ class AgentRuntime:
             if not ai_settings.enabled:
                 raise AgentRunError("provider.disabled")
             runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
-            file_settings = await SettingsStore.load(db, FileMediaSettings)
+            instance_limits = await SettingsStore.load(db, InstanceLimits)
             memory_settings = await SettingsStore.load(
                 db, MemorySettings, user_id=chat_session.user_id
             )
@@ -1731,8 +1731,8 @@ class AgentRuntime:
             )
             root_files = RootFileService(
                 chat_session.id,
-                session_quota_bytes=file_settings.session_quota_bytes,
-                max_editable_text_bytes=file_settings.max_editable_text_bytes,
+                session_quota_bytes=instance_limits.session_quota_bytes,
+                max_editable_text_bytes=instance_limits.max_editable_text_bytes,
             )
             if (
                 model_trust_level == TrustLevel.PUBLIC
@@ -3603,7 +3603,7 @@ class AgentRuntime:
                 attachments_committed = False
                 try:
                     await db.flush()
-                    attachment_service = AttachmentService(settings=file_settings)
+                    attachment_service = AttachmentService(settings=instance_limits)
                     for position, attachment in enumerate(tool_attachments):
                         created_attachments.append(
                             await attachment_service.create_attachment(

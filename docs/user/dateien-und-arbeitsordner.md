@@ -46,7 +46,7 @@ Von Tools zurückgegebene Dateien erscheinen als schreibgeschützte Session-Arte
 
 Benötigt eine angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel bleibt eine getrennte, widerrufbare Session-Freigabe.
 
-Bis zu vier Dateien können im Browser gemeinsam ausgewählt und nacheinander hochgeladen werden. Die maximale Uploadgröße und die gemeinsame Quote des vollständigen Session-Dateibaums werden global von Administratoren unter **Einstellungen > Dateien und Medien** festgelegt. Neue Dateien überschreiben keine vorhandenen Pfade.
+Bis zu vier Dateien können im Browser gemeinsam ausgewählt und nacheinander hochgeladen werden. Die maximale Uploadgröße und die gemeinsame Quote des vollständigen Session-Dateibaums werden global von Administratoren unter **Einstellungen > Instanzlimits** festgelegt. Neue Dateien überschreiben keine vorhandenen Pfade.
 
 ## Vorschau und Bearbeitung
 
