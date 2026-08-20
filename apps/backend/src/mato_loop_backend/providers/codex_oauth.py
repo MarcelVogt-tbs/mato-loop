@@ -16,6 +16,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from mato_loop_backend import __version__
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
+from mato_loop_backend.settings.models import ReasoningEffort
 
 CODEX_AUTH_BASE_URL = "https://auth.openai.com"
 CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -72,6 +73,12 @@ class _TokenResponse(BaseModel):
     expires_in: int = Field(gt=0)
 
 
+class _CodexReasoningLevel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    effort: str = Field(min_length=1, max_length=20)
+
+
 class _CodexModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -81,12 +88,34 @@ class _CodexModel(BaseModel):
     context_window: int | None = Field(default=None, gt=1)
     supports_parallel_tool_calls: bool = False
     input_modalities: list[str] = Field(default_factory=list)
+    default_reasoning_level: str | None = Field(default=None, min_length=1, max_length=20)
+    supported_reasoning_levels: list[_CodexReasoningLevel] = Field(
+        default_factory=list, max_length=16
+    )
 
 
 class _CodexModelsResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     models: list[_CodexModel]
+
+
+def _reasoning_metadata(
+    model: _CodexModel,
+) -> tuple[ReasoningEffort | None, list[ReasoningEffort]]:
+    efforts: list[ReasoningEffort] = []
+    for item in model.supported_reasoning_levels:
+        try:
+            effort = ReasoningEffort(item.effort)
+        except ValueError:
+            continue
+        if effort not in efforts:
+            efforts.append(effort)
+    try:
+        default = ReasoningEffort(model.default_reasoning_level)
+    except (TypeError, ValueError):
+        default = None
+    return (default if default in efforts else None), efforts
 
 
 @dataclass
@@ -300,17 +329,22 @@ async def discover_models(
             "Codex returned an invalid model list",
             code="provider.invalidResponse",
         ) from exc
-    models = [
-        DiscoveredModel(
-            id=f"openai-codex/{model.slug}",
-            name=model.display_name or model.slug,
-            max_model_len=model.context_window,
-            supports_parallel_tool_calls=model.supports_parallel_tool_calls,
-            supports_image_input="image" in model.input_modalities,
+    models = []
+    for model in parsed.models:
+        if model.visibility != "list":
+            continue
+        default_effort, efforts = _reasoning_metadata(model)
+        models.append(
+            DiscoveredModel(
+                id=f"openai-codex/{model.slug}",
+                name=model.display_name or model.slug,
+                max_model_len=model.context_window,
+                supports_parallel_tool_calls=model.supports_parallel_tool_calls,
+                supports_image_input="image" in model.input_modalities,
+                default_reasoning_effort=default_effort,
+                reasoning_efforts=efforts or None,
+            )
         )
-        for model in parsed.models
-        if model.visibility == "list"
-    ]
     models.append(
         DiscoveredModel(
             id=CODEX_IMAGE_MODEL_ID,

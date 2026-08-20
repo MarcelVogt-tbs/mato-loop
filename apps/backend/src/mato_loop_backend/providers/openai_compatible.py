@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -26,7 +27,11 @@ from mato_loop_backend.providers.reasoning import (
     TaggedReasoningStream,
     split_tagged_reasoning,
 )
-from mato_loop_backend.settings.models import ModelCapability, ModelInputModality
+from mato_loop_backend.settings.models import (
+    ModelCapability,
+    ModelInputModality,
+    ReasoningEffort,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,8 @@ class DiscoveredModel(BaseModel):
         default_factory=lambda: {ModelCapability.CHAT}
     )
     input_modalities: set[ModelInputModality] | None = None
+    default_reasoning_effort: ReasoningEffort | None = None
+    reasoning_efforts: list[ReasoningEffort] | None = None
 
     @model_validator(mode="after")
     def derive_legacy_image_capability(self) -> DiscoveredModel:
@@ -66,6 +73,8 @@ class DiscoveredModel(BaseModel):
             "supports_parallel_tool_calls",
             "capabilities_authoritative",
             "native_for_chat_provider",
+            "default_reasoning_effort",
+            "reasoning_efforts",
         }
         metadata: dict[str, Any] = {}
         for key, value in self.model_dump(
@@ -73,6 +82,9 @@ class DiscoveredModel(BaseModel):
         ).items():
             if key == "input_modalities" and isinstance(value, set):
                 metadata[key] = sorted(str(item) for item in value)
+                continue
+            if key == "reasoning_efforts" and isinstance(value, list):
+                metadata[key] = [str(item) for item in value]
                 continue
             if key not in allowed or not isinstance(value, (str, int, float, bool, type(None))):
                 continue
@@ -219,7 +231,14 @@ def _chat_messages(
     return converted
 
 
-def _chat_body(request: ProviderRequest) -> dict[str, Any]:
+def _direct_thinking_options(base_url: str) -> bool:
+    hostname = (urlparse(base_url).hostname or "").casefold()
+    return hostname.startswith("dashscope") and hostname.endswith(".aliyuncs.com")
+
+
+def _chat_body(
+    request: ProviderRequest, *, direct_thinking_options: bool = False
+) -> dict[str, Any]:
     body: dict[str, Any] = {
         "model": request.model,
         "messages": _chat_messages(request.messages, request.continuation_scope, request.media),
@@ -234,7 +253,12 @@ def _chat_body(request: ProviderRequest) -> dict[str, Any]:
     if request.reasoning_effort is not None:
         body["reasoning_effort"] = request.reasoning_effort.value
     if request.enable_thinking is not None:
-        body["chat_template_kwargs"] = {"enable_thinking": request.enable_thinking}
+        if direct_thinking_options:
+            body["enable_thinking"] = request.enable_thinking
+        else:
+            body["chat_template_kwargs"] = {
+                "enable_thinking": request.enable_thinking
+            }
     if request.tools:
         body["tools"] = _tools_payload(request.tools)
         body["tool_choice"] = request.tool_choice
@@ -667,7 +691,9 @@ async def chat_completions(
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    body = _chat_body(request)
+    body = _chat_body(
+        request, direct_thinking_options=_direct_thinking_options(base_url)
+    )
     url = f"{base_url.rstrip('/')}/chat/completions"
     async with httpx.AsyncClient(timeout=request.timeout) as client:
         if not request.stream:

@@ -156,7 +156,7 @@ class ChatSession(Base):
         ),
         CheckConstraint(
             "reasoning_effort IS NULL OR reasoning_effort IN "
-            "('none', 'minimal', 'low', 'medium', 'high', 'xhigh')",
+            "('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')",
             name="reasoning_effort_valid",
         ),
         CheckConstraint(

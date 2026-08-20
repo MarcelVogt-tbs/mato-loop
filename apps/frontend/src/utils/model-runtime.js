@@ -7,11 +7,25 @@ export const REASONING_EFFORT_OPTIONS = Object.freeze([
   { label: 'Niedrig', value: 'low' },
   { label: 'Mittel', value: 'medium' },
   { label: 'Hoch', value: 'high' },
-  { label: 'Sehr hoch', value: 'xhigh' }
+  { label: 'Sehr hoch', value: 'xhigh' },
+  { label: 'Maximum', value: 'max' },
+  { label: 'Ultra', value: 'ultra' }
 ])
 
 export function reasoningEffortLabel(value) {
   return REASONING_EFFORT_OPTIONS.find((option) => option.value === value)?.label || 'Providerstandard'
+}
+
+export function modelReasoningEffortOptions(model) {
+  const supported = new Set(Array.isArray(model?.reasoningEfforts) ? model.reasoningEfforts : [])
+  if (!supported.size) return []
+  return [
+    {
+      label: `Modellstandard (${reasoningEffortLabel(model?.reasoningEffort)})`,
+      value: null
+    },
+    ...REASONING_EFFORT_OPTIONS.filter((option) => supported.has(option.value))
+  ]
 }
 
 export const DEFAULT_MODEL_RUNTIME = Object.freeze({

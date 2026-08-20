@@ -313,6 +313,8 @@ async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
                     max_model_len=272_000,
                     supports_parallel_tool_calls=False,
                     supports_image_input=True,
+                    default_reasoning_effort="medium",
+                    reasoning_efforts=["low", "medium", "high", "xhigh", "max", "ultra"],
                 ),
                 DiscoveredModel(
                     id="openai-codex/gpt-image-2",
@@ -338,6 +340,15 @@ async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
     assert model.supports_parallel_tool_calls is False
     assert model.supports_image_input is True
     assert result["models"][0]["modelId"] == "openai-codex/gpt-test"
+    assert result["models"][0]["reasoningEffort"] == "medium"
+    assert result["models"][0]["reasoningEfforts"] == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+    ]
     assert settings.models[1].enabled is True
     assert settings.models[1].capabilities == {
         ModelCapability.IMAGE_GENERATION,
@@ -1023,7 +1034,7 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
     model = ModelConfig.model_validate(
         {
             "provider_id": provider.id,
-            "model_id": "model",
+            "model_id": "Qwen/Qwen3.8-27B",
             "supportsImageInput": True,
             "webfetchPolicy": "auto_public",
         }
@@ -1048,6 +1059,13 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
     assert payload["models"][0]["effectiveTrustLevel"] == "private"
     assert payload["models"][0]["pseudonymizationEnabled"] is None
     assert payload["models"][0]["effectivePseudonymizationEnabled"] is False
+    assert payload["models"][0]["reasoningEffort"] == "medium"
+    assert payload["models"][0]["reasoningEfforts"] == [
+        "none",
+        "low",
+        "medium",
+        "xhigh",
+    ]
     assert payload["compactionModelId"] is None
     assert payload["titleGenerationModelId"] is None
     assert "compressionModelId" not in payload["models"][0]

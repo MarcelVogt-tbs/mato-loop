@@ -1,10 +1,41 @@
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_MODEL_RUNTIME, modelRuntimeForm, modelRuntimePayload } from '../src/utils/model-runtime'
+import {
+  DEFAULT_MODEL_RUNTIME,
+  modelReasoningEffortOptions,
+  modelRuntimeForm,
+  modelRuntimePayload
+} from '../src/utils/model-runtime'
 
 describe('model runtime configuration', () => {
   it('uses safe defaults for a new model', () => {
     expect(modelRuntimeForm()).toEqual(DEFAULT_MODEL_RUNTIME)
+  })
+
+  it('uses only the reasoning efforts advertised by the model', () => {
+    expect(modelReasoningEffortOptions({
+      reasoningEffort: 'medium',
+      reasoningEfforts: ['none', 'low', 'medium', 'xhigh']
+    })).toEqual([
+      { label: 'Modellstandard (Mittel)', value: null },
+      { label: 'Aus', value: 'none' },
+      { label: 'Niedrig', value: 'low' },
+      { label: 'Mittel', value: 'medium' },
+      { label: 'Sehr hoch', value: 'xhigh' }
+    ])
+    expect(modelReasoningEffortOptions({
+      reasoningEffort: 'low',
+      reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+    })).toEqual([
+      { label: 'Modellstandard (Niedrig)', value: null },
+      { label: 'Niedrig', value: 'low' },
+      { label: 'Mittel', value: 'medium' },
+      { label: 'Hoch', value: 'high' },
+      { label: 'Sehr hoch', value: 'xhigh' },
+      { label: 'Maximum', value: 'max' },
+      { label: 'Ultra', value: 'ultra' }
+    ])
+    expect(modelReasoningEffortOptions({ reasoningEffort: null })).toEqual([])
   })
 
   it('reads camelCase API fields and preserves false capabilities', () => {

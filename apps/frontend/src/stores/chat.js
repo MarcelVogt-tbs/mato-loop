@@ -155,7 +155,7 @@ function normalizedNewSessionDraft(value) {
     message: typeof value?.message === 'string' ? value.message : '',
     options: sanitizedSessionOptions({
       modelId: typeof options.modelId === 'string' ? options.modelId : null,
-      reasoningEffort: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(options.reasoningEffort)
+      reasoningEffort: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.reasoningEffort)
         ? options.reasoningEffort
         : null,
       memoryMode: ['full', 'read_only', 'disabled'].includes(options.memoryMode)

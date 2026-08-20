@@ -30,6 +30,7 @@ from mato_loop_backend.providers.codex_oauth import (
     poll_device_code,
 )
 from mato_loop_backend.providers.media import media_model_available
+from mato_loop_backend.providers.reasoning import ReasoningProfile, reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.security import (
     delete_credential,
@@ -66,6 +67,36 @@ router = APIRouter(prefix="/providers", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
 SettingsApiScope = Literal["instance", "personal"]
 AiSettingsDocument = AiSettings | UserAiSettings
+
+
+def _model_reasoning_profile(
+    provider: LlmProviderConfig, model: ModelConfig
+) -> ReasoningProfile | None:
+    api_type = (
+        "chat_completions"
+        if provider.adapter_type == "lemonade"
+        else provider.config.get("api_type", "chat_completions")
+    )
+    return (
+        reasoning_profile(model.model_id, model.discovery_metadata)
+        if provider.adapter_type == "openai-codex" or api_type == "chat_completions"
+        else None
+    )
+
+
+def _model_reasoning_default(
+    provider: LlmProviderConfig, model: ModelConfig
+) -> str | None:
+    profile = _model_reasoning_profile(provider, model)
+    effort = profile.default_effort if profile else model.reasoning_effort
+    return effort.value if effort else None
+
+
+def _model_reasoning_options(
+    provider: LlmProviderConfig, model: ModelConfig
+) -> list[str]:
+    profile = _model_reasoning_profile(provider, model)
+    return [effort.value for effort in profile.options] if profile else []
 
 
 async def _load_scoped_ai(
@@ -568,8 +599,11 @@ def _settings_payload(
                     tool_settings, model
                 ).value,
                 "reasoningSummary": model.reasoning_summary,
-                "reasoningEffort": (
-                    model.reasoning_effort.value if model.reasoning_effort else None
+                "reasoningEffort": _model_reasoning_default(
+                    providers_by_id[model.provider_id], model
+                ),
+                "reasoningEfforts": _model_reasoning_options(
+                    providers_by_id[model.provider_id], model
                 ),
                 "trustLevel": model.trust_level.value if model.trust_level else None,
                 "effectiveTrustLevel": effective_model_trust(

@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from mato_loop_backend.settings.models import ReasoningEffort
+
 _TAG_OPEN = re.compile(r"^\s*<(?:think(?:ing)?|thought|mm:think)(?:\s+[^>]*)?>", re.I)
 _TAG_CLOSE = re.compile(r"</(?:think(?:ing)?|thought|mm:think)>", re.I)
 _CHANNEL_OPEN = re.compile(r"^\s*<\|channel>thought\s*", re.I)
@@ -11,6 +13,56 @@ _CHANNEL_RESPONSE = re.compile(r"^\s*<\|channel>response\s*", re.I)
 _CHANNEL_RESPONSE_PREFIX = "<|channel>response"
 _OPEN_PREFIXES = ("<think", "<thinking", "<thought", "<mm:think", "<|channel>thought")
 _CLOSE_PREFIXES = ("</think>", "</thinking>", "</thought>", "</mm:think>", "<channel|>")
+
+
+@dataclass(frozen=True, slots=True)
+class ReasoningProfile:
+    efforts: tuple[ReasoningEffort, ...]
+    default_effort: ReasoningEffort
+    supports_disable: bool = False
+
+    @property
+    def options(self) -> tuple[ReasoningEffort, ...]:
+        return (
+            (ReasoningEffort.NONE, *self.efforts)
+            if self.supports_disable
+            else self.efforts
+        )
+
+
+_QWEN_3_8_27B = ReasoningProfile(
+    efforts=(ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.XHIGH),
+    default_effort=ReasoningEffort.MEDIUM,
+    supports_disable=True,
+)
+
+
+def reasoning_profile(
+    model_id: str, metadata: dict[str, object] | None = None
+) -> ReasoningProfile | None:
+    values = metadata or {}
+    raw_efforts = values.get("reasoning_efforts")
+    raw_default = values.get("default_reasoning_effort")
+    if isinstance(raw_efforts, list) and isinstance(raw_default, str):
+        efforts: list[ReasoningEffort] = []
+        for value in raw_efforts:
+            try:
+                effort = ReasoningEffort(value)
+            except (TypeError, ValueError):
+                continue
+            if effort not in efforts:
+                efforts.append(effort)
+        try:
+            default = ReasoningEffort(raw_default)
+        except ValueError:
+            default = None
+        if default in efforts:
+            return ReasoningProfile(tuple(efforts), default)
+
+    name = model_id.rsplit("/", 1)[-1].casefold().replace("_", "-")
+    if name == "qwen3.8-27b" or name.startswith(("qwen3.8-27b-", "qwen3.8-27b:")):
+        return _QWEN_3_8_27B
+    return None
 
 
 def _without_partial_marker(value: str) -> str:

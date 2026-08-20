@@ -7,6 +7,7 @@ from mato_loop_backend.providers.openai_compatible import (
     _chat_body,
     _chat_messages,
     _chat_result,
+    _direct_thinking_options,
     _responses_body,
     _responses_input,
     _responses_result,
@@ -15,6 +16,7 @@ from mato_loop_backend.providers.openai_compatible import (
 )
 from mato_loop_backend.providers.reasoning import (
     TaggedReasoningStream,
+    reasoning_profile,
     split_tagged_reasoning,
 )
 from mato_loop_backend.settings.models import ReasoningEffort
@@ -226,6 +228,47 @@ def test_reasoning_effort_uses_native_openai_and_llama_cpp_fields() -> None:
         "summary": "auto",
         "effort": "none",
     }
+
+
+def test_qwen_3_8_profile_and_thinking_parameter_locations() -> None:
+    profile = reasoning_profile("Qwen/Qwen3.8-27B-Q4_K_M.gguf")
+    assert profile is not None
+    assert profile.default_effort == ReasoningEffort.MEDIUM
+    assert profile.options == (
+        ReasoningEffort.NONE,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.XHIGH,
+    )
+    assert reasoning_profile("Qwen3.5-27B") is None
+
+    request = ProviderRequest(model="qwen3.8-27b", messages=[], enable_thinking=False)
+    assert _chat_body(request)["chat_template_kwargs"] == {"enable_thinking": False}
+    assert _chat_body(request, direct_thinking_options=True)["enable_thinking"] is False
+    assert _direct_thinking_options(
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    )
+    assert not _direct_thinking_options("http://localhost:8000/v1")
+
+
+def test_codex_reasoning_profile_uses_catalog_metadata() -> None:
+    profile = reasoning_profile(
+        "openai-codex/gpt-5.6-sol",
+        {
+            "default_reasoning_effort": "low",
+            "reasoning_efforts": ["low", "medium", "max", "ultra", "future"],
+        },
+    )
+
+    assert profile is not None
+    assert profile.default_effort == ReasoningEffort.LOW
+    assert profile.options == (
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.MAX,
+        ReasoningEffort.ULTRA,
+    )
+    assert profile.supports_disable is False
 
 
 async def test_chat_stream_routes_tagged_reasoning_separately(monkeypatch) -> None:

@@ -231,18 +231,18 @@ describe('chat drafts', () => {
   it('persists and sends the session reasoning override', async () => {
     api.post.mockResolvedValue({
       data: {
-        session: { id: 'session-1', reasoningEffort: 'low', messages: [] },
+        session: { id: 'session-1', reasoningEffort: 'ultra', messages: [] },
         runId: 'run-1'
       }
     })
     const chat = useChatStore()
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
 
-    await chat.updateActive({ reasoning_effort: 'low' })
+    await chat.updateActive({ reasoning_effort: 'ultra' })
     await chat.startSession('Kurz nachdenken')
 
     expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
-      reasoning_effort: 'low'
+      reasoning_effort: 'ultra'
     }))
   })
 

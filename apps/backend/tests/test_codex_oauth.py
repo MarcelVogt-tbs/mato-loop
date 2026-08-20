@@ -97,6 +97,14 @@ async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) 
                         "context_window": 272000,
                         "supports_parallel_tool_calls": True,
                         "input_modalities": ["text", "image"],
+                        "default_reasoning_level": "medium",
+                        "supported_reasoning_levels": [
+                            {"effort": "low", "description": "Fast"},
+                            {"effort": "medium", "description": "Balanced"},
+                            {"effort": "max", "description": "Maximum"},
+                            {"effort": "ultra", "description": "Delegation"},
+                            {"effort": "future", "description": "Unknown"},
+                        ],
                     },
                     {"slug": "hidden", "visibility": "hide"},
                 ]
@@ -119,6 +127,8 @@ async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) 
         "max_model_len": 272000,
         "supports_parallel_tool_calls": True,
         "supports_image_input": True,
+        "default_reasoning_effort": "medium",
+        "reasoning_efforts": ["low", "medium", "max", "ultra"],
     }
     assert models[1].capabilities == {"image_generation", "image_editing"}
     assert models[1].metadata == {

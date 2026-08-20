@@ -35,6 +35,7 @@ from mato_loop_backend.settings.models import (
     ModelCapability,
     ModelConfig,
     ModelInputModality,
+    ReasoningEffort,
     TrustLevel,
 )
 
@@ -367,6 +368,10 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
         provider_id=provider.id,
         model_id="openai-codex/gpt-5.6-sol",
         supports_parallel_tool_calls=True,
+        discovery_metadata={
+            "default_reasoning_effort": "low",
+            "reasoning_efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
         config={"temperature": 0.5},
     )
     db = AsyncMock(spec=AsyncSession)
@@ -415,6 +420,17 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
     assert "temperature" not in captured["body"]
     assert "text" not in captured["body"]
     assert captured["body"]["prompt_cache_key"] == "session-1"
+    assert captured["body"]["reasoning"]["effort"] == "low"
+
+    await ProviderService.complete(
+        db,
+        provider=provider,
+        model=model,
+        messages=[{"role": "user", "content": "Test"}],
+        tools=[],
+        reasoning_effort="ultra",
+    )
+    assert captured["body"]["reasoning"]["effort"] == "ultra"
 
 
 async def test_complete_does_not_touch_attachment_storage_without_image_capability(
@@ -1366,6 +1382,54 @@ async def test_openai_compatible_stream_does_not_request_usage(monkeypatch) -> N
     )
 
     assert transport.await_args.kwargs["request"].include_usage is False
+
+
+async def test_qwen_3_8_uses_medium_by_default_and_disables_thinking_cleanly(
+    monkeypatch,
+) -> None:
+    provider = LlmProviderConfig(
+        name="Local",
+        adapter_type="openai-compatible",
+        pseudonymization_enabled=False,
+        config={"base_url": "http://provider.test/v1"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="Qwen/Qwen3.8-27B")
+    transport = AsyncMock(return_value=ProviderResult(content="OK"))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+
+    await ProviderService.complete(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        messages=[{"role": "user", "content": "Test"}],
+        tools=[],
+    )
+    request = transport.await_args.kwargs["request"]
+    assert request.reasoning_effort == ReasoningEffort.MEDIUM
+    assert request.enable_thinking is True
+
+    await ProviderService.complete(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        messages=[{"role": "user", "content": "Test"}],
+        tools=[],
+        reasoning_effort="none",
+    )
+    request = transport.await_args.kwargs["request"]
+    assert request.reasoning_effort is None
+    assert request.enable_thinking is False
+
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession),
+            provider=provider,
+            model=model,
+            messages=[{"role": "user", "content": "Test"}],
+            tools=[],
+            reasoning_effort="high",
+        )
+    assert exc_info.value.public_code == "provider.modelCapabilityUnavailable"
 
 
 async def test_complete_rejects_unknown_adapter_before_transport(monkeypatch) -> None:

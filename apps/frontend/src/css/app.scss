@@ -886,6 +886,11 @@ body.body--dark .app-floating-control--flat {
   min-width: 150px;
 }
 
+.composer-reasoning {
+  width: 165px;
+  min-width: 135px;
+}
+
 .composer-session-settings {
   position: relative;
 }
@@ -2886,6 +2891,10 @@ body.body--dark .file-viewer .app-muted {
 
   .composer-model {
     width: 180px;
+  }
+
+  .composer-reasoning {
+    width: 150px;
   }
 
   .composer-agent-mode {

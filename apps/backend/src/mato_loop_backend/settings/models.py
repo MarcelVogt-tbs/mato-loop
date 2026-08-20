@@ -148,6 +148,8 @@ class ReasoningEffort(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
+    MAX = "max"
+    ULTRA = "ultra"
 
 
 class LlmProviderConfig(BaseModel):

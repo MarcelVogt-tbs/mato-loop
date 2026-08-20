@@ -1365,13 +1365,13 @@ async def test_session_can_override_reasoning_effort() -> None:
 
     result = await update_session(
         session.id,
-        SessionUpdateRequest(reasoning_effort="high"),
+        SessionUpdateRequest(reasoning_effort="ultra"),
         user,
         db,
     )
 
-    assert session.reasoning_effort == "high"
-    assert result["reasoningEffort"] == "high"
+    assert session.reasoning_effort == "ultra"
+    assert result["reasoningEffort"] == "ultra"
 
 
 async def test_workspace_mode_is_preserved_without_workdir() -> None:

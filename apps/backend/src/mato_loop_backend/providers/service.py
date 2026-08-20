@@ -48,6 +48,7 @@ from mato_loop_backend.providers.openai_compatible import (
     chat_completions,
     responses_api,
 )
+from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
@@ -509,11 +510,21 @@ class ProviderService:
             else None
         )
         is_codex = provider.adapter_type == "openai-codex"
+        profile = (
+            reasoning_profile(model.model_id, model.discovery_metadata)
+            if is_codex or api_type == "chat_completions"
+            else None
+        )
         effective_reasoning_effort = (
             ReasoningEffort(reasoning_effort)
             if reasoning_effort is not None
-            else model.reasoning_effort
+            else profile.default_effort if profile else model.reasoning_effort
         )
+        if profile and effective_reasoning_effort not in profile.options:
+            raise ProviderError(
+                "Model does not support the selected reasoning effort",
+                code="provider.modelCapabilityUnavailable",
+            )
         payload = read_credential(credential) if credential and not is_codex else {}
         endpoint = (
             codex_oauth.CODEX_RESPONSES_URL
@@ -567,11 +578,21 @@ class ProviderService:
             temperature=None if is_codex else _temperature_option(model.config),
             timeout=timeout,
             reasoning_summary=is_codex or model.reasoning_summary,
-            reasoning_effort=effective_reasoning_effort,
+            reasoning_effort=(
+                None
+                if profile
+                and profile.supports_disable
+                and effective_reasoning_effort == ReasoningEffort.NONE
+                else effective_reasoning_effort
+            ),
             enable_thinking=(
                 effective_reasoning_effort != ReasoningEffort.NONE
-                if provider.adapter_type == "lemonade"
-                and effective_reasoning_effort is not None
+                if effective_reasoning_effort is not None
+                and (
+                    profile is not None
+                    and profile.supports_disable
+                    or provider.adapter_type == "lemonade"
+                )
                 else None
             ),
             prompt_cache_key=prompt_cache_key if is_codex else None,

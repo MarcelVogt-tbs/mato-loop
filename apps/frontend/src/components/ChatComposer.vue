@@ -129,7 +129,7 @@
             class="composer-model"
             popup-content-class="app-menu-popup"
             :disable="interactionDisabled"
-            @update:model-value="update({ model_id: $event })"
+            @update:model-value="selectModel"
           >
             <template #prepend><q-icon :name="selectedModelTrustIcon" size="18px" /></template>
             <template #option="scope">
@@ -138,6 +138,23 @@
                 <q-item-section><q-item-label>{{ scope.opt.label }}</q-item-label></q-item-section>
               </q-item>
             </template>
+          </q-select>
+          <q-select
+            v-if="reasoningEffortOptions.length"
+            :model-value="session?.reasoningEffort ?? null"
+            :options="reasoningEffortOptions"
+            emit-value
+            map-options
+            dense
+            borderless
+            options-dense
+            label="Denken"
+            class="composer-reasoning"
+            popup-content-class="app-menu-popup"
+            :disable="interactionDisabled"
+            @update:model-value="update({ reasoning_effort: $event })"
+          >
+            <q-tooltip>Reasoning-Aufwand für diese Session</q-tooltip>
           </q-select>
           <q-chip v-if="pendingCount" dense square color="warning" text-color="dark" icon="pending_actions">
             {{ pendingCount }} offen
@@ -233,24 +250,6 @@
                         </template>
                         {{ executionAgentMessage }}
                       </q-banner>
-
-                      <q-select
-                        :model-value="session?.reasoningEffort ?? null"
-                        :options="reasoningEffortOptions"
-                        emit-value
-                        map-options
-                        outlined
-                        :dense="$q.screen.gt.xs"
-                        options-dense
-                        label="Reasoning-Aufwand"
-                        hint="Überschreibt den Modellstandard nur für diese Session."
-                        persistent-hint
-                        popup-content-class="app-menu-popup"
-                        :disable="interactionDisabled"
-                        @update:model-value="update({ reasoning_effort: $event })"
-                      >
-                        <template #prepend><q-icon name="psychology" /></template>
-                      </q-select>
 
                       <q-select
                         :model-value="session?.memoryMode"
@@ -381,7 +380,7 @@ import { recorderErrorMessage, useAudioRecorder } from 'src/composables/audio-re
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { clipboardAttachmentFiles } from 'src/utils/attachment-drafts'
 import { formatAttachmentDuration } from 'src/utils/attachments'
-import { REASONING_EFFORT_OPTIONS, reasoningEffortLabel } from 'src/utils/model-runtime'
+import { modelReasoningEffortOptions } from 'src/utils/model-runtime'
 
 defineOptions({ name: 'ChatComposer' })
 
@@ -502,13 +501,7 @@ const selectedModelConfig = computed(() => providers.models.find((model) => (
   model.id === effectiveModelId.value
 )))
 const selectedModelTrustIcon = computed(() => selectedModelConfig.value?.effectiveTrustLevel === 'private' ? 'lock' : 'public')
-const reasoningEffortOptions = computed(() => [
-  {
-    label: `Modellstandard (${reasoningEffortLabel(selectedModelConfig.value?.reasoningEffort)})`,
-    value: null
-  },
-  ...REASONING_EFFORT_OPTIONS.filter((option) => option.value !== null)
-])
+const reasoningEffortOptions = computed(() => modelReasoningEffortOptions(selectedModelConfig.value))
 const modelSupportsTools = computed(() => selectedModelConfig.value?.supportsTools !== false)
 const transcriptionModelAvailable = computed(() => (
   Boolean(providers.audioTranscriptionModelId)
@@ -631,6 +624,15 @@ const sessionSettingsWarning = computed(() => {
 
 function update(patch) {
   if (props.session) emit('update', patch)
+}
+
+function selectModel(modelId) {
+  const model = providers.models.find((item) => item.id === modelId)
+  const effort = props.session?.reasoningEffort
+  update({
+    model_id: modelId,
+    ...(effort && !model?.reasoningEfforts?.includes(effort) ? { reasoning_effort: null } : {})
+  })
 }
 
 async function selectExecutionAgent(value) {
