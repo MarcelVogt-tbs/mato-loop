@@ -284,6 +284,12 @@
         </div>
       </transition>
 
+      <ChatQueuedMessages
+        :messages="chat.activeQueuedMessages"
+        :paused="chat.queuedSendPaused"
+        @remove="chat.removeQueuedMessage"
+        @resume="chat.resumeQueuedSend"
+      />
       <QuestionDock
         v-if="activeQuestion"
         :key="activeQuestion.id"
@@ -300,6 +306,7 @@
         :running="chat.running"
         :stopping="chat.stopping"
         :pending-count="sessionApprovals.length"
+        :queue-mode="chat.messageQueueActive"
         :attachments="chat.activeAttachmentDraft"
         @add-attachments="addAttachmentFiles"
         @remove-attachment="chat.removeAttachmentFile"
@@ -354,6 +361,7 @@ import ApprovalCard from 'components/ApprovalCard.vue'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
+import ChatQueuedMessages from 'components/ChatQueuedMessages.vue'
 import ControlCenterPanel from 'components/ControlCenterPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
@@ -439,6 +447,7 @@ let touchActive = false
 let activityPanelScrollFrame = null
 let virtualScrollRefreshFrame = null
 let virtualScrollRefreshTimer = null
+let flushingQueue = false
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
 const sessionQuestions = computed(() => chat.current ? questions.forSession(chat.current.id) : [])
 const activeQuestion = computed(() => sessionQuestions.value[0] || null)
@@ -697,6 +706,10 @@ async function loadBackgroundData() {
 }
 
 async function send(content) {
+  if (chat.messageQueueActive) {
+    chat.queueMessage(content)
+    return
+  }
   followingBottom.value = true
   const request = chat.send(content)
   await nextTick()
@@ -711,6 +724,20 @@ async function send(content) {
         session: result.sessionId
       }
     })
+  }
+}
+
+async function flushQueuedMessage() {
+  if (flushingQueue || !chat.queuedSendReady) return
+  flushingQueue = true
+  try {
+    followingBottom.value = true
+    const request = chat.flushQueuedMessage()
+    await nextTick()
+    scheduleFollowScroll()
+    await request
+  } finally {
+    flushingQueue = false
   }
 }
 
@@ -871,6 +898,13 @@ watch(
     await nextTick()
     composer.value?.focus()
   }
+)
+watch(
+  () => chat.queuedSendReady,
+  (ready) => {
+    if (ready) void flushQueuedMessage()
+  },
+  { immediate: true }
 )
 onMounted(() => {
   observeChatSize()

@@ -30,6 +30,12 @@ function normalizedMimeType(file) {
   return String(file?.type || '').split(';', 1)[0].trim().toLowerCase()
 }
 
+function releaseAttachmentDrafts(attachments = []) {
+  for (const attachment of attachments) {
+    if (attachment?.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
+  }
+}
+
 function attachmentKind(file) {
   const mimeType = normalizedMimeType(file)
   if (mimeType.startsWith('image/')) return 'image'
@@ -319,7 +325,9 @@ export const useChatStore = defineStore('chat', {
       newSession: null,
       newSessions: { standalone: null },
       sessionMessages: {}
-    }
+    },
+    queuedMessages: {},
+    queuedSendPausedSessionId: null
   }),
   getters: {
     activeSessionList: (state) => state.sessionLists[sessionScopeKey(state.sessionsProjectId)]
@@ -355,7 +363,37 @@ export const useChatStore = defineStore('chat', {
       : state.drafts.newSession.message,
     activeAttachmentDraft: (state) => state.current
       ? state.attachmentDrafts.sessionMessages[state.current.id] || []
-      : state.attachmentDrafts.newSession
+      : state.attachmentDrafts.newSession,
+    activeQueuedMessages: (state) => (
+      state.current ? state.queuedMessages[state.current.id] || [] : []
+    ),
+    queuedSendPaused: (state) => Boolean(
+      state.current && state.queuedSendPausedSessionId === state.current.id
+    ),
+    messageQueueActive() {
+      if (!this.current) return false
+      if (
+        this.running
+        || this.stopping
+        || this.historyActionPending
+        || this.sessionSettingsPending > 0
+      ) return true
+      const sessionId = this.current.id
+      return Boolean(
+        useApprovalStore().forSession(sessionId).length
+        || useQuestionStore().forSession(sessionId).length
+      )
+    },
+    queuedSendReady() {
+      if (!this.current || this.queuedSendPaused) return false
+      if (this.loading || this.running || this.stopping) return false
+      if (this.historyActionPending || this.sessionSettingsPending > 0) return false
+      if (!this.activeQueuedMessages.length) return false
+      const sessionId = this.current.id
+      if (useApprovalStore().forSession(sessionId).length) return false
+      if (useQuestionStore().forSession(sessionId).length) return false
+      return true
+    }
   },
   actions: {
     ensureSessionList(projectId = null) {
@@ -597,6 +635,11 @@ export const useChatStore = defineStore('chat', {
       this.attachmentDrafts = { newSession: [], sessionMessages: {} }
       this.attachmentDrafts.newSessions = { standalone: this.attachmentDrafts.newSession }
       this.audioDictations = { newSession: null, newSessions: { standalone: null }, sessionMessages: {} }
+      releaseAttachmentDrafts(
+        Object.values(this.queuedMessages).flat().flatMap((entry) => entry.attachments)
+      )
+      this.queuedMessages = {}
+      this.queuedSendPausedSessionId = null
     },
     clearAllDrafts() {
       this.clearAllAttachmentDrafts()
@@ -869,6 +912,9 @@ export const useChatStore = defineStore('chat', {
       for (const id of Object.keys(this.audioDictations.sessionMessages)) {
         if (!sessionIds.has(id)) delete this.audioDictations.sessionMessages[id]
       }
+      for (const id of Object.keys(this.queuedMessages)) {
+        if (id !== this.current?.id && !sessionIds.has(id)) this.clearQueuedMessages(id)
+      }
       this.persistDrafts()
     },
     async refreshGeneratedTitle(sessionId) {
@@ -1107,6 +1153,7 @@ export const useChatStore = defineStore('chat', {
       this.removeCachedSession(id)
       delete this.drafts.sessionMessages[id]
       this.clearAttachmentDraft(id)
+      this.clearQueuedMessages(id)
       this.setAudioDictation(null, id)
       this.persistDrafts()
       if (this.current?.id === id) this.current = null
@@ -1337,6 +1384,66 @@ export const useChatStore = defineStore('chat', {
         ? this.sendToCurrent(content, attachments)
         : this.startSession(content, attachments)
     },
+    queueMessage(content) {
+      const sessionId = this.current?.id
+      const text = String(content || '').trim()
+      if (!sessionId || !text) return null
+      const entry = {
+        id: globalThis.crypto?.randomUUID?.() || `queued-${Date.now()}`,
+        content: text,
+        attachments: [...(this.attachmentDrafts.sessionMessages[sessionId] || [])],
+        queuedAt: new Date().toISOString()
+      }
+      if (!this.queuedMessages[sessionId]) this.queuedMessages[sessionId] = []
+      this.queuedMessages[sessionId].push(entry)
+      delete this.attachmentDrafts.sessionMessages[sessionId]
+      delete this.drafts.sessionMessages[sessionId]
+      this.persistDrafts()
+      return entry
+    },
+    removeQueuedMessage(id, sessionId = this.current?.id || null) {
+      const queue = sessionId ? this.queuedMessages[sessionId] : null
+      const index = queue ? queue.findIndex((entry) => entry.id === id) : -1
+      if (index < 0) return null
+      const [entry] = queue.splice(index, 1)
+      releaseAttachmentDrafts(entry.attachments)
+      if (!queue.length) {
+        delete this.queuedMessages[sessionId]
+        if (this.queuedSendPausedSessionId === sessionId) this.queuedSendPausedSessionId = null
+      }
+      return entry
+    },
+    clearQueuedMessages(sessionId = this.current?.id || null) {
+      if (!sessionId) return
+      releaseAttachmentDrafts(
+        (this.queuedMessages[sessionId] || []).flatMap((entry) => entry.attachments)
+      )
+      delete this.queuedMessages[sessionId]
+      if (this.queuedSendPausedSessionId === sessionId) this.queuedSendPausedSessionId = null
+    },
+    resumeQueuedSend() {
+      this.queuedSendPausedSessionId = null
+    },
+    async flushQueuedMessage() {
+      if (!this.queuedSendReady) return null
+      const sessionId = this.current.id
+      const queue = this.queuedMessages[sessionId] || []
+      const entry = queue.shift()
+      if (!queue.length) delete this.queuedMessages[sessionId]
+      if (!entry) return null
+      try {
+        const result = await this.sendToCurrent(entry.content, entry.attachments, {
+          clearDraft: false
+        })
+        releaseAttachmentDrafts(entry.attachments)
+        return result
+      } catch {
+        if (!this.queuedMessages[sessionId]) this.queuedMessages[sessionId] = []
+        this.queuedMessages[sessionId].unshift(entry)
+        this.queuedSendPausedSessionId = sessionId
+        return null
+      }
+    },
     async stop() {
       if (!this.running || this.stopping) return
       this.cancelRequested = true
@@ -1445,7 +1552,7 @@ export const useChatStore = defineStore('chat', {
         throw error
       }
     },
-    async sendToCurrent(content, attachments = []) {
+    async sendToCurrent(content, attachments = [], { clearDraft = true } = {}) {
       const session = this.current
       const sessionLoadVersion = this.sessionLoadVersion
       this.running = true
@@ -1480,9 +1587,11 @@ export const useChatStore = defineStore('chat', {
             }))
           }
         }
-        this.clearAttachmentDraft(session.id)
-        delete this.drafts.sessionMessages[session.id]
-        this.persistDrafts()
+        if (clearDraft) {
+          this.clearAttachmentDraft(session.id)
+          delete this.drafts.sessionMessages[session.id]
+          this.persistDrafts()
+        }
         if (
           this.sessionLoadVersion === sessionLoadVersion
           && this.selectedSessionId === session.id
