@@ -41,7 +41,7 @@
           <div class="work-history__meta row items-center no-wrap q-gutter-xs">
             <span v-if="totalDuration">
               {{ totalDuration }}
-              <q-tooltip>Gesamtdauer bis zur Antwort</q-tooltip>
+              <q-tooltip>Antwortdauer ohne Wartezeit auf dich</q-tooltip>
             </span>
             <span
               v-if="errorItems.length"
@@ -216,6 +216,8 @@ const now = ref(Date.now())
 const historyExpanded = ref(false)
 const previousHistoryExpanded = ref(false)
 let timer = null
+let pausedAt = null
+let pausedDuration = 0
 const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
 const preparedEntries = computed(() => [
   ...(props.history?.entries || []),
@@ -253,7 +255,7 @@ const totalDuration = computed(() => {
   const startedAt = new Date(props.history?.startedAt).getTime()
   const completedAt = props.running ? now.value : new Date(props.history?.completedAt).getTime()
   return Number.isFinite(startedAt) && Number.isFinite(completedAt)
-    ? formatActivityDuration(startedAt, completedAt)
+    ? formatActivityDuration(startedAt, completedAt - pausedDuration)
     : null
 })
 const headerTitle = computed(() => props.running
@@ -298,13 +300,29 @@ function updateTimer(running) {
   timer = running ? setInterval(() => { now.value = Date.now() }, 1000) : null
 }
 
-watch(() => props.running, (running, wasRunning) => {
-  updateTimer(running)
+function syncTimer(running, wasRunning = false) {
+  const timestamp = Date.now()
+  if (running && !wasRunning) {
+    pausedAt = null
+    pausedDuration = 0
+  }
+  const paused = running && ['waiting_approval', 'waiting_input'].includes(props.activity?.phase)
+  if (paused && pausedAt === null) pausedAt = timestamp
+  if (!paused && pausedAt !== null) {
+    pausedDuration += timestamp - pausedAt
+    pausedAt = null
+  }
+  now.value = timestamp
+  updateTimer(running && !paused)
+}
+
+watch([() => props.running, () => props.activity?.phase], ([running], [wasRunning]) => {
+  syncTimer(running, wasRunning)
   if (wasRunning && !running) {
     historyExpanded.value = false
     previousHistoryExpanded.value = false
   }
 })
-onMounted(() => updateTimer(props.running))
+onMounted(() => syncTimer(props.running))
 onBeforeUnmount(() => clearInterval(timer))
 </script>
