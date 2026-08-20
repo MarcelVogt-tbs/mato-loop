@@ -135,9 +135,11 @@ async def test_skill_approval_requires_and_forwards_exact_revision(
 
 async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     approval_id = uuid4()
+    target_session_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
     run = AgentRun(id=uuid4(), session_id=session.id)
     db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = "Ziel-Session"
     created = asyncio.Event()
 
     async def flush() -> None:
@@ -160,7 +162,7 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
             PermissionRequest(
                 capability="session.read",
                 resource_type="session",
-                resource_scope=str(uuid4()),
+                resource_scope=str(target_session_id),
                 action_kind="session_read",
                 risk_level="medium",
                 title="Session lesen?",
@@ -174,6 +176,12 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     persisted = db.add.call_args.args[0]
     assert persisted.request_type == "agent_action"
     assert persisted.user_id == session.user_id
+    assert persisted.payload["resourceDisplay"] == "Ziel-Session"
+    statement = db.scalar.await_args.args[0]
+    assert "chat_sessions.user_id =" in str(statement)
+    assert {target_session_id, session.user_id, "chat"}.issubset(
+        set(statement.compile().params.values())
+    )
 
     assert AgentRuntime.claim_approval_resolution(approval_id) is True
     assert AgentRuntime.resolve_approval(approval_id, "allow_once") is True

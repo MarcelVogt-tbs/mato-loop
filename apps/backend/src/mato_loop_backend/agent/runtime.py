@@ -4499,6 +4499,19 @@ class AgentRuntime:
         call: ToolCall,
         permission: PermissionRequest,
     ) -> str | ApprovalResolution:
+        resource_display = permission.resource_display
+        if (
+            resource_display is None
+            and permission.capability == "session.read"
+            and permission.resource_type == "session"
+        ):
+            resource_display = await db.scalar(
+                select(ChatSession.title).where(
+                    ChatSession.id == UUID(permission.resource_scope),
+                    ChatSession.user_id == chat_session.user_id,
+                    ChatSession.session_type == "chat",
+                )
+            )
         approval = ApprovalRequest(
             request_type="agent_action",
             user_id=chat_session.user_id,
@@ -4516,7 +4529,7 @@ class AgentRuntime:
                 "toolCallId": call.id,
                 "tool": call.name,
                 "arguments": _safe_tool_arguments(call.name, call.arguments),
-                "resourceDisplay": permission.resource_display,
+                "resourceDisplay": resource_display,
                 "policyIntegrationId": (
                     str(permission.policy_integration_id)
                     if permission.policy_integration_id is not None

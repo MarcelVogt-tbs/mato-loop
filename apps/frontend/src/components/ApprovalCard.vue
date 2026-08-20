@@ -58,6 +58,20 @@
         <div class="approval-resource">
           <div class="text-caption app-muted">{{ resource.label }}</div>
           <code>{{ resource.value }}</code>
+          <div v-if="approval.resourceType === 'session' && approval.resourceScope">
+            <q-btn
+              flat
+              dense
+              no-caps
+              color="primary"
+              icon="open_in_new"
+              label="Session öffnen"
+              :to="{ name: 'chat', query: { session: approval.resourceScope } }"
+              target="_blank"
+              rel="noopener"
+              class="q-mt-sm"
+            />
+          </div>
           <ToolPresentation
             v-if="presentation.items.length"
             :items="presentation.items"

@@ -54,7 +54,8 @@ export function approvalResource(approval, sessions = []) {
     }
   }
   if (approval?.resourceType === 'session') {
-    const name = detailName(approval.details, ['sessionName', 'sessionTitle', 'resourceName'])
+    const name = detailName(approval, ['resourceDisplay'])
+      || detailName(approval.details, ['sessionName', 'sessionTitle', 'resourceName'])
     const sessionTitle = sessions.find((session) => session.id === scope)?.title
     const currentSession = scope && scope === approval.sessionId
     return {

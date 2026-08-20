@@ -23,6 +23,13 @@ describe('approval display', () => {
       details: {}
     })).toEqual({ label: 'Session', value: 'Aktuelle Session' })
     expect(approvalResource({
+      resourceType: 'session',
+      resourceScope: 'session-2',
+      sessionId: 'session-1',
+      resourceDisplay: 'Projekt Aurora',
+      details: {}
+    })).toEqual({ label: 'Session', value: '„Projekt Aurora“' })
+    expect(approvalResource({
       resourceType: 'session_collection',
       resourceScope: '*',
       details: {}
