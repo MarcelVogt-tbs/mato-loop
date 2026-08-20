@@ -12,6 +12,7 @@ import pytest
 import zxingcpp
 from PIL import Image
 from pydantic import BaseModel
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.tools as tools_module
@@ -91,6 +92,17 @@ class _SharedConfig(BaseModel):
 
 async def _successful_handler(_arguments, _context) -> ToolResult:
     return ToolResult.json({"ok": True})
+
+
+async def test_sqlalchemy_tool_errors_reach_runtime_rollback() -> None:
+    async def handler(_arguments, _context):
+        raise SQLAlchemyError("database failed")
+
+    definition = ToolDefinition("database_test", "Test", _EmptyArguments, handler)
+    call = ToolCall("database-test", "database_test", {})
+
+    with pytest.raises(SQLAlchemyError, match="database failed"):
+        await ToolRegistry([definition]).execute(call, Mock())
 
 
 async def test_bound_tool_defaults_fill_only_fully_omitted_arguments(tmp_path) -> None:

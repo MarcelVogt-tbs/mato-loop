@@ -25,6 +25,7 @@ from pydantic import (
     model_validator,
 )
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -1251,6 +1252,8 @@ class ToolRegistry:
             )
         except ProviderError as exc:
             return ToolResult.error(exc.public_code, params=exc.params)
+        except SQLAlchemyError:
+            raise
         except Exception:
             logger.exception("Tool %s failed", call.name)
             return ToolResult.error("tool.executionFailed")
