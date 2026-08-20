@@ -1064,10 +1064,11 @@ class AgentRuntime:
             raise AgentRunError("auth.accountDisabled")
 
     @classmethod
-    def _schedule_run(cls, run: AgentRun) -> None:
+    def _schedule_run(cls, run: AgentRun) -> asyncio.Task[None]:
         task = asyncio.create_task(cls._run(run.id))
         cls._tasks[run.id] = task
         task.add_done_callback(lambda _task: cls._tasks.pop(run.id, None))
+        return task
 
     @classmethod
     async def start(
@@ -1285,10 +1286,16 @@ class AgentRuntime:
         except BaseException:
             await rollback_and_discard()
             raise
-        cls._schedule_run(run)
+        run_task = cls._schedule_run(run)
         if generate_title:
             title_task = asyncio.create_task(
-                cls._generate_title(run.id, chat_session.id, content, chat_session.title)
+                cls._generate_title(
+                    run.id,
+                    chat_session.id,
+                    content,
+                    chat_session.title,
+                    after=run_task,
+                )
             )
             cls._title_tasks[title_task] = chat_session.user_id
             title_task.add_done_callback(lambda task: cls._title_tasks.pop(task, None))
@@ -4231,8 +4238,20 @@ class AgentRuntime:
 
     @staticmethod
     async def _generate_title(
-        run_id: UUID, session_id: UUID, content: str, expected_title: str
+        run_id: UUID,
+        session_id: UUID,
+        content: str,
+        expected_title: str,
+        *,
+        after: asyncio.Task[None] | None = None,
     ) -> None:
+        if after is not None:
+            try:
+                await asyncio.shield(asyncio.gather(after, return_exceptions=True))
+            except asyncio.CancelledError:
+                async with AsyncSessionFactory() as db:
+                    await AgentRuntime._fail_title_generation(db, session_id)
+                raise
         async with AsyncSessionFactory() as db:
             try:
                 chat_session = await db.get(ChatSession, session_id)

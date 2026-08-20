@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -137,6 +138,36 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch) -> None
             "title": "Standardmodelle konfigurieren",
         },
     )
+
+
+async def test_title_generation_waits_for_agent_run(monkeypatch) -> None:
+    release_run = asyncio.Event()
+    factory_calls = 0
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = None
+
+    async def run_worker() -> None:
+        await release_run.wait()
+
+    def session_factory():
+        nonlocal factory_calls
+        factory_calls += 1
+        return _SessionContext(db)
+
+    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", session_factory)
+    run_task = asyncio.create_task(run_worker())
+    title_task = asyncio.create_task(
+        AgentRuntime._generate_title(
+            uuid4(), uuid4(), "Erste Nachricht", "Erste Nachricht", after=run_task
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert factory_calls == 0
+
+    release_run.set()
+    await title_task
+    assert factory_calls == 1
 
 
 async def test_title_generation_does_not_overwrite_manual_title(monkeypatch) -> None:

@@ -179,7 +179,7 @@ async def test_start_rejects_unavailable_model_before_persisting(monkeypatch) ->
     db.commit.assert_not_awaited()
 
 
-async def test_start_schedules_title_generation_next_to_agent_run(monkeypatch) -> None:
+async def test_start_schedules_title_generation_after_agent_run(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="model")
     settings = AiSettings(
@@ -191,11 +191,14 @@ async def test_start_schedules_title_generation_next_to_agent_run(monkeypatch) -
     monkeypatch.setattr(AgentRuntime, "_run", run_worker)
     monkeypatch.setattr(AgentRuntime, "_generate_title", title_worker)
     scheduled = []
+    tasks = []
 
     def create_task(coroutine):
         scheduled.append(coroutine)
         coroutine.close()
-        return Mock()
+        task = Mock()
+        tasks.append(task)
+        return task
 
     monkeypatch.setattr(asyncio, "create_task", create_task)
     session = ChatSession(
@@ -221,7 +224,11 @@ async def test_start_schedules_title_generation_next_to_agent_run(monkeypatch) -
     assert session.title_generation_status == TitleGenerationStatus.RUNNING.value
     run_worker.assert_called_once_with(run_id)
     title_worker.assert_called_once_with(
-        run_id, session.id, "Erste Nachricht", "Erste Nachricht"
+        run_id,
+        session.id,
+        "Erste Nachricht",
+        "Erste Nachricht",
+        after=tasks[0],
     )
     assert list(AgentRuntime._title_tasks.values()) == [session.user_id]
     AgentRuntime._tasks.pop(run_id, None)
