@@ -1,5 +1,5 @@
 <template>
-  <div v-if="messages.length" class="chat-queued q-px-md q-pt-sm" aria-label="Vorgemerkte Nachrichten">
+  <div v-if="messages.length" class="chat-queued" aria-label="Vorgemerkte Nachrichten">
     <q-card flat class="app-surface-tonal chat-queued__card">
       <div class="row items-center q-gutter-sm q-mb-xs">
         <q-icon :name="paused ? 'error_outline' : 'schedule_send'" :color="paused ? 'negative' : undefined" size="18px" />
@@ -71,6 +71,12 @@ function attachmentLabel(message) {
 </script>
 
 <style scoped>
+.chat-queued {
+  width: min(900px, 100%);
+  margin: 0 auto;
+  padding: 8px 16px 0;
+}
+
 .chat-queued__card {
   padding: 8px 12px;
   border-radius: 12px;
@@ -87,5 +93,11 @@ function attachmentLabel(message) {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+@media (max-width: 700px) {
+  .chat-queued {
+    padding: 8px 8px 0;
+  }
 }
 </style>
