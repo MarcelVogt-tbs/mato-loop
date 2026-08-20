@@ -646,7 +646,7 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         strategy=MemoryRetrievalStrategy.BROWSE,
         readable_by=TrustLevel.PRIVATE,
         offset=0,
-        limit=50,
+        limit=10,
         has_more=False,
         total=1,
     )
@@ -669,7 +669,7 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         "system_prompt"
     ]
     assert retrieve.await_args.kwargs["mode"] == MemoryRetrieveMode.BROWSE
-    assert retrieve.await_args.kwargs["limit"] == 50
+    assert retrieve.await_args.kwargs["limit"] == 10
     execute_tool.assert_not_awaited()
     persisted = [
         call.args[0]
@@ -724,7 +724,7 @@ async def test_memory_overview_follow_up_uses_persisted_cursor(monkeypatch) -> N
         strategy=MemoryRetrievalStrategy.BROWSE,
         readable_by=TrustLevel.PRIVATE,
         offset=0,
-        limit=50,
+        limit=10,
         has_more=False,
         total=15,
     )
