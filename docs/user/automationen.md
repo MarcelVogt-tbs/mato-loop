@@ -12,9 +12,11 @@ Automationen führen einen festen Agent-Auftrag manuell oder nach Zeitplan aus. 
 
 Optional können Sie einen Skill auswählen, Laufzeiteinstellungen aus einer vorhandenen Session übernehmen und eine Ausgabe-Session festlegen. Modell, Memory-Modus, Websuche, Computer und Arbeitsordner werden beim Übernehmen in den eigenen Automation-Kontext kopiert. Spätere Änderungen der Quell-Session verändern die Automation nicht.
 
+Bei genau einem einmaligen Zeitplan kann die Automation nach einem erfolgreichen geplanten Lauf automatisch archiviert werden. Archivierte Automationen werden nicht mehr ausgeführt oder bearbeitet, behalten aber ihre Laufhistorie und können im Archiv endgültig gelöscht werden. Fehlgeschlagene, abgebrochene und übersprungene Läufe archivieren die Automation nicht.
+
 ## Zeitpläne
 
-Eine Automation kann mehrere Zeitpläne besitzen. Jeder Zeitplan verwendet einen Cron-Ausdruck mit fünf Feldern:
+Eine Automation kann mehrere wiederkehrende oder einmalige Zeitpläne besitzen. Ein wiederkehrender Zeitplan verwendet einen Cron-Ausdruck mit fünf Feldern:
 
 ```text
 Minute Stunde Tag Monat Wochentag
@@ -22,7 +24,9 @@ Minute Stunde Tag Monat Wochentag
 
 Das Beispiel `0 8 * * 1-5` startet die Automation montags bis freitags um 08:00 Uhr. Die IANA-Zeitzone, beispielsweise `Europe/Berlin`, bestimmt die lokale Uhrzeit.
 
-Bei der Zeitumstellung wird eine nicht existente lokale Uhrzeit im Frühjahr einmal direkt nach dem Zeitsprung ausgeführt. Eine doppelte Uhrzeit im Herbst läuft nur einmal. Während einer Serverunterbrechung verpasste Termine werden nicht nachgeholt. Treffen mehrere Zeitpläne derselben Automation gleichzeitig, werden sie zu einem Lauf zusammengefasst.
+Ein einmaliger Zeitplan verwendet stattdessen einen festen Ausführungszeitpunkt. Nach diesem Termin wird der Zeitplan deaktiviert und nicht erneut ausgeführt.
+
+Bei der Zeitumstellung wird eine nicht existente lokale Cron-Uhrzeit im Frühjahr einmal direkt nach dem Zeitsprung ausgeführt. Eine doppelte Uhrzeit im Herbst läuft nur einmal. Während einer Serverunterbrechung verpasste wiederkehrende und einmalige Termine werden nicht nachgeholt. Treffen mehrere Zeitpläne derselben Automation gleichzeitig, werden sie zu einem Lauf zusammengefasst.
 
 Ist ein vorheriger Lauf noch aktiv oder wartet auf eine Freigabe, wird der neue Termin übersprungen. Automatische Wiederholungen fehlgeschlagener Agent-Läufe gibt es nicht, da vorherige Tool-Aktionen bereits externe Wirkungen verursacht haben können.
 
@@ -34,7 +38,7 @@ Mit **Jetzt ausführen** können Sie eine Automation unabhängig von ihrem Aktiv
 
 Erfolgreiche und fehlgeschlagene Läufe erzeugen eine Benachrichtigung. Die Benachrichtigung öffnet den zugehörigen Lauf mit seinem vollständigen Ergebnis, Fehlerstatus und den beim Start gespeicherten Zeitplänen und Einstellungen.
 
-Eine optionale Ausgabe-Session erhält erfolgreiche Antworten zusätzlich als normale Agent-Nachricht. Ist dort gerade ein Lauf aktiv, wartet die Zustellung. Technische Zustellfehler werden bis zu dreimal versucht; anschließend erscheint eine Warnung mit einer manuellen Wiederholungsmöglichkeit.
+Eine optionale Ausgabe-Session erhält erfolgreiche Antworten zusätzlich als eigene Agent-Nachricht. Ist dort gerade ein Lauf aktiv, wartet die Zustellung. Technische Zustellfehler werden bis zu dreimal versucht; anschließend erscheint eine Warnung mit einer manuellen Wiederholungsmöglichkeit.
 
 Wenn die Ausgabe-Session als erforderlich markiert ist, kann sie nur zusammen mit den abhängigen Automationen gelöscht werden. Bei einer optionalen Verknüpfung können Sie die Bindung lösen und die Automation behalten.
 

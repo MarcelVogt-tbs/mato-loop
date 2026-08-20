@@ -1789,20 +1789,42 @@ class LoadSkillArguments(ToolArguments):
 
 
 class AutomationScheduleArguments(ToolArguments):
-    cron: str = Field(min_length=1, max_length=255)
-    timezone: str = Field(min_length=1, max_length=100)
+    cron: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+    )
+    timezone: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+    )
+    run_at: datetime | None = None
     enabled: bool = True
 
     @field_validator("cron", "timezone")
     @classmethod
-    def normalize_schedule_text(cls, value: str) -> str:
+    def normalize_schedule_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if not (cleaned := value.strip()):
             raise ValueError("schedule value must not be blank")
         return cleaned
 
     @model_validator(mode="after")
     def schedule_is_valid(self) -> AutomationScheduleArguments:
-        next_run_at(self.cron, self.timezone, datetime.now(UTC))
+        if self.run_at is None:
+            if self.cron is None or self.timezone is None:
+                raise ValueError("cron and timezone are required together")
+            next_run_at(self.cron, self.timezone, datetime.now(UTC))
+        elif (
+            self.cron is not None
+            or self.run_at.tzinfo is None
+            or self.run_at.utcoffset() is None
+        ):
+            raise ValueError("run_at must be timezone-aware and cannot use cron")
+        else:
+            self.timezone = None
         return self
 
 
@@ -1813,6 +1835,7 @@ class AutomationDefinitionArguments(ToolArguments):
     enabled: bool = True
     schedules: list[AutomationScheduleArguments] = Field(min_length=1, max_length=50)
     output_session_required: bool = False
+    archive_after_success: bool = False
 
     @field_validator("name", "task")
     @classmethod
@@ -1823,9 +1846,18 @@ class AutomationDefinitionArguments(ToolArguments):
 
     @model_validator(mode="after")
     def schedules_are_unique(self) -> AutomationDefinitionArguments:
-        keys = [(item.cron, item.timezone) for item in self.schedules]
+        keys = [
+            ("once", item.run_at)
+            if item.run_at is not None
+            else ("cron", item.cron, item.timezone)
+            for item in self.schedules
+        ]
         if len(keys) != len(set(keys)):
             raise ValueError("automation schedules must be unique")
+        if self.archive_after_success and (
+            len(self.schedules) != 1 or self.schedules[0].run_at is None
+        ):
+            raise ValueError("archive_after_success requires one one-time schedule")
         return self
 
 
@@ -4610,14 +4642,28 @@ def _automation_permission(
 def _automation_schedules(
     schedules: list[AutomationScheduleArguments],
 ) -> list[dict[str, Any]]:
-    return [item.model_dump() for item in schedules]
+    return [item.model_dump(exclude_none=True) for item in schedules]
+
+
+def _automation_schedule_json(schedules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            **item,
+            **(
+                {"run_at": item["run_at"].isoformat()}
+                if isinstance(item.get("run_at"), datetime)
+                else {}
+            ),
+        }
+        for item in schedules
+    ]
 
 
 def _automation_schedule_lines(schedules: list[dict[str, Any]]) -> tuple[str, ...]:
     return tuple(
-        f'{item["cron"]} | {item["timezone"]} | '
+        f'{item.get("run_at") or "{} | {}".format(item["cron"], item["timezone"])} | '
         f'{"aktiv" if item["enabled"] else "inaktiv"}'
-        for item in schedules
+        for item in _automation_schedule_json(schedules)
     )
 
 
@@ -4633,11 +4679,20 @@ async def _automation_definition_payload(
         "task": automation.task,
         "skillId": str(automation.skill_id) if automation.skill_id else None,
         "enabled": automation.enabled,
+        "archiveAfterSuccess": automation.archive_after_success,
+        "archivedAt": (
+            automation.archived_at.isoformat() if automation.archived_at else None
+        ),
         "revision": automation.revision,
         "schedules": [
             {
                 "cron": item.cron_expression,
                 "timezone": item.timezone,
+                "runAt": (
+                    item.next_run_at.isoformat()
+                    if item.cron_expression is None
+                    else None
+                ),
                 "enabled": item.enabled,
                 "nextRunAt": item.next_run_at.isoformat(),
             }
@@ -4673,7 +4728,10 @@ async def _list_automations(
             await context.db.scalars(
                 select(Automation)
                 .options(selectinload(Automation.schedules))
-                .where(Automation.user_id == context.session.user_id)
+                .where(
+                    Automation.user_id == context.session.user_id,
+                    Automation.archived_at.is_(None),
+                )
                 .order_by(Automation.updated_at.desc(), Automation.id.desc())
                 .limit(arguments.limit + 1)
             )
@@ -4757,7 +4815,8 @@ async def _create_automation(
             "task": arguments.task,
             "skillId": str(arguments.skill_id) if arguments.skill_id else None,
             "enabled": arguments.enabled,
-            "schedules": schedules,
+            "archiveAfterSuccess": arguments.archive_after_success,
+            "schedules": _automation_schedule_json(schedules),
             "output": "current" if deliver else "none",
             "outputSessionRequired": arguments.output_session_required,
         }
@@ -4776,6 +4835,10 @@ async def _create_automation(
                     "Zeitpläne", _automation_schedule_lines(schedules), "list"
                 ),
                 PermissionDisplayItem("Skill", skill.name if skill else "Keiner"),
+                PermissionDisplayItem(
+                    "Nach Erfolg",
+                    "Archivieren" if arguments.archive_after_success else "Aktiv lassen",
+                ),
                 PermissionDisplayItem(
                     "Ausgabe",
                     "Aktuelle Session" if deliver else "Keine Session",
@@ -4796,6 +4859,7 @@ async def _create_automation(
             output_session_id=context.session.id if deliver else None,
             output_session_required=arguments.output_session_required,
             schedules=schedules,
+            archive_after_success=arguments.archive_after_success,
         )
         await AutomationService.provision_and_commit(context.db, automation)
         return ToolResult.json(
@@ -4820,8 +4884,11 @@ def _automation_edit_diff(
 ) -> tuple[str, ...]:
     before_schedules = [
         {
-            "cron": item.cron_expression,
-            "timezone": item.timezone,
+            **(
+                {"run_at": item.next_run_at.isoformat()}
+                if item.cron_expression is None
+                else {"cron": item.cron_expression, "timezone": item.timezone}
+            ),
             "enabled": item.enabled,
         }
         for item in automation.schedules
@@ -4836,7 +4903,16 @@ def _automation_edit_diff(
             str(arguments.skill_id) if arguments.skill_id else "Keiner",
         ),
         ("Aktiv", str(automation.enabled), str(arguments.enabled)),
-        ("Zeitpläne", json.dumps(before_schedules), json.dumps(schedules)),
+        (
+            "Nach Erfolg archivieren",
+            str(automation.archive_after_success),
+            str(arguments.archive_after_success),
+        ),
+        (
+            "Zeitpläne",
+            json.dumps(before_schedules),
+            json.dumps(_automation_schedule_json(schedules)),
+        ),
         (
             "Ausgabe",
             str(automation.output_session_id) if automation.output_session_id else "Keine",
@@ -4864,6 +4940,8 @@ async def _edit_automation(
         automation = await AutomationService.owned(
             context.db, arguments.automation_id, context.session.user_id
         )
+        if automation.archived_at is not None:
+            raise AutomationError("automation.archived")
         if automation.revision != arguments.expected_revision:
             raise AutomationError(
                 "automation.changed", params={"currentRevision": automation.revision}
@@ -4928,6 +5006,7 @@ async def _edit_automation(
             output_session_id=output_session_id,
             output_session_required=arguments.output_session_required,
             schedules=schedules,
+            archive_after_success=arguments.archive_after_success,
         )
         await context.db.commit()
         return ToolResult.json(
@@ -4951,6 +5030,8 @@ async def _run_automation(
         automation = await AutomationService.owned(
             context.db, arguments.automation_id, context.session.user_id
         )
+        if automation.archived_at is not None:
+            raise AutomationError("automation.archived")
         if automation.revision != arguments.expected_revision:
             raise AutomationError(
                 "automation.changed", params={"currentRevision": automation.revision}
@@ -4965,7 +5046,7 @@ async def _run_automation(
                 title="Automation jetzt starten?",
                 summary=(
                     f'Der Agent möchte „{automation.name}“ in Revision '
-                    f"{automation.revision} einmalig einreihen."
+                    f"{automation.revision} manuell einreihen."
                 ),
                 display_items=(
                     PermissionDisplayItem("Auswirkung", "Ein Lauf wird eingereiht."),
@@ -5609,7 +5690,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "list_automations",
-            "List a bounded, compact page of the current user's automations.",
+            "List.",
             ListAutomationsArguments,
             _list_automations,
             group="automations",
@@ -5619,7 +5700,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "get_automation",
-            "Get one complete owned automation definition, including its current revision, schedules, output, and runtime.",
+            "Get by ID.",
             GetAutomationArguments,
             _get_automation,
             group="automations",
@@ -5629,7 +5710,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "create_automation",
-            "Create an automation only after an explicit request in the latest user message. Runtime is copied from the current session; output can only target the current session or none.",
+            "Create only if latest asks. Schedules use cron+timezone or run_at alone; archive_after_success needs one run_at.",
             CreateAutomationArguments,
             _create_automation,
             group="automations",
@@ -5639,7 +5720,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "edit_automation",
-            "Replace one owned automation at an exact revision only after an explicit request in the latest user message. Output mode is keep, current, or none; runtime can optionally be copied from the current session.",
+            "Edit exact revision only if latest asks; cron+timezone or run_at alone. archive_after_success needs one run_at.",
             EditAutomationArguments,
             _edit_automation,
             group="automations",
@@ -5649,7 +5730,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "run_automation",
-            "Queue one manual run of an owned automation at an exact revision only after an explicit request in the latest user message.",
+            "Run an exact revision only if latest asks.",
             RunAutomationArguments,
             _run_automation,
             group="automations",
@@ -5659,7 +5740,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "delete_automation",
-            "Permanently delete one owned automation and its execution history at an exact revision only after an explicit request in the latest user message.",
+            "Delete with history only if latest asks; exact revision.",
             DeleteAutomationArguments,
             _delete_automation,
             group="automations",

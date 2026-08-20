@@ -35,9 +35,19 @@ describe('automation store', () => {
     resolveFirst({ data: { items: [{ id: 'old' }] } })
     await first
 
-    expect(api.get).toHaveBeenCalledWith('/automations')
+    expect(api.get).toHaveBeenCalledWith('/automations', { params: { archived: false } })
     expect(store.items).toEqual([automation])
     expect(store.loading).toBe(false)
+  })
+
+  it('loads archived automations separately', async () => {
+    api.get.mockResolvedValue({ data: { items: [{ ...automation, archivedAt: '2026-08-20T14:20:00Z' }] } })
+    const store = useAutomationStore()
+
+    await store.fetchAutomations({ archived: true })
+
+    expect(api.get).toHaveBeenCalledWith('/automations', { params: { archived: true } })
+    expect(store.items[0].archivedAt).toBeTruthy()
   })
 
   it('creates, updates and deletes only after successful requests', async () => {

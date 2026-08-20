@@ -28,6 +28,17 @@ export function formatAbsoluteDateTime(value) {
   return date ? absoluteDateTimeFormatter.format(date) : ''
 }
 
+export function formatDateTimeLocalInput(value) {
+  const date = parseDate(value)
+  if (!date) return ''
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+}
+
+export function localDateTimeToIso(value) {
+  const date = parseDate(value)
+  return date ? date.toISOString() : ''
+}
+
 export function formatRelativeDateTime(value, nowValue = new Date()) {
   const date = parseDate(value)
   const now = parseDate(nowValue)

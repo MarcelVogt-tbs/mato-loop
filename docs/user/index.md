@@ -9,7 +9,7 @@ MatoLoop ist eine selbst gehostete Arbeitsumgebung für KI-gestützte Chats und 
 - [Dateien und Arbeitsordner](dateien-und-arbeitsordner.md): Computer, Arbeitsbereiche und Session-Dateien
 - [Freigaben und Datenfreigabe](freigaben-und-datenfreigabe.md): Entscheidungen über sensible Aktionen und externe Modelle
 - [Skills](skills.md): wiederverwendbare Anweisungen verwenden, im Chat erstellen und verwalten
-- [Automationen](automationen.md): Agent-Aufträge manuell oder mit mehreren Zeitplänen ausführen
+- [Automationen](automationen.md): Agent-Aufträge manuell sowie mit einmaligen oder wiederkehrenden Zeitplänen ausführen
 
 ## Administration
 

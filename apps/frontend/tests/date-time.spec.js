@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   formatAbsoluteDateTime,
-  formatRelativeDateTime
+  formatDateTimeLocalInput,
+  formatRelativeDateTime,
+  localDateTimeToIso
 } from '../src/utils/date-time'
 
 describe('date-time formatting', () => {
@@ -29,5 +31,12 @@ describe('date-time formatting', () => {
     expect(formatRelativeDateTime(null, now)).toBe('')
     expect(formatRelativeDateTime('invalid', now)).toBe('')
     expect(formatAbsoluteDateTime(null)).toBe('')
+  })
+
+  it('converts browser-local date-time input to and from ISO', () => {
+    const value = new Date(2026, 7, 21, 10, 30)
+
+    expect(formatDateTimeLocalInput(value)).toBe('2026-08-21T10:30')
+    expect(localDateTimeToIso('2026-08-21T10:30')).toBe(value.toISOString())
   })
 })

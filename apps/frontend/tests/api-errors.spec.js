@@ -149,10 +149,13 @@ describe('API error messages', () => {
       'Der Skill wird noch von einer Automation verwendet und kann nicht gelöscht werden.'
     )
     expect(apiErrorMessage({ error: { code: 'automation.scheduleInvalid' } })).toBe(
-      'Der Cron-Zeitplan ist ungültig.'
+      'Der Zeitplan ist ungültig.'
     )
     expect(apiErrorMessage({ error: { code: 'automation.alreadyRunning' } })).toBe(
       'Für diese Automation läuft bereits ein Auftrag.'
+    )
+    expect(apiErrorMessage({ error: { code: 'automation.archived' } })).toBe(
+      'Diese Automation ist archiviert.'
     )
     expect(apiErrorMessage({
       error: { code: 'session.automationOutputRequired', params: { automationCount: 2 } }

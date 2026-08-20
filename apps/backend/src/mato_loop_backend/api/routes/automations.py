@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -33,16 +34,37 @@ router = APIRouter(prefix="/automations", dependencies=[Depends(require_user)])
 
 
 class ScheduleRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
-    cron: str = Field(min_length=1, max_length=255)
-    timezone: str = Field(min_length=1, max_length=100)
+    cron: str | None = Field(default=None, min_length=1, max_length=255)
+    timezone: str | None = Field(default=None, min_length=1, max_length=100)
+    run_at: datetime | None = Field(default=None, alias="runAt")
     enabled: bool = True
 
     @field_validator("cron", "timezone")
     @classmethod
-    def normalize(cls, value: str) -> str:
-        return value.strip()
+    def normalize(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not (cleaned := value.strip()):
+            raise ValueError("schedule value must not be blank")
+        return cleaned
+
+    @field_validator("run_at")
+    @classmethod
+    def run_at_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("runAt must include a timezone offset")
+        return value
+
+    @model_validator(mode="after")
+    def schedule_kind_is_valid(self) -> ScheduleRequest:
+        if self.run_at is None:
+            if self.cron is None or self.timezone is None:
+                raise ValueError("cron and timezone are required together")
+        elif self.cron is not None or self.timezone is not None:
+            raise ValueError("runAt cannot be combined with cron or timezone")
+        return self
 
 
 class AutomationRequest(BaseModel):
@@ -55,6 +77,7 @@ class AutomationRequest(BaseModel):
     source_session_id: UUID | None = Field(default=None, alias="sourceSessionId")
     output_session_id: UUID | None = Field(default=None, alias="outputSessionId")
     output_session_required: bool = Field(default=False, alias="outputSessionRequired")
+    archive_after_success: bool = Field(default=False, alias="archiveAfterSuccess")
     schedules: list[ScheduleRequest] = Field(min_length=1, max_length=50)
     expected_revision: int | None = Field(default=None, alias="expectedRevision", ge=1)
 
@@ -84,6 +107,7 @@ def _raise(exc: AutomationError) -> None:
         "automation.sessionNotFound": 404,
         "skill.notFound": 404,
         "automation.alreadyRunning": 409,
+        "automation.archived": 409,
         "automation.deliveryUnavailable": 409,
         "automation.scheduleDuplicate": 409,
         "automation.runtimeActive": 409,
@@ -102,6 +126,7 @@ def _schedule_payload(item) -> dict[str, Any]:
         "id": str(item.id),
         "cron": item.cron_expression,
         "timezone": item.timezone,
+        "runAt": item.next_run_at.isoformat() if item.cron_expression is None else None,
         "enabled": item.enabled,
         "nextRunAt": item.next_run_at.isoformat(),
     }
@@ -122,13 +147,19 @@ async def _automation_payload(
         .order_by(AutomationRun.created_at.desc(), AutomationRun.id.desc())
     )
     schedules = [_schedule_payload(schedule) for schedule in item.schedules]
-    effective_enabled = item.enabled and any(schedule["enabled"] for schedule in schedules)
+    effective_enabled = (
+        item.archived_at is None
+        and item.enabled
+        and any(schedule["enabled"] for schedule in schedules)
+    )
     payload = {
         "id": str(item.id),
         "name": item.name,
         "task": item.task,
         "skillId": str(item.skill_id) if item.skill_id else None,
         "enabled": item.enabled,
+        "archiveAfterSuccess": item.archive_after_success,
+        "archivedAt": item.archived_at.isoformat() if item.archived_at else None,
         "revision": item.revision,
         "outputSessionId": str(item.output_session_id) if item.output_session_id else None,
         "outputSessionRequired": item.output_session_required,
@@ -138,9 +169,17 @@ async def _automation_payload(
         "effectiveState": {
             "enabled": effective_enabled,
             "activeRunStatus": active.status if active else None,
-            "nextRunAt": min(
-                (schedule["nextRunAt"] for schedule in schedules if schedule["enabled"]),
-                default=None,
+            "nextRunAt": (
+                min(
+                    (
+                        schedule["nextRunAt"]
+                        for schedule in schedules
+                        if schedule["enabled"]
+                    ),
+                    default=None,
+                )
+                if item.archived_at is None
+                else None
             ),
         },
         "createdAt": item.created_at.isoformat() if item.created_at else None,
@@ -233,13 +272,19 @@ def _schedule_drafts(payload: AutomationRequest) -> list[dict[str, Any]]:
 async def list_automations(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    archived: bool = False,
 ) -> dict[str, Any]:
     items = list(
         (
             await db.scalars(
                 select(Automation)
                 .options(selectinload(Automation.schedules))
-                .where(Automation.user_id == user.id)
+                .where(
+                    Automation.user_id == user.id,
+                    Automation.archived_at.is_not(None)
+                    if archived
+                    else Automation.archived_at.is_(None),
+                )
                 .order_by(Automation.updated_at.desc(), Automation.id.desc())
             )
         ).all()
@@ -265,6 +310,7 @@ async def create_automation(
             output_session_id=payload.output_session_id,
             output_session_required=payload.output_session_required,
             schedules=_schedule_drafts(payload),
+            archive_after_success=payload.archive_after_success,
         )
     except AutomationError as exc:
         _raise(exc)
@@ -311,6 +357,7 @@ async def replace_automation(
             output_session_id=payload.output_session_id,
             output_session_required=payload.output_session_required,
             schedules=_schedule_drafts(payload),
+            archive_after_success=payload.archive_after_success,
         )
         await db.commit()
         return await _automation_payload(db, item, detail=True)

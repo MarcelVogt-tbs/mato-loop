@@ -472,7 +472,7 @@ const TOOL_DESCRIPTIONS = {
   get_automation: 'Liest die vollständige Definition einer Automation.',
   create_automation: 'Erstellt eine Automation mit Zeitplänen und aktuellem Laufzeitkontext.',
   edit_automation: 'Ersetzt die Definition einer Automation an einer exakten Revision.',
-  run_automation: 'Startet einen einmaligen Lauf einer Automation.',
+  run_automation: 'Startet einen manuellen Lauf einer Automation.',
   delete_automation: 'Löscht eine Automation samt Laufhistorie dauerhaft.'
 }
 const form = reactive({

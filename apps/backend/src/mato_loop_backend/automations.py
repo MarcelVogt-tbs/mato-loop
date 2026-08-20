@@ -102,6 +102,18 @@ def copy_runtime(source: ChatSession, target: ChatSession) -> None:
 
 class AutomationService:
     @staticmethod
+    def validate_archive_policy(
+        schedules: list[dict[str, Any]], archive_after_success: bool
+    ) -> None:
+        if archive_after_success and (
+            len(schedules) != 1 or schedules[0].get("run_at") is None
+        ):
+            raise AutomationError(
+                "automation.archiveRequiresOneTimeSchedule",
+                field="archiveAfterSuccess",
+            )
+
+    @staticmethod
     async def owned(
         db: AsyncSession,
         automation_id: UUID,
@@ -160,19 +172,37 @@ class AutomationService:
         *,
         now: datetime,
     ) -> None:
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[Any, ...]] = set()
         replacement = []
         for draft in schedules:
-            key = (draft["cron"], draft["timezone"])
+            cron = draft.get("cron")
+            timezone = draft.get("timezone")
+            run_at = draft.get("run_at")
+            if run_at is None:
+                if not isinstance(cron, str) or not isinstance(timezone, str):
+                    raise AutomationError("automation.scheduleInvalid", field="schedules")
+                key = ("cron", cron, timezone)
+                next_at = next_run_at(cron, timezone, now)
+            else:
+                if (
+                    cron is not None
+                    or timezone is not None
+                    or not isinstance(run_at, datetime)
+                    or run_at.tzinfo is None
+                    or run_at.utcoffset() is None
+                ):
+                    raise AutomationError("automation.scheduleInvalid", field="runAt")
+                next_at = run_at.astimezone(UTC)
+                key = ("once", next_at)
             if key in seen:
                 raise AutomationError("automation.scheduleDuplicate", field="schedules")
             seen.add(key)
             replacement.append(
                 AutomationSchedule(
-                    cron_expression=draft["cron"],
-                    timezone=draft["timezone"],
+                    cron_expression=cron,
+                    timezone=timezone,
                     enabled=draft["enabled"],
-                    next_run_at=next_run_at(draft["cron"], draft["timezone"], now),
+                    next_run_at=next_at,
                 )
             )
         automation.schedules = replacement
@@ -190,6 +220,7 @@ class AutomationService:
         output_session_id: UUID | None,
         output_session_required: bool,
         schedules: list[dict[str, Any]],
+        archive_after_success: bool = False,
         now: datetime | None = None,
     ) -> Automation:
         await AutomationService.skill(db, user_id, skill_id)
@@ -206,6 +237,7 @@ class AutomationService:
             await AutomationService.normal_session(
                 db, output_session_id, user_id, field="outputSessionId"
             )
+        AutomationService.validate_archive_policy(schedules, archive_after_success)
         execution_session = ChatSession(
             id=uuid4(),
             user_id=user_id,
@@ -227,11 +259,14 @@ class AutomationService:
             task=task,
             skill_id=skill_id,
             enabled=enabled,
+            archive_after_success=archive_after_success,
         )
-        db.add_all([execution_session, automation])
         AutomationService.set_schedules(
             automation, schedules, now=now or datetime.now(UTC)
         )
+        db.add(execution_session)
+        await db.flush()
+        db.add(automation)
         await db.flush()
         return automation
 
@@ -269,8 +304,11 @@ class AutomationService:
         output_session_id: UUID | None,
         output_session_required: bool,
         schedules: list[dict[str, Any]],
+        archive_after_success: bool = False,
         now: datetime | None = None,
     ) -> Automation:
+        if automation.archived_at is not None:
+            raise AutomationError("automation.archived")
         if automation.revision != expected_revision:
             raise AutomationError(
                 "automation.changed", params={"currentRevision": automation.revision}
@@ -282,6 +320,7 @@ class AutomationService:
             await AutomationService.normal_session(
                 db, output_session_id, automation.user_id, field="outputSessionId"
             )
+        AutomationService.validate_archive_policy(schedules, archive_after_success)
         execution_session = await db.get(ChatSession, automation.execution_session_id)
         if execution_session is None:
             raise AutomationError("automation.executionSessionMissing")
@@ -303,6 +342,7 @@ class AutomationService:
         automation.task = task
         automation.skill_id = skill_id
         automation.enabled = enabled
+        automation.archive_after_success = archive_after_success
         automation.output_session_id = output_session_id
         automation.output_session_required = output_session_required
         automation.revision += 1
@@ -343,6 +383,8 @@ class AutomationService:
         automation = await AutomationService.owned(
             db, automation_id, user_id, for_update=True
         )
+        if automation.archived_at is not None:
+            raise AutomationError("automation.archived")
         if expected_revision is not None and automation.revision != expected_revision:
             raise AutomationError(
                 "automation.changed", params={"currentRevision": automation.revision}
@@ -468,6 +510,7 @@ class AutomationService:
                     .options(selectinload(Automation.schedules))
                     .where(
                         Automation.enabled.is_(True),
+                        Automation.archived_at.is_(None),
                         UserAccount.is_active.is_(True),
                         Automation.schedules.any(
                             and_(
@@ -495,13 +538,24 @@ class AutomationService:
                     "id": str(item.id),
                     "cron": item.cron_expression,
                     "timezone": item.timezone,
+                    "runAt": (
+                        item.next_run_at.isoformat()
+                        if item.cron_expression is None
+                        else None
+                    ),
                     "scheduledFor": item.next_run_at.isoformat(),
                 }
                 for item in due
             ]
             scheduled_for = min(item.next_run_at for item in due)
             for item in due:
-                item.next_run_at = next_run_at(item.cron_expression, item.timezone, now)
+                if item.cron_expression is None:
+                    item.enabled = False
+                else:
+                    assert item.timezone is not None
+                    item.next_run_at = next_run_at(
+                        item.cron_expression, item.timezone, now
+                    )
             active = await db.scalar(
                 select(AutomationRun.id).where(
                     AutomationRun.automation_id == automation.id,
@@ -674,6 +728,17 @@ class AutomationService:
                     run.delivery_status = "cancelled"
                     run.delivery_next_attempt_at = None
                 await AutomationService._notify_terminal(db, automation, run)
+                if (
+                    status == "completed"
+                    and automation.archive_after_success
+                    and automation.archived_at is None
+                    and run.trigger == "scheduled"
+                    and run.automation_revision == automation.revision
+                    and len(run.schedule_snapshots) == 1
+                    and run.schedule_snapshots[0].get("runAt") is not None
+                    and run.schedule_snapshots[0].get("cron") is None
+                ):
+                    automation.archived_at = run.completed_at
         await db.commit()
         return changed
 
@@ -867,9 +932,13 @@ class AutomationService:
             ).all()
         )
         for schedule in schedules:
-            schedule.next_run_at = next_run_at(
-                schedule.cron_expression, schedule.timezone, now
-            )
+            if schedule.cron_expression is None:
+                schedule.enabled = False
+            else:
+                assert schedule.timezone is not None
+                schedule.next_run_at = next_run_at(
+                    schedule.cron_expression, schedule.timezone, now
+                )
         await db.commit()
 
 

@@ -4,10 +4,13 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Automationen</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Wiederkehrende Agent-Aufträge mit Zeitplänen und eigener Laufhistorie verwalten.
+          Agent-Aufträge mit einmaligen oder wiederkehrenden Zeitplänen und eigener Laufhistorie verwalten.
         </p>
       </div>
-      <q-btn unelevated no-caps color="primary" icon="add" label="Automation erstellen" @click="openCreateDialog" />
+      <div class="row items-center q-gutter-sm wrap">
+        <q-toggle v-model="showArchived" color="primary" label="Archiv anzeigen" />
+        <q-btn v-if="!showArchived" unelevated no-caps color="primary" icon="add" label="Automation erstellen" @click="openCreateDialog" />
+      </div>
     </header>
 
     <q-banner v-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
@@ -22,8 +25,8 @@
     </q-card>
     <q-card v-else-if="loaded && !automations.items.length" flat class="app-surface text-center q-pa-xl">
       <q-icon name="schedule" size="48px" color="grey-6" />
-      <div class="text-subtitle1 text-weight-medium q-mt-sm">Noch keine Automationen</div>
-      <div class="text-body2 app-muted q-mt-xs">Erstelle einen Auftrag mit mindestens einem Zeitplan.</div>
+      <div class="text-subtitle1 text-weight-medium q-mt-sm">{{ showArchived ? 'Keine archivierten Automationen' : 'Noch keine Automationen' }}</div>
+      <div v-if="!showArchived" class="text-body2 app-muted q-mt-xs">Erstelle einen Auftrag mit mindestens einem Zeitplan.</div>
     </q-card>
     <div v-else class="row q-col-gutter-md">
       <div v-for="automation in automations.items" :key="automation.id" class="col-12 col-lg-6">
@@ -45,13 +48,14 @@
             </div>
             <div class="col-12 col-sm-6">
               <div class="text-caption app-muted">Nächster Lauf</div>
-              <div class="text-body2">{{ automation.enabled ? formatDate(automation.effectiveState?.nextRunAt) || 'Nicht geplant' : 'Pausiert' }}</div>
+              <div class="text-body2">{{ automation.archivedAt ? `Archiviert am ${formatDate(automation.archivedAt)}` : automation.enabled ? formatDate(automation.effectiveState?.nextRunAt) || 'Nicht geplant' : 'Pausiert' }}</div>
             </div>
           </q-card-section>
           <q-space />
           <q-separator />
           <q-card-actions align="right" class="q-pa-sm">
             <q-btn
+              v-if="!automation.archivedAt"
               flat no-caps icon="play_arrow" label="Jetzt ausführen"
               :loading="runningId === automation.id"
               :disable="Boolean(activeStatus(automation)) || Boolean(runningId)"
@@ -63,7 +67,7 @@
             <q-btn flat round icon="more_vert" :aria-label="`Aktionen für ${automation.name}`">
               <q-menu class="app-action-menu">
                 <q-list padding>
-                  <q-item clickable v-ripple v-close-popup @click="openEditDialog(automation)">
+                  <q-item v-if="!automation.archivedAt" clickable v-ripple v-close-popup @click="openEditDialog(automation)">
                     <q-item-section avatar><q-icon name="edit" /></q-item-section>
                     <q-item-section>Bearbeiten</q-item-section>
                   </q-item>
@@ -142,22 +146,35 @@
               <div class="row items-center justify-between q-mb-sm">
                 <div>
                   <div class="text-subtitle1 text-weight-bold">Zeitpläne</div>
-                  <div class="text-caption app-muted">Cron mit genau fünf Feldern, zum Beispiel „0 8 * * 1-5“.</div>
+                  <div class="text-caption app-muted">Wiederkehrend per Cron oder einmalig zu einem festen Zeitpunkt.</div>
                 </div>
                 <q-btn outline no-caps color="primary" icon="add" label="Zeitplan hinzufügen" :disable="form.schedules.length >= 50" @click="addSchedule" />
               </div>
               <q-card v-for="(schedule, index) in form.schedules" :key="index" flat class="app-surface-tonal q-mb-sm">
                 <q-card-section class="row q-col-gutter-sm items-start">
-                  <div class="col-12 col-md-6">
+                  <div class="col-12 col-md-3">
+                    <q-select
+                      v-model="schedule.kind" outlined dense emit-value map-options label="Ausführung"
+                      :options="scheduleKindOptions" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                    />
+                  </div>
+                  <div v-if="schedule.kind === 'cron'" class="col-12 col-md-4">
                     <q-input
                       v-model="schedule.cron" outlined dense :label="`Cron ${index + 1}`"
                       maxlength="255" lazy-rules :rules="[requiredRule, cronRule]" hint="Minute Stunde Tag Monat Wochentag"
                     />
                   </div>
-                  <div class="col-12 col-md-5">
+                  <div v-if="schedule.kind === 'cron'" class="col-12 col-md-4">
                     <q-input
                       v-model="schedule.timezone" outlined dense label="IANA-Zeitzone"
                       maxlength="100" lazy-rules :rules="[requiredRule]" hint="Zum Beispiel Europe/Berlin"
+                    />
+                  </div>
+                  <div v-else class="col-12 col-md-8">
+                    <q-input
+                      v-model="schedule.runAt" outlined dense stack-label type="datetime-local"
+                      label="Ausführungszeitpunkt" lazy-rules :rules="[requiredRule]"
+                      hint="Lokale Uhrzeit dieses Geräts"
                     />
                   </div>
                   <div class="col-12 col-md-1 row justify-end">
@@ -170,6 +187,10 @@
                   <div class="col-12"><q-toggle v-model="schedule.enabled" dense color="primary" label="Zeitplan aktiv" /></div>
                 </q-card-section>
               </q-card>
+              <q-toggle
+                v-if="canArchiveAfterSuccess" v-model="form.archiveAfterSuccess" dense color="primary"
+                label="Nach erfolgreicher Ausführung archivieren"
+              />
             </div>
           </q-card-section>
           <q-separator />
@@ -217,7 +238,7 @@
                 </div>
                 <div class="col-12 col-sm-6">
                   <div class="text-caption app-muted">Nächster Lauf</div>
-                  <div>{{ automations.detail.enabled ? formatDate(automations.detail.effectiveState?.nextRunAt) || 'Nicht geplant' : 'Pausiert' }}</div>
+                  <div>{{ automations.detail.archivedAt ? `Archiviert am ${formatDate(automations.detail.archivedAt)}` : automations.detail.enabled ? formatDate(automations.detail.effectiveState?.nextRunAt) || 'Nicht geplant' : 'Pausiert' }}</div>
                 </div>
               </div>
             </q-card-section>
@@ -225,12 +246,13 @@
 
           <q-expansion-item icon="schedule" label="Zeitpläne" header-class="text-weight-medium" default-opened>
             <q-list bordered separator class="rounded-borders">
-              <q-item v-for="schedule in automations.detail.schedules" :key="schedule.id || `${schedule.cron}-${schedule.timezone}`">
+              <q-item v-for="schedule in automations.detail.schedules" :key="schedule.id || schedule.runAt || `${schedule.cron}-${schedule.timezone}`">
                 <q-item-section>
-                  <q-item-label><code>{{ schedule.cron }}</code> · {{ schedule.timezone }}</q-item-label>
-                  <q-item-label caption>Nächster Lauf: {{ automations.detail.enabled && schedule.enabled ? formatDate(schedule.nextRunAt) || 'Nicht geplant' : 'Pausiert' }}</q-item-label>
+                  <q-item-label v-if="schedule.runAt">Einmalig am {{ formatDate(schedule.runAt) }}</q-item-label>
+                  <q-item-label v-else><code>{{ schedule.cron }}</code> · {{ schedule.timezone }}</q-item-label>
+                  <q-item-label caption>{{ schedule.runAt ? 'Ausführung' : 'Nächster Lauf' }}: {{ automations.detail.archivedAt ? 'Archiviert' : automations.detail.enabled && schedule.enabled ? formatDate(schedule.nextRunAt) || 'Nicht geplant' : automations.detail.enabled ? 'Inaktiv' : 'Pausiert' }}</q-item-label>
                 </q-item-section>
-                <q-item-section side><q-chip dense :color="automations.detail.enabled && schedule.enabled ? 'positive' : 'grey-6'" :text-color="statusTextColor(automations.detail.enabled && schedule.enabled ? 'positive' : 'grey-6')">{{ automations.detail.enabled && schedule.enabled ? 'Aktiv' : 'Pausiert' }}</q-chip></q-item-section>
+                  <q-item-section side><q-chip dense :color="automations.detail.enabled && schedule.enabled && !automations.detail.archivedAt ? 'positive' : 'grey-6'" :text-color="statusTextColor(automations.detail.enabled && schedule.enabled && !automations.detail.archivedAt ? 'positive' : 'grey-6')">{{ automations.detail.archivedAt ? 'Archiviert' : automations.detail.enabled && schedule.enabled ? 'Aktiv' : automations.detail.enabled ? 'Inaktiv' : 'Pausiert' }}</q-chip></q-item-section>
               </q-item>
             </q-list>
           </q-expansion-item>
@@ -275,7 +297,7 @@
                 <div v-if="automations.selectedRun.scheduleSnapshots?.length" class="q-mt-md">
                   <div class="text-caption app-muted">Zeitplan-Snapshots</div>
                   <div v-for="(snapshot, index) in automations.selectedRun.scheduleSnapshots" :key="index" class="text-body2">
-                    <code>{{ snapshot.cron }}</code> · {{ snapshot.timezone }}<span v-if="snapshot.scheduledFor"> · {{ formatDate(snapshot.scheduledFor) }}</span>
+                    <template v-if="snapshot.runAt">Einmalig</template><template v-else><code>{{ snapshot.cron }}</code> · {{ snapshot.timezone }}</template><span v-if="snapshot.scheduledFor"> · {{ formatDate(snapshot.scheduledFor) }}</span>
                   </div>
                 </div>
                 <div v-if="automations.selectedRun.result?.content" class="q-mt-md">
@@ -339,7 +361,7 @@ import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage } from 'src/utils/api-errors'
-import { formatAbsoluteDateTime } from 'src/utils/date-time'
+import { formatAbsoluteDateTime, formatDateTimeLocalInput, localDateTimeToIso } from 'src/utils/date-time'
 import { useAutomationStore } from 'stores/automations'
 import { useChatStore } from 'stores/chat'
 import { useSkillStore } from 'stores/skills'
@@ -356,6 +378,7 @@ const chat = useChatStore()
 const skills = useSkillStore()
 const loaded = ref(false)
 const loadFailed = ref(false)
+const showArchived = ref(false)
 const formDialogOpen = ref(false)
 const detailDialogOpen = ref(false)
 const formRef = ref(null)
@@ -371,11 +394,18 @@ let refreshPending = false
 let detailRequestRevision = 0
 const form = reactive({
   name: '', task: '', skillId: null, enabled: true, sourceSessionId: null, copyRuntime: false,
-  outputSessionId: null, outputSessionRequired: false, schedules: []
+  outputSessionId: null, outputSessionRequired: false, archiveAfterSuccess: false, schedules: []
 })
 
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 const cronRule = (value) => String(value || '').trim().split(/\s+/).length === 5 || 'Cron muss genau fünf Felder enthalten.'
+const scheduleKindOptions = [
+  { label: 'Wiederkehrend', value: 'cron' },
+  { label: 'Einmalig', value: 'once' }
+]
+const canArchiveAfterSuccess = computed(() => (
+  form.schedules.length === 1 && form.schedules[0]?.kind === 'once'
+))
 const sessionOptions = computed(() => {
   const options = chat.sessionCatalog.map((session) => ({ label: session.title, value: session.id }))
   for (const id of [form.outputSessionId, automations.detail?.outputSessionId]) {
@@ -410,13 +440,13 @@ const runtimeItems = computed(() => {
 })
 
 function blankSchedule() {
-  return { cron: '0 8 * * 1-5', timezone: 'Europe/Berlin', enabled: true }
+  return { kind: 'cron', cron: '0 8 * * 1-5', timezone: 'Europe/Berlin', runAt: '', enabled: true }
 }
 
 async function loadAutomations() {
   loadFailed.value = false
   try {
-    await automations.fetchAutomations()
+    await automations.fetchAutomations({ archived: showArchived.value })
     loaded.value = true
   } catch {
     loadFailed.value = true
@@ -434,7 +464,14 @@ function resetForm(automation = null) {
     copyRuntime: false,
     outputSessionId: automation?.outputSessionId || null,
     outputSessionRequired: automation?.outputSessionRequired || false,
-    schedules: automation?.schedules?.map(({ cron, timezone, enabled }) => ({ cron, timezone, enabled })) || [blankSchedule()]
+    archiveAfterSuccess: automation?.archiveAfterSuccess || false,
+    schedules: automation?.schedules?.map(({ cron, timezone, runAt, enabled }) => ({
+      kind: runAt ? 'once' : 'cron',
+      cron: cron || '0 8 * * 1-5',
+      timezone: timezone || 'Europe/Berlin',
+      runAt: formatDateTimeLocalInput(runAt),
+      enabled
+    })) || [blankSchedule()]
   })
 }
 
@@ -467,9 +504,10 @@ async function saveAutomation() {
     sourceSessionId: editingAutomation.value && !form.copyRuntime ? null : form.sourceSessionId || null,
     outputSessionId: form.outputSessionId || null,
     outputSessionRequired: Boolean(form.outputSessionId && form.outputSessionRequired),
-    schedules: form.schedules.map((schedule) => ({
-      cron: schedule.cron.trim(), timezone: schedule.timezone.trim(), enabled: schedule.enabled
-    }))
+    archiveAfterSuccess: Boolean(canArchiveAfterSuccess.value && form.archiveAfterSuccess),
+    schedules: form.schedules.map((schedule) => schedule.kind === 'once'
+      ? { runAt: localDateTimeToIso(schedule.runAt), enabled: schedule.enabled }
+      : { cron: schedule.cron.trim(), timezone: schedule.timezone.trim(), enabled: schedule.enabled })
   }
   try {
     if (editingAutomation.value) {
@@ -578,7 +616,10 @@ function activeStatus(automation) {
 }
 
 function stateLabel(automation) {
-  return activeStatus(automation) ? runStatus({ status: activeStatus(automation) }).label : automation.effectiveState?.enabled ? 'Aktiv' : 'Pausiert'
+  if (automation.archivedAt) return 'Archiviert'
+  return activeStatus(automation)
+    ? runStatus({ status: activeStatus(automation) }).label
+    : automation.effectiveState?.enabled ? 'Aktiv' : automation.enabled ? 'Nicht geplant' : 'Pausiert'
 }
 
 function stateColor(automation) {
@@ -655,6 +696,11 @@ watch(
   { immediate: true }
 )
 
+watch(showArchived, () => {
+  loaded.value = false
+  void loadAutomations()
+})
+
 onMounted(() => {
   void loadAutomations()
   void skills.fetchSkills().catch(() => {})
@@ -666,7 +712,7 @@ async function refreshAutomationState() {
   if (refreshPending) return
   refreshPending = true
   try {
-    await automations.fetchAutomations({ suppressErrorToast: true })
+    await automations.fetchAutomations({ archived: showArchived.value, suppressErrorToast: true })
     loaded.value = true
     loadFailed.value = false
     const automationId = route.query.automation

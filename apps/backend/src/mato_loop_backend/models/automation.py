@@ -53,6 +53,12 @@ class Automation(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
+    archive_after_success: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )
@@ -77,6 +83,11 @@ class Automation(Base):
 class AutomationSchedule(Base):
     __tablename__ = "automation_schedules"
     __table_args__ = (
+        CheckConstraint(
+            "(cron_expression IS NULL AND timezone IS NULL) OR "
+            "(cron_expression IS NOT NULL AND timezone IS NOT NULL)",
+            name="cron_timezone_pair",
+        ),
         UniqueConstraint("automation_id", "cron_expression", "timezone"),
         Index("ix_automation_schedules_due", "enabled", "next_run_at", "id"),
     )
@@ -85,8 +96,8 @@ class AutomationSchedule(Base):
     automation_id: Mapped[UUID] = mapped_column(
         ForeignKey("automations.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    cron_expression: Mapped[str] = mapped_column(String(255), nullable=False)
-    timezone: Mapped[str] = mapped_column(String(100), nullable=False)
+    cron_expression: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    timezone: Mapped[str | None] = mapped_column(String(100), nullable=True)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )

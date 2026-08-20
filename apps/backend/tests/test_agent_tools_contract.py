@@ -1005,6 +1005,8 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert definitions["edit_automation"].actions[0].mutates
     assert definitions["run_automation"].actions[0].mutates
     assert definitions["delete_automation"].actions[0].mutates
+    assert "cron+timezone or run_at alone" in definitions["create_automation"].description
+    assert "cron+timezone or run_at alone" in definitions["edit_automation"].description
     assert tool_registry.action_default("automation.read") == ToolExecutionPolicy.ASK
     assert tool_registry.action_default("automation.create") == ToolExecutionPolicy.ASK
     assert tool_registry.action_default("automation.update") == ToolExecutionPolicy.ASK
@@ -1017,6 +1019,10 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert "source_session_id" not in create["properties"]
     assert "output_session_id" not in create["properties"]
     assert create["properties"]["schedules"]["maxItems"] == 50
+    assert "archive_after_success" in create["properties"]
+    schedule_schema = create["properties"]["schedules"]["items"]
+    schedule_schema = create["$defs"][schedule_schema["$ref"].rsplit("/", 1)[-1]]
+    assert "run_at" in schedule_schema["properties"]
     edit = definitions["edit_automation"].schema()["parameters"]
     assert edit["properties"]["output_mode"]["enum"] == ["keep", "current", "none"]
     assert "expected_revision" in edit["required"]
@@ -1057,6 +1063,35 @@ async def test_automation_argument_validation_rejects_invalid_schedule_and_outpu
 
     assert first.metadata == {"errorCode": "tool.invalidArguments"}
     assert second.metadata == {"errorCode": "tool.invalidArguments"}
+
+
+def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
+    schedule = tools_module.AutomationScheduleArguments.model_validate(
+        {
+            "cron": None,
+            "timezone": "Europe/Berlin",
+            "run_at": "2026-08-21T10:30:00+02:00",
+        }
+    )
+
+    assert schedule.run_at == datetime(2026, 8, 21, 8, 30, tzinfo=UTC)
+    assert schedule.timezone is None
+    with pytest.raises(ValueError):
+        tools_module.AutomationScheduleArguments.model_validate(
+            {
+                "cron": "0 8 * * *",
+                "run_at": "2026-08-21T10:30:00+02:00",
+            }
+        )
+    with pytest.raises(ValueError):
+        tools_module.CreateAutomationArguments.model_validate(
+            {
+                "name": "Bericht",
+                "task": "Erstellen",
+                "archive_after_success": True,
+                "schedules": [{"cron": "0 8 * * *", "timezone": "UTC"}],
+            }
+        )
 
 
 async def test_create_automation_approval_uses_current_session_boundaries(
@@ -1102,6 +1137,7 @@ async def test_create_automation_approval_uses_current_session_boundaries(
     assert permission.approval_details["automationPreview"]["output"] == "current"
     assert create.await_args.kwargs["source_session_id"] == context.session.id
     assert create.await_args.kwargs["output_session_id"] == context.session.id
+    assert create.await_args.kwargs["archive_after_success"] is False
 
 
 async def test_run_automation_rechecks_revision_after_approval_and_queues_only(
