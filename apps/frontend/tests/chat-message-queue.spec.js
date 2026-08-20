@@ -14,7 +14,7 @@ vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
 import { useApprovalStore } from '../src/stores/approvals'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/stores/chat'
 import { useQuestionStore } from '../src/stores/questions'
 
 const originalURL = globalThis.URL
@@ -156,5 +156,72 @@ describe('chat message queue', () => {
 
     expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview')
     expect(chat.activeQueuedMessages).toEqual([])
+  })
+
+  it('keeps the queue waiting without pausing when the run is still active', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    chat.queueMessage('Zu früh')
+    chat.running = false
+    api.get.mockResolvedValue({ data: { id: 'session-1', messages: [], activeRun: null } })
+    api.post.mockRejectedValue({
+      response: { status: 409, data: { error: { code: 'session.runAlreadyActive' } } }
+    })
+
+    await chat.flushQueuedMessage()
+
+    expect(chat.activeQueuedMessages).toHaveLength(1)
+    expect(chat.queuedSendPaused).toBe(false)
+  })
+
+  it('drops an in-flight queued message when its session is deleted meanwhile', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    chat.attachmentDrafts.sessionMessages['session-1'] = [
+      { id: 'a1', file: new Blob(['x']), objectUrl: 'blob:preview' }
+    ]
+    chat.queueMessage('Verloren')
+    chat.running = false
+    api.post.mockImplementation(() => {
+      chat.clearQueuedMessages('session-1')
+      return Promise.reject(new Error('offline'))
+    })
+
+    await chat.flushQueuedMessage()
+
+    expect(chat.queuedMessages['session-1']).toBeUndefined()
+    expect(chat.queuedSendPaused).toBe(false)
+    expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview')
+  })
+
+  it('keeps the paused state per session', () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    chat.queueMessage('A')
+    chat.queuedSendPausedSessions['session-1'] = true
+    chat.queuedSendPausedSessions['session-2'] = true
+
+    chat.resumeQueuedSend()
+
+    expect(chat.queuedSendPausedSessions['session-2']).toBe(true)
+    expect(chat.queuedSendPaused).toBe(false)
+  })
+
+  it('counts queued attachments against the global draft budget', () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    chat.attachmentDrafts.sessionMessages['session-1'] = [
+      { id: 'a1', file: { size: MAX_ATTACHMENT_DRAFT_BYTES }, objectUrl: 'blob:preview' }
+    ]
+    chat.queueMessage('Groß')
+
+    const result = chat.addAttachmentFiles([{ name: 'bild.png', type: 'image/png', size: 1024 }])
+
+    expect(result.added).toBe(0)
+    expect(result.error).toContain('256 MiB')
   })
 })

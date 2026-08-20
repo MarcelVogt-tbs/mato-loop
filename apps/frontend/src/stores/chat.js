@@ -9,6 +9,7 @@ import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { agentActivityDisplayKey } from 'src/utils/agent-activity'
+import { errorDescriptor } from 'src/utils/api-errors'
 import { safeAttachmentUrl, toolFileActions } from 'src/utils/attachments'
 import { notifyError } from 'src/utils/notifications'
 
@@ -327,7 +328,8 @@ export const useChatStore = defineStore('chat', {
       sessionMessages: {}
     },
     queuedMessages: {},
-    queuedSendPausedSessionId: null
+    queuedSendPausedSessions: {},
+    discardedQueueSessions: new Set()
   }),
   getters: {
     activeSessionList: (state) => state.sessionLists[sessionScopeKey(state.sessionsProjectId)]
@@ -368,7 +370,7 @@ export const useChatStore = defineStore('chat', {
       state.current ? state.queuedMessages[state.current.id] || [] : []
     ),
     queuedSendPaused: (state) => Boolean(
-      state.current && state.queuedSendPausedSessionId === state.current.id
+      state.current && state.queuedSendPausedSessions[state.current.id]
     ),
     messageQueueActive() {
       if (!this.current) return false
@@ -577,7 +579,8 @@ export const useChatStore = defineStore('chat', {
       }
       const draftBytes = [
         ...Object.values(this.attachmentDrafts.newSessions).flat(),
-        ...Object.values(this.attachmentDrafts.sessionMessages).flat()
+        ...Object.values(this.attachmentDrafts.sessionMessages).flat(),
+        ...Object.values(this.queuedMessages).flat().flatMap((entry) => entry.attachments)
       ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
       if (draftBytes + incomingBytes > MAX_ATTACHMENT_DRAFT_BYTES) {
         return {
@@ -638,8 +641,11 @@ export const useChatStore = defineStore('chat', {
       releaseAttachmentDrafts(
         Object.values(this.queuedMessages).flat().flatMap((entry) => entry.attachments)
       )
+      for (const sessionId of Object.keys(this.queuedMessages)) {
+        this.discardedQueueSessions.add(sessionId)
+      }
       this.queuedMessages = {}
-      this.queuedSendPausedSessionId = null
+      this.queuedSendPausedSessions = {}
     },
     clearAllDrafts() {
       this.clearAllAttachmentDrafts()
@@ -1293,6 +1299,7 @@ export const useChatStore = defineStore('chat', {
         this.setAudioDictation(null, session.id)
         if (data.sessionDeleted) {
           this.removeCachedSession(session.id)
+          this.clearQueuedMessages(session.id)
           if (stillSelected) {
             this.current = null
             this.selectedSessionId = null
@@ -1409,7 +1416,7 @@ export const useChatStore = defineStore('chat', {
       releaseAttachmentDrafts(entry.attachments)
       if (!queue.length) {
         delete this.queuedMessages[sessionId]
-        if (this.queuedSendPausedSessionId === sessionId) this.queuedSendPausedSessionId = null
+        delete this.queuedSendPausedSessions[sessionId]
       }
       return entry
     },
@@ -1419,10 +1426,11 @@ export const useChatStore = defineStore('chat', {
         (this.queuedMessages[sessionId] || []).flatMap((entry) => entry.attachments)
       )
       delete this.queuedMessages[sessionId]
-      if (this.queuedSendPausedSessionId === sessionId) this.queuedSendPausedSessionId = null
+      delete this.queuedSendPausedSessions[sessionId]
+      this.discardedQueueSessions.add(sessionId)
     },
-    resumeQueuedSend() {
-      this.queuedSendPausedSessionId = null
+    resumeQueuedSend(sessionId = this.current?.id || null) {
+      if (sessionId) delete this.queuedSendPausedSessions[sessionId]
     },
     async flushQueuedMessage() {
       if (!this.queuedSendReady) return null
@@ -1431,16 +1439,25 @@ export const useChatStore = defineStore('chat', {
       const entry = queue.shift()
       if (!queue.length) delete this.queuedMessages[sessionId]
       if (!entry) return null
+      this.discardedQueueSessions.delete(sessionId)
       try {
         const result = await this.sendToCurrent(entry.content, entry.attachments, {
           clearDraft: false
         })
         releaseAttachmentDrafts(entry.attachments)
         return result
-      } catch {
+      } catch (error) {
+        if (this.discardedQueueSessions.has(sessionId)) {
+          releaseAttachmentDrafts(entry.attachments)
+          return null
+        }
         if (!this.queuedMessages[sessionId]) this.queuedMessages[sessionId] = []
         this.queuedMessages[sessionId].unshift(entry)
-        this.queuedSendPausedSessionId = sessionId
+        if (errorDescriptor(error)?.code === 'session.runAlreadyActive') {
+          void this.refreshSession(sessionId).catch(() => {})
+        } else {
+          this.queuedSendPausedSessions[sessionId] = true
+        }
         return null
       }
     },

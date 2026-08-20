@@ -1,5 +1,11 @@
 <template>
-  <div v-if="messages.length" class="chat-queued" aria-label="Vorgemerkte Nachrichten">
+  <div
+    v-if="messages.length"
+    class="chat-queued"
+    role="status"
+    aria-live="polite"
+    aria-label="Vorgemerkte Nachrichten"
+  >
     <q-card flat class="app-surface-tonal chat-queued__card">
       <div class="row items-center q-gutter-sm q-mb-xs">
         <q-icon :name="paused ? 'error_outline' : 'schedule_send'" :color="paused ? 'negative' : undefined" size="18px" />
