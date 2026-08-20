@@ -181,12 +181,7 @@ EventTiming = Annotated[
     TimedEventTiming | AllDayEventTiming,
     Field(
         discriminator="type",
-        description=(
-            'Every timing object requires type. Timed example: {"type":"timed",'
-            '"start":"2026-08-07T14:00:00+02:00","end":"2026-08-07T15:00:00+02:00"}. '
-            'All-day example: {"type":"allDay","start":"2026-08-07",'
-            '"end":"2026-08-08"}; the all-day end date is exclusive.'
-        ),
+        description="type required; timed values need timezone offsets; allDay end is exclusive.",
     ),
 ]
 
@@ -1886,8 +1881,8 @@ CALDAV_SHARED_TOOLS = (
     ToolContribution(
         name="calendar_create_event",
         description=(
-            "Create one timed or all-day calendar event. Timed events require both start and end; "
-            "all-day events require start and exclusive end dates."
+            "Create one calendar event. Only summary and timing are required; location and description "
+            "are optional. Timed events require start and end; all-day end is exclusive."
         ),
         arguments_model=CalendarCreateEventArguments,
         handler=calendar_create_event,
@@ -1901,7 +1896,10 @@ CALDAV_SHARED_TOOLS = (
     ),
     ToolContribution(
         name="calendar_update_event",
-        description="Update supported fields of a previously returned calendar event.",
+        description=(
+            "Update one returned calendar event at least one field. Timed events require start and end; "
+            "all-day end is exclusive."
+        ),
         arguments_model=CalendarUpdateEventArguments,
         handler=calendar_update_event,
         label="Termin ändern",

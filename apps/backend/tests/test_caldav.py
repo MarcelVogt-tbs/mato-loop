@@ -269,8 +269,10 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
     create_schema = tools["calendar_create_event"].arguments_model.model_json_schema()
     assert "idempotency_key" not in create_schema["properties"]
     assert create_schema["properties"]["timing"]["discriminator"]["propertyName"] == "type"
-    assert '"type":"timed"' in create_schema["properties"]["timing"]["description"]
-    assert '"type":"allDay"' in create_schema["properties"]["timing"]["description"]
+    assert "timed values need timezone offsets" in create_schema["properties"]["timing"][
+        "description"
+    ]
+    assert "allDay end is exclusive" in create_schema["properties"]["timing"]["description"]
     assert set(create_schema["$defs"]["TimedEventTiming"]["required"]) == {
         "type",
         "start",

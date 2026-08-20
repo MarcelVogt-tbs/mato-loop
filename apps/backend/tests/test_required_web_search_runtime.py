@@ -2419,7 +2419,7 @@ async def test_exact_tool_call_limit_allows_tool_free_final_response(monkeypatch
 
     assert len(requests) == 2
     assert requests[1]["tools"] == []
-    assert "Tool budget limit for this run: 1" in projections[0][
+    assert "Tool budget: 1 calls" in projections[0][
         "system_prompt"
     ]
     assert "Tool budget exhausted. No tools are available." in projections[1][

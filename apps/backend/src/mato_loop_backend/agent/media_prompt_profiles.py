@@ -39,13 +39,9 @@ GPT_IMAGE_2_EDIT_INSTRUCTIONS = (
     "change explicitly and preserve all unrequested structure and identity."
 )
 Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS = (
-    "Z-Image Turbo generation prompt contract: Write prompt as a fluent, detailed natural-language "
-    "scene description in English, not a keyword or tag list, unless the user explicitly provides "
-    "an exact prompt in another language. Copy exact prompts verbatim without translation or "
-    "expansion. Preserve quoted visible text and proper names exactly. Otherwise include only "
-    "relevant subject appearance and action, environment, spatial relationships and counts, "
-    "composition, viewpoint, lighting, color, style, and visible-text details. Do not add unrelated "
-    "elements, negative-prompt syntax, or generation parameters."
+    "Z-Image Turbo: write a fluent English scene description, not tags. Copy an explicit prompt "
+    "verbatim; preserve quoted text and proper names. Do not add negative-prompt syntax or generation "
+    "parameters."
 )
 
 _TOOL_CAPABILITIES = {

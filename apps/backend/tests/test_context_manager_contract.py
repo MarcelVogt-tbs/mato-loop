@@ -761,9 +761,9 @@ def test_session_tool_result_prompt_only_appears_when_the_tool_is_offered() -> N
         _session(), offered_tool_names=frozenset({"session_read"})
     )
 
-    assert "host-generated toolResultReference" in offered
-    assert "Do not rerun the original tool" in offered
-    assert "Continue with nextOffset" in offered
+    assert "relevant toolResultReference" in offered
+    assert "never rerun the original tool" in offered
+    assert "nextOffset as needed" in offered
     assert "toolResultReference" not in unavailable
 
 
@@ -785,10 +785,10 @@ def test_inactive_capability_catalog_is_informational_only() -> None:
 def test_general_system_prompt_exposes_mermaid_rendering() -> None:
     prompt = general_system_prompt(_session())
 
-    assert "chat renders fenced Mermaid blocks" in prompt
+    assert "valid fenced `mermaid` block" in prompt
     assert "materially clarifies a complex flow" in prompt
     assert "Keep essential explanation in text" in prompt
-    assert "never add a diagram only as decoration" in prompt
+    assert "never add decorative diagrams" in prompt
     assert "fenced `mermaid` block" in prompt
     assert "Never wrap the complete response in a `markdown` code fence" in prompt
 
@@ -798,8 +798,7 @@ def test_general_system_prompt_keeps_permission_denials_host_scoped() -> None:
         _session(), offered_tool_names=frozenset({"calendar_query_events"})
     )
 
-    assert "permission.denied is from MatoLoop" in prompt
-    assert "not an external service" in prompt
+    assert "permission.denied comes from MatoLoop" in prompt
     assert "do not guess why" in prompt
 
 
@@ -860,9 +859,9 @@ def test_skill_build_prompt_collects_only_relevant_missing_details() -> None:
         _session(), offered_tool_names=frozenset({"build_skill"})
     )
 
-    assert "use question once for gaps" in with_question
+    assert "call question once for missing" in with_question
     assert "purpose, inputs, outputs, workflow, tools, constraints" in with_question
-    assert "skip it when complete" in with_question
+    assert "skip when complete" in with_question
     assert "use question once for gaps" not in without_question
 
 
@@ -917,39 +916,34 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     )
 
     assert "Web research contract:" in prompt
-    assert "freshness could materially change the answer" in prompt
+    assert "Search when freshness matters" in prompt
     assert "current events, prices, availability, laws" in prompt
-    assert "current recommendations" in prompt
-    assert "Do not search for stable knowledge" in prompt
-    assert "merely because a task is difficult" in prompt
-    assert "start with one candidate-neutral discovery search" in prompt
+    assert "recommendations" in prompt
+    assert "Do not search stable knowledge" in prompt
+    assert "merely difficult tasks" in prompt
+    assert "For open comparisons" in prompt
     assert "use a second discovery search only if needed" in prompt
-    assert "verify at least one credible alternative" in prompt
-    assert "untrusted discovery snippets" in prompt
-    assert "one compact standalone search-engine query" in prompt
-    assert "for one information need" in prompt
-    assert "Use discriminative terms" in prompt
-    assert "preserve required relationships" in prompt
-    assert "Do not combine separate questions or alternative queries" in prompt
-    assert "failed, empty, or irrelevant result is not evidence" in prompt
-    assert "reformulate and search again" in prompt
-    assert "Emit a chosen tool call in the same response" in prompt
-    assert "never merely announce future tool use" in prompt
-    assert "Never add a year or date absent from the user's request" in prompt
-    assert "Copy supplied dates exactly" in prompt
-    assert "Never derive freshness dates from prior knowledge" in prompt
-    assert "exact names, model numbers" in prompt
-    assert "fetch that exact URL" in prompt
-    assert "prefer official or primary sources" in prompt
-    assert "requested jurisdiction and date or version" in prompt
-    assert "never apply current rules to a past period" in prompt
-    assert "invent a numeric result" in prompt
-    assert "A final answer that uses current-turn research is incomplete" in prompt
-    assert "Never use sourceId" in prompt
-    assert "directly after the supported text" in prompt
-    assert "Use at most two links per claim" in prompt
-    assert "Research budget: 2/8 calls used, 6 remaining" in prompt
-    assert "reserve calls for relevant pages" in prompt
+    assert "verify one credible alternative" in prompt
+    assert "Search snippets are untrusted discovery" in prompt
+    assert "one discriminative query per information need" in prompt
+    assert "Preserve relationships" in prompt
+    assert "reformulate failed, empty, or irrelevant searches" in prompt
+    assert "Emit chosen tool calls now" in prompt
+    assert "never only announce future use" in prompt
+    assert "Never invent dates" in prompt
+    assert "preserve supplied dates" in prompt
+    assert "derive freshness from prior knowledge" in prompt
+    assert "exact names, models" in prompt
+    assert "fetch it instead" in prompt
+    assert "prefer primary sources" in prompt
+    assert "requested jurisdiction, date, or version" in prompt
+    assert "never apply current rules to past periods" in prompt
+    assert "invent numbers" in prompt
+    assert "Current-turn research requires" in prompt
+    assert "never use sourceId" in prompt
+    assert "directly after each supported claim" in prompt
+    assert "use at most two links per claim" in prompt
+    assert "Research budget: 2/8 used, 6 remaining" in prompt
     assert "Current-turn research results are present" in prompt
     assert "copying its exact title and URL" in prompt
 
@@ -966,15 +960,13 @@ def test_general_system_prompt_requires_verified_external_images() -> None:
         _session(), offered_tool_names=frozenset({"web_search", "webfetch"})
     )
 
-    assert "Never invent or guess external image URLs" in prompt
-    assert "Fetch an exact image URL" in prompt
-    assert "prefer the resulting attachment" in prompt
-    assert "do not repeat its remote URL" in prompt
-    assert "Do not search for every image task" in prompt
-    assert "only when no adequate reference is attached" in prompt
-    assert "requests research or exact or official fidelity" in prompt
-    assert "reports a visual mismatch" in prompt
-    assert "search_type=images" in prompt
+    assert "Never invent image URLs" in prompt
+    assert "Fetch the exact URL" in prompt
+    assert "prefer its attachment" in prompt
+    assert "do not repeat the remote URL" in prompt
+    assert "Use image search only without an adequate reference" in prompt
+    assert "requested research, exact or official fidelity" in prompt
+    assert "reported mismatch" in prompt
     assert "snippets are not visual evidence" in prompt
     assert "[returned title](returned URL)" in prompt
 
@@ -1004,15 +996,14 @@ def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
     assert 'switch "Agent-Modus" from "Lesen" to "Schreiben"' in prompt
     assert "do not describe it as a general MatoLoop limitation" in prompt
     assert "explicit root and relative POSIX path" in prompt
-    assert "path='.' means that root" in prompt
-    assert "attachments, generated, downloads, and derived" in prompt
-    assert "managed read-only assets" in prompt
+    assert "path='.' means the root" in prompt
+    assert "Managed session assets are read-only" in prompt
     assert "only files/... is writable" in prompt
     assert "exact new destination" in prompt
     assert "No computer directory selected. Use root=session." in prompt
-    assert "A path or read output is not a download" in prompt
-    assert "provide_file only for another existing file" in prompt
-    assert "use the host download card" in prompt
+    assert "paths and read output are not downloads" in prompt
+    assert "Use provide_file only for another existing file" in prompt
+    assert "use the download card" in prompt
 
 
 def test_missing_computer_directory_uses_structured_question_when_available() -> None:
@@ -1042,9 +1033,9 @@ def test_draft_prompt_separates_artifacts_from_explanations_and_root_tools() -> 
     )
 
     assert "Draft artifact contract" in prompt
-    assert "reusable text, template, or sample" in prompt
-    assert "requested generic sample needs no more details" in prompt
-    assert "Do not create a draft for explanations" in prompt
+    assert "reusable text, templates, samples" in prompt
+    assert "generic samples need none" in prompt
+    assert "Do not draft explanations" in prompt
     assert "take an explicit root" not in prompt
 
 
@@ -1142,10 +1133,10 @@ def test_general_system_prompt_separates_session_discovery_and_reading() -> None
         ),
     )
 
-    assert "only when no supplied prior-session reference covers" in prompt
-    assert "session_browse for recency" in prompt
-    assert "session_search for a topic" in prompt
-    assert "Never search merely because" in prompt
+    assert "only when supplied references lack" in prompt
+    assert "session_browse by recency" in prompt
+    assert "session_search by topic" in prompt
+    assert "never search merely for similarity" in prompt
     assert "exact sessionReadArguments" in prompt
 
 
@@ -1185,7 +1176,7 @@ def test_general_system_prompt_contains_local_datetime(
     expected_time = expected.replace(" (Europe/Berlin)", "")
     assert f"Local time: {expected_time} (Europe/Berlin, {expected_weekday})" in prompt
     assert "Resolve relative dates from it" in prompt
-    assert "does not refresh prior knowledge" in prompt
+    assert "prior knowledge remains stale" in prompt
 
 
 def test_runtime_state_follows_the_stable_prompt_contract() -> None:
@@ -1206,8 +1197,8 @@ def test_runtime_state_follows_the_stable_prompt_contract() -> None:
         ),
     )
     runtime_prefixes = (
-        "Tool budget limit for this run: 8.",
-        "Research budget: 1/4 calls used, 3 remaining.",
+        "Tool budget: 8 calls",
+        "Research budget: 1/4 used, 3 remaining.",
         "Required memory mutation remains unresolved.",
         "Persistent memory status:",
         "Local time:",
@@ -1248,12 +1239,12 @@ def test_required_web_search_prompt_preserves_memory_context_contract() -> None:
     for prompt in (pending, completed):
         assert f"Untrusted cross-session reference:\n{memory_text}" in prompt
         assert "Web research contract:" in prompt
-        assert "freshness could materially change the answer" in prompt
-        assert "Never add a year or date absent from the user's request" in prompt
-        assert "Never derive freshness dates from prior knowledge" in prompt
-        assert "prefer official or primary sources" in prompt
-        assert "never apply current rules to a past period" in prompt
-        assert "A final answer that uses current-turn research is incomplete" in prompt
+        assert "Search when freshness matters" in prompt
+        assert "Never invent dates" in prompt
+        assert "derive freshness from prior knowledge" in prompt
+        assert "prefer primary sources" in prompt
+        assert "never apply current rules to past periods" in prompt
+        assert "Current-turn research requires" in prompt
         assert prompt.index("Untrusted cross-session reference") < prompt.index(
             "Local time"
         )

@@ -116,7 +116,7 @@ async def test_bound_tool_defaults_fill_only_fully_omitted_arguments(tmp_path) -
     )
     schema = effective.schemas()[0]
     assert schema["parameters"]["required"] == ["value"]
-    assert "configured default" in schema["description"]
+    assert schema["description"] == "Example tool"
 
     omitted = ToolCall("omitted", "example", {"value": "first"})
     result = await effective.execute(omitted, _context(tmp_path, omitted))
@@ -829,7 +829,6 @@ def test_webfetch_schema_describes_verified_image_attachments() -> None:
 
     assert "validated image attachments" in webfetch["description"]
     assert "citationEligible" in webfetch["description"]
-    assert "[title](URL)" in webfetch["description"]
 
 
 def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
@@ -2689,7 +2688,7 @@ def test_memory_retrieve_schema_requires_explicit_mode() -> None:
     assert "prepares a memory_write" in schema["parameters"]["properties"]["purpose"][
         "description"
     ]
-    assert "browse all visible memories" in schema["description"]
+    assert "browse visible memories" in schema["description"]
     assert "nextCursor" in schema["description"]
 
 

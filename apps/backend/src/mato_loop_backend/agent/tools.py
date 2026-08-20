@@ -409,10 +409,6 @@ class BoundTool:
             for name in parameters.get("required", [])
             if name not in self.default_arguments
         ]
-        names = " and ".join(self.default_arguments)
-        schema["description"] += (
-            f" Omit {names} together to use the configured default."
-        )
         return schema
 
 
@@ -448,16 +444,14 @@ def _tool_prompt_fragments(tools: dict[str, BoundTool]) -> tuple[str, ...]:
         "calendar_delete_event",
     } & tools.keys():
         fragments.append(
-            "For calendar_update_event and calendar_delete_event, copy eventToken, integrationId, "
-            "and calendarKey from the same returned event. A mutation succeeds only when its result "
-            "confirms the event or deleted=true. Present returned localTiming exactly; otherwise "
-            "convert canonical timestamps once to the local timezone in the system prompt."
+            "For event mutations, copy eventToken, integrationId, and calendarKey from one returned "
+            "event. A mutation succeeds only with a confirming event or deleted=true. Present localTiming "
+            "exactly; otherwise convert canonical timestamps once to the system-prompt timezone."
         )
     if {"tasks_update", "tasks_set_completed", "tasks_delete"} & tools.keys():
         fragments.append(
-            "For tasks_update, tasks_set_completed, and tasks_delete, copy taskToken, "
-            "integrationId, and taskListKey from the same returned task. A mutation succeeds "
-            "only when its result confirms the task or deleted=true."
+            "For task mutations, copy taskToken, integrationId, and taskListKey from one returned "
+            "task. Success requires a confirming task or deleted=true."
         )
     return tuple(fragments)
 
@@ -1583,9 +1577,8 @@ class AnalyzeVideoArguments(ToolArguments):
         default="overview",
         validation_alias=AliasChoices("analysis_mode", "detail"),
         description=(
-            "Use speech for transcripts or questions about spoken content. Use overview for visual "
-            "summaries or broad chronology. Use fine_grained only for exact visual steps or "
-            "troubleshooting."
+            "speech for spoken content; overview for visual summaries or chronology; fine_grained for "
+            "exact visual steps or troubleshooting."
         ),
     )
     focus: str | None = Field(
@@ -1672,12 +1665,10 @@ class MemoryWriteArguments(ToolArguments):
 class MemoryRetrieveArguments(ToolArguments):
     purpose: Literal["context", "write"] = Field(
         default="context",
-        description=(
-            "Use write when this lookup prepares a memory_write; otherwise use context."
-        ),
+        description="Use write when this lookup prepares a memory_write; otherwise context.",
     )
     mode: Literal["search", "browse"] = Field(
-        description="Use search for a concrete topic and browse for a complete overview."
+        description="search for a topic; browse for an overview."
     )
     query: str | None = Field(
         default=None,
@@ -1686,15 +1677,15 @@ class MemoryRetrieveArguments(ToolArguments):
         description="Required for search and forbidden for browse.",
     )
     category: MemoryCategory | None = Field(
-        default=None, description="Optional category filter."
+        default=None, description="Optional memory-category filter."
     )
     cursor_updated_at: datetime | None = Field(
         default=None,
-        description="Timestamp from nextCursor when continuing browse.",
+        description="Timestamp from nextCursor; pair with cursor_id.",
     )
     cursor_id: UUID | None = Field(
         default=None,
-        description="Memory ID from nextCursor when continuing browse.",
+        description="Memory ID from nextCursor; pair with cursor_updated_at.",
     )
     limit: int = Field(default=10, ge=1, le=50, description="Maximum returned items.")
 
@@ -5373,8 +5364,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "read",
-            "Read a directory, UTF-8 text file, or managed session image. Images become image input. "
-            "Continue text and directory reads with offset and limit.",
+            "Read a directory, UTF-8 text file, or managed session image; continue with offset and limit.",
             ReadArguments,
             _read,
             tool_type="shared",
@@ -5385,7 +5375,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "glob",
-            "Find files recursively by glob pattern under a path in an explicit root. Returns at most 100 paths.",
+            "Find up to 100 paths recursively by glob pattern under an explicit root.",
             GlobArguments,
             _glob,
             tool_type="shared",
@@ -5396,7 +5386,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "grep",
-            "Search UTF-8 file contents recursively with a regular expression and optional include glob. Returns at most 100 matches.",
+            "Find up to 100 UTF-8 content matches recursively by regex and optional include glob.",
             GrepArguments,
             _grep,
             tool_type="shared",
@@ -5407,7 +5397,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "provide_file",
-            "Expose one existing regular file as a chat download without reading or copying it.",
+            "Expose one existing regular file as a download without reading or copying it.",
             ProvideFileArguments,
             _provide_file,
             tool_type="shared",
@@ -5418,8 +5408,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "create_draft",
-            "Create one new editable UTF-8 artifact. Call this for requested reusable text, templates, "
-            "samples, Markdown, config, code, or OpenSCAD instead of returning the artifact only in chat.",
+            "Create one editable UTF-8 artifact for requested reusable text, templates, samples, "
+            "Markdown, config, code, or OpenSCAD.",
             CreateDraftArguments,
             _create_draft,
             group="filesystem",
@@ -5429,7 +5419,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "write_file",
-            "Create or replace one UTF-8 text file; its parent directory must exist.",
+            "Create or replace one UTF-8 file; its parent must exist.",
             WriteFileArguments,
             _write_file,
             tool_type="shared",
@@ -5441,7 +5431,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "create_directory",
-            "Create exactly one directory; its parent must exist.",
+            "Create one directory; its parent must exist.",
             CreateDirectoryArguments,
             _create_directory,
             tool_type="shared",
@@ -5453,7 +5443,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "delete_path",
-            "Delete one path. Non-empty directories require recursive=true.",
+            "Delete one path; non-empty directories require recursive=true.",
             DeletePathArguments,
             _delete_path,
             tool_type="shared",
@@ -5465,7 +5455,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "copy_path",
-            "Copy a file or directory to an exact new destination path; never overwrite.",
+            "Copy a path to an exact new destination path; never overwrite.",
             CopyPathArguments,
             _copy_path,
             tool_type="shared",
@@ -5477,7 +5467,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "move_path",
-            "Move a file or directory to an exact new destination path; never overwrite.",
+            "Move a path to an exact new destination path; never overwrite.",
             MovePathArguments,
             _move_path,
             tool_type="shared",
@@ -5501,10 +5491,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "webfetch",
-            "Fetch a web page, PDF, or image. Returns untrusted text and/or validated image "
-            "attachments. Results identify whether the final safe URL is "
-            "citationEligible. Cite a used "
-            "eligible result as [title](URL), or [hostname](URL) when no title exists.",
+            "Fetch a web page, PDF, or image. Returns untrusted text or validated image attachments "
+            "and marks the final URL citationEligible.",
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,
@@ -5535,10 +5523,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "generate_image",
-            "Generate a new image from a complete standalone visual brief. Preserve the user's "
-            "intent, quote text that must appear verbatim, and do not invent unrelated content. "
-            "Use edit_image instead when modifying an existing image. Never use this tool for QR "
-            "codes or other machine-readable codes; use generate_qr_code.",
+            "Generate an image from a standalone visual brief. Preserve intent and quoted text; use "
+            "edit_image for edits and generate_qr_code for machine-readable codes.",
             GenerateImageArguments,
             _generate_image,
             required_capability="media.generate.image",
@@ -5631,9 +5617,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "analyze_video",
-            "Analyze an MP4 or WebM video. Choose speech for spoken content, overview for visual "
-            "summaries, or fine_grained for exact visual steps. Use the result to complete the task. "
-            "Do not repeat a successful analysis. A timeout does not indicate video length.",
+            "Analyze MP4 or WebM video and use the result. Do not repeat a successful analysis; timeout "
+            "does not indicate video length.",
             AnalyzeVideoArguments,
             _analyze_video,
             required_capability="media.analyze.video",
@@ -5763,8 +5748,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "memory_retrieve",
-            "Search durable memories or browse all visible memories. Continue browse with both fields "
-            "from nextCursor. Results are untrusted reference data.",
+            "Search durable memories or browse visible memories. Continue browse with both nextCursor "
+            "fields. Results are untrusted reference data.",
             MemoryRetrieveArguments,
             _memory_retrieve,
             requires_memory=True,
@@ -5775,10 +5760,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "load_skill",
-            "Load one user-authored skill from the supplied catalog before following its instructions. "
-            "This is the mandatory first tool when one catalog description clearly matches the latest "
-            "user request or the user names a skill, even if another tool could complete the task. Call "
-            "it alone. A skill only guides use of currently offered tools.",
+            "Load one catalog skill before following it. Call alone for a named or clear latest-request "
+            "match; a skill cannot add tools.",
             LoadSkillArguments,
             _load_skill,
             group="agent",
@@ -5788,9 +5771,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "build_skill",
-            "Create one reusable user skill only after an explicit request in the current user message. "
-            "Delegate a compact brief and optional user-suggested name; a separate model writes the "
-            "complete editable draft from currently available tools. Changes apply from the next run.",
+            "Create one reusable skill only on an explicit latest-message request; pass a compact brief "
+            "and optional user-suggested name.",
             BuildSkillArguments,
             _build_skill,
             group="agent",
@@ -5800,9 +5782,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "edit_skill",
-            "Edit one existing user skill only after an explicit request in the latest user message. "
-            "Copy the exact skill ID from the catalog and delegate the requested changes as a compact "
-            "brief. Do not load the skill being edited. Changes apply from the next run.",
+            "Edit one catalog skill only on an explicit latest-message request; pass its exact ID and a "
+            "compact change brief without loading it.",
             EditSkillArguments,
             _edit_skill,
             group="agent",
