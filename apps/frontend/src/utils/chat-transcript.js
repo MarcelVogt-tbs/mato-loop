@@ -189,6 +189,7 @@ export function buildChatTranscript(
 
   for (const message of transcriptMessages) {
     if (message.role === 'assistant') {
+      if (message.sourceType === 'automationRun') flushAssistantSection()
       assistantSection.push(message)
       continue
     }

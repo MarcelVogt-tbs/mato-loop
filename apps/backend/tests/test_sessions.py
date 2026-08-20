@@ -731,6 +731,31 @@ def test_message_payload_exposes_only_validated_research_snapshot() -> None:
     assert "not-public" not in str(payload)
 
 
+def test_message_payload_exposes_only_validated_automation_source() -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="assistant",
+        content="Erinnerung",
+        provider_data={
+            "secret": "private-state",
+            "_matoloop": {
+                "source": {
+                    "type": "automationRun",
+                    "automationId": str(uuid4()),
+                    "runId": str(uuid4()),
+                }
+            },
+        },
+    )
+
+    payload = message_payload(message)
+
+    assert payload["sourceType"] == "automationRun"
+    assert "private-state" not in str(payload)
+    assert "automationId" not in str(payload)
+
+
 def test_message_payload_validates_file_actions_and_derives_download_url() -> None:
     session_id = uuid4()
     execution_agent_id = str(uuid4())

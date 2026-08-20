@@ -259,6 +259,28 @@ describe('chat transcript', () => {
     })
   })
 
+  it('starts a new assistant turn for delivered automation messages', () => {
+    const transcript = buildChatTranscript([
+      { id: 'user-1', role: 'user', content: 'Erinnere mich später' },
+      { id: 'assistant-1', role: 'assistant', content: 'Automation erstellt' },
+      {
+        id: 'automation-1', role: 'assistant', content: 'Erinnerung',
+        sourceType: 'automationRun', createdAt: '2026-08-20T14:20:00Z'
+      }
+    ])
+
+    expect(transcript.messages).toHaveLength(3)
+    expect(transcript.messages[1]).toMatchObject({
+      showAgentLabel: true,
+      continuesAssistantTurn: false
+    })
+    expect(transcript.messages[2]).toMatchObject({
+      showAgentLabel: true,
+      continuesAssistantTurn: false,
+      createdAt: '2026-08-20T14:20:00Z'
+    })
+  })
+
   it('does not mix reused tool call ids across user requests', () => {
     const messages = [
       { id: 'user-1', role: 'user', content: 'Erste Anfrage' },

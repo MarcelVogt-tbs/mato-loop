@@ -993,6 +993,7 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
         if item.error_code
         else None
     )
+    source = (item.provider_data or {}).get("_matoloop", {}).get("source", {})
     return {
         "id": str(item.id),
         "role": item.role,
@@ -1012,6 +1013,11 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
         "reasoning": item.public_reasoning,
         "research": _public_research_payload(item),
         "fileActions": _public_file_actions(item),
+        "sourceType": (
+            "automationRun"
+            if isinstance(source, dict) and source.get("type") == "automationRun"
+            else None
+        ),
         "error": error.payload() if error else None,
         "retryAvailable": retry_available,
         "attachments": [

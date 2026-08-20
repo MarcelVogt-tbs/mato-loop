@@ -4,7 +4,7 @@
       icon="notifications"
       title="Benachrichtigungen"
       title-id="notification-app-title"
-      subtitle="Hinweise aus allen Sessions"
+      subtitle="Dauerhafte Hinweise zu Automationsläufen"
       refreshable
       refresh-label="Benachrichtigungen aktualisieren"
       :refreshing="notifications.loading"
@@ -42,7 +42,7 @@
         <div v-else-if="notifications.loaded && !notifications.items.length" class="column items-center text-center q-pa-xl">
           <q-icon name="notifications_none" size="48px" color="grey-6" />
           <div class="text-subtitle1 text-weight-medium q-mt-sm">Noch keine Hinweise</div>
-          <div class="text-body2 app-muted q-mt-xs">Erinnerungen und Ergebnisse von Automationen erscheinen hier.</div>
+          <div class="text-body2 app-muted q-mt-xs">Ergebnisse und Fehler von Automationen erscheinen hier.</div>
         </div>
         <q-list v-else bordered separator class="rounded-borders app-surface">
           <q-item
