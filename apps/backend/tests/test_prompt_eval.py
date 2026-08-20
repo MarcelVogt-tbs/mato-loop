@@ -103,12 +103,18 @@ def test_evaluator_parser_supports_resume() -> None:
             "--schema-ab",
             "--reasoning-effort",
             "none",
+            "--message-layout",
+            "time-tail",
+            "--slimming-variant",
+            "schema-structural",
         ]
     )
     assert args.resume is True
     assert args.resume_allow_source_drift is True
     assert args.schema_ab is True
     assert args.reasoning_effort == "none"
+    assert args.message_layout == ["time-tail"]
+    assert args.slimming_variant == ["schema-structural"]
 
 
 def test_inventory_names_all_host_only_contracts_with_precise_reasons() -> None:
@@ -169,7 +175,9 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
         _case("z_image_turbo_uses_natural_language_prompt")
     )
     assert "GPT Image 2 generation prompt contract" in gpt_image_messages[0]["content"]
-    assert "Z-Image Turbo generation prompt contract" in z_image_messages[0]["content"]
+    assert "Z-Image Turbo: write a fluent English scene description" in z_image_messages[0][
+        "content"
+    ]
     edit_messages, _tools = build_case(_case("edit_image_confines_precise_object_change"))
     assert "base canvas and must remain the same scene" in edit_messages[0]["content"]
     assert "Do not zoom, pan, rotate, reframe, extend, recrop" in edit_messages[0]["content"]
@@ -203,7 +211,7 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
         "question",
         "calendar_create_event",
     ]
-    assert "instead of asking" in calendar_messages[0]["content"]
+    assert "never ask in assistant text" in calendar_messages[0]["content"]
     assert "Call this tool alone" in calendar_tools[0]["description"]
     assert "Never use question for console commands" in calendar_tools[0]["description"]
     assert "Use shell_run for requested execution only" in calendar_tools[0]["description"]
@@ -212,7 +220,7 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     assert "free_text" in question_parameters
     assert "QuestionOption" in question_parameters
     assert "default_answers" in question_parameters
-    assert "Timed events require both start and end" in calendar_tools[1]["description"]
+    assert "Timed events require start and end" in calendar_tools[1]["description"]
     assert "A default calendar is configured" in calendar_messages[0]["content"]
     assert "Missing-information contract" in calendar_messages[0]["content"]
     create_required = calendar_tools[1]["parameters"]["required"]
@@ -240,24 +248,120 @@ def test_schema_ab_groups_full_tool_families_without_changing_production_registr
     assert set(tool_registry._definitions).isdisjoint(SCHEMA_GROUPS)
 
 
-def test_grouped_schema_keeps_action_branches_and_resolvable_definitions() -> None:
+def test_grouped_schema_keeps_required_action_and_resolvable_definitions() -> None:
     case = next(case for case in SCHEMA_AB_CASES if case.id == "complete_calendar_event_skips_question")
     _messages, tools = build_case(case, "grouped")
     calendar = next(tool for tool in tools if tool["name"] == "calendar_action")
     parameters = calendar["parameters"]
-    actions = {
-        branch["properties"]["action"]["enum"][0]
-        for branch in parameters["oneOf"]
-    }
-    refs = {
-        value
-        for branch in parameters["oneOf"]
-        for value in _schema_values(branch, "$ref")
-    }
+    actions = set(parameters["properties"]["action"]["enum"])
+    refs = set(_schema_values(parameters, "$ref"))
 
     assert actions == {action for action, _tool_name in SCHEMA_GROUPS["calendar_action"]}
     assert all(reference.removeprefix("#/$defs/") in parameters["$defs"] for reference in refs)
-    assert all(branch["additionalProperties"] is False for branch in parameters["oneOf"])
+    assert parameters["required"] == ["action"]
+    assert parameters["additionalProperties"] is False
+    assert "Required fields: summary, timing" in parameters["properties"]["action"]["description"]
+
+
+def test_prompt_slimming_schema_variants_preserve_tools_and_validation_shape() -> None:
+    case = next(case for case in SCHEMA_AB_CASES if case.id == "complete_calendar_event_skips_question")
+    current_messages, current = build_case(case, "narrow")
+    _messages, structural = build_case(
+        case, "narrow", slimming_variant="schema-structural"
+    )
+    _messages, compact = build_case(case, "narrow", slimming_variant="schema-compact")
+    _messages, prose_v2 = build_case(case, "narrow", slimming_variant="schema-prose-v2")
+    after_messages, after = build_case(case, "narrow")
+
+    assert current_messages == after_messages
+    assert current == after
+    assert [tool["name"] for tool in current] == [tool["name"] for tool in structural]
+    assert [tool["name"] for tool in current] == [tool["name"] for tool in compact]
+    assert len(json.dumps(compact)) < len(json.dumps(structural)) < len(json.dumps(current))
+    assert prose_v2 == current
+    for baseline, candidate in zip(current, compact, strict=True):
+        assert set(candidate["parameters"].get("properties", {})) == set(
+            baseline["parameters"].get("properties", {})
+        )
+        assert candidate["parameters"].get("required", []) == baseline["parameters"].get(
+            "required", []
+        )
+        assert candidate["parameters"].get("additionalProperties") is False
+
+    def without_descriptions(value):
+        if isinstance(value, dict):
+            return {
+                name: without_descriptions(item)
+                for name, item in value.items()
+                if name != "description"
+            }
+        if isinstance(value, list):
+            return [without_descriptions(item) for item in value]
+        return value
+
+    for baseline, candidate in zip(current, prose_v2, strict=True):
+        assert without_descriptions(candidate["parameters"]) == without_descriptions(
+            baseline["parameters"]
+        )
+
+    update = next(tool for tool in compact if tool["name"] == "calendar_update_event")
+    properties = update["parameters"]["properties"]
+    assert {item.get("type") for item in properties["description"]["anyOf"]} == {
+        "string",
+        "null",
+    }
+    assert "anyOf" not in properties["summary"]
+
+
+def test_prompt_slimming_system_variants_keep_security_contracts() -> None:
+    case = next(case for case in SCHEMA_AB_CASES if case.id == "complete_calendar_event_skips_question")
+    current, tools = build_case(case, "narrow")
+    deduped, deduped_tools = build_case(
+        case, "narrow", slimming_variant="prompt-dedupe"
+    )
+    compact, compact_tools = build_case(
+        case, "narrow", slimming_variant="prompt-compact"
+    )
+    combined, combined_tools = build_case(
+        case, "narrow", slimming_variant="combined-compact"
+    )
+    prose_v2, prose_v2_tools = build_case(
+        case, "narrow", slimming_variant="prompt-prose-v2"
+    )
+
+    assert tools == deduped_tools == compact_tools
+    assert tools == prose_v2_tools
+    assert [tool["name"] for tool in tools] == [tool["name"] for tool in combined_tools]
+    assert current[-1] == deduped[-1] == compact[-1] == combined[-1]
+    assert len(compact[0]["content"]) < len(deduped[0]["content"]) < len(
+        current[0]["content"]
+    )
+    assert len(json.dumps(combined_tools)) < len(json.dumps(tools))
+    assert prose_v2 == current
+    for required in (
+        "Host security",
+        "untrusted data",
+        "permission.denied",
+        "Host approval",
+        "relative POSIX path",
+    ):
+        assert required in compact[0]["content"]
+        assert required in prose_v2[0]["content"]
+    for required in (
+        "Never invent image URLs",
+        "citationEligible",
+        "For high-stakes claims",
+    ):
+        assert required in prose_v2[0]["content"]
+
+
+def test_promoted_v2_system_prompt_matches_all_production_general_cases() -> None:
+    for case in SCHEMA_AB_CASES:
+        current, _current_tools = build_case(case, "narrow")
+        candidate, _candidate_tools = build_case(
+            case, "narrow", slimming_variant="combined-v2"
+        )
+        assert candidate == current
 
 
 def _schema_values(value, target):
@@ -344,8 +448,8 @@ def test_grouped_result_rejects_unknown_action() -> None:
 
     build_messages, build_tools = build_case(_case("vague_skill_build_uses_question"))
     assert [tool["name"] for tool in build_tools] == ["question", "build_skill"]
-    assert "use question once for gaps" in build_messages[0]["content"]
-    assert "Delegate a compact brief" in build_messages[0]["content"]
+    assert "call question once for missing" in build_messages[0]["content"]
+    assert "Pass a compact brief" in build_messages[0]["content"]
     assert build_tools[1]["parameters"]["required"] == ["brief"]
 
 
@@ -509,6 +613,42 @@ def test_evaluator_applies_tool_argument_defaults() -> None:
     )
 
     assert evaluate(case, result) == []
+
+
+def test_one_time_automation_evaluator_accepts_redundant_timezone() -> None:
+    case = _case("explicit_one_time_automation_create_uses_run_at")
+    arguments = {
+        "name": "Erinnerung",
+        "task": "Erinnere mich an Niklas",
+        "enabled": True,
+        "deliver_to_current_session": True,
+        "schedules": [
+            {
+                "cron": None,
+                "timezone": "Europe/Berlin",
+                "run_at": "2026-07-27T12:00:00+02:00",
+                "enabled": True,
+            }
+        ],
+    }
+
+    assert evaluate(
+        case,
+        ProviderResult(
+            tool_calls=[ToolCall("automation", "create_automation", arguments)]
+        ),
+    ) == []
+
+    arguments["schedules"][0]["cron"] = "0 12 * * *"
+    assert any(
+        "invalid arguments" in failure
+        for failure in evaluate(
+            case,
+            ProviderResult(
+                tool_calls=[ToolCall("automation", "create_automation", arguments)]
+            ),
+        )
+    )
 
 
 def test_question_evaluator_checks_selection_payload_and_continuation() -> None:
@@ -694,6 +834,289 @@ def test_general_cases_place_summaries_history_and_current_turns_in_production_o
         "assistant",
         "tool",
     ]
+
+
+def test_evaluator_only_layouts_move_prompt_paragraphs_without_changing_text() -> None:
+    case = _case("memory_write_pending_requires_tool")
+    current, current_tools = build_case(case)
+    user_prefix, user_prefix_tools = build_case(case, message_layout="time-user-prefix")
+    time_before, time_before_tools = build_case(case, message_layout="time-before-user")
+    runtime_before, runtime_before_tools = build_case(
+        case, message_layout="runtime-before-user"
+    )
+    time_tail, time_tools = build_case(case, message_layout="time-tail")
+    runtime_tail, runtime_tools = build_case(case, message_layout="runtime-tail")
+
+    assert (
+        current_tools
+        == user_prefix_tools
+        == time_before_tools
+        == runtime_before_tools
+        == time_tools
+        == runtime_tools
+    )
+    assert [message["role"] for message in current] == ["system", "user"]
+    assert [message["role"] for message in user_prefix] == ["system", "user"]
+    assert "Local time:" not in user_prefix[0]["content"]
+    assert user_prefix[1]["content"].startswith("Local time:")
+    assert user_prefix[1]["content"].endswith(case.user)
+    assert [message["role"] for message in time_before] == ["system", "system", "user"]
+    assert [message["role"] for message in runtime_before] == [
+        "system",
+        "system",
+        "user",
+    ]
+    assert [message["role"] for message in time_tail] == ["system", "user", "system"]
+    assert [message["role"] for message in runtime_tail] == ["system", "user", "system"]
+    assert time_before[1]["content"].startswith("Local time:")
+    assert runtime_before[1]["content"].startswith(
+        "Required memory mutation remains unresolved."
+    )
+    assert time_tail[-1]["content"].startswith("Local time:")
+    assert "Local time:" not in time_tail[0]["content"]
+    assert runtime_tail[-1]["content"].startswith(
+        "Required memory mutation remains unresolved."
+    )
+    assert "Required memory mutation remains unresolved." in runtime_tail[-1]["content"]
+    assert "Local time:" in runtime_tail[-1]["content"]
+
+    original_paragraphs = sorted(current[0]["content"].split("\n\n"))
+    for messages in (time_before, runtime_before, time_tail, runtime_tail):
+        moved_paragraphs = sorted(
+            paragraph
+            for message in messages
+            if message["role"] == "system"
+            for paragraph in message["content"].split("\n\n")
+        )
+        assert moved_paragraphs == original_paragraphs
+    assert sorted(
+        paragraph
+        for message in user_prefix
+        for paragraph in message["content"].split("\n\n")
+    ) == sorted((*original_paragraphs, case.user))
+
+
+def test_memory_tool_result_layout_moves_all_dynamic_memory_after_user() -> None:
+    case = _case("memory_prompt_injection_is_ignored")
+    current, current_tools = build_case(case)
+    candidate, candidate_tools = build_case(case, message_layout="memory-tool-result")
+
+    assert candidate_tools == current_tools
+    assert case.memory_text in current[0]["content"]
+    assert case.memory_text not in candidate[0]["content"]
+    assert "Persistent memory status:" not in candidate[0]["content"]
+    assert "Host-prefetched memory contract:" in candidate[0]["content"]
+    assert [message["role"] for message in candidate] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    call = candidate[2]["tool_calls"][0]
+    assert call == {
+        "id": "eval-memory-prefetch-1",
+        "name": "memory_retrieve",
+        "arguments": {
+            "purpose": "context",
+            "mode": "search",
+            "query": case.user,
+        },
+    }
+    assert candidate[3]["tool_call_id"] == call["id"]
+    result = json.loads(candidate[3]["content"])
+    assert result["purpose"] == "context"
+    assert result["mode"] == "search"
+    assert result["hostPrefetch"] == {
+        "additionalRetrievalAllowed": True,
+        "visibleEntries": {"total": 4, "pinned": 1},
+        "overviewHasMore": False,
+    }
+    assert result["contentIsUntrusted"] is True
+    memory_data = result["untrustedMemoryData"]
+    assert memory_data["durableMemories"][0]["content"].startswith("Mein Name ist Lara.")
+    assert memory_data["priorSessionEpisodes"][0]["sessionReadArguments"] == {
+        "session_id": str(prompt_eval.SESSION_ID),
+        "around_message_id": str(prompt_eval.DREAM_USER_MESSAGE_ID),
+    }
+
+
+def test_memory_tool_result_layout_has_stable_overview_prefix() -> None:
+    partial = _case("prefetched_memory_overview_reports_partial_status")
+    exhausted = _case("prefetched_memory_overview_reports_exhausted_status")
+    current_partial, _tools = build_case(partial)
+    current_exhausted, _tools = build_case(exhausted)
+    candidate_partial, partial_tools = build_case(
+        partial, message_layout="memory-tool-result"
+    )
+    candidate_exhausted, exhausted_tools = build_case(
+        exhausted, message_layout="memory-tool-result"
+    )
+
+    assert current_partial[0]["content"] != current_exhausted[0]["content"]
+    assert partial_tools == exhausted_tools
+    assert candidate_partial[:3] == candidate_exhausted[:3]
+    assert [message["role"] for message in candidate_partial] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    call = candidate_partial[2]["tool_calls"][0]
+    assert call["arguments"] == {"purpose": "context", "mode": "browse"}
+    partial_result = json.loads(candidate_partial[3]["content"])
+    exhausted_result = json.loads(candidate_exhausted[3]["content"])
+    assert len(partial_result["untrustedMemoryData"]["memoryOverview"]) == 10
+    assert partial_result["hostPrefetch"]["additionalRetrievalAllowed"] is False
+    assert partial_result["hostPrefetch"]["overviewHasMore"] is True
+    assert exhausted_result["hostPrefetch"]["overviewHasMore"] is False
+    assert candidate_partial[3]["content"] != candidate_exhausted[3]["content"]
+
+
+def test_memory_tool_driven_layout_starts_without_prefetched_memory() -> None:
+    case = _case("prefetched_memory_overview_reports_partial_status")
+    current, current_tools = build_case(case)
+    candidate, candidate_tools = build_case(case, message_layout="memory-tool-driven")
+
+    assert candidate_tools == current_tools
+    assert case.memory_text in current[0]["content"]
+    assert case.memory_text not in candidate[0]["content"]
+    assert "Persistent memory status:" not in candidate[0]["content"]
+    assert "Use memory_retrieve" in candidate[0]["content"]
+    assert "Never answer a memory overview from general knowledge" in candidate[0]["content"]
+    assert [message["role"] for message in candidate] == ["system", "user"]
+
+
+async def test_memory_tool_driven_layout_runs_canonical_retrieval_round(
+    monkeypatch,
+) -> None:
+    case = _case("prefetched_memory_overview_reports_partial_status")
+    requests = []
+    responses = iter(
+        (
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        "eval-model-memory-1",
+                        "memory_retrieve",
+                        {"purpose": "context", "mode": "browse"},
+                    )
+                ],
+                usage={"input_tokens": 100, "cached_input_tokens": 60},
+            ),
+            ProviderResult(
+                content="Klavier ist enthalten; die Übersicht ist nicht vollständig.",
+                usage={"input_tokens": 120, "cached_input_tokens": 100},
+            ),
+        )
+    )
+
+    async def complete(**kwargs):
+        request = kwargs["request"]
+        requests.append(json.loads(json.dumps(request.messages)))
+        return next(responses)
+
+    monkeypatch.setattr(prompt_eval, "chat_completions", complete)
+    args = prompt_eval.parser().parse_args([])
+    raw, result, failures, messages, _tools, rounds = await prompt_eval._request_case(
+        args,
+        case,
+        "eval-model",
+        "production",
+        "memory-tool-driven",
+    )
+
+    assert failures == []
+    assert evaluate(case, result) == []
+    assert len(rounds) == 2
+    assert len(requests) == 2
+    assert [message["role"] for message in requests[0]] == ["system", "user"]
+    assert [message["role"] for message in requests[1]] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    tool_result = json.loads(messages[-1]["content"])
+    assert tool_result["mode"] == "browse"
+    assert tool_result["strategy"] == "browse"
+    assert len(tool_result["items"]) == 10
+    assert tool_result["hasMore"] is True
+    assert tool_result["nextCursor"]["cursor_id"] == tool_result["items"][-1]["id"]
+    assert raw.usage == result.usage == {
+        "input_tokens": 220,
+        "cached_input_tokens": 160,
+    }
+
+
+def test_memory_tool_result_precedes_existing_tool_round() -> None:
+    messages, _tools = build_case(
+        _case("hostile_identity_and_external_identity_injections_are_subordinate"),
+        message_layout="memory-tool-result",
+    )
+
+    assert [message["role"] for message in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+    ]
+    assert messages[2]["tool_calls"][0]["id"] == messages[3]["tool_call_id"]
+    assert messages[4]["tool_calls"][0]["id"] == messages[5]["tool_call_id"]
+    assert messages[2]["tool_calls"][0]["id"] != messages[4]["tool_calls"][0]["id"]
+
+
+def test_runtime_tail_preserves_summary_and_tool_call_result_adjacency() -> None:
+    compacted, _tools = build_case(
+        _case("compacted_and_omitted_history_remain_untrusted"),
+        message_layout="runtime-tail",
+    )
+    continued, _tools = build_case(
+        _case("successful_tool_result_allows_confirmation"),
+        message_layout="runtime-tail",
+    )
+
+    assert [message["role"] for message in compacted] == [
+        "system",
+        "system",
+        "assistant",
+        "tool",
+        "user",
+        "system",
+    ]
+    assert compacted[1]["content"].startswith("Compacted session history.")
+    assert [message["role"] for message in continued] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "system",
+    ]
+    assert continued[2]["tool_calls"][0]["id"] == continued[3]["tool_call_id"]
+
+    before, _tools = build_case(
+        _case("successful_tool_result_allows_confirmation"),
+        message_layout="runtime-before-user",
+    )
+    assert [message["role"] for message in before] == [
+        "system",
+        "system",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert before[3]["tool_calls"][0]["id"] == before[4]["tool_call_id"]
+
+
+def test_layout_keeps_privacy_instruction_in_first_system_message() -> None:
+    messages, _tools = build_case(
+        _case("privacy_placeholder_is_copied_in_text"),
+        message_layout="runtime-tail",
+    )
+
+    assert PRIVACY_MARKER_INSTRUCTION in messages[0]["content"]
+    assert PRIVACY_MARKER_INSTRUCTION not in messages[-1]["content"]
 
 
 def test_evaluate_checks_expected_tool_arguments_and_paths() -> None:
@@ -1262,10 +1685,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 127
-    assert payload["contractCount"] == 273
-    assert "Cases: 146" in report
+    assert payload["contractCount"] == 274
+    assert "Cases: 147" in report
     assert "Semantic contracts: 127" in report
-    assert "All inventory rows: 273" in report
+    assert "All inventory rows: 274" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report
@@ -1275,7 +1698,7 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     assert "## Per-case pass rates" in report
     assert "| one | 1/1 | 100.0% |" in report
     assert "| two | 0/1 | 0.0% |" in report
-    assert "| two | model-a | 1 | bad output |" in report
+    assert "| two | model-a | current | current | 1 | bad output |" in report
     assert "Latency seconds: 2.000" in report
     assert "Input tokens: 15" in report
     assert "Output tokens: 6" in report
