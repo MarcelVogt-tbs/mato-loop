@@ -210,6 +210,40 @@ describe('chat message queue', () => {
     expect(chat.queuedSendPaused).toBe(false)
   })
 
+  it('sends a queued message in the background after switching sessions', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    chat.queueMessage('Im Hintergrund')
+    chat.selectedSessionId = 'session-2'
+    api.post.mockResolvedValue({ data: { message: { id: 'm1' } } })
+    api.get.mockResolvedValue({ data: { items: [], hasMore: false } })
+
+    await chat.flushQueuedMessageInBackground('session-1')
+
+    expect(api.post).toHaveBeenCalledWith('/sessions/session-1/messages', {
+      content: 'Im Hintergrund'
+    })
+    expect(chat.queuedMessages['session-1']).toBeUndefined()
+  })
+
+  it('retries a background send while the other session is still running', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    chat.queueMessage('Noch nicht')
+    chat.selectedSessionId = 'session-2'
+    api.post.mockRejectedValue({
+      response: { status: 409, data: { error: { code: 'session.runAlreadyActive' } } }
+    })
+
+    await chat.flushQueuedMessageInBackground('session-1')
+
+    expect(chat.queuedMessages['session-1']).toHaveLength(1)
+    expect(chat.queuedSendPausedSessions['session-1']).toBeUndefined()
+    chat.cancelBackgroundQueueFlush('session-1')
+  })
+
   it('counts queued attachments against the global draft budget', () => {
     const chat = useChatStore()
     activeSession(chat)

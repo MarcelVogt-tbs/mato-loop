@@ -70,6 +70,10 @@ export async function downloadMessageAttachmentFiles(message) {
   }))
 }
 
+const BACKGROUND_QUEUE_DELAY_MS = 1500
+const BACKGROUND_QUEUE_RETRY_MS = 4000
+const backgroundQueueTimers = new Map()
+
 export function buildAttachmentFormData(payload, attachments) {
   const formData = new FormData()
   formData.append('payload', JSON.stringify(payload))
@@ -643,6 +647,7 @@ export const useChatStore = defineStore('chat', {
       )
       for (const sessionId of Object.keys(this.queuedMessages)) {
         this.discardedQueueSessions.add(sessionId)
+        this.cancelBackgroundQueueFlush(sessionId)
       }
       this.queuedMessages = {}
       this.queuedSendPausedSessions = {}
@@ -948,6 +953,7 @@ export const useChatStore = defineStore('chat', {
       this.sessionRequestController?.abort()
       this.selectedSessionId = id
       this.sessionLoadVersion += 1
+      this.syncBackgroundQueueFlush()
       const loadVersion = this.sessionLoadVersion
       const controller = id ? markRaw(new AbortController()) : null
       this.sessionRequestController = controller
@@ -1406,6 +1412,7 @@ export const useChatStore = defineStore('chat', {
       delete this.attachmentDrafts.sessionMessages[sessionId]
       delete this.drafts.sessionMessages[sessionId]
       this.persistDrafts()
+      this.syncBackgroundQueueFlush()
       return entry
     },
     removeQueuedMessage(id, sessionId = this.current?.id || null) {
@@ -1417,11 +1424,13 @@ export const useChatStore = defineStore('chat', {
       if (!queue.length) {
         delete this.queuedMessages[sessionId]
         delete this.queuedSendPausedSessions[sessionId]
+        this.cancelBackgroundQueueFlush(sessionId)
       }
       return entry
     },
     clearQueuedMessages(sessionId = this.current?.id || null) {
       if (!sessionId) return
+      this.cancelBackgroundQueueFlush(sessionId)
       releaseAttachmentDrafts(
         (this.queuedMessages[sessionId] || []).flatMap((entry) => entry.attachments)
       )
@@ -1430,10 +1439,11 @@ export const useChatStore = defineStore('chat', {
       this.discardedQueueSessions.add(sessionId)
     },
     resumeQueuedSend(sessionId = this.current?.id || null) {
-      if (sessionId) delete this.queuedSendPausedSessions[sessionId]
+      if (!sessionId) return
+      delete this.queuedSendPausedSessions[sessionId]
+      this.syncBackgroundQueueFlush()
     },
-    async flushQueuedMessage() {
-      if (!this.queuedSendReady) return null
+    async flushQueuedMessage() {      if (!this.queuedSendReady) return null
       const sessionId = this.current.id
       const queue = this.queuedMessages[sessionId] || []
       const entry = queue.shift()
@@ -1455,6 +1465,67 @@ export const useChatStore = defineStore('chat', {
         this.queuedMessages[sessionId].unshift(entry)
         if (errorDescriptor(error)?.code === 'session.runAlreadyActive') {
           void this.refreshSession(sessionId).catch(() => {})
+        } else {
+          this.queuedSendPausedSessions[sessionId] = true
+        }
+        return null
+      }
+    },
+    scheduleBackgroundQueueFlush(sessionId, delay = BACKGROUND_QUEUE_DELAY_MS) {
+      if (!sessionId || backgroundQueueTimers.has(sessionId)) return
+      const timer = setTimeout(() => {
+        backgroundQueueTimers.delete(sessionId)
+        void this.flushQueuedMessageInBackground(sessionId)
+      }, delay)
+      backgroundQueueTimers.set(sessionId, timer)
+    },
+    cancelBackgroundQueueFlush(sessionId) {
+      const timer = backgroundQueueTimers.get(sessionId)
+      if (timer === undefined) return
+      clearTimeout(timer)
+      backgroundQueueTimers.delete(sessionId)
+    },
+    syncBackgroundQueueFlush() {
+      for (const sessionId of backgroundQueueTimers.keys()) {
+        if (!this.queuedMessages[sessionId] || sessionId === this.selectedSessionId) {
+          this.cancelBackgroundQueueFlush(sessionId)
+        }
+      }
+      for (const sessionId of Object.keys(this.queuedMessages)) {
+        if (sessionId === this.selectedSessionId) continue
+        if (this.queuedSendPausedSessions[sessionId]) continue
+        this.scheduleBackgroundQueueFlush(sessionId)
+      }
+    },
+    async flushQueuedMessageInBackground(sessionId) {
+      if (!sessionId || sessionId === this.selectedSessionId) return null
+      if (this.queuedSendPausedSessions[sessionId]) return null
+      const queue = this.queuedMessages[sessionId] || []
+      const entry = queue.shift()
+      if (!queue.length) delete this.queuedMessages[sessionId]
+      if (!entry) return null
+      this.discardedQueueSessions.delete(sessionId)
+      try {
+        const payload = { content: entry.content }
+        await (entry.attachments.length
+          ? api.post(
+              `/sessions/${sessionId}/messages/with-attachments`,
+              buildAttachmentFormData(payload, entry.attachments)
+            )
+          : api.post(`/sessions/${sessionId}/messages`, payload))
+        releaseAttachmentDrafts(entry.attachments)
+        void this.refreshSessions().catch(() => {})
+        this.syncBackgroundQueueFlush()
+        return true
+      } catch (error) {
+        if (this.discardedQueueSessions.has(sessionId)) {
+          releaseAttachmentDrafts(entry.attachments)
+          return null
+        }
+        if (!this.queuedMessages[sessionId]) this.queuedMessages[sessionId] = []
+        this.queuedMessages[sessionId].unshift(entry)
+        if (errorDescriptor(error)?.code === 'session.runAlreadyActive') {
+          this.scheduleBackgroundQueueFlush(sessionId, BACKGROUND_QUEUE_RETRY_MS)
         } else {
           this.queuedSendPausedSessions[sessionId] = true
         }
