@@ -330,9 +330,17 @@ export function supportedAttachments(attachments) {
 
 export function toolOutputAttachments(tool, attachments) {
   const supported = supportedAttachments(attachments)
-  return tool?.name === 'render_openscad'
-    ? supported.filter((attachment) => attachment.kind !== 'image')
-    : supported
+  if (tool?.name === 'render_openscad') {
+    return supported.filter((attachment) => attachment.kind !== 'image')
+  }
+  if (tool?.name === 'webfetch') {
+    return supported.filter((attachment) => !(
+      attachment.category === 'downloaded'
+      && Number.isInteger(attachment.metadata.pageNumber)
+      && attachment.metadata.pageNumber > 0
+    ))
+  }
+  return supported
 }
 
 export function audioMimeTypeSupported(value) {
