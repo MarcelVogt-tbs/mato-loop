@@ -40,6 +40,7 @@ _MESSAGES = {
     "approval.policyChanged": "The approval policy changed before the decision was applied.",
     "approval.targetChanged": "The approval target changed before the decision was applied.",
     "attachment.tooLarge": "The attachment is too large.",
+    "attachment.textTooLarge": "The text attachment exceeds the configured processing limit.",
     "auth.accountDisabled": "The user account is disabled.",
     "auth.adminRequired": "Administrator access is required.",
     "auth.currentPasswordInvalid": "The current password is invalid.",

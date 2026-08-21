@@ -172,6 +172,21 @@ def test_claimed_corrupt_readable_formats_are_not_downgraded_to_generic_files() 
         classify_attachment(b"ungueltig\xff", "text/plain", "notiz.txt")
 
 
+def test_text_character_limit_has_a_specific_error() -> None:
+    limits = processing.AttachmentProcessingLimits(max_extracted_characters=3)
+
+    with pytest.raises(
+        processing.AttachmentProcessingError, match="attachment.textTooLarge"
+    ):
+        processing.process_attachment(
+            b"four",
+            kind="text",
+            mime_type="text/csv",
+            filename="logs.csv",
+            limits=limits,
+        )
+
+
 def test_ooxml_zip_bomb_ratio_is_rejected_before_parsing() -> None:
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:

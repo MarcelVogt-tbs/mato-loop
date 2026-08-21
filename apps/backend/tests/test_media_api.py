@@ -14,7 +14,7 @@ from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import sessions as sessions_route
 from mato_loop_backend.api.routes.media import create_transcription
-from mato_loop_backend.attachments import AttachmentInput
+from mato_loop_backend.attachments import AttachmentError, AttachmentInput
 from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.providers import TranscriptionResult
 from mato_loop_backend.providers.base import ProviderError
@@ -141,6 +141,29 @@ async def test_session_multipart_routes_forward_classified_attachments(monkeypat
     assert created_audio.kind == "audio"
     assert created_audio.mime_type == "audio/wav"
     assert sent_audio.filename == "aufnahme.wav"
+
+
+async def test_session_attachment_processing_limit_returns_413(monkeypatch) -> None:
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=InstanceLimits())
+    )
+    monkeypatch.setattr(
+        sessions_route,
+        "_send_message",
+        AsyncMock(side_effect=AttachmentError("attachment.textTooLarge")),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await sessions_route.send_message_with_attachments(
+            uuid4(),
+            json.dumps({"content": "Analysiere das Log"}),
+            [upload()],
+            UserAccount(id=uuid4(), username="test", password_hash="hash"),
+            AsyncMock(spec=AsyncSession),
+        )
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.code == "attachment.textTooLarge"
 
 
 async def test_attachment_upload_count_is_bounded() -> None:

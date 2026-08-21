@@ -740,6 +740,15 @@ def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
         raise ApiError(422, "validation.invalid", field=field) from exc
 
 
+def _attachment_api_error(exc: AttachmentError) -> ApiError:
+    status_code = 413 if exc.code in {
+        "attachment.sessionQuotaExceeded",
+        "attachment.textTooLarge",
+        "attachment.tooLarge",
+    } else 400
+    return ApiError(status_code, exc.code)
+
+
 async def _attachment_uploads(
     files: list[UploadFile], settings: InstanceLimits | None = None
 ) -> list[AttachmentInput]:
@@ -789,9 +798,7 @@ async def _attachment_uploads(
                         suffix,
                         exc.diagnostic,
                     )
-                raise ApiError(
-                    413 if exc.code == "attachment.tooLarge" else 400, exc.code
-                ) from exc
+                raise _attachment_api_error(exc) from exc
     finally:
         for upload in files:
             await upload.close()
@@ -1387,12 +1394,15 @@ async def create_session_with_attachments(
     request = _multipart_payload(payload, SessionCreateRequest)
     assert isinstance(request, SessionCreateRequest)
     instance_limits = await SettingsStore.load(db, InstanceLimits)
-    return await _create_session(
-        request,
-        user,
-        db,
-        await _attachment_uploads(attachments, instance_limits),
-    )
+    try:
+        return await _create_session(
+            request,
+            user,
+            db,
+            await _attachment_uploads(attachments, instance_limits),
+        )
+    except AttachmentError as exc:
+        raise _attachment_api_error(exc) from exc
 
 
 @router.get("/defaults")
@@ -2128,13 +2138,16 @@ async def send_message_with_attachments(
     request = _multipart_payload(payload, SendMessageRequest)
     assert isinstance(request, SendMessageRequest)
     instance_limits = await SettingsStore.load(db, InstanceLimits)
-    return await _send_message(
-        session_id,
-        request,
-        user,
-        db,
-        await _attachment_uploads(attachments, instance_limits),
-    )
+    try:
+        return await _send_message(
+            session_id,
+            request,
+            user,
+            db,
+            await _attachment_uploads(attachments, instance_limits),
+        )
+    except AttachmentError as exc:
+        raise _attachment_api_error(exc) from exc
 
 
 @router.get("/{session_id}/runs/{run_id}")

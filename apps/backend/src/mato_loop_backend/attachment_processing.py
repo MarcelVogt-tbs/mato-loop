@@ -609,7 +609,7 @@ def process_attachment(
         except UnicodeDecodeError as exc:
             raise AttachmentProcessingError("attachment.invalidText") from exc
         if len(text) > resolved.max_extracted_characters:
-            raise AttachmentProcessingError("attachment.invalidText")
+            raise AttachmentProcessingError("attachment.textTooLarge")
         return ProcessingResult(
             mime_type if mime_type.startswith("text/") else "text/plain",
             suffix.removeprefix(".") or "text",

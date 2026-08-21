@@ -10,7 +10,7 @@ export const INSTANCE_LIMIT_DEFAULTS = {
   maxEditableTextMib: 1,
   maxAudioDurationSeconds: 3600,
   maxVideoDurationSeconds: 900,
-  maxExtractedCharacters: 1_000_000,
+  maxExtractedCharacters: 5_000_000,
   maxPdfPages: 1000,
   maxWorkbookSheets: 100,
   maxWorkbookCells: 1_000_000,

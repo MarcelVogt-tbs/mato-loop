@@ -107,6 +107,7 @@ const messages = {
   'attachment.mimeMismatch': () => 'Dateityp und Inhalt des Anhangs stimmen nicht überein.',
   'attachment.notFound': () => 'Der Dateianhang wurde nicht gefunden.',
   'attachment.sessionQuotaExceeded': () => 'Das Speicherlimit für Dateien dieser Session ist erreicht.',
+  'attachment.textTooLarge': () => 'Die Textdatei überschreitet das konfigurierte Verarbeitungslimit.',
   'attachment.tooLarge': () => 'Der Dateianhang ist zu groß.',
   'attachment.unsupportedType': () => 'Dieser Dateityp kann nicht verarbeitet werden.',
   'cache.exportFailed': () => 'Die erzeugte Datei konnte nicht exportiert werden.',
