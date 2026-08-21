@@ -40,6 +40,7 @@ from mato_loop_backend.integrations.service import (
 )
 from mato_loop_backend.integrations.webfetch import (
     PdfVisionHandler,
+    WebFetchBytesResult,
     WebFetchError,
     WebFetchImage,
     WebFetchResult,
@@ -47,7 +48,14 @@ from mato_loop_backend.integrations.webfetch import (
     fetch_web,
     normalize_source_title,
     private_origin_is_allowed,
+    request_web_bytes,
     sanitize_url_for_display,
+)
+from mato_loop_backend.integrations.youtube_transcript import (
+    TranscriptError,
+    TranscriptResult,
+    canonicalize_youtube_video_url,
+    fetch_youtube_transcript,
 )
 
 __all__ = [
@@ -69,10 +77,14 @@ __all__ = [
     "IntegrationSettingsError",
     "PdfVisionHandler",
     "SearchIntegrationService",
+    "TranscriptError",
+    "TranscriptResult",
     "WebFetchError",
+    "WebFetchBytesResult",
     "WebFetchImage",
     "WebFetchResult",
     "canonicalize_url",
+    "canonicalize_youtube_video_url",
     "bookstack_error_code",
     "caldav_error_code",
     "mealie_error_code",
@@ -86,9 +98,11 @@ __all__ = [
     "search_with_key",
     "search_with_provider",
     "fetch_web",
+    "fetch_youtube_transcript",
     "normalize_source_title",
     "load_bookstack_resources",
     "load_caldav_resources",
     "private_origin_is_allowed",
+    "request_web_bytes",
     "sanitize_url_for_display",
 ]

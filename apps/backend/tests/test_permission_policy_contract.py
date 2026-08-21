@@ -24,6 +24,7 @@ from mato_loop_backend.agent.permissions import (
     skill_edit_permission,
     skill_load_permission,
     skill_write_permission,
+    transcript_permission,
     webfetch_permission,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
@@ -1014,6 +1015,19 @@ def test_webfetch_permission_hashes_the_full_canonical_url_and_redacts_summary()
     assert "secret" not in first.summary
     assert first.resource_display == "https://example.com/path?REDACTED"
     assert canonicalize_url("https://example.com/path?token=secret") not in first.summary
+
+
+def test_transcript_permission_normalizes_equivalent_video_urls() -> None:
+    watch = transcript_permission(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=12"
+    )
+    short = transcript_permission("https://youtu.be/dQw4w9WgXcQ")
+    other = transcript_permission("https://youtu.be/abcdefghijk")
+
+    assert watch.resource_scope == short.resource_scope
+    assert watch.resource_scope != other.resource_scope
+    assert watch.resource_display == "https://youtu.be/dQw4w9WgXcQ"
+    assert watch.action_kind == "fetch_transcript"
 
 
 async def test_webfetch_grant_matches_only_the_exact_url_hash(tmp_path) -> None:

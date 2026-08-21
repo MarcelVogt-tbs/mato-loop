@@ -2326,6 +2326,7 @@ async def test_available_uses_the_shared_research_budget(monkeypatch) -> None:
     assert tool_registry._execute_definition.await_count == 1
     assert "web_search" not in {tool["name"] for tool in requests[1]["tools"]}
     assert "webfetch" not in {tool["name"] for tool in requests[1]["tools"]}
+    assert "fetch_transcript" not in {tool["name"] for tool in requests[1]["tools"]}
     tool_messages = [
         call.args[0]
         for call in db.add.call_args_list

@@ -32,7 +32,12 @@ from mato_loop_backend.agent.tools import (
     tool_registry,
 )
 from mato_loop_backend.attachments import AttachmentService, AttachmentStorage
-from mato_loop_backend.integrations import WebFetchError, WebFetchImage, WebFetchResult
+from mato_loop_backend.integrations import (
+    TranscriptResult,
+    WebFetchError,
+    WebFetchImage,
+    WebFetchResult,
+)
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
@@ -3091,6 +3096,20 @@ def test_webfetch_schema_has_the_expected_contract() -> None:
     }
 
 
+def test_fetch_transcript_schema_has_the_expected_contract() -> None:
+    schema = next(
+        item.schema()
+        for item in tool_registry.available(
+            IntegrationSettings(), "read-only", webfetch_enabled=True
+        )
+        if item.name == "fetch_transcript"
+    )
+
+    assert set(schema["parameters"]["properties"]) == {"url", "language"}
+    assert schema["parameters"]["required"] == ["url"]
+    assert schema["parameters"]["properties"]["language"]["default"] is None
+
+
 def test_skill_write_schemas_delegate_compact_briefs() -> None:
     build_schema = next(
         item.schema()
@@ -3224,6 +3243,67 @@ async def test_webfetch_applies_the_effective_policy(
         assert request.capability == "network.fetch"
         assert request.resource_type == "url"
         assert "secret" not in request.summary
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_asks"),
+    [(WebFetchPolicy.ASK, 1), (WebFetchPolicy.AUTO_PUBLIC, 0)],
+)
+async def test_fetch_transcript_uses_one_video_approval_and_returns_evidence(
+    tmp_path, monkeypatch, policy, expected_asks
+) -> None:
+    calls = []
+
+    async def fake_fetch(url, **kwargs):
+        calls.append((url, kwargs))
+        await kwargs["before_request"]("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        return TranscriptResult(
+            source_url="https://youtu.be/dQw4w9WgXcQ",
+            title="Example video",
+            language="de",
+            language_fallback=False,
+            track_type="manual",
+            content="[00:00:01] Hallo",
+        )
+
+    monkeypatch.setattr(tools_module, "fetch_youtube_transcript", fake_fetch)
+    call = ToolCall(
+        id="transcript",
+        name="fetch_transcript",
+        arguments={
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=12",
+            "language": "de",
+        },
+    )
+    context = _context(tmp_path, call, web_fetch_policy=policy)
+    context.db.scalar.return_value.data = context.tool_settings.model_dump(mode="json")
+
+    result = await tool_registry.execute(call, context)
+
+    payload = json.loads(result.content)
+    assert payload == {
+        "sourceId": payload["sourceId"],
+        "url": "https://youtu.be/dQw4w9WgXcQ",
+        "kind": "transcript",
+        "citationEligible": True,
+        "title": "Example video",
+        "sourceType": "youtube",
+        "sourceUrl": "https://youtu.be/dQw4w9WgXcQ",
+        "language": "de",
+        "languageFallback": False,
+        "trackType": "manual",
+        "outputFormat": "text",
+        "content": "[00:00:01] Hallo",
+    }
+    assert result.metadata == {"sources": [{key: payload[key] for key in (
+        "sourceId", "url", "kind", "citationEligible", "title"
+    )}]}
+    assert context.ask_handler.await_count == expected_asks
+    if expected_asks:
+        request = context.ask_handler.await_args.args[0]
+        assert request.action_kind == "fetch_transcript"
+        assert request.resource_display == "https://youtu.be/dQw4w9WgXcQ"
+    assert calls[0][0] == "https://youtu.be/dQw4w9WgXcQ"
 
 
 async def test_webfetch_denial_stops_before_the_fetch_continues(tmp_path, monkeypatch) -> None:

@@ -19,6 +19,7 @@ from mato_loop_backend.integrations import (
     WebFetchError,
     canonicalize_url,
     fetch_web,
+    request_web_bytes,
     sanitize_url_for_display,
     webfetch,
 )
@@ -328,6 +329,48 @@ async def test_redirect_limit_and_invalid_redirect() -> None:
         assert await _error_code(
             fetch_web(f"{_origin(port)}/missing", allowed_private_origins=allowed)
         ) == "webfetch.redirectInvalid"
+
+
+async def test_raw_byte_transport_preserves_get_and_posts_without_redirect_replay() -> None:
+    seen_headers: list[dict[str, str]] = []
+
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        seen_headers.append(headers)
+        if target == "/redirect":
+            return _response(status=302, headers={"Location": "/target"})
+        return _response(b"<transcript />", headers={"Content-Type": "text/xml; charset=utf-8"})
+
+    async with _server(responder) as port:
+        origin = _origin(port)
+        fetched = await request_web_bytes(
+            f"{origin}/captions",
+            allowed_private_origins=(origin,),
+            max_response_bytes=100,
+        )
+        posted = await request_web_bytes(
+            f"{origin}/player",
+            method="POST",
+            body=b'{"videoId":"abcdefghijk"}',
+            request_content_type="application/json",
+            allowed_private_origins=(origin,),
+            max_response_bytes=100,
+        )
+        redirect_code = await _error_code(
+            request_web_bytes(
+                f"{origin}/redirect",
+                method="POST",
+                body=b"{}",
+                request_content_type="application/json",
+                allowed_private_origins=(origin,),
+                max_response_bytes=100,
+            )
+        )
+
+    assert fetched.data == posted.data == b"<transcript />"
+    assert fetched.content_type == posted.content_type == "text/xml"
+    assert seen_headers[1]["content-type"] == "application/json"
+    assert {"authorization", "cookie", "referer"}.isdisjoint(seen_headers[1])
+    assert redirect_code == "webfetch.requestFailed"
 
 
 async def test_html_conversion_removes_active_content() -> None:

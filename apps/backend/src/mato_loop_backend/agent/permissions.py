@@ -12,7 +12,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.integrations import canonicalize_url, sanitize_url_for_display
+from mato_loop_backend.integrations import (
+    canonicalize_url,
+    canonicalize_youtube_video_url,
+    sanitize_url_for_display,
+)
 from mato_loop_backend.models import ChatSession, PermissionGrant
 from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
@@ -492,6 +496,20 @@ def webfetch_permission(url: str) -> PermissionRequest:
         title="Webseite abrufen?",
         summary=f"Der Agent möchte {sanitize_url_for_display(canonical_url)} abrufen.",
         resource_display=sanitize_url_for_display(canonical_url),
+    )
+
+
+def transcript_permission(url: str) -> PermissionRequest:
+    canonical_url = canonicalize_youtube_video_url(url)
+    return PermissionRequest(
+        capability="network.fetch",
+        resource_type="url",
+        resource_scope=hashlib.sha256(canonical_url.encode("utf-8")).hexdigest(),
+        action_kind="fetch_transcript",
+        risk_level="medium",
+        title="Untertitel abrufen?",
+        summary=f"Der Agent möchte veröffentlichte Untertitel von {canonical_url} abrufen.",
+        resource_display=canonical_url,
     )
 
 

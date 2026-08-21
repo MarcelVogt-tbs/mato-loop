@@ -224,6 +224,7 @@ REQUIRED_OPENSCAD_RENDER_RETRIES = 2
 REQUIRED_OPENSCAD_SOURCE_REVIEW_RETRIES = 2
 VIDEO_FRAME_BATCH_IMAGES = 4
 EMPTY_RESPONSE_RETRIES = 1
+_RESEARCH_TOOL_NAMES = frozenset({"web_search", "webfetch", "fetch_transcript"})
 MEMORY_WRITE_OUTCOME_PRIORITY = {
     "denied": 0,
     "duplicate": 1,
@@ -1005,7 +1006,9 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
             if tool_name in {"write_file", "create_draft", "generate_qr_code"}
             else {"characters": len(content), "preview": content[:200]}
         )
-    if tool_name == "webfetch" and isinstance(safe.get("url"), str):
+    if tool_name in {"webfetch", "fetch_transcript"} and isinstance(
+        safe.get("url"), str
+    ):
         try:
             safe["url"] = sanitize_url_for_display(safe["url"])
         except WebFetchError:
@@ -2101,7 +2104,7 @@ class AgentRuntime:
             ):
                 effective_toolset = effective_toolset.only("read")
             elif research_budget_exhausted and effective_toolset is not None:
-                effective_toolset = effective_toolset.without("web_search", "webfetch")
+                effective_toolset = effective_toolset.without(*_RESEARCH_TOOL_NAMES)
             effective_tool_count = len(effective_toolset.tools) if effective_toolset else 0
             if effective_toolset is not None:
                 effective_toolset = with_media_prompt_profiles(
@@ -2711,7 +2714,7 @@ class AgentRuntime:
                 call_signature = _tool_call_signature(call)
                 is_research_call = (
                     chat_session.web_search_policy != WebSearchPolicy.DISABLED
-                    and call.name in {"web_search", "webfetch"}
+                    and call.name in _RESEARCH_TOOL_NAMES
                 )
                 repeated_successful_research_call = (
                     is_research_call and call_signature in successful_research_calls
@@ -3895,7 +3898,7 @@ class AgentRuntime:
                         failed_tool_call_signatures.clear()
                     else:
                         failed_tool_call_signatures.discard(call_signature)
-                    if call.name in {"web_search", "webfetch"}:
+                    if call.name in _RESEARCH_TOOL_NAMES:
                         research_used = True
                         _add_research_sources(
                             research_sources, metadata, research_source_titles

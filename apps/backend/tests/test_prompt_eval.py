@@ -53,7 +53,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 24
+    assert INVENTORY_VERSION == 25
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -67,6 +67,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "tools",
         "search",
         "webfetch",
+        "transcript",
         "high-stakes",
         "citation",
         "budget",
@@ -86,7 +87,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 150
+    assert 80 <= len(CASES) <= 160
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -145,6 +146,41 @@ def test_every_builtin_tool_is_expected_by_a_live_case() -> None:
     }
 
     assert set(tool_registry._definitions) <= covered
+
+
+def test_transcript_routing_uses_the_production_tool_contract() -> None:
+    case_ids = {
+        "youtube_url_uses_published_transcript",
+        "youtube_spoken_summary_uses_transcript",
+        "youtube_visual_request_rejects_transcript",
+        "audio_attachment_uses_transcription",
+        "video_attachment_speech_uses_analysis",
+        "youtube_page_metadata_uses_webfetch",
+    }
+
+    assert "fetch_transcript" in tool_registry._definitions
+    for case_id in case_ids:
+        messages, tools = build_case(_case(case_id))
+        by_name = {tool["name"]: tool for tool in tools}
+
+        assert set(by_name) == {
+            "fetch_transcript",
+            "webfetch",
+            "transcribe_audio",
+            "analyze_video",
+        }
+        assert "spoken content only, not of visual events" in messages[0]["content"]
+        assert "does not inspect video visuals" in by_name["fetch_transcript"]["description"]
+        assert "does not extract audio, video" in by_name["webfetch"]["description"]
+        assert "does not accept video attachments" in by_name["transcribe_audio"]["description"]
+        assert "does not accept URLs" in by_name["analyze_video"]["description"]
+        parameters = by_name["fetch_transcript"]["parameters"]
+        assert parameters["required"] == ["url"]
+        assert parameters["additionalProperties"] is False
+        assert set(parameters["properties"]) == {"url", "language"}
+
+    _messages, webfetch_tools = build_case(_case("known_url_uses_webfetch"))
+    assert {tool["name"] for tool in webfetch_tools} == {"web_search", "webfetch"}
 
 
 def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
@@ -1701,11 +1737,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 128
-    assert payload["contractCount"] == 277
-    assert "Cases: 149" in report
-    assert "Semantic contracts: 128" in report
-    assert "All inventory rows: 277" in report
+    assert payload["semanticContractCount"] == 131
+    assert payload["contractCount"] == 286
+    assert "Cases: 155" in report
+    assert "Semantic contracts: 131" in report
+    assert "All inventory rows: 286" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

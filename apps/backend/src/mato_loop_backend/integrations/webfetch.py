@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from email.message import Message
 from pathlib import PurePosixPath
+from typing import Literal
 from urllib.parse import unquote
 
 import aiohttp
@@ -31,6 +32,7 @@ from mato_loop_backend.settings.models import DEFAULT_WEBFETCH_USER_AGENT
 logger = logging.getLogger(__name__)
 
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+MAX_REQUEST_BYTES = 256 * 1024
 MAX_REDIRECTS = 5
 PDF_RENDER_TIMEOUT_SECONDS = 30
 PDF_VISION_BATCH_PAGES = 4
@@ -117,6 +119,15 @@ class DownloadedFile:
     final_url: str
     content_type: str
     filename: str
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class WebFetchBytesResult:
+    final_url: str
+    content_type: str
+    charset: str | None
+    status_code: int
     data: bytes
 
 
@@ -391,6 +402,10 @@ async def _request_once(
     max_response_bytes: int,
     user_agent: str,
     accept: str = _DEFAULT_ACCEPT,
+    *,
+    method: Literal["GET", "POST"] = "GET",
+    body: bytes | None = None,
+    request_content_type: str | None = None,
 ) -> _Response:
     resolver = _PinnedResolver(target.host, target.addresses)
     connector = aiohttp.TCPConnector(
@@ -405,6 +420,8 @@ async def _request_once(
         "Connection": "close",
         "User-Agent": user_agent,
     }
+    if request_content_type is not None:
+        headers["Content-Type"] = request_content_type
     try:
         async with aiohttp.ClientSession(
             connector=connector,
@@ -414,7 +431,12 @@ async def _request_once(
             timeout=aiohttp.ClientTimeout(total=timeout),
             trust_env=False,
         ) as session:
-            async with session.get(target.url, allow_redirects=False) as response:
+            request = (
+                session.get(target.url, allow_redirects=False)
+                if method == "GET"
+                else session.post(target.url, data=body, allow_redirects=False)
+            )
+            async with request as response:
                 if response.status in _REDIRECT_STATUSES:
                     return _Response(
                         status=response.status,
@@ -806,6 +828,10 @@ async def _follow_redirects(
     max_response_bytes: int,
     user_agent: str,
     accept: str,
+    *,
+    method: Literal["GET", "POST"] = "GET",
+    body: bytes | None = None,
+    request_content_type: str | None = None,
 ) -> tuple[_Target, _Response, float]:
     loop = asyncio.get_running_loop()
     remaining = float(timeout)
@@ -818,10 +844,19 @@ async def _follow_redirects(
         async with asyncio.timeout(max(remaining, 0.001)):
             target = await _validate_target(current_url, origins)
             response = await _request_once(
-                target, remaining, max_response_bytes, user_agent, accept
+                target,
+                remaining,
+                max_response_bytes,
+                user_agent,
+                accept,
+                method=method,
+                body=body,
+                request_content_type=request_content_type,
             )
         remaining -= loop.time() - started
         if response.status in _REDIRECT_STATUSES:
+            if method == "POST":
+                raise _error("requestFailed", statusCode=response.status)
             if not response.location:
                 raise _error("redirectInvalid")
             if redirect_count == MAX_REDIRECTS:
@@ -846,6 +881,66 @@ def _validate_fetch_limits(timeout: float, max_response_bytes: int) -> None:
         or max_response_bytes < 1
     ):
         raise _error("responseLimitInvalid")
+
+
+def _validate_header_value(value: str) -> None:
+    if not value or any(not 32 <= ord(character) <= 126 for character in value):
+        raise _error("invalidUrl")
+
+
+async def request_web_bytes(
+    url: str,
+    *,
+    method: Literal["GET", "POST"] = "GET",
+    body: bytes | None = None,
+    request_content_type: str | None = None,
+    accept: str = "*/*",
+    timeout: float = 30,
+    allowed_private_origins: tuple[str, ...] | list[str] = (),
+    authorize_url: Callable[[str], Awaitable[None]] | None = None,
+    max_response_bytes: int = MAX_RESPONSE_BYTES,
+    user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
+) -> WebFetchBytesResult:
+    """Return bounded raw bytes through the webfetch security pipeline."""
+    _validate_fetch_limits(timeout, max_response_bytes)
+    if method not in {"GET", "POST"}:
+        raise _error("requestFailed")
+    if body is not None and not isinstance(body, bytes):
+        raise _error("requestFailed")
+    if method == "GET" and (body is not None or request_content_type is not None):
+        raise _error("requestFailed")
+    if method == "POST" and (body is None or request_content_type is None):
+        raise _error("requestFailed")
+    if body is not None and len(body) > MAX_REQUEST_BYTES:
+        raise _error("requestTooLarge")
+    _validate_header_value(accept)
+    if request_content_type is not None:
+        _validate_header_value(request_content_type)
+    origins = _allowed_origins(allowed_private_origins)
+    try:
+        target, response, _remaining = await _follow_redirects(
+            url,
+            timeout,
+            origins,
+            authorize_url,
+            max_response_bytes,
+            user_agent,
+            accept,
+            method=method,
+            body=body,
+            request_content_type=request_content_type,
+        )
+    except WebFetchError:
+        raise
+    except TimeoutError as exc:
+        raise _error("timeout") from exc
+    return WebFetchBytesResult(
+        final_url=str(target.url),
+        content_type=response.content_type,
+        charset=response.charset,
+        status_code=response.status,
+        data=response.body,
+    )
 
 
 def _raw_download_name(url: URL, content_disposition: str | None) -> str:

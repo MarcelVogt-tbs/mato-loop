@@ -59,6 +59,7 @@ from mato_loop_backend.agent.permissions import (
     skill_load_permission,
     skill_write_permission,
     system_info_permission,
+    transcript_permission,
     web_search_permission,
     webfetch_permission,
 )
@@ -101,11 +102,14 @@ from mato_loop_backend.filesystem_search import RootFileSearch
 from mato_loop_backend.integrations import (
     PdfVisionHandler,
     SearchIntegrationError,
+    TranscriptError,
     WebFetchError,
     canonicalize_url,
+    canonicalize_youtube_video_url,
     effective_search_providers,
     evidence_source_id,
     fetch_web,
+    fetch_youtube_transcript,
     normalize_source_title,
     private_origin_is_allowed,
     sanitize_url_for_display,
@@ -883,7 +887,8 @@ class ToolRegistry:
                                 tool_settings.web_fetch
                             )
                         }
-                        if name == "webfetch" and tool_settings is not None
+                        if name in {"webfetch", "fetch_transcript"}
+                        and tool_settings is not None
                         else {}
                     )
                 ),
@@ -1505,6 +1510,28 @@ class WebFetchArguments(ToolArguments):
     @classmethod
     def normalize_pdf_pages(cls, value: list[int]) -> list[int]:
         return sorted(set(value))
+
+
+class FetchTranscriptArguments(ToolArguments):
+    url: str = Field(
+        min_length=1,
+        max_length=1_200,
+        description=(
+            "Complete remote media page URL. Pass a URL, not a video ID, caption endpoint, "
+            "attachment ID, or file path."
+        ),
+    )
+    language: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=35,
+        pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$",
+        description=(
+            "Preferred existing caption language as a BCP 47 tag, for example de or en-US. "
+            "Omit unless the user requests a language. If unavailable, the host selects the "
+            "original language; this never translates or transcribes media."
+        ),
+    )
 
 
 class GenerateImageArguments(ToolArguments):
@@ -3236,6 +3263,57 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         json.dumps(payload, ensure_ascii=False),
         {"sources": [source]},
         attachments=attachments,
+    )
+
+
+async def _fetch_transcript(
+    arguments: FetchTranscriptArguments, context: ToolContext
+) -> ToolResult:
+    try:
+        source_url = canonicalize_youtube_video_url(arguments.url)
+        await _ensure_webfetch_binding_is_current(context)
+        if context.web_fetch_policy == WebFetchPolicy.ASK and not await _allow(
+            context, transcript_permission(source_url)
+        ):
+            return ToolResult.error("permission.denied")
+        await _ensure_webfetch_binding_is_current(context)
+
+        async def before_request(_url: str) -> None:
+            await _ensure_webfetch_binding_is_current(context)
+
+        result = await fetch_youtube_transcript(
+            source_url,
+            language=arguments.language,
+            max_response_bytes=context.tool_settings.web_fetch.max_response_mib
+            * 1024
+            * 1024,
+            user_agent=context.tool_settings.web_fetch.user_agent,
+            before_request=before_request,
+        )
+    except TranscriptError as exc:
+        return ToolResult.error(exc.code, params=exc.params)
+
+    source = {
+        "sourceId": evidence_source_id(result.source_url),
+        "url": result.source_url,
+        "kind": "transcript",
+        "citationEligible": True,
+    }
+    title = normalize_source_title(result.title)
+    if title is not None:
+        source["title"] = title
+    return ToolResult.json(
+        {
+            **source,
+            "sourceType": "youtube",
+            "sourceUrl": result.source_url,
+            "language": result.language,
+            "languageFallback": result.language_fallback,
+            "trackType": result.track_type,
+            "outputFormat": "text",
+            "content": result.content,
+        },
+        metadata={"sources": [source]},
     )
 
 
@@ -5380,6 +5458,11 @@ _WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO)
 _WEB_FETCH = ToolAction(
     "network.fetch", "Webseiten abrufen", ToolExecutionPolicy.ASK, configurable=False
 )
+_TRANSCRIPT_ROUTING_INSTRUCTION = (
+    "Published transcript text is evidence of spoken content only, not of visual events. Call "
+    "fetch_transcript only when the requested output can be answered from spoken content; never "
+    "call it for camera work, visible UI, objects, actions, or other visual details."
+)
 _SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.ASK)
 _SESSION_SEARCH = ToolAction(
     "session.search", "Sessions durchsuchen", ToolExecutionPolicy.ASK
@@ -5595,8 +5678,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "webfetch",
-            "Fetch a web page, PDF, or image. Returns untrusted text or validated image attachments "
-            "and marks the final URL citationEligible.",
+            "Fetch a general web page, PDF, or image. It does not extract audio, video, or published "
+            "captions. Returns untrusted text or validated image attachments and identifies whether "
+            "the final safe URL is citationEligible.",
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,
@@ -5604,6 +5688,22 @@ tool_registry = ToolRegistry(
             label="Webseite abrufen",
             icon="language",
             actions=(_WEB_FETCH,),
+        ),
+        ToolDefinition(
+            "fetch_transcript",
+            "Fetch published captions for one supported remote media URL. Use this for transcript "
+            "or spoken-content requests about a YouTube URL. Call it only when published captions "
+            "can answer the request, never for camera work, visible UI, objects, actions, or other "
+            "visual details. It does not inspect video visuals, download media, or transcribe session "
+            "or workspace files. Initially supports public YouTube video URLs.",
+            FetchTranscriptArguments,
+            _fetch_transcript,
+            requires_webfetch=True,
+            group="web",
+            label="Untertitel abrufen",
+            icon="subtitles",
+            actions=(_WEB_FETCH,),
+            prompt_fragments=(_TRANSCRIPT_ROUTING_INSTRUCTION,),
         ),
         ToolDefinition(
             "generate_qr_code",
@@ -5704,7 +5804,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "transcribe_audio",
-            "Transcribe a WAV audio attachment from the current session by attachment ID.",
+            "Transcribe one current-session audio attachment by attachment ID. It does not accept "
+            "video attachments, file paths, or URLs.",
             TranscribeAudioArguments,
             _transcribe_audio,
             required_capability="media.transcribe.audio",
@@ -5721,8 +5822,10 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "analyze_video",
-            "Analyze MP4 or WebM video and use the result. Do not repeat a successful analysis; timeout "
-            "does not indicate video length.",
+            "Analyze one MP4 or WebM file from session or workspace for speech and/or visuals. It does "
+            "not accept URLs or published caption tracks. Choose speech for spoken content, overview "
+            "for visual summaries, or fine_grained for exact visual steps. Do not repeat a successful "
+            "analysis; timeout does not indicate video length.",
             AnalyzeVideoArguments,
             _analyze_video,
             required_capability="media.analyze.video",
@@ -6017,10 +6120,14 @@ def permission_for(
         "memory_retrieve",
     }:
         return None
-    if tool_name == "webfetch":
+    if tool_name in {"webfetch", "fetch_transcript"}:
         try:
-            return webfetch_permission(arguments.get("url", ""))
-        except (TypeError, ValueError, WebFetchError):
+            return (
+                transcript_permission(arguments.get("url", ""))
+                if tool_name == "fetch_transcript"
+                else webfetch_permission(arguments.get("url", ""))
+            )
+        except (TypeError, ValueError, TranscriptError, WebFetchError):
             return None
     path_value = arguments.get("path")
     capability = {
