@@ -129,6 +129,8 @@ describe('tool display', () => {
     expect(toolSummary({ name: 'session_browse', arguments: {} })).toBe('Letzte Sessions')
     expect(toolActivityLabel('web_search')).toBe('Web wird durchsucht')
     expect(toolActivityLabel('webfetch')).toBe('Webseite wird abgerufen')
+    expect(toolIdentity('fetch_transcript')).toEqual({ label: 'Untertitel abrufen', icon: 'subtitles' })
+    expect(toolActivityLabel('fetch_transcript')).toBe('Untertitel werden abgerufen')
     expect(toolActivityLabel('write_file')).toBe('Datei wird geschrieben')
     expect(toolActivityLabel('shell_run')).toBe('Befehl wird ausgeführt')
     expect(toolActivityLabel('unknown_tool')).toBe('Tool wird ausgeführt')

@@ -17,6 +17,7 @@ const TOOL_DISPLAY = {
   move_path: { label: 'Pfad verschieben', activity: 'Pfad wird verschoben', icon: 'drive_file_move' },
   web_search: { label: 'Im Web suchen', activity: 'Web wird durchsucht', icon: 'travel_explore' },
   webfetch: { label: 'Webseite abrufen', activity: 'Webseite wird abgerufen', icon: 'language' },
+  fetch_transcript: { label: 'Untertitel abrufen', activity: 'Untertitel werden abgerufen', icon: 'subtitles' },
   generate_qr_code: { label: 'QR-Code erzeugen', activity: 'QR-Code wird erzeugt', icon: 'qr_code_2' },
   read_qr_code: { label: 'QR-Code lesen', activity: 'QR-Code wird gelesen', icon: 'qr_code_scanner' },
   generate_image: { label: 'Bild erzeugen', activity: 'Bild wird erzeugt', icon: 'image' },

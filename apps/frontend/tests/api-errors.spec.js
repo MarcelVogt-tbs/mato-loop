@@ -94,6 +94,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'webfetch.tlsFailed' } })).toBe(
       'Das TLS-Zertifikat der Webadresse konnte nicht überprüft werden.'
     )
+    expect(apiErrorMessage({ error: { code: 'transcript.unavailable' } })).toBe(
+      'Für dieses Video sind keine unterstützten veröffentlichten Untertitel verfügbar.'
+    )
     expect(apiErrorMessage({ error: { code: 'attachment.tooLarge' } })).toBe(
       'Der Dateianhang ist zu groß.'
     )
