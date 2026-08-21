@@ -210,12 +210,18 @@ class EpisodeRetrievalService:
         semantic_enabled: bool = True,
         max_semantic_distance: float | None = None,
         excerpt_messages: int = 6,
+        latest_messages: int = 0,
         max_excerpt_characters: int = 6_000,
     ) -> EpisodeRetrieval:
         cleaned_query = query.strip()
         if not cleaned_query:
             raise ValueError("episode search requires a query")
-        if limit <= 0 or excerpt_messages <= 0 or max_excerpt_characters <= 0:
+        if (
+            limit <= 0
+            or excerpt_messages <= 0
+            or latest_messages < 0
+            or max_excerpt_characters <= 0
+        ):
             raise ValueError("episode retrieval limits must be positive")
         candidate_limit = min(MAX_CANDIDATES, max(20, limit * 3))
         filters = _candidate_filters(
@@ -342,6 +348,7 @@ class EpisodeRetrievalService:
                 candidate,
                 readable_by=readable_by,
                 excerpt_messages=excerpt_messages,
+                latest_messages=latest_messages,
                 max_excerpt_characters=max_excerpt_characters,
             )
             for candidate in anchors
@@ -362,6 +369,7 @@ class EpisodeRetrievalService:
         *,
         readable_by: TrustLevel,
         excerpt_messages: int,
+        latest_messages: int,
         max_excerpt_characters: int,
     ) -> EpisodeReference:
         return await EpisodeRetrievalService._reference_for(
@@ -372,6 +380,7 @@ class EpisodeRetrievalService:
             anchor_content=candidate.chunk.content,
             readable_by=readable_by,
             excerpt_messages=excerpt_messages,
+            latest_messages=latest_messages,
             max_excerpt_characters=max_excerpt_characters,
         )
 
@@ -386,6 +395,7 @@ class EpisodeRetrievalService:
         readable_by: TrustLevel,
         excerpt_messages: int,
         max_excerpt_characters: int,
+        latest_messages: int = 0,
     ) -> EpisodeReference:
         anchor = message
         visible = [
@@ -441,7 +451,20 @@ class EpisodeRetrievalService:
                 )
             ).all()
         )
-        messages = sorted([*before, *after], key=lambda item: (item.created_at, item.id))
+        messages = [*before, *after]
+        if latest_messages:
+            latest = list(
+                (
+                    await db.scalars(
+                        select(Message)
+                        .where(*visible)
+                        .order_by(Message.created_at.desc(), Message.id.desc())
+                        .limit(latest_messages)
+                    )
+                ).all()
+            )
+            messages = list({item.id: item for item in (*messages, *latest)}.values())
+        messages.sort(key=lambda item: (item.created_at, item.id))
         per_message = max(1, max_excerpt_characters // max(1, len(messages)))
         excerpt = tuple(
             EpisodeExcerptMessage(

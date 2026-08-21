@@ -14,7 +14,7 @@ Provider- und Modelleinstellungen können den zulässigen Umgang mit öffentlich
 
 ## Sitzungsübergreifender Abruf
 
-Bei einer passenden Anfrage kann MatoLoop sofort begrenzte Ausschnitte aus früheren Sessions abrufen. Dafür müssen diese Inhalte nicht zuerst als dauerhafte Erinnerung gespeichert oder durch Dreaming verarbeitet werden. Eine neue Session übernimmt jedoch nicht automatisch die vorherige Session und erhält keine automatische Übergabe oder Zusammenfassung. Nur die aktuelle Anfrage oder eine ausdrückliche Frage nach den letzten Sessions löst den Abruf aus.
+Beim ersten Beitrag einer neuen Session lädt MatoLoop automatisch einen begrenzten Ausschnitt aus der letzten passenden Session. Dadurch kennt der Agent Thema und letzten Stand, ohne das vollständige Gespräch erneut zu übertragen. Spätere Fragen nach der letzten Session verwenden Aktualität; ausdrückliche Bezüge auf ältere Arbeit verwenden eine thematische Suche. Normale Folgefragen laden den Ausschnitt nicht erneut. Dafür müssen Inhalte nicht zuerst als dauerhafte Erinnerung gespeichert oder durch Dreaming verarbeitet werden.
 
 Die Textabschnitte und die Volltextsuche werden gemeinsam mit der jeweiligen Nachricht gespeichert und stehen nach dem Speichern sofort bereit. Semantische Embeddings entstehen im Hintergrund. Falls der Embedding-Dienst noch nicht verfügbar ist, funktioniert die Volltextsuche weiter. Beim Start und regelmäßig im Betrieb repariert MatoLoop fehlende Indexdaten. Beim Start werden passende endgültig fehlgeschlagene Embeddings einmal erneut versucht; im laufenden Betrieb werden solche Fehler nicht endlos wiederholt.
 
@@ -23,6 +23,8 @@ Die Textabschnitte und die Volltextsuche werden gemeinsam mit der jeweiligen Nac
 Unter **Einstellungen > Memory** können Sie Erinnerungen suchen, filtern, anlegen, bearbeiten und löschen. Verfügbare Kategorien sind Kontext, Fakt, Ziel, Identität und Präferenz.
 
 **Immer berücksichtigen** ist die einzige besondere Abrufart. Solche Erinnerungen werden bei jeder zulässigen Anfrage berücksichtigt. Alle anderen Erinnerungen bleiben vollständig gespeichert und werden bei Bedarf passend zur Anfrage abgerufen. Quelle, Quell-Session und Zeitangaben helfen bei der Einordnung.
+
+Eine ausdrückliche Bitte im Chat, eine Information künftig immer zu berücksichtigen, kann diese Markierung bereits beim Speichern setzen. Dafür gilt dieselbe konfigurierbare Freigabe wie für andere Schreibzugriffe auf Memory. Eine gewöhnliche Bitte, etwas zu merken, setzt die Markierung nicht.
 
 Beim Ändern von **privat** auf **öffentlich** warnt MatoLoop, weil diese Einstufung die zulässige Übertragung an öffentliche Modelle beeinflusst.
 
@@ -37,7 +39,7 @@ Anschließend sucht der Host für jeden Kandidaten getrennt nach möglichen vorh
 - eine Erinnerung aktualisieren
 - mehrere Erinnerungen zusammenführen
 
-Dreaming kann außerdem vorschlagen, eine geeignete Identitätserinnerung künftig immer zu berücksichtigen. Zulässig sind nur ein bevorzugter Name, eine Anrede, der primäre Wohnort, Pronomen und eine dauerhaft relevante primäre Sprache. Dreaming hebt diese Berücksichtigung nie selbst auf. Die automatische Markierung endet bei fünf entsprechend markierten Erinnerungen; manuelle Änderungen bleiben möglich.
+Dreaming kann außerdem vorschlagen, eine Erinnerung künftig immer zu berücksichtigen. Kernidentität bleibt auf bevorzugten Namen, Anrede, primären Wohnort, Pronomen und primäre Sprache begrenzt. Ohne Kernidentitätsart sind auch ausdrücklich für künftige Antworten relevante enge Familienfakten, wiederkehrende Präferenzen und Sicherheitsbeschränkungen möglich. Dreaming hebt diese Berücksichtigung nie selbst auf. Die automatische Markierung endet bei fünf entsprechend markierten Erinnerungen; manuelle Änderungen bleiben möglich.
 
 ## Änderungsrichtlinien
 

@@ -50,6 +50,7 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert InstanceLimits.settings_key == "instance-limits"
     assert InstanceLimits().max_upload_mib == 64
     assert InstanceLimits().session_quota_mib == 500
+    assert InstanceLimits().max_extracted_characters == 5_000_000
 
 
 def test_instance_limits_validate_related_limits_and_aliases() -> None:

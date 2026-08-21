@@ -12,8 +12,14 @@ from mato_loop_backend.memory.retrieval import (
     MemoryRetrieveMode,
     _filters,
 )
-from mato_loop_backend.memory.service import MemoryService, memory_lexical_terms
-from mato_loop_backend.models import MemoryRecord
+from mato_loop_backend.memory.service import (
+    MemoryService,
+    memory_audience_for_source,
+    memory_audience_intersection,
+    memory_lexical_terms,
+    memory_visible_to,
+)
+from mato_loop_backend.models import MemoryAudience, MemoryRecord
 from mato_loop_backend.settings import TrustLevel
 
 
@@ -25,13 +31,13 @@ class _NestedTransaction:
         return None
 
 
-def _record(content: str, *, trust: str = "public") -> MemoryRecord:
+def _record(content: str, *, audience: str = "both") -> MemoryRecord:
     return MemoryRecord(
         id=uuid4(),
         content=content,
         category="fact",
         pinned=False,
-        trust_level=trust,
+        audience=audience,
         normalized_content_hash=content,
         updated_at=datetime.now(UTC),
     )
@@ -44,6 +50,29 @@ def test_memory_lexical_terms_are_safe_and_bounded() -> None:
     )
 
     assert terms == ["first", *(f"term{index}" for index in range(19))]
+
+
+def test_memory_audience_helpers_apply_source_defaults_and_intersections() -> None:
+    assert memory_audience_for_source(TrustLevel.PUBLIC) == MemoryAudience.BOTH
+    assert (
+        memory_audience_for_source(TrustLevel.PRIVATE)
+        == MemoryAudience.PRIVATE_ONLY
+    )
+    assert memory_visible_to(MemoryAudience.BOTH, TrustLevel.PUBLIC)
+    assert memory_visible_to(MemoryAudience.BOTH, TrustLevel.PRIVATE)
+    assert not memory_visible_to(MemoryAudience.PUBLIC_ONLY, TrustLevel.PRIVATE)
+    assert (
+        memory_audience_intersection(
+            [MemoryAudience.BOTH, MemoryAudience.PRIVATE_ONLY]
+        )
+        == MemoryAudience.PRIVATE_ONLY
+    )
+    assert (
+        memory_audience_intersection(
+            [MemoryAudience.PUBLIC_ONLY, MemoryAudience.PRIVATE_ONLY]
+        )
+        is None
+    )
 
 
 def test_retrieval_filters_bind_each_owner() -> None:
@@ -103,8 +132,8 @@ async def test_hybrid_retrieval_boosts_candidates_found_by_both_strategies(
 
     assert result.strategy == MemoryRetrievalStrategy.HYBRID
     assert result.items[0].id == shared.id
-    assert "memories.trust_level" in str(db.scalars.await_args_list[0].args[0])
-    assert "memories.trust_level" in str(db.scalars.await_args_list[1].args[0])
+    assert "memories.audience" in str(db.scalars.await_args_list[0].args[0])
+    assert "memories.audience" in str(db.scalars.await_args_list[1].args[0])
     assert "memories.user_id" in str(db.scalars.await_args_list[0].args[0])
     assert "memories.user_id" in str(db.scalars.await_args_list[1].args[0])
 
@@ -133,7 +162,7 @@ async def test_search_uses_lexical_fallback_when_embeddings_are_disabled(
     assert result.strategy == MemoryRetrievalStrategy.LEXICAL
     assert result.items == [item]
     statement = str(db.scalars.await_args.args[0])
-    assert "memories.trust_level =" not in statement
+    assert "memories.audience" in statement
     assert "plainto_tsquery" in statement
     assert "websearch_to_tsquery" not in statement
 

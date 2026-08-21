@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -544,7 +545,8 @@ def default_control_center_state() -> ControlCenterState:
 
 
 class SessionCreateRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=200_000)
+    content: str = Field(max_length=200_000)
+    run_id: UUID | None = None
     project_id: UUID | None = None
     model_id: UUID | None = None
     reasoning_effort: ReasoningEffort | None = None
@@ -649,7 +651,8 @@ async def _add_directory_grant(
 
 
 class SendMessageRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=200_000)
+    content: str = Field(max_length=200_000)
+    run_id: UUID | None = None
 
 
 class SessionReadRequest(BaseModel):
@@ -740,6 +743,15 @@ def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
         raise ApiError(422, "validation.invalid", field=field) from exc
 
 
+def _attachment_api_error(exc: AttachmentError) -> ApiError:
+    status_code = 413 if exc.code in {
+        "attachment.sessionQuotaExceeded",
+        "attachment.textTooLarge",
+        "attachment.tooLarge",
+    } else 400
+    return ApiError(status_code, exc.code)
+
+
 async def _attachment_uploads(
     files: list[UploadFile], settings: InstanceLimits | None = None
 ) -> list[AttachmentInput]:
@@ -789,9 +801,7 @@ async def _attachment_uploads(
                         suffix,
                         exc.diagnostic,
                     )
-                raise ApiError(
-                    413 if exc.code == "attachment.tooLarge" else 400, exc.code
-                ) from exc
+                raise _attachment_api_error(exc) from exc
     finally:
         for upload in files:
             await upload.close()
@@ -1143,6 +1153,53 @@ async def _latest_user_message(db: AsyncSession, session_id: UUID) -> Message:
     return message
 
 
+async def _duplicate_submission_response(
+    db: AsyncSession,
+    run_id: UUID | None,
+    user_id: UUID,
+    *,
+    requested_session_id: UUID | None = None,
+) -> dict[str, Any] | None:
+    if run_id is None:
+        return None
+    run = await db.scalar(
+        select(AgentRun)
+        .join(ChatSession, ChatSession.id == AgentRun.session_id)
+        .where(
+            AgentRun.id == run_id,
+            ChatSession.user_id == user_id,
+            ChatSession.session_type == "chat",
+        )
+    )
+    if run is None:
+        return None
+    if requested_session_id is not None and run.session_id != requested_session_id:
+        raise ApiError(409, "http.conflict")
+    item = await db.get(ChatSession, run.session_id)
+    message = await db.scalar(
+        select(Message)
+        .where(
+            Message.id == run.input_message_id,
+            Message.session_id == run.session_id,
+            Message.role == "user",
+        )
+        .options(selectinload(Message.attachments))
+    )
+    if item is None or message is None:
+        raise RuntimeError("Persisted agent run input is missing")
+    response = {
+        "runId": str(run.id),
+        "modelName": run.model_name,
+        "message": message_payload(message),
+    }
+    if requested_session_id is not None:
+        return response
+    return {
+        "session": await _session_payload(db, item, last_message_at=message.created_at),
+        **response,
+    }
+
+
 def run_payload(run: AgentRun) -> dict[str, Any]:
     return {
         "id": str(run.id),
@@ -1273,8 +1330,11 @@ async def _create_session(
     db: AsyncSession,
     attachments: list[AttachmentInput] | None = None,
 ) -> dict:
+    duplicate = await _duplicate_submission_response(db, payload.run_id, user.id)
+    if duplicate is not None:
+        return duplicate
     content = payload.content.strip()
-    if not content:
+    if not content and not attachments:
         raise ApiError(422, "validation.required", field="content")
     if payload.project_id is not None:
         project = await db.scalar(
@@ -1317,6 +1377,8 @@ async def _create_session(
         control_center=payload.control_center.model_dump(mode="json"),
     )
     db.add(item)
+    item_id = item.id
+    item_project_id = item.project_id
     await _add_directory_grant(
         db,
         item.id,
@@ -1328,11 +1390,9 @@ async def _create_session(
     await db.flush()
     session_storage = SessionStorage()
     try:
-        await asyncio.to_thread(session_storage.provision, item.id, item.project_id)
-        run = (
-            await AgentRuntime.start(db, item, content, attachments=attachments)
-            if attachments
-            else await AgentRuntime.start(db, item, content)
+        await asyncio.to_thread(session_storage.provision, item_id, item_project_id)
+        run = await AgentRuntime.start(
+            db, item, content, run_id=payload.run_id, attachments=attachments
         )
     except (OSError, SessionStorageError) as exc:
         await db.rollback()
@@ -1342,16 +1402,28 @@ async def _create_session(
         await db.rollback()
         try:
             await asyncio.to_thread(
-                session_storage.remove_session, item.id, item.project_id
+                session_storage.remove_session, item_id, item_project_id
             )
         except Exception:
             logger.exception("Unpersisted session storage could not be removed")
         raise ApiError(409, exc.code, params=exc.params) from exc
+    except IntegrityError as exc:
+        await db.rollback()
+        try:
+            await asyncio.to_thread(
+                session_storage.remove_session, item_id, item_project_id
+            )
+        except Exception:
+            logger.exception("Unpersisted session storage could not be removed")
+        duplicate = await _duplicate_submission_response(db, payload.run_id, user.id)
+        if duplicate is not None:
+            return duplicate
+        raise ApiError(409, "http.conflict") from exc
     except Exception:
         await db.rollback()
         try:
             await asyncio.to_thread(
-                session_storage.remove_session, item.id, item.project_id
+                session_storage.remove_session, item_id, item_project_id
             )
         except Exception:
             logger.exception("Unpersisted session storage could not be removed")
@@ -1386,13 +1458,19 @@ async def create_session_with_attachments(
 ) -> dict:
     request = _multipart_payload(payload, SessionCreateRequest)
     assert isinstance(request, SessionCreateRequest)
+    duplicate = await _duplicate_submission_response(db, request.run_id, user.id)
+    if duplicate is not None:
+        return duplicate
     instance_limits = await SettingsStore.load(db, InstanceLimits)
-    return await _create_session(
-        request,
-        user,
-        db,
-        await _attachment_uploads(attachments, instance_limits),
-    )
+    try:
+        return await _create_session(
+            request,
+            user,
+            db,
+            await _attachment_uploads(attachments, instance_limits),
+        )
+    except AttachmentError as exc:
+        raise _attachment_api_error(exc) from exc
 
 
 @router.get("/defaults")
@@ -2074,8 +2152,13 @@ async def _send_message(
     item = await _owned_session(db, session_id, user.id, for_update=True)
     if item is None:
         raise ApiError(404, "session.notFound")
+    duplicate = await _duplicate_submission_response(
+        db, payload.run_id, user.id, requested_session_id=session_id
+    )
+    if duplicate is not None:
+        return duplicate
     content = payload.content.strip()
-    if not content:
+    if not content and not attachments:
         raise ApiError(422, "validation.required", field="content")
     active = await db.scalar(
         select(AgentRun).where(
@@ -2092,13 +2175,19 @@ async def _send_message(
     if not _model_supports_tools(ai, model_id):
         raise ApiError(409, "session.modelToolsUnavailable")
     try:
-        run = (
-            await AgentRuntime.start(db, item, content, attachments=attachments)
-            if attachments
-            else await AgentRuntime.start(db, item, content)
+        run = await AgentRuntime.start(
+            db, item, content, run_id=payload.run_id, attachments=attachments
         )
     except AgentRunError as exc:
         raise ApiError(409, exc.code, params=exc.params) from exc
+    except IntegrityError as exc:
+        await db.rollback()
+        duplicate = await _duplicate_submission_response(
+            db, payload.run_id, user.id, requested_session_id=session_id
+        )
+        if duplicate is not None:
+            return duplicate
+        raise ApiError(409, "http.conflict") from exc
     user_message = await _latest_user_message(db, item.id)
     return {
         "runId": str(run.id),
@@ -2127,14 +2216,22 @@ async def send_message_with_attachments(
 ) -> dict[str, Any]:
     request = _multipart_payload(payload, SendMessageRequest)
     assert isinstance(request, SendMessageRequest)
-    instance_limits = await SettingsStore.load(db, InstanceLimits)
-    return await _send_message(
-        session_id,
-        request,
-        user,
-        db,
-        await _attachment_uploads(attachments, instance_limits),
+    duplicate = await _duplicate_submission_response(
+        db, request.run_id, user.id, requested_session_id=session_id
     )
+    if duplicate is not None:
+        return duplicate
+    instance_limits = await SettingsStore.load(db, InstanceLimits)
+    try:
+        return await _send_message(
+            session_id,
+            request,
+            user,
+            db,
+            await _attachment_uploads(attachments, instance_limits),
+        )
+    except AttachmentError as exc:
+        raise _attachment_api_error(exc) from exc
 
 
 @router.get("/{session_id}/runs/{run_id}")

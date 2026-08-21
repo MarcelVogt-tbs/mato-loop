@@ -3,7 +3,7 @@ import json
 import logging
 import wave
 from io import BytesIO
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -14,7 +14,7 @@ from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import sessions as sessions_route
 from mato_loop_backend.api.routes.media import create_transcription
-from mato_loop_backend.attachments import AttachmentInput
+from mato_loop_backend.attachments import AttachmentError, AttachmentInput
 from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.providers import TranscriptionResult
 from mato_loop_backend.providers.base import ProviderError
@@ -112,7 +112,7 @@ async def test_direct_transcription_rejects_disabled_policy(monkeypatch) -> None
     transcribe.assert_not_awaited()
 
 
-async def test_session_multipart_routes_forward_classified_attachments(monkeypatch) -> None:
+async def test_session_multipart_routes_forward_attachments_without_text(monkeypatch) -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
     create = AsyncMock(return_value={"created": True})
@@ -122,8 +122,8 @@ async def test_session_multipart_routes_forward_classified_attachments(monkeypat
     monkeypatch.setattr(
         SettingsStore, "load", AsyncMock(return_value=InstanceLimits())
     )
-    create_payload = json.dumps({"content": "Bitte transkribieren"})
-    send_payload = json.dumps({"content": "Noch eine Aufnahme"})
+    create_payload = json.dumps({"content": ""})
+    send_payload = json.dumps({"content": ""})
 
     result = await sessions_route.create_session_with_attachments(
         create_payload, [upload()], user, db
@@ -135,12 +135,64 @@ async def test_session_multipart_routes_forward_classified_attachments(monkeypat
 
     assert result == {"created": True}
     assert sent["modelName"] == "Test"
+    assert create.await_args.args[0].content == ""
+    assert send.await_args.args[1].content == ""
     created_audio = create.await_args.args[3][0]
     sent_audio = send.await_args.args[4][0]
     assert isinstance(created_audio, AttachmentInput)
     assert created_audio.kind == "audio"
     assert created_audio.mime_type == "audio/wav"
     assert sent_audio.filename == "aufnahme.wav"
+
+
+async def test_session_multipart_retries_skip_attachment_classification(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    run_id = uuid4()
+    duplicate_response = {"runId": str(run_id), "message": {"attachments": [{"id": "old"}]}}
+    duplicate = AsyncMock(return_value=duplicate_response)
+    load = AsyncMock()
+    uploads = AsyncMock()
+    monkeypatch.setattr(sessions_route, "_duplicate_submission_response", duplicate)
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(sessions_route, "_attachment_uploads", uploads)
+    payload = json.dumps({"content": "retry", "run_id": str(run_id)})
+
+    created = await sessions_route.create_session_with_attachments(
+        payload, [upload()], user, db
+    )
+    session_id = uuid4()
+    sent = await sessions_route.send_message_with_attachments(
+        session_id, payload, [upload()], user, db
+    )
+
+    assert created is duplicate_response
+    assert sent is duplicate_response
+    load.assert_not_awaited()
+    uploads.assert_not_awaited()
+
+
+async def test_session_attachment_processing_limit_returns_413(monkeypatch) -> None:
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=InstanceLimits())
+    )
+    monkeypatch.setattr(
+        sessions_route,
+        "_send_message",
+        AsyncMock(side_effect=AttachmentError("attachment.textTooLarge")),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await sessions_route.send_message_with_attachments(
+            uuid4(),
+            json.dumps({"content": "Analysiere das Log"}),
+            [upload()],
+            UserAccount(id=uuid4(), username="test", password_hash="hash"),
+            AsyncMock(spec=AsyncSession),
+        )
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.code == "attachment.textTooLarge"
 
 
 async def test_attachment_upload_count_is_bounded() -> None:
@@ -291,6 +343,8 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         model_config_id=model.id,
     )
     db.scalar.side_effect = [session, None, True, True]
+    schedule = MagicMock()
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
     task = asyncio.create_task(
         AgentRuntime.start(
             db,
@@ -309,5 +363,6 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         await task
 
     assert committed is True
+    schedule.assert_called_once()
     service.discard.assert_not_awaited()
     db.rollback.assert_not_awaited()

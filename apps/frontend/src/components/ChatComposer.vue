@@ -23,14 +23,6 @@
           class="q-mb-sm"
           @remove="$emit('remove-attachment', $event)"
         />
-        <q-banner
-          v-if="attachments.length && !draft.trim()"
-          dense
-          rounded
-          class="composer-attachment-hint app-surface-tonal q-mb-sm text-caption"
-        >
-          Ergänze einen kurzen Auftrag für die angehängten Dateien.
-        </q-banner>
         <div v-if="recording" class="composer-recording app-surface-tonal q-mb-sm">
           <div class="row items-center q-gutter-sm">
             <q-icon name="fiber_manual_record" color="negative" class="composer-recording__pulse" />
@@ -347,7 +339,7 @@
               @click="$emit('stop')"
             />
             <q-btn
-              v-if="!running || draftFilled"
+              v-if="!running || draftHasContent"
               round
               unelevated
               :color="queueMode ? 'secondary' : 'primary'"
@@ -547,13 +539,9 @@ const memoryModeIcon = computed(() => ({ full: 'memory', read_only: 'visibility'
 const interactionDisabled = computed(() => (
   !props.session || props.disabled || props.running || props.pendingCount > 0
 ))
-const inputDisabled = computed(() => !props.session)
-const draftFilled = computed(() => Boolean(props.draft.trim()))
-const inputPlaceholder = computed(() => (
-  props.queueMode
-    ? 'Nachricht vormerken – sie wird gesendet, sobald der Chat bereit ist'
-    : `Eine Nachricht an ${identity.displayName} senden`
-))
+const inputDisabled = computed(() => !props.session || props.disabled)
+const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
+const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
 const requiredSearchUnavailable = computed(() => (
   props.session?.webSearchPolicy === 'required'
   && (!searchAvailable.value || !modelSupportsTools.value)
@@ -565,7 +553,7 @@ const sendDisabled = computed(() => (
   || recording.value
   || transcribing.value
   || !modelSupportsTools.value
-  || !draftFilled.value
+  || (!props.draft.trim() && !props.attachments.length)
 ))
 const agentModeIcon = computed(() => props.session?.workspaceAccess === 'read-write' ? 'edit' : 'visibility')
 const searchAvailable = computed(() => integrations.search.effectiveEnabled)
@@ -660,7 +648,7 @@ async function selectExecutionAgent(value) {
 
 function submit() {
   const content = props.draft.trim()
-  if (!content || sendDisabled.value) return
+  if (sendDisabled.value) return
   emit('send', content)
 }
 

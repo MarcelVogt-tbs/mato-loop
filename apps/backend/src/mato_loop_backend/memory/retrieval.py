@@ -20,6 +20,7 @@ from mato_loop_backend.memory.service import (
     MemoryService,
     memory_lexical_terms,
     memory_reference_options,
+    memory_visibility_filter,
 )
 from mato_loop_backend.models import (
     MemoryCategory,
@@ -71,8 +72,7 @@ def _filters(
         filters.append(MemoryRecord.category == category.value)
     if pinned is not None:
         filters.append(MemoryRecord.pinned.is_(pinned))
-    if readable_by == TrustLevel.PUBLIC:
-        filters.append(MemoryRecord.trust_level == TrustLevel.PUBLIC.value)
+    filters.append(memory_visibility_filter(readable_by))
     return filters
 
 

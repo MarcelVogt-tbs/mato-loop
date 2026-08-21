@@ -5,7 +5,12 @@ from mato_loop_backend.memory.retrieval import (
     MemoryRetrievalStrategy,
     MemoryRetrieveMode,
 )
-from mato_loop_backend.memory.service import MemoryList, MemoryService, normalize_content
+from mato_loop_backend.memory.service import (
+    MemoryList,
+    MemoryService,
+    memory_visible_to,
+    normalize_content,
+)
 
 __all__ = [
     "EffectiveMemory",
@@ -16,5 +21,6 @@ __all__ = [
     "MemoryRetrieveMode",
     "MemoryService",
     "effective_memory",
+    "memory_visible_to",
     "normalize_content",
 ]

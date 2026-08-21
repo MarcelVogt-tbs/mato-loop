@@ -224,13 +224,17 @@ REQUIRED_OPENSCAD_RENDER_RETRIES = 2
 REQUIRED_OPENSCAD_SOURCE_REVIEW_RETRIES = 2
 VIDEO_FRAME_BATCH_IMAGES = 4
 EMPTY_RESPONSE_RETRIES = 1
-MEMORY_WRITE_OUTCOME_PRIORITY = {"denied": 0, "duplicate": 1, "stored": 2}
-AUTOMATIC_MEMORY_MAX_ITEMS = 3
-AUTOMATIC_MEMORY_MAX_CHARACTERS = 2_500
-AUTOMATIC_MEMORY_MAX_DISTANCE = 0.21
+_RESEARCH_TOOL_NAMES = frozenset({"web_search", "webfetch", "fetch_transcript"})
+MEMORY_WRITE_OUTCOME_PRIORITY = {
+    "denied": 0,
+    "duplicate": 1,
+    "stored": 2,
+    "forgotten": 3,
+}
 AUTOMATIC_EPISODE_MAX_ITEMS = 2
 AUTOMATIC_EPISODE_MAX_DISTANCE = 0.25
 AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS = 320
+AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS = 1_200
 AUTOMATIC_CONTEXT_MAX_TOKENS = 1_536
 AUTOMATIC_CONTEXT_BUDGET_RATIO = 0.1
 MEMORY_OVERVIEW_MAX_ITEMS = 10
@@ -658,9 +662,9 @@ def _model_for_id(ai_settings: AiSettings, model_id: UUID | None) -> ModelConfig
 
 def _memory_rag_queries(records: list[Message]) -> tuple[str | None, str | None]:
     user_messages = [item.content.strip() for item in records if item.role == "user"]
-    user_messages = [item for item in user_messages if item]
-    if not user_messages:
+    if not user_messages or not user_messages[-1]:
         return None, None
+    user_messages = [item for item in user_messages if item]
     current = user_messages[-1][:2_000]
     contextual = (
         (user_messages[-2][:1_000] + "\nFollow-up: " + current)[:2_000]
@@ -695,16 +699,36 @@ def _merge_contextual_results[T](
     return selected
 
 
-def _recent_episode_overview_requested(records: list[Message]) -> bool:
+def _episode_reference_request_text(records: list[Message]) -> str:
     current = next(
         (
             item.content.casefold()
             for item in reversed(records)
-            if item.role == "user" and item.content.strip()
+            if item.role == "user"
         ),
         "",
     )
     normalized = re.sub(r"\s+", " ", current).strip()
+    if re.search(
+        r"\b(?:translate|übersetze|uebersetze|rewrite|umschreiben|"
+        r"explain the phrase)\b|\bwhat does .{0,40}\bmean\b",
+        normalized,
+    ) or re.search(
+        r"\b(?:do not|don't|dont|ignore|avoid|without|no information from|"
+        r"nicht|keine? informationen? aus)\b.{0,80}\b"
+        r"(?:previous|prior|earlier|vorherigen|früheren|frueheren)\b",
+        normalized,
+    ) or re.search(
+        r"\b(?:previous|prior|earlier|vorherige|frühere|fruehere)\b.{0,80}\b"
+        r"(?:irrelevant|do not|don't|dont|ignore|nicht verwenden|nicht nutzen)\b",
+        normalized,
+    ):
+        return ""
+    return normalized
+
+
+def _recent_episode_overview_requested(records: list[Message]) -> bool:
+    normalized = _episode_reference_request_text(records)
     return bool(
         re.search(
             r"\b(?:was haben wir|worüber haben wir|woran haben wir) (?:zuletzt|in der letzten session|im letzten chat)\b"
@@ -713,6 +737,29 @@ def _recent_episode_overview_requested(records: list[Message]) -> bool:
             r"|\b(?:last|previous) (?:session|chat|conversation)\b",
             normalized,
         )
+    )
+
+
+def _prior_session_history_requested(records: list[Message]) -> bool:
+    if _recent_episode_overview_requested(records):
+        return True
+    normalized = _episode_reference_request_text(records)
+    return bool(
+        re.search(
+            r"\b(?:im|in dem) (?:vorherigen|früheren|frueheren) (?:chat|session)\b"
+            r"|\bwie wir (?:damals|zuvor|früher|frueher) (?:besprochen|entschieden|vereinbart)\b"
+            r"|\b(?:mach|mache|machen wir) dort weiter,? wo wir aufgehört haben\b"
+            r"|\b(?:in|from) (?:(?:an?|the) )?(?:previous|prior|earlier) (?:chat|session|conversation)\b"
+            r"|\bas we (?:discussed|decided|agreed) (?:earlier|before|previously)\b"
+            r"|\b(?:continue|pick up) (?:from )?where we left off\b",
+            normalized,
+        )
+    )
+
+
+def _session_bootstrap_requested(records: list[Message]) -> bool:
+    return sum(item.role == "user" for item in records) == 1 and not any(
+        item.role == "assistant" for item in records
     )
 
 
@@ -802,29 +849,6 @@ def _memory_overview_continuation(records: list[Message]) -> dict[str, Any] | No
     return None
 
 
-def _bounded_memory_references(
-    pinned: list[MemoryRecord],
-    relevant: list[MemoryRecord],
-    *,
-    relevant_max_items: int,
-    relevant_max_characters: int,
-) -> list[tuple[str, MemoryRecord]]:
-    selected = [("pinned", item) for item in pinned]
-    selected_ids = {item.id for item in pinned}
-    used_characters = 0
-    relevant_count = 0
-    for item in relevant:
-        if item.id in selected_ids or relevant_count >= relevant_max_items:
-            continue
-        if used_characters + len(item.content) > relevant_max_characters:
-            continue
-        selected.append(("retrieved", item))
-        selected_ids.add(item.id)
-        used_characters += len(item.content)
-        relevant_count += 1
-    return selected
-
-
 def _automatic_context_character_budget(
     model: ModelConfig, settings: AgentRuntimeSettings
 ) -> int:
@@ -856,6 +880,25 @@ def _bounded_episode_payload(
         matched_text = reference.anchor_content[
             : min(share, AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS)
         ]
+        local_used = len(matched_text)
+        messages = []
+        for message in reference.excerpt:
+            if message.id == reference.anchor_message_id:
+                continue
+            remaining = share - local_used
+            if remaining <= 0:
+                break
+            content = message.content[:remaining]
+            if not content:
+                continue
+            messages.append(
+                {
+                    "role": message.role,
+                    "content": content,
+                    "at": message.created_at.isoformat(),
+                }
+            )
+            local_used += len(content)
         if not matched_text:
             continue
         payload.append(
@@ -868,13 +911,10 @@ def _bounded_episode_payload(
                     "createdAt": reference.anchor_created_at.isoformat(),
                     "preview": matched_text,
                 },
-                "sessionReadArguments": {
-                    "session_id": str(reference.session_id),
-                    "around_message_id": str(reference.anchor_message_id),
-                },
+                "messages": messages,
             }
         )
-        remaining_budget -= len(matched_text)
+        remaining_budget -= local_used
     return payload
 
 
@@ -902,6 +942,8 @@ def _durable_memory_payload(
             "id": str(item.id),
             "revision": item.revision,
             "category": item.category,
+            "audience": item.audience,
+            "pinKind": item.pin_kind,
             "content": item.content,
             **memory_reference_timestamps(item),
         }
@@ -934,6 +976,8 @@ def _bounded_memory_overview(
                 "revision": item.revision,
                 "category": item.category,
                 "pinned": item.pinned,
+                "audience": item.audience,
+                "pinKind": item.pin_kind,
                 "content": content,
                 **memory_reference_timestamps(item),
                 "sourceSession": (
@@ -962,7 +1006,9 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
             if tool_name in {"write_file", "create_draft", "generate_qr_code"}
             else {"characters": len(content), "preview": content[:200]}
         )
-    if tool_name == "webfetch" and isinstance(safe.get("url"), str):
+    if tool_name in {"webfetch", "fetch_transcript"} and isinstance(
+        safe.get("url"), str
+    ):
         try:
             safe["url"] = sanitize_url_for_display(safe["url"])
         except WebFetchError:
@@ -1077,6 +1123,7 @@ class AgentRuntime:
         chat_session: ChatSession,
         content: str,
         *,
+        run_id: UUID | None = None,
         attachments: list[AttachmentInput] | None = None,
         automation_run: AutomationRun | None = None,
         model_id_override: UUID | None = None,
@@ -1204,6 +1251,7 @@ class AgentRuntime:
             trust_level=trust_level.value,
         )
         run = AgentRun(
+            id=run_id or uuid4(),
             session_id=chat_session.id,
             status="queued",
             model_config_id=model_id,
@@ -1275,6 +1323,7 @@ class AgentRuntime:
             await rollback_and_discard()
             raise
         commit_task = asyncio.get_running_loop().create_task(db.commit())
+        cancelled = False
         try:
             await asyncio.shield(commit_task)
         except asyncio.CancelledError:
@@ -1282,7 +1331,8 @@ class AgentRuntime:
                 await commit_task
             except BaseException:
                 await rollback_and_discard()
-            raise
+                raise
+            cancelled = True
         except BaseException:
             await rollback_and_discard()
             raise
@@ -1299,6 +1349,8 @@ class AgentRuntime:
             )
             cls._title_tasks[title_task] = chat_session.user_id
             title_task.add_done_callback(lambda task: cls._title_tasks.pop(task, None))
+        if cancelled:
+            raise asyncio.CancelledError
         return run
 
     @classmethod
@@ -1694,7 +1746,6 @@ class AgentRuntime:
         failed_tool_call_signatures: set[str] = set()
         unresolved_mutation_errors: dict[str, str] = {}
         turn_datetime = run.created_at or datetime.now(UTC)
-        automatic_memories: list[MemoryRecord] | None = None
         automatic_episodes: list[EpisodeReference] | None = None
         memory_scope = None
         memory_overview_required: bool | None = None
@@ -1821,10 +1872,14 @@ class AgentRuntime:
                             _bounded_memory_overview(memory_overview_items)
                         )
                         pinned_ids = {item.id for item in pinned_memories}
+                        pinned_identity_kinds = {
+                            item.pin_kind for item in pinned_memories if item.pin_kind
+                        }
                         overview_payload = [
                             item
                             for item in overview_payload
                             if UUID(item["id"]) not in pinned_ids
+                            and item["pinKind"] not in pinned_identity_kinds
                         ]
                         pinned_references = [
                             ("pinned", item) for item in pinned_memories
@@ -1865,124 +1920,16 @@ class AgentRuntime:
                         (memory_text, injected_memory_count, 0)
                     )
                 else:
-                    rag_query, contextual_rag_query = _memory_rag_queries(records)
-                    if automatic_memories is None or automatic_episodes is None:
+                    rag_query, _contextual_rag_query = _memory_rag_queries(records)
+                    if automatic_episodes is None:
                         recent_episodes_requested = _recent_episode_overview_requested(
                             records
                         )
-                        query_embedding = None
-                        contextual_query_embedding = None
-                        semantic_enabled = get_runtime_config().embedding_enabled
-                        if rag_query and semantic_enabled and not recent_episodes_requested:
-                            try:
-                                if contextual_rag_query:
-                                    (
-                                        query_embedding,
-                                        contextual_query_embedding,
-                                    ) = await embedding_client.embed_queries(
-                                        [rag_query, contextual_rag_query]
-                                    )
-                                else:
-                                    query_embedding = await embedding_client.embed_query(
-                                        rag_query
-                                    )
-                            except EmbeddingError:
-                                semantic_enabled = False
-                        if rag_query and not recent_episodes_requested:
-                            primary_memories = (
-                                await MemoryRetrievalService.retrieve(
-                                    db,
-                                    owner_id=chat_session.user_id,
-                                    mode=MemoryRetrieveMode.SEARCH,
-                                    query=rag_query,
-                                    readable_by=model_trust_level,
-                                    pinned=False,
-                                    limit=AUTOMATIC_MEMORY_MAX_ITEMS,
-                                    query_embedding=query_embedding,
-                                    semantic_enabled=semantic_enabled,
-                                    max_semantic_distance=AUTOMATIC_MEMORY_MAX_DISTANCE,
-                                )
-                            ).items
-                            primary_episodes = (
-                                await EpisodeRetrievalService.retrieve(
-                                    db,
-                                    owner_id=chat_session.user_id,
-                                    current_session_id=chat_session.id,
-                                    project_id=chat_session.project_id,
-                                    readable_by=model_trust_level,
-                                    query=rag_query,
-                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
-                                    query_embedding=query_embedding,
-                                    semantic_enabled=semantic_enabled,
-                                    max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
-                                    excerpt_messages=1,
-                                    max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
-                                )
-                            ).references
-                            if sum(item.role == "user" for item in records) == 1:
-                                latest_episode = await EpisodeRetrievalService.recent(
-                                    db,
-                                    owner_id=chat_session.user_id,
-                                    current_session_id=chat_session.id,
-                                    project_id=chat_session.project_id,
-                                    readable_by=model_trust_level,
-                                    limit=1,
-                                    excerpt_messages=1,
-                                    max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
-                                )
-                                primary_episodes = _merge_contextual_results(
-                                    latest_episode.references,
-                                    primary_episodes,
-                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
-                                    identity=lambda item: item.session_id,
-                                )
-                            automatic_memories = primary_memories
-                            automatic_episodes = primary_episodes
-                            if contextual_rag_query:
-                                contextual_memories = (
-                                    await MemoryRetrievalService.retrieve(
-                                        db,
-                                        owner_id=chat_session.user_id,
-                                        mode=MemoryRetrieveMode.SEARCH,
-                                        query=contextual_rag_query,
-                                        readable_by=model_trust_level,
-                                        pinned=False,
-                                        limit=AUTOMATIC_MEMORY_MAX_ITEMS,
-                                        query_embedding=contextual_query_embedding,
-                                        semantic_enabled=semantic_enabled,
-                                        max_semantic_distance=AUTOMATIC_MEMORY_MAX_DISTANCE,
-                                    )
-                                ).items
-                                contextual_episodes = (
-                                    await EpisodeRetrievalService.retrieve(
-                                        db,
-                                        owner_id=chat_session.user_id,
-                                        current_session_id=chat_session.id,
-                                        project_id=chat_session.project_id,
-                                        readable_by=model_trust_level,
-                                        query=contextual_rag_query,
-                                        limit=AUTOMATIC_EPISODE_MAX_ITEMS,
-                                        query_embedding=contextual_query_embedding,
-                                        semantic_enabled=semantic_enabled,
-                                        max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
-                                        excerpt_messages=1,
-                                        max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
-                                    )
-                                ).references
-                                automatic_memories = _merge_contextual_results(
-                                    primary_memories,
-                                    contextual_memories,
-                                    limit=AUTOMATIC_MEMORY_MAX_ITEMS,
-                                    identity=lambda item: item.id,
-                                )
-                                automatic_episodes = _merge_contextual_results(
-                                    primary_episodes,
-                                    contextual_episodes,
-                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
-                                    identity=lambda item: item.session_id,
-                                )
-                        elif recent_episodes_requested:
-                            automatic_memories = []
+                        prior_session_requested = _prior_session_history_requested(
+                            records
+                        )
+                        bootstrap_requested = _session_bootstrap_requested(records)
+                        if recent_episodes_requested:
                             automatic_episodes = (
                                 await EpisodeRetrievalService.recent(
                                     db,
@@ -1991,38 +1938,76 @@ class AgentRuntime:
                                     project_id=chat_session.project_id,
                                     readable_by=model_trust_level,
                                     limit=AUTOMATIC_EPISODE_MAX_ITEMS,
+                                    excerpt_messages=4,
+                                    max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
+                                )
+                            ).references
+                        elif prior_session_requested and rag_query:
+                            query_embedding = None
+                            semantic_enabled = get_runtime_config().embedding_enabled
+                            if semantic_enabled:
+                                try:
+                                    query_embedding = await embedding_client.embed_query(rag_query)
+                                except EmbeddingError:
+                                    semantic_enabled = False
+                            automatic_episodes = (
+                                await EpisodeRetrievalService.retrieve(
+                                    db,
+                                    owner_id=chat_session.user_id,
+                                    current_session_id=chat_session.id,
+                                    project_id=chat_session.project_id,
+                                    readable_by=model_trust_level,
+                                    query=rag_query,
+                                    limit=1,
+                                    query_embedding=query_embedding,
+                                    semantic_enabled=semantic_enabled,
+                                    max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
                                     excerpt_messages=1,
-                                    max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
+                                    latest_messages=2,
+                                    max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
+                                )
+                            ).references
+                            if bootstrap_requested:
+                                latest_episode = await EpisodeRetrievalService.recent(
+                                    db,
+                                    owner_id=chat_session.user_id,
+                                    current_session_id=chat_session.id,
+                                    project_id=chat_session.project_id,
+                                    readable_by=model_trust_level,
+                                    limit=1,
+                                    excerpt_messages=4,
+                                    max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
+                                )
+                                automatic_episodes = _merge_contextual_results(
+                                    latest_episode.references,
+                                    automatic_episodes,
+                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
+                                    identity=lambda item: item.session_id,
+                                )
+                        elif bootstrap_requested:
+                            automatic_episodes = (
+                                await EpisodeRetrievalService.recent(
+                                    db,
+                                    owner_id=chat_session.user_id,
+                                    current_session_id=chat_session.id,
+                                    project_id=chat_session.project_id,
+                                    readable_by=model_trust_level,
+                                    limit=1,
+                                    excerpt_messages=4,
+                                    max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
                                 )
                             ).references
                         else:
-                            automatic_memories = []
                             automatic_episodes = []
                     automatic_budget = _automatic_context_character_budget(
                         model, runtime_settings
                     )
-                    episode_reserve = (
-                        min(AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS, automatic_budget)
-                        if automatic_episodes
-                        else 0
-                    )
-                    selected_memory_references = _bounded_memory_references(
-                        pinned_memories,
-                        automatic_memories,
-                        relevant_max_items=AUTOMATIC_MEMORY_MAX_ITEMS,
-                        relevant_max_characters=min(
-                            AUTOMATIC_MEMORY_MAX_CHARACTERS,
-                            automatic_budget - episode_reserve,
-                        ),
-                    )
-                    retrieved_characters = sum(
-                        len(item.content)
-                        for source, item in selected_memory_references
-                        if source == "retrieved"
-                    )
+                    selected_memory_references = [
+                        ("pinned", item) for item in pinned_memories
+                    ]
                     episode_payload = _bounded_episode_payload(
                         automatic_episodes,
-                        max_characters=max(0, automatic_budget - retrieved_characters),
+                        max_characters=automatic_budget,
                     )
                     injected_memory_count = len(selected_memory_references)
                     injected_episode_count = len(episode_payload)
@@ -2041,18 +2026,6 @@ class AgentRuntime:
                         for reference in selected_memory_references
                         if reference[0] == "pinned"
                     ]
-                    if episode_payload and len(pinned_references) != len(
-                        selected_memory_references
-                    ):
-                        memory_prompt_candidates.append(
-                            (
-                                _cross_session_context_text(
-                                    pinned_references, episode_payload
-                                ),
-                                len(pinned_references),
-                                injected_episode_count,
-                            )
-                        )
                     if episode_payload:
                         memory_prompt_candidates.append(
                             (
@@ -2060,14 +2033,6 @@ class AgentRuntime:
                                     selected_memory_references, []
                                 ),
                                 injected_memory_count,
-                                0,
-                            )
-                        )
-                    if len(pinned_references) != len(selected_memory_references):
-                        memory_prompt_candidates.append(
-                            (
-                                _cross_session_context_text(pinned_references, []),
-                                len(pinned_references),
                                 0,
                             )
                         )
@@ -2145,7 +2110,7 @@ class AgentRuntime:
             ):
                 effective_toolset = effective_toolset.only("read")
             elif research_budget_exhausted and effective_toolset is not None:
-                effective_toolset = effective_toolset.without("web_search", "webfetch")
+                effective_toolset = effective_toolset.without(*_RESEARCH_TOOL_NAMES)
             effective_tool_count = len(effective_toolset.tools) if effective_toolset else 0
             if effective_toolset is not None:
                 effective_toolset = with_media_prompt_profiles(
@@ -2755,7 +2720,7 @@ class AgentRuntime:
                 call_signature = _tool_call_signature(call)
                 is_research_call = (
                     chat_session.web_search_policy != WebSearchPolicy.DISABLED
-                    and call.name in {"web_search", "webfetch"}
+                    and call.name in _RESEARCH_TOOL_NAMES
                 )
                 repeated_successful_research_call = (
                     is_research_call and call_signature in successful_research_calls
@@ -3918,7 +3883,7 @@ class AgentRuntime:
                         reported_outcome = metadata.get("memoryWriteOutcome")
                         outcome = (
                             reported_outcome
-                            if reported_outcome in {"stored", "duplicate"}
+                            if reported_outcome in {"stored", "forgotten", "duplicate"}
                             else "stored"
                         )
                     if outcome is not None and (
@@ -3939,7 +3904,7 @@ class AgentRuntime:
                         failed_tool_call_signatures.clear()
                     else:
                         failed_tool_call_signatures.discard(call_signature)
-                    if call.name in {"web_search", "webfetch"}:
+                    if call.name in _RESEARCH_TOOL_NAMES:
                         research_used = True
                         _add_research_sources(
                             research_sources, metadata, research_source_titles

@@ -1,15 +1,17 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { api } = vi.hoisted(() => ({
+const { api, notifyError } = vi.hoisted(() => ({
   api: {
     get: vi.fn(),
     post: vi.fn(),
     put: vi.fn()
-  }
+  },
+  notifyError: vi.fn()
 }))
 
 vi.mock('src/boot/axios', () => ({ api }))
+vi.mock('src/utils/notifications', () => ({ notifyError }))
 
 import { useAuthStore } from '../src/stores/auth'
 import { useAgentIdentityStore } from '../src/stores/agent-identity'
@@ -104,6 +106,37 @@ describe('auth store', () => {
     expect(chat.activeDraft).toBe('')
     expect(identity.displayName).toBe('MatoLoop')
     expect(identity.loaded).toBe(false)
+  })
+
+  it('leaves the authenticated UI when local logout cleanup fails', async () => {
+    const replace = vi.fn()
+    global.window = { localStorage: { removeItem: vi.fn() }, location: { reload: vi.fn(), replace } }
+    api.post.mockResolvedValue({ data: {} })
+    const auth = useAuthStore()
+    auth.authenticated = true
+    vi.spyOn(useChatStore(), 'clearAllDrafts').mockRejectedValue(new Error('storage failed'))
+
+    await auth.logout()
+
+    expect(auth.authenticated).toBe(false)
+    expect(notifyError).toHaveBeenCalledOnce()
+    expect(replace).toHaveBeenCalledWith('/login')
+  })
+
+  it('leaves the authenticated UI when local cleanup throws synchronously', async () => {
+    const replace = vi.fn()
+    global.window = {
+      localStorage: { removeItem: () => { throw new Error('storage blocked') } },
+      location: { reload: vi.fn(), replace }
+    }
+    api.post.mockResolvedValue({ data: {} })
+    const auth = useAuthStore()
+    auth.authenticated = true
+
+    await auth.logout()
+
+    expect(auth.authenticated).toBe(false)
+    expect(replace).toHaveBeenCalledWith('/login')
   })
 
   it('clears persisted drafts and hard reloads when the authenticated user changes', async () => {

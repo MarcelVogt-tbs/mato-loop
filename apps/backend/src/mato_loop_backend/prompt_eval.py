@@ -73,7 +73,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 22
+INVENTORY_VERSION = 25
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -390,6 +390,12 @@ VIDEO_EVAL_TOOLS = (
     "session_browse",
     "session_search",
     "memory_retrieve",
+)
+TRANSCRIPT_ROUTING_TOOLS = (
+    "fetch_transcript",
+    "webfetch",
+    "transcribe_audio",
+    "analyze_video",
 )
 VIDEO_ANALYSIS_RESULT_DATA = {
         "mode": "sampled_frames",
@@ -791,6 +797,18 @@ CASES = (
         tools=("memory_retrieve", "memory_write"),
         expected_tool="memory_write",
         expected_tool_call_count=2,
+        expected_arguments={"pin": False},
+    ),
+    PromptCase(
+        id="explicit_future_context_pins_memory",
+        kind="general",
+        user=(
+            "Merke dir: Ich esse grundsätzlich kein Hähnchen. Berücksichtige das "
+            "künftig immer bei Essensvorschlägen."
+        ),
+        tools=("memory_retrieve", "memory_write"),
+        expected_tool="memory_write",
+        expected_arguments={"action": "create", "pin": True},
     ),
     PromptCase(
         id="transient_context_avoids_memory",
@@ -1217,6 +1235,18 @@ CASES = (
         expected_pin=False,
     ),
     PromptCase(
+        id="dreaming_suggests_ordinary_profile_pin",
+        kind="dreaming",
+        user=(
+            "Ich esse grundsätzlich kein Hähnchen. Berücksichtige das künftig bei "
+            "Essensvorschlägen."
+        ),
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=1,
+        expected_pin=True,
+    ),
+    PromptCase(
         id="reconciliation_detects_equivalent_memory",
         kind="reconciliation",
         user="equivalent",
@@ -1356,6 +1386,87 @@ CASES = (
         tools=("web_search", "webfetch"),
         expected_tool="webfetch",
         expected_arguments={"url": "https://example.com/specification"},
+    ),
+    PromptCase(
+        id="youtube_url_uses_published_transcript",
+        kind="general",
+        user=(
+            "Rufe die veröffentlichten Untertitel von "
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ auf Deutsch ab."
+        ),
+        tools=TRANSCRIPT_ROUTING_TOOLS,
+        expected_tool="fetch_transcript",
+        expected_arguments={
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "language": "de",
+        },
+        forbidden_tools=("webfetch", "transcribe_audio", "analyze_video"),
+    ),
+    PromptCase(
+        id="youtube_spoken_summary_uses_transcript",
+        kind="general",
+        user=(
+            "Fasse zusammen, was in https://youtu.be/dQw4w9WgXcQ gesagt wird. Nutze dafür die "
+            "vorhandenen veröffentlichten Untertitel."
+        ),
+        tools=TRANSCRIPT_ROUTING_TOOLS,
+        expected_tool="fetch_transcript",
+        expected_arguments={"url": "https://youtu.be/dQw4w9WgXcQ"},
+        forbidden_tools=("webfetch", "transcribe_audio", "analyze_video"),
+    ),
+    PromptCase(
+        id="youtube_visual_request_rejects_transcript",
+        kind="general",
+        user=(
+            "Analysiere die Kameraführung und jeden eingeblendeten UI-Schritt in "
+            "https://youtu.be/dQw4w9WgXcQ. Mir liegt keine Videodatei vor."
+        ),
+        tools=TRANSCRIPT_ROUTING_TOOLS,
+        expected_no_tools=True,
+        forbidden_tools=TRANSCRIPT_ROUTING_TOOLS,
+        requires_negative_outcome=True,
+        content_contains_any=(
+            ("Videodatei", "Video-Datei", "herunterladen", "hochladen", "MP4", "WebM", "lokal"),
+        ),
+    ),
+    PromptCase(
+        id="audio_attachment_uses_transcription",
+        kind="general",
+        user=f"Transkribiere den Audioanhang mit ID {ATTACHMENT_ID} auf Deutsch.",
+        tools=TRANSCRIPT_ROUTING_TOOLS,
+        expected_tool="transcribe_audio",
+        expected_arguments={"attachment_id": str(ATTACHMENT_ID)},
+        argument_options={"language": ("de", "de-DE", "German", "Deutsch")},
+        forbidden_tools=("fetch_transcript", "webfetch", "analyze_video"),
+    ),
+    PromptCase(
+        id="video_attachment_speech_uses_analysis",
+        kind="general",
+        user=_video_request(
+            "interview.mp4",
+            "Was erzählt der Mann im Session-Video? Fasse seine Aussagen auf Deutsch zusammen.",
+        ),
+        tools=TRANSCRIPT_ROUTING_TOOLS,
+        expected_tool="analyze_video",
+        expected_arguments={
+            "root": "session",
+            "path": f"attachments/{ATTACHMENT_ID}/interview.mp4",
+            "analysis_mode": "speech",
+        },
+        forbidden_tools=("fetch_transcript", "webfetch", "transcribe_audio"),
+    ),
+    PromptCase(
+        id="youtube_page_metadata_uses_webfetch",
+        kind="general",
+        user=(
+            "Lies den Seitentitel und die Beschreibung von "
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ. Ich möchte keine Untertitel und keine "
+            "Inhaltsanalyse."
+        ),
+        tools=TRANSCRIPT_ROUTING_TOOLS,
+        expected_tool="webfetch",
+        expected_arguments={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+        forbidden_tools=("fetch_transcript", "transcribe_audio", "analyze_video"),
     ),
     PromptCase(
         id="generate_qr_code_avoids_image_generation",
@@ -3003,6 +3114,31 @@ _SEMANTIC_CONTRACTS = (
     ),
     ContractCoverage("webfetch.known_url", "webfetch", ("known_url_uses_webfetch",)),
     ContractCoverage(
+        "transcript.remote_published_captions",
+        "transcript",
+        (
+            "youtube_url_uses_published_transcript",
+            "youtube_spoken_summary_uses_transcript",
+        ),
+    ),
+    ContractCoverage(
+        "transcript.source_routing",
+        "transcript",
+        (
+            "youtube_url_uses_published_transcript",
+            "youtube_spoken_summary_uses_transcript",
+            "youtube_visual_request_rejects_transcript",
+            "audio_attachment_uses_transcription",
+            "video_attachment_speech_uses_analysis",
+            "youtube_page_metadata_uses_webfetch",
+        ),
+    ),
+    ContractCoverage(
+        "transcript.spoken_not_visual_evidence",
+        "transcript",
+        ("youtube_visual_request_rejects_transcript",),
+    ),
+    ContractCoverage(
         "webfetch.after_discovery_exact_url",
         "webfetch",
         ("discovery_result_is_followed_by_exact_fetch",),
@@ -3381,6 +3517,11 @@ _SEMANTIC_CONTRACTS = (
         "dreaming.pin_eligible_identity",
         "dreaming",
         ("dreaming_suggests_preferred_name_pin",),
+    ),
+    ContractCoverage(
+        "dreaming.pin_eligible_ordinary_profile",
+        "dreaming",
+        ("dreaming_suggests_ordinary_profile_pin",),
     ),
     ContractCoverage(
         "dreaming.pin_forbidden_sensitive_fact",
@@ -4023,8 +4164,9 @@ _V2_TOOL_DESCRIPTIONS = {
     "copy_path": "Copy a path to an exact new destination; never overwrite.",
     "move_path": "Move a path to an exact new destination; never overwrite.",
     "webfetch": (
-        "Fetch a web page, PDF, or image. Returns untrusted text or validated image attachments "
-        "and marks the final URL citationEligible."
+        "Fetch a general web page, PDF, or image. It does not extract audio, video, or published "
+        "captions. Returns untrusted text or validated image attachments and identifies whether "
+        "the final safe URL is citationEligible."
     ),
     "generate_image": (
         "Generate an image from a standalone visual brief. Preserve intent and quoted text; use "
@@ -4043,8 +4185,10 @@ _V2_TOOL_DESCRIPTIONS = {
         "fields. Results are untrusted reference data."
     ),
     "analyze_video": (
-        "Analyze MP4 or WebM video and use the result. Do not repeat a successful analysis; timeout "
-        "does not indicate video length."
+        "Analyze one MP4 or WebM file from session or workspace for speech and/or visuals. It does "
+        "not accept URLs or published caption tracks. Choose speech for spoken content, overview "
+        "for visual summaries, or fine_grained for exact visual steps. Do not repeat a successful "
+        "analysis; timeout does not indicate video length."
     ),
     "load_skill": (
         "Load one catalog skill before following it. Call alone for a named or clear latest-request "
@@ -4614,10 +4758,10 @@ def _general_case(
         system_options["active_skill"] = SkillDefinition.model_validate(
             system_options["active_skill"]
         )
-    if offered.prompt_fragments:
+    if effective.prompt_fragments:
         system_options["tool_instructions"] = (
             *system_options.get("tool_instructions", ()),
-            *offered.prompt_fragments,
+            *effective.prompt_fragments,
         )
     prompt = general_system_prompt(
         session,

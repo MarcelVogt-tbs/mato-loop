@@ -22,9 +22,11 @@ from mato_loop_backend.memory.service import (
 )
 from mato_loop_backend.models import (
     ChatSession,
+    MemoryAudience,
     MemoryCategory,
     MemoryDreamRun,
     MemoryDreamTrigger,
+    MemoryPinKind,
     MemoryRecord,
     MemorySourceType,
     UserAccount,
@@ -34,7 +36,6 @@ from mato_loop_backend.settings import (
     MemorySettings,
     SettingsStore,
     ToolExecutionPolicy,
-    TrustLevel,
     load_effective_ai,
 )
 
@@ -53,11 +54,24 @@ class ApiRequest(BaseModel):
 class MemoryRequest(ApiRequest):
     content: str = Field(min_length=1, max_length=20_000)
     category: MemoryCategory
-    trust_level: TrustLevel
+    audience: MemoryAudience = MemoryAudience.BOTH
+    pin_kind: MemoryPinKind | None = None
+
+    @model_validator(mode="after")
+    def validate_pin_kind(self) -> MemoryRequest:
+        if self.pin_kind is not None and self.category != MemoryCategory.IDENTITY:
+            raise ValueError("pinKind requires identity category")
+        return self
 
 
 class MemoryUpdateRequest(MemoryRequest):
     pinned: bool
+
+    @model_validator(mode="after")
+    def validate_pinned_identity(self) -> MemoryUpdateRequest:
+        if self.pin_kind is not None and not self.pinned:
+            raise ValueError("pinKind requires pinned true")
+        return self
 
 
 class MemorySettingsRequest(ApiRequest):
@@ -105,7 +119,8 @@ def memory_payload(item: MemoryRecord) -> dict[str, Any]:
         "revision": item.revision,
         "sourceType": item.source_type,
         "pinned": item.pinned,
-        "trustLevel": item.trust_level,
+        "audience": item.audience,
+        "pinKind": item.pin_kind,
         "sourceSession": (
             {"id": str(item.source_session.id), "title": item.source_session.title}
             if item.source_session
@@ -297,7 +312,7 @@ async def list_memories(
         MemorySourceType | None, Query(alias="sourceType")
     ] = None,
     category: MemoryCategory | None = None,
-    trust_level: Annotated[TrustLevel | None, Query(alias="trustLevel")] = None,
+    audience: MemoryAudience | None = None,
     pinned: bool | None = None,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
@@ -308,7 +323,7 @@ async def list_memories(
         query=query,
         source_type=source_type,
         category=category,
-        trust_level=trust_level,
+        audience=audience,
         pinned=pinned,
         offset=offset,
         limit=limit,
@@ -336,7 +351,8 @@ async def create_memory(
             owner_id=user.id,
             content=content,
             category=payload.category,
-            trust_level=payload.trust_level,
+            audience=payload.audience,
+            pin_kind=payload.pin_kind,
         )
     except MemoryDuplicateError as exc:
         raise ApiError(409, "memory.duplicate") from exc
@@ -394,9 +410,10 @@ async def update_memory(
             owner_id=user.id,
             content=content,
             category=payload.category,
-            trust_level=payload.trust_level,
+            audience=payload.audience,
             source_type=MemorySourceType.MANUAL,
             pinned=payload.pinned,
+            pin_kind=payload.pin_kind,
         )
     except MemoryDuplicateError as exc:
         raise ApiError(409, "memory.duplicate") from exc

@@ -57,9 +57,9 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
         user = UserAccount(username=f"memory-{uuid4().hex}", password_hash="test")
         db.add(user)
         await db.flush()
-        for content, trust_level, vector in zip(
+        for content, audience, vector in zip(
             contents,
-            ["public", "private", "public"],
+            ["both", "private_only", "both"],
             vectors,
             strict=True,
         ):
@@ -69,7 +69,7 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
                 user_id=user.id,
                 source_type="manual",
                 pinned=False,
-                trust_level=trust_level,
+                audience=audience,
                 category="preference",
                 content=content,
                 normalized_content_hash=content_hash,
@@ -97,7 +97,7 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
         )
 
         assert result.items[0].content == public_content
-        assert all(item.trust_level == "public" for item in result.items)
+        assert all(item.audience in {"both", "public_only"} for item in result.items)
         await db.rollback()
 
 
@@ -116,6 +116,21 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
             role="assistant",
             content="Wir entschieden uns für PostgreSQL als zentrale Datenbank.",
             trust_level=TrustLevel.PUBLIC.value,
+            created_at=datetime(2026, 8, 1, 10, tzinfo=UTC),
+        )
+        latest_user = Message(
+            session_id=public_session.id,
+            role="user",
+            content="Die Migration ist noch nicht gestartet.",
+            trust_level=TrustLevel.PUBLIC.value,
+            created_at=datetime(2026, 8, 2, 10, tzinfo=UTC),
+        )
+        latest_assistant = Message(
+            session_id=public_session.id,
+            role="assistant",
+            content="Als Nächstes erstellen wir zuerst ein Backup.",
+            trust_level=TrustLevel.PUBLIC.value,
+            created_at=datetime(2026, 8, 2, 11, tzinfo=UTC),
         )
         private_message = Message(
             session_id=private_session.id,
@@ -123,7 +138,7 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
             content="Die geheime Alternative wäre eine private Oracle-Instanz.",
             trust_level=TrustLevel.PRIVATE.value,
         )
-        db.add_all([public_message, private_message])
+        db.add_all([public_message, latest_user, latest_assistant, private_message])
         await db.flush()
         await EpisodeIndexService.enqueue(db, public_message)
         await EpisodeIndexService.enqueue(db, private_message)
@@ -154,6 +169,7 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
             query="Which database did we choose for the architecture?",
             limit=2,
             max_semantic_distance=0.25,
+            latest_messages=2,
         )
 
         assert result.references
@@ -166,6 +182,10 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
             message.content
             for message in result.references[0].excerpt
         )
+        assert {message.content for message in result.references[0].excerpt} >= {
+            latest_user.content,
+            latest_assistant.content,
+        }
         await db.rollback()
 
 
@@ -227,7 +247,7 @@ async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
             user_id=user.id,
             source_type="manual",
             pinned=False,
-            trust_level="public",
+            audience="both",
             category="fact",
             content=content,
             normalized_content_hash=content_hash,
@@ -270,7 +290,7 @@ async def test_automatic_rag_distance_excludes_unrelated_memory() -> None:
                 user_id=user.id,
                 source_type="manual",
                 pinned=False,
-                trust_level="public",
+                audience="both",
                 category="fact",
                 content=content,
                 normalized_content_hash=content_hash,
@@ -319,7 +339,7 @@ async def test_browse_lists_pinned_and_unpinned_memories() -> None:
                 user_id=user.id,
                 source_type="manual",
                 pinned=pinned,
-                trust_level="public",
+                audience="both",
                 category="fact",
                 content=content,
                 normalized_content_hash=content_hash,
@@ -399,7 +419,7 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
             source_message_id=source_message.id,
             source_type="dreaming",
             pinned=False,
-            trust_level="private",
+            audience="private_only",
             category="fact",
             revision=1,
             content=stale_content,
@@ -411,7 +431,7 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
             source_message_id=correction_message.id,
             source_type="tool_call",
             pinned=False,
-            trust_level="public",
+            audience="both",
             category="context",
             revision=2,
             content=canonical_content,
@@ -451,7 +471,7 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
         assert result.item is canonical
         assert result.updated is True
         assert canonical.revision == 3
-        assert canonical.trust_level == TrustLevel.PRIVATE.value
+        assert canonical.audience == "private_only"
         remaining_ids = set(
             (
                 await db.scalars(

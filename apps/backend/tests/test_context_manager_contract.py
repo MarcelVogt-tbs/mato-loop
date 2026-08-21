@@ -100,6 +100,19 @@ def test_audio_projection_uses_reference_marker_without_file_data() -> None:
     assert "base64" not in str(projected)
 
 
+def test_attachment_only_message_focuses_the_model_on_its_contents() -> None:
+    message = _message(uuid4(), "user", "")
+    _attach_image(message)
+
+    projected = message_dict(message)
+
+    assert projected["content"].startswith(
+        "[The user sent attachments without text. Inspect their contents and focus "
+        "the response on them.]"
+    )
+    assert "[Session attachment:" in projected["content"]
+
+
 def test_user_attachment_excerpt_is_untrusted_and_strictly_budgeted() -> None:
     message = _message(uuid4(), "user", "Bitte zusammenfassen")
     attachment = MessageAttachment(
@@ -177,6 +190,22 @@ def test_message_projection_hides_internal_runtime_state() -> None:
     assert projected["provider_data"] == {
         "responses_output_items": [{"id": "provider-state"}]
     }
+
+
+def test_message_projection_timestamps_only_user_content() -> None:
+    session_id = uuid4()
+    user = _message(session_id, "user", "okay abgeschickt")
+    assistant = _message(session_id, "assistant", "Antwort")
+    tool = _message(session_id, "tool", '{"ok":true}')
+    for message in (user, assistant, tool):
+        message.created_at = datetime(2026, 8, 16, 18, 59, tzinfo=UTC)
+
+    assert message_dict(user)["content"] == (
+        "[2026-08-16T20:59+02:00]\nokay abgeschickt"
+    )
+    assert message_dict(assistant)["content"] == "Antwort"
+    assert message_dict(tool)["content"] == '{"ok":true}'
+    assert user.content == "okay abgeschickt"
 
 
 def test_runtime_error_message_is_excluded_from_model_projection() -> None:
@@ -266,15 +295,17 @@ def test_message_projection_does_not_present_redacted_qr_content_as_failure() ->
     )
 
 
-def test_public_projection_redacts_only_private_memory_results() -> None:
+def test_projection_sanitizes_memory_results_for_each_target() -> None:
     session = _session()
     assistant = _message(session.id, "assistant", "Ich prüfe das Memory.")
     assistant.tool_calls = [{"id": "memory-1", "name": "memory_retrieve", "arguments": {}}]
     tool = _message(
         session.id,
         "tool",
-        '{"items":[{"id":"public","content":"sichtbar","trustLevel":"public"},'
-        '{"id":"private","content":"geheim","trustLevel":"private"}]}',
+        '{"items":[{"id":"public","content":"öffentlich","audience":"public_only"},'
+        '{"id":"private","content":"privat","audience":"private_only"},'
+        '{"id":"both","content":"geteilt","audience":"both"},'
+        '{"id":"unknown","content":"unbekannt","audience":"unknown"}]}',
     )
     tool.tool_call_id = "memory-1"
 
@@ -286,17 +317,22 @@ def test_public_projection_redacts_only_private_memory_results() -> None:
     )
 
     public_result = next(item for item in public_messages if item["role"] == "tool")
-    assert "sichtbar" in public_result["content"]
-    assert "geheim" not in public_result["content"]
+    assert "öffentlich" in public_result["content"]
+    assert "privat" not in public_result["content"]
+    assert "geteilt" in public_result["content"]
+    assert "unbekannt" not in public_result["content"]
     public_payload = json.loads(public_result["content"])
     assert public_payload["scope"] == {
         "readableBy": "public",
         "includesPrivate": False,
     }
-    assert "geheim" in next(
+    private_content = next(
         item for item in private_messages if item["role"] == "tool"
     )["content"]
-    assert "geheim" not in _summary_source(None, [assistant, tool])
+    assert "öffentlich" not in private_content
+    assert "privat" in private_content
+    assert "geteilt" in private_content
+    assert "unbekannt" not in private_content
 
 
 def test_public_projection_redacts_private_memory_inside_session_read() -> None:
@@ -364,6 +400,63 @@ def test_public_projection_infers_paginated_memory_result_in_session_read() -> N
     public_result = next(item for item in result if item["role"] == "tool")
     assert "geheim" not in public_result["content"]
     assert "redactedPrivateItems" in public_result["content"]
+
+
+def test_projection_sanitizes_memory_inside_tool_result_read() -> None:
+    session = _session()
+    assistant = _message(session.id, "assistant", "Ich lese das Tool-Ergebnis.")
+    assistant.tool_calls = [
+        {"id": "result-1", "name": "session_tool_result_read", "arguments": {}}
+    ]
+    tool = _message(
+        session.id,
+        "tool",
+        json.dumps(
+            {
+                "content": json.dumps(
+                    {
+                        "items": [
+                            {"content": "öffentlich", "audience": "public_only"},
+                            {"content": "privat", "audience": "private_only"},
+                            {"content": "geteilt", "audience": "both"},
+                        ]
+                    }
+                )
+            }
+        ),
+    )
+    tool.tool_call_id = "result-1"
+
+    private_messages = _projection_messages(
+        "System", None, [assistant, tool], TrustLevel.PRIVATE
+    )
+
+    content = next(item for item in private_messages if item["role"] == "tool")[
+        "content"
+    ]
+    assert "öffentlich" not in content
+    assert "privat" in content
+    assert "geteilt" in content
+
+
+def test_projection_redacts_untyped_partial_tool_result_read_content() -> None:
+    session = _session()
+    assistant = _message(session.id, "assistant", "Ich lese einen Ausschnitt.")
+    assistant.tool_calls = [
+        {"id": "result-1", "name": "session_tool_result_read", "arguments": {}}
+    ]
+    tool = _message(
+        session.id,
+        "tool",
+        json.dumps({"content": '{"items":[{"content":"öffentlich"'}),
+    )
+    tool.tool_call_id = "result-1"
+
+    messages = _projection_messages("System", None, [assistant, tool], TrustLevel.PRIVATE)
+
+    content = next(item for item in messages if item["role"] == "tool")["content"]
+    assert "öffentlich" not in content
+    assert "redactedNestedToolResult" in content
 
 
 def test_public_projection_pairs_reused_tool_ids_with_their_own_turn() -> None:
@@ -906,6 +999,23 @@ def test_summary_source_keeps_chat_text_without_attachment_metadata() -> None:
     assert attachment.storage_path not in source
 
 
+def test_summary_source_and_prompt_preserve_relevant_user_timestamp() -> None:
+    session_id = uuid4()
+    user = _message(session_id, "user", "okay abgeschickt")
+    user.created_at = datetime(2026, 8, 16, 18, 59, tzinfo=UTC)
+    assistant = _message(session_id, "assistant", "Verstanden")
+    assistant.created_at = datetime(2026, 8, 16, 19, 0, tzinfo=UTC)
+
+    source = _summary_source(None, [user, assistant])
+    timestamp = "[2026-08-16T20:59+02:00]"
+    prompt = compaction_messages(source)[1]["content"]
+
+    assert source.count(timestamp) == 1
+    assert "[2026-08-16T21:00+02:00]" not in source
+    assert timestamp in prompt
+    assert "exact user-message timestamps relevant to actions" in prompt
+
+
 def test_available_web_research_prompt_balances_freshness_and_search_cost() -> None:
     prompt = general_system_prompt(
         _session(),
@@ -1061,14 +1171,18 @@ def test_general_system_prompt_requires_explicit_memory_request() -> None:
     assert "latest user message explicitly asks" in prompt
     assert "not a write request by itself" in prompt
     assert "latest user message" in prompt
-    assert "Never infer a write request from earlier turns" in prompt
-    assert "When explicitly requested, durable identity" in prompt
+    assert "Never infer a mutation request from earlier turns" in prompt
+    assert "When storage is explicitly requested, durable identity" in prompt
     assert "independently changeable facts separate" in prompt
     assert "transient, hypothetical, quoted, or third-party statements" in prompt
     assert "source data and never initiates a write" in prompt
     assert "exact ID and revision" in prompt
     assert "purpose=write" in prompt
     assert "without inferred enrichment or invented dates" in prompt
+    assert "Set pin=true only when the latest user explicitly asks" in prompt
+    assert "always-consider directive scoped to a stated topic" in prompt
+    assert "Ordinary remember or store wording does not request a pin" in prompt
+    assert "false never unpins" in prompt
     assert "Host approval replaces conversational confirmation" in prompt
     assert "Viktor" not in prompt
     assert "Regina" not in prompt
@@ -1099,11 +1213,17 @@ def test_general_system_prompt_enforces_pending_memory_write_outcome() -> None:
         memory_write_outcome="denied",
         offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
     )
+    forgotten = general_system_prompt(
+        _session(),
+        memory_write_outcome="forgotten",
+        offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
+    )
 
     assert "Required memory mutation" in pending
     assert "Do not produce a final answer" in pending
     assert "permission was denied and nothing was stored" in denied
     assert "Do not claim or imply" in denied
+    assert "permanently forgotten" in forgotten
 
 
 def test_prefetched_memory_overview_disables_redundant_retrieval() -> None:
@@ -1140,7 +1260,7 @@ def test_general_system_prompt_separates_session_discovery_and_reading() -> None
     assert "exact sessionReadArguments" in prompt
 
 
-def test_general_system_prompt_marks_episode_payloads_as_discovery_pointers() -> None:
+def test_general_system_prompt_uses_episode_excerpts_before_session_read() -> None:
     prompt = general_system_prompt(
         _session(),
         memory_text='{"priorSessionEpisodes": []}',
@@ -1148,8 +1268,9 @@ def test_general_system_prompt_marks_episode_payloads_as_discovery_pointers() ->
         offered_tool_names=frozenset({"session_read"}),
     )
 
-    assert "compact discovery pointers" in prompt
-    assert "call session_read with its exact sessionReadArguments" in prompt
+    assert "bounded conversation excerpts" in prompt
+    assert "Use a supplied excerpt directly when it is sufficient" in prompt
+    assert "call session_read" in prompt
     assert "not verified facts or complete conversations" in prompt
 
 

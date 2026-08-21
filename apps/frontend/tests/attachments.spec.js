@@ -353,6 +353,24 @@ describe('persisted attachments', () => {
     expect(attachments).toHaveLength(2)
   })
 
+  it('hides PDF pages fetched for agent inspection from visible tool output', () => {
+    const attachments = [
+      { id: 'image', kind: 'image', category: 'downloaded', mimeType: 'image/jpeg', url },
+      {
+        id: 'page',
+        kind: 'image',
+        category: 'downloaded',
+        mimeType: 'image/jpeg',
+        metadata: { pageNumber: 1 },
+        url
+      }
+    ]
+
+    expect(toolOutputAttachments({ name: 'webfetch' }, attachments))
+      .toEqual([expect.objectContaining({ id: 'image' })])
+    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(2)
+  })
+
   it('only enables the audio player when the browser accepts the MIME type', () => {
     const originalDocument = globalThis.document
     globalThis.document = {

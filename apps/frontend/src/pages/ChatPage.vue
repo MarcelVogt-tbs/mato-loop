@@ -284,11 +284,23 @@
         </div>
       </transition>
 
+      <q-banner
+        v-if="chat.outboxLoadFailed"
+        dense
+        rounded
+        class="app-surface-tonal q-mx-md q-mt-sm"
+      >
+        Der lokale Nachrichtenspeicher konnte nicht geladen werden.
+        <template #action>
+          <q-btn flat dense no-caps label="Erneut versuchen" @click="chat.loadQueuedMessages()" />
+        </template>
+      </q-banner>
       <ChatQueuedMessages
         :messages="chat.activeQueuedMessages"
         :paused="chat.queuedSendPaused"
-        @remove="chat.removeQueuedMessage"
+        :sending-id="chat.queueSendingEntryId"
         @resume="chat.resumeQueuedSend"
+        @undo="undoQueuedMessage"
       />
       <QuestionDock
         v-if="activeQuestion"
@@ -302,7 +314,11 @@
         ref="composer"
         :session="chat.activeContext"
         :draft="chat.activeDraft"
-        :disabled="chat.historyActionPending || chat.sessionSettingsPending > 0"
+        :disabled="!chat.outboxLoaded
+          || chat.outboxSaving
+          || chat.historyActionPending
+          || chat.sessionSettingsPending > 0
+          || (!chat.current && chat.activeQueuedMessages.length > 0)"
         :running="chat.running"
         :stopping="chat.stopping"
         :pending-count="sessionApprovals.length"
@@ -447,7 +463,6 @@ let touchActive = false
 let activityPanelScrollFrame = null
 let virtualScrollRefreshFrame = null
 let virtualScrollRefreshTimer = null
-let flushingQueue = false
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
 const sessionQuestions = computed(() => chat.current ? questions.forSession(chat.current.id) : [])
 const activeQuestion = computed(() => sessionQuestions.value[0] || null)
@@ -622,6 +637,30 @@ async function undoMessage(message) {
   }
 }
 
+async function undoQueuedMessage(id) {
+  if (composer.value?.hasAudioActivity?.()) {
+    $q.notify({
+      type: 'info',
+      message: 'Beende oder brich zuerst die laufende Aufnahme beziehungsweise Transkription ab.'
+    })
+    return
+  }
+  const hasDraft = Boolean(
+    chat.activeDraft.trim()
+    || chat.activeAttachmentDraft.length
+    || chat.getAudioDictation(chat.current?.id || null)
+  )
+  if (hasDraft && !await confirm(
+    'Der aktuelle Entwurf, seine Anhänge und ein vorhandenes Diktat werden ersetzt.',
+    'Vorgemerkte Nachricht rückgängig machen?',
+    { okLabel: 'Rückgängig machen' }
+  )) return
+  const restored = await chat.restoreQueuedMessage(id)
+  if (!restored) return
+  await nextTick()
+  composer.value?.focus()
+}
+
 async function retryMessage(message) {
   const accepted = await confirm(
     'Die fehlerhafte Antwort wird entfernt und mit dem ursprünglichen Modell erneut erzeugt. '
@@ -706,39 +745,25 @@ async function loadBackgroundData() {
 }
 
 async function send(content) {
-  if (chat.messageQueueActive) {
-    chat.queueMessage(content)
-    return
-  }
   followingBottom.value = true
   const request = chat.send(content)
   await nextTick()
   scheduleFollowScroll()
-  const result = await request
-  if (result?.created) {
-    if (routeProjectId.value) void projects.fetchAll().catch(() => {})
-    await router.replace({
-      name: 'chat',
-      query: {
-        ...(routeProjectId.value ? { project: routeProjectId.value } : {}),
-        session: result.sessionId
-      }
-    })
+  try {
+    await request
+  } finally {
+    await nextTick()
+    composer.value?.focus()
   }
 }
 
 async function flushQueuedMessage() {
-  if (flushingQueue || !chat.queuedSendReady) return
-  flushingQueue = true
-  try {
-    followingBottom.value = true
-    const request = chat.flushQueuedMessage()
-    await nextTick()
-    scheduleFollowScroll()
-    await request
-  } finally {
-    flushingQueue = false
-  }
+  if (!chat.queuedSendReady) return
+  followingBottom.value = true
+  const request = chat.drainOutbox()
+  await nextTick()
+  scheduleFollowScroll()
+  await request
 }
 
 function addAttachmentFiles(files, done) {
@@ -905,6 +930,21 @@ watch(
     if (ready) void flushQueuedMessage()
   },
   { immediate: true }
+)
+watch(
+  () => chat.createdSessionResult,
+  async (result) => {
+    if (!result) return
+    chat.createdSessionResult = null
+    if (routeProjectId.value) void projects.fetchAll().catch(() => {})
+    await router.replace({
+      name: 'chat',
+      query: {
+        ...(routeProjectId.value ? { project: routeProjectId.value } : {}),
+        session: result.sessionId
+      }
+    })
+  }
 )
 onMounted(() => {
   observeChatSize()

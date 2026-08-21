@@ -403,6 +403,7 @@ const TOOL_DESCRIPTIONS = {
   move_path: 'Verschiebt Dateien oder Verzeichnisse zwischen erlaubten Bereichen.',
   web_search: 'Sucht über den hostseitig gewählten Provider im Web.',
   webfetch: 'Ruft geprüfte HTTP(S)-Inhalte ab.',
+  fetch_transcript: 'Ruft veröffentlichte Untertitel unterstützter Video-URLs mit der Webzugriffsrichtlinie ab.',
   generate_image: 'Erzeugt Bilder aus einer textlichen Beschreibung.',
   edit_image: 'Bearbeitet Bildanhänge, ohne die Originale zu verändern.',
   generate_speech: 'Erzeugt gesprochene WAV-Audiodateien aus Text.',
@@ -550,7 +551,7 @@ function actionLabel(tool, action) {
 }
 
 function fixedActionLabel(tool, action) {
-  if (tool.name === 'webfetch') return 'Spezialrichtlinie'
+  if (['webfetch', 'fetch_transcript'].includes(tool.name)) return 'Spezialrichtlinie'
   return `Hostgesteuert · ${policyLabel(action.policy)}`
 }
 

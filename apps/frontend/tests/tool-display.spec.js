@@ -129,6 +129,8 @@ describe('tool display', () => {
     expect(toolSummary({ name: 'session_browse', arguments: {} })).toBe('Letzte Sessions')
     expect(toolActivityLabel('web_search')).toBe('Web wird durchsucht')
     expect(toolActivityLabel('webfetch')).toBe('Webseite wird abgerufen')
+    expect(toolIdentity('fetch_transcript')).toEqual({ label: 'Untertitel abrufen', icon: 'subtitles' })
+    expect(toolActivityLabel('fetch_transcript')).toBe('Untertitel werden abgerufen')
     expect(toolActivityLabel('write_file')).toBe('Datei wird geschrieben')
     expect(toolActivityLabel('shell_run')).toBe('Befehl wird ausgeführt')
     expect(toolActivityLabel('unknown_tool')).toBe('Tool wird ausgeführt')
@@ -358,12 +360,17 @@ describe('tool display', () => {
       scope: { readableBy: 'private' },
       total: 1,
       nextCursor: { cursor_updated_at: '2026-07-23T12:00:00Z', cursor_id: 'memory-1' },
-      items: [{ id: 'memory-1', content: 'Sichtbarer Inhalt', category: 'fact', pinned: true }]
+      items: [{
+        id: 'memory-1', content: 'Sichtbarer Inhalt', category: 'identity', pinned: true,
+        audience: 'private_only', pinKind: 'preferred_name'
+      }]
     }), 'memory_retrieve')
 
     expect(parsed.text).toContain('Sichtbarer Inhalt')
     expect(parsed.text).toContain('private')
     expect(parsed.text).toContain('pinned')
+    expect(parsed.text).toContain('private_only')
+    expect(parsed.text).toContain('preferred_name')
     expect(parsed.text).toContain('cursor_updated_at')
   })
 

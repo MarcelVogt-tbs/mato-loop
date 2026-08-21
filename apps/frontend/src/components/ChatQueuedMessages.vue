@@ -2,14 +2,12 @@
   <div
     v-if="messages.length"
     class="chat-queued"
-    role="status"
-    aria-live="polite"
     aria-label="Vorgemerkte Nachrichten"
   >
     <q-card flat class="app-surface-tonal chat-queued__card">
       <div class="row items-center q-gutter-sm q-mb-xs">
         <q-icon :name="paused ? 'error_outline' : 'schedule_send'" :color="paused ? 'negative' : undefined" size="18px" />
-        <span class="text-caption text-weight-medium">
+        <span class="text-caption text-weight-medium" role="status" aria-live="polite" aria-atomic="true">
           {{ headline }}
         </span>
         <q-space />
@@ -24,29 +22,33 @@
           @click="$emit('resume')"
         />
       </div>
-      <article
-        v-for="message in messages"
-        :key="message.id"
-        class="chat-queued__item row items-start no-wrap q-gutter-sm"
-      >
-        <div class="col chat-queued__text">
-          {{ message.content }}
-          <div v-if="message.attachments.length" class="text-caption app-muted">
-            {{ attachmentLabel(message) }}
-          </div>
-        </div>
-        <q-btn
-          flat
-          round
-          dense
-          size="sm"
-          icon="close"
-          aria-label="Vorgemerkte Nachricht entfernen"
-          @click="$emit('remove', message.id)"
+      <div class="chat-queued__items">
+        <article
+          v-for="(message, index) in messages"
+          :key="message.id"
+          class="chat-queued__item row items-start no-wrap q-gutter-sm"
         >
-          <q-tooltip>Vorgemerkte Nachricht entfernen</q-tooltip>
-        </q-btn>
-      </article>
+          <div class="col chat-queued__text">
+            {{ message.content || 'Nachricht ohne Text' }}
+            <div v-if="message.attachments.length" class="text-caption app-muted">
+              {{ attachmentLabel(message) }}
+            </div>
+          </div>
+          <q-btn
+            flat
+            round
+            dense
+            size="sm"
+            icon="undo"
+            :loading="message.id === sendingId"
+            :disable="message.id === sendingId"
+            :aria-label="`Vorgemerkte Nachricht ${index + 1} rückgängig machen`"
+            @click="$emit('undo', message.id)"
+          >
+            <q-tooltip>Vorgemerkte Nachricht rückgängig machen</q-tooltip>
+          </q-btn>
+        </article>
+      </div>
     </q-card>
   </div>
 </template>
@@ -58,10 +60,11 @@ defineOptions({ name: 'ChatQueuedMessages' })
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
-  paused: Boolean
+  paused: Boolean,
+  sendingId: { type: String, default: null }
 })
 
-defineEmits(['remove', 'resume'])
+defineEmits(['resume', 'undo'])
 
 const headline = computed(() => {
   if (props.paused) return 'Die vorgemerkte Nachricht konnte nicht gesendet werden.'
@@ -90,6 +93,12 @@ function attachmentLabel(message) {
 
 .chat-queued__item + .chat-queued__item {
   margin-top: 4px;
+}
+
+.chat-queued__items {
+  max-height: min(28dvh, 240px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .chat-queued__text {

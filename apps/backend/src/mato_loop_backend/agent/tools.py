@@ -30,9 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from mato_loop_backend.agent.context import (
-    _public_tool_result,
+    _inferred_tool_name,
     _sanitize_tool_result_reference_fields,
     _shorten_evidence_output,
+    _target_tool_result,
     _tool_names_by_message_id,
     _tool_result_reference,
 )
@@ -58,6 +59,7 @@ from mato_loop_backend.agent.permissions import (
     skill_load_permission,
     skill_write_permission,
     system_info_permission,
+    transcript_permission,
     web_search_permission,
     webfetch_permission,
 )
@@ -100,11 +102,14 @@ from mato_loop_backend.filesystem_search import RootFileSearch
 from mato_loop_backend.integrations import (
     PdfVisionHandler,
     SearchIntegrationError,
+    TranscriptError,
     WebFetchError,
     canonicalize_url,
+    canonicalize_youtube_video_url,
     effective_search_providers,
     evidence_source_id,
     fetch_web,
+    fetch_youtube_transcript,
     normalize_source_title,
     private_origin_is_allowed,
     sanitize_url_for_display,
@@ -117,7 +122,11 @@ from mato_loop_backend.integrations.registry import (
     integration_adapter,
 )
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
-from mato_loop_backend.memory.service import MemoryService, memory_reference_timestamps
+from mato_loop_backend.memory.service import (
+    MemoryService,
+    memory_reference_timestamps,
+    memory_visible_to,
+)
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
@@ -878,7 +887,8 @@ class ToolRegistry:
                                 tool_settings.web_fetch
                             )
                         }
-                        if name == "webfetch" and tool_settings is not None
+                        if name in {"webfetch", "fetch_transcript"}
+                        and tool_settings is not None
                         else {}
                     )
                 ),
@@ -1502,6 +1512,28 @@ class WebFetchArguments(ToolArguments):
         return sorted(set(value))
 
 
+class FetchTranscriptArguments(ToolArguments):
+    url: str = Field(
+        min_length=1,
+        max_length=1_200,
+        description=(
+            "Complete remote media page URL. Pass a URL, not a video ID, caption endpoint, "
+            "attachment ID, or file path."
+        ),
+    )
+    language: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=35,
+        pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$",
+        description=(
+            "Preferred existing caption language as a BCP 47 tag, for example de or en-US. "
+            "Omit unless the user requests a language. If unavailable, the host selects the "
+            "original language; this never translates or transcribes media."
+        ),
+    )
+
+
 class GenerateImageArguments(ToolArguments):
     prompt: str = Field(min_length=1, max_length=20_000)
     width: int | None = Field(default=None, ge=64, le=4_096)
@@ -1634,20 +1666,32 @@ class SessionBrowseArguments(ToolArguments):
 
 
 class MemoryWriteArguments(ToolArguments):
-    action: Literal["create", "update"]
+    action: Literal["create", "update", "forget"]
     memory_id: UUID | None = None
     expected_revision: int | None = Field(default=None, ge=1)
-    content: str = Field(min_length=1, max_length=20_000)
-    category: MemoryCategory = Field(
+    content: str | None = Field(default=None, min_length=1, max_length=20_000)
+    category: MemoryCategory | None = Field(
+        default=None,
         description=(
             "Use exactly one of context, fact, goal, identity, or preference. "
             "Names and personal identity use identity; occupations use fact."
         )
     )
+    pin: bool = Field(
+        default=False,
+        description=(
+            "Set true when the latest user explicitly asks to always consider this memory "
+            "in future answers, including answers about a stated topic. Plain remember or "
+            "store wording stays false. Example: 'Always consider this for meal suggestions' "
+            "means true. False does not unpin."
+        ),
+    )
 
     @field_validator("content")
     @classmethod
-    def content_must_not_be_blank(cls, value: str) -> str:
+    def content_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("content must not be blank")
@@ -1655,13 +1699,22 @@ class MemoryWriteArguments(ToolArguments):
 
     @model_validator(mode="after")
     def memory_id_matches_action(self) -> MemoryWriteArguments:
-        if self.action == "update" and self.memory_id is None:
-            raise ValueError("memory_id is required for updates")
-        if self.action == "update" and self.expected_revision is None:
-            raise ValueError("expected_revision is required for updates")
+        if self.action in {"update", "forget"} and self.memory_id is None:
+            raise ValueError("memory_id is required for updates and forgetting")
+        if self.action in {"update", "forget"} and self.expected_revision is None:
+            raise ValueError("expected_revision is required for updates and forgetting")
         if self.action == "create":
             self.memory_id = None
             self.expected_revision = None
+        if self.action in {"create", "update"} and (
+            self.content is None or self.category is None
+        ):
+            raise ValueError("content and category are required for creates and updates")
+        if self.action == "forget":
+            if self.pin:
+                raise ValueError("pin is not allowed for forgetting")
+            self.content = None
+            self.category = None
         return self
 
 
@@ -3213,6 +3266,57 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
     )
 
 
+async def _fetch_transcript(
+    arguments: FetchTranscriptArguments, context: ToolContext
+) -> ToolResult:
+    try:
+        source_url = canonicalize_youtube_video_url(arguments.url)
+        await _ensure_webfetch_binding_is_current(context)
+        if context.web_fetch_policy == WebFetchPolicy.ASK and not await _allow(
+            context, transcript_permission(source_url)
+        ):
+            return ToolResult.error("permission.denied")
+        await _ensure_webfetch_binding_is_current(context)
+
+        async def before_request(_url: str) -> None:
+            await _ensure_webfetch_binding_is_current(context)
+
+        result = await fetch_youtube_transcript(
+            source_url,
+            language=arguments.language,
+            max_response_bytes=context.tool_settings.web_fetch.max_response_mib
+            * 1024
+            * 1024,
+            user_agent=context.tool_settings.web_fetch.user_agent,
+            before_request=before_request,
+        )
+    except TranscriptError as exc:
+        return ToolResult.error(exc.code, params=exc.params)
+
+    source = {
+        "sourceId": evidence_source_id(result.source_url),
+        "url": result.source_url,
+        "kind": "transcript",
+        "citationEligible": True,
+    }
+    title = normalize_source_title(result.title)
+    if title is not None:
+        source["title"] = title
+    return ToolResult.json(
+        {
+            **source,
+            "sourceType": "youtube",
+            "sourceUrl": result.source_url,
+            "language": result.language,
+            "languageFallback": result.language_fallback,
+            "trackType": result.track_type,
+            "outputFormat": "text",
+            "content": result.content,
+        },
+        metadata={"sources": [source]},
+    )
+
+
 _MEDIA_SETTINGS_FIELDS = {
     "media.generate.image": "generate_image",
     "media.edit.image": "edit_image",
@@ -4185,9 +4289,9 @@ def _message_item(
 ) -> tuple[dict[str, Any], int]:
     content_limit = min(SESSION_TOOL_RESULT_CHUNK_CHARACTERS, max(0, remaining))
     content = message.content
-    if target_trust_level == TrustLevel.PUBLIC and message.role == "tool":
-        content = _public_tool_result(
-            tool_names.get(message.id), message.content
+    if message.role == "tool":
+        content = _target_tool_result(
+            tool_names.get(message.id), message.content, target_trust_level
         )
     if message.role == "tool":
         content = _sanitize_tool_result_reference_fields(content)
@@ -4237,9 +4341,8 @@ async def _session_tool_result_read(
     if message is None:
         return ToolResult.error("session.messageNotFound")
 
-    content = message.content
-    if context.memory_trust_level == TrustLevel.PUBLIC:
-        content = _public_tool_result(None, content)
+    tool_name = _inferred_tool_name(message.content)
+    content = _target_tool_result(tool_name, message.content, context.memory_trust_level)
     content = _sanitize_tool_result_reference_fields(content)
     end = min(len(content), arguments.offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
     has_more = end < len(content)
@@ -4252,6 +4355,8 @@ async def _session_tool_result_read(
         "nextOffset": end if has_more else None,
         "contentIsUntrusted": True,
     }
+    if tool_name is not None:
+        payload["toolName"] = tool_name
     if attachments := _attachment_items(message):
         payload["attachments"] = attachments
     return ToolResult.json(payload)
@@ -5125,13 +5230,50 @@ async def _memory_write(
 ) -> ToolResult:
     if context.assistant_message_id is None:
         return ToolResult.error("memory.provenanceUnavailable")
+    if arguments.action == "forget":
+        assert arguments.memory_id is not None
+        assert arguments.expected_revision is not None
+        item = await MemoryService.get(
+            context.db,
+            owner_id=context.session.user_id,
+            memory_id=arguments.memory_id,
+        )
+        if item is None or not memory_visible_to(
+            item.audience, context.memory_trust_level
+        ):
+            return ToolResult.error("memory.notFound")
+        if item.revision != arguments.expected_revision:
+            return ToolResult.error("memory.changed")
     if not await _allow(
-        context, memory_write_permission(context.session.id, arguments.action)
+        context,
+        memory_write_permission(
+            context.session.id, arguments.action, pinned=arguments.pin
+        ),
     ):
         return ToolResult.error("permission.denied")
+    if arguments.action == "forget":
+        item = await MemoryService.get(
+            context.db,
+            owner_id=context.session.user_id,
+            memory_id=arguments.memory_id,
+            for_update=True,
+        )
+        if item is None or not memory_visible_to(
+            item.audience, context.memory_trust_level
+        ):
+            return ToolResult.error("memory.notFound")
+        if item.revision != arguments.expected_revision:
+            return ToolResult.error("memory.changed")
+        await MemoryService.delete(context.db, item, owner_id=context.session.user_id)
+        return ToolResult.json(
+            {"id": str(item.id), "forgotten": True},
+            metadata={"memoryWriteOutcome": "forgotten"},
+        )
     if arguments.action == "update":
         assert arguments.memory_id is not None
         assert arguments.expected_revision is not None
+        assert arguments.content is not None
+        assert arguments.category is not None
         result = await MemoryService.update_tool(
             context.db,
             owner_id=context.session.user_id,
@@ -5150,15 +5292,34 @@ async def _memory_write(
             return ToolResult.error("memory.notFound")
         if result.conflict:
             return ToolResult.error("memory.changed")
+        if arguments.pin and not result.item.pinned:
+            await MemoryService.set_pinned(
+                context.db,
+                result.item,
+                owner_id=context.session.user_id,
+                pinned=True,
+            )
         if result.duplicate:
             return ToolResult.json(
-                {"stored": False, "updated": False, "duplicate": True},
+                {
+                    "stored": False,
+                    "updated": False,
+                    "duplicate": True,
+                    "pinned": result.item.pinned,
+                },
                 metadata={"memoryWriteOutcome": "duplicate"},
             )
         return ToolResult.json(
-            {"id": str(result.item.id), "stored": True, "updated": True},
+            {
+                "id": str(result.item.id),
+                "stored": True,
+                "updated": True,
+                "pinned": result.item.pinned,
+            },
             metadata={"memoryWriteOutcome": "stored"},
         )
+    assert arguments.content is not None
+    assert arguments.category is not None
     result = await MemoryService.create_tool(
         context.db,
         owner_id=context.session.user_id,
@@ -5170,13 +5331,30 @@ async def _memory_write(
         run_id=context.run_id,
         tool_call_id=context.tool_call.id,
     )
+    if arguments.pin and not result.item.pinned:
+        await MemoryService.set_pinned(
+            context.db,
+            result.item,
+            owner_id=context.session.user_id,
+            pinned=True,
+        )
     if result.duplicate:
         return ToolResult.json(
-            {"stored": False, "updated": False, "duplicate": True},
+            {
+                "stored": False,
+                "updated": False,
+                "duplicate": True,
+                "pinned": result.item.pinned,
+            },
             metadata={"memoryWriteOutcome": "duplicate"},
         )
     return ToolResult.json(
-        {"id": str(result.item.id), "stored": True, "updated": False},
+        {
+            "id": str(result.item.id),
+            "stored": True,
+            "updated": False,
+            "pinned": result.item.pinned,
+        },
         metadata={"memoryWriteOutcome": "stored"},
     )
 
@@ -5222,7 +5400,8 @@ async def _memory_retrieve(
                     "revision": item.revision,
                     "category": item.category,
                     "pinned": item.pinned,
-                    "trustLevel": item.trust_level,
+                    "audience": item.audience,
+                    "pinKind": item.pin_kind,
                     **memory_reference_timestamps(item),
                     "sourceSession": (
                         {"id": str(item.source_session.id)}
@@ -5278,6 +5457,11 @@ _FILESYSTEM_DELETE = ToolAction(
 _WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO)
 _WEB_FETCH = ToolAction(
     "network.fetch", "Webseiten abrufen", ToolExecutionPolicy.ASK, configurable=False
+)
+_TRANSCRIPT_ROUTING_INSTRUCTION = (
+    "Published transcript text is evidence of spoken content only, not of visual events. Call "
+    "fetch_transcript only when the requested output can be answered from spoken content; never "
+    "call it for camera work, visible UI, objects, actions, or other visual details."
 )
 _SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.ASK)
 _SESSION_SEARCH = ToolAction(
@@ -5494,8 +5678,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "webfetch",
-            "Fetch a web page, PDF, or image. Returns untrusted text or validated image attachments "
-            "and marks the final URL citationEligible.",
+            "Fetch a general web page, PDF, or image. It does not extract audio, video, or published "
+            "captions. Returns untrusted text or validated image attachments and identifies whether "
+            "the final safe URL is citationEligible.",
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,
@@ -5503,6 +5688,22 @@ tool_registry = ToolRegistry(
             label="Webseite abrufen",
             icon="language",
             actions=(_WEB_FETCH,),
+        ),
+        ToolDefinition(
+            "fetch_transcript",
+            "Fetch published captions for one supported remote media URL. Use this for transcript "
+            "or spoken-content requests about a YouTube URL. Call it only when published captions "
+            "can answer the request, never for camera work, visible UI, objects, actions, or other "
+            "visual details. It does not inspect video visuals, download media, or transcribe session "
+            "or workspace files. Initially supports public YouTube video URLs.",
+            FetchTranscriptArguments,
+            _fetch_transcript,
+            requires_webfetch=True,
+            group="web",
+            label="Untertitel abrufen",
+            icon="subtitles",
+            actions=(_WEB_FETCH,),
+            prompt_fragments=(_TRANSCRIPT_ROUTING_INSTRUCTION,),
         ),
         ToolDefinition(
             "generate_qr_code",
@@ -5603,7 +5804,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "transcribe_audio",
-            "Transcribe a WAV audio attachment from the current session by attachment ID.",
+            "Transcribe one current-session audio attachment by attachment ID. It does not accept "
+            "video attachments, file paths, or URLs.",
             TranscribeAudioArguments,
             _transcribe_audio,
             required_capability="media.transcribe.audio",
@@ -5620,8 +5822,10 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "analyze_video",
-            "Analyze MP4 or WebM video and use the result. Do not repeat a successful analysis; timeout "
-            "does not indicate video length.",
+            "Analyze one MP4 or WebM file from session or workspace for speech and/or visuals. It does "
+            "not accept URLs or published caption tracks. Choose speech for spoken content, overview "
+            "for visual summaries, or fine_grained for exact visual steps. Do not repeat a successful "
+            "analysis; timeout does not indicate video length.",
             AnalyzeVideoArguments,
             _analyze_video,
             required_capability="media.analyze.video",
@@ -5738,8 +5942,11 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "memory_write",
-            "Create or update one user-supported durable memory. Create without memory_id or "
-            "expected_revision; update only with an injected or retrieved exact ID and revision.",
+            "Create, update, or forget one durable memory only when the latest user message explicitly "
+            "requests that action. Create without memory_id or expected_revision; update or forget only "
+            "with a retrieved exact visible ID and revision. Set pin=true for an explicit request to "
+            "always consider the memory in future answers, including for a stated topic; plain remember "
+            "wording stays false, and false never unpins.",
             MemoryWriteArguments,
             _memory_write,
             requires_memory=True,
@@ -5913,10 +6120,14 @@ def permission_for(
         "memory_retrieve",
     }:
         return None
-    if tool_name == "webfetch":
+    if tool_name in {"webfetch", "fetch_transcript"}:
         try:
-            return webfetch_permission(arguments.get("url", ""))
-        except (TypeError, ValueError, WebFetchError):
+            return (
+                transcript_permission(arguments.get("url", ""))
+                if tool_name == "fetch_transcript"
+                else webfetch_permission(arguments.get("url", ""))
+            )
+        except (TypeError, ValueError, TranscriptError, WebFetchError):
             return None
     path_value = arguments.get("path")
     capability = {

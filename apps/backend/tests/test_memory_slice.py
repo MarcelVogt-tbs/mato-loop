@@ -13,7 +13,9 @@ from mato_loop_backend.agent.runtime import _bounded_memory_trust
 from mato_loop_backend.agent.tools import MemoryWriteArguments, ToolContext, tool_registry
 from mato_loop_backend.api.routes.memories import (
     MemoryAcknowledgementRequest,
+    MemoryRequest,
     MemorySettingsRequest,
+    MemoryUpdateRequest,
     acknowledge_memories,
     memory_payload,
     put_memory_settings,
@@ -26,6 +28,7 @@ from mato_loop_backend.memory.dreaming import (
     DreamingContractError,
     DreamingService,
     DreamReconciliation,
+    _dreaming_reasoning_effort,
     _extract_candidates,
     _fit_message_batch,
     _memory_read_trust,
@@ -48,9 +51,11 @@ from mato_loop_backend.memory.service import (
 from mato_loop_backend.models import (
     ApprovalRequest,
     ChatSession,
+    MemoryAudience,
     MemoryCategory,
     MemoryDreamRun,
     MemoryDreamState,
+    MemoryPinKind,
     MemoryRecord,
     MemorySourceMessage,
     Message,
@@ -64,6 +69,7 @@ from mato_loop_backend.settings import (
     AiSettings,
     IntegrationSettings,
     MemorySettings,
+    ReasoningEffort,
     SettingsStore,
     ToolExecutionPolicy,
     TrustLevel,
@@ -170,6 +176,22 @@ def test_automatic_dreaming_is_independent_from_manual_dreaming() -> None:
     )
 
 
+def test_dreaming_disables_reasoning_only_when_the_model_supports_it() -> None:
+    assert _dreaming_reasoning_effort(
+        ModelConfig(provider_id=uuid4(), model_id="Qwen/Qwen3.8-27B-Q4_K_M.gguf")
+    ) == ReasoningEffort.NONE
+    assert _dreaming_reasoning_effort(
+        ModelConfig(
+            provider_id=uuid4(),
+            model_id="reasoning-only",
+            discovery_metadata={
+                "reasoning_efforts": ["medium", "high"],
+                "default_reasoning_effort": "medium",
+            },
+        )
+    ) is None
+
+
 async def test_provider_rejects_model_from_another_provider_before_database_access() -> None:
     db = AsyncMock(spec=AsyncSession)
     provider = LlmProviderConfig(
@@ -228,6 +250,34 @@ def test_memory_normalization_is_whitespace_and_case_stable() -> None:
     assert first_hash == second_hash
 
 
+def test_memory_identity_metadata_contract() -> None:
+    request = MemoryRequest(content="Ich heiße Lara.", category="identity")
+    assert request.audience == MemoryAudience.BOTH
+    with pytest.raises(ValidationError):
+        MemoryRequest(
+            content="Kurze Antworten",
+            category="preference",
+            pinKind="preferred_name",
+        )
+    with pytest.raises(ValidationError):
+        MemoryUpdateRequest(
+            content="Ich heiße Lara.",
+            category="identity",
+            audience="both",
+            pinned=False,
+            pinKind="preferred_name",
+        )
+
+    constraints = {item.name for item in MemoryRecord.__table__.constraints}
+    indexes = {item.name: item for item in MemoryRecord.__table__.indexes}
+    assert {
+        "ck_memories_audience_valid",
+        "ck_memories_pin_kind_valid",
+        "ck_memories_pin_kind_identity_pinned",
+    } <= constraints
+    assert indexes["uq_memories_user_pin_kind_audience"].unique is True
+
+
 async def test_memory_crud_and_dedupe_queries_bind_each_owner() -> None:
     first_owner = uuid4()
     second_owner = uuid4()
@@ -280,7 +330,7 @@ async def test_same_content_is_created_once_per_owner(monkeypatch) -> None:
             owner_id=owner_id,
             content="Shared normalized content",
             category=MemoryCategory.FACT,
-            trust_level=TrustLevel.PUBLIC,
+            audience=MemoryAudience.BOTH,
         )
 
     assert [call.kwargs["owner_id"] for call in duplicate.await_args_list] == [
@@ -382,7 +432,7 @@ async def test_private_dreaming_candidate_upgrades_public_duplicate(monkeypatch)
         user_id=owner_id,
         source_type="dreaming",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="fact",
         content="Dauerhafter Fakt",
     )
@@ -407,7 +457,7 @@ async def test_private_dreaming_candidate_upgrades_public_duplicate(monkeypatch)
     )
 
     assert created.duplicate is True
-    assert existing.trust_level == "private"
+    assert existing.audience == "private_only"
     add_evidence.assert_awaited_once_with(
         db,
         owner_id=owner_id,
@@ -423,7 +473,7 @@ async def test_manual_memory_rejects_normalized_duplicate() -> None:
         user_id=owner_id,
         source_type="manual",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="fact",
         content="Ein Fakt",
     )
@@ -436,7 +486,7 @@ async def test_manual_memory_rejects_normalized_duplicate() -> None:
             owner_id=owner_id,
             content="  EIN\nFAKT ",
             category=MemoryCategory.FACT,
-            trust_level=TrustLevel.PUBLIC,
+            audience=MemoryAudience.BOTH,
         )
 
     db.add.assert_not_called()
@@ -463,10 +513,12 @@ def test_memory_write_arguments_require_explicit_update_target() -> None:
             "expected_revision": 3,
             "content": "Aktualisierter Fakt",
             "category": "fact",
+            "pin": False,
         }
     )
 
     assert valid.category == MemoryCategory.FACT
+    assert valid.pin is False
     assert "retrieval_level" not in type(valid).model_fields
     with pytest.raises(ValidationError):
         MemoryWriteArguments.model_validate(
@@ -479,13 +531,45 @@ def test_memory_write_arguments_require_explicit_update_target() -> None:
             "expected_revision": 7,
             "content": "Der Nutzer kommt aus Ascholding.",
             "category": "identity",
+            "pin": False,
         }
     )
     assert create.memory_id is None
     assert create.expected_revision is None
+    assert MemoryWriteArguments.model_validate(
+        {
+            "action": "create",
+            "content": "Kurze Antworten",
+            "category": "preference",
+            "pin": True,
+        }
+    ).pin is True
     with pytest.raises(ValidationError):
         MemoryWriteArguments.model_validate(
             {"action": "update", "content": "Fakt", "category": "fact"}
+        )
+    forget = MemoryWriteArguments.model_validate(
+        {
+            "action": "forget",
+            "memory_id": str(uuid4()),
+            "expected_revision": 2,
+            "pin": False,
+        }
+    )
+    assert forget.content is None
+    assert forget.category is None
+    with pytest.raises(ValidationError):
+        MemoryWriteArguments.model_validate(
+            {"action": "forget", "memory_id": str(uuid4())}
+        )
+    with pytest.raises(ValidationError):
+        MemoryWriteArguments.model_validate(
+            {
+                "action": "forget",
+                "memory_id": str(uuid4()),
+                "expected_revision": 2,
+                "pin": True,
+            }
         )
 
 
@@ -496,7 +580,7 @@ async def test_private_tool_update_upgrades_trust_and_adds_evidence(monkeypatch)
         user_id=owner_id,
         source_type="manual",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="fact",
         content="Alter Fakt",
         revision=3,
@@ -524,7 +608,10 @@ async def test_private_tool_update_upgrades_trust_and_adds_evidence(monkeypatch)
     )
 
     assert result.updated is True
-    assert update_memory.await_args.kwargs["trust_level"] == TrustLevel.PRIVATE
+    assert (
+        update_memory.await_args.kwargs["audience"]
+        == MemoryAudience.PRIVATE_ONLY
+    )
     assert update_memory.await_args.kwargs["evidence_message_ids"] == [evidence_id]
 
 
@@ -535,7 +622,7 @@ async def test_tool_update_rejects_stale_memory_snapshot(monkeypatch) -> None:
         user_id=owner_id,
         source_type="manual",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="fact",
         content="Inzwischen geändert",
         revision=4,
@@ -578,7 +665,7 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
         source_message_id=source_message_id,
         source_type="dreaming",
         pinned=False,
-        trust_level="private",
+        audience="private_only",
         category="fact",
         content="Der Benutzer kommt aus Aschodling.",
         revision=1,
@@ -588,7 +675,7 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
         user_id=owner_id,
         source_type="tool_call",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="context",
         content="Der Benutzer kommt aus Wolfratshausen.",
         revision=2,
@@ -622,7 +709,7 @@ async def test_tool_update_merges_exact_duplicate_and_preserves_evidence(
     assert result.item is canonical
     assert result.updated is True
     assert result.duplicate is False
-    assert canonical.trust_level == TrustLevel.PRIVATE.value
+    assert canonical.audience == MemoryAudience.PRIVATE_ONLY.value
     assert canonical.revision == 3
     assert canonical.source_type == "tool_call"
     assert canonical.source_message_id == current_evidence_id
@@ -641,7 +728,7 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
         id=uuid4(),
         source_type="manual",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="preference",
         content="Kurze Antworten",
     )
@@ -649,6 +736,10 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
         return_value=MemoryMutation(duplicate, duplicate=True)
     )
     monkeypatch.setattr(MemoryService, "create_tool", create_tool)
+    set_pinned = AsyncMock(
+        side_effect=lambda _db, item, **_kwargs: setattr(item, "pinned", True) or item
+    )
+    monkeypatch.setattr(MemoryService, "set_pinned", set_pinned)
     call = ToolCall(
         id="memory",
         name="memory_write",
@@ -656,6 +747,7 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
             "action": "create",
             "content": "Kurze Antworten",
             "category": "preference",
+            "pin": True,
         },
     )
     session = ChatSession(id=uuid4(), title="Test", workspace_access="read-only")
@@ -681,7 +773,9 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
         "stored": False,
         "updated": False,
         "duplicate": True,
+        "pinned": True,
     }
+    set_pinned.assert_awaited_once()
 
 
 def test_memory_tools_are_gated_independently_from_workspace_write_mode() -> None:
@@ -751,7 +845,7 @@ def test_memory_payload_contains_camel_case_provenance() -> None:
         id=uuid4(),
         source_type="dreaming",
         pinned=True,
-        trust_level="private",
+        audience="private_only",
         category="fact",
         content="Fakt",
         seen_at=seen_at,
@@ -765,7 +859,8 @@ def test_memory_payload_contains_camel_case_provenance() -> None:
 
     assert payload["sourceType"] == "dreaming"
     assert payload["pinned"] is True
-    assert payload["trustLevel"] == "private"
+    assert payload["audience"] == "private_only"
+    assert payload["pinKind"] is None
     assert payload["category"] == "fact"
     assert payload["seenAt"] == seen_at.isoformat()
     assert payload["sourceSession"] == {"id": str(session.id), "title": "Quelle"}
@@ -778,7 +873,7 @@ def test_memory_payload_uses_dream_run_provenance() -> None:
         id=uuid4(),
         source_type="dreaming",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="fact",
         content="Fakt",
         source_dream_run_id=dream_run_id,
@@ -962,6 +1057,21 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
     assert output.candidates[0].evidence_message_ids == [message_id]
     assert output.candidates[0].category == MemoryCategory.FACT
 
+    ordinary_pin = DreamCandidates.model_validate(
+        {
+            "candidates": [
+                {
+                    "memory": "Der Nutzer isst kein Hähnchen.",
+                    "category": "preference",
+                    "evidence": [str(message_id)],
+                    "pin": True,
+                }
+            ]
+        }
+    ).candidates[0]
+    assert ordinary_pin.pin is True
+    assert ordinary_pin.pin_kind is None
+
     with pytest.raises(ValueError):
         DreamCandidates.model_validate(
             {
@@ -970,6 +1080,20 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
                         "content": "   ",
                         "category": "fact",
                         "evidenceMessageIds": [str(message_id)],
+                    }
+                ]
+            }
+        )
+    with pytest.raises(ValueError):
+        DreamCandidates.model_validate(
+            {
+                "candidates": [
+                    {
+                        "memory": "Der Nutzer isst kein Hähnchen.",
+                        "category": "preference",
+                        "evidence": [str(message_id)],
+                        "pin": False,
+                        "pinKind": "preferred_name",
                     }
                 ]
             }
@@ -1030,8 +1154,6 @@ def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
     assert set(decisions["items"]["required"]) == {
         "index",
         "action",
-        "category",
-        "memory",
         "memoryIds",
         "pin",
     }
@@ -1213,7 +1335,7 @@ async def test_dreaming_extraction_uses_source_only_and_merges_candidate_calls(
         id=uuid4(),
         source_type="manual",
         pinned=True,
-        trust_level="private",
+        audience="private_only",
         category="identity",
         revision=1,
         content="Der Nutzer hat eine Familie.",
@@ -1450,6 +1572,22 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
         }
     ).decisions[0]
     assert merge.memory_ids == [memory_id, second_memory_id]
+    ordinary_pin = DreamReconciliation.model_validate(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "update",
+                    "memoryIds": [str(memory_id)],
+                    "memory": "Der Nutzer isst kein Hähnchen.",
+                    "category": "preference",
+                    "pin": True,
+                }
+            ]
+        }
+    ).decisions[0]
+    assert ordinary_pin.pin is True
+    assert ordinary_pin.pin_kind is None
     with pytest.raises(ValidationError):
         DreamReconciliation.model_validate(
             {
@@ -1570,7 +1708,7 @@ async def test_contract_exhaustion_fails_persistent_run_without_retry(monkeypatc
 
 
 @pytest.mark.parametrize("exact", [True, False], ids=["exact_duplicate", "unrelated_pinned"])
-async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) -> None:
+async def test_host_matching_preserves_ordinary_pin_approval(monkeypatch, exact) -> None:
     monkeypatch.setattr(
         DreamingService, "_cancel_if_inactive", AsyncMock(return_value=False)
     )
@@ -1580,7 +1718,7 @@ async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) 
         id=uuid4(),
         session_id=session.id,
         role="user",
-        content="Ich heiße Lara.",
+        content="Ich esse kein Hähnchen.",
         trust_level="public",
         created_at=datetime.now(UTC),
     )
@@ -1603,15 +1741,17 @@ async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) 
         attempts=1,
     )
     state = MemoryDreamState(session_id=session.id)
-    existing_content = "Ich heiße Lara." if exact else "Der Nutzer spielt Klavier."
+    existing_content = (
+        "Ich esse kein Hähnchen." if exact else "Der Nutzer spielt Klavier."
+    )
     _, content_hash = normalize_content(existing_content)
     existing = MemoryRecord(
         id=uuid4(),
         user_id=user_id,
         source_type="manual",
         pinned=not exact,
-        trust_level="public",
-        category="identity",
+        audience="both",
+        category="preference",
         content=existing_content,
         normalized_content_hash=content_hash,
         revision=2,
@@ -1628,9 +1768,10 @@ async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) 
                     arguments={
                         "candidates": [
                             {
-                                "memory": "Ich heiße Lara.",
-                                "category": "identity",
+                                "memory": "Ich esse kein Hähnchen.",
+                                "category": "preference",
                                 "evidence": [str(user_message.id)],
+                                "pin": True,
                             }
                         ]
                     },
@@ -1660,15 +1801,17 @@ async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) 
         user_id=user_id,
         source_type="dreaming",
         pinned=False,
-        trust_level="public",
-        category="identity",
-        content="Ich heiße Lara.",
-        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
+        audience="both",
+        category="preference",
+        content="Ich esse kein Hähnchen.",
+        normalized_content_hash=normalize_content("Ich esse kein Hähnchen.")[1],
         revision=1,
     )
     create = AsyncMock(return_value=MemoryMutation(created_item, created=True))
     monkeypatch.setattr(MemoryService, "keep_dreaming", keep)
     monkeypatch.setattr(MemoryService, "create_dreaming", create)
+    approval = AsyncMock()
+    monkeypatch.setattr(MemoryService, "request_dreaming_approval", approval)
     pinned_context = AsyncMock(return_value=[existing])
     monkeypatch.setattr(MemoryService, "pinned_context", pinned_context)
     monkeypatch.setattr(
@@ -1703,6 +1846,10 @@ async def test_host_matching_avoids_unneeded_reconciliation(monkeypatch, exact) 
         create.assert_awaited_once()
         assert create.await_args.kwargs["owner_id"] == user_id
         keep.assert_not_awaited()
+    approval.assert_awaited_once()
+    assert approval.await_args.kwargs["action"] == "pin"
+    assert approval.await_args.kwargs["requested_pin"] is True
+    assert approval.await_args.kwargs["pin_kind"] is None
     pinned_context.assert_not_awaited()
     assert state.last_processed_message_id == assistant_message.id
     assert run.status == "completed"
@@ -1748,7 +1895,7 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
         user_id=session.user_id,
         source_type="manual",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="identity",
         content="Ich heiße Lara.",
         normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
@@ -1847,7 +1994,7 @@ def test_memory_approval_payload_rejects_invalid_pin_and_unbounded_targets() -> 
                 "revision": 1,
                 "content": "Ich heiße Lara.",
                 "category": "identity",
-                "trustLevel": "public",
+                "audience": "both",
                 "pinned": False,
                 "evidenceHash": "0" * 64,
             }
@@ -1862,11 +2009,14 @@ def test_memory_approval_payload_rejects_invalid_pin_and_unbounded_targets() -> 
         "pinPolicy": "ask",
     }
 
-    with pytest.raises(ValidationError):
-        MemoryApprovalPayload.model_validate(base)
+    assert MemoryApprovalPayload.model_validate(base).pin_kind is None
     with pytest.raises(ValidationError):
         MemoryApprovalPayload.model_validate(
-            {**base, "requestedPin": False, "targetMemories": base["targetMemories"] * 51}
+            {**base, "requestedPin": False, "pinKind": "preferred_name"}
+        )
+    with pytest.raises(ValidationError):
+        MemoryApprovalPayload.model_validate(
+            {**base, "targetMemories": base["targetMemories"] * 51}
         )
 
 
@@ -1882,7 +2032,7 @@ async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypat
         source_message_id=first_source,
         source_type="manual",
         pinned=True,
-        trust_level="public",
+        audience="both",
         category="identity",
         content="Ich heiße Lara.",
         normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
@@ -1894,7 +2044,7 @@ async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypat
         source_message_id=second_source,
         source_type="dreaming",
         pinned=False,
-        trust_level="private",
+        audience="private_only",
         category="identity",
         content=canonical,
         normalized_content_hash=normalize_content(canonical)[1],
@@ -1921,7 +2071,10 @@ async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypat
         owner_id=owner_id,
         memory_ids=[first.id, second.id],
         expected_revisions={first.id: 2, second.id: 4},
-        expected_trust={first.id: TrustLevel.PUBLIC, second.id: TrustLevel.PRIVATE},
+        expected_audience={
+            first.id: MemoryAudience.BOTH,
+            second.id: MemoryAudience.PRIVATE_ONLY,
+        },
         content=canonical,
         category=MemoryCategory.IDENTITY,
         trust_level=TrustLevel.PUBLIC,
@@ -1932,7 +2085,7 @@ async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypat
     )
 
     assert mutation.item is second
-    assert second.trust_level == "private"
+    assert second.audience == "private_only"
     assert second.pinned is True
     assert second.revision == 5
     db.delete.assert_awaited_once_with(first)
@@ -1952,7 +2105,7 @@ async def test_merge_stale_snapshot_changes_nothing() -> None:
         user_id=owner_id,
         source_type="manual",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="fact",
         content="A",
         normalized_content_hash=normalize_content("A")[1],
@@ -1963,7 +2116,7 @@ async def test_merge_stale_snapshot_changes_nothing() -> None:
         user_id=owner_id,
         source_type="manual",
         pinned=False,
-        trust_level="public",
+        audience="both",
         category="fact",
         content="B",
         normalized_content_hash=normalize_content("B")[1],
@@ -1979,7 +2132,10 @@ async def test_merge_stale_snapshot_changes_nothing() -> None:
         owner_id=owner_id,
         memory_ids=[first.id, second.id],
         expected_revisions={first.id: 1, second.id: 3},
-        expected_trust={first.id: TrustLevel.PUBLIC, second.id: TrustLevel.PUBLIC},
+        expected_audience={
+            first.id: MemoryAudience.BOTH,
+            second.id: MemoryAudience.BOTH,
+        },
         content="C",
         category=MemoryCategory.FACT,
         trust_level=TrustLevel.PUBLIC,
@@ -1995,7 +2151,7 @@ async def test_merge_stale_snapshot_changes_nothing() -> None:
     db.flush.assert_not_awaited()
 
 
-async def test_approved_update_is_restart_independent_and_does_not_commit(monkeypatch) -> None:
+async def test_approved_ordinary_pin_update_is_restart_independent(monkeypatch) -> None:
     user_id = uuid4()
     session = ChatSession(
         id=uuid4(), user_id=user_id, title="Quelle", memory_mode="full"
@@ -2007,10 +2163,10 @@ async def test_approved_update_is_restart_independent_and_does_not_commit(monkey
         user_id=user_id,
         source_type="manual",
         pinned=False,
-        trust_level="public",
-        category="identity",
-        content="Ich heiße Lara.",
-        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
+        audience="both",
+        category="preference",
+        content="Ich esse gelegentlich Hähnchen.",
+        normalized_content_hash=normalize_content("Ich esse gelegentlich Hähnchen.")[1],
         revision=3,
     )
     payload = MemoryApprovalPayload.model_validate(
@@ -2021,20 +2177,19 @@ async def test_approved_update_is_restart_independent_and_does_not_commit(monkey
                     "id": str(target.id),
                     "revision": 3,
                     "content": target.content,
-                    "category": "identity",
-                    "trustLevel": "public",
+                    "category": "preference",
+                    "audience": "both",
                     "pinned": False,
                     "evidenceHash": "0" * 64,
                 }
             ],
             "after": {
-                "content": "Ich heiße Mara.",
-                "category": "identity",
-                "trustLevel": "public",
+                "content": "Ich esse grundsätzlich kein Hähnchen.",
+                "category": "preference",
+                "audience": "both",
                 "pinned": True,
             },
             "requestedPin": True,
-            "pinKind": "preferred_name",
             "sourceDreamRunId": str(run.id),
             "sourceSessionId": str(session.id),
             "evidenceMessageIds": [str(evidence_id)],
@@ -2051,6 +2206,7 @@ async def test_approved_update_is_restart_independent_and_does_not_commit(monkey
         payload=payload.model_dump(by_alias=True, mode="json", exclude_none=True),
     )
     db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
 
     async def get(model_type, _item_id, **_kwargs):
         return session if model_type is ChatSession else run
@@ -2088,10 +2244,10 @@ async def test_auto_pin_stops_at_five(monkeypatch) -> None:
         user_id=owner_id,
         source_type="manual",
         pinned=False,
-        trust_level="public",
-        category="identity",
-        content="Ich heiße Lara.",
-        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
+        audience="both",
+        category="preference",
+        content="Ich esse kein Hähnchen.",
+        normalized_content_hash=normalize_content("Ich esse kein Hähnchen.")[1],
         revision=1,
     )
     db = AsyncMock(spec=AsyncSession)
@@ -2099,5 +2255,35 @@ async def test_auto_pin_stops_at_five(monkeypatch) -> None:
     set_pinned = AsyncMock(return_value=item)
     monkeypatch.setattr(MemoryService, "set_pinned", set_pinned)
 
-    assert await MemoryService.auto_pin(db, item, owner_id=owner_id) is False
+    assert (
+        await MemoryService.auto_pin(
+            db,
+            item,
+            owner_id=owner_id,
+            pin_kind=None,
+        )
+        is False
+    )
+    set_pinned.assert_not_awaited()
+
+
+async def test_ordinary_auto_pin_preserves_existing_core_kind(monkeypatch) -> None:
+    owner_id = uuid4()
+    item = MemoryRecord(
+        id=uuid4(),
+        user_id=owner_id,
+        source_type="manual",
+        pinned=True,
+        pin_kind=MemoryPinKind.PREFERRED_NAME.value,
+        audience="both",
+        category="identity",
+        content="Ich heiße Lara.",
+        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
+        revision=1,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    set_pinned = AsyncMock(return_value=item)
+    monkeypatch.setattr(MemoryService, "set_pinned", set_pinned)
+
+    assert await MemoryService.auto_pin(db, item, owner_id=owner_id, pin_kind=None)
     set_pinned.assert_not_awaited()

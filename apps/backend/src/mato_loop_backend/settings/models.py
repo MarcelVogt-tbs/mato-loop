@@ -591,7 +591,7 @@ class InstanceLimits(SettingsDocument):
     max_editable_text_mib: int = Field(default=10, ge=1, le=16)
     max_audio_duration_seconds: int = Field(default=3_600, ge=1, le=3_600)
     max_video_duration_seconds: int = Field(default=900, ge=1, le=900)
-    max_extracted_characters: int = Field(default=1_000_000, ge=1_000, le=10_000_000)
+    max_extracted_characters: int = Field(default=5_000_000, ge=1_000, le=10_000_000)
     max_pdf_pages: int = Field(default=1_000, ge=1, le=5_000)
     max_workbook_sheets: int = Field(default=100, ge=1, le=500)
     max_workbook_cells: int = Field(default=1_000_000, ge=1_000, le=5_000_000)
