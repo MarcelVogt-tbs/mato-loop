@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.context import ContextError, ContextManager, ContextProjection
 from mato_loop_backend.agent.runtime import (
-    AUTOMATIC_MEMORY_MAX_DISTANCE,
     AUTOMATIC_MEMORY_MAX_ITEMS,
     MEMORY_OVERVIEW_MAX_CHARACTERS,
     AgentRuntime,
@@ -15,6 +14,7 @@ from mato_loop_backend.agent.runtime import (
     _bounded_memory_overview,
     _memory_overview_requested,
     _merge_contextual_results,
+    _prior_session_history_requested,
     _recent_episode_overview_requested,
 )
 from mato_loop_backend.agent.tools import EffectiveToolSet, ToolResult
@@ -77,6 +77,101 @@ def test_recent_episode_overview_intent_is_host_detected() -> None:
                 session_id=session_id,
                 role="user",
                 content="Erkläre mir PostgreSQL-Indizes.",
+            )
+        ]
+    )
+
+
+def test_prior_session_intent_uses_only_the_latest_explicit_request() -> None:
+    session_id = uuid4()
+    assert _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="Mach dort weiter, wo wir aufgehört haben.",
+            )
+        ]
+    )
+    assert _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="As we decided earlier, use PostgreSQL.",
+            )
+        ]
+    )
+    assert not _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="Im vorherigen Chat ging es um PostgreSQL.",
+            ),
+            Message(session_id=session_id, role="user", content="Machen wir weiter."),
+        ]
+    )
+    assert not _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content='Translate "continue where we left off" into German.',
+            )
+        ]
+    )
+    assert not _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="Do not use the previous session for this answer.",
+            )
+        ]
+    )
+    assert _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content='What did we discuss in the "previous session"?',
+            )
+        ]
+    )
+    assert not _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="Please use no information from the previous session.",
+            )
+        ]
+    )
+    assert not _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="Please translate continue where we left off into German.",
+            )
+        ]
+    )
+    assert not _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="The previous session is irrelevant; do not use it.",
+            )
+        ]
+    )
+    assert _prior_session_history_requested(
+        [
+            Message(
+                session_id=session_id,
+                role="user",
+                content="Can you recap what we discussed in an earlier session?",
             )
         ]
     )
@@ -259,7 +354,7 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
         content="Der Sohn des Nutzers ist neun Monate alt.",
         category="fact",
         pinned=False,
-        trust_level="private",
+        audience="private_only",
         revision=1,
         created_at=created_at,
         updated_at=updated_at,
@@ -279,8 +374,10 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
     assert kwargs["query"] == "Wie alt ist mein Sohn?"
     assert "retrieval_level" not in kwargs
     assert kwargs["pinned"] is False
-    assert kwargs["limit"] == AUTOMATIC_MEMORY_MAX_ITEMS
-    assert kwargs["max_semantic_distance"] == AUTOMATIC_MEMORY_MAX_DISTANCE
+    assert kwargs["limit"] == 2
+    assert kwargs["semantic_enabled"] is False
+    assert "query_embedding" not in kwargs
+    assert "max_semantic_distance" not in kwargs
     assert kwargs["owner_id"] == db.get.return_value.user_id
     MemoryService.pinned_context.assert_awaited_once()
     assert (
@@ -301,28 +398,50 @@ async def test_automatic_rag_injects_bounded_relevant_memories(monkeypatch) -> N
     assert "15 total, 2 pinned" in projections[0]["system_prompt"]
     assert "0 prior-session references" in projections[0]["system_prompt"]
     assert requests[0]["tool_choice"] == "auto"
+    embedding_client.embed_query.assert_not_awaited()
+    embedding_client.embed_queries.assert_not_awaited()
+    EpisodeRetrievalService.retrieve.assert_not_awaited()
+    EpisodeRetrievalService.recent.assert_not_awaited()
 
 
-async def test_first_turn_includes_a_pointer_to_the_latest_session(monkeypatch) -> None:
+async def test_ordinary_first_turn_does_not_include_the_latest_session(monkeypatch) -> None:
     session_id = uuid4()
-    previous_session_id = uuid4()
-    anchor_message_id = uuid4()
-    created_at = datetime(2026, 8, 19, 10, tzinfo=UTC)
-    reference = EpisodeReference(
-        session_id=previous_session_id,
-        session_title="Vorheriger Chat",
-        anchor_message_id=anchor_message_id,
-        anchor_created_at=created_at,
-        anchor_role="assistant",
-        anchor_content="Wir haben das Deployment vorbereitet.",
-        excerpt=(),
-    )
     user = Message(
         id=uuid4(), session_id=session_id, role="user", content="Machen wir weiter."
     )
     db, run, _requests, projections, _retrieve, _execute = await _runtime_setup(
         monkeypatch,
         [ProviderResult(content="Gern.", finish_reason="stop")],
+        records=[user],
+    )
+    await AgentRuntime._execute_loop(db, run)
+
+    EpisodeRetrievalService.recent.assert_not_awaited()
+    EpisodeRetrievalService.retrieve.assert_not_awaited()
+    prompt = projections[0]["system_prompt"]
+    assert '"title": "Vorheriger Chat"' not in prompt
+
+
+async def test_explicit_latest_session_request_includes_a_pointer(monkeypatch) -> None:
+    session_id = uuid4()
+    reference = EpisodeReference(
+        session_id=uuid4(),
+        session_title="Vorheriger Chat",
+        anchor_message_id=uuid4(),
+        anchor_created_at=datetime(2026, 8, 19, 10, tzinfo=UTC),
+        anchor_role="assistant",
+        anchor_content="Wir haben das Deployment vorbereitet.",
+        excerpt=(),
+    )
+    user = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="user",
+        content="Was haben wir in der letzten Session besprochen?",
+    )
+    db, run, _requests, projections, _retrieve, _execute = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="Deployment.", finish_reason="stop")],
         records=[user],
     )
     EpisodeRetrievalService.recent.return_value = EpisodeRetrieval(
@@ -332,10 +451,48 @@ async def test_first_turn_includes_a_pointer_to_the_latest_session(monkeypatch) 
     await AgentRuntime._execute_loop(db, run)
 
     EpisodeRetrievalService.recent.assert_awaited_once()
+    EpisodeRetrievalService.retrieve.assert_not_awaited()
     prompt = projections[0]["system_prompt"]
     assert '"title": "Vorheriger Chat"' in prompt
-    assert f'"session_id": "{previous_session_id}"' in prompt
-    assert f'"around_message_id": "{anchor_message_id}"' in prompt
+    assert f'"session_id": "{reference.session_id}"' in prompt
+
+
+async def test_explicit_earlier_work_request_uses_lexical_episode_search(
+    monkeypatch,
+) -> None:
+    session_id = uuid4()
+    reference = EpisodeReference(
+        session_id=uuid4(),
+        session_title="Datenbankwahl",
+        anchor_message_id=uuid4(),
+        anchor_created_at=datetime(2026, 8, 19, 10, tzinfo=UTC),
+        anchor_role="assistant",
+        anchor_content="Wir haben PostgreSQL gewählt.",
+        excerpt=(),
+    )
+    user = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="user",
+        content="Wie wir zuvor besprochen haben: Welche Datenbank nutzen wir?",
+    )
+    db, run, _requests, projections, _retrieve, _execute = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="PostgreSQL.", finish_reason="stop")],
+        records=[user],
+    )
+    EpisodeRetrievalService.retrieve.return_value = EpisodeRetrieval(
+        references=[reference], strategy=MemoryRetrievalStrategy.LEXICAL
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    EpisodeRetrievalService.recent.assert_not_awaited()
+    EpisodeRetrievalService.retrieve.assert_awaited_once()
+    kwargs = EpisodeRetrievalService.retrieve.await_args.kwargs
+    assert kwargs["query"] == user.content
+    assert kwargs["semantic_enabled"] is False
+    assert '"title": "Datenbankwahl"' in projections[0]["system_prompt"]
 
 
 async def test_short_turn_retrieval_prioritizes_current_query_before_context(
@@ -360,7 +517,7 @@ async def test_short_turn_retrieval_prioritizes_current_query_before_context(
             content=content,
             category="identity",
             pinned=False,
-            trust_level="private",
+            audience="private_only",
             revision=1,
         )
         for content in (
@@ -375,7 +532,7 @@ async def test_short_turn_retrieval_prioritizes_current_query_before_context(
             content=content,
             category="preference",
             pinned=False,
-            trust_level="private",
+            audience="private_only",
             revision=1,
         )
         for content in (
@@ -411,12 +568,10 @@ async def test_short_turn_retrieval_prioritizes_current_query_before_context(
         current.content,
         contextual_query,
     ]
-    embedding_client.embed_queries.assert_awaited_once_with(
-        [current.content, contextual_query]
-    )
+    embedding_client.embed_queries.assert_not_awaited()
     system_prompt = projections[0]["system_prompt"]
     assert primary[0].content in system_prompt
-    assert primary[1].content in system_prompt
+    assert primary[1].content not in system_prompt
     assert primary[2].content not in system_prompt
     assert contextual[0].content in system_prompt
     assert contextual[1].content not in system_prompt
@@ -435,7 +590,7 @@ async def test_context_overflow_drops_automatic_memory_before_failing(
         content="Automatisch geladener Kontext",
         category="fact",
         pinned=False,
-        trust_level="private",
+        audience="private_only",
         revision=1,
     )
     db, run, _requests, _projections, _retrieve, _execute = await _runtime_setup(
@@ -586,7 +741,7 @@ def test_memory_overview_stops_before_exceeding_its_character_budget() -> None:
             content=character * 7_000,
             category="fact",
             pinned=False,
-            trust_level="private",
+            audience="private_only",
             revision=1,
         )
         for character in ("a", "b")
@@ -618,18 +773,30 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         content="Der Nutzer bevorzugt lokale Modelle.",
         category="preference",
         pinned=False,
-        trust_level="private",
+        audience="private_only",
         revision=1,
         created_at=created_at,
         updated_at=updated_at,
     )
     memory.source_message = Message(created_at=source_at)
+    shared_identity = MemoryRecord(
+        id=uuid4(),
+        content="Der gemeinsame Name ist Alt.",
+        category="identity",
+        pinned=True,
+        pin_kind="preferred_name",
+        audience="both",
+        revision=1,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
     pinned = MemoryRecord(
         id=uuid4(),
-        content="Diese angeheftete Erinnerung bleibt vollständig enthalten.",
-        category="context",
+        content="Der private Name ist Neu.",
+        category="identity",
         pinned=True,
-        trust_level="private",
+        pin_kind="preferred_name",
+        audience="private_only",
         revision=1,
         created_at=created_at,
         updated_at=updated_at,
@@ -641,14 +808,14 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
     )
     MemoryService.pinned_context.return_value = [pinned]
     retrieve.return_value = MemoryRetrieval(
-        items=[memory],
+        items=[shared_identity, memory],
         mode=MemoryRetrieveMode.BROWSE,
         strategy=MemoryRetrievalStrategy.BROWSE,
         readable_by=TrustLevel.PRIVATE,
         offset=0,
         limit=10,
         has_more=False,
-        total=1,
+        total=2,
     )
 
     await AgentRuntime._execute_loop(db, run)
@@ -659,6 +826,7 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
     ]
     assert memory.content in projections[0]["system_prompt"]
     assert pinned.content in projections[0]["system_prompt"]
+    assert shared_identity.content not in projections[0]["system_prompt"]
     assert f'"sourceMessageAt": "{source_at.isoformat()}"' in projections[0][
         "system_prompt"
     ]

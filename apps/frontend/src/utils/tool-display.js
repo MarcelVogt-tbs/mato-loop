@@ -450,7 +450,8 @@ export function parseToolResult(content, toolName = null) {
             id: item.id,
             category: item.category,
             pinned: item.pinned,
-            trustLevel: item.trustLevel,
+            audience: item.audience,
+            pinKind: item.pinKind,
             memory: item.content
           }))
         }

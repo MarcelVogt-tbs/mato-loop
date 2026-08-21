@@ -20,6 +20,7 @@ from mato_loop_backend.memory.episode_indexing import EpisodeIndexService, _cont
 from mato_loop_backend.memory.indexing import MemoryIndexService
 from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.models import (
+    MemoryAudience,
     MemoryCategory,
     MemoryEmbedding,
     MemoryEmbeddingStatus,
@@ -27,7 +28,6 @@ from mato_loop_backend.models import (
     Message,
     MessageSearchChunk,
 )
-from mato_loop_backend.settings import TrustLevel
 
 
 def _vector(value: float = 1.0) -> list[float]:
@@ -216,7 +216,7 @@ async def test_memory_creation_enqueues_embedding_in_same_service_transaction(
         content="Ein neuer Fakt",
         category=MemoryCategory.FACT,
         source_type=MemorySourceType.MANUAL,
-        trust_level=TrustLevel.PRIVATE,
+        audience=MemoryAudience.PRIVATE_ONLY,
     )
 
     enqueue.assert_awaited_once_with(db, memory)
@@ -240,7 +240,7 @@ async def test_automatic_memory_creation_starts_unseen(
         content="Automatisch erkannter Fakt",
         category=MemoryCategory.FACT,
         source_type=source_type,
-        trust_level=TrustLevel.PRIVATE,
+        audience=MemoryAudience.PRIVATE_ONLY,
     )
 
     assert memory.seen_at is None

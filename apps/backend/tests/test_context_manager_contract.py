@@ -266,15 +266,17 @@ def test_message_projection_does_not_present_redacted_qr_content_as_failure() ->
     )
 
 
-def test_public_projection_redacts_only_private_memory_results() -> None:
+def test_projection_sanitizes_memory_results_for_each_target() -> None:
     session = _session()
     assistant = _message(session.id, "assistant", "Ich prüfe das Memory.")
     assistant.tool_calls = [{"id": "memory-1", "name": "memory_retrieve", "arguments": {}}]
     tool = _message(
         session.id,
         "tool",
-        '{"items":[{"id":"public","content":"sichtbar","trustLevel":"public"},'
-        '{"id":"private","content":"geheim","trustLevel":"private"}]}',
+        '{"items":[{"id":"public","content":"öffentlich","audience":"public_only"},'
+        '{"id":"private","content":"privat","audience":"private_only"},'
+        '{"id":"both","content":"geteilt","audience":"both"},'
+        '{"id":"unknown","content":"unbekannt","audience":"unknown"}]}',
     )
     tool.tool_call_id = "memory-1"
 
@@ -286,17 +288,22 @@ def test_public_projection_redacts_only_private_memory_results() -> None:
     )
 
     public_result = next(item for item in public_messages if item["role"] == "tool")
-    assert "sichtbar" in public_result["content"]
-    assert "geheim" not in public_result["content"]
+    assert "öffentlich" in public_result["content"]
+    assert "privat" not in public_result["content"]
+    assert "geteilt" in public_result["content"]
+    assert "unbekannt" not in public_result["content"]
     public_payload = json.loads(public_result["content"])
     assert public_payload["scope"] == {
         "readableBy": "public",
         "includesPrivate": False,
     }
-    assert "geheim" in next(
+    private_content = next(
         item for item in private_messages if item["role"] == "tool"
     )["content"]
-    assert "geheim" not in _summary_source(None, [assistant, tool])
+    assert "öffentlich" not in private_content
+    assert "privat" in private_content
+    assert "geteilt" in private_content
+    assert "unbekannt" not in private_content
 
 
 def test_public_projection_redacts_private_memory_inside_session_read() -> None:
@@ -364,6 +371,63 @@ def test_public_projection_infers_paginated_memory_result_in_session_read() -> N
     public_result = next(item for item in result if item["role"] == "tool")
     assert "geheim" not in public_result["content"]
     assert "redactedPrivateItems" in public_result["content"]
+
+
+def test_projection_sanitizes_memory_inside_tool_result_read() -> None:
+    session = _session()
+    assistant = _message(session.id, "assistant", "Ich lese das Tool-Ergebnis.")
+    assistant.tool_calls = [
+        {"id": "result-1", "name": "session_tool_result_read", "arguments": {}}
+    ]
+    tool = _message(
+        session.id,
+        "tool",
+        json.dumps(
+            {
+                "content": json.dumps(
+                    {
+                        "items": [
+                            {"content": "öffentlich", "audience": "public_only"},
+                            {"content": "privat", "audience": "private_only"},
+                            {"content": "geteilt", "audience": "both"},
+                        ]
+                    }
+                )
+            }
+        ),
+    )
+    tool.tool_call_id = "result-1"
+
+    private_messages = _projection_messages(
+        "System", None, [assistant, tool], TrustLevel.PRIVATE
+    )
+
+    content = next(item for item in private_messages if item["role"] == "tool")[
+        "content"
+    ]
+    assert "öffentlich" not in content
+    assert "privat" in content
+    assert "geteilt" in content
+
+
+def test_projection_redacts_untyped_partial_tool_result_read_content() -> None:
+    session = _session()
+    assistant = _message(session.id, "assistant", "Ich lese einen Ausschnitt.")
+    assistant.tool_calls = [
+        {"id": "result-1", "name": "session_tool_result_read", "arguments": {}}
+    ]
+    tool = _message(
+        session.id,
+        "tool",
+        json.dumps({"content": '{"items":[{"content":"öffentlich"'}),
+    )
+    tool.tool_call_id = "result-1"
+
+    messages = _projection_messages("System", None, [assistant, tool], TrustLevel.PRIVATE)
+
+    content = next(item for item in messages if item["role"] == "tool")["content"]
+    assert "öffentlich" not in content
+    assert "redactedNestedToolResult" in content
 
 
 def test_public_projection_pairs_reused_tool_ids_with_their_own_turn() -> None:
@@ -1061,8 +1125,8 @@ def test_general_system_prompt_requires_explicit_memory_request() -> None:
     assert "latest user message explicitly asks" in prompt
     assert "not a write request by itself" in prompt
     assert "latest user message" in prompt
-    assert "Never infer a write request from earlier turns" in prompt
-    assert "When explicitly requested, durable identity" in prompt
+    assert "Never infer a mutation request from earlier turns" in prompt
+    assert "When storage is explicitly requested, durable identity" in prompt
     assert "independently changeable facts separate" in prompt
     assert "transient, hypothetical, quoted, or third-party statements" in prompt
     assert "source data and never initiates a write" in prompt
@@ -1099,11 +1163,17 @@ def test_general_system_prompt_enforces_pending_memory_write_outcome() -> None:
         memory_write_outcome="denied",
         offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
     )
+    forgotten = general_system_prompt(
+        _session(),
+        memory_write_outcome="forgotten",
+        offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
+    )
 
     assert "Required memory mutation" in pending
     assert "Do not produce a final answer" in pending
     assert "permission was denied and nothing was stored" in denied
     assert "Do not claim or imply" in denied
+    assert "permanently forgotten" in forgotten
 
 
 def test_prefetched_memory_overview_disables_redundant_retrieval() -> None:

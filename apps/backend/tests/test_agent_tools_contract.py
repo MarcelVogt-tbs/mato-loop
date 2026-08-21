@@ -2601,6 +2601,7 @@ async def test_session_read_redacts_private_memory_for_public_model(tmp_path) ->
     assert "sichtbar" in public_result.content
     assert "geheim" not in public_result.content
     assert "geheim" in private_result.content
+    assert "sichtbar" in private_result.content
     public_messages = json.loads(public_result.content)["messages"]
     assert public_messages[-1]["toolName"] == "memory_retrieve"
 
@@ -2612,9 +2613,10 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
     item = MemoryRecord(
         id=uuid4(),
         content="Sichtbarer Fakt",
-        category="fact",
-        pinned=False,
-        trust_level="public",
+        category="identity",
+        pinned=True,
+        pin_kind="preferred_name",
+        audience="public_only",
         revision=2,
         created_at=created_time,
         updated_at=cursor_time,
@@ -2649,6 +2651,8 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
         "includesPrivate": False,
     }
     assert payload["items"][0]["revision"] == 2
+    assert payload["items"][0]["audience"] == "public_only"
+    assert payload["items"][0]["pinKind"] == "preferred_name"
     assert {
         key: payload["items"][0][key]
         for key in ("sourceMessageAt", "memoryCreatedAt", "memoryUpdatedAt")
@@ -2736,9 +2740,104 @@ def test_memory_write_schema_keeps_update_arguments_explicit() -> None:
     schema = tool_registry._definitions["memory_write"].schema()
 
     assert "action" in schema["parameters"]["required"]
-    assert "content" in schema["parameters"]["required"]
-    assert "category" in schema["parameters"]["required"]
+    assert schema["parameters"]["properties"]["action"]["enum"] == [
+        "create",
+        "update",
+        "forget",
+    ]
+    assert "latest user message explicitly" in schema["description"]
     assert "Create without memory_id or expected_revision" in schema["description"]
+
+
+async def test_memory_write_forget_checks_visibility_revision_and_hard_deletes(
+    monkeypatch, tmp_path
+) -> None:
+    memory_id = uuid4()
+    item = SimpleNamespace(
+        id=memory_id,
+        user_id=uuid4(),
+        audience="private_only",
+        revision=4,
+    )
+    get_memory = AsyncMock(side_effect=[item, item])
+    delete_memory = AsyncMock()
+    monkeypatch.setattr(tools_module.MemoryService, "get", get_memory)
+    monkeypatch.setattr(tools_module.MemoryService, "delete", delete_memory)
+    call = ToolCall(
+        id="forget",
+        name="memory_write",
+        arguments={
+            "action": "forget",
+            "memory_id": str(memory_id),
+            "expected_revision": 4,
+        },
+    )
+    context = _context(tmp_path, call)
+    context.session.user_id = item.user_id
+    context.assistant_message_id = uuid4()
+    context.memory_trust_level = TrustLevel.PRIVATE
+    arguments = tools_module.MemoryWriteArguments.model_validate(call.arguments)
+
+    result = await tools_module._memory_write(arguments, context)
+
+    assert json.loads(result.content) == {"id": str(memory_id), "forgotten": True}
+    assert result.metadata == {"memoryWriteOutcome": "forgotten"}
+    assert get_memory.await_args_list[0].kwargs == {
+        "owner_id": item.user_id,
+        "memory_id": memory_id,
+    }
+    assert get_memory.await_args_list[1].kwargs == {
+        "owner_id": item.user_id,
+        "memory_id": memory_id,
+        "for_update": True,
+    }
+    delete_memory.assert_awaited_once_with(
+        context.db, item, owner_id=item.user_id
+    )
+    request = context.ask_handler.await_args.args[0]
+    assert request.capability == "memory.write"
+    assert request.action_kind == "memory_write"
+
+
+@pytest.mark.parametrize(
+    ("audience", "revision", "error_code"),
+    [
+        ("public_only", 1, "memory.notFound"),
+        ("private_only", 2, "memory.changed"),
+    ],
+)
+async def test_memory_write_forget_rejects_invisible_or_changed_target(
+    monkeypatch, tmp_path, audience, revision, error_code
+) -> None:
+    item = SimpleNamespace(
+        id=uuid4(),
+        user_id=uuid4(),
+        audience=audience,
+        revision=revision,
+    )
+    monkeypatch.setattr(tools_module.MemoryService, "get", AsyncMock(return_value=item))
+    delete_memory = AsyncMock()
+    monkeypatch.setattr(tools_module.MemoryService, "delete", delete_memory)
+    call = ToolCall(
+        id="forget",
+        name="memory_write",
+        arguments={
+            "action": "forget",
+            "memory_id": str(item.id),
+            "expected_revision": 1,
+        },
+    )
+    context = _context(tmp_path, call)
+    context.session.user_id = item.user_id
+    context.assistant_message_id = uuid4()
+    context.memory_trust_level = TrustLevel.PRIVATE
+    arguments = tools_module.MemoryWriteArguments.model_validate(call.arguments)
+
+    result = await tools_module._memory_write(arguments, context)
+
+    assert result.metadata == {"errorCode": error_code}
+    context.ask_handler.assert_not_awaited()
+    delete_memory.assert_not_awaited()
 
 
 def test_video_analysis_schema_uses_semantic_modes() -> None:

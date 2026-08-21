@@ -358,12 +358,17 @@ describe('tool display', () => {
       scope: { readableBy: 'private' },
       total: 1,
       nextCursor: { cursor_updated_at: '2026-07-23T12:00:00Z', cursor_id: 'memory-1' },
-      items: [{ id: 'memory-1', content: 'Sichtbarer Inhalt', category: 'fact', pinned: true }]
+      items: [{
+        id: 'memory-1', content: 'Sichtbarer Inhalt', category: 'identity', pinned: true,
+        audience: 'private_only', pinKind: 'preferred_name'
+      }]
     }), 'memory_retrieve')
 
     expect(parsed.text).toContain('Sichtbarer Inhalt')
     expect(parsed.text).toContain('private')
     expect(parsed.text).toContain('pinned')
+    expect(parsed.text).toContain('private_only')
+    expect(parsed.text).toContain('preferred_name')
     expect(parsed.text).toContain('cursor_updated_at')
   })
 

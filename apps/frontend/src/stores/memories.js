@@ -25,7 +25,7 @@ export const useMemoryStore = defineStore('memories', {
           offset: filters.offset ?? this.offset,
           limit: filters.limit ?? this.limit
         }
-        for (const key of ['query', 'category', 'sourceType', 'trustLevel']) {
+        for (const key of ['query', 'category', 'sourceType', 'audience']) {
           if (filters[key]) params[key] = filters[key]
         }
         if (filters.pinned != null) params.pinned = filters.pinned
@@ -40,11 +40,13 @@ export const useMemoryStore = defineStore('memories', {
         if (requestId === this.listRequestId) this.loading = false
       }
     },
-    async createMemory({ content, category, trustLevel }) {
-      return (await api.post('/memories', { content, category, trustLevel })).data
+    async createMemory({ content, category, audience, pinKind }) {
+      return (await api.post('/memories', { content, category, audience, pinKind })).data
     },
-    async updateMemory(id, { content, category, trustLevel, pinned }) {
-      const { data } = await api.patch(`/memories/${id}`, { content, category, trustLevel, pinned })
+    async updateMemory(id, { content, category, audience, pinned, pinKind }) {
+      const { data } = await api.patch(`/memories/${id}`, {
+        content, category, audience, pinned, pinKind
+      })
       const index = this.items.findIndex((item) => item.id === id)
       if (index >= 0) this.items[index] = data
       return data

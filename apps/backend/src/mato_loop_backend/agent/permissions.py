@@ -451,15 +451,24 @@ def _automation_scope(
 
 def memory_write_permission(session_id: UUID, action: str) -> PermissionRequest:
     updating = action == "update"
+    forgetting = action == "forget"
     return PermissionRequest(
         capability="memory.write",
-        resource_type="session",
-        resource_scope=str(session_id),
+        resource_type="memory_collection" if forgetting else "session",
+        resource_scope=f"forget:{session_id}" if forgetting else str(session_id),
         action_kind="memory_write",
         risk_level="medium",
-        title="Memory aktualisieren?" if updating else "Memory speichern?",
+        title=(
+            "Memory vergessen?"
+            if forgetting
+            else "Memory aktualisieren?"
+            if updating
+            else "Memory speichern?"
+        ),
         summary=(
-            "Der Agent möchte ein bestehendes Memory aktualisieren."
+            "Der Agent möchte ein bestehendes Memory endgültig löschen."
+            if forgetting
+            else "Der Agent möchte ein bestehendes Memory aktualisieren."
             if updating
             else "Der Agent möchte ein neues Memory speichern."
         ),

@@ -873,6 +873,13 @@ async def test_memory_write_uses_current_session_grant(tmp_path) -> None:
     assert request.capability == "memory.write"
     assert request.action_kind == "memory_write"
 
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant),
+        session,
+        memory_write_permission(session.id, "forget"),
+        root_files,
+    ) == PermissionDecision.ASK
+
 
 async def test_agent_identity_session_grant_matches_exact_user(tmp_path) -> None:
     session = _session(user_id=uuid4())

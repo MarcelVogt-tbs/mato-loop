@@ -25,8 +25,11 @@
           <div class="text-body2">{{ memory.content }}</div>
           <div class="row items-center q-gutter-xs q-mt-sm">
             <q-chip dense square>{{ memoryCategoryLabel(memory.category) }}</q-chip>
-            <q-chip dense square :icon="memory.trustLevel === 'private' ? 'lock' : 'public'">
-              {{ memory.trustLevel === 'private' ? 'Privat' : 'Öffentlich' }}
+            <q-chip dense square :icon="memoryAudienceIcon(memory.audience)">
+              {{ memoryAudienceLabel(memory.audience) }}
+            </q-chip>
+            <q-chip v-if="memory.pinKind" dense square icon="badge">
+              Kernidentität: {{ memoryPinKindLabel(memory.pinKind) }}
             </q-chip>
             <q-chip dense square :icon="memory.pinned ? 'push_pin' : 'bookmark_border'">
               {{ memory.pinned ? 'Immer berücksichtigen' : 'Bei Bedarf berücksichtigen' }}
@@ -39,8 +42,11 @@
             <div class="text-body2">{{ memoryPayload.after.content }}</div>
             <div class="row items-center q-gutter-xs q-mt-sm">
               <q-chip dense square>{{ memoryCategoryLabel(memoryPayload.after.category) }}</q-chip>
-              <q-chip dense square :icon="memoryPayload.after.trustLevel === 'private' ? 'lock' : 'public'">
-                {{ memoryPayload.after.trustLevel === 'private' ? 'Privat' : 'Öffentlich' }}
+              <q-chip dense square :icon="memoryAudienceIcon(memoryPayload.after.audience)">
+                {{ memoryAudienceLabel(memoryPayload.after.audience) }}
+              </q-chip>
+              <q-chip v-if="memoryPayload.after.pinKind || memoryPayload.pinKind" dense square icon="badge">
+                Kernidentität: {{ memoryPinKindLabel(memoryPayload.after.pinKind || memoryPayload.pinKind) }}
               </q-chip>
               <q-chip dense square :icon="memoryPayload.after.pinned ? 'push_pin' : 'bookmark_border'">
                 {{ memoryPayload.after.pinned ? 'Immer berücksichtigen' : 'Bei Bedarf berücksichtigen' }}
@@ -52,6 +58,9 @@
           <template #avatar><q-icon name="push_pin" color="primary" /></template>
           Die Erinnerung soll künftig
           {{ memoryPayload.requestedPin ? 'immer' : 'nur bei Bedarf' }} berücksichtigt werden.
+          <template v-if="memoryPayload.pinKind">
+            Sie wird als „{{ memoryPinKindLabel(memoryPayload.pinKind) }}“ Teil der Kernidentität.
+          </template>
         </q-banner>
       </template>
       <template v-else>
@@ -339,6 +348,28 @@ function memoryCategoryLabel(value) {
     identity: 'Identität',
     preference: 'Präferenz'
   })[value] || value || 'Ohne Kategorie'
+}
+
+function memoryAudienceLabel(value) {
+  return ({
+    private_only: 'Nur private Modelle',
+    public_only: 'Nur öffentliche Modelle',
+    both: 'Öffentliche und private Modelle'
+  })[value] || value || 'Ohne Modellzugriff'
+}
+
+function memoryAudienceIcon(value) {
+  return ({ private_only: 'lock', public_only: 'public', both: 'groups' })[value] || 'help_outline'
+}
+
+function memoryPinKindLabel(value) {
+  return ({
+    preferred_name: 'Bevorzugter Name',
+    form_of_address: 'Anrede',
+    pronouns: 'Pronomen',
+    primary_language: 'Hauptsprache',
+    primary_residence: 'Hauptwohnsitz'
+  })[value] || value
 }
 
 async function decide(decision) {

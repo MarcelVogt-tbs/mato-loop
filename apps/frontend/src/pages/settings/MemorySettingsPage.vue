@@ -45,7 +45,7 @@
             <div class="col">
               <div class="text-subtitle1 text-weight-medium">Memory-Zugriff</div>
               <div class="text-body2 app-muted">
-                Alle Erinnerungen bleiben gespeichert. „Immer berücksichtigen“ nimmt eine Erinnerung in jede Anfrage auf.
+                Alle Erinnerungen bleiben gespeichert. Angeheftete Erinnerungen und die Kernidentität werden in jeder Anfrage berücksichtigt.
               </div>
             </div>
             <q-toggle
@@ -100,14 +100,14 @@
                 @update:model-value="applyFilters"
               />
               <q-select
-                v-model="filters.trustLevel"
+                v-model="filters.audience"
                 outlined
                 dense
                 clearable
                 emit-value
                 map-options
-                label="Vertrauen"
-                :options="trustLevelOptions"
+                label="Verfügbar für"
+                :options="audienceOptions"
                 @update:model-value="applyFilters"
               />
               <q-select
@@ -175,11 +175,14 @@
                   <q-chip
                     dense
                     square
-                    :color="item.trustLevel === 'private' ? 'deep-purple' : 'grey-7'"
+                    :color="audienceMeta(item.audience).color"
                     text-color="white"
-                    :icon="item.trustLevel === 'private' ? 'lock' : 'public'"
+                    :icon="audienceMeta(item.audience).icon"
                   >
-                    {{ trustLevelLabel(item.trustLevel) }}
+                    {{ audienceMeta(item.audience).label }}
+                  </q-chip>
+                  <q-chip v-if="item.pinKind" dense square icon="badge">
+                    Kernidentität: {{ pinKindLabel(item.pinKind) }}
                   </q-chip>
                   <q-badge
                     outline
@@ -441,7 +444,7 @@
             <div class="col">
               <div class="text-h6">{{ editingMemory ? 'Erinnerung bearbeiten' : 'Erinnerung hinzufügen' }}</div>
               <div class="text-body2 app-muted">
-                Inhalt, Kategorie{{ editingMemory ? ', Berücksichtigung' : '' }} und Vertrauen festlegen.
+                Inhalt, Kategorie, Modellzugriff und optional Kernidentität festlegen.
               </div>
             </div>
             <q-btn flat round dense icon="close" aria-label="Dialog schließen" :disable="savingMemory" v-close-popup />
@@ -470,14 +473,36 @@
                 lazy-rules
                 :rules="[requiredRule]"
               />
-              <q-select v-model="memoryForm.trustLevel" outlined emit-value map-options label="Vertrauen" :options="trustLevelOptions" />
+              <q-select
+                v-model="memoryForm.audience"
+                outlined
+                emit-value
+                map-options
+                label="Verfügbar für"
+                hint="Legt fest, welche Modellarten diese Erinnerung verwenden dürfen."
+                :options="audienceOptions"
+              />
             </div>
+            <q-select
+              v-if="memoryForm.category === 'identity'"
+              :model-value="memoryForm.pinKind"
+              outlined
+              clearable
+              emit-value
+              map-options
+              label="Kernidentität (optional)"
+              hint="Wird immer berücksichtigt. Verwende jede Art nur für den passenden Identitätswert."
+              :options="pinKindOptions"
+              class="q-mt-md"
+              @update:model-value="setPinKind"
+            />
             <q-toggle
               v-if="editingMemory"
-              v-model="memoryForm.pinned"
+              :model-value="memoryForm.pinned"
               color="primary"
               label="Immer berücksichtigen"
               class="q-mt-md"
+              @update:model-value="setPinned"
             />
             <div v-if="editingMemory" class="text-caption app-muted">
               Ausgeschaltet bleibt die Erinnerung gespeichert und wird bei Bedarf berücksichtigt.
@@ -529,8 +554,8 @@ const settingsLoaded = ref(false)
 const savedSettings = ref(null)
 const dreamSessionId = ref(null)
 const advancedSettingsOpen = ref(false)
-const filters = reactive({ query: '', category: null, sourceType: null, trustLevel: null, pinned: null })
-const memoryForm = reactive({ content: '', category: null, trustLevel: 'public', pinned: false })
+const filters = reactive({ query: '', category: null, sourceType: null, audience: null, pinned: null })
+const memoryForm = reactive({ content: '', category: null, audience: 'both', pinned: false, pinKind: null })
 const settingsForm = reactive({
   enabled: false,
   automaticDreamingEnabled: false,
@@ -552,9 +577,17 @@ const sourceTypeOptions = [
   { label: 'Dreaming', value: 'dreaming' },
   { label: 'Manuell', value: 'manual' }
 ]
-const trustLevelOptions = [
-  { label: 'Öffentlich', value: 'public' },
-  { label: 'Privat', value: 'private' }
+const audienceOptions = [
+  { label: 'Nur private Modelle', value: 'private_only', icon: 'lock', color: 'deep-purple' },
+  { label: 'Nur öffentliche Modelle', value: 'public_only', icon: 'public', color: 'blue-grey-7' },
+  { label: 'Öffentliche und private Modelle', value: 'both', icon: 'groups', color: 'primary' }
+]
+const pinKindOptions = [
+  { label: 'Bevorzugter Name', value: 'preferred_name' },
+  { label: 'Anrede', value: 'form_of_address' },
+  { label: 'Pronomen', value: 'pronouns' },
+  { label: 'Hauptsprache', value: 'primary_language' },
+  { label: 'Hauptwohnsitz', value: 'primary_residence' }
 ]
 const pinnedOptions = [
   { label: 'Immer berücksichtigen', value: true },
@@ -581,7 +614,7 @@ const sourceTypeMeta = {
 }
 
 const filtersActive = computed(() => (
-  Boolean(filters.query || filters.category || filters.sourceType || filters.trustLevel)
+  Boolean(filters.query || filters.category || filters.sourceType || filters.audience)
   || filters.pinned != null
 ))
 const pageCount = computed(() => Math.max(1, Math.ceil(memories.total / pageSize.value)))
@@ -644,7 +677,7 @@ function applyFilters() {
 }
 
 function resetFilters() {
-  Object.assign(filters, { query: '', category: null, sourceType: null, trustLevel: null, pinned: null })
+  Object.assign(filters, { query: '', category: null, sourceType: null, audience: null, pinned: null })
   applyFilters()
 }
 
@@ -664,7 +697,9 @@ function changePageSize() {
 
 function openCreateDialog() {
   editingMemory.value = null
-  Object.assign(memoryForm, { content: '', category: null, trustLevel: 'public', pinned: false })
+  Object.assign(memoryForm, {
+    content: '', category: null, audience: 'both', pinned: false, pinKind: null
+  })
   memoryDialogOpen.value = true
 }
 
@@ -673,19 +708,23 @@ function openEditDialog(item) {
   Object.assign(memoryForm, {
     content: item.content,
     category: item.category,
-    trustLevel: item.trustLevel,
-    pinned: item.pinned
+    audience: item.audience,
+    pinned: item.pinned,
+    pinKind: item.pinKind
   })
   memoryDialogOpen.value = true
 }
 
 async function saveMemory() {
   if (!await memoryFormRef.value?.validate()) return
-  if (editingMemory.value?.trustLevel === 'private' && memoryForm.trustLevel === 'public') {
+  if (
+    editingMemory.value?.audience === 'private_only'
+    && memoryForm.audience !== 'private_only'
+  ) {
     const accepted = await confirm(
-      'Die Erinnerung wird danach auch für öffentliche Sessions und Modelle verfügbar. Wirklich veröffentlichen?',
-      'Privatsphäre herabstufen',
-      { okLabel: 'Veröffentlichen', okColor: 'warning' }
+      'Die Erinnerung wird danach auch für öffentliche Modelle verfügbar. Bereits übermittelte Inhalte lassen sich nicht zurückholen. Wirklich freigeben?',
+      'Für öffentliche Modelle freigeben',
+      { okLabel: 'Freigeben', okColor: 'warning' }
     )
     if (!accepted) return
   }
@@ -707,7 +746,8 @@ async function saveMemory() {
     const payload = {
       content: memoryForm.content.trim(),
       category: memoryForm.category,
-      trustLevel: memoryForm.trustLevel
+      audience: memoryForm.audience,
+      pinKind: memoryForm.pinKind
     }
     if (editingMemory.value) {
       await memories.updateMemory(editingMemory.value.id, {
@@ -830,8 +870,23 @@ function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
 }
 
-function trustLevelLabel(value) {
-  return value === 'private' ? 'Privat' : 'Öffentlich'
+function setPinKind(value) {
+  memoryForm.pinKind = value
+  if (value) memoryForm.pinned = true
+}
+
+function setPinned(value) {
+  memoryForm.pinned = value
+  if (!value) memoryForm.pinKind = null
+}
+
+function audienceMeta(value) {
+  return audienceOptions.find((item) => item.value === value)
+    || { label: value || 'Unbekannt', icon: 'help_outline', color: 'grey-7' }
+}
+
+function pinKindLabel(value) {
+  return pinKindOptions.find((item) => item.value === value)?.label || value || 'Unbekannt'
 }
 
 function pinnedLabel(pinned) {
@@ -881,6 +936,10 @@ watch(section, (value, previous) => {
     page.value = 1
     void loadMemories(0)
   }
+})
+
+watch(() => memoryForm.category, (value) => {
+  if (value !== 'identity') memoryForm.pinKind = null
 })
 
 onMounted(() => {

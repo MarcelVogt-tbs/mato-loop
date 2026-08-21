@@ -30,9 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from mato_loop_backend.agent.context import (
-    _public_tool_result,
+    _inferred_tool_name,
     _sanitize_tool_result_reference_fields,
     _shorten_evidence_output,
+    _target_tool_result,
     _tool_names_by_message_id,
     _tool_result_reference,
 )
@@ -117,7 +118,11 @@ from mato_loop_backend.integrations.registry import (
     integration_adapter,
 )
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
-from mato_loop_backend.memory.service import MemoryService, memory_reference_timestamps
+from mato_loop_backend.memory.service import (
+    MemoryService,
+    memory_reference_timestamps,
+    memory_visible_to,
+)
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
@@ -1634,11 +1639,12 @@ class SessionBrowseArguments(ToolArguments):
 
 
 class MemoryWriteArguments(ToolArguments):
-    action: Literal["create", "update"]
+    action: Literal["create", "update", "forget"]
     memory_id: UUID | None = None
     expected_revision: int | None = Field(default=None, ge=1)
-    content: str = Field(min_length=1, max_length=20_000)
-    category: MemoryCategory = Field(
+    content: str | None = Field(default=None, min_length=1, max_length=20_000)
+    category: MemoryCategory | None = Field(
+        default=None,
         description=(
             "Use exactly one of context, fact, goal, identity, or preference. "
             "Names and personal identity use identity; occupations use fact."
@@ -1647,7 +1653,9 @@ class MemoryWriteArguments(ToolArguments):
 
     @field_validator("content")
     @classmethod
-    def content_must_not_be_blank(cls, value: str) -> str:
+    def content_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("content must not be blank")
@@ -1655,13 +1663,20 @@ class MemoryWriteArguments(ToolArguments):
 
     @model_validator(mode="after")
     def memory_id_matches_action(self) -> MemoryWriteArguments:
-        if self.action == "update" and self.memory_id is None:
-            raise ValueError("memory_id is required for updates")
-        if self.action == "update" and self.expected_revision is None:
-            raise ValueError("expected_revision is required for updates")
+        if self.action in {"update", "forget"} and self.memory_id is None:
+            raise ValueError("memory_id is required for updates and forgetting")
+        if self.action in {"update", "forget"} and self.expected_revision is None:
+            raise ValueError("expected_revision is required for updates and forgetting")
         if self.action == "create":
             self.memory_id = None
             self.expected_revision = None
+        if self.action in {"create", "update"} and (
+            self.content is None or self.category is None
+        ):
+            raise ValueError("content and category are required for creates and updates")
+        if self.action == "forget":
+            self.content = None
+            self.category = None
         return self
 
 
@@ -4185,9 +4200,9 @@ def _message_item(
 ) -> tuple[dict[str, Any], int]:
     content_limit = min(SESSION_TOOL_RESULT_CHUNK_CHARACTERS, max(0, remaining))
     content = message.content
-    if target_trust_level == TrustLevel.PUBLIC and message.role == "tool":
-        content = _public_tool_result(
-            tool_names.get(message.id), message.content
+    if message.role == "tool":
+        content = _target_tool_result(
+            tool_names.get(message.id), message.content, target_trust_level
         )
     if message.role == "tool":
         content = _sanitize_tool_result_reference_fields(content)
@@ -4237,9 +4252,8 @@ async def _session_tool_result_read(
     if message is None:
         return ToolResult.error("session.messageNotFound")
 
-    content = message.content
-    if context.memory_trust_level == TrustLevel.PUBLIC:
-        content = _public_tool_result(None, content)
+    tool_name = _inferred_tool_name(message.content)
+    content = _target_tool_result(tool_name, message.content, context.memory_trust_level)
     content = _sanitize_tool_result_reference_fields(content)
     end = min(len(content), arguments.offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
     has_more = end < len(content)
@@ -4252,6 +4266,8 @@ async def _session_tool_result_read(
         "nextOffset": end if has_more else None,
         "contentIsUntrusted": True,
     }
+    if tool_name is not None:
+        payload["toolName"] = tool_name
     if attachments := _attachment_items(message):
         payload["attachments"] = attachments
     return ToolResult.json(payload)
@@ -5125,13 +5141,47 @@ async def _memory_write(
 ) -> ToolResult:
     if context.assistant_message_id is None:
         return ToolResult.error("memory.provenanceUnavailable")
+    if arguments.action == "forget":
+        assert arguments.memory_id is not None
+        assert arguments.expected_revision is not None
+        item = await MemoryService.get(
+            context.db,
+            owner_id=context.session.user_id,
+            memory_id=arguments.memory_id,
+        )
+        if item is None or not memory_visible_to(
+            item.audience, context.memory_trust_level
+        ):
+            return ToolResult.error("memory.notFound")
+        if item.revision != arguments.expected_revision:
+            return ToolResult.error("memory.changed")
     if not await _allow(
         context, memory_write_permission(context.session.id, arguments.action)
     ):
         return ToolResult.error("permission.denied")
+    if arguments.action == "forget":
+        item = await MemoryService.get(
+            context.db,
+            owner_id=context.session.user_id,
+            memory_id=arguments.memory_id,
+            for_update=True,
+        )
+        if item is None or not memory_visible_to(
+            item.audience, context.memory_trust_level
+        ):
+            return ToolResult.error("memory.notFound")
+        if item.revision != arguments.expected_revision:
+            return ToolResult.error("memory.changed")
+        await MemoryService.delete(context.db, item, owner_id=context.session.user_id)
+        return ToolResult.json(
+            {"id": str(item.id), "forgotten": True},
+            metadata={"memoryWriteOutcome": "forgotten"},
+        )
     if arguments.action == "update":
         assert arguments.memory_id is not None
         assert arguments.expected_revision is not None
+        assert arguments.content is not None
+        assert arguments.category is not None
         result = await MemoryService.update_tool(
             context.db,
             owner_id=context.session.user_id,
@@ -5159,6 +5209,8 @@ async def _memory_write(
             {"id": str(result.item.id), "stored": True, "updated": True},
             metadata={"memoryWriteOutcome": "stored"},
         )
+    assert arguments.content is not None
+    assert arguments.category is not None
     result = await MemoryService.create_tool(
         context.db,
         owner_id=context.session.user_id,
@@ -5222,7 +5274,8 @@ async def _memory_retrieve(
                     "revision": item.revision,
                     "category": item.category,
                     "pinned": item.pinned,
-                    "trustLevel": item.trust_level,
+                    "audience": item.audience,
+                    "pinKind": item.pin_kind,
                     **memory_reference_timestamps(item),
                     "sourceSession": (
                         {"id": str(item.source_session.id)}
@@ -5738,8 +5791,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "memory_write",
-            "Create or update one user-supported durable memory. Create without memory_id or "
-            "expected_revision; update only with an injected or retrieved exact ID and revision.",
+            "Create, update, or forget one durable memory only when the latest user message explicitly "
+            "requests that action. Create without memory_id or expected_revision; update or forget only "
+            "with a retrieved exact visible ID and revision.",
             MemoryWriteArguments,
             _memory_write,
             requires_memory=True,

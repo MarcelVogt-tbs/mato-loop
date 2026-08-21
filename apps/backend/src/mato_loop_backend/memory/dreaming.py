@@ -33,21 +33,25 @@ from mato_loop_backend.memory.service import (
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
+    MemoryAudience,
     MemoryCategory,
     MemoryDreamRun,
     MemoryDreamState,
     MemoryDreamStatus,
     MemoryDreamTrigger,
     MemoryMode,
+    MemoryPinKind,
     MemoryRecord,
     Message,
     UserAccount,
 )
 from mato_loop_backend.providers.base import ProviderError, ProviderResult, ToolCall
+from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AiSettings,
     MemorySettings,
+    ReasoningEffort,
     SettingsStore,
     ToolExecutionPolicy,
     TrustLevel,
@@ -146,13 +150,7 @@ class DreamCandidate(BaseModel):
         description="Message UUIDs from the supplied batch that support this memory.",
     )
     pin: bool = False
-    pin_kind: Literal[
-        "preferred_name",
-        "form_of_address",
-        "primary_residence",
-        "pronouns",
-        "primary_language",
-    ] | None = Field(
+    pin_kind: MemoryPinKind | None = Field(
         default=None,
         validation_alias=AliasChoices("pinKind", "pin_kind"),
         serialization_alias="pinKind",
@@ -209,13 +207,7 @@ class DreamReconciliationDecision(BaseModel):
     )
     category: MemoryCategory | None = None
     pin: bool = False
-    pin_kind: Literal[
-        "preferred_name",
-        "form_of_address",
-        "primary_residence",
-        "pronouns",
-        "primary_language",
-    ] | None = Field(
+    pin_kind: MemoryPinKind | None = Field(
         default=None,
         validation_alias=AliasChoices("pinKind", "pin_kind"),
         serialization_alias="pinKind",
@@ -485,6 +477,15 @@ def _merged_candidate_calls(calls: list[ToolCall]) -> DreamCandidates | None:
     return DreamCandidates(candidates=list(merged.values()))
 
 
+def _dreaming_reasoning_effort(model: ModelConfig) -> ReasoningEffort | None:
+    profile = reasoning_profile(model.model_id, model.discovery_metadata)
+    return (
+        ReasoningEffort.NONE
+        if profile is not None and ReasoningEffort.NONE in profile.options
+        else None
+    )
+
+
 async def _extract_candidates(
     db: AsyncSession,
     *,
@@ -519,6 +520,7 @@ async def _extract_candidates(
             tools=[_record_candidates_tool(max_candidates)],
             tool_choice="required",
             max_output_tokens=DREAMING_EXTRACTION_OUTPUT_TOKENS,
+            reasoning_effort=_dreaming_reasoning_effort(model),
         )
         calls = _normalized_calls(result)
         output = _merged_candidate_calls(calls)
@@ -575,9 +577,8 @@ def _reconciliation_tool(candidate_count: int) -> dict[str, Any]:
         "name": "reconcile_memory_candidates",
         "description": (
             f"Return exactly {candidate_count} decisions, one for every candidate index. Use "
-            "all exact fields index, action, memoryIds, memory, category, and pin for every "
-            "decision. Create uses no memoryIds and copies the candidate memory and category. "
-            "Unchanged uses one memoryId and copies that memory and category. Update uses one "
+            "exact fields index, action, memoryIds, and pin for every decision. "
+            "Create uses no memoryIds. Unchanged uses one memoryId. Update uses one "
             "memoryId. Merge uses 2-50 memoryIds. Update and merge use the complete canonical "
             "memory and category. If pin is true, include "
             "pinKind; otherwise omit pinKind."
@@ -635,8 +636,6 @@ def _reconciliation_tool(candidate_count: int) -> dict[str, Any]:
                             "index",
                             "action",
                             "memoryIds",
-                            "memory",
-                            "category",
                             "pin",
                         ],
                     },
@@ -722,6 +721,7 @@ async def _reconcile_candidates(
             tools=[_reconciliation_tool(candidate_count)],
             tool_choice="required",
             max_output_tokens=DREAMING_RECONCILIATION_OUTPUT_TOKENS,
+            reasoning_effort=_dreaming_reasoning_effort(model),
         )
         calls = _normalized_calls(result)
         reconciliation = _merged_reconciliation_calls(calls)
@@ -768,6 +768,8 @@ def _reconciliation_source(
                             "content": item.content,
                             "category": item.category,
                             "pinned": item.pinned,
+                            "audience": item.audience,
+                            "pinKind": item.pin_kind,
                             **memory_reference_timestamps(item),
                         }
                         for item in matches
@@ -1488,11 +1490,15 @@ class DreamingService:
             decision: DreamReconciliationDecision,
             candidate_evidence: list[UUID],
         ) -> None:
-            if not decision.pin or item.pinned:
+            if not decision.pin or item.pin_kind == decision.pin_kind:
                 return
+            assert decision.pin_kind is not None
             if memory.dreaming_pin_policy == ToolExecutionPolicy.AUTO:
                 await MemoryService.auto_pin(
-                    db, item, owner_id=session.user_id
+                    db,
+                    item,
+                    owner_id=session.user_id,
+                    pin_kind=decision.pin_kind,
                 )
             elif memory.dreaming_pin_policy == ToolExecutionPolicy.ASK:
                 await MemoryService.request_dreaming_approval(
@@ -1596,7 +1602,9 @@ class DreamingService:
                     owner_id=session.user_id,
                     memory_ids=decision.memory_ids,
                     expected_revisions={item.id: item.revision for item in targets},
-                    expected_trust={item.id: TrustLevel(item.trust_level) for item in targets},
+                    expected_audience={
+                        item.id: MemoryAudience(item.audience) for item in targets
+                    },
                     content=decision.content,
                     category=decision.category,
                     trust_level=input_trust,

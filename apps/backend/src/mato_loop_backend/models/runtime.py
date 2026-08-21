@@ -26,13 +26,11 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mato_loop_backend.db.base import Base
+from mato_loop_backend.settings.models import TrustLevel
 
 if TYPE_CHECKING:
     from mato_loop_backend.models.automation import AutomationRun
     from mato_loop_backend.models.project import Project
-from mato_loop_backend.settings.models import TrustLevel
-
-
 class WebSearchPolicy(StrEnum):
     REQUIRED = "required"
     AVAILABLE = "available"
@@ -59,6 +57,20 @@ class MemoryCategory(StrEnum):
     GOAL = "goal"
     IDENTITY = "identity"
     PREFERENCE = "preference"
+
+
+class MemoryAudience(StrEnum):
+    PRIVATE_ONLY = "private_only"
+    PUBLIC_ONLY = "public_only"
+    BOTH = "both"
+
+
+class MemoryPinKind(StrEnum):
+    PREFERRED_NAME = "preferred_name"
+    FORM_OF_ADDRESS = "form_of_address"
+    PRONOUNS = "pronouns"
+    PRIMARY_LANGUAGE = "primary_language"
+    PRIMARY_RESIDENCE = "primary_residence"
 
 
 class MemoryMode(StrEnum):
@@ -629,12 +641,22 @@ class MemoryRecord(Base):
             name="source_type_valid",
         ),
         CheckConstraint(
-            "trust_level IN ('public', 'private')",
-            name="trust_level_valid",
+            "audience IN ('private_only', 'public_only', 'both')",
+            name="audience_valid",
         ),
         CheckConstraint(
             "category IN ('context', 'fact', 'goal', 'identity', 'preference')",
             name="category_valid",
+        ),
+        CheckConstraint(
+            "pin_kind IS NULL OR pin_kind IN "
+            "('preferred_name', 'form_of_address', 'pronouns', "
+            "'primary_language', 'primary_residence')",
+            name="pin_kind_valid",
+        ),
+        CheckConstraint(
+            "pin_kind IS NULL OR (category = 'identity' AND pinned)",
+            name="pin_kind_identity_pinned",
         ),
         CheckConstraint("revision >= 1", name="revision_positive"),
         Index("ix_memories_search_vector", "search_vector", postgresql_using="gin"),
@@ -651,6 +673,14 @@ class MemoryRecord(Base):
             "source_tool_call_id",
             unique=True,
             postgresql_where=text("source_type = 'tool_call'"),
+        ),
+        Index(
+            "uq_memories_user_pin_kind_audience",
+            "user_id",
+            "pin_kind",
+            "audience",
+            unique=True,
+            postgresql_where=text("pin_kind IS NOT NULL"),
         ),
     )
 
@@ -677,9 +707,10 @@ class MemoryRecord(Base):
     pinned: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false"), index=True
     )
-    trust_level: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=TrustLevel.PUBLIC.value
+    audience: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=MemoryAudience.BOTH.value
     )
+    pin_kind: Mapped[str | None] = mapped_column(String(40), nullable=True)
     category: Mapped[str] = mapped_column(String(20), nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     content: Mapped[str] = mapped_column(Text, nullable=False)

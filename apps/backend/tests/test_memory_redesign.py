@@ -40,7 +40,7 @@ async def test_pinned_context_filters_visibility_and_set_pinned_preserves_index(
         user_id=owner_id,
         content="Pinned",
         category="fact",
-        trust_level="public",
+        audience="both",
         pinned=False,
         revision=1,
         normalized_content_hash="hash",
@@ -57,12 +57,55 @@ async def test_pinned_context_filters_visibility_and_set_pinned_preserves_index(
     assert records == [memory]
     statement = str(db.scalars.await_args.args[0])
     assert "memories.pinned IS true" in statement
-    assert "memories.trust_level" in statement
+    assert "memories.audience" in statement
     assert "memories.user_id" in statement
 
     await MemoryService.set_pinned(db, memory, owner_id=owner_id, pinned=True)
     assert memory.pinned is True
     assert memory.revision == 2
+
+
+async def test_pinned_context_prefers_audience_specific_identity() -> None:
+    owner_id = uuid4()
+    shared = MemoryRecord(
+        id=uuid4(),
+        user_id=owner_id,
+        content="Shared name",
+        category="identity",
+        audience="both",
+        pinned=True,
+        pin_kind="preferred_name",
+        normalized_content_hash="shared",
+    )
+    private = MemoryRecord(
+        id=uuid4(),
+        user_id=owner_id,
+        content="Private name",
+        category="identity",
+        audience="private_only",
+        pinned=True,
+        pin_kind="preferred_name",
+        normalized_content_hash="private",
+    )
+    fact = MemoryRecord(
+        id=uuid4(),
+        user_id=owner_id,
+        content="Pinned fact",
+        category="fact",
+        audience="both",
+        pinned=True,
+        normalized_content_hash="fact",
+    )
+    scalar_result = Mock()
+    scalar_result.all.return_value = [shared, private, fact]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = scalar_result
+
+    records = await MemoryService.pinned_context(
+        db, owner_id=owner_id, input_trust_level=TrustLevel.PRIVATE
+    )
+
+    assert records == [private, fact]
 
 
 def _candidate(session_id, message_id, chunk_id, created_at) -> _Candidate:

@@ -36,7 +36,7 @@ describe('memory store', () => {
       query: 'Antworten',
       category: 'preference',
       sourceType: 'manual',
-      trustLevel: 'private',
+      audience: 'private_only',
       pinned: false,
       offset: 20,
       limit: 10
@@ -49,7 +49,7 @@ describe('memory store', () => {
         query: 'Antworten',
         category: 'preference',
         sourceType: 'manual',
-        trustLevel: 'private',
+        audience: 'private_only',
         pinned: false
       }
     })
@@ -61,10 +61,11 @@ describe('memory store', () => {
   it('keeps create host-controlled and includes pinned in an update', async () => {
     const memory = {
       id: 'memory-1',
-      content: 'Nur lokal ausführen',
-      category: 'preference',
-      trustLevel: 'private',
-      pinned: true
+      content: 'Die bevorzugte Sprache ist Deutsch',
+      category: 'identity',
+      audience: 'private_only',
+      pinned: true,
+      pinKind: 'primary_language'
     }
     api.post.mockResolvedValue({ data: memory })
     api.patch.mockResolvedValue({ data: memory })
@@ -73,7 +74,8 @@ describe('memory store', () => {
     const contentPayload = {
       content: memory.content,
       category: memory.category,
-      trustLevel: memory.trustLevel
+      audience: memory.audience,
+      pinKind: memory.pinKind
     }
     const suppliedPayload = {
       ...contentPayload,

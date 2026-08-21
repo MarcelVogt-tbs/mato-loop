@@ -70,7 +70,6 @@ from mato_loop_backend.attachments import (
     AttachmentService,
     image_mime_type,
 )
-from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import ErrorDescriptor, describe_error, error_payload
 from mato_loop_backend.events import run_events
@@ -90,7 +89,6 @@ from mato_loop_backend.integrations import (
     search_available,
 )
 from mato_loop_backend.memory import policy as memory_policy
-from mato_loop_backend.memory.embeddings import EmbeddingError, embedding_client
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
 from mato_loop_backend.memory.episode_retrieval import (
     EpisodeReference,
@@ -224,12 +222,15 @@ REQUIRED_OPENSCAD_RENDER_RETRIES = 2
 REQUIRED_OPENSCAD_SOURCE_REVIEW_RETRIES = 2
 VIDEO_FRAME_BATCH_IMAGES = 4
 EMPTY_RESPONSE_RETRIES = 1
-MEMORY_WRITE_OUTCOME_PRIORITY = {"denied": 0, "duplicate": 1, "stored": 2}
-AUTOMATIC_MEMORY_MAX_ITEMS = 3
+MEMORY_WRITE_OUTCOME_PRIORITY = {
+    "denied": 0,
+    "duplicate": 1,
+    "stored": 2,
+    "forgotten": 3,
+}
+AUTOMATIC_MEMORY_MAX_ITEMS = 2
 AUTOMATIC_MEMORY_MAX_CHARACTERS = 2_500
-AUTOMATIC_MEMORY_MAX_DISTANCE = 0.21
 AUTOMATIC_EPISODE_MAX_ITEMS = 2
-AUTOMATIC_EPISODE_MAX_DISTANCE = 0.25
 AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS = 320
 AUTOMATIC_CONTEXT_MAX_TOKENS = 1_536
 AUTOMATIC_CONTEXT_BUDGET_RATIO = 0.1
@@ -695,7 +696,7 @@ def _merge_contextual_results[T](
     return selected
 
 
-def _recent_episode_overview_requested(records: list[Message]) -> bool:
+def _episode_reference_request_text(records: list[Message]) -> str:
     current = next(
         (
             item.content.casefold()
@@ -705,12 +706,49 @@ def _recent_episode_overview_requested(records: list[Message]) -> bool:
         "",
     )
     normalized = re.sub(r"\s+", " ", current).strip()
+    if re.search(
+        r"\b(?:translate|übersetze|uebersetze|rewrite|umschreiben|"
+        r"explain the phrase)\b|\bwhat does .{0,40}\bmean\b",
+        normalized,
+    ) or re.search(
+        r"\b(?:do not|don't|dont|ignore|avoid|without|no information from|"
+        r"nicht|keine? informationen? aus)\b.{0,80}\b"
+        r"(?:previous|prior|earlier|vorherigen|früheren|frueheren)\b",
+        normalized,
+    ) or re.search(
+        r"\b(?:previous|prior|earlier|vorherige|frühere|fruehere)\b.{0,80}\b"
+        r"(?:irrelevant|do not|don't|dont|ignore|nicht verwenden|nicht nutzen)\b",
+        normalized,
+    ):
+        return ""
+    return normalized
+
+
+def _recent_episode_overview_requested(records: list[Message]) -> bool:
+    normalized = _episode_reference_request_text(records)
     return bool(
         re.search(
             r"\b(?:was haben wir|worüber haben wir|woran haben wir) (?:zuletzt|in der letzten session|im letzten chat)\b"
             r"|\b(?:letzte|vorherige) session\b"
             r"|\bwhat did we (?:last|previously) discuss\b"
             r"|\b(?:last|previous) (?:session|chat|conversation)\b",
+            normalized,
+        )
+    )
+
+
+def _prior_session_history_requested(records: list[Message]) -> bool:
+    if _recent_episode_overview_requested(records):
+        return True
+    normalized = _episode_reference_request_text(records)
+    return bool(
+        re.search(
+            r"\b(?:im|in dem) (?:vorherigen|früheren|frueheren) (?:chat|session)\b"
+            r"|\bwie wir (?:damals|zuvor|früher|frueher) (?:besprochen|entschieden|vereinbart)\b"
+            r"|\b(?:mach|mache|machen wir) dort weiter,? wo wir aufgehört haben\b"
+            r"|\b(?:in|from) (?:(?:an?|the) )?(?:previous|prior|earlier) (?:chat|session|conversation)\b"
+            r"|\bas we (?:discussed|decided|agreed) (?:earlier|before|previously)\b"
+            r"|\b(?:continue|pick up) (?:from )?where we left off\b",
             normalized,
         )
     )
@@ -902,6 +940,8 @@ def _durable_memory_payload(
             "id": str(item.id),
             "revision": item.revision,
             "category": item.category,
+            "audience": item.audience,
+            "pinKind": item.pin_kind,
             "content": item.content,
             **memory_reference_timestamps(item),
         }
@@ -934,6 +974,8 @@ def _bounded_memory_overview(
                 "revision": item.revision,
                 "category": item.category,
                 "pinned": item.pinned,
+                "audience": item.audience,
+                "pinKind": item.pin_kind,
                 "content": content,
                 **memory_reference_timestamps(item),
                 "sourceSession": (
@@ -1821,10 +1863,14 @@ class AgentRuntime:
                             _bounded_memory_overview(memory_overview_items)
                         )
                         pinned_ids = {item.id for item in pinned_memories}
+                        pinned_identity_kinds = {
+                            item.pin_kind for item in pinned_memories if item.pin_kind
+                        }
                         overview_payload = [
                             item
                             for item in overview_payload
                             if UUID(item["id"]) not in pinned_ids
+                            and item["pinKind"] not in pinned_identity_kinds
                         ]
                         pinned_references = [
                             ("pinned", item) for item in pinned_memories
@@ -1870,24 +1916,9 @@ class AgentRuntime:
                         recent_episodes_requested = _recent_episode_overview_requested(
                             records
                         )
-                        query_embedding = None
-                        contextual_query_embedding = None
-                        semantic_enabled = get_runtime_config().embedding_enabled
-                        if rag_query and semantic_enabled and not recent_episodes_requested:
-                            try:
-                                if contextual_rag_query:
-                                    (
-                                        query_embedding,
-                                        contextual_query_embedding,
-                                    ) = await embedding_client.embed_queries(
-                                        [rag_query, contextual_rag_query]
-                                    )
-                                else:
-                                    query_embedding = await embedding_client.embed_query(
-                                        rag_query
-                                    )
-                            except EmbeddingError:
-                                semantic_enabled = False
+                        prior_session_requested = _prior_session_history_requested(
+                            records
+                        )
                         if rag_query and not recent_episodes_requested:
                             primary_memories = (
                                 await MemoryRetrievalService.retrieve(
@@ -1898,44 +1929,25 @@ class AgentRuntime:
                                     readable_by=model_trust_level,
                                     pinned=False,
                                     limit=AUTOMATIC_MEMORY_MAX_ITEMS,
-                                    query_embedding=query_embedding,
-                                    semantic_enabled=semantic_enabled,
-                                    max_semantic_distance=AUTOMATIC_MEMORY_MAX_DISTANCE,
+                                    semantic_enabled=False,
                                 )
                             ).items
-                            primary_episodes = (
-                                await EpisodeRetrievalService.retrieve(
-                                    db,
-                                    owner_id=chat_session.user_id,
-                                    current_session_id=chat_session.id,
-                                    project_id=chat_session.project_id,
-                                    readable_by=model_trust_level,
-                                    query=rag_query,
-                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
-                                    query_embedding=query_embedding,
-                                    semantic_enabled=semantic_enabled,
-                                    max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
-                                    excerpt_messages=1,
-                                    max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
-                                )
-                            ).references
-                            if sum(item.role == "user" for item in records) == 1:
-                                latest_episode = await EpisodeRetrievalService.recent(
-                                    db,
-                                    owner_id=chat_session.user_id,
-                                    current_session_id=chat_session.id,
-                                    project_id=chat_session.project_id,
-                                    readable_by=model_trust_level,
-                                    limit=1,
-                                    excerpt_messages=1,
-                                    max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
-                                )
-                                primary_episodes = _merge_contextual_results(
-                                    latest_episode.references,
-                                    primary_episodes,
-                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
-                                    identity=lambda item: item.session_id,
-                                )
+                            primary_episodes = []
+                            if prior_session_requested:
+                                primary_episodes = (
+                                    await EpisodeRetrievalService.retrieve(
+                                        db,
+                                        owner_id=chat_session.user_id,
+                                        current_session_id=chat_session.id,
+                                        project_id=chat_session.project_id,
+                                        readable_by=model_trust_level,
+                                        query=rag_query,
+                                        limit=AUTOMATIC_EPISODE_MAX_ITEMS,
+                                        semantic_enabled=False,
+                                        excerpt_messages=1,
+                                        max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
+                                    )
+                                ).references
                             automatic_memories = primary_memories
                             automatic_episodes = primary_episodes
                             if contextual_rag_query:
@@ -1948,27 +1960,25 @@ class AgentRuntime:
                                         readable_by=model_trust_level,
                                         pinned=False,
                                         limit=AUTOMATIC_MEMORY_MAX_ITEMS,
-                                        query_embedding=contextual_query_embedding,
-                                        semantic_enabled=semantic_enabled,
-                                        max_semantic_distance=AUTOMATIC_MEMORY_MAX_DISTANCE,
+                                        semantic_enabled=False,
                                     )
                                 ).items
-                                contextual_episodes = (
-                                    await EpisodeRetrievalService.retrieve(
-                                        db,
-                                        owner_id=chat_session.user_id,
-                                        current_session_id=chat_session.id,
-                                        project_id=chat_session.project_id,
-                                        readable_by=model_trust_level,
-                                        query=contextual_rag_query,
-                                        limit=AUTOMATIC_EPISODE_MAX_ITEMS,
-                                        query_embedding=contextual_query_embedding,
-                                        semantic_enabled=semantic_enabled,
-                                        max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
-                                        excerpt_messages=1,
-                                        max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
-                                    )
-                                ).references
+                                contextual_episodes = []
+                                if prior_session_requested:
+                                    contextual_episodes = (
+                                        await EpisodeRetrievalService.retrieve(
+                                            db,
+                                            owner_id=chat_session.user_id,
+                                            current_session_id=chat_session.id,
+                                            project_id=chat_session.project_id,
+                                            readable_by=model_trust_level,
+                                            query=contextual_rag_query,
+                                            limit=AUTOMATIC_EPISODE_MAX_ITEMS,
+                                            semantic_enabled=False,
+                                            excerpt_messages=1,
+                                            max_excerpt_characters=AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
+                                        )
+                                    ).references
                                 automatic_memories = _merge_contextual_results(
                                     primary_memories,
                                     contextual_memories,
@@ -3918,7 +3928,7 @@ class AgentRuntime:
                         reported_outcome = metadata.get("memoryWriteOutcome")
                         outcome = (
                             reported_outcome
-                            if reported_outcome in {"stored", "duplicate"}
+                            if reported_outcome in {"stored", "forgotten", "duplicate"}
                             else "stored"
                         )
                     if outcome is not None and (
