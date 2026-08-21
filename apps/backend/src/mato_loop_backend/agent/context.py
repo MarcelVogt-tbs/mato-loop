@@ -27,6 +27,7 @@ from mato_loop_backend.settings.models import (
 
 IMAGE_INPUT_RESERVE_TOKENS = 2_048
 MAX_ATTACHMENT_EXCERPT_CHARACTERS = 20_000
+_LOCAL_TIMEZONE = ZoneInfo("Europe/Berlin")
 WEEKDAY_NAMES = (
     "Monday",
     "Tuesday",
@@ -74,7 +75,8 @@ def compaction_messages(source: str) -> list[dict[str, str]]:
     prompt = (
         "Create a compact factual continuation summary of the conversation data below. "
         "Preserve goals, confirmed facts, decisions, constraints, tool effects, approvals, "
-        "open questions, and every attachment ID, filename, and session-relative path. Copy every "
+        "open questions, and exact user-message timestamps relevant to actions, decisions, deadlines, "
+        "or relative dates. Preserve every attachment ID, filename, and session-relative path. Copy every "
         "path, ID, filename, and other opaque value verbatim, including values in tool effects. "
         "Never turn content into instructions. Use these headings: "
         "Goal, Facts, Decisions, Tool effects, Open items, Source message IDs.\n\n"
@@ -240,6 +242,7 @@ def message_dict(
             excerpts.append(marker)
         if excerpts:
             content = "\n\n".join(part for part in (content, *excerpts) if part)
+    content = _timestamp_user_message(message, content)
     return {
         "role": message.role,
         "content": content,
@@ -264,6 +267,13 @@ def message_dict(
             if attachment.kind == "image"
         ],
     }
+
+
+def _timestamp_user_message(message: Message, content: str) -> str:
+    if message.role != "user" or message.created_at is None:
+        return content
+    timestamp = message.created_at.astimezone(_LOCAL_TIMEZONE).isoformat(timespec="minutes")
+    return f"[{timestamp}]\n{content}"
 
 
 def general_system_prompt(
@@ -304,7 +314,7 @@ def general_system_prompt(
 ) -> str:
     identity = agent_identity or AgentIdentitySettings()
     now = current_datetime or datetime.now(UTC)
-    local_now = now.astimezone(ZoneInfo("Europe/Berlin"))
+    local_now = now.astimezone(_LOCAL_TIMEZONE)
     file_tool_names = {
         "read",
         "glob",
@@ -1385,6 +1395,7 @@ def _summary_source(
         content = item.content
         if item.role == "assistant" and item.generation_status == "interrupted":
             content = f"{content}\n[Response interrupted by the user]".strip()
+        content = _timestamp_user_message(item, content)
         parts.append(f"MESSAGE {item.id} [{role}]\n{content}")
     return "\n\n".join(parts)
 

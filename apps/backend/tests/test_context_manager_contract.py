@@ -179,6 +179,22 @@ def test_message_projection_hides_internal_runtime_state() -> None:
     }
 
 
+def test_message_projection_timestamps_only_user_content() -> None:
+    session_id = uuid4()
+    user = _message(session_id, "user", "okay abgeschickt")
+    assistant = _message(session_id, "assistant", "Antwort")
+    tool = _message(session_id, "tool", '{"ok":true}')
+    for message in (user, assistant, tool):
+        message.created_at = datetime(2026, 8, 16, 18, 59, tzinfo=UTC)
+
+    assert message_dict(user)["content"] == (
+        "[2026-08-16T20:59+02:00]\nokay abgeschickt"
+    )
+    assert message_dict(assistant)["content"] == "Antwort"
+    assert message_dict(tool)["content"] == '{"ok":true}'
+    assert user.content == "okay abgeschickt"
+
+
 def test_runtime_error_message_is_excluded_from_model_projection() -> None:
     session_id = uuid4()
     user = _message(session_id, "user", "Weiterarbeiten")
@@ -968,6 +984,23 @@ def test_summary_source_keeps_chat_text_without_attachment_metadata() -> None:
     assert user.content in source
     assert str(attachment.id) not in source
     assert attachment.storage_path not in source
+
+
+def test_summary_source_and_prompt_preserve_relevant_user_timestamp() -> None:
+    session_id = uuid4()
+    user = _message(session_id, "user", "okay abgeschickt")
+    user.created_at = datetime(2026, 8, 16, 18, 59, tzinfo=UTC)
+    assistant = _message(session_id, "assistant", "Verstanden")
+    assistant.created_at = datetime(2026, 8, 16, 19, 0, tzinfo=UTC)
+
+    source = _summary_source(None, [user, assistant])
+    timestamp = "[2026-08-16T20:59+02:00]"
+    prompt = compaction_messages(source)[1]["content"]
+
+    assert source.count(timestamp) == 1
+    assert "[2026-08-16T21:00+02:00]" not in source
+    assert timestamp in prompt
+    assert "exact user-message timestamps relevant to actions" in prompt
 
 
 def test_available_web_research_prompt_balances_freshness_and_search_cost() -> None:
