@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useChatStore } from 'src/stores/chat'
+import { notifyError } from 'src/utils/notifications'
 
 function identityFrom(data, authenticated = data.authenticated) {
   return {
@@ -28,13 +29,20 @@ export const useAuthStore = defineStore('auth', {
     isAdmin: false
   }),
   actions: {
-    clearIdentityState() {
+    async clearIdentityState() {
       const chat = useChatStore()
-      chat.clearAllDrafts()
-      chat.setDraftOwner(null)
-      useAgentIdentityStore().resetIdentity()
+      try {
+        await chat.clearAllDrafts()
+        return true
+      } catch {
+        notifyError({}, 'Vorgemerkte Nachrichten konnten nicht sicher gelöscht werden.')
+        return false
+      } finally {
+        chat.setDraftOwner(null)
+        useAgentIdentityStore().resetIdentity()
+      }
     },
-    applyIdentity(data, authenticated = data.authenticated) {
+    async applyIdentity(data, authenticated = data.authenticated) {
       const previous = {
         authenticated: this.authenticated,
         userId: this.userId,
@@ -45,10 +53,11 @@ export const useAuthStore = defineStore('auth', {
       const accountChanged = previous.authenticated && (
         !next.authenticated || previous.userId !== next.userId
       )
-      if (accountChanged) this.clearIdentityState()
+      const clearing = accountChanged ? this.clearIdentityState() : null
       Object.assign(this, next)
       useChatStore().setDraftOwner(next.authenticated ? next.userId : null)
       if (accountChanged) {
+        await clearing
         hardReload(next.authenticated ? null : '/login')
       } else if (previous.authenticated && previous.isAdmin !== next.isAdmin) {
         hardReload()
@@ -59,39 +68,40 @@ export const useAuthStore = defineStore('auth', {
       const { data } = await api.get('/auth/status')
       this.statusLoaded = true
       this.setupRequired = data.setupRequired ?? data.setup_required
-      this.applyIdentity(data)
+      await this.applyIdentity(data)
       return data
     },
     async fetchMe(config = null) {
       const { data } = await api.get('/auth/me', config || undefined)
-      this.applyIdentity(data, true)
+      await this.applyIdentity(data, true)
       return data
     },
-    invalidateSession() {
-      this.clearIdentityState()
+    async invalidateSession() {
+      const clearing = this.clearIdentityState()
       this.authenticated = false
       this.userId = null
       this.username = null
       this.isAdmin = false
+      await clearing
       hardReload('/login')
     },
     async setup(credentials) {
       const { data } = await api.post('/auth/setup', credentials)
       this.setupRequired = false
-      this.applyIdentity(data, true)
+      await this.applyIdentity(data, true)
     },
     async login(credentials) {
       const { data } = await api.post('/auth/login', credentials)
-      this.applyIdentity(data, true)
+      await this.applyIdentity(data, true)
     },
     async changePassword(payload) {
       await api.put('/users/me/password', payload)
-      this.clearIdentityState()
+      await this.clearIdentityState()
       hardReload('/login')
     },
     async logout() {
       await api.post('/auth/logout')
-      this.clearIdentityState()
+      await this.clearIdentityState()
       this.authenticated = false
       this.userId = null
       this.username = null

@@ -24,6 +24,10 @@ Local username and password authentication is currently the only implemented pro
 
 Sessions own messages, runs, approvals, grants, notifications, and session storage. Memories, credentials, personal settings, and Execution Agent records carry the same user boundary. Agent filesystem roots remain externally owned by those agents. Owner checks apply in services and queries before trust or retrieval filtering. Instance-scoped providers, models, integrations, integration resources, and tool policies are deliberately shared configuration and are not another user's personal content.
 
+## Chat Submission Boundary
+
+The browser keeps unsent chat submissions and their attachments in an owner-scoped IndexedDB outbox and drains each session in FIFO order when no run, approval, question, or conflicting mutation blocks it. Every entry has one browser-generated UUID that is reused as its requested `AgentRun` ID. Session creation and message endpoints return the canonical persisted session, input message, and run when that owned UUID already exists; a UUID tied to another owner or session remains a conflict. This makes retries after an unknown HTTP outcome safe without turning persisted run state into a resumable backend execution queue. Failed sends remain paused in the browser until the user retries, and logout or account replacement clears the previous owner's outbox before reloading.
+
 ## Configuration Boundaries
 
 Bootstrap and infrastructure values come from environment variables. Operational settings are stored as typed Pydantic documents in the PostgreSQL `settings` table.

@@ -284,6 +284,24 @@
         </div>
       </transition>
 
+      <q-banner
+        v-if="chat.outboxLoadFailed"
+        dense
+        rounded
+        class="app-surface-tonal q-mx-md q-mt-sm"
+      >
+        Der lokale Nachrichtenspeicher konnte nicht geladen werden.
+        <template #action>
+          <q-btn flat dense no-caps label="Erneut versuchen" @click="chat.loadQueuedMessages()" />
+        </template>
+      </q-banner>
+      <ChatQueuedMessages
+        :messages="chat.activeQueuedMessages"
+        :paused="chat.queuedSendPaused"
+        :sending-id="chat.queueSendingEntryId"
+        @resume="chat.resumeQueuedSend"
+        @undo="undoQueuedMessage"
+      />
       <QuestionDock
         v-if="activeQuestion"
         :key="activeQuestion.id"
@@ -296,10 +314,15 @@
         ref="composer"
         :session="chat.activeContext"
         :draft="chat.activeDraft"
-        :disabled="chat.historyActionPending || chat.sessionSettingsPending > 0"
+        :disabled="!chat.outboxLoaded
+          || chat.outboxSaving
+          || chat.historyActionPending
+          || chat.sessionSettingsPending > 0
+          || (!chat.current && chat.activeQueuedMessages.length > 0)"
         :running="chat.running"
         :stopping="chat.stopping"
         :pending-count="sessionApprovals.length"
+        :queue-mode="chat.messageQueueActive"
         :attachments="chat.activeAttachmentDraft"
         @add-attachments="addAttachmentFiles"
         @remove-attachment="chat.removeAttachmentFile"
@@ -354,6 +377,7 @@ import ApprovalCard from 'components/ApprovalCard.vue'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
+import ChatQueuedMessages from 'components/ChatQueuedMessages.vue'
 import ControlCenterPanel from 'components/ControlCenterPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
@@ -613,6 +637,30 @@ async function undoMessage(message) {
   }
 }
 
+async function undoQueuedMessage(id) {
+  if (composer.value?.hasAudioActivity?.()) {
+    $q.notify({
+      type: 'info',
+      message: 'Beende oder brich zuerst die laufende Aufnahme beziehungsweise Transkription ab.'
+    })
+    return
+  }
+  const hasDraft = Boolean(
+    chat.activeDraft.trim()
+    || chat.activeAttachmentDraft.length
+    || chat.getAudioDictation(chat.current?.id || null)
+  )
+  if (hasDraft && !await confirm(
+    'Der aktuelle Entwurf, seine Anhänge und ein vorhandenes Diktat werden ersetzt.',
+    'Vorgemerkte Nachricht rückgängig machen?',
+    { okLabel: 'Rückgängig machen' }
+  )) return
+  const restored = await chat.restoreQueuedMessage(id)
+  if (!restored) return
+  await nextTick()
+  composer.value?.focus()
+}
+
 async function retryMessage(message) {
   const accepted = await confirm(
     'Die fehlerhafte Antwort wird entfernt und mit dem ursprünglichen Modell erneut erzeugt. '
@@ -701,17 +749,21 @@ async function send(content) {
   const request = chat.send(content)
   await nextTick()
   scheduleFollowScroll()
-  const result = await request
-  if (result?.created) {
-    if (routeProjectId.value) void projects.fetchAll().catch(() => {})
-    await router.replace({
-      name: 'chat',
-      query: {
-        ...(routeProjectId.value ? { project: routeProjectId.value } : {}),
-        session: result.sessionId
-      }
-    })
+  try {
+    await request
+  } finally {
+    await nextTick()
+    composer.value?.focus()
   }
+}
+
+async function flushQueuedMessage() {
+  if (!chat.queuedSendReady) return
+  followingBottom.value = true
+  const request = chat.drainOutbox()
+  await nextTick()
+  scheduleFollowScroll()
+  await request
 }
 
 function addAttachmentFiles(files, done) {
@@ -870,6 +922,28 @@ watch(
     if (question || running || (!previousQuestion && !wasRunning)) return
     await nextTick()
     composer.value?.focus()
+  }
+)
+watch(
+  () => chat.queuedSendReady,
+  (ready) => {
+    if (ready) void flushQueuedMessage()
+  },
+  { immediate: true }
+)
+watch(
+  () => chat.createdSessionResult,
+  async (result) => {
+    if (!result) return
+    chat.createdSessionResult = null
+    if (routeProjectId.value) void projects.fetchAll().catch(() => {})
+    await router.replace({
+      name: 'chat',
+      query: {
+        ...(routeProjectId.value ? { project: routeProjectId.value } : {}),
+        session: result.sessionId
+      }
+    })
   }
 )
 onMounted(() => {

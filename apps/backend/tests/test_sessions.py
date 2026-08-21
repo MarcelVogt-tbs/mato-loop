@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import AgentRuntime
@@ -404,7 +405,9 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
         "file_view": None,
     }
     assert session.title_generation_status == TitleGenerationStatus.PENDING.value
-    start.assert_awaited_once_with(db, session, "Erste Nachricht")
+    start.assert_awaited_once_with(
+        db, session, "Erste Nachricht", run_id=None, attachments=None
+    )
     assert result["session"]["id"] == str(session.id)
     assert result["session"]["titleGenerationStatus"] == "pending"
     assert result["session"]["webSearchPolicy"] == "available"
@@ -414,6 +417,109 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert result["modelName"] == "Test"
     assert result["message"]["id"] == str(persisted_message.id)
     storage.provision.assert_called_once_with(session.id, None)
+
+
+async def test_first_session_retry_returns_canonical_session_and_attachment() -> None:
+    user = _user()
+    run_id = uuid4()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Erste Session",
+        memory_mode="disabled",
+    )
+    message = Message(
+        id=uuid4(),
+        session_id=session.id,
+        role="user",
+        content="Erste Nachricht",
+    )
+    message.attachments = [
+        MessageAttachment(
+            id=uuid4(),
+            message_id=message.id,
+            position=0,
+            kind="text",
+            mime_type="text/plain",
+            size_bytes=7,
+            sha256="a" * 64,
+            storage_path=f"attachments/{uuid4()}/note.txt",
+            filename="note.txt",
+        )
+    ]
+    run = AgentRun(
+        id=run_id,
+        session_id=session.id,
+        input_message_id=message.id,
+        status="completed",
+        model_name="Test",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [run, message]
+    db.get.return_value = session
+
+    result = await create_session(
+        SessionCreateRequest(content="ignored retry content", run_id=run_id), user, db
+    )
+
+    assert result["session"]["id"] == str(session.id)
+    assert result["runId"] == str(run_id)
+    assert result["message"]["id"] == str(message.id)
+    assert result["message"]["attachments"][0]["filename"] == "note.txt"
+    db.add.assert_not_called()
+
+
+async def test_concurrent_first_session_retry_recovers_winning_run(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    run_id = uuid4()
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="agent")
+    winner = ChatSession(
+        id=uuid4(),
+        user_id=user.id,
+        title="Gewinner",
+        memory_mode="disabled",
+        model_config_id=model.id,
+    )
+    message = Message(
+        id=uuid4(), session_id=winner.id, role="user", content="Nachricht"
+    )
+    run = AgentRun(
+        id=run_id,
+        session_id=winner.id,
+        input_message_id=message.id,
+        status="queued",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [None, run, message]
+    db.get.return_value = winner
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(
+            return_value=AiSettings(
+                providers=[provider], models=[model], default_model_id=model.id
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        AgentRuntime,
+        "start",
+        AsyncMock(side_effect=IntegrityError("insert", {}, Exception("duplicate"))),
+    )
+    storage = MagicMock()
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
+
+    result = await create_session(
+        SessionCreateRequest(content="Nachricht", run_id=run_id), user, db
+    )
+
+    assert result["session"]["id"] == str(winner.id)
+    assert result["runId"] == str(run_id)
+    db.rollback.assert_awaited()
+    storage.remove_session.assert_called_once()
 
 
 async def test_session_defaults_report_effective_memory_state(monkeypatch) -> None:
@@ -1319,9 +1425,98 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
         session.id, SendMessageRequest(content="Aktuelle Frage"), user, db
     )
 
-    start.assert_awaited_once_with(db, session, "Aktuelle Frage")
+    start.assert_awaited_once_with(
+        db, session, "Aktuelle Frage", run_id=None, attachments=None
+    )
     load.assert_awaited_once()
     assert result["runId"] == str(run.id)
+
+
+async def test_existing_session_retry_returns_original_message_before_active_rejection() -> None:
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
+    message = Message(
+        id=uuid4(), session_id=session.id, role="user", content="Original"
+    )
+    run = AgentRun(
+        id=uuid4(),
+        session_id=session.id,
+        input_message_id=message.id,
+        status="running",
+        model_name="Test",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, run, message]
+    db.get.return_value = session
+
+    result = await send_message(
+        session.id,
+        SendMessageRequest(content="retry", run_id=run.id),
+        user,
+        db,
+    )
+
+    assert result["runId"] == str(run.id)
+    assert result["message"]["content"] == "Original"
+    assert len(db.scalar.await_args_list) == 3
+
+
+async def test_existing_session_retry_rejects_owned_run_from_another_session() -> None:
+    user = _user()
+    requested = ChatSession(id=uuid4(), user_id=user.id, title="Requested")
+    run = AgentRun(id=uuid4(), session_id=uuid4(), status="completed")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [requested, run]
+
+    with pytest.raises(ApiError) as exc_info:
+        await send_message(
+            requested.id,
+            SendMessageRequest(content="retry", run_id=run.id),
+            user,
+            db,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "http.conflict"
+    ownership_statement = db.scalar.await_args_list[1].args[0]
+    assert user.id in ownership_statement.compile().params.values()
+
+
+async def test_run_id_collision_with_another_owner_is_a_controlled_conflict(monkeypatch) -> None:
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
+    run_id = uuid4()
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="agent")
+    session.model_config_id = model.id
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, None, None]
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(
+            return_value=AiSettings(
+                providers=[provider], models=[model], default_model_id=model.id
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        AgentRuntime,
+        "start",
+        AsyncMock(side_effect=IntegrityError("insert", {}, Exception("duplicate"))),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await send_message(
+            session.id,
+            SendMessageRequest(content="Nachricht", run_id=run_id),
+            user,
+            db,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "http.conflict"
+    db.rollback.assert_awaited_once()
 
 
 async def test_attachment_only_message_starts_run(monkeypatch) -> None:
@@ -1357,7 +1552,9 @@ async def test_attachment_only_message_starts_run(monkeypatch) -> None:
         attachments=[attachment],
     )
 
-    start.assert_awaited_once_with(db, session, "", attachments=[attachment])
+    start.assert_awaited_once_with(
+        db, session, "", run_id=None, attachments=[attachment]
+    )
     assert result["message"]["content"] == ""
 
 

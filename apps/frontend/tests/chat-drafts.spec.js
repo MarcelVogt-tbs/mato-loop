@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,6 +19,7 @@ import { useControlCenterStore } from '../src/stores/control-center'
 import { controlCenterIntegrationIds } from 'src/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
+import { clearChatOutbox } from '../src/utils/chat-outbox'
 
 const originalURL = globalThis.URL
 
@@ -62,11 +64,14 @@ class EventSourceMock {
 }
 
 describe('chat drafts', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await clearChatOutbox('user-1')
     global.window = { localStorage: createStorage() }
     controlCenterIntegrationIds.add('calendar')
     setActivePinia(createPinia())
-    useChatStore().setDraftOwner('user-1')
+    const chat = useChatStore()
+    chat.setDraftOwner('user-1')
+    await chat.outboxLoadPromise
     vi.clearAllMocks()
     EventSourceMock.instances = []
   })
@@ -538,7 +543,11 @@ describe('chat drafts', () => {
 
     await chat.send('Bitte transkribieren')
 
-    expect(api.post).toHaveBeenCalledWith('/sessions/with-attachments', expect.any(FormData))
+    expect(api.post).toHaveBeenCalledWith(
+      '/sessions/with-attachments',
+      expect.any(FormData),
+      { suppressErrorToast: true }
+    )
     const formData = api.post.mock.calls[0][1]
     expect(JSON.parse(formData.get('payload'))).toMatchObject({ content: 'Bitte transkribieren' })
     expect(formData.getAll('attachments')).toHaveLength(2)
@@ -572,10 +581,14 @@ describe('chat drafts', () => {
 
     expect(api.post).toHaveBeenCalledWith(
       '/sessions/session-1/messages/with-attachments',
-      expect.any(FormData)
+      expect.any(FormData),
+      { suppressErrorToast: true }
     )
     const formData = api.post.mock.calls[0][1]
-    expect(JSON.parse(formData.get('payload'))).toEqual({ content: '' })
+    expect(JSON.parse(formData.get('payload'))).toMatchObject({
+      content: '',
+      run_id: expect.any(String)
+    })
     expect(formData.getAll('attachments')).toHaveLength(1)
     expect(chat.current.messages).toEqual([expect.objectContaining({ content: '' })])
     expect(chat.activeAttachmentDraft).toEqual([])
@@ -589,13 +602,16 @@ describe('chat drafts', () => {
     chat.current = { id: 'session-1', messages: [] }
     chat.addAttachmentFiles([document])
 
-    await expect(chat.send('Bitte prüfen')).rejects.toThrow('offline')
+    await expect(chat.send('Bitte prüfen')).resolves.toBeNull()
 
     expect(api.post).toHaveBeenCalledWith(
       '/sessions/session-1/messages/with-attachments',
-      expect.any(FormData)
+      expect.any(FormData),
+      { suppressErrorToast: true }
     )
-    expect(chat.activeAttachmentDraft).toHaveLength(1)
+    expect(chat.activeAttachmentDraft).toHaveLength(0)
+    expect(chat.activeQueuedMessages).toHaveLength(1)
+    expect(chat.queuedSendPaused).toBe(true)
     expect(chat.current.messages).toEqual([])
   })
 
@@ -640,7 +656,11 @@ describe('chat drafts', () => {
 
     await expect(chat.send('Bitte lesen')).resolves.toMatchObject({ created: true })
 
-    expect(api.post).toHaveBeenCalledWith('/sessions/with-attachments', expect.any(FormData))
+    expect(api.post).toHaveBeenCalledWith(
+      '/sessions/with-attachments',
+      expect.any(FormData),
+      { suppressErrorToast: true }
+    )
     expect(chat.activeAttachmentDraft).toHaveLength(0)
   })
 
@@ -1783,6 +1803,8 @@ describe('chat drafts', () => {
     const sending = chat.send('Bitte stoppen')
     await chat.stop()
     expect(chat.stopping).toBe(true)
+
+    await vi.waitFor(() => expect(resolveCreate).toBeTypeOf('function'))
 
     resolveCreate({
       data: {

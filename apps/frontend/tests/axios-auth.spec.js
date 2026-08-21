@@ -62,7 +62,6 @@ describe('Axios auth recovery', () => {
     const auth = useAuthStore()
     auth.authenticated = true
     auth.userId = 'user-1'
-    const invalidate = vi.spyOn(auth, 'invalidateSession')
     const error = {
       config: {},
       response: { data: { error: { code: 'auth.sessionExpired' } } }
@@ -70,8 +69,8 @@ describe('Axios auth recovery', () => {
 
     await Promise.all([recoverControlledAuth(error), recoverControlledAuth(error)])
 
-    expect(invalidate).toHaveBeenCalledOnce()
     expect(auth.authenticated).toBe(false)
+    expect(window.location.replace).toHaveBeenCalledOnce()
     expect(window.location.replace).toHaveBeenCalledWith('/login')
   })
 })

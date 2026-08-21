@@ -137,11 +137,13 @@ async def test_start_persists_effective_run_policy_snapshot(
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [session, None, True, True]
 
-    run = await AgentRuntime.start(db, session, "Nachricht")
+    requested_run_id = uuid4()
+    run = await AgentRuntime.start(db, session, "Nachricht", run_id=requested_run_id)
 
     message, persisted_run = db.add_all.call_args.args[0]
     assert message.trust_level == expected_trust.value
     assert persisted_run is run
+    assert run.id == requested_run_id
     assert run.model_config_id == model.id
     assert run.model_name == "Anzeigename"
     assert run.trust_level == expected_trust.value

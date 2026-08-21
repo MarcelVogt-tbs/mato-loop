@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getActivePinia } from 'pinia'
 import { boot } from 'quasar/wrappers'
 import { decodeBlobApiError, errorDescriptor } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
@@ -19,14 +20,20 @@ let adminRefresh = null
 
 export async function recoverControlledAuth(error) {
   const code = errorDescriptor(error)?.code
+  const pinia = getActivePinia()
   if (SESSION_INVALIDATION_CODES.has(code)) {
-    sessionInvalidation ||= import('src/stores/auth').then(({ useAuthStore }) => {
-      useAuthStore().invalidateSession()
-    })
-    await sessionInvalidation
+    if (sessionInvalidation?.pinia !== pinia) {
+      const request = import('src/stores/auth')
+        .then(({ useAuthStore }) => useAuthStore(pinia).invalidateSession())
+        .finally(() => {
+        if (sessionInvalidation?.request === request) sessionInvalidation = null
+      })
+      sessionInvalidation = { pinia, request }
+    }
+    await sessionInvalidation.request
   } else if (code === 'auth.adminRequired' && !error.config?.authRefresh) {
     adminRefresh ||= import('src/stores/auth')
-      .then(({ useAuthStore }) => useAuthStore().fetchMe({
+      .then(({ useAuthStore }) => useAuthStore(pinia).fetchMe({
         authRefresh: true,
         suppressErrorToast: true
       }))
