@@ -544,7 +544,7 @@ def default_control_center_state() -> ControlCenterState:
 
 
 class SessionCreateRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=200_000)
+    content: str = Field(max_length=200_000)
     project_id: UUID | None = None
     model_id: UUID | None = None
     reasoning_effort: ReasoningEffort | None = None
@@ -649,7 +649,7 @@ async def _add_directory_grant(
 
 
 class SendMessageRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=200_000)
+    content: str = Field(max_length=200_000)
 
 
 class SessionReadRequest(BaseModel):
@@ -1281,7 +1281,7 @@ async def _create_session(
     attachments: list[AttachmentInput] | None = None,
 ) -> dict:
     content = payload.content.strip()
-    if not content:
+    if not content and not attachments:
         raise ApiError(422, "validation.required", field="content")
     if payload.project_id is not None:
         project = await db.scalar(
@@ -2085,7 +2085,7 @@ async def _send_message(
     if item is None:
         raise ApiError(404, "session.notFound")
     content = payload.content.strip()
-    if not content:
+    if not content and not attachments:
         raise ApiError(422, "validation.required", field="content")
     active = await db.scalar(
         select(AgentRun).where(

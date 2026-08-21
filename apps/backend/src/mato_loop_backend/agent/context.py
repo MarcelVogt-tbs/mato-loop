@@ -216,6 +216,11 @@ def message_dict(
             f"MIME {attachment.mime_type}, path {attachment.storage_path}{derived}{duration}]"
         )
     if include_attachment_markers and attachment_markers:
+        if message.role == "user" and not content.strip():
+            content = (
+                "[The user sent attachments without text. Inspect their contents and focus "
+                "the response on them.]"
+            )
         content = "\n\n".join(
             part for part in (content, "\n".join(attachment_markers)) if part
         )

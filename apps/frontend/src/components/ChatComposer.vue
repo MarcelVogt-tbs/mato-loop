@@ -23,14 +23,6 @@
           class="q-mb-sm"
           @remove="$emit('remove-attachment', $event)"
         />
-        <q-banner
-          v-if="attachments.length && !draft.trim()"
-          dense
-          rounded
-          class="composer-attachment-hint app-surface-tonal q-mb-sm text-caption"
-        >
-          Ergänze einen kurzen Auftrag für die angehängten Dateien.
-        </q-banner>
         <div v-if="recording" class="composer-recording app-surface-tonal q-mb-sm">
           <div class="row items-center q-gutter-sm">
             <q-icon name="fiber_manual_record" color="negative" class="composer-recording__pulse" />
@@ -552,7 +544,7 @@ const sendDisabled = computed(() => (
   || recording.value
   || transcribing.value
   || !modelSupportsTools.value
-  || !props.draft.trim()
+  || (!props.draft.trim() && !props.attachments.length)
 ))
 const agentModeIcon = computed(() => props.session?.workspaceAccess === 'read-write' ? 'edit' : 'visibility')
 const searchAvailable = computed(() => integrations.search.effectiveEnabled)
@@ -647,7 +639,7 @@ async function selectExecutionAgent(value) {
 
 function submit() {
   const content = props.draft.trim()
-  if (!content || sendDisabled.value) return
+  if (sendDisabled.value) return
   emit('send', content)
 }
 

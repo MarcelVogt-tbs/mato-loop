@@ -112,7 +112,7 @@ async def test_direct_transcription_rejects_disabled_policy(monkeypatch) -> None
     transcribe.assert_not_awaited()
 
 
-async def test_session_multipart_routes_forward_classified_attachments(monkeypatch) -> None:
+async def test_session_multipart_routes_forward_attachments_without_text(monkeypatch) -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
     create = AsyncMock(return_value={"created": True})
@@ -122,8 +122,8 @@ async def test_session_multipart_routes_forward_classified_attachments(monkeypat
     monkeypatch.setattr(
         SettingsStore, "load", AsyncMock(return_value=InstanceLimits())
     )
-    create_payload = json.dumps({"content": "Bitte transkribieren"})
-    send_payload = json.dumps({"content": "Noch eine Aufnahme"})
+    create_payload = json.dumps({"content": ""})
+    send_payload = json.dumps({"content": ""})
 
     result = await sessions_route.create_session_with_attachments(
         create_payload, [upload()], user, db
@@ -135,6 +135,8 @@ async def test_session_multipart_routes_forward_classified_attachments(monkeypat
 
     assert result == {"created": True}
     assert sent["modelName"] == "Test"
+    assert create.await_args.args[0].content == ""
+    assert send.await_args.args[1].content == ""
     created_audio = create.await_args.args[3][0]
     sent_audio = send.await_args.args[4][0]
     assert isinstance(created_audio, AttachmentInput)

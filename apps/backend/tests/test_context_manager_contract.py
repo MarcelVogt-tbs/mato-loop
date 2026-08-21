@@ -100,6 +100,19 @@ def test_audio_projection_uses_reference_marker_without_file_data() -> None:
     assert "base64" not in str(projected)
 
 
+def test_attachment_only_message_focuses_the_model_on_its_contents() -> None:
+    message = _message(uuid4(), "user", "")
+    _attach_image(message)
+
+    projected = message_dict(message)
+
+    assert projected["content"].startswith(
+        "[The user sent attachments without text. Inspect their contents and focus "
+        "the response on them.]"
+    )
+    assert "[Session attachment:" in projected["content"]
+
+
 def test_user_attachment_excerpt_is_untrusted_and_strictly_budgeted() -> None:
     message = _message(uuid4(), "user", "Bitte zusammenfassen")
     attachment = MessageAttachment(

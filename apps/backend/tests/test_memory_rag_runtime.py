@@ -12,7 +12,9 @@ from mato_loop_backend.agent.runtime import (
     AgentRuntime,
     _bounded_episode_payload,
     _bounded_memory_overview,
+    _episode_reference_request_text,
     _memory_overview_requested,
+    _memory_rag_queries,
     _merge_contextual_results,
     _prior_session_history_requested,
     _recent_episode_overview_requested,
@@ -175,6 +177,18 @@ def test_prior_session_intent_uses_only_the_latest_explicit_request() -> None:
             )
         ]
     )
+
+
+def test_attachment_only_turn_does_not_reuse_the_previous_memory_query() -> None:
+    session_id = uuid4()
+    records = [
+        Message(session_id=session_id, role="user", content="Vorherige Frage"),
+        Message(session_id=session_id, role="assistant", content="Vorherige Antwort"),
+        Message(session_id=session_id, role="user", content=""),
+    ]
+
+    assert _memory_rag_queries(records) == (None, None)
+    assert _episode_reference_request_text(records) == ""
 
 
 def test_episode_budget_keeps_a_compact_pointer_for_each_session() -> None:

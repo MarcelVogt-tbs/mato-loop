@@ -659,9 +659,9 @@ def _model_for_id(ai_settings: AiSettings, model_id: UUID | None) -> ModelConfig
 
 def _memory_rag_queries(records: list[Message]) -> tuple[str | None, str | None]:
     user_messages = [item.content.strip() for item in records if item.role == "user"]
-    user_messages = [item for item in user_messages if item]
-    if not user_messages:
+    if not user_messages or not user_messages[-1]:
         return None, None
+    user_messages = [item for item in user_messages if item]
     current = user_messages[-1][:2_000]
     contextual = (
         (user_messages[-2][:1_000] + "\nFollow-up: " + current)[:2_000]
@@ -701,7 +701,7 @@ def _episode_reference_request_text(records: list[Message]) -> str:
         (
             item.content.casefold()
             for item in reversed(records)
-            if item.role == "user" and item.content.strip()
+            if item.role == "user"
         ),
         "",
     )

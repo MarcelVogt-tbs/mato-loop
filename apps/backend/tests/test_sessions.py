@@ -32,7 +32,11 @@ from mato_loop_backend.api.routes.sessions import (
     stream_run_events,
     update_session,
 )
-from mato_loop_backend.attachments import AttachmentService, AttachmentStorage
+from mato_loop_backend.attachments import (
+    AttachmentInput,
+    AttachmentService,
+    AttachmentStorage,
+)
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import (
     AgentRun,
@@ -1318,6 +1322,43 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
     start.assert_awaited_once_with(db, session, "Aktuelle Frage")
     load.assert_awaited_once()
     assert result["runId"] == str(run.id)
+
+
+async def test_attachment_only_message_starts_run(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
+    run = AgentRun(id=uuid4(), session_id=session.id, status="queued")
+    user_message = Message(id=uuid4(), session_id=session.id, role="user", content="")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, user_message]
+    start = AsyncMock(return_value=run)
+    monkeypatch.setattr(AgentRuntime, "start", start)
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="agent")
+    session.model_config_id = model.id
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(
+            return_value=AiSettings(
+                providers=[provider], models=[model], default_model_id=model.id
+            )
+        ),
+    )
+    attachment = AttachmentInput(b"Bericht", "text/plain", "bericht.txt")
+
+    result = await sessions_route._send_message(
+        session.id,
+        SendMessageRequest(content="   "),
+        user,
+        db,
+        attachments=[attachment],
+    )
+
+    start.assert_awaited_once_with(db, session, "", attachments=[attachment])
+    assert result["message"]["content"] == ""
 
 
 async def test_session_can_switch_to_public_model(monkeypatch) -> None:

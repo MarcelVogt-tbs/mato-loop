@@ -548,6 +548,39 @@ describe('chat drafts', () => {
     expect(chat.current.messages[0].attachments).toHaveLength(1)
   })
 
+  it('sends attachments without message text', async () => {
+    api.post.mockResolvedValue({
+      data: {
+        message: {
+          id: 'message-document',
+          role: 'user',
+          content: '',
+          attachments: [{ id: 'attachment-document', kind: 'document', mimeType: 'application/pdf' }]
+        },
+        runId: 'run-document'
+      }
+    })
+    const document = new Blob(['PDF'], { type: 'application/pdf' })
+    Object.defineProperty(document, 'name', { value: 'bericht.pdf' })
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    chat.addAttachmentFiles([document])
+
+    await chat.send('')
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/sessions/session-1/messages/with-attachments',
+      expect.any(FormData)
+    )
+    const formData = api.post.mock.calls[0][1]
+    expect(JSON.parse(formData.get('payload'))).toEqual({ content: '' })
+    expect(formData.getAll('attachments')).toHaveLength(1)
+    expect(chat.current.messages).toEqual([expect.objectContaining({ content: '' })])
+    expect(chat.activeAttachmentDraft).toEqual([])
+  })
+
   it('uses the message multipart route and retains a generic file after an API failure', async () => {
     api.post.mockRejectedValue(new Error('offline'))
     const document = new Blob(['PDF'], { type: 'application/pdf' })
