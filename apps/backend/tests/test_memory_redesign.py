@@ -165,3 +165,17 @@ def test_episode_ranking_deduplicates_sessions_and_applies_public_filter() -> No
     )
     assert "messages.trust_level" in public_sql
     assert "messages.trust_level" not in private_sql
+
+    global_sql = " ".join(
+        str(item)
+        for item in _candidate_filters(
+            owner_id=uuid4(),
+            current_session_id=None,
+            project_id=None,
+            readable_by=TrustLevel.PRIVATE,
+            all_projects=True,
+        )
+    )
+    assert "chat_sessions.user_id" in global_sql
+    assert "chat_sessions.id !=" not in global_sql
+    assert "chat_sessions.project_id" not in global_sql

@@ -74,8 +74,13 @@
               :class="[
                 'chat-message',
                 `chat-message--${message.role}`,
-                { 'chat-message--turn-continues': message.continuesAssistantTurn }
+                {
+                  'chat-message--turn-continues': message.continuesAssistantTurn,
+                  'chat-message--search-target': highlightedMessageId === message.id
+                }
               ]"
+              :data-message-id="message.id"
+              tabindex="-1"
             >
             <div v-if="message.role === 'user' || message.showAgentLabel" class="chat-message__label">
               <span>{{ message.role === 'user' ? 'Du' : identity.displayName }}</span>
@@ -452,6 +457,10 @@ const routeSessionId = computed(() => (
 const routeProjectId = computed(() => (
   typeof route.query.project === 'string' ? route.query.project : null
 ))
+const routeMessageId = computed(() => (
+  typeof route.query.message === 'string' ? route.query.message : null
+))
+const highlightedMessageId = ref(null)
 let resizeObserver = null
 let scrollFrame = null
 let scrollTarget = null
@@ -463,6 +472,7 @@ let touchActive = false
 let activityPanelScrollFrame = null
 let virtualScrollRefreshFrame = null
 let virtualScrollRefreshTimer = null
+let searchHighlightTimer = null
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
 const sessionQuestions = computed(() => chat.current ? questions.forSession(chat.current.id) : [])
 const activeQuestion = computed(() => sessionQuestions.value[0] || null)
@@ -698,7 +708,8 @@ async function loadRouteSession() {
     }
   }
   await nextTick()
-  composer.value?.focus()
+  if (routeMessageId.value) await revealRouteMessage()
+  else composer.value?.focus()
 }
 
 async function reconcileRouteProject() {
@@ -714,9 +725,30 @@ async function reconcileRouteProject() {
       session: chat.current.id,
       ...(typeof route.query.controlCenter === 'string'
         ? { controlCenter: route.query.controlCenter }
-        : {})
+        : {}),
+      ...(routeMessageId.value ? { message: routeMessageId.value } : {})
     }
   })
+}
+
+async function revealRouteMessage() {
+  const messageId = routeMessageId.value
+  if (!messageId || chat.current?.id !== routeSessionId.value) return
+  const index = transcript.value.messages.findIndex((message) => message.id === messageId)
+  if (index < 0) return
+  followingBottom.value = false
+  cancelFollowScroll()
+  highlightedMessageId.value = messageId
+  await nextTick()
+  virtualScroll.value?.scrollTo(index, 'center-force')
+  await new Promise((resolve) => window.requestAnimationFrame(resolve))
+  const target = [...document.querySelectorAll('[data-message-id]')]
+    .find((element) => element.dataset.messageId === messageId)
+  target?.focus({ preventScroll: true })
+  clearTimeout(searchHighlightTimer)
+  searchHighlightTimer = window.setTimeout(() => {
+    if (highlightedMessageId.value === messageId) highlightedMessageId.value = null
+  }, 2500)
 }
 
 async function loadBackgroundData() {
@@ -893,6 +925,7 @@ function chatPageStyle(offset, height) {
 
 watch(routeSessionId, () => void loadRouteSession(), { immediate: true })
 watch(routeProjectId, () => void reconcileRouteProject())
+watch(routeMessageId, () => void revealRouteMessage())
 watch(
   () => runPresentation.value.announcement,
   (value) => {
@@ -911,6 +944,10 @@ watch(
   () => chat.current?.id,
   async (sessionId, previousSessionId) => {
     if (!sessionId || sessionId === previousSessionId) return
+    if (routeMessageId.value) {
+      followingBottom.value = false
+      return
+    }
     followingBottom.value = true
     await nextTick()
     scheduleFollowScroll()
@@ -966,6 +1003,7 @@ onBeforeUnmount(() => {
   clearTimeout(runAnnouncementTimer)
   clearTimeout(userScrollTimer)
   clearTimeout(virtualScrollRefreshTimer)
+  clearTimeout(searchHighlightTimer)
   if (activityPanelScrollFrame !== null) window.cancelAnimationFrame(activityPanelScrollFrame)
   if (virtualScrollRefreshFrame !== null) window.cancelAnimationFrame(virtualScrollRefreshFrame)
   cancelFollowScroll()

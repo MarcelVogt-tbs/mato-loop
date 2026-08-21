@@ -38,20 +38,11 @@
             flat
             round
             dense
-            :icon="notifications.unreadCount || attentionCount ? 'notifications' : 'notifications_none'"
-            :aria-label="notificationBellLabel"
-            @click="openControlCenterApp('notifications')"
+            icon="search"
+            aria-label="Suche öffnen"
+            @click="search.openDialog"
           >
-            <q-badge
-              v-if="notificationBadgeCount"
-              floating
-              rounded
-              :color="attentionCount ? 'warning' : 'primary'"
-              :text-color="attentionCount ? 'dark' : 'white'"
-              :label="notificationBadgeLabel"
-              aria-hidden="true"
-            />
-            <q-tooltip>Benachrichtigungen</q-tooltip>
+            <q-tooltip>Sessions und Projekte durchsuchen</q-tooltip>
           </q-btn>
 
           <q-btn
@@ -373,6 +364,11 @@
       @closed="focusUserMenuTrigger"
     />
 
+    <SearchDialog
+      @open-project="openSearchProject"
+      @open-session="openSearchSession"
+    />
+
     <q-dialog v-model="renameDialogOpen">
       <q-card class="session-rename-dialog app-surface">
         <q-form @submit.prevent="renameSession">
@@ -490,6 +486,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import AccountDialog from 'components/AccountDialog.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ControlCenterPanel from 'components/ControlCenterPanel.vue'
+import SearchDialog from 'components/SearchDialog.vue'
 import SidebarSessionList from 'components/SidebarSessionList.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
@@ -499,11 +496,13 @@ import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
+import { useSearchStore } from 'stores/search'
 import { useProjectStore } from 'stores/projects'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import { notifyError } from 'src/utils/notifications'
 import { sessionSidebarStatus } from 'src/utils/session-groups'
+import { searchShortcutAction } from 'src/utils/search-shortcut'
 
 defineOptions({ name: 'MainLayout' })
 
@@ -524,6 +523,7 @@ const approvals = useApprovalStore()
 const automations = useAutomationStore()
 const notifications = useInAppNotificationStore()
 const questions = useQuestionStore()
+const search = useSearchStore()
 const projects = useProjectStore()
 const projectsSectionOpen = ref(true)
 const expandedProjects = reactive({})
@@ -804,12 +804,24 @@ async function openNewSession(projectId = null) {
   await router.push({ name: 'chat', query: chatQuery(null, projectId) })
 }
 
-async function openSession(session) {
+async function openSession(session, messageId = null) {
   if ($q.screen.lt.md) drawerOpen.value = false
   await router.push({
     name: 'chat',
-    query: chatQuery(session.id, session.projectId || null)
+    query: chatQuery(
+      session.id,
+      session.projectId || null,
+      messageId ? { message: messageId } : {}
+    )
   })
+}
+
+async function openSearchProject(project) {
+  await openNewSession(project.id)
+}
+
+async function openSearchSession(session) {
+  await openSession(session, session.messageId)
 }
 
 function closeDrawerOnMobile() {
@@ -830,19 +842,13 @@ function openNavigation() {
   drawerOpen.value = true
 }
 
-async function openControlCenterApp(appId) {
-  if ($q.screen.lt.md) drawerOpen.value = false
-  if (route.name !== 'chat') {
-    await router.push({
-      name: 'chat',
-      query: chatQuery(chat.current?.id, selectedProjectId.value, { controlCenter: appId })
-    })
-    return
-  }
-  try {
-    await controlCenter.openApp(appId)
-  } catch {
-    // The central API interceptor displays the error and restores the previous tabs.
+function handleSearchShortcut(event) {
+  const action = searchShortcutAction(event, search.dialogOpen)
+  if (action === 'app') {
+    event.preventDefault()
+    search.openDialog()
+  } else if (action === 'browser') {
+    search.dialogOpen = false
   }
 }
 
@@ -1012,6 +1018,7 @@ onMounted(async () => {
   window.visualViewport?.addEventListener('resize', updateVisualViewport)
   window.visualViewport?.addEventListener('scroll', updateVisualViewport)
   window.addEventListener('resize', updateVisualViewport)
+  window.addEventListener('keydown', handleSearchShortcut)
   document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
   sessionActivityTimer = window.setInterval(refreshActiveSessions, SESSION_ACTIVITY_REFRESH_MS)
   await Promise.allSettled([
@@ -1028,6 +1035,7 @@ onBeforeUnmount(() => {
   window.visualViewport?.removeEventListener('resize', updateVisualViewport)
   window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
   window.removeEventListener('resize', updateVisualViewport)
+  window.removeEventListener('keydown', handleSearchShortcut)
   document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)
   window.clearInterval(sessionActivityTimer)
   sessionActivityTimer = null

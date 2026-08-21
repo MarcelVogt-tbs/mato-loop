@@ -225,6 +225,20 @@ body.body--dark .app-floating-control--flat {
   overflow-x: hidden;
 }
 
+.chat-message--search-target {
+  border-radius: 8px;
+  outline: 2px solid color-mix(in srgb, var(--q-primary) 72%, transparent);
+  outline-offset: 6px;
+  background: color-mix(in srgb, var(--q-primary) 12%, transparent);
+  transition: background-color 180ms ease, outline-color 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-message--search-target {
+    transition: none;
+  }
+}
+
 .app-file-dialog {
   width: 100%;
   height: 100%;

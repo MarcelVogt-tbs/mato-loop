@@ -48,6 +48,7 @@ class EpisodeReference:
     anchor_role: str
     anchor_content: str
     excerpt: tuple[EpisodeExcerptMessage, ...]
+    project_id: UUID | None = None
     content_is_untrusted: bool = True
 
 
@@ -79,17 +80,20 @@ def _title_trust():
 def _candidate_filters(
     *,
     owner_id: UUID,
-    current_session_id: UUID,
+    current_session_id: UUID | None,
     project_id: UUID | None,
     readable_by: TrustLevel,
+    all_projects: bool = False,
 ) -> list[object]:
     filters = [
         ChatSession.user_id == owner_id,
-        ChatSession.id != current_session_id,
         ChatSession.session_type == "chat",
-        ChatSession.project_id == project_id,
         *_eligible_filters(),
     ]
+    if current_session_id is not None:
+        filters.append(ChatSession.id != current_session_id)
+    if not all_projects:
+        filters.append(ChatSession.project_id == project_id)
     if readable_by == TrustLevel.PUBLIC:
         filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
         filters.append(ChatSession.private_integration_data_used.is_(False))
@@ -201,7 +205,7 @@ class EpisodeRetrievalService:
         db: AsyncSession,
         *,
         owner_id: UUID,
-        current_session_id: UUID,
+        current_session_id: UUID | None,
         project_id: UUID | None = None,
         readable_by: TrustLevel,
         query: str,
@@ -212,6 +216,8 @@ class EpisodeRetrievalService:
         excerpt_messages: int = 6,
         latest_messages: int = 0,
         max_excerpt_characters: int = 6_000,
+        all_projects: bool = False,
+        anchor_only: bool = False,
     ) -> EpisodeRetrieval:
         cleaned_query = query.strip()
         if not cleaned_query:
@@ -229,6 +235,7 @@ class EpisodeRetrievalService:
             current_session_id=current_session_id,
             project_id=project_id,
             readable_by=readable_by,
+            all_projects=all_projects,
         )
         title_trust = _title_trust().label("title_trust")
         tsquery = func.plainto_tsquery(
@@ -342,17 +349,33 @@ class EpisodeRetrievalService:
                 semantic = []
 
         anchors = _rank_candidates(lexical, semantic, limit)
-        references = [
-            await EpisodeRetrievalService._reference(
-                db,
-                candidate,
-                readable_by=readable_by,
-                excerpt_messages=excerpt_messages,
-                latest_messages=latest_messages,
-                max_excerpt_characters=max_excerpt_characters,
-            )
-            for candidate in anchors
-        ]
+        references = (
+            [
+                EpisodeReference(
+                    session_id=candidate.session.id,
+                    session_title=candidate.session.title,
+                    anchor_message_id=candidate.message.id,
+                    anchor_created_at=candidate.message.created_at,
+                    anchor_role=candidate.message.role,
+                    anchor_content=candidate.chunk.content,
+                    excerpt=(),
+                    project_id=candidate.session.project_id,
+                )
+                for candidate in anchors
+            ]
+            if anchor_only
+            else [
+                await EpisodeRetrievalService._reference(
+                    db,
+                    candidate,
+                    readable_by=readable_by,
+                    excerpt_messages=excerpt_messages,
+                    latest_messages=latest_messages,
+                    max_excerpt_characters=max_excerpt_characters,
+                )
+                for candidate in anchors
+            ]
+        )
         return EpisodeRetrieval(
             references=references,
             strategy=(
@@ -487,4 +510,5 @@ class EpisodeRetrievalService:
             anchor_role=anchor.role,
             anchor_content=anchor_content,
             excerpt=excerpt,
+            project_id=session.project_id,
         )
