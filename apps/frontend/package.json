@@ -32,6 +32,7 @@
     "eslint": "8.57.1",
     "eslint-config-prettier": "9.1.0",
     "eslint-plugin-vue": "9.32.0",
+    "fake-indexeddb": "6.2.2",
     "jsdom": "26.1.0",
     "postcss": "8.5.6",
     "prettier": "3.5.3",

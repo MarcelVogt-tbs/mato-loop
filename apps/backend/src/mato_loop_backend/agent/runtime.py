@@ -1123,6 +1123,7 @@ class AgentRuntime:
         chat_session: ChatSession,
         content: str,
         *,
+        run_id: UUID | None = None,
         attachments: list[AttachmentInput] | None = None,
         automation_run: AutomationRun | None = None,
         model_id_override: UUID | None = None,
@@ -1250,6 +1251,7 @@ class AgentRuntime:
             trust_level=trust_level.value,
         )
         run = AgentRun(
+            id=run_id or uuid4(),
             session_id=chat_session.id,
             status="queued",
             model_config_id=model_id,
@@ -1321,6 +1323,7 @@ class AgentRuntime:
             await rollback_and_discard()
             raise
         commit_task = asyncio.get_running_loop().create_task(db.commit())
+        cancelled = False
         try:
             await asyncio.shield(commit_task)
         except asyncio.CancelledError:
@@ -1328,7 +1331,8 @@ class AgentRuntime:
                 await commit_task
             except BaseException:
                 await rollback_and_discard()
-            raise
+                raise
+            cancelled = True
         except BaseException:
             await rollback_and_discard()
             raise
@@ -1345,6 +1349,8 @@ class AgentRuntime:
             )
             cls._title_tasks[title_task] = chat_session.user_id
             title_task.add_done_callback(lambda task: cls._title_tasks.pop(task, None))
+        if cancelled:
+            raise asyncio.CancelledError
         return run
 
     @classmethod

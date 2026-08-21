@@ -11,15 +11,15 @@
           type="textarea"
           rows="1"
           class="chat-composer__input"
-          :placeholder="`Eine Nachricht an ${identity.displayName} senden`"
-          :disable="interactionDisabled"
+          :placeholder="inputPlaceholder"
+          :disable="inputDisabled"
           @update:model-value="$emit('update:draft', $event)"
           @keydown.enter.exact.prevent="submit"
           @paste="handlePaste"
         />
         <ComposerAttachments
           :attachments="attachments"
-          :disabled="interactionDisabled"
+          :disabled="inputDisabled"
           class="q-mb-sm"
           @remove="$emit('remove-attachment', $event)"
         />
@@ -308,7 +308,7 @@
               icon="attach_file"
               type="button"
               aria-label="Dateien anhängen"
-              :disable="interactionDisabled || starting || recording || transcribing"
+              :disable="inputDisabled || starting || recording || transcribing"
               @click="attachmentInput?.click()"
             >
               <q-tooltip>Dateien anhängen</q-tooltip>
@@ -321,7 +321,7 @@
               type="button"
               aria-label="Diktat starten"
               :loading="starting || transcribing"
-              :disable="interactionDisabled || starting || recording || transcribing || !micAvailable"
+              :disable="inputDisabled || starting || recording || transcribing || !micAvailable"
               @click="startDictation"
             >
               <q-tooltip>{{ micUnavailableReason || 'Diktat starten' }}</q-tooltip>
@@ -339,15 +339,19 @@
               @click="$emit('stop')"
             />
             <q-btn
-              v-else
+              v-if="!running || draftHasContent"
               round
               unelevated
-              color="primary"
-              icon="arrow_upward"
-              aria-label="Nachricht senden"
+              :color="queueMode ? 'secondary' : 'primary'"
+              :icon="queueMode ? 'schedule_send' : 'arrow_upward'"
+              :aria-label="queueMode ? 'Nachricht vormerken' : 'Nachricht senden'"
               type="submit"
               :disable="sendDisabled"
-            />
+            >
+              <q-tooltip v-if="queueMode">
+                Wird automatisch gesendet, sobald der Chat bereit ist
+              </q-tooltip>
+            </q-btn>
           </div>
         </div>
 
@@ -383,6 +387,7 @@ const props = defineProps({
   running: Boolean,
   stopping: Boolean,
   pendingCount: { type: Number, default: 0 },
+  queueMode: Boolean,
   attachments: { type: Array, default: () => [] }
 })
 const emit = defineEmits(['add-attachments', 'remove-attachment', 'send', 'stop', 'update', 'update:draft'])
@@ -534,12 +539,16 @@ const memoryModeIcon = computed(() => ({ full: 'memory', read_only: 'visibility'
 const interactionDisabled = computed(() => (
   !props.session || props.disabled || props.running || props.pendingCount > 0
 ))
+const inputDisabled = computed(() => !props.session || props.disabled)
+const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
+const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
 const requiredSearchUnavailable = computed(() => (
   props.session?.webSearchPolicy === 'required'
   && (!searchAvailable.value || !modelSupportsTools.value)
 ))
 const sendDisabled = computed(() => (
-  interactionDisabled.value
+  inputDisabled.value
+  || (props.running && !props.queueMode)
   || starting.value
   || recording.value
   || transcribing.value

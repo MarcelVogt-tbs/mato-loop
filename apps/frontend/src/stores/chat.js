@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { markRaw } from 'vue'
+import { markRaw, toRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
@@ -9,7 +9,16 @@ import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { agentActivityDisplayKey } from 'src/utils/agent-activity'
+import { errorDescriptor } from 'src/utils/api-errors'
 import { safeAttachmentUrl, toolFileActions } from 'src/utils/attachments'
+import {
+  clearChatOutbox,
+  deleteChatOutboxEntry,
+  deleteChatOutboxEntries,
+  loadChatOutbox,
+  saveChatOutboxEntries,
+  saveChatOutboxEntry
+} from 'src/utils/chat-outbox'
 import { notifyError } from 'src/utils/notifications'
 
 const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
@@ -28,6 +37,12 @@ export const MAX_ATTACHMENT_DRAFT_BYTES = 256 * 1024 * 1024
 
 function normalizedMimeType(file) {
   return String(file?.type || '').split(';', 1)[0].trim().toLowerCase()
+}
+
+function releaseAttachmentDrafts(attachments = []) {
+  for (const attachment of attachments) {
+    if (attachment?.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
+  }
 }
 
 function attachmentKind(file) {
@@ -63,11 +78,13 @@ export async function downloadMessageAttachmentFiles(message) {
   }))
 }
 
+const OUTBOX_RETRY_MS = 4000
+
 export function buildAttachmentFormData(payload, attachments) {
   const formData = new FormData()
   formData.append('payload', JSON.stringify(payload))
   for (const attachment of attachments) {
-    formData.append('attachments', attachment.file, attachment.file.name || 'datei')
+    formData.append('attachments', attachment.file, attachment.file.name || attachment.name || 'datei')
   }
   return formData
 }
@@ -132,6 +149,34 @@ function emptyDrafts() {
 
 function sessionScopeKey(projectId) {
   return projectId || 'standalone'
+}
+
+function newSessionQueueKey(projectId) {
+  return `new:${sessionScopeKey(projectId)}`
+}
+
+function queueKeyForEntry(entry) {
+  return entry.sessionId || newSessionQueueKey(entry.projectId)
+}
+
+function newSubmissionId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  const bytes = globalThis.crypto?.getRandomValues?.(new Uint8Array(16))
+  if (!bytes) throw new Error('Secure random UUID generation is unavailable')
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const value = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`
+}
+
+function groupedOutbox(entries) {
+  const grouped = {}
+  for (const entry of entries) {
+    const key = queueKeyForEntry(entry)
+    if (!grouped[key]) grouped[key] = []
+    grouped[key].push(entry)
+  }
+  return grouped
 }
 
 function emptySessionList() {
@@ -319,7 +364,18 @@ export const useChatStore = defineStore('chat', {
       newSession: null,
       newSessions: { standalone: null },
       sessionMessages: {}
-    }
+    },
+    queuedMessages: {},
+    queuedSendPausedSessions: {},
+    outboxLoaded: false,
+    outboxLoadFailed: false,
+    outboxSaving: false,
+    outboxLoadVersion: 0,
+    outboxLoadPromise: null,
+    queueDrainPromise: null,
+    queueDrainTimer: null,
+    queueSendingEntryId: null,
+    createdSessionResult: null
   }),
   getters: {
     activeSessionList: (state) => state.sessionLists[sessionScopeKey(state.sessionsProjectId)]
@@ -355,7 +411,35 @@ export const useChatStore = defineStore('chat', {
       : state.drafts.newSession.message,
     activeAttachmentDraft: (state) => state.current
       ? state.attachmentDrafts.sessionMessages[state.current.id] || []
-      : state.attachmentDrafts.newSession
+      : state.attachmentDrafts.newSession,
+    activeQueueKey: (state) => state.current?.id || newSessionQueueKey(state.sessionsProjectId),
+    activeQueuedMessages() {
+      return this.queuedMessages[this.activeQueueKey] || []
+    },
+    queuedSendPaused() {
+      return Boolean(this.queuedSendPausedSessions[this.activeQueueKey])
+    },
+    messageQueueActive() {
+      if (this.activeQueuedMessages.length) return true
+      if (!this.current) return false
+      if (this.running || this.stopping) return true
+      const sessionId = this.current.id
+      return Boolean(
+        useApprovalStore().forSession(sessionId).length
+        || useQuestionStore().forSession(sessionId).length
+      )
+    },
+    queuedSendReady() {
+      if (!this.outboxLoaded || this.queuedSendPaused) return false
+      if (this.loading || this.sessionRequestController || this.running || this.stopping) return false
+      if (this.historyActionPending || this.sessionSettingsPending > 0) return false
+      if (!this.activeQueuedMessages.length) return false
+      const sessionId = this.current?.id
+      if (!sessionId) return this.selectedSessionId === null
+      if (useApprovalStore().forSession(sessionId).length) return false
+      if (useQuestionStore().forSession(sessionId).length) return false
+      return true
+    }
   },
   actions: {
     ensureSessionList(projectId = null) {
@@ -442,8 +526,15 @@ export const useChatStore = defineStore('chat', {
     setDraftOwner(userId) {
       const ownerUserId = typeof userId === 'string' && userId ? userId : null
       if (ownerUserId === this.draftOwnerUserId) return
+      this.cancelQueueDrain()
       this.clearAllAttachmentDrafts()
       this.draftOwnerUserId = ownerUserId
+      this.queuedMessages = {}
+      this.queuedSendPausedSessions = {}
+      this.outboxLoaded = !ownerUserId
+      this.outboxLoadFailed = false
+      const loadVersion = ++this.outboxLoadVersion
+      this.outboxLoadPromise = null
       this.drafts = loadDrafts(ownerUserId)
       const scope = sessionScopeKey(this.sessionsProjectId)
       if (!this.drafts.newSessions[scope]) {
@@ -454,7 +545,42 @@ export const useChatStore = defineStore('chat', {
       this.attachmentDrafts.newSession = this.attachmentDrafts.newSessions[scope]
       this.audioDictations.newSessions[scope] = null
       this.audioDictations.newSession = this.audioDictations.newSessions[scope]
-      if (ownerUserId) this.persistDrafts()
+      if (ownerUserId) {
+        this.persistDrafts()
+        const request = this.loadQueuedMessages(ownerUserId, loadVersion)
+        this.outboxLoadPromise = markRaw(request)
+        void request.finally(() => {
+          if (this.outboxLoadPromise === request) this.outboxLoadPromise = null
+        })
+      }
+    },
+    async loadQueuedMessages(ownerUserId = this.draftOwnerUserId, loadVersion = this.outboxLoadVersion) {
+      if (ownerUserId === this.draftOwnerUserId && loadVersion === this.outboxLoadVersion) {
+        this.outboxLoaded = false
+        this.outboxLoadFailed = false
+      }
+      try {
+        const entries = await loadChatOutbox(ownerUserId)
+        if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion) return
+        this.queuedMessages = groupedOutbox(entries.map((entry) => ({
+          ...entry,
+          attachments: (entry.attachments || []).map((attachment) => ({
+            ...attachment,
+            file: markRaw(attachment.file)
+          }))
+        })))
+        this.queuedSendPausedSessions = Object.fromEntries(
+          Object.entries(this.queuedMessages)
+            .filter(([, queue]) => queue[0]?.paused)
+            .map(([key]) => [key, true])
+        )
+        this.outboxLoaded = true
+        this.scheduleQueueDrain(0)
+      } catch (error) {
+        if (ownerUserId === this.draftOwnerUserId && loadVersion === this.outboxLoadVersion) {
+          this.outboxLoadFailed = true
+        }
+      }
     },
     async fetchDefaults() {
       this.sessionDefaults = sanitizedSessionOptions({
@@ -539,7 +665,8 @@ export const useChatStore = defineStore('chat', {
       }
       const draftBytes = [
         ...Object.values(this.attachmentDrafts.newSessions).flat(),
-        ...Object.values(this.attachmentDrafts.sessionMessages).flat()
+        ...Object.values(this.attachmentDrafts.sessionMessages).flat(),
+        ...Object.values(this.queuedMessages).flat().flatMap((entry) => entry.attachments)
       ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
       if (draftBytes + incomingBytes > MAX_ATTACHMENT_DRAFT_BYTES) {
         return {
@@ -599,7 +726,16 @@ export const useChatStore = defineStore('chat', {
       this.audioDictations = { newSession: null, newSessions: { standalone: null }, sessionMessages: {} }
     },
     clearAllDrafts() {
+      const ownerUserId = this.draftOwnerUserId
+      this.cancelQueueDrain()
       this.clearAllAttachmentDrafts()
+      releaseAttachmentDrafts(
+        Object.values(this.queuedMessages).flat().flatMap((entry) => entry.attachments)
+      )
+      this.queuedMessages = {}
+      this.queuedSendPausedSessions = {}
+      this.outboxLoaded = !ownerUserId
+      this.outboxLoadVersion += 1
       this.drafts = emptyDrafts()
       const scope = sessionScopeKey(this.sessionsProjectId)
       if (scope !== 'standalone') {
@@ -611,6 +747,7 @@ export const useChatStore = defineStore('chat', {
         this.audioDictations.newSession = null
       }
       if (typeof window !== 'undefined') window.localStorage.removeItem(DRAFT_STORAGE_KEY)
+      return ownerUserId ? clearChatOutbox(ownerUserId) : Promise.resolve()
     },
     attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
       const limits = useInstanceLimitsStore()
@@ -639,7 +776,8 @@ export const useChatStore = defineStore('chat', {
       ]
       const currentBytes = [
         ...Object.values(this.attachmentDrafts.newSessions).flat(),
-        ...Object.values(this.attachmentDrafts.sessionMessages).flat()
+        ...Object.values(this.attachmentDrafts.sessionMessages).flat(),
+        ...Object.values(this.queuedMessages).flat().flatMap((entry) => entry.attachments)
       ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
       const replacedBytes = replaced.reduce(
         (total, attachment) => total + (Number(attachment.file?.size) || 0),
@@ -869,6 +1007,11 @@ export const useChatStore = defineStore('chat', {
       for (const id of Object.keys(this.audioDictations.sessionMessages)) {
         if (!sessionIds.has(id)) delete this.audioDictations.sessionMessages[id]
       }
+      for (const id of Object.keys(this.queuedMessages)) {
+        if (!id.startsWith('new:') && id !== this.current?.id && !sessionIds.has(id)) {
+          void this.clearQueuedMessages(id)
+        }
+      }
       this.persistDrafts()
     },
     async refreshGeneratedTitle(sessionId) {
@@ -896,6 +1039,7 @@ export const useChatStore = defineStore('chat', {
       this.sessionRequestController?.abort()
       this.selectedSessionId = id
       this.sessionLoadVersion += 1
+      this.scheduleQueueDrain(0)
       const loadVersion = this.sessionLoadVersion
       const controller = id ? markRaw(new AbortController()) : null
       this.sessionRequestController = controller
@@ -1102,8 +1246,37 @@ export const useChatStore = defineStore('chat', {
         ...(suppressErrorToast ? { suppressErrorToast: true } : {}),
         ...(automationMode ? { params: { automationMode, automationImpact } } : {})
       }
-      if (Object.keys(config).length) await api.delete(`/sessions/${id}`, config)
-      else await api.delete(`/sessions/${id}`)
+      const queued = [...(this.queuedMessages[id] || [])]
+      const ownerUserId = this.draftOwnerUserId
+      const loadVersion = this.outboxLoadVersion
+      if (queued.length) {
+        try {
+          await deleteChatOutboxEntries(queued.map((entry) => entry.id))
+        } catch (error) {
+          notifyError({}, 'Vorgemerkte Nachrichten konnten nicht gelöscht werden.')
+          throw error
+        }
+      }
+      try {
+        if (Object.keys(config).length) await api.delete(`/sessions/${id}`, config)
+        else await api.delete(`/sessions/${id}`)
+      } catch (error) {
+        if (
+          queued.length
+          && ownerUserId === this.draftOwnerUserId
+          && loadVersion === this.outboxLoadVersion
+        ) {
+          try {
+            await saveChatOutboxEntries(queued.map((entry) => toRaw(entry)))
+          } catch {
+            notifyError({}, 'Vorgemerkte Nachrichten konnten nicht wiederhergestellt werden.')
+          }
+        }
+        throw error
+      }
+      releaseAttachmentDrafts(queued.flatMap((entry) => entry.attachments))
+      delete this.queuedMessages[id]
+      delete this.queuedSendPausedSessions[id]
       this.removeCachedSession(id)
       delete this.drafts.sessionMessages[id]
       this.clearAttachmentDraft(id)
@@ -1245,6 +1418,11 @@ export const useChatStore = defineStore('chat', {
         this.clearAttachmentDraft(session.id)
         this.setAudioDictation(null, session.id)
         if (data.sessionDeleted) {
+          try {
+            await this.clearQueuedMessages(session.id)
+          } catch {
+            notifyError({}, 'Vorgemerkte Nachrichten konnten nicht gelöscht werden.')
+          }
           this.removeCachedSession(session.id)
           if (stillSelected) {
             this.current = null
@@ -1331,11 +1509,270 @@ export const useChatStore = defineStore('chat', {
       }
     },
     async send(content) {
-      if (this.running || this.historyActionPending || this.sessionSettingsPending) return null
+      if (this.outboxSaving || this.historyActionPending || this.sessionSettingsPending) return null
+      this.outboxSaving = true
+      const submitImmediately = !this.running
+        && !this.stopping
+        && !this.activeQueuedMessages.length
+        && !this.queueDrainPromise
+      if (submitImmediately) {
+        this.running = true
+        this.setActivity('submitting', { startedAt: new Date().toISOString() })
+      }
+      if (this.outboxLoadPromise) await this.outboxLoadPromise
+      let entry
+      try {
+        entry = await this.queueMessage(content)
+      } finally {
+        this.outboxSaving = false
+      }
+      if (!entry) {
+        if (submitImmediately) {
+          this.running = false
+          this.stopping = false
+          this.cancelRequested = false
+          this.clearActivity()
+        }
+        return null
+      }
+      if (submitImmediately) {
+        this.running = false
+        return this.submitOutboxEntry(entry)
+      }
+      return this.drainOutbox()
+    },
+    async queueMessage(content) {
+      const ownerUserId = this.draftOwnerUserId
+      const loadVersion = this.outboxLoadVersion
+      if (!ownerUserId) return null
+      const text = String(content || '').trim()
       const attachments = [...this.activeAttachmentDraft]
-      return this.current
-        ? this.sendToCurrent(content, attachments)
-        : this.startSession(content, attachments)
+      if (!text && !attachments.length) return null
+      const sessionId = this.current?.id || null
+      const entry = {
+        id: newSubmissionId(),
+        ownerUserId,
+        sessionId,
+        projectId: this.current?.projectId || this.sessionsProjectId || null,
+        content: text,
+        attachments: attachments.map((attachment) => ({
+          id: attachment.id,
+          file: attachment.file,
+          name: attachment.file.name || 'datei',
+          kind: attachment.kind,
+          mimeType: attachment.mimeType
+        })),
+        options: sessionId ? null : sanitizedSessionOptions({ ...this.drafts.newSession.options }),
+        controlCenter: sessionId ? null : controlCenterRequestState(useControlCenterStore()),
+        queuedAt: new Date().toISOString(),
+        paused: false
+      }
+      try {
+        await saveChatOutboxEntry(toRaw(entry))
+      } catch (error) {
+        notifyError({}, 'Die Nachricht konnte nicht auf diesem Gerät vorgemerkt werden.')
+        return null
+      }
+      if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion) {
+        await deleteChatOutboxEntry(entry.id).catch(() => {})
+        return null
+      }
+      const key = queueKeyForEntry(entry)
+      if (!this.queuedMessages[key]) this.queuedMessages[key] = []
+      this.queuedMessages[key].push(entry)
+      this.clearAttachmentDraft(sessionId)
+      if (sessionId) delete this.drafts.sessionMessages[sessionId]
+      else this.drafts.newSession.message = ''
+      this.persistDrafts()
+      return entry
+    },
+    async removeQueuedMessage(id, key = this.activeQueueKey) {
+      if (id === this.queueSendingEntryId) return null
+      const queue = key ? this.queuedMessages[key] : null
+      const index = queue ? queue.findIndex((entry) => entry.id === id) : -1
+      if (index < 0) return null
+      const entry = queue[index]
+      try {
+        await deleteChatOutboxEntry(entry.id)
+      } catch {
+        notifyError({}, 'Die vorgemerkte Nachricht konnte nicht entfernt werden.')
+        return null
+      }
+      queue.splice(index, 1)
+      releaseAttachmentDrafts(entry.attachments)
+      if (!queue.length) {
+        delete this.queuedMessages[key]
+        delete this.queuedSendPausedSessions[key]
+      } else if (queue[0].paused) {
+        this.queuedSendPausedSessions[key] = true
+      } else {
+        delete this.queuedSendPausedSessions[key]
+      }
+      return entry
+    },
+    async restoreQueuedMessage(id, key = this.activeQueueKey) {
+      const entry = await this.removeQueuedMessage(id, key)
+      if (!entry) return null
+      const sessionId = entry.sessionId || null
+      if (sessionId) this.drafts.sessionMessages[sessionId] = entry.content
+      else this.drafts.newSession.message = entry.content
+      this.replaceAttachmentFiles(entry.attachments.map((attachment) => attachment.file), sessionId)
+      this.setAudioDictation(null, sessionId)
+      this.persistDrafts()
+      return entry
+    },
+    async clearQueuedMessages(key = this.activeQueueKey) {
+      const entries = this.queuedMessages[key] || []
+      if (!entries.length) return
+      await deleteChatOutboxEntries(entries.map((entry) => entry.id))
+      releaseAttachmentDrafts(entries.flatMap((entry) => entry.attachments))
+      delete this.queuedMessages[key]
+      delete this.queuedSendPausedSessions[key]
+    },
+    async resumeQueuedSend(key = this.activeQueueKey) {
+      if (!key) return
+      const entry = this.queuedMessages[key]?.[0]
+      if (entry?.paused) {
+        entry.paused = false
+        try {
+          await saveChatOutboxEntry(toRaw(entry))
+        } catch {
+          entry.paused = true
+          notifyError({}, 'Der Versand konnte nicht wieder aufgenommen werden.')
+          return
+        }
+      }
+      delete this.queuedSendPausedSessions[key]
+      this.scheduleQueueDrain(0)
+    },
+    cancelQueueDrain() {
+      if (this.queueDrainTimer !== null) clearTimeout(this.queueDrainTimer)
+      this.queueDrainTimer = null
+    },
+    scheduleQueueDrain(delay = OUTBOX_RETRY_MS) {
+      if (this.queueDrainTimer !== null) return
+      this.queueDrainTimer = setTimeout(() => {
+        this.queueDrainTimer = null
+        void this.drainOutbox()
+      }, delay)
+    },
+    async drainOutbox() {
+      if (!this.outboxLoaded) return null
+      if (this.queueDrainPromise) return this.queueDrainPromise
+      const request = this.drainNextOutboxEntry()
+      this.queueDrainPromise = markRaw(request)
+      try {
+        return await request
+      } finally {
+        if (this.queueDrainPromise === request) this.queueDrainPromise = null
+        if (
+          this.queuedSendReady
+          || Object.values(this.queuedMessages).some((queue) => (
+            queue[0]?.sessionId && queue[0].sessionId !== this.selectedSessionId
+              && !this.queuedSendPausedSessions[queueKeyForEntry(queue[0])]
+          ))
+        ) this.scheduleQueueDrain(0)
+      }
+    },
+    async drainNextOutboxEntry() {
+      this.cancelQueueDrain()
+      let entry = this.queuedSendReady ? this.activeQueuedMessages[0] : null
+      if (!entry) {
+        const backgroundEntries = Object.values(this.queuedMessages)
+          .filter((queue) => queue[0]?.sessionId && queue[0].sessionId !== this.selectedSessionId)
+          .map((queue) => queue[0])
+          .filter((item) => !this.queuedSendPausedSessions[queueKeyForEntry(item)])
+          .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt))
+        for (const candidate of backgroundEntries) {
+          try {
+            const { data } = await api.get(`/sessions/${candidate.sessionId}`, {
+              suppressErrorToast: true
+            })
+            if (!data.activeRun) {
+              entry = candidate
+              break
+            }
+          } catch (error) {
+            const key = queueKeyForEntry(candidate)
+            candidate.paused = true
+            try {
+              await saveChatOutboxEntry(toRaw(candidate))
+            } catch {
+              notifyError({}, 'Der Pausenstatus konnte nicht gespeichert werden.')
+            }
+            this.queuedSendPausedSessions[key] = true
+            notifyError(error)
+          }
+        }
+      }
+      if (!entry) {
+        if (Object.values(this.queuedMessages).some((queue) => (
+          queue[0]?.sessionId && !this.queuedSendPausedSessions[queueKeyForEntry(queue[0])]
+        ))) this.scheduleQueueDrain()
+        return null
+      }
+      return this.submitOutboxEntry(entry)
+    },
+    async submitOutboxEntry(entry) {
+      const key = queueKeyForEntry(entry)
+      this.queueSendingEntryId = entry.id
+      try {
+        let result
+        if (!entry.sessionId) {
+          result = await this.startSession(entry.content, entry.attachments, {
+            options: entry.options,
+            projectId: entry.projectId,
+            controlCenter: entry.controlCenter,
+            runId: entry.id,
+            suppressErrorToast: true
+          })
+          if (result?.created) this.createdSessionResult = result
+        } else if (this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
+          result = await this.sendToCurrent(entry.content, entry.attachments, {
+            clearDraft: false,
+            runId: entry.id,
+            suppressErrorToast: true
+          })
+        } else {
+          const payload = { content: entry.content, run_id: entry.id }
+          const config = { suppressErrorToast: true }
+          await (entry.attachments.length
+            ? api.post(
+                `/sessions/${entry.sessionId}/messages/with-attachments`,
+                buildAttachmentFormData(payload, entry.attachments),
+                config
+              )
+            : api.post(`/sessions/${entry.sessionId}/messages`, payload, config))
+          void this.refreshSessions(null, entry.projectId).catch(() => {})
+          result = { created: false, sessionId: entry.sessionId }
+        }
+        await deleteChatOutboxEntry(entry.id)
+        const queue = this.queuedMessages[key] || []
+        this.queuedMessages[key] = queue.filter((item) => item.id !== entry.id)
+        if (!this.queuedMessages[key].length) delete this.queuedMessages[key]
+        if (this.queuedMessages[key]?.[0]?.paused) this.queuedSendPausedSessions[key] = true
+        else delete this.queuedSendPausedSessions[key]
+        releaseAttachmentDrafts(entry.attachments)
+        return result
+      } catch (error) {
+        const stillQueued = this.queuedMessages[key]?.some((item) => item.id === entry.id)
+        if (!stillQueued) return null
+        if (errorDescriptor(error)?.code === 'session.runAlreadyActive') {
+          this.scheduleQueueDrain()
+        } else {
+          entry.paused = true
+          try {
+            await saveChatOutboxEntry(toRaw(entry))
+          } catch {
+            notifyError({}, 'Der Pausenstatus konnte nicht gespeichert werden.')
+          }
+          this.queuedSendPausedSessions[key] = true
+          notifyError(error)
+        }
+        return null
+      } finally {
+        if (this.queueSendingEntryId === entry.id) this.queueSendingEntryId = null
+      }
     },
     async stop() {
       if (!this.running || this.stopping) return
@@ -1356,20 +1793,31 @@ export const useChatStore = defineStore('chat', {
         }
       }
     },
-    async startSession(content, attachments = []) {
+    async startSession(
+      content,
+      attachments = [],
+      {
+        options: requestedOptions = null,
+        projectId: requestedProjectId,
+        controlCenter: requestedControlCenter = null,
+        runId = null,
+        suppressErrorToast = false
+      } = {}
+    ) {
       const sessionLoadVersion = this.sessionLoadVersion
       const selectedSessionId = this.selectedSessionId
-      const projectId = this.sessionsProjectId
+      const projectId = requestedProjectId === undefined ? this.sessionsProjectId : requestedProjectId
       this.running = true
       this.streamContent = ''
       this.streamReasoning = null
       this.streamModelName = null
       this.processOutputs = {}
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
-      const options = sanitizedSessionOptions(this.drafts.newSession.options)
+      const options = sanitizedSessionOptions(requestedOptions || this.drafts.newSession.options)
       try {
         const payload = {
           content,
+          ...(runId ? { run_id: runId } : {}),
           project_id: projectId,
           model_id: options.modelId,
           reasoning_effort: options.reasoningEffort,
@@ -1381,11 +1829,12 @@ export const useChatStore = defineStore('chat', {
             ? { working_directory: options.workingDirectory }
             : {}),
           workspace_access: options.workspaceAccess,
-          control_center: controlCenterRequestState(useControlCenterStore())
+          control_center: requestedControlCenter || controlCenterRequestState(useControlCenterStore())
         }
+        const config = suppressErrorToast ? [{ suppressErrorToast: true }] : []
         const { data } = attachments.length
-          ? await api.post('/sessions/with-attachments', buildAttachmentFormData(payload, attachments))
-          : await api.post('/sessions', payload)
+          ? await api.post('/sessions/with-attachments', buildAttachmentFormData(payload, attachments), ...config)
+          : await api.post('/sessions', payload, ...config)
         const userMessage = data.message || { id: `local-${Date.now()}`, role: 'user', content }
         const session = { ...data.session, messages: [userMessage] }
         const wasStillSelected = this.sessionLoadVersion === sessionLoadVersion
@@ -1445,7 +1894,11 @@ export const useChatStore = defineStore('chat', {
         throw error
       }
     },
-    async sendToCurrent(content, attachments = []) {
+    async sendToCurrent(
+      content,
+      attachments = [],
+      { clearDraft = true, runId = null, suppressErrorToast = false } = {}
+    ) {
       const session = this.current
       const sessionLoadVersion = this.sessionLoadVersion
       this.running = true
@@ -1462,16 +1915,24 @@ export const useChatStore = defineStore('chat', {
       }
       session.messages.push(localMessage)
       try {
-        const payload = { content }
+        const payload = { content, ...(runId ? { run_id: runId } : {}) }
+        const config = suppressErrorToast ? [{ suppressErrorToast: true }] : []
         const { data } = attachments.length
           ? await api.post(
               `/sessions/${session.id}/messages/with-attachments`,
-              buildAttachmentFormData(payload, attachments)
+              buildAttachmentFormData(payload, attachments),
+              ...config
             )
-          : await api.post(`/sessions/${session.id}/messages`, payload)
+          : await api.post(`/sessions/${session.id}/messages`, payload, ...config)
         if (data.message) {
-          const index = session.messages.findIndex((message) => message.id === localMessage.id)
-          if (index >= 0) session.messages[index] = data.message
+          const canonicalIndex = session.messages.findIndex((message) => message.id === data.message.id)
+          const localIndex = session.messages.findIndex((message) => message.id === localMessage.id)
+          if (canonicalIndex >= 0) {
+            session.messages[canonicalIndex] = data.message
+            if (localIndex >= 0) session.messages.splice(localIndex, 1)
+          } else if (localIndex >= 0) {
+            session.messages[localIndex] = data.message
+          }
           if (data.message.createdAt) {
             session.lastMessageAt = data.message.createdAt
             this.updateCachedSession(session.id, (item) => ({
@@ -1480,9 +1941,11 @@ export const useChatStore = defineStore('chat', {
             }))
           }
         }
-        this.clearAttachmentDraft(session.id)
-        delete this.drafts.sessionMessages[session.id]
-        this.persistDrafts()
+        if (clearDraft) {
+          this.clearAttachmentDraft(session.id)
+          delete this.drafts.sessionMessages[session.id]
+          this.persistDrafts()
+        }
         if (
           this.sessionLoadVersion === sessionLoadVersion
           && this.selectedSessionId === session.id
@@ -1741,8 +2204,15 @@ export const useChatStore = defineStore('chat', {
         this.clearActivity()
         this.setSessionRunStatus(sessionId, null)
         if (!this.historyActionPending) {
-          void this.refreshSession(sessionId).catch(() => {})
+          void this.refreshSession(sessionId)
+            .catch(() => {})
+            .finally(() => {
+              this.cancelQueueDrain()
+              this.scheduleQueueDrain(0)
+            })
           void this.refreshSessions().catch(() => {})
+        } else {
+          this.scheduleQueueDrain(0)
         }
         useApprovalStore().fetchPending()
         void useQuestionStore().fetchPending().catch(() => {})

@@ -3,7 +3,7 @@ import json
 import logging
 import wave
 from io import BytesIO
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -143,6 +143,33 @@ async def test_session_multipart_routes_forward_attachments_without_text(monkeyp
     assert created_audio.kind == "audio"
     assert created_audio.mime_type == "audio/wav"
     assert sent_audio.filename == "aufnahme.wav"
+
+
+async def test_session_multipart_retries_skip_attachment_classification(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    run_id = uuid4()
+    duplicate_response = {"runId": str(run_id), "message": {"attachments": [{"id": "old"}]}}
+    duplicate = AsyncMock(return_value=duplicate_response)
+    load = AsyncMock()
+    uploads = AsyncMock()
+    monkeypatch.setattr(sessions_route, "_duplicate_submission_response", duplicate)
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(sessions_route, "_attachment_uploads", uploads)
+    payload = json.dumps({"content": "retry", "run_id": str(run_id)})
+
+    created = await sessions_route.create_session_with_attachments(
+        payload, [upload()], user, db
+    )
+    session_id = uuid4()
+    sent = await sessions_route.send_message_with_attachments(
+        session_id, payload, [upload()], user, db
+    )
+
+    assert created is duplicate_response
+    assert sent is duplicate_response
+    load.assert_not_awaited()
+    uploads.assert_not_awaited()
 
 
 async def test_session_attachment_processing_limit_returns_413(monkeypatch) -> None:
@@ -316,6 +343,8 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         model_config_id=model.id,
     )
     db.scalar.side_effect = [session, None, True, True]
+    schedule = MagicMock()
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
     task = asyncio.create_task(
         AgentRuntime.start(
             db,
@@ -334,5 +363,6 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         await task
 
     assert committed is True
+    schedule.assert_called_once()
     service.discard.assert_not_awaited()
     db.rollback.assert_not_awaited()
