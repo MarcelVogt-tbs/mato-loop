@@ -26,6 +26,10 @@ Der Fallback wird nur bei vorübergehenden Fehlern des primären Providers verwe
 
 Weiterleitungen und Zieladressen werden erneut geprüft. Link-lokale, Metadaten- und andere gefährliche Netzwerkziele werden blockiert. Private Ursprünge benötigen eine explizite Freigabe in den Einstellungen.
 
+## Veröffentlichte Untertitel
+
+`fetch_transcript` ruft vorhandene veröffentlichte Untertitel unterstützter öffentlicher YouTube-Videos ab und verwendet dieselbe Webzugriffsrichtlinie. Das Werkzeug lädt kein Video herunter, übersetzt keine Untertitel und startet keine automatische Transkription. Ist eine gewünschte Sprache nicht vorhanden, wird die ursprüngliche verfügbare Untertitelsprache gekennzeichnet zurückgegeben. Bildinhalt, Kameraführung und sichtbare Bedienoberflächen können damit nicht ausgewertet werden.
+
 ## Quellen in Antworten
 
 Aktuelle Recherchequellen erscheinen als hervorgehobene Links in der Antwort. Prüfen Sie wichtige Aussagen weiterhin anhand der verlinkten Originalquelle; Suchergebnisse und Webseiten können unvollständig oder fehlerhaft sein.

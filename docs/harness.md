@@ -155,12 +155,15 @@ The following independent cases are automated when their symbols are introduced.
 | `WEBFETCH-05` | Response over 5 MiB or unsupported MIME type | Body streams | Fetch ends with stable error before persistence. |
 | `WEBFETCH-06` | HTML with semantic main content, navigation, and relative links | Tool creates Markdown or text | Relevant root is converted, links resolve against final URL, and result reports status, input type, and output format. |
 | `WEBFETCH-07` | Target returns non-success HTTP status | Fetch ends | Model gets `webfetch.requestFailed` and safe `statusCode`, never external error text or body. |
+| `TRANSCRIPT-01` | Supported public YouTube URL has published captions | Tool fetches transcript | One normalized video approval covers bounded allowlisted watch, player, and timed-text requests; timestamped text and track metadata return. |
+| `TRANSCRIPT-02` | Requested caption language is unavailable | Tool selects a track | The advertised original/default track returns with `languageFallback=true`; no translation or transcription request occurs. |
+| `TRANSCRIPT-03` | Caption URL, redirect, XML, live state, or response bounds violate the contract | Tool processes provider data | The request fails closed with a stable `transcript.*` error and exposes no provider body or signed URL. |
 | `RESEARCH-01` | Search mode `disabled` | Normal request builds | `web_search` and instructions are absent; independent `webfetch` still follows policy. |
 | `RESEARCH-02` | Search mode `available` and web tools offered | Model researches or answers directly | Normal loop uses automatic tool choice, streaming, and finalization without host final block. |
 | `RESEARCH-03` | Search mode `required` without successful current-turn search | Initial request builds | Only `web_search` is offered with `tool_choice=required`; text and reasoning are hidden. |
 | `RESEARCH-04` | Forced initial search succeeds with no results | Host handles result | Gate is satisfied; result need not contain hits or links. |
 | `RESEARCH-05` | `required` gate satisfied | Next request builds | Tool set, automatic choice, prompts, budgets, streaming, and finalization match `available`. |
-| `RESEARCH-06` | `available` or completed `required` | Search and fetch are called repeatedly | `max_research_tool_calls` limits their combined count. |
+| `RESEARCH-06` | `available` or completed `required` | Search, page fetch, and transcript fetch are called repeatedly | `max_research_tool_calls` limits their combined count. |
 | `RESEARCH-07` | Identical research call already succeeded | Model repeats it | No network request; compact `alreadyCompleted` result returns and next request finalizes without research tools. |
 | `RESEARCH-08` | Current turn used research and final answer visibly links some research URLs | Answer finalizes | Host preserves text and stores only policy, use flag, and visibly linked current URLs without claiming support. |
 | `RESEARCH-09` | Final Markdown link canonically matches approved current research URL | Frontend renders | Only allowlisted link becomes an inline source chip; other links render normally. |
