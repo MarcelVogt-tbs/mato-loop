@@ -134,8 +134,8 @@ class MemoryApprovalPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_pin(self) -> MemoryApprovalPayload:
-        if self.requested_pin != (self.pin_kind is not None):
-            raise ValueError("pinKind is required exactly when requestedPin is true")
+        if self.pin_kind is not None and not self.requested_pin:
+            raise ValueError("pinKind requires requestedPin true")
         if len(self.target_memories) != len({item.id for item in self.target_memories}):
             raise ValueError("targetMemories must be unique")
         if len(self.evidence_message_ids) != len(set(self.evidence_message_ids)):
@@ -895,11 +895,11 @@ class MemoryService:
                 None,
             )
         )
-        if requested_pin and (
+        if pin_kind is not None and (
             after_category
             or MemoryCategory(ordered_targets[0].category)
         ) != MemoryCategory.IDENTITY:
-            raise ValueError("pin suggestions require an identity result")
+            raise ValueError("pinKind requires an identity result")
         payload = MemoryApprovalPayload(
             schemaVersion=_MEMORY_APPROVAL_SCHEMA_VERSION,
             targetMemories=snapshots,
@@ -993,19 +993,15 @@ class MemoryService:
         item: MemoryRecord,
         *,
         owner_id: UUID,
-        pin_kind: MemoryPinKind,
+        pin_kind: MemoryPinKind | None,
     ) -> bool:
         if item.user_id != owner_id:
             raise ValueError("memory owner mismatch")
-        if item.pinned and item.pin_kind == pin_kind.value:
+        if item.pinned and (pin_kind is None or item.pin_kind == pin_kind.value):
             return True
         await db.execute(select(func.pg_advisory_xact_lock(1_836_642_671)))
-        if await MemoryService._pin_kind_taken(
-            db,
-            owner_id=owner_id,
-            pin_kind=pin_kind,
-            audience=item.audience,
-            exclude_ids=[item.id],
+        if pin_kind is not None and await MemoryService._pin_kind_taken(
+            db, owner_id=owner_id, pin_kind=pin_kind, audience=item.audience, exclude_ids=[item.id]
         ):
             return False
         pinned = int(
@@ -1166,7 +1162,10 @@ class MemoryService:
             if (
                 not payload.requested_pin
                 or len(targets) != 1
-                or targets[0].category != MemoryCategory.IDENTITY.value
+                or (
+                    payload.pin_kind is not None
+                    and targets[0].category != MemoryCategory.IDENTITY.value
+                )
             ):
                 return "target_changed"
             await MemoryService.set_pinned(
@@ -1179,7 +1178,7 @@ class MemoryService:
             return "applied"
 
         if payload.after is None or (
-            payload.requested_pin
+            payload.pin_kind is not None
             and payload.after.category != MemoryCategory.IDENTITY
         ):
             return "target_changed"
@@ -1232,7 +1231,7 @@ class MemoryService:
                     mutation.item,
                     owner_id=owner_id,
                     pinned=True,
-                    pin_kind=payload.pin_kind,
+                    pin_kind=payload.after.pin_kind,
                 )
             return "applied"
 

@@ -449,7 +449,9 @@ def _automation_scope(
         return None
 
 
-def memory_write_permission(session_id: UUID, action: str) -> PermissionRequest:
+def memory_write_permission(
+    session_id: UUID, action: str, *, pinned: bool = False
+) -> PermissionRequest:
     updating = action == "update"
     forgetting = action == "forget"
     return PermissionRequest(
@@ -473,6 +475,9 @@ def memory_write_permission(session_id: UUID, action: str) -> PermissionRequest:
             else "Der Agent möchte ein neues Memory speichern."
         ),
         resource_display="Memory der aktuellen Session",
+        display_items=(
+            (PermissionDisplayItem("Berücksichtigung", "Immer"),) if pinned else ()
+        ),
     )
 
 

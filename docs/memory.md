@@ -3,10 +3,10 @@
 MatoLoop has three distinct context layers:
 
 1. Current-session working context: canonical messages, a compacted summary when needed, and recent original history.
-2. Episodic context: compact discovery references retrieved automatically from prior sessions.
+2. Episodic context: bounded excerpts retrieved automatically from prior sessions.
 3. Durable memory: explicit records created manually, by `memory_write`, or by optional dreaming.
 
-Episodic retrieval provides immediate session-crossing discovery without first converting a conversation into durable memory. When the latest user message explicitly refers to earlier work, a relevant turn can retrieve a prior-session anchor as soon as its source message is committed. Dreaming is not required for either episodic or durable retrieval.
+Episodic retrieval provides immediate session-crossing context without first converting a conversation into durable memory. The first user turn of a new session includes one bounded tail from the latest eligible prior session. Later turns retrieve an episode only for an explicit recency or earlier-work reference. Dreaming is not required for either episodic or durable retrieval.
 
 ## Access and Trust
 
@@ -25,27 +25,27 @@ Durable memories and prior-session references are explicitly untrusted data, nev
 1. Current user message
 2. Pinned durable memory
 3. Retrieved durable memory
-4. A transcript read from a historical-session reference
+4. A retrieved prior-session excerpt or transcript
 
-An automatic episode contains only session metadata, one bounded anchor preview, and exact `sessionReadArguments`. It is a discovery pointer, not complete conversation evidence or permission to read its source session. The model calls `session_read` before relying on omitted details. `session_read` remains separately controlled: the current session is host-allowed, while another session requires the normal exact `session.read` grant or approval. Public session tools also retain their public-only release boundary.
+An automatic episode contains session metadata, one bounded anchor preview, and a bounded trust-filtered excerpt. The model uses the excerpt directly when sufficient and calls `session_read` only for omitted details or attachments. `session_read` remains separately controlled: the current session is host-allowed, while another session requires the normal exact `session.read` grant or approval. Public session tools also retain their public-only release boundary.
 
 ## Automatic Context
 
-On a normal user turn, MatoLoop builds one query from the latest user message. A short follow-up of at most 120 characters also includes up to 1,000 characters from the preceding user turn. The resulting query is limited to 2,000 characters.
+For an explicit earlier-work reference, MatoLoop builds one query of at most 2,000 characters from the latest user message. The session-start recency bootstrap does not require a search query.
 
-Automatic durable-memory retrieval uses PostgreSQL full-text search only, so every injected unpinned memory has direct lexical support from the current query. Automatic episodic retrieval is also lexical-only and runs only when the latest user message explicitly refers to a prior chat or earlier work. Explicit `memory_retrieve` and Dreaming reconciliation may still combine full-text and local E5 cosine ranking through reciprocal rank fusion.
+Explicit episodic and durable-memory search combine PostgreSQL full-text search and local E5 cosine ranking through reciprocal rank fusion. Embedding failure falls back to immediate full-text retrieval. The session-start episode uses recency without an embedding. Episode context is suppressed when the latest request explicitly excludes prior-session information or only transforms a quoted prior-session phrase.
 
 The current user message is always the primary retrieval query. For a short turn, the host may also search the previous user turn plus the current message as a contextual query. Primary results keep all but one available slot when present; the contextual lane supplements rather than replaces them, and duplicate memories or source sessions are removed.
 
 Automatic retrieval is bounded as follows:
 
-- At most two unpinned durable results, with at most 2,500 total memory-content characters.
-- At most two prior-session references, with one anchor per source session.
+- No speculative unpinned durable results; `memory_retrieve` loads them when needed.
+- One prior-session reference at session start, or at most two for an explicit recent-session overview.
 - A shared automatic-context character budget derived from `min(1,536 tokens, 10% of usable model input)` using the selected model's characters-per-token estimate. Usable input is the context window minus maximum output and the safety reserve.
 
-Pinned memories are injected in stable creation order whenever read access and trust allow it. They are not displaced by the automatic retrieval budget and are limited only by the selected model's final context projection. When prior-session candidates exist, their small anchor-preview budget is reserved before retrieved unpinned memories. The final context manager still guarantees that the complete request fits the selected model and drops unpinned memories before session references during overflow fallback.
+Pinned memories are injected in stable creation order whenever read access and trust allow it. They are not displaced by the automatic retrieval budget and are limited only by the selected model's final context projection. One bounded episode excerpt may use the shared automatic-context budget. The final context manager still guarantees that the complete request fits the selected model and can drop the episode before failing.
 
-Explicit intent about the latest or previous session uses recency retrieval. Other explicit references to earlier work use lexical episode retrieval. Ordinary first turns and generic follow-ups do not inject a prior-session pointer. Explicit durable-memory overview intent uses a bounded memory browse prefetch and continuation state while still including every visible pinned memory in full. `memory_retrieve`, `session_browse`, `session_search`, and `session_read` remain available for deliberate retrieval beyond the automatic references, subject to their own policies and permissions.
+The first user turn includes the most recent eligible prior session once. Explicit intent about the latest sessions uses recency retrieval, while explicit references to earlier work use one hybrid topic result. Generic follow-ups inject neither again. Explicit durable-memory overview intent uses a bounded memory browse prefetch and continuation state while still including every visible pinned memory in full. `memory_retrieve`, `session_browse`, `session_search`, and `session_read` remain available for deliberate retrieval beyond the automatic references, subject to their own policies and permissions.
 
 The model-facing prompt reports visible durable-memory totals and the counts injected into the request. Assistant provider metadata records `durableMemoryReferences` and `priorSessionEpisodes` under `_matoloop.performance`, alongside context preparation and provider timing; it does not duplicate retrieved content.
 
@@ -53,9 +53,9 @@ The model-facing prompt reports visible durable-memory totals and the counts inj
 
 A durable memory stores canonical content, category, audience, source provenance, revision, evidence links, seen state, `pinned`, and an optional core-identity `pinKind`. Categories remain `context`, `fact`, `goal`, `identity`, and `preference`; sources remain `manual`, `tool_call`, and `dreaming`. Normalized content hashes prevent case- and whitespace-equivalent duplicates. PostgreSQL keeps a generated `simple` full-text vector with a GIN index.
 
-Pinned records are always supplied automatically when visible; unpinned records are selected by lexical automatic retrieval. Core identity uses only `preferred_name`, `form_of_address`, `pronouns`, `primary_language`, and `primary_residence`. At most one record exists per owner, core-identity kind, and audience. When an audience-specific identity and `both` are visible for the same kind, the audience-specific record alone is injected. All durable memories remain available to explicit hybrid retrieval. MatoLoop does not promote, demote, or evict durable records based on capacity, exposure, or usage counts.
+Pinned records are always supplied automatically when visible; unpinned records remain available through explicit hybrid retrieval. Core identity uses only `preferred_name`, `form_of_address`, `pronouns`, `primary_language`, and `primary_residence`. An ordinary pin has no `pinKind`. At most one record exists per owner, core-identity kind, and audience. When an audience-specific identity and `both` are visible for the same kind, the audience-specific record alone is injected. MatoLoop does not promote, demote, or evict durable records based on capacity, exposure, or usage counts.
 
-`memory_write` persists explicitly requested durable information and durable first-person self-context stated directly in the latest user message. It excludes temporary situations, hypotheticals, quotations, source text supplied for transformation, and incidental facts about third parties. Writes use the existing `memory.write` permission flow. Updates and explicit forgetting require an injected or retrieved memory ID and revision; the host rechecks ownership, audience visibility, and stale-write protection. Forgetting hard-deletes the exact record and uses a separate session-grant scope, so a prior create or update grant cannot authorize deletion.
+`memory_write` persists explicitly requested durable information and durable first-person self-context stated directly in the latest user message. It excludes temporary situations, hypotheticals, quotations, source text supplied for transformation, and incidental facts about third parties. An explicit request to always consider the information can set the resulting memory's one-way `pinned` flag; ordinary remember wording does not pin and `false` never unpins. Writes and explicit pins use the existing `memory.write` permission flow. Updates and explicit forgetting require an injected or retrieved memory ID and revision; the host rechecks ownership, audience visibility, and stale-write protection. Forgetting hard-deletes the exact record and uses a separate session-grant scope, so a prior create or update grant cannot authorize deletion.
 
 `memory_retrieve` supports hybrid `search` and chronological `browse`, with `context` or `write` purpose. Search and browse cover all audience-visible durable records regardless of pinning. References include ID, revision, category, audience, pin state, optional `pinKind`, content, source session, and source, creation, and update timestamps. Timestamp metadata describes observation and record history; it does not prove that a time-dependent fact remains current.
 
@@ -65,7 +65,7 @@ Pinned records are always supplied automatically when visible; unpinned records 
 
 Chunking is deterministic and paragraph-aware, targets 1,200 characters, never exceeds 1,500 characters, and overlaps adjacent chunks by 120 characters. Each chunk has a generated PostgreSQL `simple` full-text vector with a GIN index and a local 384-dimensional E5 vector tied to the active embedding profile and content hash.
 
-Retrieval filters by owner, excludes the current session, and applies the run trust boundary before top-K ranking. Hybrid ranking selects at most one anchor per prior session. The host then creates a chronological, trust-filtered excerpt around each anchor, bounded by message count and characters; the automatic context applies its smaller shared turn budget afterward. Session titles are released only when their first-user-message trust permits it.
+Retrieval filters by owner, excludes the current session, and applies the run trust boundary before top-K ranking. Hybrid ranking selects at most one anchor per prior session. The host combines the bounded anchor with the latest trust-filtered messages from that session; the automatic context applies its smaller shared turn budget afterward. Session titles are released only when their first-user-message trust permits it.
 
 The index is derived from canonical messages. Eligible message persistence synchronously replaces that message's deterministic chunks in the same transaction, so chunk content and generated FTS are available immediately after commit. Vector generation remains asynchronous and lexical retrieval works while an embedding is queued or unavailable. Undo deletes chunks for its removed message suffix through database cascades, and deleting a session cascades through messages to their chunks. Reconciliation also removes chunks whose messages are no longer eligible.
 
@@ -84,7 +84,7 @@ Reconciliation returns exactly one host-validated action per candidate:
 
 New records are created automatically. Existing-record changes use independent `disabled`, `ask`, or `auto` policies: update defaults to `auto`, merge defaults to `ask`, and pin defaults to `ask`. Disabled changes are skipped; `ask` creates a persistent `memory_change` approval; `auto` applies the validated change without approval.
 
-Dreaming can suggest pinning only for an `identity` result representing a preferred name, form of address, primary residence, pronouns, or a durably relevant primary language. Public-only evidence creates `both` memories; private or mixed evidence creates `private_only` memories. Dreaming never creates `public_only`, never suggests unpinning, and applies identity uniqueness through the same pin service as other automatic pinning. Automatic pinning stops when five memories are pinned; explicit user pinning is not subject to that automatic limit.
+Dreaming can suggest a core-identity pin for a preferred name, form of address, primary residence, pronouns, or a durably relevant primary language. It can also suggest an ordinary pin without `pinKind` for an explicitly future-relevant close-family fact, recurring preference, or recurring safety constraint. Public-only evidence creates `both` memories; private or mixed evidence creates `private_only` memories. Dreaming never creates `public_only`, never suggests unpinning, and applies identity uniqueness through the same pin service as other automatic pinning. Automatic pinning stops when five memories are pinned; explicit user pinning is not subject to that automatic limit.
 
 Automatic dreaming is off by default and runs only for `full` sessions when user memory, a suitable tool-capable model, and automatic dreaming are enabled. Manual processing requires memory and a suitable model but not the automatic switch. Failed work retains its checkpoint and follows bounded retry behavior.
 

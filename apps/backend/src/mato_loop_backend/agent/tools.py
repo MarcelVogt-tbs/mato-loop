@@ -1650,6 +1650,15 @@ class MemoryWriteArguments(ToolArguments):
             "Names and personal identity use identity; occupations use fact."
         )
     )
+    pin: bool = Field(
+        default=False,
+        description=(
+            "Set true when the latest user explicitly asks to always consider this memory "
+            "in future answers, including answers about a stated topic. Plain remember or "
+            "store wording stays false. Example: 'Always consider this for meal suggestions' "
+            "means true. False does not unpin."
+        ),
+    )
 
     @field_validator("content")
     @classmethod
@@ -1675,6 +1684,8 @@ class MemoryWriteArguments(ToolArguments):
         ):
             raise ValueError("content and category are required for creates and updates")
         if self.action == "forget":
+            if self.pin:
+                raise ValueError("pin is not allowed for forgetting")
             self.content = None
             self.category = None
         return self
@@ -5156,7 +5167,10 @@ async def _memory_write(
         if item.revision != arguments.expected_revision:
             return ToolResult.error("memory.changed")
     if not await _allow(
-        context, memory_write_permission(context.session.id, arguments.action)
+        context,
+        memory_write_permission(
+            context.session.id, arguments.action, pinned=arguments.pin
+        ),
     ):
         return ToolResult.error("permission.denied")
     if arguments.action == "forget":
@@ -5200,13 +5214,30 @@ async def _memory_write(
             return ToolResult.error("memory.notFound")
         if result.conflict:
             return ToolResult.error("memory.changed")
+        if arguments.pin and not result.item.pinned:
+            await MemoryService.set_pinned(
+                context.db,
+                result.item,
+                owner_id=context.session.user_id,
+                pinned=True,
+            )
         if result.duplicate:
             return ToolResult.json(
-                {"stored": False, "updated": False, "duplicate": True},
+                {
+                    "stored": False,
+                    "updated": False,
+                    "duplicate": True,
+                    "pinned": result.item.pinned,
+                },
                 metadata={"memoryWriteOutcome": "duplicate"},
             )
         return ToolResult.json(
-            {"id": str(result.item.id), "stored": True, "updated": True},
+            {
+                "id": str(result.item.id),
+                "stored": True,
+                "updated": True,
+                "pinned": result.item.pinned,
+            },
             metadata={"memoryWriteOutcome": "stored"},
         )
     assert arguments.content is not None
@@ -5222,13 +5253,30 @@ async def _memory_write(
         run_id=context.run_id,
         tool_call_id=context.tool_call.id,
     )
+    if arguments.pin and not result.item.pinned:
+        await MemoryService.set_pinned(
+            context.db,
+            result.item,
+            owner_id=context.session.user_id,
+            pinned=True,
+        )
     if result.duplicate:
         return ToolResult.json(
-            {"stored": False, "updated": False, "duplicate": True},
+            {
+                "stored": False,
+                "updated": False,
+                "duplicate": True,
+                "pinned": result.item.pinned,
+            },
             metadata={"memoryWriteOutcome": "duplicate"},
         )
     return ToolResult.json(
-        {"id": str(result.item.id), "stored": True, "updated": False},
+        {
+            "id": str(result.item.id),
+            "stored": True,
+            "updated": False,
+            "pinned": result.item.pinned,
+        },
         metadata={"memoryWriteOutcome": "stored"},
     )
 
@@ -5793,7 +5841,9 @@ tool_registry = ToolRegistry(
             "memory_write",
             "Create, update, or forget one durable memory only when the latest user message explicitly "
             "requests that action. Create without memory_id or expected_revision; update or forget only "
-            "with a retrieved exact visible ID and revision.",
+            "with a retrieved exact visible ID and revision. Set pin=true for an explicit request to "
+            "always consider the memory in future answers, including for a stated topic; plain remember "
+            "wording stays false, and false never unpins.",
             MemoryWriteArguments,
             _memory_write,
             requires_memory=True,

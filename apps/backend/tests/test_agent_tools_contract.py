@@ -2718,6 +2718,7 @@ async def test_memory_write_reports_invalid_identifier_field(tmp_path) -> None:
             "expected_revision": 1,
             "content": "Aktualisierter Fakt",
             "category": "identity",
+            "pin": False,
         },
     )
     context = _context(tmp_path, call)
@@ -2747,6 +2748,11 @@ def test_memory_write_schema_keeps_update_arguments_explicit() -> None:
     ]
     assert "latest user message explicitly" in schema["description"]
     assert "Create without memory_id or expected_revision" in schema["description"]
+    pin = schema["parameters"]["properties"]["pin"]
+    assert pin["default"] is False
+    assert "latest user explicitly" in pin["description"]
+    assert "meal suggestions" in pin["description"]
+    assert "False does not unpin" in pin["description"]
 
 
 async def test_memory_write_forget_checks_visibility_revision_and_hard_deletes(
@@ -2770,6 +2776,7 @@ async def test_memory_write_forget_checks_visibility_revision_and_hard_deletes(
             "action": "forget",
             "memory_id": str(memory_id),
             "expected_revision": 4,
+            "pin": False,
         },
     )
     context = _context(tmp_path, call)
@@ -2825,6 +2832,7 @@ async def test_memory_write_forget_rejects_invisible_or_changed_target(
             "action": "forget",
             "memory_id": str(item.id),
             "expected_revision": 1,
+            "pin": False,
         },
     )
     context = _context(tmp_path, call)
@@ -2920,6 +2928,7 @@ async def test_memory_write_requires_session_permission_before_mutation(
             "action": "create",
             "content": "Der Nutzer heißt Max.",
             "category": "identity",
+            "pin": True,
         },
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
@@ -2935,6 +2944,9 @@ async def test_memory_write_requires_session_permission_before_mutation(
     assert request.resource_type == "session"
     assert request.resource_scope == str(context.session.id)
     assert request.action_kind == "memory_write"
+    assert [(item.label, item.value) for item in request.display_items] == [
+        ("Berücksichtigung", "Immer")
+    ]
     create_memory.assert_not_awaited()
 
 

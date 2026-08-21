@@ -446,9 +446,9 @@ def general_system_prompt(
         )
         if injected_episode_count:
             parts.append(
-                "Prior-session references are compact discovery pointers, not complete conversation "
-                "evidence. For a relevant pointer, call session_read with its exact sessionReadArguments "
-                "before relying on omitted details. Do not search again for a supplied candidate."
+                "Prior-session references contain bounded conversation excerpts, not complete "
+                "conversations. Use a supplied excerpt directly when it is sufficient; call session_read "
+                "only for omitted details or attachments. Do not search again for a supplied candidate."
             )
     if {"session_browse", "session_search"} & offered_tool_names:
         parts.append(
@@ -501,7 +501,10 @@ def general_system_prompt(
             "first-person wording. "
             "Store only user-supported content without inferred enrichment or invented dates. Update with an "
             "injected exact ID and revision, or retrieve with purpose=write first; otherwise create without "
-            "them. After an invalid target, retrieve again. Host approval replaces conversational confirmation."
+            "them. Set pin=true only when the latest user explicitly asks that the memory always be "
+            "considered in future answers. This includes an always-consider directive scoped to a stated "
+            "topic. Ordinary remember or store wording does not request a pin, and false never unpins. After "
+            "an invalid target, retrieve again. Host approval replaces conversational confirmation."
         )
     if "memory_retrieve" in offered_tool_names and not memory_overview_prefetched:
         parts.append(

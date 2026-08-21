@@ -53,7 +53,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 22
+    assert INVENTORY_VERSION == 24
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -1173,6 +1173,23 @@ def test_evaluate_checks_query_shape_multiple_calls_and_link_labels() -> None:
     )
     assert any("expected exactly 2" in failure for failure in evaluate(explicit, one_write))
 
+    pinned = _case("explicit_future_context_pins_memory")
+    pinned_write = ProviderResult(
+        tool_calls=[
+            ToolCall(
+                "1",
+                "memory_write",
+                {
+                    "action": "create",
+                    "content": "Der Nutzer isst grundsätzlich kein Hähnchen.",
+                    "category": "preference",
+                    "pin": True,
+                },
+            )
+        ]
+    )
+    assert evaluate(pinned, pinned_write) == []
+
     citation = _case("researched_answer_uses_exact_citation")
     bad_links = ProviderResult(
         content=(
@@ -1684,11 +1701,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 127
-    assert payload["contractCount"] == 274
-    assert "Cases: 147" in report
-    assert "Semantic contracts: 127" in report
-    assert "All inventory rows: 274" in report
+    assert payload["semanticContractCount"] == 128
+    assert payload["contractCount"] == 277
+    assert "Cases: 149" in report
+    assert "Semantic contracts: 128" in report
+    assert "All inventory rows: 277" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

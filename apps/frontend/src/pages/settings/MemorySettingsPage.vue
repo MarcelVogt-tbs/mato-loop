@@ -319,7 +319,7 @@
                   outlined
                   emit-value
                   map-options
-                  label="Berücksichtigung ändern"
+                  label="Erinnerungen anheften"
                   :options="dreamingPolicyOptions"
                   :disable="memories.settingsLoading"
                   :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"

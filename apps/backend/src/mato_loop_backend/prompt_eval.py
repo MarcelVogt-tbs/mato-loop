@@ -73,7 +73,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 22
+INVENTORY_VERSION = 24
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -791,6 +791,18 @@ CASES = (
         tools=("memory_retrieve", "memory_write"),
         expected_tool="memory_write",
         expected_tool_call_count=2,
+        expected_arguments={"pin": False},
+    ),
+    PromptCase(
+        id="explicit_future_context_pins_memory",
+        kind="general",
+        user=(
+            "Merke dir: Ich esse grundsätzlich kein Hähnchen. Berücksichtige das "
+            "künftig immer bei Essensvorschlägen."
+        ),
+        tools=("memory_retrieve", "memory_write"),
+        expected_tool="memory_write",
+        expected_arguments={"action": "create", "pin": True},
     ),
     PromptCase(
         id="transient_context_avoids_memory",
@@ -1223,6 +1235,18 @@ CASES = (
         tool_choice="required",
         expected_tool="reconcile_memory_candidates",
         expected_action="unchanged",
+    ),
+    PromptCase(
+        id="dreaming_suggests_ordinary_profile_pin",
+        kind="dreaming",
+        user=(
+            "Ich esse grundsätzlich kein Hähnchen. Berücksichtige das künftig bei "
+            "Essensvorschlägen."
+        ),
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=1,
+        expected_pin=True,
     ),
     PromptCase(
         id="reconciliation_creates_independent_memory",
@@ -3495,6 +3519,11 @@ _SEMANTIC_CONTRACTS = (
             "Streaming restoration is host transport behavior, while this serial evaluator uses "
             "non-streaming Chat Completions and stores protected marker output."
         ),
+    ),
+    ContractCoverage(
+        "dreaming.pin_eligible_ordinary_profile",
+        "dreaming",
+        ("dreaming_suggests_ordinary_profile_pin",),
     ),
     ContractCoverage(
         "pdf.vision_instruction_injection_and_json",

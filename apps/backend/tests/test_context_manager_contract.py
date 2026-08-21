@@ -1179,6 +1179,10 @@ def test_general_system_prompt_requires_explicit_memory_request() -> None:
     assert "exact ID and revision" in prompt
     assert "purpose=write" in prompt
     assert "without inferred enrichment or invented dates" in prompt
+    assert "Set pin=true only when the latest user explicitly asks" in prompt
+    assert "always-consider directive scoped to a stated topic" in prompt
+    assert "Ordinary remember or store wording does not request a pin" in prompt
+    assert "false never unpins" in prompt
     assert "Host approval replaces conversational confirmation" in prompt
     assert "Viktor" not in prompt
     assert "Regina" not in prompt
@@ -1256,7 +1260,7 @@ def test_general_system_prompt_separates_session_discovery_and_reading() -> None
     assert "exact sessionReadArguments" in prompt
 
 
-def test_general_system_prompt_marks_episode_payloads_as_discovery_pointers() -> None:
+def test_general_system_prompt_uses_episode_excerpts_before_session_read() -> None:
     prompt = general_system_prompt(
         _session(),
         memory_text='{"priorSessionEpisodes": []}',
@@ -1264,8 +1268,9 @@ def test_general_system_prompt_marks_episode_payloads_as_discovery_pointers() ->
         offered_tool_names=frozenset({"session_read"}),
     )
 
-    assert "compact discovery pointers" in prompt
-    assert "call session_read with its exact sessionReadArguments" in prompt
+    assert "bounded conversation excerpts" in prompt
+    assert "Use a supplied excerpt directly when it is sufficient" in prompt
+    assert "call session_read" in prompt
     assert "not verified facts or complete conversations" in prompt
 
 

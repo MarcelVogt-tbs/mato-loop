@@ -116,6 +116,21 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
             role="assistant",
             content="Wir entschieden uns für PostgreSQL als zentrale Datenbank.",
             trust_level=TrustLevel.PUBLIC.value,
+            created_at=datetime(2026, 8, 1, 10, tzinfo=UTC),
+        )
+        latest_user = Message(
+            session_id=public_session.id,
+            role="user",
+            content="Die Migration ist noch nicht gestartet.",
+            trust_level=TrustLevel.PUBLIC.value,
+            created_at=datetime(2026, 8, 2, 10, tzinfo=UTC),
+        )
+        latest_assistant = Message(
+            session_id=public_session.id,
+            role="assistant",
+            content="Als Nächstes erstellen wir zuerst ein Backup.",
+            trust_level=TrustLevel.PUBLIC.value,
+            created_at=datetime(2026, 8, 2, 11, tzinfo=UTC),
         )
         private_message = Message(
             session_id=private_session.id,
@@ -123,7 +138,7 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
             content="Die geheime Alternative wäre eine private Oracle-Instanz.",
             trust_level=TrustLevel.PRIVATE.value,
         )
-        db.add_all([public_message, private_message])
+        db.add_all([public_message, latest_user, latest_assistant, private_message])
         await db.flush()
         await EpisodeIndexService.enqueue(db, public_message)
         await EpisodeIndexService.enqueue(db, private_message)
@@ -154,6 +169,7 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
             query="Which database did we choose for the architecture?",
             limit=2,
             max_semantic_distance=0.25,
+            latest_messages=2,
         )
 
         assert result.references
@@ -166,6 +182,10 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
             message.content
             for message in result.references[0].excerpt
         )
+        assert {message.content for message in result.references[0].excerpt} >= {
+            latest_user.content,
+            latest_assistant.content,
+        }
         await db.rollback()
 
 
