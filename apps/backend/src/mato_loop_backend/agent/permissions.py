@@ -905,18 +905,14 @@ class PermissionPolicy:
                     return PermissionDecision.DENY
                 if identity != current_identity:
                     return PermissionDecision.DENY
-                if identity != str(chat_session.id):
+                if identity != str(chat_session.project_id or chat_session.id):
                     return PermissionDecision.DENY
             if request.capability not in {
                 "filesystem.read",
                 "filesystem.write",
                 "filesystem.delete",
+                "session.files.write",
             }:
-                return PermissionDecision.DENY
-            if (
-                request.capability in {"filesystem.write", "filesystem.delete"}
-                and chat_session.workspace_access != "read-write"
-            ):
                 return PermissionDecision.DENY
             if policy == ToolExecutionPolicy.DISABLED:
                 return PermissionDecision.DENY

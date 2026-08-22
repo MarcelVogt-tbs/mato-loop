@@ -30,19 +30,7 @@
         </button>
         <div class="attachment-preview__meta">
           <strong class="ellipsis" :title="attachment.filename || 'Bild'">{{ attachment.filename || 'Bild' }}</strong>
-          <q-badge v-if="attachment.draftAction" outline color="primary" label="Entwurf" />
-          <div v-if="attachment.safeUrl || attachment.draftAction" class="attachment-preview__actions row items-center no-wrap">
-            <q-btn
-              v-if="attachment.draftAction"
-              flat
-              round
-              dense
-              icon="visibility"
-              :aria-label="`${attachment.filename || 'Bild'} als Entwurf ansehen`"
-              @click="emit('open-file', attachment.draftAction)"
-            >
-              <q-tooltip>Entwurf ansehen</q-tooltip>
-            </q-btn>
+          <div v-if="attachment.safeUrl" class="attachment-preview__actions row items-center no-wrap">
             <q-btn
               v-if="attachment.safeUrl"
               flat
@@ -81,18 +69,6 @@
             <div class="text-weight-medium ellipsis">{{ attachment.filename || 'Audioaufnahme' }}</div>
             <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
           </div>
-          <q-badge v-if="attachment.draftAction" outline color="primary" label="Entwurf" />
-          <q-btn
-            v-if="attachment.draftAction"
-            flat
-            round
-            dense
-            icon="visibility"
-            :aria-label="`${attachment.filename || 'Audio'} als Entwurf ansehen`"
-            @click="emit('open-file', attachment.draftAction)"
-          >
-            <q-tooltip>Entwurf ansehen</q-tooltip>
-          </q-btn>
           <q-btn
             v-if="attachmentDownloadUrl(attachment)"
             flat
@@ -127,18 +103,6 @@
             <div class="text-weight-medium ellipsis">{{ attachment.filename || 'Video' }}</div>
             <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
           </div>
-          <q-badge v-if="attachment.draftAction" outline color="primary" label="Entwurf" />
-          <q-btn
-            v-if="attachment.draftAction"
-            flat
-            round
-            dense
-            icon="visibility"
-            :aria-label="`${attachment.filename || 'Video'} als Entwurf ansehen`"
-            @click="emit('open-file', attachment.draftAction)"
-          >
-            <q-tooltip>Entwurf ansehen</q-tooltip>
-          </q-btn>
           <q-btn
             v-if="attachmentDownloadUrl(attachment)"
             flat
@@ -178,18 +142,6 @@
           <div class="text-weight-medium ellipsis">{{ attachment.filename || 'Dateianhang' }}</div>
           <div class="text-caption app-muted ellipsis">{{ attachmentMetadata(attachment) }}</div>
         </div>
-        <q-badge v-if="attachment.draftAction" outline color="primary" label="Entwurf" />
-        <q-btn
-          v-if="attachment.draftAction"
-          flat
-          round
-          dense
-          icon="visibility"
-          :aria-label="`${attachment.filename || 'Datei'} als Entwurf ansehen`"
-          @click="emit('open-file', attachment.draftAction)"
-        >
-          <q-tooltip>Entwurf ansehen</q-tooltip>
-        </q-btn>
         <q-btn
           v-if="attachment.safeUrl && isModel(attachment)"
           flat
@@ -254,8 +206,6 @@ const props = defineProps({
   attachments: { type: Array, default: () => [] },
   label: { type: String, default: '' }
 })
-const emit = defineEmits(['open-file'])
-
 const items = computed(() => supportedAttachments(props.attachments))
 const images = computed(() => items.value.filter((attachment) => attachment.kind === 'image'))
 const audio = computed(() => items.value.filter((attachment) => attachment.kind === 'audio'))
@@ -274,9 +224,7 @@ function openAttachment(attachment) {
 }
 
 function attachmentDownloadUrl(attachment) {
-  return attachment.draftRole === 'download'
-    ? attachment.safeUrl
-    : attachment.draftAction?.downloadUrl || attachment.safeUrl
+  return attachment.safeUrl
 }
 
 function modelFormat(attachment) {

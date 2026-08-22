@@ -226,15 +226,14 @@ def test_openscad_prompt_fragment_covers_the_source_render_verify_workflow() -> 
     for requirement in (
         "use render_openscad, not shell_run or process_exec",
         "render output=preview",
-        "file tools",
         "source in assistant text is not a file",
-        "create each new .scad model with create_draft",
-        "revise the exact returned draft path",
+        "create each new .scad model with write_file mode=create",
+        "revise the exact returned path",
         "exact .scad basename",
         "source entrypoint must end in .scad",
-        "render a new draft directly",
+        "render a new file directly",
         "parent directory as projectpath",
-        "never copy a draft merely to render it",
+        "never copy it merely to render it",
         "keep the project self-contained",
         "relative use/include files",
         "unspecified units as millimeters",
@@ -553,7 +552,7 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
         assert ImageChops.difference(label, Image.new("RGB", label.size, "white")).getbbox()
 
 
-async def test_render_tool_presents_the_current_session_draft(
+async def test_render_tool_returns_generated_attachments(
     monkeypatch, tmp_path: Path
 ) -> None:
     instance = _instance()
@@ -564,7 +563,9 @@ async def test_render_tool_presents_the_current_session_draft(
         context.session.id,
         session_storage=storage,
     )
-    draft = context.root_files.create_text_draft("model.scad", "cube(1);\n")
+    context.root_files.create_file(
+        "session", "files/model.scad", BytesIO(b"cube(1);\n"), max_bytes=100
+    )
     rendered = _render_result(instance.execution_agent_id, context.session.id)
     off = b"OFF\n3 1 0\n0 0 0\n2 0 0\n0 3 4\n3 0 1 2\n"
     monkeypatch.setattr(
@@ -582,20 +583,15 @@ async def test_render_tool_presents_the_current_session_draft(
     result = await render_openscad(
         OpenScadRenderArguments(
             root="session",
-            path=draft.path,
-            projectPath=str(Path(draft.path).parent).replace("\\", "/"),
+            path="files/model.scad",
+            projectPath="files",
         ),
         context,
     )
 
-    assert result.draft_action is not None
-    assert result.draft_action.operation == "present"
-    assert result.draft_action.draft_id == draft.draft_id
-    assert result.draft_action.revision == 1
-    assert [
-        (item.attachment_position, item.role)
-        for item in result.draft_action.representations
-    ] == [(0, "preview"), (1, "internal")]
+    assert len(result.attachments) == 2
+    assert result.attachments[0].mime_type == "model/vnd.off"
+    assert result.attachments[1].mime_type == "image/png"
 
 
 async def test_render_tool_exposes_only_controlled_syntax_diagnostics(

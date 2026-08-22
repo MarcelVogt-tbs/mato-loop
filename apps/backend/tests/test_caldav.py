@@ -209,7 +209,6 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "tasks_set_completed",
         "tasks_delete",
     }
-    assert all(tool.write is False for tool in tools.values())
     assert tools["calendar_list_accounts"].instance_argument is None
     assert tools["calendar_list_accounts"].integration_ids == (
         str(first.id),
@@ -361,7 +360,6 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
 
     effective = tool_registry.effective(
         IntegrationSettings(instances=[account]),
-        "read-only",
         tool_settings=settings,
     )
 
@@ -393,7 +391,6 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
     settings.default_calendar.integration_id = uuid4()
     without_active_default = tool_registry.effective(
         IntegrationSettings(instances=[account]),
-        "read-only",
         tool_settings=settings,
     )
     required = without_active_default.tools["calendar_query_events"].schema()[
@@ -427,7 +424,6 @@ def test_active_default_task_list_is_bound_to_query_and_create_tools() -> None:
 
     effective = tool_registry.effective(
         integrations,
-        "read-only",
         tool_settings=settings,
     )
 
@@ -473,7 +469,6 @@ def test_active_default_task_list_is_bound_to_query_and_create_tools() -> None:
         settings.default_task_list.integration_id = integration_id
         unbound = tool_registry.effective(
             integrations,
-            "read-only",
             tool_settings=settings,
         )
         assert not any(

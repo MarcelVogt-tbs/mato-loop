@@ -6,7 +6,7 @@ Eine Session wird erst mit der ersten gesendeten Nachricht dauerhaft angelegt. E
 
 ## Warum kann der Agent nicht auf meinen Arbeitsordner zugreifen?
 
-Prüfen Sie, ob ein verbundener Computer, einer seiner Arbeitsbereiche und der richtige Agent-Modus gewählt sind. Der interne Session-Speicher liegt getrennt im Backend und bleibt auch ohne Computer verfügbar.
+Prüfen Sie, ob ein verbundener Computer, einer seiner Arbeitsbereiche und ein aktueller Ordner gewählt sind und die benötigte Tool-Richtlinie die Aktion erlaubt. Backend-Dateien bleiben auch ohne Computer verfügbar.
 
 ## Warum wird ein Modell nicht im Chat angeboten?
 
@@ -30,7 +30,7 @@ Nein. Bilder aus MatoLoop-Anhängen werden lokal geladen. Für externe Bildurspr
 
 ## Wo liegen meine Dateien?
 
-Arbeitsdateien liegen in den Wurzeln des jeweiligen Computers. Beim Compose-Computer ist dies standardmäßig das Host-Verzeichnis `./data/home`, das nur dort als `/workspace` eingebunden wird, oder der über `MATO_EXECUTION_AGENT_WORKSPACE` gesetzte Pfad. Das Backend greift nicht auf diesen Host-Pfad zu. Jede dauerhaft angelegte Session besitzt getrennten Backend-Speicher, der auch ohne Computer verfügbar bleibt. Sessions ohne Projekt liegen unter `/data/sessions/<session-id>`, Projekt-Sessions unter `/data/projects/<project-id>/sessions/<session-id>`.
+Arbeitsdateien liegen in den Wurzeln des jeweiligen Computers. Beim Compose-Computer ist dies standardmäßig das Host-Verzeichnis `./data/home`, das nur dort als `/workspace` eingebunden wird, oder der über `MATO_EXECUTION_AGENT_WORKSPACE` gesetzte Pfad. Das Backend greift nicht auf diesen Host-Pfad zu. Backend-Dateien einer Session ohne Projekt liegen unter `/data/sessions/<session-id>/files`. Sessions eines Projekts teilen `/data/projects/<project-id>/files`; ihre privaten Nachrichtenanhänge bleiben trotzdem je Session getrennt.
 
 ## Ist die Dokumentation nur nach Anmeldung erreichbar?
 

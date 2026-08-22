@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -170,13 +170,6 @@ def _public_research_payload(item: Message) -> dict[str, Any] | None:
     return {"policy": policy, "used": used, "linkedSources": linked_sources}
 
 
-class _StoredDraftRepresentation(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    attachment_position: int = Field(alias="attachmentPosition", ge=0)
-    role: Literal["preview", "download", "internal"]
-
-
 class _StoredFileAction(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -186,20 +179,6 @@ class _StoredFileAction(BaseModel):
     path: str = Field(min_length=1, max_length=1_000)
     filename: str = Field(min_length=1, max_length=1_000)
     size_bytes: int = Field(alias="sizeBytes", ge=0)
-    intent: Literal["draft"] | None = None
-    draft_id: str | None = Field(
-        default=None, alias="draftId", min_length=36, max_length=36
-    )
-    revision: int | None = Field(default=None, ge=1)
-    draft_operation: Literal["create", "revise", "present"] = Field(
-        default="create", alias="draftOperation"
-    )
-    representations: list[_StoredDraftRepresentation] = Field(
-        default_factory=list, max_length=8
-    )
-    attachment_position: int | None = Field(
-        default=None, alias="attachmentPosition", ge=0
-    )
     execution_agent_id: str | None = Field(
         default=None, alias="executionAgentId", min_length=1, max_length=36
     )
@@ -218,33 +197,6 @@ class _StoredFileAction(BaseModel):
             raise ValueError("path must be a normalized file path")
         if self.filename != self.path.rsplit("/", 1)[-1]:
             raise ValueError("filename must match path")
-        draft_fields = {"draft_id", "revision"}
-        optional_draft_fields = {
-            "draft_operation",
-            "representations",
-            "attachment_position",
-        }
-        if self.intent is None:
-            if self.model_fields_set & (draft_fields | optional_draft_fields):
-                raise ValueError("non-draft actions cannot contain draft fields")
-        else:
-            if any(getattr(self, field) is None for field in draft_fields):
-                raise ValueError("draft fields are required")
-            assert self.draft_id is not None
-            try:
-                canonical_draft_id = str(UUID(self.draft_id))
-            except ValueError as exc:
-                raise ValueError("draft ID must be a canonical UUID") from exc
-            if (
-                canonical_draft_id != self.draft_id
-                or self.root != "session"
-                or self.operation != "write"
-                or self.path != f"files/drafts/{self.draft_id}/{self.filename}"
-            ):
-                raise ValueError("invalid draft action")
-            positions = [item.attachment_position for item in self.representations]
-            if len(positions) != len(set(positions)):
-                raise ValueError("draft representation positions must be unique")
         snapshot_fields = {
             "execution_agent_id",
             "root_id",
@@ -254,6 +206,11 @@ class _StoredFileAction(BaseModel):
         if self.root == "session":
             if self.model_fields_set & snapshot_fields:
                 raise ValueError("session actions cannot contain workspace snapshot fields")
+            try:
+                if str(UUID(self.root_identity)) != self.root_identity:
+                    raise ValueError("session identity must be a canonical UUID")
+            except ValueError as exc:
+                raise ValueError("session identity must be a canonical UUID") from exc
             return self
         if any(getattr(self, field) is None for field in snapshot_fields):
             raise ValueError("workspace snapshot fields are required")
@@ -290,8 +247,6 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
             action = _StoredFileAction.model_validate(raw_action)
         except (RootFileError, ValidationError, ValueError):
             continue
-        if action.root == "session" and action.root_identity != str(item.session_id):
-            continue
         scope = "session" if action.root == "session" else "filesystem"
         query = {
             "path": action.path,
@@ -312,89 +267,13 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
                     mode="json",
                     by_alias=True,
                     exclude_none=True,
-                    exclude={
-                        "attachment_position",
-                        "draft_operation",
-                        "representations",
-                    },
-                ),
-                **(
-                    {
-                        "draftOperation": action.draft_operation,
-                        "representations": _draft_action_representations(item, action),
-                    }
-                    if action.intent == "draft"
-                    else {}
+                    exclude=set(),
                 ),
                 "downloadUrl": "/api/workspace/files/download?"
                 + urlencode(query),
             }
         )
     return actions
-
-
-def _draft_action_representations(
-    item: Message, action: _StoredFileAction
-) -> list[dict[str, str]]:
-    if action.intent != "draft":
-        return []
-    if action.representations:
-        attachments = {attachment.position: attachment for attachment in item.attachments}
-        linked = []
-        for representation in action.representations:
-            attachment = attachments.get(representation.attachment_position)
-            if not _is_generated_artifact(attachment):
-                return []
-            assert attachment is not None
-            linked.append(
-                {"attachmentId": str(attachment.id), "role": representation.role}
-            )
-        return linked
-    if action.attachment_position is not None:
-        attachment = next(
-            (
-                attachment
-                for attachment in item.attachments
-                if attachment.position == action.attachment_position
-            ),
-            None,
-        )
-        return (
-            [{"attachmentId": str(attachment.id), "role": "preview"}]
-            if _matches_legacy_draft_attachment(attachment, action)
-            else []
-        )
-    matches = [
-        attachment
-        for attachment in item.attachments
-        if _matches_legacy_draft_attachment(attachment, action)
-    ]
-    return (
-        [{"attachmentId": str(matches[0].id), "role": "preview"}]
-        if len(matches) == 1
-        else []
-    )
-
-
-def _is_generated_artifact(attachment: MessageAttachment | None) -> bool:
-    return bool(
-        attachment
-        and attachment.category == "generated"
-        and attachment.purpose == "artifact"
-    )
-
-
-def _matches_legacy_draft_attachment(
-    attachment: MessageAttachment | None, action: _StoredFileAction
-) -> bool:
-    return bool(
-        _is_generated_artifact(attachment)
-        and attachment is not None
-        and attachment.filename == action.filename
-        and attachment.size_bytes == action.size_bytes
-    )
-
-
 def _model_available(ai: AiSettings, model_id: UUID | None) -> bool:
     if not ai.enabled or model_id is None:
         return False
@@ -544,7 +423,56 @@ def default_control_center_state() -> ControlCenterState:
     )
 
 
+class ActiveFileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    root: Literal["session", "workspace"]
+    root_identity: str = Field(
+        min_length=36,
+        max_length=36,
+        validation_alias=AliasChoices("root_identity", "rootIdentity"),
+    )
+    path: str = Field(min_length=1, max_length=1_000)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dirty: bool
+
+
+def _active_file_payload(
+    active_file: ActiveFileRequest | None, session: ChatSession
+) -> dict[str, Any] | None:
+    if active_file is None:
+        return None
+    try:
+        identity = UUID(active_file.root_identity)
+        path = RootFileService(UUID(int=0)).normalize_relative_path(active_file.path)
+    except (RootFileError, ValueError) as exc:
+        raise ApiError(422, "validation.invalid", field="activeFile") from exc
+    expected_identity = (
+        session.project_id or session.id
+        if active_file.root == "session"
+        else session.preferred_root_id
+    )
+    if (
+        str(identity) != active_file.root_identity
+        or identity != expected_identity
+        or path != active_file.path
+        or path == "."
+        or active_file.root == "session"
+        and not path.startswith("files/")
+    ):
+        raise ApiError(422, "validation.invalid", field="activeFile")
+    return {
+        "root": active_file.root,
+        "rootIdentity": str(identity),
+        "path": path,
+        "sha256": active_file.sha256,
+        "dirty": active_file.dirty,
+    }
+
+
 class SessionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     content: str = Field(max_length=200_000)
     run_id: UUID | None = None
     project_id: UUID | None = None
@@ -555,8 +483,10 @@ class SessionCreateRequest(BaseModel):
     preferred_execution_agent_id: UUID | None = None
     preferred_root_id: UUID | None = None
     working_directory: str | None = Field(default=None, max_length=1_000)
-    workspace_access: str = Field(default="read-only", pattern="^(read-only|read-write)$")
     control_center: ControlCenterState = Field(default_factory=default_control_center_state)
+    active_file: ActiveFileRequest | None = Field(
+        default=None, validation_alias=AliasChoices("active_file", "activeFile")
+    )
 
 
 class SessionUpdateRequest(BaseModel):
@@ -570,7 +500,6 @@ class SessionUpdateRequest(BaseModel):
     preferred_execution_agent_id: UUID | None = None
     preferred_root_id: UUID | None = None
     working_directory: str | None = Field(default=None, max_length=1_000)
-    workspace_access: str | None = Field(default=None, pattern="^(read-only|read-write)$")
     control_center: ControlCenterState = Field(default=None)
 
 
@@ -651,8 +580,13 @@ async def _add_directory_grant(
 
 
 class SendMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     content: str = Field(max_length=200_000)
     run_id: UUID | None = None
+    active_file: ActiveFileRequest | None = Field(
+        default=None, validation_alias=AliasChoices("active_file", "activeFile")
+    )
 
 
 class SessionReadRequest(BaseModel):
@@ -866,7 +800,6 @@ def session_payload(
         "preferredRootId": str(item.preferred_root_id) if item.preferred_root_id else None,
         "workingDirectory": item.working_directory,
         "currentDirectory": item.current_directory,
-        "workspaceAccess": item.workspace_access,
         "workspaceContext": workspace_context
         or {
             "executionAgentId": (
@@ -959,15 +892,6 @@ async def _workspace_context(db: AsyncSession, item: ChatSession) -> dict[str, A
             operations = operations & {"system.info", "filesystem.resolve"}
     else:
         operations = operations & {"system.info", "filesystem.resolve"}
-    if item.workspace_access == "read-only":
-        operations = operations & {
-            "workspace.list",
-            "workspace.read",
-            "workspace.stat",
-            "workspace.export",
-            "workspace.glob",
-            "workspace.grep",
-        }
     return {**context, "connected": True, "operations": sorted(operations)}
 
 
@@ -1373,7 +1297,6 @@ async def _create_session(
         preferred_root_id=root_id,
         working_directory=working_directory,
         current_directory=current_directory,
-        workspace_access=payload.workspace_access,
         control_center=payload.control_center.model_dump(mode="json"),
     )
     db.add(item)
@@ -1392,7 +1315,12 @@ async def _create_session(
     try:
         await asyncio.to_thread(session_storage.provision, item_id, item_project_id)
         run = await AgentRuntime.start(
-            db, item, content, run_id=payload.run_id, attachments=attachments
+            db,
+            item,
+            content,
+            run_id=payload.run_id,
+            attachments=attachments,
+            active_file=_active_file_payload(payload.active_file, item),
         )
     except (OSError, SessionStorageError) as exc:
         await db.rollback()
@@ -1533,7 +1461,6 @@ async def session_defaults(
         "preferredRootId": str(preferred_root_id) if preferred_root_id else None,
         "workingDirectory": working_directory,
         "currentDirectory": current_directory,
-        "workspaceAccess": "read-only",
     }
 
 
@@ -1602,7 +1529,6 @@ async def update_session(
         "preferred_execution_agent_id",
         "preferred_root_id",
         "working_directory",
-        "workspace_access",
     }
     if fields & policy_fields:
         await db.scalar(
@@ -1634,6 +1560,17 @@ async def update_session(
         )
         if project is None:
             raise ApiError(404, "project.notFound", field="projectId")
+    if target_project_id != source_project_id:
+        for grant in list(
+            (
+                await db.scalars(
+                    select(PermissionGrant).where(
+                        PermissionGrant.session_id == session_id
+                    )
+                )
+            ).all()
+        ):
+            await db.delete(grant)
     if "title" in fields and payload.title is not None:
         item.title = payload.title
         item.title_generation_status = TitleGenerationStatus.SKIPPED.value
@@ -1696,8 +1633,6 @@ async def update_session(
         await _add_directory_grant(
             db, item.id, agent_id, root_id, root_revision, item.current_directory
         )
-    if "workspace_access" in fields and payload.workspace_access is not None:
-        item.workspace_access = payload.workspace_access
     storage = SessionStorage()
     moved = False
 
@@ -1717,6 +1652,12 @@ async def update_session(
     commit_task: asyncio.Task[None] | None = None
     try:
         if target_project_id != source_project_id:
+            if source_project_id is None and target_project_id is not None:
+                standalone_files = storage.session_path(
+                    item.id, project_id=None, require_exists=True
+                ) / "files"
+                if any(standalone_files.iterdir()):
+                    raise ApiError(409, "session.projectFilesConflict")
             await asyncio.to_thread(
                 storage.move_session,
                 item.id,
@@ -2176,7 +2117,12 @@ async def _send_message(
         raise ApiError(409, "session.modelToolsUnavailable")
     try:
         run = await AgentRuntime.start(
-            db, item, content, run_id=payload.run_id, attachments=attachments
+            db,
+            item,
+            content,
+            run_id=payload.run_id,
+            attachments=attachments,
+            active_file=_active_file_payload(payload.active_file, item),
         )
     except AgentRunError as exc:
         raise ApiError(409, exc.code, params=exc.params) from exc

@@ -57,23 +57,21 @@ describe('execution agent store', () => {
     })
   })
 
-  it('requires the selected root and applies persisted read-only access to live operations', () => {
+  it('requires the selected root and exposes its advertised operations', () => {
     const store = useExecutionAgentStore()
     store.items = [agent]
 
     expect(store.workspaceContextFor({
       preferredExecutionAgentId: 'agent-1',
-      preferredRootId: 'missing-root',
-      workspaceAccess: 'read-write'
+      preferredRootId: 'missing-root'
     })).toMatchObject({ connected: false, operations: [] })
     expect(store.workspaceContextFor({
       preferredExecutionAgentId: 'agent-1',
       preferredRootId: 'root-1',
-      workspaceAccess: 'read-only',
       workspaceContext: { connected: false, operations: [] }
     })).toMatchObject({
       connected: true,
-      operations: ['workspace.export', 'workspace.list', 'workspace.read']
+      operations: agent.operations
     })
   })
 

@@ -28,7 +28,7 @@
       <template #menu>
         <template v-if="hasOverflowActions">
             <q-item
-              v-if="!workspace.rootIdentity && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('workspace.list')"
+              v-if="!workspace.toolContext && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('workspace.list')"
               clickable
               v-ripple
               v-close-popup
@@ -57,32 +57,19 @@
       </template>
     </ControlCenterContentHeader>
     <div class="file-explorer__controls q-px-md q-pb-md q-gutter-y-sm">
-      <q-btn-toggle
-        :model-value="workspace.scope"
-        spread
-        no-caps
-        unelevated
-        toggle-color="primary"
-        :options="scopeOptions"
-        @update:model-value="workspace.setScope"
-      />
-      <q-select
-        v-if="selectedExecutionAgent"
-        :model-value="selectedRoot?.id || null"
-        :options="rootOptions"
-        emit-value
-        map-options
-        outlined
-        dense
-        options-dense
-        label="Arbeitsbereich"
-        popup-content-class="app-menu-popup"
-        :disable="chat.running || !rootOptions.length"
-        @update:model-value="selectRoot"
-      >
-        <template #prepend><q-icon name="folder" /></template>
-      </q-select>
-      <div class="text-caption app-muted ellipsis">{{ scopeDescription }}</div>
+      <div class="row items-center no-wrap q-gutter-sm">
+        <div class="col text-caption app-muted ellipsis">{{ scopeDescription }}</div>
+        <q-btn
+          v-if="workspace.toolContext"
+          flat
+          dense
+          no-caps
+          color="primary"
+          icon="undo"
+          label="Zu aktuellen Dateien"
+          @click="workspace.returnToCurrentContext()"
+        />
+      </div>
       <div class="row items-center no-wrap">
         <q-btn
           class="file-icon-action q-mr-xs"
@@ -177,7 +164,7 @@
           @focus="treeFocusPath = '.'"
         >
           <span class="file-tree-spacer" />
-          <q-icon :name="workspace.scope === 'session' ? 'folder_special' : workspace.workingDirectory ? 'home_work' : 'home'" size="20px" />
+          <q-icon name="folder_special" size="20px" />
           <span class="q-ml-sm">{{ rootLabel }}</span>
         </div>
         <div v-if="workspace.loadErrors['.']" class="file-load-state q-ma-sm q-pa-md text-center" role="alert">
@@ -437,12 +424,6 @@ const selectedExecutionAgent = computed(() => (
 const selectedRoot = computed(() => selectedExecutionAgent.value?.roots?.find((root) => (
   root.id === chat.activeContext?.preferredRootId
 )) || null)
-const rootOptions = computed(() => (
-  (selectedExecutionAgent.value?.roots || []).map((root) => ({
-    label: root.label,
-    value: root.id
-  }))
-))
 const hasOverflowActions = computed(() => Boolean(
   (workspace.scope === 'filesystem' && explorerAvailable.value && selectedIsDirectory.value)
   || (workspace.scope === 'filesystem' && explorerAvailable.value && chat.activeContext?.workingDirectory)
@@ -456,7 +437,7 @@ const targetDirectory = computed(() => {
 const mutationDirectory = computed(() => (
   workspace.scope === 'session' && targetDirectory.value === '.' ? 'files' : targetDirectory.value
 ))
-const writableLocation = computed(() => !workspace.rootIdentity && (
+const writableLocation = computed(() => !workspace.toolContext && (
   workspace.scope === 'filesystem'
   || mutationDirectory.value === 'files'
   || mutationDirectory.value.startsWith('files/')
@@ -471,13 +452,8 @@ const canRename = computed(() => Boolean(
   && renameName.value.trim() !== renameTarget.value.name
 ))
 const rootLabel = computed(() => {
-  if (workspace.scope === 'session') return 'Session-Dateien'
-  return workspace.workingDirectory ? 'Aktueller Ordner' : 'Computer'
+  return 'Dateien'
 })
-const scopeOptions = computed(() => [
-  { label: 'Session', value: 'session', disable: !chat.current },
-  { label: 'Computer', value: 'filesystem' }
-])
 const explorerAvailable = computed(() => workspace.operationAvailable('workspace.list'))
 const explorerUnavailableMessage = computed(() => {
   if (explorerAvailable.value) return ''
@@ -510,12 +486,8 @@ const explorerUnavailableIcon = computed(() => (
   selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'folder_off'
 ))
 const scopeDescription = computed(() => {
-  if (workspace.rootIdentity) {
-    return workspace.scope === 'session'
-      ? 'Tool-Datei · Session-Dateien · nur Lesen'
-      : `Tool-Datei · ${workspace.rootIdentity} · nur Lesen`
-  }
-  if (workspace.scope === 'session') return 'Session-Dateien · nur „files“ ist veränderbar'
+  if (workspace.toolContext) return 'Gespeicherter Dateistand · nur Lesen'
+  if (workspace.scope === 'session') return 'Dateien · nur „files“ ist veränderbar'
   if (!workspace.operationAvailable('workspace.list')) return 'Der ausgewählte Arbeitsbereich ist nicht verfügbar.'
   return workspace.workingDirectory
     ? `Aktueller Ordner · ${chat.activeContext?.currentDirectory || workspace.workingDirectory}`
@@ -743,10 +715,6 @@ async function setWorkspaceRoot() {
   await chat.updateActive({ working_directory: '.' })
 }
 
-async function selectRoot(value) {
-  await chat.updateActive({ preferred_root_id: value })
-}
-
 function openRenameDialog(entry) {
   workspace.selectPath(entry.path, entry.kind)
   renameTarget.value = entry
@@ -809,18 +777,24 @@ watch(
   [
     () => chat.selectedSessionId || null,
     () => chat.current?.id || null,
+    () => chat.current?.projectId || null,
     () => chat.current?.workingDirectory || null,
     () => chat.activeContext?.workingDirectory || null,
     () => workspaceContextKey(activeWorkspaceContext.value),
     () => controlCenter.requestGeneration,
     () => controlCenter.ready
   ],
-  ([selectedSessionId, currentSessionId, currentWorkingDirectory, draftWorkingDirectory]) => {
+  ([selectedSessionId, currentSessionId, currentProjectId, currentWorkingDirectory, draftWorkingDirectory]) => {
     const sessionId = selectedSessionId || currentSessionId
     const workingDirectory = currentSessionId === sessionId
       ? currentWorkingDirectory
       : sessionId ? null : draftWorkingDirectory
-    workspace.configure({ sessionId, workingDirectory, workspaceContext: activeWorkspaceContext.value })
+    workspace.configure({
+      sessionId,
+      rootIdentity: sessionId ? currentProjectId || sessionId : null,
+      workingDirectory,
+      workspaceContext: activeWorkspaceContext.value
+    })
     if (
       sessionId
       && currentSessionId === sessionId

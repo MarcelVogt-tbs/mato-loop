@@ -139,10 +139,44 @@ async def delete_project(
     project = await _owned_project(db, project_id, user.id, for_update=True)
     if await _session_count(db, project):
         raise ApiError(status.HTTP_409_CONFLICT, "project.notEmpty")
+    storage = SessionStorage()
     try:
-        await asyncio.to_thread(SessionStorage().remove_project, project.id)
+        trashed = await asyncio.to_thread(storage.trash_project, project.id)
     except (OSError, SessionStorageError) as exc:
         logger.exception("Empty project storage could not be removed")
         raise ApiError(500, "session.storageUnavailable") from exc
-    await db.delete(project)
-    await db.commit()
+
+    async def restore_storage() -> None:
+        if trashed is None:
+            return
+        try:
+            await asyncio.to_thread(storage.restore_project, project.id, trashed)
+        except Exception:
+            logger.exception("Project storage could not be restored after database failure")
+
+    commit_task: asyncio.Task[None] | None = None
+    try:
+        await db.delete(project)
+        commit_task = asyncio.create_task(db.commit())
+        await asyncio.shield(commit_task)
+    except asyncio.CancelledError:
+        if commit_task is None:
+            await db.rollback()
+            await restore_storage()
+            raise
+        try:
+            await commit_task
+        except BaseException:
+            await db.rollback()
+            await restore_storage()
+        else:
+            await asyncio.to_thread(storage.purge_trashed, trashed)
+        raise
+    except BaseException:
+        await db.rollback()
+        await restore_storage()
+        raise
+    try:
+        await asyncio.to_thread(storage.purge_trashed, trashed)
+    except Exception:
+        logger.exception("Deleted project storage could not be removed from trash")

@@ -47,6 +47,8 @@ class WorkspaceTests(unittest.TestCase):
             ROOT_ID, self.revision, ".", "src/app.py", "one\ntwo\n", None
         )
         self.assertEqual(written["sha256"], hashlib.sha256(b"one\ntwo\n").hexdigest())
+        with self.assertRaisesRegex(AgentError, "exists"):
+            self.workspace.write(ROOT_ID, self.revision, ".", "src/app.py", "overwrite", None)
         read = self.workspace.read(ROOT_ID, self.revision, ".", "src/app.py", 2, 1, 2000)
         self.assertEqual(read["content"], "2: two")
         self.assertEqual(
@@ -132,6 +134,52 @@ class WorkspaceTests(unittest.TestCase):
                 self.workspace.import_file(ROOT_ID, self.revision, ".", "raced.bin", source, False)
         self.assertEqual((self.root / "raced.bin").read_bytes(), b"winner")
         self.assertFalse(any(path.name.startswith(".import-") for path in self.root.iterdir()))
+
+    def test_write_replace_restores_a_concurrent_edit(self) -> None:
+        (self.root / "app.py").write_text("old")
+        expected = hashlib.sha256(b"old").hexdigest()
+        exchange = workspace_module._rename_exchange
+        raced = False
+
+        def race(source_fd: int, source: str, destination_fd: int, destination: str) -> None:
+            nonlocal raced
+            if not raced:
+                raced = True
+                (self.root / "winner").write_text("concurrent")
+                os.replace(self.root / "winner", self.root / "app.py")
+            exchange(source_fd, source, destination_fd, destination)
+
+        with patch.object(workspace_module, "_rename_exchange", side_effect=race):
+            with self.assertRaisesRegex(AgentError, "changed"):
+                self.workspace.write(ROOT_ID, self.revision, ".", "app.py", "agent", expected)
+
+        self.assertEqual((self.root / "app.py").read_text(), "concurrent")
+
+    def test_write_replace_preserves_displaced_content_if_rollback_races(self) -> None:
+        (self.root / "app.py").write_text("old")
+        expected = hashlib.sha256(b"old").hexdigest()
+        exchange = workspace_module._rename_exchange
+        raced = False
+
+        def race(source_fd: int, source: str, destination_fd: int, destination: str) -> None:
+            nonlocal raced
+            if not raced:
+                raced = True
+                (self.root / "first").write_text("first concurrent edit")
+                os.replace(self.root / "first", self.root / "app.py")
+                exchange(source_fd, source, destination_fd, destination)
+                (self.root / "app.py").write_text("second concurrent edit")
+                return
+            exchange(source_fd, source, destination_fd, destination)
+
+        with patch.object(workspace_module, "_rename_exchange", side_effect=race):
+            with self.assertRaisesRegex(AgentError, "changed"):
+                self.workspace.write(ROOT_ID, self.revision, ".", "app.py", "agent", expected)
+
+        self.assertEqual((self.root / "app.py").read_text(), "first concurrent edit")
+        preserved = list(self.root.glob(".write-*.tmp"))
+        self.assertEqual(len(preserved), 1)
+        self.assertEqual(preserved[0].read_text(), "second concurrent edit")
 
     def test_copy_enforces_limits_again_while_streaming(self) -> None:
         source = self.root / "growing.bin"

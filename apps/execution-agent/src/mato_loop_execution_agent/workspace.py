@@ -38,6 +38,7 @@ class RootState:
 
 
 _RENAME_NOREPLACE = 1
+_RENAME_EXCHANGE = 2
 _renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
 if _renameat2 is not None:
     _renameat2.argtypes = [
@@ -102,6 +103,24 @@ def _rename_no_replace(source_fd: int, source: str, destination_fd: int, destina
     if number == errno.EXDEV:
         raise OSError(number, os.strerror(number))
     raise AgentError("path.notFound", "Source or destination parent is unavailable")
+
+
+def _rename_exchange(source_fd: int, source: str, destination_fd: int, destination: str) -> None:
+    if _renameat2 is None:
+        raise AgentError("agent.unsupported", "Atomic rename is unavailable on this Linux host")
+    result = _renameat2(
+        source_fd,
+        os.fsencode(source),
+        destination_fd,
+        os.fsencode(destination),
+        _RENAME_EXCHANGE,
+    )
+    if result == 0:
+        return
+    number = ctypes.get_errno()
+    if number == errno.EXDEV:
+        raise OSError(number, os.strerror(number))
+    raise AgentError("path.notFound", "Source or destination is unavailable")
 
 
 class Workspace:
@@ -510,37 +529,47 @@ class Workspace:
                 0o600,
                 dir_fd=parent,
             )
+            preserve_temporary = False
             try:
                 with os.fdopen(fd, "wb") as handle:
                     handle.write(data)
                     handle.flush()
                     os.fsync(handle.fileno())
-                if expected_sha256 is not None:
-                    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-                    current_identity = (
-                        current.st_dev,
-                        current.st_ino,
-                        current.st_size,
-                        current.st_mtime_ns,
-                        current.st_ctime_ns,
-                    )
-                    original_identity = (
-                        metadata.st_dev,
-                        metadata.st_ino,
-                        metadata.st_size,
-                        metadata.st_mtime_ns,
-                        metadata.st_ctime_ns,
-                    )
-                    if current_identity != original_identity:
-                        raise AgentError("file.changed", "File changed since it was read")
-                os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
-                os.chmod(name, 0o600, dir_fd=parent, follow_symlinks=False)
+                if expected_sha256 is None:
+                    _rename_no_replace(parent, temporary, parent, name)
+                else:
+                    staged = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+                    _rename_exchange(parent, temporary, parent, name)
+                    try:
+                        displaced_fd, _ = self._open_regular(parent, temporary)
+                        with os.fdopen(displaced_fd, "rb") as displaced:
+                            displaced_digest = hashlib.file_digest(displaced, "sha256").hexdigest()
+                        if displaced_digest != expected_sha256:
+                            raise AgentError("file.changed", "File changed since it was read")
+                    except BaseException:
+                        preserve_temporary = True
+                        try:
+                            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                        except OSError:
+                            raise
+                        if (current.st_dev, current.st_ino) != (
+                            staged.st_dev,
+                            staged.st_ino,
+                        ):
+                            raise
+                        try:
+                            _rename_exchange(parent, temporary, parent, name)
+                        except BaseException:
+                            raise
+                        raise
+                    os.unlink(temporary, dir_fd=parent)
                 _fsync(parent)
             except BaseException:
-                try:
-                    os.unlink(temporary, dir_fd=parent)
-                except FileNotFoundError:
-                    pass
+                if not preserve_temporary:
+                    try:
+                        os.unlink(temporary, dir_fd=parent)
+                    except FileNotFoundError:
+                        pass
                 raise
         return {
             "path": _path(parts[len(_parts(working_directory)) :]),

@@ -1,14 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
-const READ_ONLY_OPERATIONS = new Set([
-  'workspace.export',
-  'workspace.list',
-  'workspace.read',
-  'workspace.glob',
-  'workspace.grep',
-  'workspace.stat'
-])
 const POLL_INTERVAL_MS = 10_000
 let fetchPromise = null
 let pairingPolicyPromise = null
@@ -49,13 +41,7 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
             operation === 'system.info' || operation === 'filesystem.resolve'
           ))
       const connected = Boolean(agent?.connected && (root || agent?.protocolVersion >= 2))
-      const operations = connected
-        ? availableOperations.filter((operation) => (
-            preferences?.workspaceAccess !== 'read-only'
-            || !operation.startsWith('workspace.')
-            || READ_ONLY_OPERATIONS.has(operation)
-          ))
-        : []
+      const operations = connected ? availableOperations : []
       return {
         executionAgentId,
         rootId,

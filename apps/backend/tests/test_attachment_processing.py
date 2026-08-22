@@ -25,7 +25,7 @@ from mato_loop_backend.attachments import (
     AttachmentStorage,
     classify_attachment,
 )
-from mato_loop_backend.models import Message
+from mato_loop_backend.models import ChatSession, Message
 from mato_loop_backend.session_storage import SessionStorage
 
 
@@ -283,7 +283,10 @@ async def test_compressed_audio_uses_verified_pcm_derivative_and_discards_both(
     service = AttachmentService(storage)
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Audio")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id, None]
+    db.scalar.side_effect = [
+        ChatSession(id=session_id, user_id=uuid4(), title="Test"),
+        None,
+    ]
     derived_wav = wav_bytes(frames=160, sample_rate=16_000)
 
     def run_media(command: list[str], _data: bytes, _timeout: int):
@@ -362,7 +365,7 @@ async def test_session_quota_includes_new_derived_content(
     service = AttachmentService(AttachmentStorage(sessions))
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Text")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id]
+    db.scalar.side_effect = [ChatSession(id=session_id, user_id=uuid4(), title="Test")]
     monkeypatch.setattr(attachment_module, "SESSION_ATTACHMENT_QUOTA_BYTES", 150)
 
     with pytest.raises(AttachmentError, match="attachment.sessionQuotaExceeded"):

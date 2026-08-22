@@ -32,4 +32,4 @@ Voraussetzungen sind:
 
 ## Mediengenerierung
 
-Je nach Provider, Modellfähigkeiten und Tool-Richtlinien kann der Agent Bilder, Sprache oder Audio erzeugen und Bilder bearbeiten. Ergebnisse erscheinen als Tool-Anhänge und werden im Session-Speicher unter `generated` abgelegt.
+Je nach Provider, Modellfähigkeiten und Tool-Richtlinien kann der Agent Bilder, Sprache oder Audio erzeugen und Bilder bearbeiten. Ergebnisse erscheinen als unveränderliche Tool-Anhänge der jeweiligen Nachricht und nicht im Dateibaum.

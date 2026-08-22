@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from io import BytesIO
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
-from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 import zxingcpp
 from PIL import Image
@@ -239,23 +239,6 @@ class ToolFileAction:
     working_directory: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class ToolDraftRepresentation:
-    attachment_position: int
-    role: Literal["preview", "download", "internal"]
-
-
-@dataclass(frozen=True, slots=True)
-class ToolDraftAction:
-    operation: Literal["create", "revise", "present"]
-    draft_id: UUID
-    revision: int
-    path: str
-    filename: str
-    size_bytes: int
-    representations: tuple[ToolDraftRepresentation, ...] = ()
-
-
 @dataclass(slots=True)
 class ToolResult:
     content: str
@@ -263,7 +246,6 @@ class ToolResult:
     is_error: bool = False
     attachments: tuple[ToolAttachment, ...] = ()
     file_actions: tuple[ToolFileAction, ...] = ()
-    draft_action: ToolDraftAction | None = None
     trust_level: TrustLevel | None = None
 
     @classmethod
@@ -358,7 +340,6 @@ class ToolDefinition:
     arguments_model: type[BaseModel]
     handler: Callable[[Any, ToolContext], Awaitable[ToolResult]]
     tool_type: Literal["backend", "computer", "shared"] = "backend"
-    write: bool = False
     requires_search: bool = False
     requires_webfetch: bool = False
     requires_memory: bool = False
@@ -369,6 +350,7 @@ class ToolDefinition:
     label: str | None = None
     icon: str = "build"
     actions: tuple[ToolAction, ...] = ()
+    alternative_action_capabilities: frozenset[str] = frozenset()
     instance_argument: str | None = None
     resource_argument: str | None = None
     releases_private_data: bool = False
@@ -381,6 +363,25 @@ class ToolDefinition:
         schema = self.arguments_model.model_json_schema()
         _remove_schema_titles(schema)
         return {"name": self.name, "description": self.description, "parameters": schema}
+
+
+def _actions_enabled(
+    definition: ToolDefinition, tool_settings: ToolSettings
+) -> bool:
+    enabled = {
+        action.capability: tool_execution_policy(
+            tool_settings,
+            action.capability,
+            action.default_policy,
+            allowed_policies=action.allowed_policies,
+        )
+        != ToolExecutionPolicy.DISABLED
+        for action in definition.actions
+    }
+    alternatives = definition.alternative_action_capabilities
+    return all(
+        value for capability, value in enabled.items() if capability not in alternatives
+    ) and (not alternatives or any(enabled.get(capability, False) for capability in alternatives))
 
 
 def _remove_schema_titles(value: Any) -> None:
@@ -576,7 +577,6 @@ class ToolRegistry:
             arguments_model=contribution.arguments_model,
             handler=contribution.handler,
             tool_type="computer" if contribution.execution_operation else "backend",
-            write=contribution.write,
             requires_search=contribution.requires_search,
             requires_webfetch=contribution.requires_webfetch,
             requires_memory=contribution.requires_memory,
@@ -598,7 +598,6 @@ class ToolRegistry:
         integration_settings: IntegrationSettings,
         offered_names: set[str] | frozenset[str],
         *,
-        workspace_access: str,
         webfetch_enabled: bool,
         web_search_enabled: bool,
         memory_enabled: bool,
@@ -623,7 +622,6 @@ class ToolRegistry:
             )
 
         grouped: dict[str, list[str]] = {
-            "write_mode": [],
             "integrations": [],
             "media": [],
             "web": [],
@@ -634,9 +632,7 @@ class ToolRegistry:
         for name, definition in installed_definitions.items():
             if name in offered_names:
                 continue
-            if definition.write and workspace_access != "read-write":
-                reason = "write_mode"
-            elif definition.group == "integrations" and name not in active_definitions:
+            if definition.group == "integrations" and name not in active_definitions:
                 reason = "integrations"
             elif definition.requires_search and not web_search_enabled:
                 reason = "web"
@@ -660,25 +656,13 @@ class ToolRegistry:
                 and definition.required_operation not in execution_operations
             ):
                 reason = "temporary"
-            elif any(
-                tool_execution_policy(
-                    tool_settings,
-                    action.capability,
-                    action.default_policy,
-                    allowed_policies=action.allowed_policies,
-                )
-                == ToolExecutionPolicy.DISABLED
-                for action in definition.actions
-            ):
+            elif not _actions_enabled(definition, tool_settings):
                 reason = "settings"
             else:
                 reason = "temporary"
             grouped[reason].append(name)
 
         templates = {
-            "write_mode": (
-                'File mutation [{names}]: switch "Agent-Modus" from "Lesen" to "Schreiben".'
-            ),
             "integrations": (
                 'Integration tools [{names}]: configure or enable them under '
                 '"Einstellungen > Integrationen".'
@@ -710,7 +694,6 @@ class ToolRegistry:
     def available(
         self,
         integration_settings: IntegrationSettings,
-        workspace_access: str,
         webfetch_enabled: bool = False,
         web_search_enabled: bool = True,
         memory_enabled: bool = False,
@@ -723,7 +706,6 @@ class ToolRegistry:
             for definition in (*self._definitions.values(), *self._operation_definitions.values())
             if self._is_available(
                 definition,
-                workspace_access=workspace_access,
                 webfetch_enabled=webfetch_enabled,
                 web_search_enabled=web_search_enabled,
                 memory_enabled=memory_enabled,
@@ -737,7 +719,6 @@ class ToolRegistry:
     def _is_available(
         definition: ToolDefinition,
         *,
-        workspace_access: str,
         webfetch_enabled: bool,
         web_search_enabled: bool,
         memory_enabled: bool,
@@ -746,8 +727,7 @@ class ToolRegistry:
         execution_operations: set[str] | frozenset[str] = frozenset(),
     ) -> bool:
         return (
-            (workspace_access == "read-write" or not definition.write)
-            and (not definition.requires_search or web_search_enabled)
+            (not definition.requires_search or web_search_enabled)
             and (not definition.requires_webfetch or webfetch_enabled)
             and (not definition.requires_memory or memory_enabled)
             and (not definition.requires_memory_write or memory_write_enabled)
@@ -764,7 +744,6 @@ class ToolRegistry:
     def schemas(
         self,
         integration_settings: IntegrationSettings,
-        workspace_access: str,
         webfetch_enabled: bool = False,
         web_search_enabled: bool = True,
         memory_enabled: bool = False,
@@ -774,7 +753,6 @@ class ToolRegistry:
     ) -> list[dict[str, Any]]:
         return self.effective(
             integration_settings,
-            workspace_access,
             webfetch_enabled,
             web_search_enabled,
             memory_enabled,
@@ -786,7 +764,6 @@ class ToolRegistry:
     def effective(
         self,
         integration_settings: IntegrationSettings,
-        workspace_access: str,
         webfetch_enabled: bool = False,
         web_search_enabled: bool = True,
         memory_enabled: bool = False,
@@ -807,7 +784,6 @@ class ToolRegistry:
             for item in definitions.values()
             if self._is_available(
                 item,
-                workspace_access=workspace_access,
                 webfetch_enabled=webfetch_enabled,
                 web_search_enabled=web_search_enabled,
                 memory_enabled=memory_enabled,
@@ -817,16 +793,7 @@ class ToolRegistry:
             )
             and (
                 tool_settings is None
-                or all(
-                    tool_execution_policy(
-                        tool_settings,
-                        action.capability,
-                        action.default_policy,
-                        allowed_policies=action.allowed_policies,
-                    )
-                    != ToolExecutionPolicy.DISABLED
-                    for action in item.actions
-                )
+                or _actions_enabled(item, tool_settings)
             )
         }
         search_providers = (
@@ -1095,8 +1062,6 @@ class ToolRegistry:
 
         if tool.source_id is not None and not await integration_is_current(tool.source_id):
             return ToolResult.error("tool.unavailable")
-        if definition.write and context.session.workspace_access != "read-write":
-            return ToolResult.error("tool.writeDisabled")
         if (
             definition.requires_webfetch
             and context.web_fetch_policy == WebFetchPolicy.DISABLED
@@ -1430,11 +1395,16 @@ class WriteFileArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
     content: str = Field(max_length=1_000_000)
+    mode: Literal["create", "replace"]
+    expected_sha256: str | None = Field(
+        default=None, alias="expectedSha256", pattern=r"^[0-9a-f]{64}$"
+    )
 
-
-class CreateDraftArguments(ToolArguments):
-    filename: str = Field(min_length=1, max_length=240)
-    content: str = Field(max_length=10 * 1024 * 1024)
+    @model_validator(mode="after")
+    def validate_mode(self) -> WriteFileArguments:
+        if (self.mode == "replace") != (self.expected_sha256 is not None):
+            raise ValueError("replace requires expected_sha256; create forbids it")
+        return self
 
 
 class CreateDirectoryArguments(ToolArguments):
@@ -2149,6 +2119,7 @@ async def _project_read_files(
     return (
         RootFileService(
             target.id,
+            project_id=target.project_id,
             session_storage=context.root_files.session_storage,
             session_quota_bytes=context.root_files.SESSION_QUOTA_BYTES,
             max_editable_text_bytes=context.root_files.max_editable_text_bytes,
@@ -2300,6 +2271,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             "hasMore": result.has_more,
             "nextOffset": result.next_offset,
             "truncatedLines": list(result.truncated_lines),
+            "sha256": result.sha256,
         },
     )
 
@@ -2502,61 +2474,15 @@ def _workspace_file_action(
     )
 
 
-async def _record_tool_text_revisions(
-    context: ToolContext,
-    root: Literal["session", "workspace"],
-    path: str,
-    contents: tuple[str, ...],
-) -> tuple[UUID, int] | None:
-    if root == "session":
-        source = {
-            "root": "session",
-            "rootIdentity": str(context.session.id),
-            "path": path,
-        }
-        parts = path.split("/")
-        try:
-            draft_id = UUID(parts[2]) if len(parts) == 4 and parts[:2] == ["files", "drafts"] else None
-        except ValueError:
-            draft_id = None
-        if draft_id is None or str(draft_id) != parts[2]:
-            draft_id = uuid5(NAMESPACE_URL, json.dumps(source, sort_keys=True))
-    else:
-        client = _workspace_client(context)
-        source = {
-            "root": "workspace",
-            "executionAgentId": str(client.agent_id),
-            "rootId": str(client.root_id),
-            "rootRevision": client.root_revision,
-            "workingDirectory": client.working_directory,
-            "path": path,
-        }
-        draft_id = uuid5(NAMESPACE_URL, json.dumps(source, sort_keys=True))
-    try:
-        revision = await asyncio.to_thread(
-            context.root_files.record_text_revisions,
-            draft_id,
-            path.rsplit("/", 1)[-1],
-            contents,
-            source,
-        )
-        return draft_id, revision
-    except (OSError, RootFileError):
-        logger.warning(
-            "Could not record tool text revisions for session %s path %s",
-            context.session.id,
-            path,
-            exc_info=True,
-        )
-        return None
-
-
 async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> ToolResult:
+    capability = (
+        "session.files.write" if arguments.root == "session" else "filesystem.write"
+    )
     request = _filesystem_permission(
         context,
         root=arguments.root,
         path=arguments.path,
-        capability="filesystem.write",
+        capability=capability,
         action_kind="write_file",
         action_label="Datei schreiben",
     )
@@ -2570,102 +2496,45 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
             {
                 "path": path,
                 "content": arguments.content,
+                **(
+                    {"expectedSha256": arguments.expected_sha256}
+                    if arguments.mode == "replace"
+                    else {}
+                ),
             },
             WorkspaceWriteResult,
         )
         assert isinstance(result, WorkspaceWriteResult)
         _require_workspace_path(result.path, path)
-        await _record_tool_text_revisions(
-            context, "workspace", result.path, (arguments.content,)
-        )
         return ToolResult.json(
-            {"root": arguments.root, "written": result.path},
+            {
+                "root": arguments.root,
+                "written": result.path,
+                "sha256": result.sha256,
+                "sizeBytes": result.size,
+            },
             file_actions=_workspace_file_action(
                 context, "write", result.path, result.size
             ),
         )
     path = context.root_files.normalize_relative_path(arguments.path)
-    previous: tuple[str, ...] = ()
-    try:
-        data = context.root_files.read_bytes(
-            arguments.root,
-            path,
-            limit=context.root_files.max_editable_text_bytes,
-        )
-        if len(data) <= context.root_files.max_editable_text_bytes:
-            old_content = data.decode("utf-8", errors="strict")
-            if "\0" not in old_content:
-                previous = (old_content,)
-    except (RootFileError, UnicodeDecodeError):
-        pass
-    written = context.root_files.write_file(arguments.root, path, arguments.content)
-    draft_revision = await _record_tool_text_revisions(
-        context, "session", written, (*previous, arguments.content)
+    written = context.root_files.write_file(
+        arguments.root,
+        path,
+        arguments.content,
+        mode=arguments.mode,
+        expected_sha256=arguments.expected_sha256,
     )
-    parts = written.split("/")
-    is_draft = (
-        draft_revision is not None
-        and len(parts) == 4
-        and parts[:2] == ["files", "drafts"]
-        and str(draft_revision[0]) == parts[2]
-    )
-    if is_draft:
-        draft_id, revision = draft_revision
-        return ToolResult(
-            content=json.dumps({"root": arguments.root, "written": written}),
-            metadata={},
-            draft_action=ToolDraftAction(
-                operation="revise",
-                draft_id=draft_id,
-                revision=revision,
-                path=written,
-                filename=parts[-1],
-                size_bytes=len(arguments.content.encode("utf-8")),
-            ),
-        )
+    encoded = arguments.content.encode("utf-8")
     return ToolResult.json(
-        {"root": arguments.root, "written": written},
+        {
+            "root": arguments.root,
+            "written": written,
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "sizeBytes": len(encoded),
+        },
         file_actions=_regular_file_action(context, "write", arguments.root, written),
     )
-
-
-async def _create_draft(
-    arguments: CreateDraftArguments, context: ToolContext
-) -> ToolResult:
-    if (
-        tool_execution_policy(
-            context.tool_settings,
-            "draft.create",
-            ToolExecutionPolicy.AUTO,
-            allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO),
-        )
-        != ToolExecutionPolicy.AUTO
-    ):
-        return ToolResult.error("tool.unavailable")
-    draft = context.root_files.create_text_draft(arguments.filename, arguments.content)
-    return ToolResult(
-        content=json.dumps(
-            {
-                "draftId": str(draft.draft_id),
-                "revision": draft.revision,
-                "path": draft.path,
-                "filename": draft.filename,
-                "sizeBytes": draft.size,
-            },
-            ensure_ascii=False,
-        ),
-        metadata={},
-        draft_action=ToolDraftAction(
-            operation="create",
-            draft_id=draft.draft_id,
-            revision=draft.revision,
-            path=draft.path,
-            filename=draft.filename,
-            size_bytes=draft.size,
-        ),
-    )
-
-
 async def _create_directory(
     arguments: CreateDirectoryArguments, context: ToolContext
 ) -> ToolResult:
@@ -2673,7 +2542,9 @@ async def _create_directory(
         context,
         root=arguments.root,
         path=arguments.path,
-        capability="filesystem.write",
+        capability=(
+            "session.files.write" if arguments.root == "session" else "filesystem.write"
+        ),
         action_kind="create_directory",
         action_label="Ordner erstellen",
     )
@@ -2738,7 +2609,11 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
         context,
         root=arguments.destination_root,
         path=arguments.destination_path,
-        capability="filesystem.write",
+        capability=(
+            "session.files.write"
+            if arguments.destination_root == "session"
+            else "filesystem.write"
+        ),
         action_kind="copy_path",
         action_label="Ziel erstellen",
     )
@@ -2812,7 +2687,11 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
         context,
         root=arguments.destination_root,
         path=arguments.destination_path,
-        capability="filesystem.write",
+        capability=(
+            "session.files.write"
+            if arguments.destination_root == "session"
+            else "filesystem.write"
+        ),
         action_kind="move_path",
         action_label="Ziel erstellen",
     )
@@ -3049,8 +2928,6 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         "shell.inspect", {"command": arguments.command}, ShellInspectResult
     )
     assert isinstance(inspection, ShellInspectResult)
-    if context.session.workspace_access != "read-write" and not inspection.read_only:
-        return ToolResult.error("tool.writeDisabled")
     process_permission = _process_permission(
         context,
         {"command": arguments.command},
@@ -3844,9 +3721,6 @@ async def _generate_image(
         expected_trust_level=target_trust_level,
         user_id=context.session.user_id,
     )
-    draft = await asyncio.to_thread(
-        context.root_files.create_draft_file, result.filename, result.data
-    )
     return ToolResult(
         "Image generated.",
         {},
@@ -3858,15 +3732,6 @@ async def _generate_image(
                 kind="image",
                 metadata=result.metadata,
             ),
-        ),
-        draft_action=ToolDraftAction(
-            "create",
-            draft.draft_id,
-            draft.revision,
-            draft.path,
-            draft.filename,
-            draft.size,
-            representations=(ToolDraftRepresentation(0, "preview"),),
         ),
         trust_level=result.trust_level,
     )
@@ -3894,22 +3759,10 @@ async def _generate_qr_code(
     except Exception:
         logger.exception("QR code generation failed")
         return ToolResult.error("tool.executionFailed")
-    draft = await asyncio.to_thread(
-        context.root_files.create_draft_file, "qr-code.png", data
-    )
     return ToolResult(
         "QR code generated.",
         {},
         attachments=(ToolAttachment(data, "image/png", "qr-code.png"),),
-        draft_action=ToolDraftAction(
-            "create",
-            draft.draft_id,
-            draft.revision,
-            draft.path,
-            draft.filename,
-            draft.size,
-            representations=(ToolDraftRepresentation(0, "preview"),),
-        ),
     )
 
 
@@ -4043,9 +3896,6 @@ async def _edit_image(
     result.metadata["authorizationSourceAttachmentIds"] = [
         str(attachment_id) for attachment_id in authorization_source_ids
     ]
-    draft = await asyncio.to_thread(
-        context.root_files.create_draft_file, result.filename, result.data
-    )
     return ToolResult(
         "Image edited.",
         {},
@@ -4057,15 +3907,6 @@ async def _edit_image(
                 kind="image",
                 metadata=result.metadata,
             ),
-        ),
-        draft_action=ToolDraftAction(
-            "create",
-            draft.draft_id,
-            draft.revision,
-            draft.path,
-            draft.filename,
-            draft.size,
-            representations=(ToolDraftRepresentation(0, "preview"),),
         ),
         trust_level=result.trust_level,
     )
@@ -5449,10 +5290,13 @@ _FILESYSTEM_READ = ToolAction(
     "filesystem.read", "Lesen", ToolExecutionPolicy.AUTO
 )
 _FILESYSTEM_WRITE = ToolAction(
-    "filesystem.write", "Schreiben", ToolExecutionPolicy.AUTO, mutates=True
+    "filesystem.write", "Workspace schreiben", ToolExecutionPolicy.ASK, mutates=True
 )
 _FILESYSTEM_DELETE = ToolAction(
-    "filesystem.delete", "Löschen", ToolExecutionPolicy.AUTO, mutates=True
+    "filesystem.delete", "Löschen", ToolExecutionPolicy.ASK, mutates=True
+)
+_SESSION_FILES_WRITE = ToolAction(
+    "session.files.write", "Session-Dateien schreiben", ToolExecutionPolicy.AUTO, mutates=True
 )
 _WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO)
 _WEB_FETCH = ToolAction(
@@ -5523,15 +5367,6 @@ _CHANGE_DIRECTORY = ToolAction(
     ToolExecutionPolicy.AUTO,
     allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO),
 )
-_DRAFT_CREATE = ToolAction(
-    "draft.create",
-    "Entwürfe erstellen",
-    ToolExecutionPolicy.AUTO,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO),
-    mutates=True,
-)
-
-
 tool_registry = ToolRegistry(
     [
         ToolDefinition(
@@ -5594,27 +5429,19 @@ tool_registry = ToolRegistry(
             actions=(_FILESYSTEM_READ,),
         ),
         ToolDefinition(
-            "create_draft",
-            "Create one editable UTF-8 artifact for requested reusable text, templates, samples, "
-            "Markdown, config, code, or OpenSCAD.",
-            CreateDraftArguments,
-            _create_draft,
-            group="filesystem",
-            label="Entwurf erstellen",
-            icon="draft",
-            actions=(_DRAFT_CREATE,),
-        ),
-        ToolDefinition(
             "write_file",
-            "Create or replace one UTF-8 file; its parent must exist.",
+            "Create or replace one UTF-8 file explicitly. Replace requires the expected SHA-256; "
+            "create fails if the path exists.",
             WriteFileArguments,
             _write_file,
             tool_type="shared",
-            write=True,
             group="filesystem",
             label="Datei schreiben",
             icon="edit_document",
-            actions=(_FILESYSTEM_WRITE,),
+            actions=(_SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
+            alternative_action_capabilities=frozenset(
+                {"session.files.write", "filesystem.write"}
+            ),
         ),
         ToolDefinition(
             "create_directory",
@@ -5622,11 +5449,13 @@ tool_registry = ToolRegistry(
             CreateDirectoryArguments,
             _create_directory,
             tool_type="shared",
-            write=True,
             group="filesystem",
             label="Ordner erstellen",
             icon="create_new_folder",
-            actions=(_FILESYSTEM_WRITE,),
+            actions=(_SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
+            alternative_action_capabilities=frozenset(
+                {"session.files.write", "filesystem.write"}
+            ),
         ),
         ToolDefinition(
             "delete_path",
@@ -5634,7 +5463,6 @@ tool_registry = ToolRegistry(
             DeletePathArguments,
             _delete_path,
             tool_type="shared",
-            write=True,
             group="filesystem",
             label="Pfad löschen",
             icon="delete_outline",
@@ -5646,11 +5474,13 @@ tool_registry = ToolRegistry(
             CopyPathArguments,
             _copy_path,
             tool_type="shared",
-            write=True,
             group="filesystem",
             label="Pfad kopieren",
             icon="content_copy",
-            actions=(_FILESYSTEM_READ, _FILESYSTEM_WRITE),
+            actions=(_FILESYSTEM_READ, _SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
+            alternative_action_capabilities=frozenset(
+                {"session.files.write", "filesystem.write"}
+            ),
         ),
         ToolDefinition(
             "move_path",
@@ -5658,11 +5488,13 @@ tool_registry = ToolRegistry(
             MovePathArguments,
             _move_path,
             tool_type="shared",
-            write=True,
             group="filesystem",
             label="Pfad verschieben",
             icon="drive_file_move",
-            actions=(_FILESYSTEM_DELETE, _FILESYSTEM_WRITE),
+            actions=(_FILESYSTEM_DELETE, _SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
+            alternative_action_capabilities=frozenset(
+                {"session.files.write", "filesystem.write"}
+            ),
         ),
         ToolDefinition(
             "web_search",
@@ -6054,7 +5886,6 @@ tool_registry = ToolRegistry(
             ProcessExecArguments,
             _process_exec,
             tool_type="computer",
-            write=True,
             required_operation="process.exec",
             group="process",
             label="Prozess ausführen",
@@ -6063,9 +5894,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "shell_run",
-            "Run one command directly with the host-configured shell in the current directory. In "
-            "read-only mode, only host-verified simple pwd, ls, cat, head, tail, wc, stat, "
-            "readlink, realpath, cmp, and sha256sum commands are accepted. This is not an "
+            "Run one command directly with the host-configured shell in the current directory. "
+            "The host inspects the command and its file targets before authorization. This is not an "
             "operating-system sandbox; shell cd applies only to this call.",
             ShellRunArguments,
             _shell_run,
@@ -6079,15 +5909,11 @@ tool_registry = ToolRegistry(
     ],
 )
 
-WRITE_TOOL_NAMES = frozenset(
-    definition.name for definition in tool_registry._definitions.values() if definition.write
-)
 ToolPermission = PermissionRequest
 
 
 def available_tool_schemas(
     integration_settings: IntegrationSettings,
-    workspace_access: str,
     webfetch_enabled: bool = False,
     web_search_enabled: bool = True,
     memory_enabled: bool = False,
@@ -6096,7 +5922,6 @@ def available_tool_schemas(
 ) -> list[dict[str, Any]]:
     return tool_registry.schemas(
         integration_settings,
-        workspace_access,
         webfetch_enabled,
         web_search_enabled,
         memory_enabled,
@@ -6135,8 +5960,16 @@ def permission_for(
         "glob": "filesystem.read",
         "grep": "filesystem.read",
         "provide_file": "filesystem.read",
-        "write_file": "filesystem.write",
-        "create_directory": "filesystem.write",
+        "write_file": (
+            "session.files.write"
+            if arguments.get("root") == "session"
+            else "filesystem.write"
+        ),
+        "create_directory": (
+            "session.files.write"
+            if arguments.get("root") == "session"
+            else "filesystem.write"
+        ),
         "delete_path": "filesystem.delete",
     }.get(tool_name)
     if capability is None:

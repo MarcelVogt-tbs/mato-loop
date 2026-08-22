@@ -88,6 +88,18 @@
       >
         <q-tooltip>Als PDF speichern</q-tooltip>
       </q-btn>
+      <q-btn
+        v-if="entry && workspace.scope === 'session' && !workspace.toolContext && !workspace.editorActive"
+        class="file-icon-action"
+        flat
+        round
+        dense
+        icon="history"
+        aria-label="Versionsverlauf öffnen"
+        @click="openRevisions"
+      >
+        <q-tooltip>Versionsverlauf</q-tooltip>
+      </q-btn>
       <q-btn v-if="!workspace.editorActive && canDownload" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
         <q-tooltip>Datei herunterladen</q-tooltip>
       </q-btn>
@@ -146,6 +158,10 @@
           <q-btn v-else flat no-caps color="primary" label="Erneut versuchen" @click="save" />
         </div>
       </div>
+      <q-banner v-if="workspace.editorExternalChange" dense rounded class="app-surface-tonal q-ma-sm" role="alert">
+        <template #avatar><q-icon name="warning_amber" color="warning" /></template>
+        Die Datei wurde außerhalb des Editors geändert. Dein ungespeicherter Entwurf bleibt erhalten.
+      </q-banner>
       <WorkspaceFileEditor
         v-model="draft"
         class="col"
@@ -205,6 +221,77 @@
         <q-btn v-if="canDownload" class="q-mt-lg" color="primary" no-caps icon="download" label="Datei herunterladen" @click="download" />
       </div>
     </div>
+
+    <q-dialog
+      v-model="revisionsOpen"
+      :maximized="$q.screen.lt.sm"
+      aria-labelledby="file-revisions-title"
+      @hide="clearRevisionPreview"
+    >
+      <q-card class="file-revisions-dialog app-surface column no-wrap">
+        <q-toolbar>
+          <q-icon name="history" color="primary" size="24px" class="q-ml-sm" />
+          <q-toolbar-title id="file-revisions-title" class="text-subtitle1 text-weight-bold">Versionsverlauf</q-toolbar-title>
+          <q-btn flat round dense icon="close" aria-label="Versionsverlauf schließen" v-close-popup />
+        </q-toolbar>
+        <q-separator />
+        <q-card-section v-if="revisionsLoading" class="col flex flex-center">
+          <q-spinner color="primary" size="36px" />
+        </q-card-section>
+        <q-card-section v-else-if="!revisions.length" class="col flex flex-center text-center app-muted">
+          Für diese Datei sind keine früheren Versionen vorhanden.
+        </q-card-section>
+        <q-card-section v-else class="col scroll q-pa-none">
+          <q-list separator>
+            <q-item
+              v-for="revision in revisions"
+              :key="revisionId(revision)"
+              clickable
+              v-ripple
+              :active="selectedRevisionId === revisionId(revision)"
+              @click="previewRevision(revision)"
+            >
+              <q-item-section avatar><q-icon name="description" /></q-item-section>
+              <q-item-section>
+                <q-item-label>Version {{ revisionLabel(revision) }}</q-item-label>
+                <q-item-label caption>{{ revisionDate(revision) }}</q-item-label>
+              </q-item-section>
+              <q-item-section v-if="isCurrentRevision(revision)" side>
+                <q-chip dense color="primary" text-color="white">Aktuell</q-chip>
+              </q-item-section>
+              <q-item-section v-else-if="editable" side>
+                <div class="row no-wrap">
+                  <q-btn
+                    flat round dense icon="restore" color="primary"
+                    :loading="restoringRevisionId === revisionId(revision)"
+                    :disable="Boolean(revisionActionPending)"
+                    :aria-label="`Version ${revisionLabel(revision)} wiederherstellen`"
+                    @click.stop="restoreRevision(revision)"
+                  ><q-tooltip>Wiederherstellen</q-tooltip></q-btn>
+                  <q-btn
+                    flat round dense icon="delete_outline" color="negative"
+                    :loading="deletingRevisionId === revisionId(revision)"
+                    :disable="Boolean(revisionActionPending)"
+                    :aria-label="`Version ${revisionLabel(revision)} löschen`"
+                    @click.stop="deleteRevision(revision)"
+                  ><q-tooltip>Löschen</q-tooltip></q-btn>
+                </div>
+              </q-item-section>
+            </q-item>
+          </q-list>
+          <q-separator v-if="selectedRevisionId" />
+          <div v-if="revisionPreviewLoading" class="q-pa-xl text-center"><q-spinner color="primary" /></div>
+          <div v-else-if="selectedRevisionId" class="q-pa-md">
+            <div class="row items-center q-mb-sm">
+              <div class="text-subtitle2">Vorschau</div>
+              <q-space />
+              <q-btn flat no-caps icon="download" label="Herunterladen" @click="downloadRevision" />
+            </div>
+            <pre class="file-viewer__text">{{ revisionPreview }}</pre>
+          </div>
+        </q-card-section>
+      </q-card>
+    </q-dialog>
   </section>
 </template>
 
@@ -250,6 +337,13 @@ const renderingOpenScad = ref(false)
 const exportingOpenScad = ref(false)
 const openScadError = ref(null)
 const openScadUrl = ref('')
+const revisionsOpen = ref(false)
+const revisionsLoading = ref(false)
+const selectedRevisionId = ref(null)
+const revisionPreviewLoading = ref(false)
+const revisionPreview = ref('')
+const deletingRevisionId = ref(null)
+const restoringRevisionId = ref(null)
 let renderController
 let renderVersion = 0
 let exportController
@@ -265,7 +359,7 @@ const draft = computed({
 const imageUrl = computed(() => props.entry?.path ? workspace.fileUrl('content', props.entry.path) : '')
 const editable = computed(() => (
   props.entry?.path
-  && !workspace.rootIdentity
+  && !workspace.toolContext
   && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
   && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
   && workspace.operationAvailable('workspace.write')
@@ -307,8 +401,7 @@ const fileDetails = computed(() => {
   return `${new Intl.NumberFormat('de-DE').format(size)} Byte · ${props.entry.path}`
 })
 const rootLabel = computed(() => {
-  if (workspace.scope === 'session') return 'Session-Dateien'
-  return workspace.workingDirectory ? 'Aktueller Ordner' : 'Computer'
+  return 'Dateien'
 })
 const parentPath = computed(() => (
   props.entry?.path?.includes('/') ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) : '.'
@@ -325,6 +418,15 @@ const saveErrorMessage = computed(() => apiErrorMessage(saveError.value, 'Die Da
 const conflictLoadErrorMessage = computed(() => apiErrorMessage(conflictLoadError.value, 'Die aktuelle Revision konnte nicht geladen werden.'))
 const openScadErrorMessage = computed(() => apiErrorMessage(openScadError.value, 'Das OpenSCAD-Modell konnte nicht gerendert werden.'))
 const saveConflict = computed(() => errorDescriptor(saveError.value)?.code === 'file.changed')
+const revisionState = computed(() => workspace.fileRevisions[props.entry?.path] || {})
+const revisions = computed(() => revisionState.value.items || revisionState.value.revisions || [])
+const currentRevisionId = computed(() => (
+  revisionState.value.currentRevisionId
+  ?? revisionState.value.currentRevision?.id
+  ?? revisionState.value.currentRevision
+  ?? preview.value.revision
+))
+const revisionActionPending = computed(() => deletingRevisionId.value || restoringRevisionId.value)
 const unavailableMessage = computed(() => ({
   invalidImage: 'Die Bilddatei ist beschädigt oder ungültig.',
   unsafeSvg: 'Die SVG-Datei enthält aktive oder externe Inhalte und kann nicht sicher angezeigt werden.',
@@ -362,6 +464,109 @@ async function loadPreview() {
   } finally {
     if (version === previewVersion) loading.value = false
   }
+}
+
+function revisionId(revision) {
+  return revision.id ?? revision.revisionId ?? revision.revision
+}
+
+function revisionLabel(revision) {
+  return revision.label || revision.number || revision.revision || revisionId(revision)
+}
+
+function revisionDate(revision) {
+  const value = revision.createdAt || revision.created_at
+  return value ? new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : ''
+}
+
+function isCurrentRevision(revision) {
+  return revision.current === true || revisionId(revision) === currentRevisionId.value
+}
+
+async function openRevisions() {
+  revisionsOpen.value = true
+  revisionsLoading.value = true
+  try {
+    await workspace.loadRevisions(props.entry.path)
+  } catch {
+    revisionsOpen.value = false
+  } finally {
+    revisionsLoading.value = false
+  }
+}
+
+async function previewRevision(revision) {
+  const id = revisionId(revision)
+  const path = props.entry?.path
+  selectedRevisionId.value = id
+  revisionPreviewLoading.value = true
+  revisionPreview.value = ''
+  try {
+    const result = await workspace.revisionPreview(path, id)
+    if (
+      !revisionsOpen.value
+      || props.entry?.path !== path
+      || selectedRevisionId.value !== id
+      || !result
+    ) return
+    revisionPreview.value = result.content || 'Für diese Version ist keine Textvorschau verfügbar.'
+  } catch {
+    if (props.entry?.path === path && selectedRevisionId.value === id) {
+      selectedRevisionId.value = null
+    }
+  } finally {
+    if (props.entry?.path === path && selectedRevisionId.value === id) {
+      revisionPreviewLoading.value = false
+    }
+  }
+}
+
+async function deleteRevision(revision) {
+  if (isCurrentRevision(revision)) return
+  const accepted = await confirm(
+    `Soll Version ${revisionLabel(revision)} dauerhaft gelöscht werden?`,
+    'Version löschen?',
+    { okLabel: 'Löschen', okColor: 'negative' }
+  )
+  if (!accepted) return
+  const id = revisionId(revision)
+  deletingRevisionId.value = id
+  try {
+    await workspace.deleteRevision(props.entry.path, id)
+    if (selectedRevisionId.value === id) clearRevisionPreview()
+  } finally {
+    deletingRevisionId.value = null
+  }
+}
+
+async function restoreRevision(revision) {
+  const accepted = await confirm(
+    `Soll Version ${revisionLabel(revision)} wiederhergestellt werden? Alle späteren Versionen werden entfernt.`,
+    'Version wiederherstellen?',
+    { okLabel: 'Wiederherstellen', okColor: 'warning' }
+  )
+  if (!accepted) return
+  const id = revisionId(revision)
+  restoringRevisionId.value = id
+  try {
+    await workspace.restoreRevision(props.entry.path, id)
+    clearRevisionPreview()
+    $q.notify({ type: 'positive', message: 'Version wiederhergestellt.' })
+  } finally {
+    restoringRevisionId.value = null
+  }
+}
+
+function downloadRevision() {
+  const anchor = document.createElement('a')
+  anchor.href = workspace.revisionDownloadUrl(props.entry.path, selectedRevisionId.value)
+  anchor.download = props.entry.name
+  anchor.click()
+}
+
+function clearRevisionPreview() {
+  selectedRevisionId.value = null
+  revisionPreview.value = ''
 }
 
 function startEditing() {
@@ -554,7 +759,8 @@ watch(
     () => workspace.workingDirectory,
     () => workspace.rootIdentity,
     () => workspace.toolContext,
-    () => workspace.workspaceContext
+    () => workspace.workspaceContext,
+    () => workspace.fileChangeVersions[props.entry?.path]
   ],
   loadPreview,
   { immediate: true }
@@ -568,3 +774,10 @@ onBeforeUnmount(() => {
   clearOpenScadExport()
 })
 </script>
+
+<style scoped>
+.file-revisions-dialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+}
+</style>

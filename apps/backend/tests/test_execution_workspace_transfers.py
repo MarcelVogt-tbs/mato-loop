@@ -197,7 +197,6 @@ async def test_file_context_uses_owned_session_root_snapshot(monkeypatch) -> Non
         preferred_execution_agent_id=agent_id,
         preferred_root_id=root_id,
         working_directory="project",
-        workspace_access="read-only",
     )
     agent = ExecutionAgent(
         id=agent_id,
@@ -238,7 +237,7 @@ async def test_file_context_uses_owned_session_root_snapshot(monkeypatch) -> Non
     assert context.agent_id == agent_id
     assert context.agent_root_id == root_id
     assert context.working_directory == "project"
-    assert context.agent_writable is False
+    assert context.agent_writable is True
 
 
 async def test_historical_file_action_url_ignores_changed_session_preferences(

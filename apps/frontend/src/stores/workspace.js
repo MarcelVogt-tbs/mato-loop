@@ -4,6 +4,7 @@ import { useControlCenterStore } from 'src/stores/control-center'
 
 export const MAX_WORKSPACE_UPLOADS = 4
 export const MAX_WORKSPACE_UPLOAD_BYTES = 64 * 1024 * 1024
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 
 function parentPath(path) {
   return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.'
@@ -42,7 +43,7 @@ function replaceCachedEntry(store, entry) {
 }
 
 function requireWritableContext(store) {
-  if (store.rootIdentity) throw new Error('Tool file contexts are read-only')
+  if (store.toolContext) throw new Error('Historical workspace snapshots are read-only')
 }
 
 function persistedFileView(store) {
@@ -94,6 +95,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     workingDirectory: null,
     workspaceContext: null,
     rootIdentity: null,
+    currentRootIdentity: null,
     toolContext: null,
     entries: {},
     hasMore: {},
@@ -110,16 +112,17 @@ export const useWorkspaceStore = defineStore('workspace', {
     editorActive: false,
     editorDirty: false,
     editorDraft: null,
+    editorExternalChange: false,
+    fileChangeVersions: {},
+    fileRevisions: {},
     viewVersion: 0,
     filter: '',
     contextVersion: 0
   }),
   getters: {
     operationAvailable: (state) => (operation) => (
-      state.rootIdentity
-        ? state.scope === 'session'
-          ? Boolean(state.sessionId)
-          : Boolean(
+      state.toolContext
+        ? Boolean(
             state.toolContext?.executionAgentId
             && state.toolContext.rootId
             && state.toolContext.rootRevision
@@ -140,10 +143,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       void controlCenter.setFileView(persistedFileView(this)).catch(() => {})
     },
     restoreView(view) {
+      const liveRootIdentity = this.rootIdentity
       this.reset(false)
-      if (!view || (view.scope === 'session' && !this.sessionId)) return
+      if (!view || (view.scope === 'session' && !this.sessionId)) {
+        this.rootIdentity = liveRootIdentity
+        return
+      }
       this.scope = view.scope
-      this.rootIdentity = view.rootIdentity || null
+      this.rootIdentity = view.scope === 'session' ? liveRootIdentity : view.rootIdentity || null
       this.toolContext = view.scope === 'filesystem' && view.rootIdentity
         ? {
             executionAgentId: view.executionAgentId,
@@ -163,24 +170,25 @@ export const useWorkspaceStore = defineStore('workspace', {
         : null
     },
     returnToCurrentContext() {
-      if (this.rootIdentity) this.reset()
+      if (this.toolContext) {
+        this.reset()
+        this.rootIdentity = this.currentRootIdentity
+      }
       this.persistView()
       return this.load('.')
     },
-    configure({ sessionId = null, workingDirectory = null, workspaceContext = null } = {}) {
-      if (this.scope === 'session' && !sessionId) this.scope = 'filesystem'
-      if (
-        this.scope === 'filesystem'
-        && sessionId
-        && !supportsWorkspaceOperation(workspaceContext, 'workspace.list')
-      ) this.scope = 'session'
+    configure({ sessionId = null, rootIdentity = null, workingDirectory = null, workspaceContext = null } = {}) {
+      if (!this.toolContext) this.scope = sessionId ? 'session' : 'filesystem'
       const changed = this.sessionId !== sessionId
+        || (!this.toolContext && this.rootIdentity !== rootIdentity)
         || this.workingDirectory !== workingDirectory
         || workspaceContextKey(this.workspaceContext) !== workspaceContextKey(workspaceContext)
       this.sessionId = sessionId
       this.workingDirectory = workingDirectory
       this.workspaceContext = workspaceContext
       if (changed) this.reset()
+      this.currentRootIdentity = rootIdentity
+      if (!this.toolContext) this.rootIdentity = rootIdentity
     },
     setScope(scope) {
       if (scope === 'session' && !this.sessionId) return
@@ -207,6 +215,9 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
+      this.editorExternalChange = false
+      this.fileChangeVersions = {}
+      this.fileRevisions = {}
       this.filter = ''
       this.rootIdentity = null
       this.toolContext = null
@@ -231,28 +242,35 @@ export const useWorkspaceStore = defineStore('workspace', {
           || !action.workingDirectory
         ))
       ) return
-      const editableDraft = action.intent === 'draft' && action.root === 'session'
+      if (action.root === 'session') {
+        if (this.rootIdentity && this.rootIdentity !== action.rootIdentity) return
+        this.scope = 'session'
+        this.rootIdentity = action.rootIdentity
+        this.toolContext = null
+        this.openEntry({
+          kind: 'file',
+          name: action.filename,
+          path: action.path,
+          size: action.sizeBytes
+        })
+        return this.refresh()
+      }
       this.reset(false)
-      this.scope = action.root === 'session' ? 'session' : 'filesystem'
-      this.rootIdentity = editableDraft ? null : action.rootIdentity
-      this.toolContext = action.root === 'workspace'
-        ? {
-          executionAgentId: action.executionAgentId,
-          rootId: action.rootId,
-          rootRevision: action.rootRevision,
-          workingDirectory: action.workingDirectory
-        }
-        : null
+      this.scope = 'filesystem'
+      this.rootIdentity = action.rootIdentity
+      this.toolContext = {
+        executionAgentId: action.executionAgentId,
+        rootId: action.rootId,
+        rootRevision: action.rootRevision,
+        workingDirectory: action.workingDirectory
+      }
       this.selectedPath = action.path
       this.selectedKind = 'file'
       this.viewedEntry = {
         kind: 'file',
         name: action.filename,
         path: action.path,
-        size: action.sizeBytes,
-        ...(editableDraft
-          ? { intent: 'draft', draftId: action.draftId, revision: action.revision }
-          : {})
+        size: action.sizeBytes
       }
       this.persistView()
       return this.load('.')
@@ -264,8 +282,10 @@ export const useWorkspaceStore = defineStore('workspace', {
         || !action.path?.startsWith('files/')
         || !action.filename
       ) return
+      const rootIdentity = this.rootIdentity
       this.reset(false)
       this.scope = 'session'
+      this.rootIdentity = action.rootIdentity || rootIdentity
       this.openEntry({
         kind: 'file',
         name: action.filename,
@@ -283,9 +303,11 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = edit
       this.editorDirty = false
       this.editorDraft = null
+      this.editorExternalChange = false
       this.persistView()
     },
     selectPath(path, kind = 'directory') {
+      if (path !== this.selectedPath || kind !== this.selectedKind) this.viewVersion += 1
       this.selectedPath = path
       this.selectedKind = kind
       this.persistView()
@@ -296,12 +318,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
+      this.editorExternalChange = false
       this.persistView()
     },
     startEdit(content) {
       this.editorActive = true
       this.editorDirty = false
       this.editorDraft = content
+      this.editorExternalChange = false
     },
     updateEditorDraft(content, original) {
       this.editorDraft = content
@@ -311,10 +335,46 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
+      this.editorExternalChange = false
+    },
+    noteFileMutation(path) {
+      if (this.viewedEntry?.path !== path) return
+      if (this.editorDirty) {
+        this.editorExternalChange = true
+        return
+      }
+      this.fileChangeVersions[path] = (this.fileChangeVersions[path] || 0) + 1
+    },
+    activeFileSnapshot() {
+      const controlCenter = useControlCenterStore()
+      const path = this.viewedEntry?.path
+      const sha256 = this.filePreviews[path]?.revision
+      if (
+        !controlCenter.open
+        || controlCenter.activeContentId !== 'files'
+        || controlCenter.sessionId !== this.sessionId
+        || this.toolContext
+        || !path
+        || this.selectedPath !== path
+        || !SHA256_PATTERN.test(sha256 || '')
+      ) return null
+      const rootIdentity = this.rootIdentity || (
+        this.scope === 'filesystem' && this.workspaceContext?.connected === true
+          ? this.workspaceContext.rootId
+          : null
+      )
+      if (!rootIdentity) return null
+      return {
+        root: this.scope === 'session' ? 'session' : 'workspace',
+        root_identity: rootIdentity,
+        path,
+        sha256,
+        dirty: this.editorDirty
+      }
     },
     requestParams(extra = {}) {
       const liveFilesystemContext = this.scope === 'filesystem'
-        && !this.rootIdentity
+        && !this.toolContext
         && this.workspaceContext?.executionAgentId
         && this.workspaceContext?.rootId
       return {
@@ -329,7 +389,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         ...(liveFilesystemContext && this.workingDirectory
           ? { working_directory: this.workingDirectory }
           : {}),
-        ...(this.rootIdentity && this.scope === 'filesystem' && this.toolContext
+        ...(this.scope === 'filesystem' && this.toolContext
           ? {
               execution_agent_id: this.toolContext.executionAgentId,
               root_id: this.toolContext.rootId,
@@ -365,6 +425,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           suppressErrorToast: true
         })
         if (version === this.contextVersion && loadVersion === this.loadVersions[path]) {
+          if (response.data.rootIdentity) this.rootIdentity = response.data.rootIdentity
           this.entries[path] = append
             ? [...(this.entries[path] || []), ...response.data.entries]
             : response.data.entries
@@ -511,6 +572,49 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.filePreviews[path] = data
       return data
     },
+    async loadRevisions(path) {
+      if (this.scope !== 'session' || this.toolContext || !this.sessionId) return null
+      const contextVersion = this.contextVersion
+      const { data } = await api.get('/workspace/files/revisions', {
+        params: { path, session_id: this.sessionId }
+      })
+      if (contextVersion !== this.contextVersion || this.viewedEntry?.path !== path) return null
+      this.fileRevisions[path] = data
+      return data
+    },
+    async revisionPreview(path, revision) {
+      if (this.scope !== 'session' || this.toolContext || !this.sessionId) return null
+      return (await api.get(`/workspace/files/revisions/${revision}/preview`, {
+        params: { path, session_id: this.sessionId }
+      })).data
+    },
+    revisionDownloadUrl(path, revision) {
+      if (this.scope !== 'session' || this.toolContext || !this.sessionId) return ''
+      const params = new URLSearchParams({ path, session_id: this.sessionId })
+      return `/api/workspace/files/revisions/${revision}/download?${params}`
+    },
+    async deleteRevision(path, revision) {
+      requireWritableContext(this)
+      await api.delete(`/workspace/files/revisions/${revision}`, {
+        params: { path, session_id: this.sessionId }
+      })
+      return this.loadRevisions(path)
+    },
+    async restoreRevision(path, revision) {
+      requireWritableContext(this)
+      const { data } = await api.post(`/workspace/files/revisions/${revision}/restore`, {
+        path
+      }, {
+        params: { session_id: this.sessionId }
+      })
+      await Promise.all([
+        this.preview(path),
+        this.loadRevisions(path),
+        this.load(parentPath(path), false, true)
+      ])
+      this.fileChangeVersions[path] = (this.fileChangeVersions[path] || 0) + 1
+      return data
+    },
     async saveFile(path, content, expectedRevision) {
       requireWritableContext(this)
       if (!this.operationAvailable('workspace.write')) throw new Error('Workspace operation is unavailable')
@@ -543,6 +647,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.viewedEntry = entry
       }
       this.editorDirty = false
+      this.editorExternalChange = false
       return data
     },
     async renderOpenScad(path, expectedRevision, signal, output = 'preview') {

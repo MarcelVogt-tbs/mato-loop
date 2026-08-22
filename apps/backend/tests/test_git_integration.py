@@ -71,11 +71,6 @@ def test_git_adapter_contract_and_tool_schemas() -> None:
         "integration.git.add",
         "integration.git.commit",
     }
-    assert {name for name, tool in tools.items() if tool.write} == {
-        "git_clone",
-        "git_add",
-        "git_commit",
-    }
     assert {
         action.capability: action.default_policy
         for tool in tools.values()
@@ -108,14 +103,14 @@ def test_git_adapter_contract_and_tool_schemas() -> None:
         )
 
 
-def test_git_write_tools_are_hidden_in_read_only_mode() -> None:
+def test_git_tools_are_available_when_the_agent_advertises_operations() -> None:
     instance = _instance()
     instance._execution_operations = frozenset(
         tool.execution_operation for tool in GIT_ADAPTER.execution_tools
     )
     settings = IntegrationSettings(instances=[instance])
     contributions = effective_integration_contributions(settings)
-    schemas = {schema["name"] for schema in tool_registry.schemas(settings, "read-only")}
+    schemas = {schema["name"] for schema in tool_registry.schemas(settings)}
 
     assert {tool.name for tool in contributions.tools} == {
         "git_clone",
@@ -125,8 +120,14 @@ def test_git_write_tools_are_hidden_in_read_only_mode() -> None:
         "git_add",
         "git_commit",
     }
-    assert {"git_status", "git_diff", "git_log"} <= schemas
-    assert {"git_clone", "git_add", "git_commit"}.isdisjoint(schemas)
+    assert {
+        "git_clone",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "git_add",
+        "git_commit",
+    } <= schemas
     catalog = {
         tool["name"]: tool
         for group in tool_registry.catalog(ToolSettings(), settings)

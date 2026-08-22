@@ -215,7 +215,6 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "knowledge_create_attachment",
         "knowledge_delete_attachment",
     }
-    assert all(tool.write is False for tool in tools.values())
     assert all(tool.releases_private_data for tool in tools.values())
     assert tools["knowledge_list_accounts"].instance_argument is None
     assert tools["knowledge_list_accounts"].integration_ids == (

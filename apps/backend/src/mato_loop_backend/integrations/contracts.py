@@ -48,7 +48,6 @@ class ToolContribution:
     description: str
     arguments_model: type[BaseModel]
     handler: ToolHandler | None
-    write: bool = False
     requires_search: bool = False
     requires_webfetch: bool = False
     requires_memory: bool = False

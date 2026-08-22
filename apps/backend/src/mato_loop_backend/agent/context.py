@@ -281,6 +281,41 @@ def _timestamp_user_message(message: Message, content: str) -> str:
     return f"[{timestamp}]\n{content}"
 
 
+def _active_file_marker(message: Message) -> str | None:
+    runtime_data = (
+        message.provider_data.get("_matoloop")
+        if isinstance(message.provider_data, dict)
+        else None
+    )
+    active = runtime_data.get("activeFile") if isinstance(runtime_data, dict) else None
+    if not isinstance(active, dict) or set(active) != {
+        "root",
+        "rootIdentity",
+        "path",
+        "sha256",
+        "dirty",
+    }:
+        return None
+    if (
+        active.get("root") not in {"session", "workspace"}
+        or not isinstance(active.get("rootIdentity"), str)
+        or not isinstance(active.get("path"), str)
+        or not isinstance(active.get("sha256"), str)
+        or not isinstance(active.get("dirty"), bool)
+    ):
+        return None
+    marker = (
+        "[Host active file context: "
+        + json.dumps(active, ensure_ascii=True, separators=(",", ":"))
+        + ". This marker contains no file content."
+    )
+    if active["dirty"]:
+        marker += (
+            " The user has unsaved changes that are unavailable to you. Do not overwrite this file."
+        )
+    return marker + "]"
+
+
 def general_system_prompt(
     chat_session: ChatSession,
     *,
@@ -464,19 +499,14 @@ def general_system_prompt(
     if file_tools_available:
         parts.append(
             "File tools require an explicit root and relative POSIX path; path='.' means the root. Never "
-            "put a root name or absolute path in path. Managed session assets are read-only; only "
-            "files/... is writable. Copy and move require an exact new destination and never overwrite."
+            "put a root name or absolute path in path. The session root exposes only files/.... "
+            "Copy and move require an exact new destination and never overwrite."
         )
-    if "create_draft" in offered_tool_names:
+    if "write_file" in offered_tool_names:
         parts.append(
-            "Draft artifact contract: For requested reusable text, templates, samples, Markdown, config, "
-            "code, or OpenSCAD, call create_draft with the complete artifact instead of returning it only "
-            "in chat. Ask required questions first; generic samples need none. Do not draft explanations. "
-            "Use write_file only to change an existing file."
-        )
-    if "read" in offered_tool_names:
-        parts.append(
-            "Read attachment-derived text or PCM audio from its session/derived path."
+            "For requested reusable text, templates, samples, Markdown, config, code, or OpenSCAD, "
+            "call write_file with mode=create and the complete artifact instead of returning it only in "
+            "chat. Use mode=replace only for an existing file after reading its exact SHA-256."
         )
     if "provide_file" in offered_tool_names:
         parts.append(
@@ -640,12 +670,6 @@ def general_system_prompt(
         )
     elif file_tools_available:
         dynamic_parts.append("No computer directory selected. Use root=session.")
-    if file_tools_available and chat_session.workspace_access == "read-only":
-        dynamic_parts.append(
-            "Workspace mode: read-only. For a requested file mutation, tell the user to switch "
-            '"Agent-Modus" from "Lesen" to "Schreiben" and retry; do not describe it as a general '
-            "MatoLoop limitation. Media tools and generated attachments are unaffected."
-        )
     if memory_read_enabled and memory_scope is not None:
         runtime_parts.append(
             "Persistent memory status: read access is enabled for the "
@@ -806,6 +830,12 @@ def _projection_messages(
             ),
             include_attachment_markers=not private_resources,
         )
+        if item.id == latest_user_id:
+            marker = _active_file_marker(item)
+            if marker is not None:
+                projected["content"] = "\n\n".join(
+                    part for part in (projected.get("content"), marker) if part
+                )
         if private_resources and projected.get("tool_calls"):
             for call in projected["tool_calls"]:
                 call["arguments"] = {}

@@ -188,11 +188,68 @@ async def test_session_preview_edit_and_image_validation(tmp_path: Path, monkeyp
     assert image.media_type == "image/png"
     assert image.headers["cache-control"] == "private, no-store"
     assert updated["revision"] == hashlib.sha256(b"updated").hexdigest()
-    assert updated["draftRevision"] == 2
-    history = root / "derived" / "drafts" / updated["draftId"]
-    assert (history / "1" / "readme.md").read_bytes() == markdown
-    assert (history / "2" / "readme.md").read_text(encoding="utf-8") == "updated"
+    revisions = context.root_files.list_revisions("files/readme.md")
+    assert [item.revision for item in revisions] == [2, 1]
+    with context.root_files.open_revision("files/readme.md", 1) as original:
+        assert original.read() == markdown
     assert (root / "files" / "readme.md").read_text(encoding="utf-8") == "updated"
+
+
+async def test_revision_api_deletes_old_versions_and_restores_history(
+    tmp_path: Path, monkeypatch
+) -> None:
+    context, root = _session_context(tmp_path)
+    service = context.root_files
+    service.write_file(FileRoot.SESSION, "files/notes.txt", "one")
+    service.write_file(
+        FileRoot.SESSION,
+        "files/notes.txt",
+        "two",
+        mode="replace",
+        expected_sha256=hashlib.sha256(b"one").hexdigest(),
+    )
+    service.write_file(
+        FileRoot.SESSION,
+        "files/notes.txt",
+        "three",
+        mode="replace",
+        expected_sha256=hashlib.sha256(b"two").hexdigest(),
+    )
+
+    async def file_context(*_args, **_kwargs):
+        return context
+
+    monkeypatch.setattr(workspace_route, "_file_context", file_context)
+    user = _user()
+    db = AsyncMock(spec=AsyncSession)
+    listed = await workspace_route.list_file_revisions(
+        user, db, "files/notes.txt", service.session_id
+    )
+    preview = await workspace_route.preview_file_revision(
+        1, user, db, "files/notes.txt", service.session_id
+    )
+
+    assert [item["revision"] for item in listed["items"]] == [3, 2, 1]
+    assert preview["content"] == "one"
+    await workspace_route.delete_file_revision(
+        2, user, db, "files/notes.txt", service.session_id
+    )
+    with pytest.raises(ApiError) as current:
+        await workspace_route.delete_file_revision(
+            3, user, db, "files/notes.txt", service.session_id
+        )
+    restored = await workspace_route.restore_file_revision(
+        1,
+        workspace_route.RestoreRevisionRequest(path="files/notes.txt"),
+        user,
+        db,
+        service.session_id,
+    )
+
+    assert current.value.code == "file.currentRevision"
+    assert restored == {"revision": hashlib.sha256(b"one").hexdigest()}
+    assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "one"
+    assert [item.revision for item in service.list_revisions("files/notes.txt")] == [1]
 
 
 async def test_preview_validates_stl_and_static_svg(tmp_path: Path, monkeypatch) -> None:

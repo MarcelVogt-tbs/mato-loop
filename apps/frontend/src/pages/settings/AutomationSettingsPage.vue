@@ -423,9 +423,7 @@ const runtimeItems = computed(() => {
     read_only: 'Nur lesen',
     disabled: 'Deaktiviert',
     required: 'Erforderlich',
-    available: 'Verfügbar',
-    'read-only': 'Nur lesen',
-    'read-write': 'Lesen und schreiben'
+    available: 'Verfügbar'
   }
   return [
     ['Modell', runtime.modelId],
@@ -434,8 +432,7 @@ const runtimeItems = computed(() => {
     ['Computer', runtime.preferredExecutionAgentId],
     ['Arbeitsbereich', runtime.preferredRootId],
     ['Arbeitsordner', runtime.workingDirectory],
-    ['Aktueller Ordner', runtime.currentDirectory],
-    ['Zugriff', runtime.workspaceAccess]
+    ['Aktueller Ordner', runtime.currentDirectory]
   ].map(([label, value]) => ({ label, value: labels[value] || value || 'Nicht festgelegt' }))
 })
 

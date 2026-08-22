@@ -162,6 +162,22 @@ def test_reconciliation_relocates_session_to_database_project(tmp_path: Path) ->
     assert not storage.session_path(session_id, project_id=None).exists()
 
 
+def test_reconciliation_restores_project_storage_from_trash(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    project_id = uuid4()
+    session_id = uuid4()
+    storage.provision(session_id, project_id)
+    shared = storage.logical_root_path(session_id, project_id) / "files" / "shared.txt"
+    shared.write_text("shared", encoding="utf-8")
+    storage.remove_session(session_id, project_id)
+    trashed = storage.trash_project(project_id)
+
+    storage.reconcile({}, projects={project_id}, stale_staging_after_seconds=0)
+
+    assert trashed is not None and not trashed.exists()
+    assert shared.read_text(encoding="utf-8") == "shared"
+
+
 def test_project_storage_rejects_symlinked_project_root(tmp_path: Path) -> None:
     storage = SessionStorage(tmp_path / "sessions")
     storage.prepare()

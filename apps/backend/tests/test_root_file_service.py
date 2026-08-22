@@ -1,5 +1,4 @@
 import hashlib
-import json
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -94,6 +93,7 @@ async def test_lists_pages_reads_utf8_and_searches_session_files(tmp_path: Path)
     assert [entry.name for entry in first.entries] == ["a.txt", "b.txt"]
     assert [entry.name for entry in second.entries] == ["c.txt"]
     assert read.content == "2: Aurora"
+    assert read.sha256 == hashlib.sha256(b"a.txt\nAurora").hexdigest()
     assert (await search.glob(FileRoot.SESSION, "files", "*.txt"))["paths"] == [
         "files/a.txt",
         "files/b.txt",
@@ -105,7 +105,13 @@ def test_mutations_are_atomic_and_limited_to_session_files(tmp_path: Path) -> No
     service, root = make_service(tmp_path)
     service.create_directory(FileRoot.SESSION, "files/subdirectory")
     service.write_file(FileRoot.SESSION, "files/subdirectory/notes.txt", "old")
-    service.write_file(FileRoot.SESSION, "files/subdirectory/notes.txt", "new")
+    service.write_file(
+        FileRoot.SESSION,
+        "files/subdirectory/notes.txt",
+        "new",
+        mode="replace",
+        expected_sha256=hashlib.sha256(b"old").hexdigest(),
+    )
     target = root / "files" / "subdirectory" / "notes.txt"
 
     assert target.read_text(encoding="utf-8") == "new"
@@ -123,32 +129,42 @@ def test_mutations_are_atomic_and_limited_to_session_files(tmp_path: Path) -> No
         }
 
 
-def test_text_draft_publishes_current_file_and_first_revision(tmp_path: Path) -> None:
+def test_file_history_preserves_full_byte_revisions(tmp_path: Path) -> None:
     service, root = make_service(tmp_path)
-
-    draft = service.create_text_draft("plan.md", "# Plan\n")
-
-    assert draft.revision == 1
-    assert draft.path == f"files/drafts/{draft.draft_id}/plan.md"
-    assert draft.size == 7
-    assert (root / draft.path).read_text(encoding="utf-8") == "# Plan\n"
-    assert (
-        root / "derived" / "drafts" / str(draft.draft_id) / "1" / "plan.md"
-    ).read_text(encoding="utf-8") == "# Plan\n"
-    index = json.loads(
-        (root / "derived" / "drafts" / str(draft.draft_id) / "index.json").read_text()
+    service.create_file(
+        FileRoot.SESSION, "files/plan.md", BytesIO(b"# Plan\n"), max_bytes=100
     )
-    assert index["draftId"] == str(draft.draft_id)
-    assert index["currentRevision"] == 1
-    assert index["revisions"][0]["revision"] == 1
+    service.replace_text_file(
+        FileRoot.SESSION,
+        "files/plan.md",
+        "# Updated\n",
+        hashlib.sha256(b"# Plan\n").hexdigest(),
+    )
+
+    revisions = service.list_revisions("files/plan.md")
+    assert [item.revision for item in revisions] == [2, 1]
+    assert revisions[0].current is True
+    assert revisions[1].current is False
+    with service.open_revision("files/plan.md", 1) as original:
+        assert original.read() == b"# Plan\n"
+    assert (root / "files" / "plan.md").read_bytes() == b"# Updated\n"
 
 
-def test_draft_reference_returns_only_a_canonical_current_draft(tmp_path: Path) -> None:
-    service, _root = make_service(tmp_path)
-    draft = service.create_text_draft("model.scad", "cube(1);\n")
+def test_project_sessions_share_files_and_revision_identity(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    project_id = uuid4()
+    first_id = uuid4()
+    second_id = uuid4()
+    storage.provision(first_id, project_id)
+    storage.provision(second_id, project_id)
+    first = RootFileService(first_id, session_storage=storage, project_id=project_id)
+    second = RootFileService(second_id, session_storage=storage, project_id=project_id)
 
-    assert service.draft_reference(draft.path) == draft
-    assert service.draft_reference("files/model.scad") is None
+    first.write_file(FileRoot.SESSION, "files/shared.txt", "shared")
+
+    assert second.root_identity(FileRoot.SESSION) == str(project_id)
+    assert second.read_file(FileRoot.SESSION, "files/shared.txt").content == "1: shared"
+    assert second.list_revisions("files/shared.txt")[0].current is True
 
 
 def test_upload_replace_rename_copy_and_move_preserve_session_contract(
@@ -208,6 +224,20 @@ def test_never_follows_symlinks_and_deletes_only_the_link(tmp_path: Path) -> Non
     service.delete_path(FileRoot.SESSION, "files/link", recursive=False)
     assert outside.is_dir()
     assert (outside / "secret.txt").is_file()
+
+
+def test_revision_storage_rejects_symlinks(tmp_path: Path) -> None:
+    service, root = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "files/notes.txt", "safe")
+    history = next((root / "revisions").iterdir())
+    (history / "1").unlink()
+    (history / "1").symlink_to(tmp_path / "outside")
+    (tmp_path / "outside").write_text("secret", encoding="utf-8")
+
+    with pytest.raises(RootFileError) as exc_info:
+        service.list_revisions("files/notes.txt")
+
+    assert exc_info.value.code == "file.revisionInvalid"
 
 
 def test_revision_limit_and_quota_fail_without_partial_publication(tmp_path: Path) -> None:

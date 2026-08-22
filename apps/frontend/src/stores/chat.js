@@ -102,7 +102,6 @@ function defaultSessionOptions() {
     preferredRootId: null,
     workingDirectory: null,
     currentDirectory: null,
-    workspaceAccess: 'read-only',
     workspaceContext: null
   }
 }
@@ -133,7 +132,6 @@ function optionsFromSession(session) {
     preferredRootId: session.preferredRootId,
     workingDirectory: session.workingDirectory,
     currentDirectory: session.currentDirectory,
-    workspaceAccess: session.workspaceAccess,
     workspaceContext: session.workspaceContext || null
   })
 }
@@ -222,7 +220,6 @@ function normalizedNewSessionDraft(value) {
       preferredRootId: typeof options.preferredRootId === 'string' ? options.preferredRootId : null,
       workingDirectory: typeof options.workingDirectory === 'string' ? options.workingDirectory : null,
       currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
-      workspaceAccess: options.workspaceAccess === 'read-write' ? 'read-write' : 'read-only',
       workspaceContext: null
     })
   }
@@ -1132,8 +1129,7 @@ export const useChatStore = defineStore('chat', {
         preferred_execution_agent_id: 'preferredExecutionAgentId',
         preferred_root_id: 'preferredRootId',
         working_directory: 'workingDirectory',
-        current_directory: 'currentDirectory',
-        workspace_access: 'workspaceAccess'
+        current_directory: 'currentDirectory'
       }
       const normalizedPatch = { ...patch }
       if (
@@ -1564,6 +1560,7 @@ export const useChatStore = defineStore('chat', {
         })),
         options: sessionId ? null : sanitizedSessionOptions({ ...this.drafts.newSession.options }),
         controlCenter: sessionId ? null : controlCenterRequestState(useControlCenterStore()),
+        activeFile: useWorkspaceStore().activeFileSnapshot(),
         queuedAt: new Date().toISOString(),
         paused: false
       }
@@ -1723,6 +1720,7 @@ export const useChatStore = defineStore('chat', {
             options: entry.options,
             projectId: entry.projectId,
             controlCenter: entry.controlCenter,
+            activeFile: entry.activeFile,
             runId: entry.id,
             suppressErrorToast: true
           })
@@ -1730,11 +1728,16 @@ export const useChatStore = defineStore('chat', {
         } else if (this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
           result = await this.sendToCurrent(entry.content, entry.attachments, {
             clearDraft: false,
+            activeFile: entry.activeFile,
             runId: entry.id,
             suppressErrorToast: true
           })
         } else {
-          const payload = { content: entry.content, run_id: entry.id }
+          const payload = {
+            content: entry.content,
+            run_id: entry.id,
+            ...(entry.activeFile ? { active_file: entry.activeFile } : {})
+          }
           const config = { suppressErrorToast: true }
           await (entry.attachments.length
             ? api.post(
@@ -1800,6 +1803,7 @@ export const useChatStore = defineStore('chat', {
         options: requestedOptions = null,
         projectId: requestedProjectId,
         controlCenter: requestedControlCenter = null,
+        activeFile: requestedActiveFile,
         runId = null,
         suppressErrorToast = false
       } = {}
@@ -1815,6 +1819,9 @@ export const useChatStore = defineStore('chat', {
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
       const options = sanitizedSessionOptions(requestedOptions || this.drafts.newSession.options)
       try {
+        const activeFile = requestedActiveFile === undefined
+          ? useWorkspaceStore().activeFileSnapshot()
+          : requestedActiveFile
         const payload = {
           content,
           ...(runId ? { run_id: runId } : {}),
@@ -1828,8 +1835,8 @@ export const useChatStore = defineStore('chat', {
           ...(options.preferredExecutionAgentId && options.preferredRootId
             ? { working_directory: options.workingDirectory }
             : {}),
-          workspace_access: options.workspaceAccess,
-          control_center: requestedControlCenter || controlCenterRequestState(useControlCenterStore())
+          control_center: requestedControlCenter || controlCenterRequestState(useControlCenterStore()),
+          ...(activeFile ? { active_file: activeFile } : {})
         }
         const config = suppressErrorToast ? [{ suppressErrorToast: true }] : []
         const { data } = attachments.length
@@ -1897,7 +1904,7 @@ export const useChatStore = defineStore('chat', {
     async sendToCurrent(
       content,
       attachments = [],
-      { clearDraft = true, runId = null, suppressErrorToast = false } = {}
+      { clearDraft = true, activeFile: requestedActiveFile, runId = null, suppressErrorToast = false } = {}
     ) {
       const session = this.current
       const sessionLoadVersion = this.sessionLoadVersion
@@ -1915,7 +1922,14 @@ export const useChatStore = defineStore('chat', {
       }
       session.messages.push(localMessage)
       try {
-        const payload = { content, ...(runId ? { run_id: runId } : {}) }
+        const activeFile = requestedActiveFile === undefined
+          ? useWorkspaceStore().activeFileSnapshot()
+          : requestedActiveFile
+        const payload = {
+          content,
+          ...(runId ? { run_id: runId } : {}),
+          ...(activeFile ? { active_file: activeFile } : {})
+        }
         const config = suppressErrorToast ? [{ suppressErrorToast: true }] : []
         const { data } = attachments.length
           ? await api.post(
@@ -2014,11 +2028,14 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('run.phase', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
-        if (payload.phase === 'processing_tool' && payload.toolCallId) {
+        if (payload.phase === 'processing_tool' && payload.toolCallId && !toolViewContexts.has(payload.toolCallId)) {
           const workspace = useWorkspaceStore()
+          const controlCenter = useControlCenterStore()
           toolViewContexts.set(payload.toolCallId, {
-            clean: !workspace.editorDirty,
-            viewVersion: workspace.viewVersion
+            viewVersion: workspace.viewVersion,
+            editorDirty: workspace.editorDirty,
+            controlCenterOpen: controlCenter.open,
+            activeContentId: controlCenter.activeContentId
           })
         }
         this.setActivity(payload.phase, payload)
@@ -2111,21 +2128,61 @@ export const useChatStore = defineStore('chat', {
           const result = this.current.messages?.find((message) => (
             message.role === 'tool' && message.toolCallId === payload.toolCallId
           ))
-          const action = toolFileActions(result).find((item) => item.intent === 'draft')
           const workspace = useWorkspaceStore()
+          const action = toolFileActions(result)[0]
+          const toolCall = this.current.messages
+            ?.flatMap((message) => message.toolCalls || [])
+            .find((item) => item.id === payload.toolCallId)
+          const argumentsValue = toolCall?.arguments || {}
+          const sourceRoot = argumentsValue.source_root || argumentsValue.root
+          const sourcePath = argumentsValue.source_path || argumentsValue.path
+          const sourceRootIdentity = sourceRoot === 'session'
+            ? this.current.projectId || sessionId
+            : useExecutionAgentStore().workspaceContextFor(this.activeContext)?.rootId
+          const sourceMatchesOpenFile = ['delete_path', 'move_path'].includes(payload.tool)
+            && workspace.viewedEntry?.path
+            && (workspace.viewedEntry.path === sourcePath
+              || workspace.viewedEntry.path.startsWith(`${sourcePath}/`))
+            && workspace.rootIdentity === sourceRootIdentity
+            && !workspace.toolContext
+            && ((sourceRoot === 'session' && workspace.scope === 'session')
+              || (sourceRoot === 'workspace' && workspace.scope === 'filesystem'))
+          if (sourceMatchesOpenFile) workspace.noteFileMutation(workspace.viewedEntry.path)
+          if (!action) return
+          const sameOpenFile = workspace.viewedEntry?.path === action.path
+            && workspace.rootIdentity === action.rootIdentity
+            && !workspace.toolContext
+            && ((action.root === 'session' && workspace.scope === 'session')
+              || (action.root === 'workspace' && workspace.scope === 'filesystem'))
+          if (sameOpenFile) {
+            workspace.noteFileMutation(action.path)
+            return
+          }
+          const created = ['copy', 'move'].includes(action.operation)
+            || toolCall?.arguments?.mode === 'create'
+          if (!created) return
+          const controlCenter = useControlCenterStore()
           if (
-            !action
-            || !start.clean
+            start.editorDirty
             || workspace.editorDirty
             || workspace.viewVersion !== start.viewVersion
+            || controlCenter.open !== start.controlCenterOpen
+            || controlCenter.activeContentId !== start.activeContentId
           ) return
           workspace.configure({
             sessionId,
+            rootIdentity: this.current.projectId || sessionId,
             workingDirectory: this.current.workingDirectory,
             workspaceContext: useExecutionAgentStore().workspaceContextFor(this.activeContext)
           })
           await workspace.openToolFile(action)
-          await useControlCenterStore().openApp('files')
+          if (
+            workspace.viewedEntry?.path !== action.path
+            || workspace.rootIdentity !== action.rootIdentity
+            || controlCenter.open !== start.controlCenterOpen
+            || controlCenter.activeContentId !== start.activeContentId
+          ) return
+          await controlCenter.openApp('files')
         }).catch(() => {})
         if (
           FILESYSTEM_MUTATION_TOOLS.has(payload.tool)

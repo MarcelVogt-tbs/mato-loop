@@ -175,7 +175,6 @@ def _session() -> ChatSession:
         memory_mode="disabled",
         web_search_policy="available",
         working_directory=None,
-        workspace_access="read-only",
     )
 
 
@@ -301,10 +300,6 @@ async def test_generate_qr_code_returns_scannable_png(tmp_path) -> None:
     assert result.content == "QR code generated."
     assert result.attachments[0].mime_type == "image/png"
     assert result.attachments[0].filename == "qr-code.png"
-    assert result.draft_action is not None
-    assert [(item.attachment_position, item.role) for item in result.draft_action.representations] == [
-        (0, "preview")
-    ]
     with Image.open(BytesIO(result.attachments[0].data)) as image:
         decoded = zxingcpp.read_barcode(
             image,
@@ -413,7 +408,7 @@ def test_effective_toolset_accepts_host_registered_integration_tools(monkeypatch
         Mock(return_value=contributions),
     )
 
-    effective = ToolRegistry([]).effective(IntegrationSettings(), "read-only")
+    effective = ToolRegistry([]).effective(IntegrationSettings())
 
     assert [item["name"] for item in effective.schemas()] == ["integration_example"]
     assert effective.prompt_fragments == ("Trusted integration instruction.",)
@@ -439,7 +434,7 @@ async def test_bound_integration_tool_rejects_changed_source(tmp_path, monkeypat
         Mock(return_value=IntegrationContributions(tools=(contribution,))),
     )
     effective = ToolRegistry([]).effective(
-        IntegrationSettings(instances=[integration]), "read-only"
+        IntegrationSettings(instances=[integration])
     )
     changed = integration.model_copy(deep=True)
     changed.config = {"base_url": "https://other.example.com"}
@@ -497,7 +492,7 @@ async def test_bound_integration_tool_rechecks_source_after_approval(
         Mock(return_value=IntegrationContributions(tools=(contribution,))),
     )
     effective = ToolRegistry([]).effective(
-        IntegrationSettings(instances=[integration]), "read-only"
+        IntegrationSettings(instances=[integration])
     )
     loads = 0
 
@@ -528,7 +523,7 @@ async def test_shared_tool_binds_two_instances_and_targets_selected_resource(
     first = _shared_integration("First")
     second = _shared_integration("Second")
     settings = IntegrationSettings(instances=[first, second])
-    effective = ToolRegistry([]).effective(settings, "read-only")
+    effective = ToolRegistry([]).effective(settings)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     call = ToolCall(
         id="shared",
@@ -564,7 +559,7 @@ async def test_shared_tool_rejects_unbound_and_stale_instance_ids(
     _shared_adapter(monkeypatch, handler)
     integration = _shared_integration("First")
     settings = IntegrationSettings(instances=[integration])
-    effective = ToolRegistry([]).effective(settings, "read-only")
+    effective = ToolRegistry([]).effective(settings)
 
     unbound_call = ToolCall(
         id="unbound",
@@ -612,7 +607,7 @@ async def test_shared_tool_rejects_action_irrelevant_to_selected_resource(
     integration = _shared_integration("First")
     settings = IntegrationSettings(instances=[integration])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    effective = ToolRegistry([]).effective(settings, "read-only")
+    effective = ToolRegistry([]).effective(settings)
     call = ToolCall(
         id="irrelevant",
         name="tasks_read",
@@ -671,7 +666,7 @@ async def test_aggregate_shared_tool_binds_all_current_instances(
     second = _shared_integration("Second")
     settings = IntegrationSettings(instances=[first, second])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    effective = ToolRegistry([]).effective(settings, "read-only")
+    effective = ToolRegistry([]).effective(settings)
     call = ToolCall(id="aggregate", name="tasks_list_accounts", arguments={})
     context = _context(tmp_path, call)
 
@@ -692,7 +687,7 @@ async def test_private_integration_tool_requires_release_before_action(
     integration = _shared_integration("Private")
     settings = IntegrationSettings(instances=[integration])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    effective = ToolRegistry([]).effective(settings, "read-only")
+    effective = ToolRegistry([]).effective(settings)
     call = ToolCall(
         id="private",
         name="tasks_read",
@@ -752,7 +747,7 @@ async def test_contributed_authorization_must_cover_every_declared_action(
     )
     settings = IntegrationSettings(instances=[integration])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    effective = ToolRegistry([]).effective(settings, "read-only")
+    effective = ToolRegistry([]).effective(settings)
     call = ToolCall(
         id="integration", name="integration_example", arguments={"value": "test"}
     )
@@ -800,7 +795,7 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
         Mock(return_value=IntegrationContributions(tools=(contribution,))),
     )
     integration_settings = IntegrationSettings(instances=[integration])
-    effective = ToolRegistry([]).effective(integration_settings, "read-only")
+    effective = ToolRegistry([]).effective(integration_settings)
     settings = ToolSettings.model_validate(
         {
             "resourcePolicies": {
@@ -841,7 +836,7 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
 
 
 def test_webfetch_schema_describes_verified_image_attachments() -> None:
-    schemas = tool_registry.schemas(IntegrationSettings(), "read-only", webfetch_enabled=True)
+    schemas = tool_registry.schemas(IntegrationSettings(), webfetch_enabled=True)
     webfetch = next(item for item in schemas if item["name"] == "webfetch")
 
     assert "validated image attachments" in webfetch["description"]
@@ -851,7 +846,7 @@ def test_webfetch_schema_describes_verified_image_attachments() -> None:
 def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
     schemas = {
         item["name"]: item
-        for item in tool_registry.schemas(IntegrationSettings(), "read-write")
+        for item in tool_registry.schemas(IntegrationSettings())
     }
 
     for name in {
@@ -884,99 +879,6 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
         assert "exact new destination path" in schemas[name]["description"]
 
 
-async def test_read_only_mode_offers_only_read_tools_and_blocks_stale_mutations(
-    tmp_path,
-) -> None:
-    file_tools = {
-        "read",
-        "glob",
-        "grep",
-        "provide_file",
-        "create_draft",
-        "write_file",
-        "create_directory",
-        "delete_path",
-        "copy_path",
-        "move_path",
-    }
-    offered = {
-        item["name"] for item in tool_registry.schemas(IntegrationSettings(), "read-only")
-    }
-    assert offered & file_tools == {
-        "read",
-        "glob",
-        "grep",
-        "provide_file",
-        "create_draft",
-    }
-
-    call = ToolCall(
-        id="stale",
-        name="write_file",
-        arguments={"root": "session", "path": "files/note.txt", "content": "secret"},
-    )
-    context = _context(tmp_path, call)
-    context.root_files.write_file = Mock(side_effect=AssertionError("must not write"))
-
-    result = await tool_registry.execute(call, context)
-
-    assert result.metadata == {"errorCode": "tool.writeDisabled"}
-    context.root_files.write_file.assert_not_called()
-
-
-async def test_create_draft_is_available_in_read_mode_and_returns_typed_action(
-    tmp_path,
-) -> None:
-    call = ToolCall(
-        id="draft",
-        name="create_draft",
-        arguments={"filename": "plan.md", "content": "# Plan\n"},
-    )
-    context = _context(tmp_path, call)
-
-    result = await tool_registry.execute(call, context)
-
-    assert result.is_error is False
-    assert result.draft_action is not None
-    assert result.draft_action.operation == "create"
-    assert result.draft_action.revision == 1
-    assert result.draft_action.path.endswith("/plan.md")
-    assert context.root_files.read_bytes(
-        "session", result.draft_action.path, limit=100
-    ) == b"# Plan\n"
-
-
-async def test_write_file_revises_the_canonical_draft(tmp_path) -> None:
-    create_call = ToolCall(
-        id="draft",
-        name="create_draft",
-        arguments={"filename": "model.scad", "content": "cube(1);\n"},
-    )
-    context = _context(tmp_path, create_call)
-    created = await tool_registry.execute(create_call, context)
-    assert created.draft_action is not None
-
-    write_call = ToolCall(
-        id="revise",
-        name="write_file",
-        arguments={
-            "root": "session",
-            "path": created.draft_action.path,
-            "content": "cube(2);\n",
-        },
-    )
-    context.session.workspace_access = "read-write"
-    context.tool_call = write_call
-
-    revised = await tool_registry.execute(write_call, context)
-
-    assert revised.draft_action is not None
-    assert revised.draft_action.operation == "revise"
-    assert revised.draft_action.draft_id == created.draft_action.draft_id
-    assert revised.draft_action.revision == 2
-    assert revised.draft_action.path == created.draft_action.path
-
-
 def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:
     catalog = tool_registry.catalog(ToolSettings(), IntegrationSettings())
     tools = {
@@ -995,7 +897,7 @@ def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:
     }
     assert all(
         "toolType" not in schema and "tool_type" not in schema
-        for schema in tool_registry.schemas(IntegrationSettings(), "read-write")
+        for schema in tool_registry.schemas(IntegrationSettings())
     )
 
 
@@ -1016,7 +918,6 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     catalog_tools = {item["name"]: item for item in group["tools"]}
 
     assert set(catalog_tools) == set(definitions)
-    assert all(not definition.write for definition in definitions.values())
     assert definitions["create_automation"].actions[0].mutates
     assert definitions["edit_automation"].actions[0].mutates
     assert definitions["run_automation"].actions[0].mutates
@@ -1236,19 +1137,6 @@ async def test_delete_automation_approval_calls_central_revision_checked_service
         expected_revision=7,
     )
 
-async def test_effective_toolset_rejects_a_call_that_was_not_offered(tmp_path) -> None:
-    effective = tool_registry.effective(IntegrationSettings(), "read-only")
-    call = ToolCall(
-        id="not-offered",
-        name="write_file",
-        arguments={"root": "session", "path": "files/note.txt", "content": "secret"},
-    )
-
-    result = await effective.execute(call, _context(tmp_path, call))
-
-    assert result.metadata == {"errorCode": "tool.unavailable"}
-
-
 def test_inactive_capability_catalog_includes_installed_tools_without_schemas() -> None:
     integrations = IntegrationSettings(
         adapter_availability={"caldav": "disabled"}
@@ -1257,7 +1145,6 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     capabilities = tools_module.effective_tool_capabilities(settings)
     effective = tool_registry.effective(
         integrations,
-        "read-only",
         tool_capabilities=capabilities,
         tool_settings=settings,
     )
@@ -1265,7 +1152,6 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     groups = tool_registry.inactive_capability_groups(
         integrations,
         frozenset(effective.tools),
-        workspace_access="read-only",
         webfetch_enabled=False,
         web_search_enabled=True,
         memory_enabled=False,
@@ -1275,8 +1161,8 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     )
     catalog = "\n".join(groups)
 
-    assert "write_file" in catalog
-    assert 'switch "Agent-Modus" from "Lesen" to "Schreiben"' in catalog
+    assert "write_file" in effective.tools
+    assert "write_file" not in catalog
     assert "generate_image" in catalog
     assert "memory_retrieve" in catalog
     assert "webfetch" in catalog
@@ -1294,14 +1180,12 @@ def test_policy_disabled_integration_tool_points_to_tool_settings(monkeypatch) -
     )
     effective = tool_registry.effective(
         integrations,
-        "read-only",
         tool_settings=settings,
     )
 
     groups = tool_registry.inactive_capability_groups(
         integrations,
         frozenset(effective.tools),
-        workspace_access="read-only",
         webfetch_enabled=False,
         web_search_enabled=True,
         memory_enabled=False,
@@ -1329,7 +1213,6 @@ def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:
         item["name"]
         for item in tool_registry.effective(
             IntegrationSettings(),
-            "read-write",
             tool_settings=settings,
         ).schemas()
     }
@@ -1353,7 +1236,7 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
         {"webSearch": {"primaryProvider": f"searxng:{integration.id}"}}
     )
     effective = tool_registry.effective(
-        settings, "read-only", tool_settings=current_tools
+        settings, tool_settings=current_tools
     )
     call = ToolCall(
         id="stale-search",
@@ -1421,7 +1304,7 @@ async def test_web_search_rejects_changed_bound_provider_configuration(
         {"webSearch": {"primaryProvider": f"searxng:{integration.id}"}}
     )
     effective = tool_registry.effective(
-        integrations, "read-only", tool_settings=tool_settings
+        integrations, tool_settings=tool_settings
     )
     changed = integration.model_copy(deep=True)
     changed.config = {"base_url": "https://other.example.com"}
@@ -1654,6 +1537,8 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(
             "session",
             draft["path"],
             '{"name":"Changed","description":"Changed","instructions":"Changed"}',
+            mode="replace",
+            expected_sha256=draft["initialRevision"],
         )
         return PermissionDecision.ALLOW
 
@@ -1879,7 +1764,7 @@ async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
     assert "update_agent_identity" not in {
         schema["name"]
         for schema in tool_registry.schemas(
-            IntegrationSettings(), "read-only", tool_capabilities=capabilities
+            IntegrationSettings(), tool_capabilities=capabilities
         )
     }
 
@@ -1962,7 +1847,6 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
         memory_mode="disabled",
         web_search_policy="available",
         working_directory=None,
-        workspace_access="read-only",
     )
     messages = Mock()
     messages.all.return_value = []
@@ -3004,7 +2888,7 @@ async def test_read_does_not_access_path_after_denial(tmp_path) -> None:
     context.db.scalar.assert_not_awaited()
 
 
-async def test_read_reactivates_managed_session_image(tmp_path) -> None:
+async def test_read_does_not_expose_managed_session_images(tmp_path) -> None:
     attachment_id = uuid4()
     call = ToolCall(
         id="read-image",
@@ -3037,21 +2921,9 @@ async def test_read_reactivates_managed_session_image(tmp_path) -> None:
 
     result = await tool_registry.execute(call, context)
 
-    assert json.loads(result.content) == {
-        "root": "session",
-        "path": storage_path,
-        "imageAttachment": {
-            "id": str(attachment_id),
-            "filename": "diagram.png",
-            "kind": "image",
-            "mimeType": "image/png",
-        },
-        "contentIsUntrusted": True,
-    }
+    assert result.metadata == {"errorCode": "file.pathNotFound"}
     context.root_files.read_file.assert_not_called()
-    statement = context.db.scalar.await_args.args[0]
-    parameters = set(statement.compile().params.values())
-    assert {storage_path, "image", "ready", context.session.id, "public"} <= parameters
+    context.db.scalar.assert_not_awaited()
 
 
 async def test_read_does_not_reactivate_unmanaged_binary_file(tmp_path) -> None:
@@ -3073,14 +2945,14 @@ async def test_read_does_not_reactivate_unmanaged_binary_file(tmp_path) -> None:
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata == {"errorCode": "file.invalidEncoding"}
+    assert result.metadata == {"errorCode": "file.pathNotFound"}
 
 
 def test_webfetch_schema_has_the_expected_contract() -> None:
     schema = next(
         item.schema()
         for item in tool_registry.available(
-            IntegrationSettings(), "read-only", webfetch_enabled=True
+            IntegrationSettings(), webfetch_enabled=True
         )
         if item.name == "webfetch"
     )
@@ -3100,7 +2972,7 @@ def test_fetch_transcript_schema_has_the_expected_contract() -> None:
     schema = next(
         item.schema()
         for item in tool_registry.available(
-            IntegrationSettings(), "read-only", webfetch_enabled=True
+            IntegrationSettings(), webfetch_enabled=True
         )
         if item.name == "fetch_transcript"
     )
@@ -3113,12 +2985,12 @@ def test_fetch_transcript_schema_has_the_expected_contract() -> None:
 def test_skill_write_schemas_delegate_compact_briefs() -> None:
     build_schema = next(
         item.schema()
-        for item in tool_registry.available(IntegrationSettings(), "read-only")
+        for item in tool_registry.available(IntegrationSettings())
         if item.name == "build_skill"
     )["parameters"]
     edit_schema = next(
         item.schema()
-        for item in tool_registry.available(IntegrationSettings(), "read-only")
+        for item in tool_registry.available(IntegrationSettings())
         if item.name == "edit_skill"
     )["parameters"]
 
@@ -3133,7 +3005,6 @@ def test_tool_schemas_remove_annotative_titles_recursively() -> None:
         item.schema()
         for item in tool_registry.available(
             IntegrationSettings(),
-            "read-write",
             webfetch_enabled=True,
             memory_enabled=True,
             memory_write_enabled=True,
@@ -3334,7 +3205,6 @@ async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) ->
     settings = ToolSettings()
     effective = tool_registry.effective(
         IntegrationSettings(),
-        "read-only",
         webfetch_enabled=True,
         tool_settings=settings,
     )
@@ -3527,5 +3397,15 @@ def test_permission_for_is_safe_for_webfetch_and_unknown_tools(tmp_path) -> None
     assert permission_for(
         "webfetch", {"url": "https://example.com"}, root_files
     ).resource_type == "url"
+    assert permission_for(
+        "write_file",
+        {"root": "session", "path": "files/result.txt"},
+        root_files,
+    ).capability == "session.files.write"
+    assert permission_for(
+        "write_file",
+        {"root": "workspace", "path": "result.txt"},
+        root_files,
+    ) is None
     assert permission_for("webfetch", {"url": "not a URL"}, root_files) is None
     assert permission_for("unknown", {}, root_files) is None

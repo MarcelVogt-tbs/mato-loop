@@ -34,11 +34,11 @@
                   size="sm"
                   color="primary"
                   icon="visibility"
-                  :aria-label="`${action.filename} ${action.intent === 'draft' ? 'als Entwurf öffnen' : 'ansehen'}`"
+                  :aria-label="`${action.filename} ansehen`"
                   @click.stop="emit('open-file', action)"
                   @keydown.stop
                 >
-                  <q-tooltip>{{ action.intent === 'draft' ? 'Entwurf öffnen' : 'Datei ansehen' }}</q-tooltip>
+                  <q-tooltip>Datei ansehen</q-tooltip>
                 </q-btn>
                 <q-btn
                   flat
@@ -147,7 +147,7 @@ import { computed, ref, watch } from 'vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
-import { mergeDraftOutputs, toolFileActions, toolFileAttachment, toolOutputAttachments } from 'src/utils/attachments'
+import { toolFileActions, toolFileAttachment, toolOutputAttachments } from 'src/utils/attachments'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 import {
   parseToolResult,
@@ -193,7 +193,7 @@ const output = computed(() => {
     ...(props.result?.attachments || []),
     ...(providedFile ? [providedFile] : [])
   ])
-  return mergeDraftOutputs(attachments, toolFileActions(props.result))
+  return { attachments, fileActions: toolFileActions(props.result) }
 })
 const attachments = computed(() => output.value.attachments)
 const fileActions = computed(() => output.value.fileActions)

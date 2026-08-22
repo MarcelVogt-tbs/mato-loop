@@ -688,21 +688,22 @@ class AttachmentService:
         if processing_status not in {None, "pending", "ready", "failed"}:
             raise AttachmentError("attachment.invalidProcessingStatus")
 
-        locked_session_id = await db.scalar(
-            select(ChatSession.id)
+        locked_session = await db.scalar(
+            select(ChatSession)
             .join(Message, Message.session_id == ChatSession.id)
             .where(ChatSession.id == message.session_id, Message.id == message.id)
             .with_for_update()
         )
-        if locked_session_id is None:
+        if locked_session is None:
             raise AttachmentError("attachment.messageNotFound")
         try:
             used_bytes = await asyncio.to_thread(
                 RootFileService(
                     message.session_id,
+                    project_id=locked_session.project_id,
                     session_storage=self.storage.sessions,
                     session_quota_bytes=session_quota_bytes,
-                ).session_usage
+                ).private_session_usage
             )
         except (RootFileError, AttachmentStorageError) as exc:
             raise AttachmentError("attachment.storageInvalid") from exc

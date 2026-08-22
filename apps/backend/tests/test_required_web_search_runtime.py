@@ -19,8 +19,6 @@ from mato_loop_backend.agent.runtime import (
 )
 from mato_loop_backend.agent.tools import (
     ToolAttachment,
-    ToolDraftAction,
-    ToolDraftRepresentation,
     ToolFileAction,
     ToolRegistry,
     ToolResult,
@@ -93,7 +91,6 @@ async def _runtime_setup(
     vision_fallback: bool = False,
     vision_fallback_private: bool = False,
     tool_result: ToolResult | None = None,
-    workspace_access: str = "read-only",
     skills: SkillsSettings | None = None,
     skill_creation_model: bool = False,
     streamed_contents: list[str | None] | None = None,
@@ -153,7 +150,6 @@ async def _runtime_setup(
         model_config_id=model.id,
         memory_mode="disabled",
         web_search_policy=search_policy.value,
-        workspace_access=workspace_access,
         reasoning_effort=reasoning_effort,
     )
     run = AgentRun(
@@ -338,6 +334,7 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
                             "root": "session",
                             "path": "files/cube.scad",
                             "content": "cube(1);\n",
+                            "mode": "create",
                         },
                     )
                 ],
@@ -399,7 +396,6 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
             ProviderResult(content="Fertig gerendert.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
-        workspace_access="read-write",
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
@@ -487,6 +483,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
                             "root": "session",
                             "path": "files/model.scad",
                             "content": "cube(1);",
+                            "mode": "create",
                         },
                     )
                 ],
@@ -534,7 +531,6 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
         search_policy=WebSearchPolicy.AVAILABLE,
         max_steps=2,
         active_supports_image_input=True,
-        workspace_access="read-write",
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
@@ -665,6 +661,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
                         "root": "session",
                         "path": "files/model.scad",
                         "content": "cube(1);",
+                        "mode": "create",
                     },
                 )
             ],
@@ -716,7 +713,6 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
         search_policy=WebSearchPolicy.AVAILABLE,
         max_steps=3,
         vision_fallback=vision_fallback,
-        workspace_access="read-write",
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
@@ -850,7 +846,6 @@ async def test_private_openscad_source_uses_configured_vision_release(monkeypatc
         search_policy=WebSearchPolicy.AVAILABLE,
         active_supports_image_input=True,
         vision_fallback=True,
-        workspace_access="read-write",
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
@@ -910,7 +905,6 @@ async def test_failed_active_openscad_verifier_does_not_fallback_and_counts_budg
         search_policy=WebSearchPolicy.AVAILABLE,
         active_supports_image_input=True,
         vision_fallback=True,
-        workspace_access="read-write",
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
@@ -1029,7 +1023,6 @@ async def test_each_successful_openscad_preview_runs_a_verifier(monkeypatch) -> 
         max_steps=3,
         search_policy=WebSearchPolicy.AVAILABLE,
         vision_fallback=True,
-        workspace_access="read-write",
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
@@ -1133,7 +1126,6 @@ async def test_openscad_stl_and_failed_preview_do_not_run_verifier(monkeypatch) 
         max_steps=2,
         search_policy=WebSearchPolicy.AVAILABLE,
         vision_fallback=True,
-        workspace_access="read-write",
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
@@ -1700,6 +1692,7 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
                             "root": "session",
                             "path": "files/report.txt",
                             "content": "report",
+                            "mode": "create",
                         },
                     )
                 ]
@@ -1707,7 +1700,6 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
             ProviderResult(content="Fertig", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
-        workspace_access="read-write",
         tool_result=ToolResult.json(
             {"root": "session", "written": "files/report.txt"},
             file_actions=(action,),
@@ -1742,62 +1734,6 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
     assert "download" not in str(tool_message.provider_data).casefold()
 
 
-async def test_runtime_persists_typed_draft_action_as_file_action(monkeypatch) -> None:
-    draft_id = uuid4()
-    db, run, *_ = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="draft-1",
-                        name="create_draft",
-                        arguments={"filename": "plan.md", "content": "# Plan"},
-                    )
-                ]
-            ),
-            ProviderResult(content="Fertig", finish_reason="stop"),
-        ],
-        search_policy=WebSearchPolicy.AVAILABLE,
-        tool_result=ToolResult(
-            content="{}",
-            metadata={},
-            draft_action=ToolDraftAction(
-                "create",
-                draft_id,
-                1,
-                f"files/drafts/{draft_id}/plan.md",
-                "plan.md",
-                6,
-                representations=(ToolDraftRepresentation(0, "preview"),),
-            ),
-        ),
-    )
-
-    await AgentRuntime._execute_loop(db, run)
-
-    tool_message = next(
-        call.args[0]
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Message) and call.args[0].role == "tool"
-    )
-    assert tool_message.provider_data["_matoloop"]["fileActions"] == [
-        {
-            "operation": "write",
-            "root": "session",
-            "rootIdentity": str(run.session_id),
-            "path": f"files/drafts/{draft_id}/plan.md",
-            "filename": "plan.md",
-            "sizeBytes": 6,
-            "intent": "draft",
-            "draftId": str(draft_id),
-            "revision": 1,
-            "draftOperation": "create",
-            "representations": [{"attachmentPosition": 0, "role": "preview"}],
-        }
-    ]
-
-
 async def test_cancelled_dispatched_workspace_write_commits_before_run_stops(
     monkeypatch,
 ) -> None:
@@ -1813,6 +1749,8 @@ async def test_cancelled_dispatched_workspace_write_commits_before_run_stops(
                             "root": "workspace",
                             "path": "a.txt",
                             "content": "x",
+                            "mode": "replace",
+                            "expectedSha256": "a" * 64,
                         },
                     )
                 ]
@@ -1820,7 +1758,6 @@ async def test_cancelled_dispatched_workspace_write_commits_before_run_stops(
             ProviderResult(content="Must not be requested", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
-        workspace_access="read-write",
     )
     run.execution_agent_id = uuid4()
     run.execution_root_id = uuid4()
@@ -2195,7 +2132,12 @@ async def test_failed_mutation_blocks_an_unconfirmed_final_response(monkeypatch)
                     ToolCall(
                         "write-failed",
                         "write_file",
-                        {"root": "session", "path": "files/note.txt", "content": "Hallo"},
+                        {
+                            "root": "session",
+                            "path": "files/note.txt",
+                            "content": "Hallo",
+                            "mode": "create",
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -2203,7 +2145,6 @@ async def test_failed_mutation_blocks_an_unconfirmed_final_response(monkeypatch)
             ProviderResult(content="Die Datei wurde erfolgreich erstellt.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
-        workspace_access="read-write",
         tool_result=ToolResult.error("tool.invalidArguments", field="path"),
     )
 
@@ -2226,7 +2167,12 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
                     ToolCall(
                         "write-failed",
                         "write_file",
-                        {"root": "session", "path": "files/wrong.txt", "content": "Hallo"},
+                        {
+                            "root": "session",
+                            "path": "files/wrong.txt",
+                            "content": "Hallo",
+                            "mode": "create",
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -2237,7 +2183,12 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
                     ToolCall(
                         "write-corrected",
                         "write_file",
-                        {"root": "session", "path": "files/note.txt", "content": "Hallo"},
+                        {
+                            "root": "session",
+                            "path": "files/note.txt",
+                            "content": "Hallo",
+                            "mode": "create",
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -2245,7 +2196,6 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
             ProviderResult(content="Die Datei wurde erstellt.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
-        workspace_access="read-write",
     )
     tool_registry._execute_definition.side_effect = [
         ToolResult.error("tool.invalidArguments", field="path"),

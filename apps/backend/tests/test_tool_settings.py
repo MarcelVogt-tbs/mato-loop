@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.tools import tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.tool_settings import (
     ToolSettingsRequest,
@@ -17,6 +18,7 @@ from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
+    ToolExecutionPolicy,
     ToolSettings,
 )
 
@@ -31,6 +33,36 @@ def test_legacy_duckduckgo_provider_is_migrated_to_no_key_search() -> None:
     )
 
     assert settings.web_search.primary_provider == "no_key"
+
+
+@pytest.mark.parametrize(
+    ("session_policy", "workspace_policy", "available"),
+    [
+        (ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK, True),
+        (ToolExecutionPolicy.AUTO, ToolExecutionPolicy.DISABLED, True),
+        (ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.DISABLED, False),
+    ],
+)
+def test_root_specific_write_policies_keep_shared_tools_available(
+    session_policy: ToolExecutionPolicy,
+    workspace_policy: ToolExecutionPolicy,
+    available: bool,
+) -> None:
+    settings = ToolSettings(
+        policies={
+            "session.files.write": session_policy,
+            "filesystem.write": workspace_policy,
+        }
+    )
+
+    tools = tool_registry.effective(
+        IntegrationSettings(), tool_settings=settings
+    ).tools
+
+    assert ("write_file" in tools) is available
+    assert ("create_directory" in tools) is available
+    assert ("copy_path" in tools) is available
+    assert ("move_path" in tools) is available
 
 
 async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
@@ -89,10 +121,10 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "updateAgentIdentity": {"policy": "ask"},
     }
     assert result["policies"] == {
-        "filesystem.read": "auto",
-        "filesystem.write": "auto",
-        "filesystem.delete": "auto",
-        "draft.create": "auto",
+            "filesystem.read": "auto",
+            "session.files.write": "auto",
+            "filesystem.write": "ask",
+            "filesystem.delete": "ask",
         "network.search": "auto",
         "media.generate.image": "disabled",
         "media.edit.image": "ask",

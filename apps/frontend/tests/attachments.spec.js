@@ -7,8 +7,6 @@ import {
   audioAttachments,
   formatAttachmentDuration,
   imageAttachments,
-  mergeDraftOutputEntries,
-  mergeDraftOutputs,
   safeAttachmentUrl,
   safeFileDownloadUrl,
   supportedAttachments,
@@ -42,6 +40,7 @@ describe('persisted attachments', () => {
     expect(safeFileDownloadUrl(`https://example.com${downloadUrl}`)).toBeNull()
     const sessionUrl = '/api/workspace/files/download?path=files%2Freport.pdf&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440000'
     expect(safeFileDownloadUrl(sessionUrl)).toBe(sessionUrl)
+    expect(safeFileDownloadUrl(sessionUrl.replace(/root_identity=[^&]+/u, 'root_identity=550e8400-e29b-41d4-a716-446655440009'))).not.toBeNull()
     expect(safeFileDownloadUrl(sessionUrl.replace(/root_identity=[^&]+/u, 'root_identity=other'))).toBeNull()
     expect(safeFileDownloadUrl(`${sessionUrl}&execution_agent_id=${executionAgentId}`)).toBeNull()
   })
@@ -175,7 +174,7 @@ describe('persisted attachments', () => {
     expect(toolFileActions({ fileActions: [{ ...action, operation: 'delete' }] })).toEqual([])
   })
 
-  it('accepts only canonical draft metadata on session file actions', () => {
+  it('does not expose legacy draft actions as reusable file outputs', () => {
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const draftId = '550e8400-e29b-41d4-a716-446655440005'
     const path = `files/drafts/${draftId}/plan.md`
@@ -194,96 +193,7 @@ describe('persisted attachments', () => {
       downloadUrl: `/api/workspace/files/download?path=${encodeURIComponent(path)}&scope=session&session_id=${sessionId}&root_identity=${sessionId}`
     }
 
-    expect(toolFileActions({ fileActions: [action] })[0]).toMatchObject({
-      intent: 'draft', draftId, revision: 1, sessionId
-    })
-    expect(toolFileActions({ fileActions: [{ ...action, draftId: rootId }] })).toEqual([])
-    expect(toolFileActions({ fileActions: [{ ...action, revision: 0 }] })).toEqual([])
-    expect(toolFileActions({ fileActions: [{ ...action, intent: 'other' }] })).toEqual([])
-  })
-
-  it.each(['image', 'audio', 'video', 'file'])(
-    'merges a correlated %s attachment and draft into one output',
-    (kind) => {
-      const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-      const attachmentId = '550e8400-e29b-41d4-a716-446655440002'
-      const draftId = '550e8400-e29b-41d4-a716-446655440005'
-      const path = `files/drafts/${draftId}/generated.bin`
-      const action = toolFileActions({
-        fileActions: [{
-          operation: 'write',
-          root: 'session',
-          rootIdentity: sessionId,
-          path,
-          filename: 'generated.bin',
-          sizeBytes: 7,
-           intent: 'draft',
-           draftId,
-           revision: 1,
-           draftOperation: 'create',
-           representations: [{ attachmentId, role: 'preview' }],
-           downloadUrl: `/api/workspace/files/download?path=${encodeURIComponent(path)}&scope=session&session_id=${sessionId}&root_identity=${sessionId}`
-        }]
-      })[0]
-
-      const output = mergeDraftOutputs([{ id: attachmentId, kind }], [action])
-
-      expect(output.fileActions).toEqual([])
-      expect(output.attachments).toEqual([{
-        id: attachmentId,
-        kind,
-        filename: 'generated.bin',
-        draftAction: action,
-        draftRole: 'preview'
-      }])
-      expect(mergeDraftOutputs([{ id: 'other', kind }], [action]).fileActions).toEqual([action])
-    }
-  )
-
-  it('keeps the latest draft output per answer and hides internal representations', () => {
-    const draftId = '550e8400-e29b-41d4-a716-446655440005'
-    const previewId = '550e8400-e29b-41d4-a716-446655440002'
-    const internalId = '550e8400-e29b-41d4-a716-446655440006'
-    const baseAction = {
-      intent: 'draft',
-      draftId,
-      filename: 'model.scad'
-    }
-
-    const outputs = mergeDraftOutputEntries([
-      {
-        key: 'create',
-        attachments: [],
-        fileActions: [{ ...baseAction, revision: 1, draftOperation: 'create', representations: [] }]
-      },
-      {
-        key: 'present',
-        attachments: [
-          { id: previewId, kind: 'file' },
-          { id: internalId, kind: 'image' }
-        ],
-        fileActions: [{
-          ...baseAction,
-          revision: 2,
-          draftOperation: 'present',
-          representations: [
-            { attachmentId: previewId, role: 'preview' },
-            { attachmentId: internalId, role: 'internal' }
-          ]
-        }]
-      }
-    ])
-
-    expect(outputs).toHaveLength(1)
-    expect(outputs[0]).toMatchObject({
-      key: `draft-${draftId}`,
-      fileActions: [],
-      attachments: [{
-        id: previewId,
-        draftRole: 'preview',
-        draftAction: { revision: 2, draftOperation: 'present' }
-      }]
-    })
+    expect(toolFileActions({ fileActions: [action] })).toEqual([])
   })
 
   it('keeps supported image metadata and marks unsafe URLs', () => {

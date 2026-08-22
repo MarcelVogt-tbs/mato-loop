@@ -71,7 +71,7 @@ function safeFileUrl(value, expectedPath) {
   const sessionId = parsed.searchParams.get('session_id')
   const rootIdentity = parsed.searchParams.get('root_identity')
   if (!validRelativePath(path) || !UUID_PATTERN.test(sessionId || '')) return null
-  if (scope === 'session') return rootIdentity === sessionId ? value : null
+  if (scope === 'session') return UUID_PATTERN.test(rootIdentity || '') ? value : null
   const executionAgentId = parsed.searchParams.get('execution_agent_id')
   const rootId = parsed.searchParams.get('root_id')
   const rootRevision = parsed.searchParams.get('root_revision')
@@ -143,6 +143,7 @@ export function toolFileActions(result) {
   if (!Array.isArray(result?.fileActions) || result.fileActions.length > 1) return []
   return result.fileActions.flatMap((action) => {
     if (!action || typeof action !== 'object') return []
+    if (action.intent === 'draft' || action.draftId || action.draftOperation) return []
     const safeUrl = safeFileDownloadUrl(action.downloadUrl)
     const size = Number(action.sizeBytes)
     const path = typeof action.path === 'string' ? action.path : ''
@@ -153,24 +154,6 @@ export function toolFileActions(result) {
     const rootId = typeof action.rootId === 'string' ? action.rootId : ''
     const rootRevision = typeof action.rootRevision === 'string' ? action.rootRevision : ''
     const workingDirectory = typeof action.workingDirectory === 'string' ? action.workingDirectory : ''
-    const isDraft = action.intent === 'draft'
-    const draftId = typeof action.draftId === 'string' ? action.draftId : ''
-    const revision = Number(action.revision)
-    const draftOperation = ['create', 'revise', 'present'].includes(action.draftOperation)
-      ? action.draftOperation
-      : ''
-    const rawRepresentations = Array.isArray(action.representations) ? action.representations : null
-    const representations = rawRepresentations?.flatMap((representation) => (
-      representation
-      && typeof representation === 'object'
-      && UUID_PATTERN.test(representation.attachmentId || '')
-      && ['preview', 'download', 'internal'].includes(representation.role)
-        ? [{ attachmentId: representation.attachmentId, role: representation.role }]
-        : []
-    )) || []
-    const hasDraftFields = [
-      'intent', 'draftId', 'revision', 'draftOperation', 'representations'
-    ].some((key) => Object.hasOwn(action, key))
     if (
       !safeUrl
       || !scope
@@ -179,21 +162,6 @@ export function toolFileActions(result) {
       || size < 0
       || filename !== path.split('/').at(-1)
       || filename.length > 255
-      || (hasDraftFields && !isDraft)
-      || (isDraft && (
-        !draftOperation
-        || !rawRepresentations
-        || rawRepresentations.length !== representations.length
-        || new Set(representations.map((item) => item.attachmentId)).size !== representations.length
-      ))
-      || (isDraft && (
-        action.root !== 'session'
-        || action.operation !== 'write'
-        || !UUID_PATTERN.test(draftId)
-        || !Number.isSafeInteger(revision)
-        || revision < 1
-        || path !== `files/drafts/${draftId}/${filename}`
-      ))
     ) return []
     const params = new URL(safeUrl, 'https://mato-loop.invalid').searchParams
     const sessionId = params.get('session_id')
@@ -223,74 +191,9 @@ export function toolFileActions(result) {
       ...(scope === 'filesystem'
         ? { executionAgentId, rootId, rootRevision, workingDirectory }
         : {}),
-      ...(isDraft
-        ? { intent: 'draft', draftId, revision, draftOperation, representations }
-        : {}),
       downloadUrl: safeUrl
     }]
   })
-}
-
-export function mergeDraftOutputs(attachments, fileActions) {
-  const entries = mergeDraftOutputEntries([{ key: 'output', attachments, fileActions }])
-  return {
-    attachments: entries.flatMap((entry) => entry.attachments),
-    fileActions: entries.flatMap((entry) => entry.fileActions)
-  }
-}
-
-export function mergeDraftOutputEntries(entries) {
-  const attachments = new Map(entries.flatMap((entry) => entry.attachments).map((item) => [item.id, item]))
-  const claimedAttachmentIds = new Set()
-  const drafts = new Map()
-  entries.forEach((entry, index) => {
-    entry.fileActions.filter((action) => action.intent === 'draft').forEach((action) => {
-      const represented = action.representations.flatMap((representation) => {
-        const attachment = attachments.get(representation.attachmentId)
-        if (!attachment) return []
-        claimedAttachmentIds.add(attachment.id)
-        return [{ attachment, role: representation.role }]
-      })
-      const visible = represented.find((item) => item.role === 'preview')
-        || represented.find((item) => item.role === 'download')
-      const previous = drafts.get(action.draftId)
-      drafts.set(action.draftId, {
-        index: previous?.index ?? index,
-        action,
-        visible
-      })
-    })
-  })
-  const output = entries.flatMap((entry, index) => {
-    const remaining = {
-      key: entry.key,
-      index,
-      attachments: entry.attachments.filter((item) => !claimedAttachmentIds.has(item.id)),
-      fileActions: entry.fileActions.filter((action) => action.intent !== 'draft')
-    }
-    return remaining.attachments.length || remaining.fileActions.length ? [remaining] : []
-  })
-  for (const [draftId, draft] of drafts) {
-    output.push({
-      key: `draft-${draftId}`,
-      index: draft.index,
-      attachments: draft.visible
-        ? [{
-            ...draft.visible.attachment,
-            ...(draft.visible.role === 'preview' ? { filename: draft.action.filename } : {}),
-            draftAction: draft.action,
-            draftRole: draft.visible.role
-          }]
-        : [],
-      fileActions: draft.visible ? [] : [draft.action]
-    })
-  }
-  return output.sort((left, right) => left.index - right.index)
-    .map((entry) => ({
-      key: entry.key,
-      attachments: entry.attachments,
-      fileActions: entry.fileActions
-    }))
 }
 
 export function imageAttachments(attachments) {

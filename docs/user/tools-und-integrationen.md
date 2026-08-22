@@ -12,7 +12,7 @@ Hostseitige Sicherheitsgrenzen gelten auch bei **Automatisch** weiterhin.
 
 Administratoren wechseln mit **Persönlich** / **Instanz** zwischen den eigenen Tool-Einstellungen und den gemeinsamen Vorgaben. Sie können persönliche Tool-Einstellungen vollständig sperren. Persönliche Richtlinien ersetzen sonst die Instanzvorgaben; User-Agent, Größenlimit und erlaubte private Ursprünge von Webfetch bleiben technische Instanzgrenzen. Mit **Auf Instanzstandard zurücksetzen** werden die persönlichen Tool-Einstellungen gelöscht.
 
-Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Agent-Modus, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
+Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Richtlinien, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
 
 Direkte Aktionen, die Sie selbst in der Oberfläche auslösen, verwenden keine Agent-Freigabekarte. Dazu gehören insbesondere Dateiaktionen unter **Control Center > Dateien** und das Diktat über die Mikrofonschaltfläche.
 
@@ -31,7 +31,7 @@ MatoLoop bündelt Werkzeuge für:
 - Wissensdatenbank (BookStack)
 - 3D-Modellierung (OpenSCAD)
 
-Welche Tools tatsächlich erscheinen, hängt zusätzlich von Agent-Modus, Session-Einstellungen, Modellfähigkeiten und konfigurierten Standardmodellen ab.
+Welche Tools tatsächlich erscheinen, hängt zusätzlich von Richtlinien, Session-Einstellungen, Modellfähigkeiten und konfigurierten Standardmodellen ab.
 
 ## Instanz und persönliche Integrationen
 
@@ -43,7 +43,7 @@ Administratoren sehen den Umschalter **Persönlich** / **Instanz**. Normale Benu
 
 Arbeitsbereiche, Prozesse, Shell-Befehle und statisch dafür vorgesehene lokale Integrationen laufen auf dem für die Session gewählten Computer. Eine lokale Integration erscheint nur, wenn sie diesem Computer zugeordnet ist, der Computer verbunden ist und die fest eingebaute Operation meldet. Ohne passenden Computer bleiben Chat, Websuche und andere Backend-Funktionen verfügbar. Es gibt keinen automatischen Wechsel, Backend-Fallback oder Wiederholungsversuch.
 
-`process.exec` kann nur administrativ konfigurierte Programm-Aliase starten. `shell.run` steht nur mit einer konfigurierten Shell zur Verfügung. Beide Funktionen laufen im gewählten Arbeitsordner, aber ohne allgemeine Betriebssystem-Sandbox. Im Agent-Modus **Lesen** prüft der Execution Agent deshalb den vollständigen Shell-Aufruf und erlaubt ausschließlich die dokumentierte Positivliste einfacher Lesebefehle. Unvollständige Analysen, Umleitungen, Skripte, unbekannte Programme, Symlinks und Pfade außerhalb der freigegebenen Wurzel werden abgelehnt. Eine Freigabe kann diese Grenze nicht umgehen.
+`process.exec` kann nur administrativ konfigurierte Programm-Aliase starten. `shell.run` steht nur mit einer konfigurierten Shell zur Verfügung. Beide Funktionen laufen im gewählten Arbeitsordner, aber ohne allgemeine Betriebssystem-Sandbox. Der Execution Agent prüft jeden vollständigen Shell-Aufruf. Nur einfache Aufrufe der dokumentierten Lesebefehle können als rein lesend gelten und eine exakte Session-Freigabe erhalten; andere Shell- und Prozessfreigaben gelten nur einmal. Eine Freigabe kann Pfad- und Wurzelgrenzen nicht umgehen.
 
 Ein nachweislich lesender Shell-Befehl kann exakt für denselben Computer, dieselbe Wurzelversion, denselben Arbeitsordner und denselben Befehl innerhalb der Session freigegeben werden. Andere Shell- und Prozessaufrufe zeigen weiterhin die deutliche Warnung und bieten nur **Einmal erlauben** oder **Ablehnen** an. Für Git sollten die fest eingebauten Git-Tools statt Shell-Befehlen verwendet werden.
 
@@ -109,7 +109,7 @@ Beschreiben Sie im Chat das gewünschte Modell mit seinen notwendigen Abmessunge
 
 Der Agent erzeugt den OpenSCAD-Quelltext selbst, rendert ihn und prüft Diagnosen, Abmessungen, Topologiedaten sowie beschriftete Ansichten von vorne, hinten, links, rechts, oben und unten. Nach jeder Vorschau führt ein bildfähiges Chatmodell selbst eine separate visuelle Prüfung durch. Bei einem reinen Textmodell übernimmt das konfigurierte Standard-Vision-Modell diese Prüfung mit bis zu sieben aktuellen Referenzbildern. Das bildfähige Chatmodell erhält das interne Ansichtsblatt anschließend weiterhin direkt im Agentenlauf. Ist kein geeignetes Vision-Modell verfügbar, bleibt der Render nutzbar und wird als visuell ungeprüft gekennzeichnet. Ein erfolgreicher Render, passende Außenmaße und eine unauffällige Sichtprüfung gelten allein nicht als Nachweis für verdeckte Geometrie, Passung, Wandstärke, Festigkeit oder Druckbarkeit. Erkennt der Agent einen bestätigten sichtbaren Fehler, korrigiert er den Quelltext und rendert erneut. Nach erfolgreichem Abschluss stehen die `.scad`-Quelldatei und eine interaktive 3D-Vorschau zur Verfügung. Eine STL-Datei erzeugt der Agent nur auf ausdrücklichen Wunsch. Unter **Control Center > Dateien** können Sie `.scad` zwischen Quelltext und 3D-Ansicht umschalten und STL explizit exportieren. 3D-Modelle lassen sich drehen, verschieben, zoomen und aus festen Perspektiven betrachten.
 
-CAD-Rendering ist standardmäßig auf **Automatisch** gestellt. Unter **Zugriff** können Sie weiterhin **Nachfragen** oder **Nicht erlaubt** wählen. Datei- und Agent-Modus-Grenzen gelten unabhängig davon weiter. OpenSCAD läuft direkt mit den Rechten des Execution Agents. Das private Arbeitsverzeichnis, feste Aufrufparameter, Laufzeit- und Größenlimits sowie die Ausgabeprüfung sind keine Betriebssystem-Sandbox; OpenSCAD kann grundsätzlich auf weitere Dateien und Netzwerkziele zugreifen, die für den Agent erreichbar sind. Verwenden Sie für eine stärkere Trennung einen Container, eine virtuelle Maschine oder einen eigenen eingeschränkten Betriebssystembenutzer. Sehr große Projekte oder STL-Dateien werden abgelehnt beziehungsweise nur als Download angeboten.
+CAD-Rendering ist standardmäßig auf **Automatisch** gestellt. Unter **Zugriff** können Sie weiterhin **Nachfragen** oder **Nicht erlaubt** wählen. Datei-Richtlinien und Wurzelgrenzen gelten unabhängig davon weiter. OpenSCAD läuft direkt mit den Rechten des Execution Agents. Das private Arbeitsverzeichnis, feste Aufrufparameter, Laufzeit- und Größenlimits sowie die Ausgabeprüfung sind keine Betriebssystem-Sandbox; OpenSCAD kann grundsätzlich auf weitere Dateien und Netzwerkziele zugreifen, die für den Agent erreichbar sind. Verwenden Sie für eine stärkere Trennung einen Container, eine virtuelle Maschine oder einen eigenen eingeschränkten Betriebssystembenutzer. Sehr große Projekte oder STL-Dateien werden abgelehnt beziehungsweise nur als Download angeboten.
 
 ## Webfetch konfigurieren
 

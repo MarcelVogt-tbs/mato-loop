@@ -170,7 +170,7 @@
                               @click="deleteProject(project)"
                             >
                               <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
-                              <q-item-section>Leeres Projekt löschen</q-item-section>
+                              <q-item-section>Projekt löschen</q-item-section>
                             </q-item>
                           </q-list>
                         </q-menu>
@@ -707,9 +707,9 @@ async function saveProject() {
 async function deleteProject(project) {
   if (!project || project.sessionCount > 0) return
   const accepted = await confirm(
-    `Projekt „${project.name}“ löschen?`,
-    'Leeres Projekt löschen?',
-    { okLabel: 'Löschen' }
+    `Projekt „${project.name}“ mit allen gemeinsamen Dateien und Versionen dauerhaft löschen?`,
+    'Projekt löschen?',
+    { okLabel: 'Löschen', okColor: 'negative' }
   )
   if (!accepted) return
   try {

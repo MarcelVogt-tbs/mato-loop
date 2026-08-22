@@ -537,7 +537,7 @@ def test_no_key_provider_makes_search_available_without_configuration() -> None:
     settings = IntegrationSettings()
 
     assert search_available(settings) is True
-    schemas = available_tool_schemas(settings, "read-only")
+    schemas = available_tool_schemas(settings)
     search_schema = next(item for item in schemas if item["name"] == "web_search")
     properties = search_schema["parameters"]["properties"]
     assert set(properties) == {"query", "search_type"}

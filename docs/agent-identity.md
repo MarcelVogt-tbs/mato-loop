@@ -1,6 +1,6 @@
 # Agent Identity
 
-MatoLoop has exactly one user-scoped agent identity. It applies across all sessions and agent modes. Work modes such as `Lesen` and `Schreiben` control tasks and technical capabilities; they are not separate personalities.
+MatoLoop has exactly one user-scoped agent identity. It applies across all sessions. Tool policies and available resources control technical capabilities; they are not separate personalities.
 
 ## Persistence
 

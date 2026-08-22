@@ -70,7 +70,6 @@ def _context(tmp_path, call, client, *, decision=PermissionDecision.ALLOW):
         memory_mode="disabled",
         web_search_policy="available",
         working_directory="project",
-        workspace_access="read-write",
     )
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session.id)
@@ -90,10 +89,9 @@ def _context(tmp_path, call, client, *, decision=PermissionDecision.ALLOW):
     )
 
 
-def _tools(operations, workspace_access="read-write"):
+def _tools(operations):
     return tool_registry.effective(
         IntegrationSettings(),
-        workspace_access,
         tool_settings=ToolSettings(),
         execution_operations=frozenset(operations),
     )
@@ -110,9 +108,9 @@ def test_process_tools_are_gated_and_cannot_select_execution_targets() -> None:
         schema["parameters"]["properties"]
     )
 
-    read_only = _tools({"process.exec", "shell.run"}, "read-only")
-    assert "process_exec" not in read_only.tools
-    assert "shell_run" in read_only.tools
+    shell_only = _tools({"process.exec", "shell.run"})
+    assert "process_exec" in shell_only.tools
+    assert "shell_run" in shell_only.tools
 
 
 async def test_execution_client_adds_only_snapshot_root_and_sanitizes_agent_errors(
@@ -335,9 +333,7 @@ async def test_read_only_shell_executes_only_host_verified_read_commands(tmp_pat
         {"shell.inspect", "shell.run"},
     )
     context = _context(tmp_path, call, client)
-    context.session.workspace_access = "read-only"
-
-    result = await _tools(client.operations, "read-only").execute(call, context)
+    result = await _tools(client.operations).execute(call, context)
 
     assert not result.is_error
     assert [request[0] for request in client.requests] == ["shell.inspect", "shell.run"]
@@ -364,20 +360,29 @@ async def test_read_only_shell_executes_only_host_verified_read_commands(tmp_pat
         inspection_revision="d" * 64,
     )
     context.tool_call = ToolCall("write", "shell_run", {"command": "rm README.md"})
-    result = await _tools(client.operations, "read-only").execute(
-        context.tool_call, context
-    )
+    result = await _tools(client.operations).execute(context.tool_call, context)
 
-    assert result.metadata == {"errorCode": "tool.writeDisabled"}
+    assert not result.is_error
     assert [request[0] for request in client.requests] == [
         "shell.inspect",
         "shell.run",
         "shell.inspect",
+        "shell.run",
     ]
 
 
 async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -> None:
-    call = ToolCall("write-1", "write_file", {"root": "workspace", "path": "a.txt", "content": "x"})
+    call = ToolCall(
+        "write-1",
+        "write_file",
+        {
+            "root": "workspace",
+            "path": "a.txt",
+            "content": "x",
+            "mode": "replace",
+            "expectedSha256": "b" * 64,
+        },
+    )
     client = FakeExecutionClient(
         {
             "workspace.write": WorkspaceWriteResult(
@@ -393,7 +398,12 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
     context.ask_handler = AsyncMock(return_value=PermissionDecision.ALLOW)
 
     written = await _tools(client.operations).execute(call, context)
-    assert json.loads(written.content) == {"root": "workspace", "written": "a.txt"}
+    assert json.loads(written.content) == {
+        "root": "workspace",
+        "written": "a.txt",
+        "sha256": "a" * 64,
+        "sizeBytes": 1,
+    }
     action = written.file_actions[0]
     assert action.root_identity == str(client.root_id)
     assert action.execution_agent_id == str(client.agent_id)
@@ -401,7 +411,10 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
     assert action.root_revision == client.root_revision
     assert action.working_directory == client.working_directory
     assert client.requests == [
-        ("workspace.write", {"path": "a.txt", "content": "x"})
+        (
+            "workspace.write",
+            {"path": "a.txt", "content": "x", "expectedSha256": "b" * 64},
+        )
     ]
     assert context.ask_handler.await_count == 2
 

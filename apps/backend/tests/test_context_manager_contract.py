@@ -36,7 +36,6 @@ def _session() -> ChatSession:
         memory_mode="disabled",
         web_search_policy="available",
         working_directory=None,
-        workspace_access="read-only",
     )
 
 
@@ -206,6 +205,43 @@ def test_message_projection_timestamps_only_user_content() -> None:
     assert message_dict(assistant)["content"] == "Antwort"
     assert message_dict(tool)["content"] == '{"ok":true}'
     assert user.content == "okay abgeschickt"
+
+
+def test_only_latest_user_active_file_is_added_to_model_context() -> None:
+    session_id = uuid4()
+    previous = _message(session_id, "user", "Vorher")
+    latest = _message(session_id, "user", "Jetzt")
+    previous.provider_data = {
+        "_matoloop": {
+            "activeFile": {
+                "root": "session",
+                "rootIdentity": str(session_id),
+                "path": "files/old.txt",
+                "sha256": "a" * 64,
+                "dirty": False,
+            }
+        }
+    }
+    latest.provider_data = {
+        "_matoloop": {
+            "activeFile": {
+                "root": "session",
+                "rootIdentity": str(session_id),
+                "path": "files/current.txt",
+                "sha256": "b" * 64,
+                "dirty": True,
+            }
+        }
+    }
+
+    projected = _projection_messages(
+        "System", None, [previous, latest], TrustLevel.PRIVATE
+    )
+
+    assert "old.txt" not in projected[1]["content"]
+    assert "current.txt" in projected[2]["content"]
+    assert "unsaved changes" in projected[2]["content"]
+    assert "file content" in projected[2]["content"]
 
 
 def test_runtime_error_message_is_excluded_from_model_projection() -> None:
@@ -865,7 +901,7 @@ def test_inactive_capability_catalog_is_informational_only() -> None:
         _session(),
         offered_tool_names=frozenset({"read"}),
         inactive_capability_groups=(
-            'File mutation [write_file]: switch "Agent-Modus" from "Lesen" to "Schreiben".',
+            'Optional tools [write_file]: enable them under "Einstellungen > Tools".',
         ),
     )
 
@@ -1096,19 +1132,15 @@ def test_general_system_prompt_contains_bounded_agent_identity() -> None:
     assert prompt.index("Host security") < prompt.index("User-configured agent identity")
 
 
-def test_read_only_system_prompt_requests_the_user_to_switch_modes() -> None:
+def test_system_prompt_describes_managed_file_roots() -> None:
     prompt = general_system_prompt(
         _session(),
         offered_tool_names=frozenset({"read", "glob", "grep", "provide_file"}),
     )
 
-    assert "Workspace mode: read-only" in prompt
-    assert 'switch "Agent-Modus" from "Lesen" to "Schreiben"' in prompt
-    assert "do not describe it as a general MatoLoop limitation" in prompt
     assert "explicit root and relative POSIX path" in prompt
     assert "path='.' means the root" in prompt
-    assert "Managed session assets are read-only" in prompt
-    assert "only files/... is writable" in prompt
+    assert "session root exposes only files/..." in prompt
     assert "exact new destination" in prompt
     assert "No computer directory selected. Use root=session." in prompt
     assert "paths and read output are not downloads" in prompt
@@ -1126,40 +1158,14 @@ def test_missing_computer_directory_uses_structured_question_when_available() ->
     assert "approval is separate" in prompt
 
 
-def test_read_only_prompt_keeps_media_tools_available() -> None:
+def test_system_prompt_does_not_request_a_mode_switch() -> None:
     prompt = general_system_prompt(
         _session(),
-        offered_tool_names=frozenset({"read", "edit_image"}),
-    )
-
-    assert "Workspace mode: read-only" in prompt
-    assert "Media tools and generated attachments are unaffected" in prompt
-
-
-def test_draft_prompt_separates_artifacts_from_explanations_and_root_tools() -> None:
-    prompt = general_system_prompt(
-        _session(),
-        offered_tool_names=frozenset({"create_draft"}),
-    )
-
-    assert "Draft artifact contract" in prompt
-    assert "reusable text, templates, samples" in prompt
-    assert "generic samples need none" in prompt
-    assert "Do not draft explanations" in prompt
-    assert "take an explicit root" not in prompt
-
-
-def test_read_write_system_prompt_does_not_request_a_mode_switch() -> None:
-    session = _session()
-    session.workspace_access = "read-write"
-
-    prompt = general_system_prompt(
-        session,
         offered_tool_names=frozenset({"read", "write_file"}),
     )
 
-    assert "Workspace mode: read-only" not in prompt
-    assert "switch Agent-Modus from Lesen to Schreiben" not in prompt
+    assert "Workspace mode:" not in prompt
+    assert "Agent-Modus" not in prompt
 
 
 def test_general_system_prompt_requires_explicit_memory_request() -> None:

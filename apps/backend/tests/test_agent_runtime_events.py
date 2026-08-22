@@ -647,7 +647,12 @@ def test_responses_replay_write_file_content_is_fully_redacted() -> None:
     call = ToolCall(
         id="write-1",
         name="write_file",
-        arguments={"root": "session", "path": "files/note.txt", "content": secret},
+        arguments={
+            "root": "session",
+            "path": "files/note.txt",
+            "content": secret,
+            "mode": "create",
+        },
     )
 
     result = _safe_provider_data(
@@ -659,7 +664,7 @@ def test_responses_replay_write_file_content_is_fully_redacted() -> None:
                     "name": "write_file",
                     "arguments": (
                         '{"root":"session","path":"files/note.txt",'
-                        f'"content":"{secret}"}}'
+                        f'"content":"{secret}","mode":"create"}}'
                     ),
                 }
             ]

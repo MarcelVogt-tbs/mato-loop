@@ -29,7 +29,6 @@ Kehren Sie zum Chat zurück, geben Sie eine Nachricht ein und senden Sie sie ab.
 Vor dem Senden können Sie unter anderem auswählen:
 
 - Modell
-- Agent-Modus **Lesen** oder **Schreiben**
 - Memory-Modus
 - Websuchmodus
 - Computer

@@ -134,7 +134,7 @@ Do not add mutation, Git, terminal, or agent-execution methods to this interface
 
 Capabilities must independently describe listing, text reads, byte previews, downloads, and mutations. The frontend and agent tool schemas use the effective capability set instead of assuming every working directory is writable and downloadable.
 
-Keep local session storage separate. `/data/sessions/<session-id>` remains local and continues to expose `files`, `attachments`, `generated`, `downloads`, and `derived` with the existing mutation boundaries.
+Keep backend-managed files separate. `root=session` exposes only `files`: standalone sessions own `/data/sessions/<session-id>/files` and project sessions share `/data/projects/<project-id>/files`. Immutable message assets remain private to their session and are available only through attachment APIs.
 
 The public UI term becomes **Arbeitsverzeichnis**. Existing internal API paths and the `root=workspace` identifier may remain for compatibility; do not perform a repository-wide naming refactor.
 

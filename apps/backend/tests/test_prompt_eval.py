@@ -1462,7 +1462,7 @@ def test_added_trajectories_use_exact_runtime_fields_and_repair_shapes() -> None
     for code in (
         "tool.unknown",
         "tool.unavailable",
-        "tool.writeDisabled",
+        "permission.denied",
         "tool.executionFailed",
         "agent.repeatedToolCall",
         "agent.researchBudgetReached",

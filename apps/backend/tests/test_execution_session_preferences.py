@@ -187,7 +187,6 @@ async def test_session_payload_reports_connected_effective_workspace_operations(
         preferred_execution_agent_id=agent.id,
         preferred_root_id=root.id,
         working_directory="project",
-        workspace_access="read-only",
     )
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = agent
@@ -209,7 +208,7 @@ async def test_session_payload_reports_connected_effective_workspace_operations(
         "executionAgentId": str(agent.id),
         "rootId": str(root.id),
         "connected": True,
-        "operations": ["workspace.list", "workspace.read"],
+        "operations": ["workspace.list", "workspace.read", "workspace.write"],
     }
 
 

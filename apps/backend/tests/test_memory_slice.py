@@ -750,7 +750,7 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
             "pin": True,
         },
     )
-    session = ChatSession(id=uuid4(), title="Test", workspace_access="read-only")
+    session = ChatSession(id=uuid4(), title="Test")
     context = ToolContext(
         db=AsyncMock(spec=AsyncSession),
         run_id=uuid4(),
@@ -779,12 +779,12 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
 
 
 def test_memory_tools_are_gated_independently_from_workspace_write_mode() -> None:
-    without_memory = tool_registry.schemas(IntegrationSettings(), "read-only")
+    without_memory = tool_registry.schemas(IntegrationSettings())
     with_read_memory = tool_registry.schemas(
-        IntegrationSettings(), "read-only", memory_enabled=True
+        IntegrationSettings(), memory_enabled=True
     )
     with_full_memory = tool_registry.schemas(
-        IntegrationSettings(), "read-only", memory_enabled=True, memory_write_enabled=True
+        IntegrationSettings(), memory_enabled=True, memory_write_enabled=True
     )
 
     assert not {"memory_write", "memory_retrieve"} & {
@@ -805,13 +805,11 @@ async def test_public_model_can_read_another_session_after_approval(
         id=uuid4(),
         user_id=uuid4(),
         title="Public",
-        workspace_access="read-only",
     )
     target = ChatSession(
         id=uuid4(),
         user_id=source.user_id,
         title="Privat",
-        workspace_access="read-only",
     )
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = target

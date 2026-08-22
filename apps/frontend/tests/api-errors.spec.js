@@ -85,6 +85,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'session.messageNotFound' } })).toBe(
       'Die Chatnachricht wurde nicht gefunden.'
     )
+    expect(apiErrorMessage({ error: { code: 'session.projectFilesConflict' } })).toBe(
+      'Die Session enthält eigene Dateien und kann deshalb keinem Projekt hinzugefügt werden.'
+    )
     expect(apiErrorMessage({ error: { code: 'session.retryUnavailable' } })).toBe(
       'Diese fehlgeschlagene Antwort kann nicht mehr erneut versucht werden.'
     )

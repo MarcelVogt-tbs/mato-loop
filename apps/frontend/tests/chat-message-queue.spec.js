@@ -16,7 +16,9 @@ vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
 import { useApprovalStore } from '../src/stores/approvals'
 import { useChatStore, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/stores/chat'
+import { useControlCenterStore } from '../src/stores/control-center'
 import { useQuestionStore } from '../src/stores/questions'
+import { useWorkspaceStore } from '../src/stores/workspace'
 import { clearChatOutbox } from '../src/utils/chat-outbox'
 
 const originalURL = globalThis.URL
@@ -118,6 +120,44 @@ describe('chat message queue', () => {
       name: 'beleg.txt',
       file: expect.any(Blob)
     })
+  })
+
+  it('persists the queue-time active file snapshot and sends it unchanged', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    const controlCenter = useControlCenterStore()
+    controlCenter.sessionId = 'session-1'
+    controlCenter.open = true
+    controlCenter.tabs = [{ appId: 'files', pinned: false }]
+    controlCenter.activeAppId = 'files'
+    const workspace = useWorkspaceStore()
+    workspace.sessionId = 'session-1'
+    workspace.scope = 'session'
+    workspace.rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    workspace.openEntry({ kind: 'file', name: 'plan.md', path: 'files/plan.md' })
+    workspace.filePreviews['files/plan.md'] = { revision: 'a'.repeat(64) }
+
+    const entry = await chat.queueMessage('Mit Datei')
+    workspace.filePreviews['files/plan.md'].revision = 'b'.repeat(64)
+    chat.running = false
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    api.post.mockResolvedValue({ data: { message: { id: 'message-1' }, runId: 'run-1' } })
+    await chat.drainOutbox()
+
+    const snapshot = {
+      root: 'session',
+      root_identity: '550e8400-e29b-41d4-a716-446655440009',
+      path: 'files/plan.md',
+      sha256: 'a'.repeat(64),
+      dirty: false
+    }
+    expect(entry.activeFile).toEqual(snapshot)
+    expect(api.post).toHaveBeenCalledWith('/sessions/session-1/messages', {
+      content: 'Mit Datei',
+      run_id: entry.id,
+      active_file: snapshot
+    }, { suppressErrorToast: true })
   })
 
   it('waits for pending approvals and questions before sending', async () => {

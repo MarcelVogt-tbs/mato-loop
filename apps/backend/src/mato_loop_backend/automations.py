@@ -81,7 +81,6 @@ def runtime_snapshot(session: ChatSession) -> dict[str, Any]:
         "preferredRootId": str(session.preferred_root_id) if session.preferred_root_id else None,
         "workingDirectory": session.working_directory,
         "currentDirectory": session.current_directory,
-        "workspaceAccess": session.workspace_access,
     }
 
 
@@ -95,7 +94,6 @@ def copy_runtime(source: ChatSession, target: ChatSession) -> None:
         "preferred_root_id",
         "working_directory",
         "current_directory",
-        "workspace_access",
     ):
         setattr(target, name, getattr(source, name))
 
@@ -246,7 +244,6 @@ class AutomationService:
             title_generation_status="skipped",
             memory_mode="full",
             web_search_policy="available",
-            workspace_access="read-only",
         )
         if source is not None:
             copy_runtime(source, execution_session)

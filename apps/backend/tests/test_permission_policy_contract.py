@@ -54,7 +54,6 @@ def _session(**values) -> ChatSession:
         "memory_mode": "disabled",
         "web_search_policy": "available",
         "working_directory": None,
-        "workspace_access": "read-only",
     }
     return ChatSession(**(defaults | values))
 
@@ -206,17 +205,16 @@ async def test_automation_scopes_are_canonical_current_session_and_revision_exac
 
 
 @pytest.mark.parametrize(
-    ("root", "access", "capability", "expected"),
+    ("root", "capability"),
     [
-        ("session", "read-only", "filesystem.read", PermissionDecision.ALLOW),
-        ("session", "read-only", "filesystem.write", PermissionDecision.DENY),
-        ("session", "read-write", "filesystem.write", PermissionDecision.ALLOW),
+        ("session", "filesystem.read"),
+        ("session", "filesystem.write"),
     ],
 )
 async def test_file_access_is_decided_only_for_current_host_bound_roots(
-    tmp_path, root: str, access: str, capability: str, expected: PermissionDecision
+    tmp_path, root: str, capability: str
 ) -> None:
-    session = _session(workspace_access=access)
+    session = _session()
     root_files = _root_files(tmp_path, session)
     db = _db_with_grants()
 
@@ -225,12 +223,12 @@ async def test_file_access_is_decided_only_for_current_host_bound_roots(
         session,
         _path_request(root_files, "files/notes.txt", root=root, capability=capability),
         root_files,
-    ) == expected
+    ) == PermissionDecision.ALLOW
     db.scalars.assert_not_awaited()
 
 
 async def test_global_policy_can_require_or_deny_a_host_bound_file_action(tmp_path) -> None:
-    session = _session(workspace_access="read-write")
+    session = _session()
     root_files = _root_files(tmp_path, session)
     request = _path_request(
         root_files,
@@ -249,7 +247,7 @@ async def test_global_policy_can_require_or_deny_a_host_bound_file_action(tmp_pa
 async def test_policy_revocation_while_waiting_for_approval_stops_action(
     tmp_path, monkeypatch
 ) -> None:
-    session = _session(workspace_access="read-write")
+    session = _session()
     root_files = _root_files(tmp_path, session)
     request = _path_request(
         root_files,
@@ -692,7 +690,7 @@ async def test_root_scope_from_another_session_is_denied(tmp_path) -> None:
 
 
 async def test_legacy_global_path_permission_is_hard_denied(tmp_path) -> None:
-    session = _session(workspace_access="read-write")
+    session = _session()
     root_files = _root_files(tmp_path, session)
     request = PermissionRequest(
         capability="filesystem.read",

@@ -231,7 +231,6 @@ class ChatSession(Base):
     preferred_root_id: Mapped[UUID | None] = mapped_column(nullable=True)
     working_directory: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     current_directory: Mapped[str | None] = mapped_column(String(4096), nullable=True)
-    workspace_access: Mapped[str] = mapped_column(String(20), nullable=False, default="read-only")
     private_integration_data_used: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )

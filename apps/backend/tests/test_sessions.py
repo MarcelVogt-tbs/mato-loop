@@ -269,6 +269,7 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
     target_project_id = uuid4()
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [session.id, None, target_project_id]
+    db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
     db.commit.side_effect = RuntimeError("commit failed")
     storage = MagicMock()
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
@@ -374,7 +375,6 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
         SessionCreateRequest(
             content="  Erste Nachricht  ",
             reasoning_effort="low",
-            workspace_access="read-write",
             control_center={
                 "tabs": [
                     {"app_id": "files", "pinned": False},
@@ -394,7 +394,6 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert session.memory_mode == "full"
     assert session.web_search_policy == "available"
     assert session.working_directory is None
-    assert session.workspace_access == "read-write"
     assert session.control_center == {
         "tabs": [
             {"app_id": "files", "pinned": False},
@@ -406,7 +405,12 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     }
     assert session.title_generation_status == TitleGenerationStatus.PENDING.value
     start.assert_awaited_once_with(
-        db, session, "Erste Nachricht", run_id=None, attachments=None
+        db,
+        session,
+        "Erste Nachricht",
+        run_id=None,
+        attachments=None,
+        active_file=None,
     )
     assert result["session"]["id"] == str(session.id)
     assert result["session"]["titleGenerationStatus"] == "pending"
@@ -607,7 +611,6 @@ async def test_session_payload_contains_active_run() -> None:
         is_pinned=True,
         memory_mode="disabled",
         web_search_policy="available",
-        workspace_access="read-only",
     )
     created_at = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
     run = AgentRun(
@@ -938,95 +941,6 @@ def test_message_payload_keeps_session_file_action_url_exact() -> None:
     }
 
 
-def test_message_payload_exposes_valid_draft_metadata() -> None:
-    session_id = uuid4()
-    draft_id = str(uuid4())
-    stored_action = {
-        "operation": "write",
-        "root": "session",
-        "rootIdentity": str(session_id),
-        "path": f"files/drafts/{draft_id}/plan.md",
-        "filename": "plan.md",
-        "sizeBytes": 7,
-        "intent": "draft",
-        "draftId": draft_id,
-        "revision": 1,
-    }
-    message = Message(
-        id=uuid4(),
-        session_id=session_id,
-        role="tool",
-        content="{}",
-        provider_data={"_matoloop": {"fileActions": [stored_action]}},
-    )
-
-    action = message_payload(message)["fileActions"][0]
-
-    action.pop("downloadUrl")
-    assert action == {
-        **stored_action,
-        "draftOperation": "create",
-        "representations": [],
-    }
-
-
-@pytest.mark.parametrize("attachment_position", [None, 0])
-def test_message_payload_links_draft_action_to_generated_attachment(
-    attachment_position,
-) -> None:
-    session_id = uuid4()
-    message_id = uuid4()
-    attachment_id = uuid4()
-    draft_id = str(uuid4())
-    path = f"files/drafts/{draft_id}/generated.bin"
-    stored_action = {
-        "operation": "write",
-        "root": "session",
-        "rootIdentity": str(session_id),
-        "path": path,
-        "filename": "generated.bin",
-        "sizeBytes": 7,
-        "intent": "draft",
-        "draftId": draft_id,
-        "revision": 1,
-        **(
-            {"attachmentPosition": attachment_position}
-            if attachment_position is not None
-            else {}
-        ),
-    }
-    message = Message(
-        id=message_id,
-        session_id=session_id,
-        role="tool",
-        content="{}",
-        provider_data={"_matoloop": {"fileActions": [stored_action]}},
-    )
-    message.attachments = [
-        MessageAttachment(
-            id=attachment_id,
-            message_id=message_id,
-            position=0,
-            kind="file",
-            category="generated",
-            purpose="artifact",
-            mime_type="application/octet-stream",
-            size_bytes=7,
-            sha256="a" * 64,
-            storage_path=f"generated/{attachment_id}/generated.bin",
-            filename="generated.bin",
-        )
-    ]
-
-    action = message_payload(message)["fileActions"][0]
-
-    assert action["representations"] == [
-        {"attachmentId": str(attachment_id), "role": "preview"}
-    ]
-    assert action["draftOperation"] == "create"
-    assert "attachmentPosition" not in action
-
-
 def test_message_payload_rejects_workspace_snapshot_fields_on_session_actions() -> None:
     session_id = uuid4()
     action = {
@@ -1059,7 +973,7 @@ def test_message_payload_rejects_workspace_snapshot_fields_on_session_actions() 
             {
                 "operation": "write",
                 "root": "session",
-                "rootIdentity": str(uuid4()),
+                "rootIdentity": "not-a-uuid",
                 "path": "files/result.txt",
                 "filename": "result.txt",
                 "sizeBytes": 7,
@@ -1421,12 +1335,33 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
     )
     monkeypatch.setattr(SettingsStore, "load", load)
 
-    result = await send_message(
-        session.id, SendMessageRequest(content="Aktuelle Frage"), user, db
+    request = SendMessageRequest.model_validate(
+        {
+            "content": "Aktuelle Frage",
+            "activeFile": {
+                "root": "session",
+                "rootIdentity": str(session.id),
+                "path": "files/notes.txt",
+                "sha256": "a" * 64,
+                "dirty": True,
+            },
+        }
     )
+    result = await send_message(session.id, request, user, db)
 
     start.assert_awaited_once_with(
-        db, session, "Aktuelle Frage", run_id=None, attachments=None
+        db,
+        session,
+        "Aktuelle Frage",
+        run_id=None,
+        attachments=None,
+        active_file={
+            "root": "session",
+            "rootIdentity": str(session.id),
+            "path": "files/notes.txt",
+            "sha256": "a" * 64,
+            "dirty": True,
+        },
     )
     load.assert_awaited_once()
     assert result["runId"] == str(run.id)
@@ -1553,7 +1488,12 @@ async def test_attachment_only_message_starts_run(monkeypatch) -> None:
     )
 
     start.assert_awaited_once_with(
-        db, session, "", run_id=None, attachments=[attachment]
+        db,
+        session,
+        "",
+        run_id=None,
+        attachments=[attachment],
+        active_file=None,
     )
     assert result["message"]["content"] == ""
 
@@ -1612,35 +1552,6 @@ async def test_session_can_override_reasoning_effort() -> None:
     assert result["reasoningEffort"] == "ultra"
 
 
-async def test_workspace_mode_is_preserved_without_workdir() -> None:
-    user = _user()
-    session_id = uuid4()
-    session = ChatSession(
-        id=session_id,
-        user_id=user.id,
-        title="Test",
-        memory_mode="disabled",
-        web_search_policy="available",
-        working_directory="project",
-        workspace_access="read-write",
-    )
-    db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    db.scalar.return_value = None
-
-    await update_session(
-        session_id,
-        SessionUpdateRequest(working_directory=None),
-        user,
-        db,
-    )
-
-    assert session.working_directory is None
-    assert session.workspace_access == "read-write"
-    assert db.scalar.await_count == 2
-    assert "FOR UPDATE" in str(db.scalar.await_args_list[0].args[0])
-
-
 async def test_manual_title_change_skips_automatic_generation(monkeypatch) -> None:
     user = _user()
     session = ChatSession(
@@ -1650,7 +1561,6 @@ async def test_manual_title_change_skips_automatic_generation(monkeypatch) -> No
         title_generation_status=TitleGenerationStatus.RUNNING.value,
         memory_mode="full",
         web_search_policy="available",
-        workspace_access="read-only",
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
@@ -1674,33 +1584,6 @@ async def test_manual_title_change_skips_automatic_generation(monkeypatch) -> No
     db.commit.assert_awaited_once()
 
 
-async def test_write_mode_can_be_selected_without_workdir() -> None:
-    user = _user()
-    session_id = uuid4()
-    session = ChatSession(
-        id=session_id,
-        user_id=user.id,
-        title="Test",
-        memory_mode="disabled",
-        web_search_policy="available",
-        working_directory=None,
-        workspace_access="read-only",
-    )
-    db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    db.scalar.return_value = None
-
-    await update_session(
-        session_id,
-        SessionUpdateRequest(workspace_access="read-write"),
-        user,
-        db,
-    )
-
-    assert session.working_directory is None
-    assert session.workspace_access == "read-write"
-
-
 async def test_session_can_be_pinned_during_active_run() -> None:
     user = _user()
     session_id = uuid4()
@@ -1711,7 +1594,6 @@ async def test_session_can_be_pinned_during_active_run() -> None:
         is_pinned=False,
         memory_mode="disabled",
         web_search_policy="available",
-        workspace_access="read-only",
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
@@ -1930,7 +1812,6 @@ async def test_runtime_policy_cannot_change_during_active_run() -> None:
         memory_mode="disabled",
         web_search_policy="available",
         working_directory=None,
-        workspace_access="read-write",
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
@@ -1939,13 +1820,12 @@ async def test_runtime_policy_cannot_change_during_active_run() -> None:
     with pytest.raises(ApiError) as exc_info:
         await update_session(
             session_id,
-            SessionUpdateRequest(workspace_access="read-only"),
+            SessionUpdateRequest(model_id=uuid4()),
             user,
             db,
         )
 
     assert exc_info.value.code == "session.runAlreadyActive"
-    assert session.workspace_access == "read-write"
 
 
 async def test_model_cannot_change_during_active_run() -> None:
@@ -1957,7 +1837,6 @@ async def test_model_cannot_change_during_active_run() -> None:
         title="Test",
         memory_mode="disabled",
         web_search_policy="available",
-        workspace_access="read-only",
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session

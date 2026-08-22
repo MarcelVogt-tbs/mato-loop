@@ -126,7 +126,7 @@ const workspace = useWorkspaceStore()
 const expanded = ref(false)
 const selected = computed(() => workspace.selectedPath === props.entry.path)
 const mutableEntry = computed(() => (
-  !workspace.rootIdentity
+  !workspace.toolContext
   && ['file', 'directory'].includes(props.entry.kind)
   && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
 ))

@@ -82,34 +82,6 @@
         </q-banner>
         <div class="chat-composer__footer row items-center q-gutter-xs">
           <q-select
-            :model-value="session?.workspaceAccess"
-            :options="agentModes"
-            emit-value
-            map-options
-            dense
-            borderless
-            options-dense
-            label="Agent-Modus"
-            class="composer-agent-mode"
-            popup-content-class="app-menu-popup"
-            :disable="interactionDisabled"
-            @update:model-value="update({ workspace_access: $event })"
-          >
-            <template #prepend><q-icon :name="agentModeIcon" size="18px" /></template>
-            <template #option="scope">
-              <q-item v-bind="scope.itemProps">
-                <q-item-section avatar><q-icon :name="scope.opt.icon" /></q-item-section>
-                <q-item-section>
-                  <q-item-label>{{ scope.opt.label }}</q-item-label>
-                  <q-item-label caption>{{ scope.opt.description }}</q-item-label>
-                </q-item-section>
-              </q-item>
-            </template>
-            <q-tooltip>
-              {{ session?.currentDirectory ? `Aktueller Ordner: ${session.currentDirectory}` : 'Kein aktueller Ordner ausgewählt.' }}
-            </q-tooltip>
-          </q-select>
-          <q-select
             :model-value="effectiveModelId"
             :options="modelSelectionOptions"
             emit-value
@@ -417,20 +389,6 @@ const dictationKey = computed(() => props.session?.id || null)
 const currentDictation = computed(() => chat.getAudioDictation(dictationKey.value))
 const transcribing = computed(() => currentDictation.value?.status === 'transcribing')
 const recordingDuration = computed(() => formatAttachmentDuration(recordingDurationMs.value) || '0:00')
-const agentModeDefinitions = [
-  {
-    label: 'Lesen',
-    value: 'read-only',
-    icon: 'visibility',
-    description: 'Nur lesende Dateitools anbieten'
-  },
-  {
-    label: 'Schreiben',
-    value: 'read-write',
-    icon: 'edit',
-    description: 'Lesende und schreibende Dateitools anbieten'
-  }
-]
 const executionAgents = useExecutionAgentStore()
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(props.session?.preferredExecutionAgentId)
@@ -460,23 +418,6 @@ const executionAgentOptions = computed(() => {
   return options
 })
 const liveWorkspaceContext = computed(() => executionAgents.workspaceContextFor(props.session))
-const mutatingWorkspaceOperations = new Set([
-  'workspace.copy',
-  'workspace.delete',
-  'workspace.import',
-  'workspace.mkdir',
-  'workspace.move',
-  'workspace.rename',
-  'workspace.write'
-])
-const agentModes = computed(() => agentModeDefinitions.map((mode) => ({
-  ...mode,
-  disable: mode.value === 'read-write'
-    && selectedExecutionAgent.value
-    && !selectedExecutionAgent.value.operations?.some((operation) => (
-      mutatingWorkspaceOperations.has(operation)
-    ))
-})))
 const executionAgentMessage = computed(() => {
   if (executionAgents.loadFailed) return 'Der Status der Computer konnte nicht geladen werden.'
   if (!props.session?.preferredExecutionAgentId) return 'Ohne Computer stehen keine lokalen Arbeitsbereiche zur Verfügung.'
@@ -555,7 +496,6 @@ const sendDisabled = computed(() => (
   || !modelSupportsTools.value
   || (!props.draft.trim() && !props.attachments.length)
 ))
-const agentModeIcon = computed(() => props.session?.workspaceAccess === 'read-write' ? 'edit' : 'visibility')
 const searchAvailable = computed(() => integrations.search.effectiveEnabled)
 const webSearchOptions = computed(() => [
   {

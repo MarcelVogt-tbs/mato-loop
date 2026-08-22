@@ -14,7 +14,7 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Annotated, BinaryIO, Literal
 from urllib.parse import quote
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Header, Query, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
@@ -111,6 +111,12 @@ class UpdateFileRequest(BaseModel):
     path: str = Field(strict=True, min_length=1, max_length=1_200)
     content: str = Field(strict=True)
     expected_revision: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
+
+
+class RestoreRevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    path: str = Field(min_length=1, max_length=1_200)
 
 
 class OpenScadFileRenderRequest(BaseModel):
@@ -275,11 +281,14 @@ async def _file_context(
     if scope is FileScope.SESSION:
         if session is None:
             raise ApiError(400, "file.sessionRequired")
-        if root_identity is not None and root_identity != str(session.id):
+        if root_identity is not None and root_identity != str(
+            session.project_id or session.id
+        ):
             raise ApiError(404, "file.fileNotFound")
         return _FileContext(
             root_files=RootFileService(
                 session.id,
+                project_id=session.project_id,
                 session_quota_bytes=instance_limits.session_quota_bytes,
                 max_editable_text_bytes=instance_limits.max_editable_text_bytes,
             ),
@@ -301,7 +310,6 @@ async def _file_context(
                 root_id,
                 working_directory,
                 root_identity,
-                writable=session is None or session.workspace_access == "read-write",
                 expected_revision=root_revision,
             ),
             instance_limits=instance_limits,
@@ -323,7 +331,6 @@ async def _file_context(
                 selected_root_id,
                 session.working_directory,
                 root_identity,
-                writable=session.workspace_access == "read-write",
             ),
             instance_limits=instance_limits,
         )
@@ -362,6 +369,7 @@ def _context_error(exc: RootFileError) -> ApiError:
         "file.directoryNotFound",
         "file.fileNotFound",
         "file.pathNotFound",
+        "file.revisionNotFound",
     }:
         return ApiError(404, exc.code)
     if exc.code in {
@@ -371,6 +379,8 @@ def _context_error(exc: RootFileError) -> ApiError:
         return ApiError(413, exc.code)
     if exc.code == "file.sessionQuotaExceeded":
         return ApiError(507, exc.code)
+    if exc.code == "file.currentRevision":
+        return ApiError(409, exc.code)
     return ApiError(400, exc.code)
 
 
@@ -484,79 +494,6 @@ def _replace_text_context(
     return context.root_files.replace_text_file(
         context.root, path, content, expected_revision
     )
-
-
-def _text_revision_target(
-    context: _FileContext, session_id: UUID | None, path: str
-) -> tuple[RootFileService, UUID, dict[str, str]] | None:
-    if session_id is None:
-        return None
-    root_files = context.root_files or RootFileService(
-        session_id,
-        session_quota_bytes=context.instance_limits.session_quota_bytes,
-        max_editable_text_bytes=context.instance_limits.max_editable_text_bytes,
-    )
-    if context.root is FileRoot.SESSION:
-        source = {
-            "root": "session",
-            "rootIdentity": str(session_id),
-            "path": path,
-        }
-        parts = path.split("/")
-        if len(parts) == 4 and parts[:2] == ["files", "drafts"]:
-            try:
-                draft_id = UUID(parts[2])
-            except ValueError:
-                draft_id = uuid5(NAMESPACE_URL, json.dumps(source, sort_keys=True))
-            else:
-                if str(draft_id) == parts[2]:
-                    return root_files, draft_id, source
-        return root_files, uuid5(NAMESPACE_URL, json.dumps(source, sort_keys=True)), source
-    if (
-        context.agent_id is None
-        or context.agent_root_id is None
-        or context.agent_root_revision is None
-    ):
-        return None
-    source = {
-        "root": "workspace",
-        "executionAgentId": str(context.agent_id),
-        "rootId": str(context.agent_root_id),
-        "rootRevision": context.agent_root_revision,
-        "workingDirectory": context.working_directory or ".",
-        "path": path,
-    }
-    return root_files, uuid5(NAMESPACE_URL, json.dumps(source, sort_keys=True)), source
-
-
-async def _record_text_revisions(
-    context: _FileContext,
-    session_id: UUID | None,
-    path: str,
-    old_content: str,
-    new_content: str,
-) -> tuple[str, int] | None:
-    target = _text_revision_target(context, session_id, path)
-    if target is None:
-        return None
-    root_files, draft_id, source = target
-    try:
-        revision = await asyncio.to_thread(
-            root_files.record_text_revisions,
-            draft_id,
-            PurePosixPath(path).name,
-            (old_content, new_content),
-            source,
-        )
-    except (OSError, RootFileError):
-        logger.warning(
-            "Could not record text revisions for session %s path %s",
-            session_id,
-            path,
-            exc_info=True,
-        )
-        return None
-    return str(draft_id), revision
 
 
 def _open_context(context: _FileContext, path: str) -> BinaryIO:
@@ -1177,24 +1114,6 @@ async def update_file(
         raise ApiError(413, "file.tooLarge")
     if context.agent_id is not None:
         path = _normalize_agent_path(payload.path)
-        old_content = None
-        if request is not None and "workspace.export" in context.agent_operations:
-            try:
-                old_content, old_revision = await _agent_text_preview(
-                    context,
-                    path,
-                    request,
-                    max_bytes=context.instance_limits.max_editable_text_bytes,
-                )
-                if old_revision != payload.expected_revision:
-                    old_content = None
-            except ApiError:
-                logger.warning(
-                    "Could not capture pre-save workspace revision for session %s path %s",
-                    session_id,
-                    path,
-                    exc_info=True,
-                )
         await _clear_file_grants(db, user, context, (path,))
         await db.commit()
         result = await _agent_request(
@@ -1213,21 +1132,9 @@ async def update_file(
             or not _SHA256_RE.fullmatch(revision)
         ):
             raise ApiError(502, "executionAgent.protocolError")
-        recorded = await _record_text_revisions(
-            context,
-            session_id,
-            path,
-            old_content if old_content is not None else payload.content,
-            payload.content,
-        )
         return {
             "revision": revision,
             "entry": await _agent_stat(context, path),
-            **(
-                {"draftId": recorded[0], "draftRevision": recorded[1]}
-                if recorded is not None
-                else {}
-            ),
         }
     await _clear_file_grants(db, user, context, (payload.path,))
     await db.commit()
@@ -1241,20 +1148,6 @@ async def update_file(
         for_update=session_id is not None,
     )
     try:
-        old_data = await asyncio.to_thread(
-            _read_context,
-            context,
-            payload.path,
-            context.instance_limits.max_editable_text_bytes,
-        )
-        if len(old_data) > context.instance_limits.max_editable_text_bytes:
-            raise RootFileError("file.tooLarge", "File is too large")
-        try:
-            old_content = old_data.decode("utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            raise RootFileError(
-                "file.invalidEncoding", "File is not readable as UTF-8"
-            ) from exc
         revision = await asyncio.to_thread(
             _replace_text_context,
             context,
@@ -1272,17 +1165,139 @@ async def update_file(
         raise
     finally:
         await db.commit()
-    recorded = await _record_text_revisions(
-        context, session_id, payload.path, old_content, payload.content
-    )
+    return {"revision": revision}
+
+
+@router.get("/files/revisions")
+async def list_file_revisions(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    path: str,
+    session_id: UUID,
+) -> dict:
+    context = await _file_context(FileScope.SESSION, session_id, user, db)
+    assert context.root_files is not None
+    try:
+        revisions = await asyncio.to_thread(context.root_files.list_revisions, path)
+    except RootFileError as exc:
+        raise _context_error(exc) from exc
     return {
-        "revision": revision,
-        **(
-            {"draftId": recorded[0], "draftRevision": recorded[1]}
-            if recorded is not None
-            else {}
-        ),
+        "fileId": str(revisions[0].file_id) if revisions else None,
+        "items": [
+            {
+                "revision": item.revision,
+                "createdAt": item.created_at,
+                "sizeBytes": item.size_bytes,
+                "sha256": item.sha256,
+                "current": item.current,
+            }
+            for item in revisions
+        ],
     }
+
+
+@router.get("/files/revisions/{revision}/preview")
+async def preview_file_revision(
+    revision: int,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    path: str,
+    session_id: UUID,
+) -> dict:
+    context = await _file_context(FileScope.SESSION, session_id, user, db)
+    assert context.root_files is not None
+    try:
+        handle = await asyncio.to_thread(context.root_files.open_revision, path, revision)
+        with handle:
+            data = handle.read(context.instance_limits.max_editable_text_bytes + 1)
+    except RootFileError as exc:
+        raise _context_error(exc) from exc
+    if len(data) > context.instance_limits.max_editable_text_bytes:
+        return {"kind": "none", "reason": "tooLarge"}
+    try:
+        content = data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return {"kind": "none", "reason": "unsupported"}
+    if "\0" in content:
+        return {"kind": "none", "reason": "unsupported"}
+    suffix = PurePosixPath(path).suffix.casefold()
+    return {
+        "kind": (
+            "openscad"
+            if suffix == ".scad"
+            else "markdown" if suffix in _MARKDOWN_SUFFIXES else "text"
+        ),
+        "content": content,
+        "encoding": "utf-8",
+        "revision": hashlib.sha256(data).hexdigest(),
+    }
+
+
+@router.get("/files/revisions/{revision}/download")
+async def download_file_revision(
+    revision: int,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    path: str,
+    session_id: UUID,
+) -> StreamingResponse:
+    context = await _file_context(FileScope.SESSION, session_id, user, db)
+    assert context.root_files is not None
+    try:
+        handle = await asyncio.to_thread(context.root_files.open_revision, path, revision)
+    except RootFileError as exc:
+        raise _context_error(exc) from exc
+    filename = PurePosixPath(path).name or "download"
+    return StreamingResponse(
+        _stream_file(handle),
+        media_type="application/octet-stream",
+        headers={
+            **_FILE_RESPONSE_HEADERS,
+            "Content-Disposition": (
+                'attachment; filename="download"; '
+                f"filename*=UTF-8''{quote(filename, safe='')}"
+            ),
+        },
+    )
+
+
+@router.delete("/files/revisions/{revision}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_file_revision(
+    revision: int,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    path: str,
+    session_id: UUID,
+) -> None:
+    context = await _file_context(
+        FileScope.SESSION, session_id, user, db, for_update=True
+    )
+    assert context.root_files is not None
+    try:
+        await asyncio.to_thread(context.root_files.delete_revision, path, revision)
+    except RootFileError as exc:
+        raise _context_error(exc) from exc
+
+
+@router.post("/files/revisions/{revision}/restore")
+async def restore_file_revision(
+    revision: int,
+    payload: RestoreRevisionRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    session_id: UUID,
+) -> dict[str, str]:
+    context = await _file_context(
+        FileScope.SESSION, session_id, user, db, for_update=True
+    )
+    assert context.root_files is not None
+    try:
+        sha256 = await asyncio.to_thread(
+            context.root_files.restore_revision, payload.path, revision
+        )
+    except RootFileError as exc:
+        raise _context_error(exc) from exc
+    return {"revision": sha256}
 
 
 @router.get("/files/content")
@@ -1882,9 +1897,11 @@ async def _copy_or_move_entry(
     if (
         source.root_files is not None
         and destination.root_files is not None
-        and source.root_files.session_id == destination.root_files.session_id
+        and source.root is not None
+        and destination.root is not None
+        and source.root_files.root_identity(source.root)
+        == destination.root_files.root_identity(destination.root)
     ):
-        assert source.root is not None and destination.root is not None
         operation = source.root_files.move_path if move else source.root_files.copy_path
         try:
             await asyncio.to_thread(

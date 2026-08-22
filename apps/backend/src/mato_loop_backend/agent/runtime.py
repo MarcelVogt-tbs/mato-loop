@@ -1003,7 +1003,7 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
     if isinstance(content, str) and tool_name != "memory_write":
         safe["content"] = (
             {"characters": len(content), "redacted": True}
-            if tool_name in {"write_file", "create_draft", "generate_qr_code"}
+            if tool_name in {"write_file", "generate_qr_code"}
             else {"characters": len(content), "preview": content[:200]}
         )
     if tool_name in {"webfetch", "fetch_transcript"} and isinstance(
@@ -1128,6 +1128,7 @@ class AgentRuntime:
         automation_run: AutomationRun | None = None,
         model_id_override: UUID | None = None,
         required_skill: SkillDefinition | None = None,
+        active_file: dict[str, Any] | None = None,
     ) -> AgentRun:
         locked_session = await db.scalar(
             select(ChatSession)
@@ -1249,6 +1250,11 @@ class AgentRuntime:
             role="user",
             content=content,
             trust_level=trust_level.value,
+            provider_data=(
+                {"_matoloop": {"activeFile": active_file}}
+                if active_file is not None
+                else {}
+            ),
         )
         run = AgentRun(
             id=run_id or uuid4(),
@@ -1802,6 +1808,7 @@ class AgentRuntime:
             )
             root_files = RootFileService(
                 chat_session.id,
+                project_id=chat_session.project_id,
                 session_quota_bytes=instance_limits.session_quota_bytes,
                 max_editable_text_bytes=instance_limits.max_editable_text_bytes,
             )
@@ -2072,7 +2079,6 @@ class AgentRuntime:
             effective_toolset = (
                 tool_registry.effective(
                     integration_settings,
-                    chat_session.workspace_access,
                     webfetch_enabled=web_fetch_policy != WebFetchPolicy.DISABLED,
                     web_search_enabled=(
                         chat_session.web_search_policy != WebSearchPolicy.DISABLED
@@ -2129,7 +2135,6 @@ class AgentRuntime:
                     if hide_skill_catalog_tools
                     else set()
                 ),
-                workspace_access=chat_session.workspace_access,
                 webfetch_enabled=web_fetch_policy != WebFetchPolicy.DISABLED,
                 web_search_enabled=(
                     chat_session.web_search_policy != WebSearchPolicy.DISABLED
@@ -2711,7 +2716,6 @@ class AgentRuntime:
                 await db.refresh(chat_session)
                 tool_attachments = ()
                 tool_file_actions = ()
-                tool_draft_action = None
                 image_handled_for_text_model = False
                 memory_available_now = True
                 memory_write_available_now = True
@@ -3436,7 +3440,6 @@ class AgentRuntime:
                         chat_session.private_integration_data_used = True
                     tool_attachments = tool_result.attachments
                     tool_file_actions = tool_result.file_actions
-                    tool_draft_action = tool_result.draft_action
                     tool_trust_level = (
                         TrustLevel.PRIVATE
                         if model_trust_level == TrustLevel.PRIVATE
@@ -3653,30 +3656,7 @@ class AgentRuntime:
                     provider_data=(
                         {
                             "_matoloop": {
-                                "fileActions": (
-                                    [
-                                        {
-                                            "operation": "write",
-                                            "root": "session",
-                                            "rootIdentity": str(chat_session.id),
-                                            "path": tool_draft_action.path,
-                                            "filename": tool_draft_action.filename,
-                                            "sizeBytes": tool_draft_action.size_bytes,
-                                            "intent": "draft",
-                                            "draftId": str(tool_draft_action.draft_id),
-                                            "revision": tool_draft_action.revision,
-                                            "draftOperation": tool_draft_action.operation,
-                                            "representations": [
-                                                {
-                                                    "attachmentPosition": representation.attachment_position,
-                                                    "role": representation.role,
-                                                }
-                                                for representation in tool_draft_action.representations
-                                            ],
-                                        }
-                                    ]
-                                    if tool_draft_action is not None
-                                    else [
+                                "fileActions": [
                                         {
                                             "operation": action.operation,
                                             "root": action.root,
@@ -3697,10 +3677,9 @@ class AgentRuntime:
                                         }
                                         for action in tool_file_actions
                                     ]
-                                )
                             }
                         }
-                        if tool_file_actions or tool_draft_action is not None
+                        if tool_file_actions
                         else {}
                     ),
                 )
@@ -3823,29 +3802,13 @@ class AgentRuntime:
                                 )
                                 openscad_source_review_retries = 0
                     elif (
-                        (
-                            call.name == "write_file"
-                            and isinstance(call.arguments.get("path"), str)
-                            and call.arguments["path"].casefold().endswith(".scad")
-                        )
-                        or (
-                            call.name == "create_draft"
-                            and tool_draft_action is not None
-                            and tool_draft_action.path.casefold().endswith(".scad")
-                        )
+                        call.name == "write_file"
+                        and isinstance(call.arguments.get("path"), str)
+                        and call.arguments["path"].casefold().endswith(".scad")
                     ):
                         openscad_render_pending = True
-                        root = (
-                            "session"
-                            if call.name == "create_draft"
-                            else call.arguments.get("root")
-                        )
-                        path = (
-                            tool_draft_action.path
-                            if call.name == "create_draft"
-                            and tool_draft_action is not None
-                            else call.arguments.get("path")
-                        )
+                        root = call.arguments.get("root")
+                        path = call.arguments.get("path")
                         if isinstance(root, str) and isinstance(path, str):
                             openscad_pending_paths.add((root, path))
                         openscad_source_review_pending = None

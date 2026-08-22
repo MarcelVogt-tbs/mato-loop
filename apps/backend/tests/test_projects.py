@@ -104,9 +104,19 @@ async def test_create_and_rename_project_commit_owner_scoped_changes() -> None:
     assert db.commit.await_count == 2
 
 
-async def test_delete_project_requires_owned_empty_project() -> None:
+async def test_delete_project_requires_owned_empty_project(tmp_path, monkeypatch) -> None:
+    from mato_loop_backend.api.routes import projects as projects_route
+    from mato_loop_backend.session_storage import SessionStorage
+
     user = _user()
     project = _project(user.id)
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    storage.provision(session_id, project.id)
+    shared_file = storage.logical_root_path(session_id, project.id) / "files" / "shared.txt"
+    shared_file.write_text("shared", encoding="utf-8")
+    storage.remove_session(session_id, project.id)
+    monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [project, 1]
 
@@ -121,6 +131,7 @@ async def test_delete_project_requires_owned_empty_project() -> None:
     await delete_project(project.id, user, db)
     db.delete.assert_awaited_once_with(project)
     db.commit.assert_awaited_once()
+    assert not shared_file.exists()
 
 
 async def test_foreign_project_is_not_found() -> None:
@@ -138,3 +149,29 @@ async def test_foreign_project_is_not_found() -> None:
         describe_error("project.notEmpty").message
         == "The project still contains chat sessions."
     )
+
+
+async def test_delete_project_restores_storage_when_commit_fails(
+    tmp_path, monkeypatch
+) -> None:
+    from mato_loop_backend.api.routes import projects as projects_route
+    from mato_loop_backend.session_storage import SessionStorage
+
+    user = _user()
+    project = _project(user.id)
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    storage.provision(session_id, project.id)
+    shared_file = storage.logical_root_path(session_id, project.id) / "files" / "shared.txt"
+    shared_file.write_text("shared", encoding="utf-8")
+    storage.remove_session(session_id, project.id)
+    monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [project, 0]
+    db.commit.side_effect = RuntimeError("commit failed")
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await delete_project(project.id, user, db)
+
+    db.rollback.assert_awaited_once()
+    assert shared_file.read_text(encoding="utf-8") == "shared"

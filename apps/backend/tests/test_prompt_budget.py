@@ -48,7 +48,6 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     }
     effective = tool_registry.effective(
         integrations,
-        "read-only",
         webfetch_enabled=True,
         memory_enabled=True,
         memory_write_enabled=True,
@@ -58,7 +57,6 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     inactive = tool_registry.inactive_capability_groups(
         integrations,
         frozenset(effective.tools),
-        workspace_access="read-only",
         webfetch_enabled=True,
         web_search_enabled=True,
         memory_enabled=True,
@@ -71,7 +69,6 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
             title="Test",
             memory_mode="full",
             web_search_policy="available",
-            workspace_access="read-only",
         ),
         memory_read_enabled=True,
         memory_scope={"total": 3, "pinned": 0},
@@ -101,12 +98,12 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     prompt_tokens = estimate_tokens(prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert len(schemas) == 43
+    assert len(schemas) == 47
     assert {"load_skill", "build_skill", "edit_skill"} <= {
         schema["name"] for schema in schemas
     }
     build_skill = next(schema for schema in schemas if schema["name"] == "build_skill")
     assert set(build_skill["parameters"]["properties"]) == {"brief", "name_hint"}
     assert prompt_tokens <= 7_200, prompt_tokens
-    assert schema_tokens <= 7_600, schema_tokens
-    assert prompt_tokens + schema_tokens <= 14_700
+    assert schema_tokens <= 8_100, schema_tokens
+    assert prompt_tokens + schema_tokens <= 14_800

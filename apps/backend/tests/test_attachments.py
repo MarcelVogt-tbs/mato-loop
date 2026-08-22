@@ -23,7 +23,7 @@ from mato_loop_backend.attachments import (
     validate_audio,
     validate_image,
 )
-from mato_loop_backend.models import Message
+from mato_loop_backend.models import ChatSession, Message
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.video_processing import MediaInfo
 
@@ -49,6 +49,15 @@ def provisioned_storage(tmp_path: Path, session_id):
     sessions = SessionStorage(tmp_path / "sessions")
     sessions.provision(session_id)
     return sessions, AttachmentStorage(sessions)
+
+
+def chat_session(session_id, *, project_id=None) -> ChatSession:
+    return ChatSession(
+        id=session_id,
+        user_id=uuid4(),
+        project_id=project_id,
+        title="Test",
+    )
 
 
 def test_pcm_wav_is_strictly_validated() -> None:
@@ -161,7 +170,7 @@ async def test_service_persists_validated_metadata_and_relative_path(tmp_path: P
     _sessions, storage = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="assistant", content="Bild")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id, None]
+    db.scalar.side_effect = [chat_session(session_id), None]
     data = image_bytes("PNG")
 
     attachment = await AttachmentService(storage).create_image(
@@ -182,7 +191,7 @@ async def test_service_validates_and_persists_artifact_purpose(tmp_path: Path) -
     sessions, storage = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="tool", content="Datei")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = session_id
+    db.scalar.side_effect = [chat_session(session_id), None]
 
     attachment = await AttachmentService(storage).create_attachment(
         db,
@@ -216,7 +225,7 @@ async def test_image_read_revalidates_persisted_content(tmp_path: Path) -> None:
     _sessions, storage = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Bild")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id, None]
+    db.scalar.side_effect = [chat_session(session_id), None]
     service = AttachmentService(storage)
     data = image_bytes("PNG")
     attachment = await service.create_image(db, message, data, "image/png")
@@ -233,7 +242,7 @@ async def test_host_image_lineage_survives_untrusted_metadata_prefix(tmp_path: P
     _sessions, storage = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="tool", content="Bild")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id, None]
+    db.scalar.side_effect = [chat_session(session_id), None]
     source_id = uuid4()
 
     attachment = await AttachmentService(storage).create_image(
@@ -261,7 +270,7 @@ async def test_service_persists_audio_duration_and_safe_metadata(tmp_path: Path)
     _sessions, storage = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="tool", content="Audio")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id, None]
+    db.scalar.side_effect = [chat_session(session_id), None]
 
     attachment = await AttachmentService(storage).create_attachment(
         db,
@@ -293,7 +302,7 @@ async def test_service_persists_video_metadata_without_derivatives(
     sessions, storage = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Video")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id, None]
+    db.scalar.side_effect = [chat_session(session_id), None]
     monkeypatch.setattr(
         "mato_loop_backend.attachment_processing.probe_video",
         lambda _data: MediaInfo("mp4", "video/mp4", 2_500, 640, 360, 0, 1),
@@ -319,7 +328,7 @@ async def test_audio_read_rejects_integrity_mismatch(tmp_path: Path) -> None:
     _sessions, storage = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Audio")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id, None]
+    db.scalar.side_effect = [chat_session(session_id), None]
     service = AttachmentService(storage)
     attachment = await service.create_audio(db, message, audio_bytes(), "audio/wav")
     attachment.sha256 = "0" * 64
@@ -333,7 +342,7 @@ async def test_service_enforces_session_quota_before_writing(tmp_path: Path) -> 
     sessions, storage = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="assistant", content="Bild")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id]
+    db.scalar.side_effect = [chat_session(session_id)]
     quota_file = sessions.session_path(session_id) / "files" / "quota.bin"
     with quota_file.open("wb") as handle:
         handle.truncate(SESSION_ATTACHMENT_QUOTA_BYTES)
@@ -343,12 +352,32 @@ async def test_service_enforces_session_quota_before_writing(tmp_path: Path) -> 
     assert list((sessions.session_path(session_id) / "attachments").iterdir()) == []
 
 
+async def test_project_attachment_quota_uses_private_session_tree(tmp_path: Path) -> None:
+    session_id = uuid4()
+    project_id = uuid4()
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(session_id, project_id)
+    storage = AttachmentStorage(sessions)
+    message = Message(id=uuid4(), session_id=session_id, role="assistant", content="Bild")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [chat_session(session_id, project_id=project_id), None]
+    shared_file = sessions.logical_root_path(session_id, project_id) / "files" / "shared.bin"
+    with shared_file.open("wb") as handle:
+        handle.truncate(SESSION_ATTACHMENT_QUOTA_BYTES)
+
+    attachment = await AttachmentService(storage).create_image(
+        db, message, image_bytes("PNG"), "image/png"
+    )
+
+    assert storage.path(session_id, attachment.storage_path).is_file()
+
+
 async def test_service_removes_file_when_database_flush_fails(tmp_path: Path) -> None:
     session_id = uuid4()
     sessions, storage = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="assistant", content="Bild")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session_id, None]
+    db.scalar.side_effect = [chat_session(session_id), None]
     db.flush.side_effect = RuntimeError("database failed")
 
     with pytest.raises(RuntimeError, match="database failed"):

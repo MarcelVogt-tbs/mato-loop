@@ -140,7 +140,6 @@ def test_runtime_snapshot_contains_only_validated_session_binding() -> None:
         preferred_root_id=uuid4(),
         working_directory="project",
         current_directory="/advertised/project",
-        workspace_access="read-only",
     )
 
     snapshot = runtime_snapshot(session)

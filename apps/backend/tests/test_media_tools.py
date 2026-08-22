@@ -60,7 +60,6 @@ def context(tmp_path, call: ToolCall, decision=PermissionDecision.ALLOW) -> Tool
         id=uuid4(),
         user_id=uuid4(),
         title="Medien",
-        workspace_access="read-only",
     )
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session.id)
@@ -139,7 +138,7 @@ def test_media_schemas_follow_effective_capabilities() -> None:
         settings, available_media_capabilities(ai)
     )
     schemas = tool_registry.schemas(
-        IntegrationSettings(), "read-only", tool_capabilities=capabilities
+        IntegrationSettings(), tool_capabilities=capabilities
     )
     names = {item["name"] for item in schemas}
 
@@ -223,7 +222,7 @@ async def test_ask_denial_stops_before_media_service(tmp_path, monkeypatch) -> N
     )
 
 
-async def test_generated_image_is_also_published_as_a_draft(
+async def test_generated_image_is_returned_as_an_attachment(
     tmp_path, monkeypatch
 ) -> None:
     settings = ToolSettings.model_validate({"generateImage": {"policy": "auto"}})
@@ -240,14 +239,8 @@ async def test_generated_image_is_also_published_as_a_draft(
 
     result = await tool_registry.execute(call, tool_context)
 
-    assert result.draft_action is not None
-    assert result.draft_action.filename == "generated.png"
-    assert [(item.attachment_position, item.role) for item in result.draft_action.representations] == [
-        (0, "preview")
-    ]
-    assert tool_context.root_files.read_bytes(
-        "session", result.draft_action.path, limit=100
-    ) == b"image"
+    assert result.attachments[0].filename == "generated.png"
+    assert result.attachments[0].data == b"image"
 
 
 def test_image_target_prefers_native_provider_model_over_global_default() -> None:
@@ -336,7 +329,6 @@ def test_media_prompt_profiles_follow_offered_resolved_target() -> None:
     )
     offered = tool_registry.effective(
         IntegrationSettings(),
-        "read-only",
         tool_capabilities={"media.generate.image", "media.edit.image"},
     ).only("generate_image", "edit_image")
 
@@ -418,7 +410,6 @@ async def test_media_tool_rejects_target_changed_after_prompt_binding(
     tools = ToolSettings.model_validate({"generateImage": {"policy": "auto"}})
     offered = tool_registry.effective(
         IntegrationSettings(),
-        "read-only",
         tool_capabilities={"media.generate.image"},
         tool_settings=tools,
     ).only("generate_image")

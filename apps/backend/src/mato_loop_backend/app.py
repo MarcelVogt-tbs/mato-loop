@@ -30,6 +30,7 @@ from mato_loop_backend.memory.indexing import MemoryIndexScheduler, MemoryIndexS
 from mato_loop_backend.models import (
     ApprovalRequest,
     ChatSession,
+    Project,
     QuestionRequest,
     TitleGenerationStatus,
 )
@@ -94,9 +95,11 @@ async def lifespan(_app: FastAPI):
             session_locations = dict(
                 (await db.execute(select(ChatSession.id, ChatSession.project_id))).all()
             )
+            project_ids = set((await db.scalars(select(Project.id))).all())
             reconciliation = await asyncio.to_thread(
                 SessionStorage().reconcile,
                 session_locations,
+                projects=project_ids,
                 stale_staging_after_seconds=0,
             )
             if reconciliation.provisioned or reconciliation.restored or reconciliation.trashed:

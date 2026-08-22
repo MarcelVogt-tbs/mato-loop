@@ -38,6 +38,8 @@ class RootFileSearch:
         return result if len(result) <= 1_000 else None
 
     async def glob(self, root: FileRoot | str, path: str, pattern: str) -> dict:
+        if FileRoot(root) is FileRoot.SESSION and path == ".":
+            path = "files"
         base = self.root_files.path_parts(path)
         paths: list[str] = []
 
@@ -82,6 +84,8 @@ class RootFileSearch:
         pattern: str,
         include: str | None,
     ) -> dict:
+        if FileRoot(root) is FileRoot.SESSION and path == ".":
+            path = "files"
         base = self.root_files.path_parts(path)
         matches: list[dict[str, str | int]] = []
 

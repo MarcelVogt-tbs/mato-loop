@@ -549,6 +549,7 @@ async function openToolFile(action) {
   if (chat.current?.id !== sessionId) return
   workspace.configure({
     sessionId,
+    rootIdentity: chat.current.projectId || sessionId,
     workingDirectory: chat.current.workingDirectory,
     workspaceContext: liveWorkspaceContext.value
   })
@@ -572,6 +573,7 @@ async function openApprovalDraft(approval) {
   if (chat.current?.id !== sessionId) return
   workspace.configure({
     sessionId,
+    rootIdentity: chat.current.projectId || sessionId,
     workingDirectory: chat.current.workingDirectory,
     workspaceContext: liveWorkspaceContext.value
   })
