@@ -122,6 +122,40 @@ describe('chat message queue', () => {
     })
   })
 
+  it('queues the first message again immediately after undoing it', async () => {
+    const chat = useChatStore()
+    const message = { id: 'message-1', role: 'user', content: 'Noch einmal', attachments: [] }
+    chat.current = {
+      id: 'session-1',
+      messages: [message],
+      workspaceContext: { connected: true, operations: ['workspace.list'] }
+    }
+    chat.selectedSessionId = 'session-1'
+    api.get.mockResolvedValue({ data: [] })
+    api.post.mockResolvedValue({
+      data: { sessionDeleted: true, draft: { content: message.content } }
+    })
+
+    await chat.undoUserMessage(message)
+    const queued = await chat.queueMessage(chat.activeDraft)
+
+    expect(queued).not.toBeNull()
+    expect(queued.options.workspaceContext).toBeNull()
+
+    setActivePinia(createPinia())
+    const restored = useChatStore()
+    restored.setDraftOwner('user-1')
+    await restored.outboxLoadPromise
+    restored.cancelQueueDrain()
+
+    expect(restored.activeQueuedMessages).toHaveLength(1)
+    expect(restored.activeQueuedMessages[0]).toMatchObject({
+      id: queued.id,
+      content: 'Noch einmal',
+      options: { workspaceContext: null }
+    })
+  })
+
   it('persists the queue-time active file snapshot and sends it unchanged', async () => {
     const chat = useChatStore()
     activeSession(chat)

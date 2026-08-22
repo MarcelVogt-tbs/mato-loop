@@ -107,7 +107,7 @@ function defaultSessionOptions() {
 }
 
 function sanitizedSessionOptions(options) {
-  const sanitized = { ...options }
+  const sanitized = { ...options, workspaceContext: null }
   if (!sanitized.preferredExecutionAgentId) {
     sanitized.preferredRootId = null
     sanitized.workingDirectory = null
