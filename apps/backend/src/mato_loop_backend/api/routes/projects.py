@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.models import ChatSession, Project, UserAccount
+from mato_loop_backend.models import ChatSession, MessageAttachment, Project, UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 
@@ -137,7 +137,12 @@ async def delete_project(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
     project = await _owned_project(db, project_id, user.id, for_update=True)
-    if await _session_count(db, project):
+    referenced_files = await db.scalar(
+        select(func.count(MessageAttachment.id)).where(
+            MessageAttachment.file_root_id == project.id
+        )
+    )
+    if await _session_count(db, project) or referenced_files:
         raise ApiError(status.HTTP_409_CONFLICT, "project.notEmpty")
     storage = SessionStorage()
     try:

@@ -18,7 +18,7 @@ const PROVIDED_IMAGE_MIME_TYPES = new Map([
 const UUID_PATTERN = new RegExp(`^${UUID}$`, 'i')
 const ROOT_REVISION_PATTERN = /^[0-9a-f]{64}$/u
 
-function validRelativePath(value, allowRoot = false) {
+export function validRelativePath(value, allowRoot = false) {
   if (value === '.') return allowRoot
   return typeof value === 'string'
     && value.length > 0

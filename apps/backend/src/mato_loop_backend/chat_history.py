@@ -155,7 +155,12 @@ class ChatHistoryService:
         removed = messages[start:]
         if not removed:
             return []
-        attachments = [attachment for message in removed for attachment in message.attachments]
+        attachments = [
+            attachment
+            for message in removed
+            for attachment in message.attachments
+            if attachment.storage_path is not None
+        ]
         await db.execute(
             delete(Message)
             .where(Message.id.in_([message.id for message in removed]))

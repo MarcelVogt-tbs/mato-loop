@@ -223,6 +223,8 @@ class ToolAttachment:
     category: Literal["generated", "downloaded"] = "generated"
     duration_ms: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    file_root_id: UUID | None = None
+    file_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2201,8 +2203,25 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     if kind != "file":
         return ToolResult.error("file.unsupportedType")
     if arguments.root == "session" and target_session_id == context.session.id:
+        current_revision = next(
+            (
+                revision
+                for revision in root_files.list_revisions(normalized_path)
+                if revision.current
+            ),
+            None,
+        )
         filters = [
-            MessageAttachment.storage_path == normalized_path,
+            or_(
+                and_(
+                    current_revision is not None,
+                    MessageAttachment.file_id
+                    == (current_revision.file_id if current_revision else None),
+                    MessageAttachment.file_revision
+                    == (current_revision.revision if current_revision else None),
+                ),
+                MessageAttachment.storage_path == normalized_path,
+            ),
             MessageAttachment.kind == "image",
             MessageAttachment.processing_status == "ready",
             Message.session_id == context.session.id,
@@ -3508,7 +3527,7 @@ async def _save_skill_draft(
     skill_id = current_skill.id if current_skill is not None else draft_id
     draft_bytes = serialize_skill_draft(draft).encode("utf-8")
     initial_revision = hashlib.sha256(draft_bytes).hexdigest()
-    draft_path = f"files/skill-draft-{draft_id}.json"
+    draft_path = f"skill-draft-{draft_id}.json"
     try:
         entry = context.root_files.create_file(
             FileRoot.SESSION,
@@ -3906,6 +3925,8 @@ async def _edit_image(
                 result.filename,
                 kind="image",
                 metadata=result.metadata,
+                file_root_id=ordered[0].file_root_id,
+                file_id=ordered[0].file_id,
             ),
         ),
         trust_level=result.trust_level,
@@ -4024,12 +4045,29 @@ async def _analyze_video(
 
     attachment = None
     if arguments.root == FileRoot.SESSION.value:
+        current_revision = next(
+            (
+                revision
+                for revision in context.root_files.list_revisions(normalized_path)
+                if revision.current
+            ),
+            None,
+        )
         attachment = await context.db.scalar(
             select(MessageAttachment)
             .join(Message, Message.id == MessageAttachment.message_id)
             .options(joinedload(MessageAttachment.message))
             .where(
-                MessageAttachment.storage_path == normalized_path,
+                or_(
+                    and_(
+                        current_revision is not None,
+                        MessageAttachment.file_id
+                        == (current_revision.file_id if current_revision else None),
+                        MessageAttachment.file_revision
+                        == (current_revision.revision if current_revision else None),
+                    ),
+                    MessageAttachment.storage_path == normalized_path,
+                ),
                 Message.session_id == context.session.id,
             )
         )
@@ -4114,7 +4152,9 @@ def _attachment_items(message: Message) -> list[dict[str, Any]]:
             "mimeType": attachment.mime_type,
             "category": attachment.category,
             "processingStatus": attachment.processing_status,
-            "path": attachment.storage_path,
+            "path": attachment.file_path or attachment.storage_path,
+            "fileId": str(attachment.file_id) if attachment.file_id else None,
+            "fileRevision": attachment.file_revision,
         }
         for attachment in message.attachments
     ]

@@ -16,9 +16,9 @@ Computer gehören genau einem Benutzer und können nicht von anderen Konten ausg
 
 ## Backend-Dateien
 
-`root=session` zeigt genau einen Ordner `files`. Bei einer Session ohne Projekt gehören Dateien und Versionsverlauf nur dieser Session. Alle Sessions eines Projekts verwenden dagegen gemeinsam `/data/projects/<projekt-id>/files` und `/data/projects/<projekt-id>/revisions`; die Projekt-ID ist dabei die Wurzelidentität.
+`root=session` zeigt direkt den Inhalt des Backend-Ordners `files/`; Pfade beginnen daher nie mit `files/`. Eine Session ohne Projekt verwendet `/data/sessions/<session-id>/files`, `/data/sessions/<session-id>/revisions` und `/data/sessions/<session-id>/attachments`. Alle Sessions eines Projekts verwenden dagegen gemeinsam `/data/projects/<projekt-id>/files` und `/data/projects/<projekt-id>/revisions`; die Projekt-ID ist dabei die Wurzelidentität.
 
-Nachrichtenanhänge und Tool-Artefakte bleiben unveränderlich im privaten Speicher ihrer Session und Nachricht. Sie erscheinen nicht im Dateibaum und sind nur über die Anhangsfunktionen erreichbar.
+Vom Benutzer an Nachrichten angehängte Dateien bleiben im privaten Ordner `/data/projects/<projekt-id>/sessions/<session-id>/attachments` beziehungsweise im `attachments/`-Ordner der eigenständigen Session; daraus erzeugte Ableitungen liegen unter dem jeweiligen Anhang. Dauerhafte Binärausgaben von Backend-Tools werden dagegen zu verwalteten Dateien mit unveränderlichen Versionen.
 
 ## Dateien im Control Center
 
@@ -32,12 +32,12 @@ In der App **Dateien** können Sie:
 - leere Text- oder Markdown-Dateien anlegen
 - Ordner anlegen
 - Dateien und Ordner umbenennen oder löschen
-- frühere Dateiversionen anzeigen, herunterladen, wiederherstellen oder löschen
+- frühere Dateiversionen anzeigen, herunterladen oder wiederherstellen
 - Session-Freigaben anzeigen und widerrufen
 
-Von Tools zurückgegebene Anhänge bleiben an der jeweiligen Nachricht. Reine Status-, JSON- und in Chatantworten eingebettete Ergebnisse erzeugen keine zusätzlichen Dateien.
+Nachrichten verweisen bei dauerhaften Binärausgaben von Tools auf die exakte Dateiversion. Dieser Verweis bleibt auch nach späterem Bearbeiten, Verschieben oder Löschen der Datei unverändert gültig. Reine Text-, JSON-, Status- und Fehlerergebnisse bleiben Teil der Nachricht und erzeugen keine zusätzlichen Dateien.
 
-`root=session` bezeichnet immer die Backend-Dateiwurzel der Session oder ihres Projekts. `root=workspace` bezeichnet immer eine Wurzel des für den Lauf gewählten, dem Benutzer gehörenden Computers. Ohne Computer und Wurzel ist nur dieser Workspace-Zugriff nicht verfügbar. Kopien zwischen beiden Bereichen werden vom Backend vermittelt und anhand von Größe und SHA-256 geprüft. Der Computer darf verwendete Backend-Dateien in einem begrenzten, unvollständigen Cache halten. Dieser Cache ist keine maßgebliche Kopie und kann jederzeit geleert werden.
+`root=session` bezeichnet immer die Backend-Dateiwurzel der Session oder ihres Projekts. `root=workspace` bezeichnet immer eine Wurzel des für den Lauf gewählten, dem Benutzer gehörenden Computers. Ohne Computer und Wurzel ist nur dieser Workspace-Zugriff nicht verfügbar. Änderungen dort bleiben Eigentum des Execution Agents; nur an das Backend zurückgegebene oder importierte Bytes werden zu verwalteten Dateien. Kopien zwischen beiden Bereichen werden vom Backend vermittelt und anhand von Größe und SHA-256 geprüft. Der Computer darf verwendete Backend-Dateien in einem begrenzten, unvollständigen Cache halten. Dieser Cache ist keine maßgebliche Kopie und kann jederzeit geleert werden.
 
 Benötigt eine angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel bleibt eine getrennte, widerrufbare Session-Freigabe.
 
@@ -45,7 +45,7 @@ Bis zu vier Dateien können im Browser gemeinsam ausgewählt und nacheinander ho
 
 ## Vorschau und Bearbeitung
 
-Die Vorschaugrößen für unterstützte Bilder sowie geeignete UTF-8-Text- und Markdown-Dateien werden global festgelegt; das Textlimit gilt auch für den integrierten Editor. Sichere SVG-Vorschauen bleiben unabhängig davon auf 5 MiB begrenzt. Andere Formate stehen zum Download bereit. Eine neue Datei beginnt mit einer vollständigen Version; Kopieren erzeugt ebenfalls eine neue Identität mit Anfangsversion. Ersetzen hängt nach Prüfung des erwarteten SHA-256-Werts eine Vollversion an. Umbenennen und Verschieben behalten Identität und Verlauf. Wiederherstellen entfernt alle späteren Versionen, die aktuelle Version kann nicht gelöscht werden, und das Löschen einer Datei entfernt ihren gesamten Verlauf.
+Die Vorschaugrößen für unterstützte Bilder sowie geeignete UTF-8-Text- und Markdown-Dateien werden global festgelegt; das Textlimit gilt auch für den integrierten Editor. Sichere SVG-Vorschauen bleiben unabhängig davon auf 5 MiB begrenzt. Andere Formate stehen zum Download bereit. Eine neue Datei beginnt mit einer vollständigen Version; Kopieren erzeugt ebenfalls eine neue Identität mit Anfangsversion. Ersetzen hängt nach Prüfung des erwarteten SHA-256-Werts eine Vollversion an. Umbenennen und Verschieben behalten Identität und Verlauf. Wiederherstellen macht die gewählte Version wieder aktuell. Exakte Versionsverweise in älteren Nachrichten bleiben durch Wiederherstellen, Bearbeiten, Verschieben und Löschen unverändert.
 
 Beim Senden einer Nachricht übermittelt MatoLoop für die aktuell geöffnete Datei nur Wurzel, Wurzelidentität, Pfad, SHA-256 und den Status ungespeicherter Änderungen. Dateiinhalte werden dadurch nicht automatisch an den Agenten gesendet.
 

@@ -3702,6 +3702,8 @@ class AgentRuntime:
                                 metadata=attachment.metadata,
                                 category=attachment.category,
                                 purpose="artifact",
+                                source_file_root_id=attachment.file_root_id,
+                                file_id=attachment.file_id,
                             )
                         )
                     commit_task = asyncio.create_task(db.commit())

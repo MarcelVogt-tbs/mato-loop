@@ -169,11 +169,11 @@ describe('chat message queue', () => {
     workspace.sessionId = 'session-1'
     workspace.scope = 'session'
     workspace.rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
-    workspace.openEntry({ kind: 'file', name: 'plan.md', path: 'files/plan.md' })
-    workspace.filePreviews['files/plan.md'] = { revision: 'a'.repeat(64) }
+    workspace.openEntry({ kind: 'file', name: 'plan.md', path: 'plan.md' })
+    workspace.filePreviews['plan.md'] = { revision: 'a'.repeat(64) }
 
     const entry = await chat.queueMessage('Mit Datei')
-    workspace.filePreviews['files/plan.md'].revision = 'b'.repeat(64)
+    workspace.filePreviews['plan.md'].revision = 'b'.repeat(64)
     chat.running = false
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
     api.post.mockResolvedValue({ data: { message: { id: 'message-1' }, runId: 'run-1' } })
@@ -182,7 +182,7 @@ describe('chat message queue', () => {
     const snapshot = {
       root: 'session',
       root_identity: '550e8400-e29b-41d4-a716-446655440009',
-      path: 'files/plan.md',
+      path: 'plan.md',
       sha256: 'a'.repeat(64),
       dirty: false
     }

@@ -154,6 +154,7 @@ const messages = {
   'file.previewUnavailable': () => 'Für diese Datei ist keine Vorschau verfügbar.',
   'file.currentRevision': () => 'Die aktuelle Dateiversion kann nicht gelöscht werden.',
   'file.revisionInvalid': () => 'Der Versionsverlauf dieser Datei ist ungültig.',
+  'file.revisionImmutable': () => 'Dateiversionen können nicht gelöscht werden.',
   'file.revisionNotFound': () => 'Die ausgewählte Dateiversion wurde nicht gefunden.',
   'file.renameUnavailable': () => 'Dateien können auf diesem System nicht umbenannt werden.',
   'file.sessionRequired': () => 'Für Session-Dateien muss die Session zuerst gespeichert werden.',

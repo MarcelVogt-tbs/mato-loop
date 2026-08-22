@@ -260,22 +260,13 @@
                 <q-chip dense color="primary" text-color="white">Aktuell</q-chip>
               </q-item-section>
               <q-item-section v-else-if="editable" side>
-                <div class="row no-wrap">
-                  <q-btn
-                    flat round dense icon="restore" color="primary"
-                    :loading="restoringRevisionId === revisionId(revision)"
-                    :disable="Boolean(revisionActionPending)"
-                    :aria-label="`Version ${revisionLabel(revision)} wiederherstellen`"
-                    @click.stop="restoreRevision(revision)"
-                  ><q-tooltip>Wiederherstellen</q-tooltip></q-btn>
-                  <q-btn
-                    flat round dense icon="delete_outline" color="negative"
-                    :loading="deletingRevisionId === revisionId(revision)"
-                    :disable="Boolean(revisionActionPending)"
-                    :aria-label="`Version ${revisionLabel(revision)} löschen`"
-                    @click.stop="deleteRevision(revision)"
-                  ><q-tooltip>Löschen</q-tooltip></q-btn>
-                </div>
+                <q-btn
+                  flat round dense icon="restore" color="primary"
+                  :loading="restoringRevisionId === revisionId(revision)"
+                  :disable="Boolean(revisionActionPending)"
+                  :aria-label="`Version ${revisionLabel(revision)} wiederherstellen`"
+                  @click.stop="restoreRevision(revision)"
+                ><q-tooltip>Wiederherstellen</q-tooltip></q-btn>
               </q-item-section>
             </q-item>
           </q-list>
@@ -342,7 +333,6 @@ const revisionsLoading = ref(false)
 const selectedRevisionId = ref(null)
 const revisionPreviewLoading = ref(false)
 const revisionPreview = ref('')
-const deletingRevisionId = ref(null)
 const restoringRevisionId = ref(null)
 let renderController
 let renderVersion = 0
@@ -361,7 +351,6 @@ const editable = computed(() => (
   props.entry?.path
   && !workspace.toolContext
   && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
-  && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
   && workspace.operationAvailable('workspace.write')
 ))
 const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('workspace.export'))
@@ -426,7 +415,7 @@ const currentRevisionId = computed(() => (
   ?? revisionState.value.currentRevision
   ?? preview.value.revision
 ))
-const revisionActionPending = computed(() => deletingRevisionId.value || restoringRevisionId.value)
+const revisionActionPending = computed(() => restoringRevisionId.value)
 const unavailableMessage = computed(() => ({
   invalidImage: 'Die Bilddatei ist beschädigt oder ungültig.',
   unsafeSvg: 'Die SVG-Datei enthält aktive oder externe Inhalte und kann nicht sicher angezeigt werden.',
@@ -521,27 +510,9 @@ async function previewRevision(revision) {
   }
 }
 
-async function deleteRevision(revision) {
-  if (isCurrentRevision(revision)) return
-  const accepted = await confirm(
-    `Soll Version ${revisionLabel(revision)} dauerhaft gelöscht werden?`,
-    'Version löschen?',
-    { okLabel: 'Löschen', okColor: 'negative' }
-  )
-  if (!accepted) return
-  const id = revisionId(revision)
-  deletingRevisionId.value = id
-  try {
-    await workspace.deleteRevision(props.entry.path, id)
-    if (selectedRevisionId.value === id) clearRevisionPreview()
-  } finally {
-    deletingRevisionId.value = null
-  }
-}
-
 async function restoreRevision(revision) {
   const accepted = await confirm(
-    `Soll Version ${revisionLabel(revision)} wiederhergestellt werden? Alle späteren Versionen werden entfernt.`,
+    `Soll Version ${revisionLabel(revision)} als neue aktuelle Version wiederhergestellt werden?`,
     'Version wiederherstellen?',
     { okLabel: 'Wiederherstellen', okColor: 'warning' }
   )

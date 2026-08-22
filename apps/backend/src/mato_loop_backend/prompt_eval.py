@@ -73,7 +73,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 25
+INVENTORY_VERSION = 26
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -555,7 +555,7 @@ _UNCERTAINTY = re.compile(
     r"\b(?:unklar|unbekannt|ungewiss|unbestätigt|"
     r"nicht\s+(?:bestätigt|feststellbar|nachweisbar)|"
     r"kein(?:e|en|em|er|es)?\s+(?:Bestätigung|Tool-Ergebnis|Ergebnis)|"
-    r"(?:kann|lässt)\b.{0,40}\bnicht\b.{0,20}\b(?:bestätigen|feststellen|sagen))\b",
+    r"(?:kann|lässt)\b.{0,40}\bnicht\b.{0,20}\b(?:bestätigen|feststellen|sagen|verifizieren))\b",
     re.IGNORECASE,
 )
 
@@ -589,6 +589,13 @@ CASES = (
         argument_contains={"query": ("Python", "Version")},
         argument_excludes={"query": ("2026",)},
         max_argument_words={"query": 10},
+    ),
+    PromptCase(
+        id="current_information_without_tools_reports_uncertainty",
+        kind="general",
+        user="Wer ist heute deutscher Bundeskanzler?",
+        expected_no_tools=True,
+        requires_uncertainty=True,
     ),
     PromptCase(
         id="required_search_calls_search",
@@ -3011,6 +3018,11 @@ class ContractCoverage:
 
 _SEMANTIC_CONTRACTS = (
     ContractCoverage("general.base_language", "base", ("stable_knowledge_avoids_search",)),
+    ContractCoverage(
+        "general.unsupported_current_claims",
+        "base",
+        ("current_information_without_tools_reports_uncertainty",),
+    ),
     ContractCoverage(
         "general.trust_untrusted_data",
         "trust",

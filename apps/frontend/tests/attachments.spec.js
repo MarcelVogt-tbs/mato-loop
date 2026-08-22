@@ -38,7 +38,7 @@ describe('persisted attachments', () => {
     expect(safeFileDownloadUrl(downloadUrl.replace('original-workspace', '../other'))).toBeNull()
     expect(safeFileDownloadUrl(downloadUrl.replace('reports%2Flarge.zip', '..%2Fsecret'))).toBeNull()
     expect(safeFileDownloadUrl(`https://example.com${downloadUrl}`)).toBeNull()
-    const sessionUrl = '/api/workspace/files/download?path=files%2Freport.pdf&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440000'
+    const sessionUrl = '/api/workspace/files/download?path=report.pdf&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440000'
     expect(safeFileDownloadUrl(sessionUrl)).toBe(sessionUrl)
     expect(safeFileDownloadUrl(sessionUrl.replace(/root_identity=[^&]+/u, 'root_identity=550e8400-e29b-41d4-a716-446655440009'))).not.toBeNull()
     expect(safeFileDownloadUrl(sessionUrl.replace(/root_identity=[^&]+/u, 'root_identity=other'))).toBeNull()
@@ -174,10 +174,25 @@ describe('persisted attachments', () => {
     expect(toolFileActions({ fileActions: [{ ...action, operation: 'delete' }] })).toEqual([])
   })
 
+  it('accepts an ordinary relative session file action', () => {
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const action = {
+      operation: 'write',
+      root: 'session',
+      rootIdentity: sessionId,
+      path: 'result.md',
+      filename: 'result.md',
+      sizeBytes: 7,
+      downloadUrl: `/api/workspace/files/download?path=result.md&scope=session&session_id=${sessionId}&root_identity=${sessionId}`
+    }
+
+    expect(toolFileActions({ fileActions: [action] })).toEqual([{ ...action, sessionId }])
+  })
+
   it('does not expose legacy draft actions as reusable file outputs', () => {
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const draftId = '550e8400-e29b-41d4-a716-446655440005'
-    const path = `files/drafts/${draftId}/plan.md`
+    const path = `drafts/${draftId}/plan.md`
     const action = {
       operation: 'write',
       root: 'session',

@@ -128,7 +128,6 @@ const selected = computed(() => workspace.selectedPath === props.entry.path)
 const mutableEntry = computed(() => (
   !workspace.toolContext
   && ['file', 'directory'].includes(props.entry.kind)
-  && (workspace.scope === 'filesystem' || props.entry.path.startsWith('files/'))
 ))
 const canRename = computed(() => mutableEntry.value && workspace.operationAvailable('workspace.rename'))
 const canDelete = computed(() => mutableEntry.value && workspace.operationAvailable('workspace.delete'))

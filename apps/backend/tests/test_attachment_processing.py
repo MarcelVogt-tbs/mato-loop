@@ -27,6 +27,7 @@ from mato_loop_backend.attachments import (
 )
 from mato_loop_backend.models import ChatSession, Message
 from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.workspace import RootFileService
 
 
 def wav_bytes(*, frames: int = 80, sample_rate: int = 8_000) -> bytes:
@@ -315,6 +316,9 @@ async def test_compressed_audio_uses_verified_pcm_derivative_and_discards_both(
     derived_path = storage.derived_path(
         session_id, attachment.id, attachment.metadata_json["derivedPath"]
     )
+    assert attachment.metadata_json["derivedPath"] == (
+        f"attachments/{attachment.id}/derived/audio.wav"
+    )
     assert derived_path.read_bytes() == derived_wav
     assert stat.S_IMODE(derived_path.stat().st_mode) == 0o600
     assert await service.read_audio(attachment, session_id) == derived_wav
@@ -353,7 +357,6 @@ async def test_invalid_compressed_audio_is_rejected_without_persisted_files(
             filename="kaputt.mp3",
         )
     assert list((sessions.session_path(session_id) / "attachments").iterdir()) == []
-    assert list((sessions.session_path(session_id) / "derived").iterdir()) == []
 
 
 async def test_session_quota_includes_new_derived_content(
@@ -378,4 +381,56 @@ async def test_session_quota_includes_new_derived_content(
             filename="lang.txt",
         )
     assert list((sessions.session_path(session_id) / "attachments").iterdir()) == []
-    assert list((sessions.session_path(session_id) / "derived").iterdir()) == []
+
+
+async def test_artifact_derivative_is_stored_with_its_exact_revision(
+    tmp_path: Path, monkeypatch
+) -> None:
+    session_id = uuid4()
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(session_id)
+    service = AttachmentService(AttachmentStorage(sessions))
+    message = Message(id=uuid4(), session_id=session_id, role="tool", content="Audio")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [
+        ChatSession(id=session_id, user_id=uuid4(), title="Test"),
+        None,
+    ]
+    derived_wav = wav_bytes(frames=160, sample_rate=16_000)
+
+    def run_media(command: list[str], _data: bytes, _timeout: int):
+        if command[0] == "ffprobe":
+            payload = {
+                "streams": [
+                    {"codec_type": "audio", "channels": 1, "sample_rate": "8000"}
+                ],
+                "format": {"duration": "0.01"},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload).encode(), b"")
+        return subprocess.CompletedProcess(command, 0, b"\x00\x00" * 160, b"")
+
+    monkeypatch.setattr(processing, "_run_media", run_media)
+    original = b"ID3generated-audio"
+
+    attachment = await service.create_attachment(
+        db,
+        message,
+        original,
+        "audio/mpeg",
+        kind="audio",
+        filename="aufnahme.mp3",
+        category="generated",
+        purpose="artifact",
+    )
+
+    assert attachment.storage_path is None
+    assert attachment.file_id is not None
+    assert attachment.file_revision == 1
+    assert attachment.metadata_json["derivedPath"] == (
+        f"revisions/{attachment.file_id}/derived/1/audio.wav"
+    )
+    root_files = RootFileService(session_id, session_storage=sessions)
+    assert root_files.revision_path(attachment.file_id, 1).read_bytes() == original
+    assert root_files.revision_derived_path(
+        attachment.file_id, 1, "audio.wav"
+    ).read_bytes() == derived_wav

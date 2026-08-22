@@ -76,7 +76,7 @@ describe('workspace store', () => {
     })
   })
 
-  it('uploads selected files individually and reloads the target', async () => {
+  it('uploads selected files to the session root and reloads it', async () => {
     api.post.mockResolvedValue({ data: {} })
     api.get.mockResolvedValue({ data: { entries: [] } })
     const workspace = useWorkspaceStore()
@@ -87,18 +87,18 @@ describe('workspace store', () => {
     api.get.mockResolvedValue({ data: { entries: [] } })
     const files = [new File(['a'], '.env'), new File(['b'], 'archive.bin')]
 
-    const count = await workspace.uploadFiles('files', files)
+    const count = await workspace.uploadFiles('.', files)
 
     expect(count).toBe(2)
     expect(api.post).toHaveBeenCalledTimes(2)
     expect(api.post.mock.calls[0][0]).toBe('/workspace/files')
     expect(api.post.mock.calls[0][2].params).toEqual({
-      parent: 'files',
+      parent: '.',
       scope: 'session',
       session_id: 'session-a'
     })
     expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
-      params: { path: 'files', scope: 'session', session_id: 'session-a' },
+      params: { path: '.', scope: 'session', session_id: 'session-a' },
       suppressErrorToast: true
     })
   })
@@ -269,7 +269,7 @@ describe('workspace store', () => {
   })
 
   it('restores a persisted session draft and records closing only the viewer', async () => {
-    const path = 'files/drafts/draft-1/plan.md'
+    const path = 'drafts/draft-1/plan.md'
     const fileView = {
       scope: 'session',
       selectedPath: path,
@@ -356,7 +356,7 @@ describe('workspace store', () => {
 
     workspace.restoreView({
       scope: 'session',
-      selectedPath: 'files/drafts',
+      selectedPath: 'drafts',
       selectedKind: 'directory',
       viewedFilePath: null,
       rootIdentity: null,
@@ -366,7 +366,7 @@ describe('workspace store', () => {
       workingDirectory: null
     })
 
-    expect(workspace.selectedPath).toBe('files/drafts')
+    expect(workspace.selectedPath).toBe('drafts')
     expect(workspace.selectedKind).toBe('directory')
     expect(workspace.viewedEntry).toBeNull()
   })
@@ -380,14 +380,14 @@ describe('workspace store', () => {
       root: 'session',
       sessionId: 'session-a',
       rootIdentity: 'session-a',
-      path: 'files/plan.md',
+      path: 'plan.md',
       filename: 'plan.md',
       sizeBytes: 7
     })
 
     expect(workspace.rootIdentity).toBe('session-a')
     expect(workspace.viewedEntry).toEqual({
-      kind: 'file', name: 'plan.md', path: 'files/plan.md', size: 7
+      kind: 'file', name: 'plan.md', path: 'plan.md', size: 7
     })
     expect(workspace.toolContext).toBeNull()
     expect(workspace.operationAvailable('workspace.write')).toBe(true)
@@ -443,10 +443,15 @@ describe('workspace store', () => {
       sessionId: 'session-a', rootIdentity: 'project-a', workingDirectory: 'current'
     })
 
+    workspace.openApprovalDraft({
+      root: 'session', sessionId: 'session-a', path: '../skill-draft.json', filename: 'skill-draft.json'
+    })
+    expect(workspace.viewedEntry).toBeNull()
+
     await workspace.openApprovalDraft({
       root: 'session',
       sessionId: 'session-a',
-      path: 'files/skill-draft.json',
+      path: 'skill-draft.json',
       filename: 'skill-draft.json',
       sizeBytes: 128,
       initialRevision: 'revision-1'
@@ -456,7 +461,7 @@ describe('workspace store', () => {
     expect(workspace.rootIdentity).toBe('project-a')
     expect(workspace.editorActive).toBe(true)
     expect(workspace.viewedEntry).toEqual({
-      kind: 'file', name: 'skill-draft.json', path: 'files/skill-draft.json', size: 128
+      kind: 'file', name: 'skill-draft.json', path: 'skill-draft.json', size: 128
     })
     expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
       params: {
@@ -496,15 +501,15 @@ describe('workspace store', () => {
   it('refreshes cached directories and ignores superseded responses', async () => {
     let resolveStale
     let fileRequests = 0
-    const rootEntry = { kind: 'directory', name: 'files', path: 'files' }
-    const freshEntry = { kind: 'file', name: 'live.txt', path: 'files/live.txt' }
+    const rootEntry = { kind: 'directory', name: 'drafts', path: 'drafts' }
+    const freshEntry = { kind: 'file', name: 'live.txt', path: 'drafts/live.txt' }
     api.get.mockImplementation((_url, { params }) => {
-      if (params.path === 'files' && fileRequests++ === 0) {
+      if (params.path === 'drafts' && fileRequests++ === 0) {
         return new Promise((resolve) => { resolveStale = resolve })
       }
       return Promise.resolve({
         data: {
-          entries: params.path === 'files' ? [freshEntry] : [rootEntry],
+          entries: params.path === 'drafts' ? [freshEntry] : [rootEntry],
           hasMore: false,
           nextOffset: null
         }
@@ -515,23 +520,23 @@ describe('workspace store', () => {
     workspace.sessionId = 'session-a'
     workspace.entries = {
       '.': [rootEntry],
-      files: [{ kind: 'file', name: 'stale.txt', path: 'files/stale.txt' }]
+      drafts: [{ kind: 'file', name: 'stale.txt', path: 'drafts/stale.txt' }]
     }
-    workspace.hasMore.files = true
-    workspace.nextOffset.files = 1000
+    workspace.hasMore.drafts = true
+    workspace.nextOffset.drafts = 1000
     const contextVersion = workspace.contextVersion
 
-    const staleLoad = workspace.load('files')
+    const staleLoad = workspace.load('drafts')
     await workspace.refresh()
-    resolveStale({ data: { entries: [{ path: 'files/stale.txt' }] } })
+    resolveStale({ data: { entries: [{ path: 'drafts/stale.txt' }] } })
     await staleLoad
 
     expect(workspace.contextVersion).toBe(contextVersion)
-    expect(workspace.entries.files).toEqual([freshEntry])
-    expect(workspace.hasMore.files).toBe(false)
-    expect(workspace.nextOffset.files).toBeNull()
+    expect(workspace.entries.drafts).toEqual([freshEntry])
+    expect(workspace.hasMore.drafts).toBe(false)
+    expect(workspace.nextOffset.drafts).toBeNull()
     expect(api.get.mock.calls.map(([, config]) => config.params.path)).toEqual([
-      'files', '.', 'files'
+      'drafts', '.', 'drafts'
     ])
   })
 
@@ -667,19 +672,19 @@ describe('workspace store', () => {
 
   it('keeps a dirty editor and marks an external file mutation', () => {
     const workspace = useWorkspaceStore()
-    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'files/notes.md' }, true)
+    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' }, true)
     workspace.updateEditorDraft('neu', 'alt')
 
-    workspace.noteFileMutation('files/notes.md')
+    workspace.noteFileMutation('notes.md')
 
     expect(workspace.editorDraft).toBe('neu')
     expect(workspace.editorDirty).toBe(true)
     expect(workspace.editorExternalChange).toBe(true)
-    expect(workspace.fileChangeVersions['files/notes.md']).toBeUndefined()
+    expect(workspace.fileChangeVersions['notes.md']).toBeUndefined()
 
     workspace.discardEdit()
-    workspace.noteFileMutation('files/notes.md')
-    expect(workspace.fileChangeVersions['files/notes.md']).toBe(1)
+    workspace.noteFileMutation('notes.md')
+    expect(workspace.fileChangeVersions['notes.md']).toBe(1)
   })
 
   it('snapshots only a live active file with the server root identity', () => {
@@ -690,8 +695,8 @@ describe('workspace store', () => {
     controlCenter.activeAppId = 'files'
     const workspace = useWorkspaceStore()
     workspace.configure({ sessionId: 'session-a', rootIdentity: 'project-root' })
-    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'files/notes.md' }, true)
-    workspace.filePreviews['files/notes.md'] = {
+    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' }, true)
+    workspace.filePreviews['notes.md'] = {
       kind: 'markdown', content: 'alt', revision: 'a'.repeat(64)
     }
     workspace.updateEditorDraft('neu', 'alt')
@@ -699,7 +704,7 @@ describe('workspace store', () => {
     expect(workspace.activeFileSnapshot()).toEqual({
       root: 'session',
       root_identity: 'project-root',
-      path: 'files/notes.md',
+      path: 'notes.md',
       sha256: 'a'.repeat(64),
       dirty: true
     })
@@ -708,12 +713,12 @@ describe('workspace store', () => {
     expect(workspace.activeFileSnapshot()).toBeNull()
   })
 
-  it('uses the revision endpoints and reloads canonical state after mutations', async () => {
+  it('uses the revision endpoints and reloads canonical state after restore', async () => {
     const workspace = useWorkspaceStore()
     workspace.sessionId = 'session-a'
     workspace.scope = 'session'
     workspace.rootIdentity = 'project-root'
-    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'files/notes.md' })
+    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' })
     api.get.mockImplementation((url) => Promise.resolve({
       data: url.includes('/revisions/1/preview')
         ? { kind: 'markdown', content: 'alt', revision: 'a'.repeat(64) }
@@ -721,30 +726,27 @@ describe('workspace store', () => {
           ? { kind: 'markdown', content: 'neu', revision: 'b'.repeat(64) }
           : { fileId: 'file-1', items: [{ revision: 2, current: true }] }
     }))
-    api.delete.mockResolvedValue({})
     api.post.mockResolvedValue({ data: { restored: true } })
 
-    await workspace.loadRevisions('files/notes.md')
-    await workspace.revisionPreview('files/notes.md', 1)
-    await workspace.deleteRevision('files/notes.md', 1)
-    await workspace.restoreRevision('files/notes.md', 1)
+    await workspace.loadRevisions('notes.md')
+    await workspace.revisionPreview('notes.md', 1)
+    await workspace.restoreRevision('notes.md', 1)
 
-    const params = { path: 'files/notes.md', session_id: 'session-a' }
+    const params = { path: 'notes.md', session_id: 'session-a' }
     expect(api.get).toHaveBeenCalledWith('/workspace/files/revisions/1/preview', {
       params
     })
-    expect(api.delete).toHaveBeenCalledWith('/workspace/files/revisions/1', { params })
     expect(api.post).toHaveBeenCalledWith('/workspace/files/revisions/1/restore', {
-      path: 'files/notes.md'
+      path: 'notes.md'
     }, {
       params: { session_id: 'session-a' }
     })
-    expect(workspace.fileRevisions['files/notes.md'].items[0].revision).toBe(2)
-    expect(workspace.filePreviews['files/notes.md'].revision).toBe('b'.repeat(64))
+    expect(workspace.fileRevisions['notes.md'].items[0].revision).toBe(2)
+    expect(workspace.filePreviews['notes.md'].revision).toBe('b'.repeat(64))
   })
 
   it('creates an empty UTF-8 file and opens the returned entry for editing', async () => {
-    const entry = { kind: 'file', name: 'Notizen.txt', path: 'files/Notizen.txt', size: 0 }
+    const entry = { kind: 'file', name: 'Notizen.txt', path: 'Notizen.txt', size: 0 }
     api.post.mockResolvedValue({ data: { entry } })
     api.get.mockResolvedValue({ data: { entries: [entry], hasMore: false } })
     const workspace = useWorkspaceStore()
@@ -754,11 +756,11 @@ describe('workspace store', () => {
     api.post.mockResolvedValue({ data: { entry } })
     api.get.mockResolvedValue({ data: { entries: [entry], hasMore: false } })
 
-    await workspace.createFile('files', 'Notizen.txt')
+    await workspace.createFile('.', 'Notizen.txt')
 
     const body = api.post.mock.calls[0][1]
     expect(api.post).toHaveBeenCalledWith('/workspace/files', body, {
-      params: { parent: 'files', scope: 'session', session_id: 'session-a' }
+      params: { parent: '.', scope: 'session', session_id: 'session-a' }
     })
     expect(body.get('file')).toBeInstanceOf(File)
     expect(body.get('file').name).toBe('Notizen.txt')

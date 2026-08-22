@@ -9,13 +9,7 @@ from uuid import UUID, uuid4
 
 from mato_loop_backend.config import get_runtime_config
 
-SESSION_DIRECTORIES = (
-    "files",
-    "attachments",
-    "generated",
-    "downloads",
-    "derived",
-)
+SESSION_DIRECTORIES = ("attachments",)
 _AUTO_LOCATION = object()
 
 
@@ -138,10 +132,11 @@ class SessionStorage:
         require_exists: bool = False,
     ) -> Path:
         if project_id is None:
-            return self.session_path(
+            target = self.session_path(
                 session_id, project_id=None, require_exists=require_exists
             )
-        target = self.projects_dir / str(self.normalize_project_id(project_id))
+        else:
+            target = self.projects_dir / str(self.normalize_project_id(project_id))
         self._validate_directory(target)
         if require_exists:
             for name in ("files", "revisions"):
@@ -227,15 +222,6 @@ class SessionStorage:
                     "sessionStorage.invalidSessionTree", "Invalid session storage"
                 )
             directory.chmod(0o700)
-        revisions = target / "revisions"
-        if not revisions.exists():
-            revisions.mkdir(mode=0o700)
-        self._validate_directory(revisions)
-        if not revisions.is_dir():
-            raise SessionStorageError(
-                "sessionStorage.invalidSessionTree", "Invalid session storage"
-            )
-        revisions.chmod(0o700)
 
     def provision(
         self, session_id: UUID | str, project_id: UUID | str | None = None
@@ -247,6 +233,9 @@ class SessionStorage:
         target = self._exact_path(normalized, project_id)
         if target.exists() or target.is_symlink():
             self._validate_tree(target)
+            if project_id is None:
+                for name in ("files", "revisions"):
+                    self._prepare_directory(target / name)
             return target
 
         staged = self.staging_dir / f"{normalized}.{uuid4().hex}"
@@ -254,7 +243,9 @@ class SessionStorage:
         try:
             for relative_path in SESSION_DIRECTORIES:
                 (staged / relative_path).mkdir(mode=0o700, parents=True, exist_ok=True)
-            (staged / "revisions").mkdir(mode=0o700)
+            if project_id is None:
+                (staged / "files").mkdir(mode=0o700)
+                (staged / "revisions").mkdir(mode=0o700)
             self._validate_tree(staged)
             try:
                 staged.rename(target)
@@ -337,9 +328,27 @@ class SessionStorage:
             raise SessionStorageError(
                 "sessionStorage.sessionAlreadyExists", "Session storage already exists"
             )
-        if target_project_id is not None:
-            self._project_sessions_dir(target_project_id, prepare=True)
-        source.rename(target)
+        if source_project_id is None and any(
+            any((source / name).iterdir()) for name in ("files", "revisions")
+        ):
+            raise SessionStorageError(
+                "sessionStorage.projectFilesConflict",
+                "A standalone session with managed files cannot join a project",
+            )
+        self.provision(normalized, target_project_id)
+        target_attachments = target / "attachments"
+        self._remove_path(target_attachments)
+        try:
+            (source / "attachments").rename(target_attachments)
+            if source_project_id is None:
+                (source / "files").rmdir()
+                (source / "revisions").rmdir()
+            source.rmdir()
+        except BaseException:
+            if target_attachments.exists() and not (source / "attachments").exists():
+                target_attachments.rename(source / "attachments")
+            self._remove_path(target)
+            raise
         return target
 
     def remove_project(self, project_id: UUID | str) -> bool:
@@ -473,9 +482,12 @@ class SessionStorage:
                     "sessionStorage.duplicateSessionTree", "Duplicate session storage"
                 )
             if located and located[0] != target:
-                if project_id is not None:
-                    self._project_sessions_dir(project_id, prepare=True)
-                located[0].rename(target)
+                source_project_id = (
+                    None
+                    if located[0].parent == self.sessions_dir
+                    else self.normalize_project_id(located[0].parents[1].name)
+                )
+                self.move_session(session_id, source_project_id, project_id)
             if not target.exists() and not target.is_symlink():
                 trash_candidates = sorted(
                     (

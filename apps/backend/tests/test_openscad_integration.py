@@ -203,7 +203,7 @@ def test_openscad_source_read_does_not_inherit_the_integration_policy(
         context.session.id, session_storage=storage
     )
     render, read = OPENSCAD_ADAPTER.execution_tools[0].authorization_factory(
-        OpenScadRenderArguments(root="session", path="files/model.scad"),
+        OpenScadRenderArguments(root="session", path="model.scad"),
         context,
     )
 
@@ -370,7 +370,7 @@ def test_session_project_archive_is_relative_bounded_and_rejects_symlinks(
     (project / "part.scad").write_text("cube(1);", encoding="utf-8")
     service = RootFileService(session_id, session_storage=storage)
 
-    archive, size, digest = _zip_project(service, "files/project")
+    archive, size, digest = _zip_project(service, "project")
     with archive:
         data = archive.read()
     assert len(data) == size
@@ -380,7 +380,7 @@ def test_session_project_archive_is_relative_bounded_and_rejects_symlinks(
 
     (project / "link.scad").symlink_to(project / "part.scad")
     with pytest.raises(RootFileError, match="unsupported"):
-        _zip_project(service, "files/project")
+        _zip_project(service, "project")
 
 
 def test_binary_stl_validation_checks_size_and_finite_coordinates() -> None:
@@ -564,7 +564,7 @@ async def test_render_tool_returns_generated_attachments(
         session_storage=storage,
     )
     context.root_files.create_file(
-        "session", "files/model.scad", BytesIO(b"cube(1);\n"), max_bytes=100
+        "session", "model.scad", BytesIO(b"cube(1);\n"), max_bytes=100
     )
     rendered = _render_result(instance.execution_agent_id, context.session.id)
     off = b"OFF\n3 1 0\n0 0 0\n2 0 0\n0 3 4\n3 0 1 2\n"
@@ -583,8 +583,8 @@ async def test_render_tool_returns_generated_attachments(
     result = await render_openscad(
         OpenScadRenderArguments(
             root="session",
-            path="files/model.scad",
-            projectPath="files",
+            path="model.scad",
+            projectPath=".",
         ),
         context,
     )

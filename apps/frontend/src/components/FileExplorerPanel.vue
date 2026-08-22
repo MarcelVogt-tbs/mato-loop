@@ -434,14 +434,8 @@ const targetDirectory = computed(() => {
   const path = workspace.selectedPath
   return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.'
 })
-const mutationDirectory = computed(() => (
-  workspace.scope === 'session' && targetDirectory.value === '.' ? 'files' : targetDirectory.value
-))
-const writableLocation = computed(() => !workspace.toolContext && (
-  workspace.scope === 'filesystem'
-  || mutationDirectory.value === 'files'
-  || mutationDirectory.value.startsWith('files/')
-))
+const mutationDirectory = computed(() => targetDirectory.value)
+const writableLocation = computed(() => !workspace.toolContext)
 const canCreateFile = computed(() => writableLocation.value && workspace.operationAvailable('workspace.import'))
 const canCreateDirectory = computed(() => writableLocation.value && workspace.operationAvailable('workspace.mkdir'))
 const canUpload = computed(() => writableLocation.value && workspace.operationAvailable('workspace.import'))
@@ -487,7 +481,7 @@ const explorerUnavailableIcon = computed(() => (
 ))
 const scopeDescription = computed(() => {
   if (workspace.toolContext) return 'Gespeicherter Dateistand · nur Lesen'
-  if (workspace.scope === 'session') return 'Dateien · nur „files“ ist veränderbar'
+  if (workspace.scope === 'session') return 'Session-Dateien'
   if (!workspace.operationAvailable('workspace.list')) return 'Der ausgewählte Arbeitsbereich ist nicht verfügbar.'
   return workspace.workingDirectory
     ? `Aktueller Ordner · ${chat.activeContext?.currentDirectory || workspace.workingDirectory}`

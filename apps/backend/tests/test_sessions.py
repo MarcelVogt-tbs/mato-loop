@@ -656,8 +656,8 @@ def test_session_payload_ignores_invalid_persisted_file_view() -> None:
             "open": True,
             "file_view": {
                 "scope": "session",
-                "selected_path": "files/drafts/draft-1/plan.md",
-                "viewed_file_path": "files/drafts/draft-1/plan.md",
+                "selected_path": "drafts/draft-1/plan.md",
+                "viewed_file_path": "drafts/draft-1/plan.md",
             },
         },
     )
@@ -917,7 +917,7 @@ def test_message_payload_keeps_session_file_action_url_exact() -> None:
         "operation": "write",
         "root": "session",
         "rootIdentity": str(session_id),
-        "path": "files/result.txt",
+        "path": "result.txt",
         "filename": "result.txt",
         "sizeBytes": 7,
     }
@@ -934,7 +934,7 @@ def test_message_payload_keeps_session_file_action_url_exact() -> None:
     query = parse_qs(urlparse(action.pop("downloadUrl")).query)
     assert action == stored_action
     assert query == {
-        "path": ["files/result.txt"],
+        "path": ["result.txt"],
         "scope": ["session"],
         "session_id": [str(session_id)],
         "root_identity": [str(session_id)],
@@ -947,7 +947,7 @@ def test_message_payload_rejects_workspace_snapshot_fields_on_session_actions() 
         "operation": "write",
         "root": "session",
         "rootIdentity": str(session_id),
-        "path": "files/result.txt",
+        "path": "result.txt",
         "filename": "result.txt",
         "sizeBytes": 7,
         "executionAgentId": str(uuid4()),
@@ -974,7 +974,7 @@ def test_message_payload_rejects_workspace_snapshot_fields_on_session_actions() 
                 "operation": "write",
                 "root": "session",
                 "rootIdentity": "not-a-uuid",
-                "path": "files/result.txt",
+                "path": "result.txt",
                 "filename": "result.txt",
                 "sizeBytes": 7,
             }
@@ -1100,6 +1100,7 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
     session_id = uuid4()
     message_id = uuid4()
     attachment_id = uuid4()
+    file_id = uuid4()
     message = Message(
         id=message_id,
         session_id=session_id,
@@ -1113,14 +1114,16 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             position=0,
             kind="image",
             category="generated",
-            purpose="attachment",
+            purpose="artifact",
             processing_status="ready",
             mime_type="image/png",
             size_bytes=123,
             sha256="a" * 64,
-            storage_path=(
-                "generated/00000000-0000-4000-8000-000000000000/bild.png"
-            ),
+            storage_path=None,
+            file_root_id=session_id,
+            file_id=file_id,
+            file_revision=3,
+            file_path="bild.png",
             filename="bild.png",
             width=10,
             height=20,
@@ -1134,7 +1137,7 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             "id": str(attachment_id),
             "kind": "image",
             "category": "generated",
-            "purpose": "attachment",
+            "purpose": "artifact",
             "processingStatus": "ready",
             "mimeType": "image/png",
             "sizeBytes": 123,
@@ -1143,6 +1146,10 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             "height": 20,
             "durationMs": None,
             "metadata": {},
+            "fileRootId": str(session_id),
+            "fileId": str(file_id),
+            "fileRevision": 3,
+            "filePath": "bild.png",
             "url": (
                 f"/api/sessions/{session_id}/messages/{message_id}"
                 f"/attachments/{attachment_id}"
@@ -1341,7 +1348,7 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
             "activeFile": {
                 "root": "session",
                 "rootIdentity": str(session.id),
-                "path": "files/notes.txt",
+                "path": "notes.txt",
                 "sha256": "a" * 64,
                 "dirty": True,
             },
@@ -1358,7 +1365,7 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
         active_file={
             "root": "session",
             "rootIdentity": str(session.id),
-            "path": "files/notes.txt",
+            "path": "notes.txt",
             "sha256": "a" * 64,
             "dirty": True,
         },
@@ -1633,9 +1640,9 @@ async def test_control_center_state_can_be_replaced() -> None:
         "open": True,
         "file_view": {
             "scope": "session",
-            "selected_path": "files/drafts/draft-id/plan.md",
+            "selected_path": "drafts/draft-id/plan.md",
             "selected_kind": "file",
-            "viewed_file_path": "files/drafts/draft-id/plan.md",
+            "viewed_file_path": "drafts/draft-id/plan.md",
             "root_identity": None,
             "execution_agent_id": None,
             "root_id": None,
@@ -1658,9 +1665,9 @@ async def test_control_center_state_can_be_replaced() -> None:
         "open": True,
         "fileView": {
             "scope": "session",
-            "selectedPath": "files/drafts/draft-id/plan.md",
+            "selectedPath": "drafts/draft-id/plan.md",
             "selectedKind": "file",
-            "viewedFilePath": "files/drafts/draft-id/plan.md",
+            "viewedFilePath": "drafts/draft-id/plan.md",
             "rootIdentity": None,
             "executionAgentId": None,
             "rootId": None,
@@ -1686,7 +1693,7 @@ async def test_control_center_state_can_be_replaced() -> None:
             "active_app_id": "files",
             "file_view": {
                 "scope": "session",
-                "selected_path": "files/../secret.txt",
+                "selected_path": "drafts/../secret.txt",
                 "selected_kind": "file",
             },
         },

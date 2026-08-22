@@ -53,7 +53,7 @@ def test_requires_host_uuid_and_rejects_every_local_workspace_operation(
         lambda: service.write_file(FileRoot.WORKSPACE, "file.txt", "value"),
         lambda: service.create_directory(FileRoot.WORKSPACE, "directory"),
         lambda: service.copy_path(
-            FileRoot.SESSION, "files", FileRoot.WORKSPACE, "files"
+            FileRoot.SESSION, "source", FileRoot.WORKSPACE, "destination"
         ),
     )
     for operation in operations:
@@ -83,31 +83,31 @@ async def test_lists_pages_reads_utf8_and_searches_session_files(tmp_path: Path)
     for name in ("c.txt", "a.txt", "b.txt"):
         (files / name).write_text(f"{name}\nAurora", encoding="utf-8")
 
-    first = service.list_entries(FileRoot.SESSION, "files", offset=0, limit=2)
+    first = service.list_entries(FileRoot.SESSION, ".", offset=0, limit=2)
     second = service.list_entries(
-        FileRoot.SESSION, "files", offset=first.next_offset or 0, limit=2
+        FileRoot.SESSION, ".", offset=first.next_offset or 0, limit=2
     )
-    read = service.read_file(FileRoot.SESSION, "files/a.txt", offset=2, limit=1)
+    read = service.read_file(FileRoot.SESSION, "a.txt", offset=2, limit=1)
     search = RootFileSearch(service)
 
     assert [entry.name for entry in first.entries] == ["a.txt", "b.txt"]
     assert [entry.name for entry in second.entries] == ["c.txt"]
     assert read.content == "2: Aurora"
     assert read.sha256 == hashlib.sha256(b"a.txt\nAurora").hexdigest()
-    assert (await search.glob(FileRoot.SESSION, "files", "*.txt"))["paths"] == [
-        "files/a.txt",
-        "files/b.txt",
-        "files/c.txt",
+    assert (await search.glob(FileRoot.SESSION, ".", "*.txt"))["paths"] == [
+        "a.txt",
+        "b.txt",
+        "c.txt",
     ]
 
 
 def test_mutations_are_atomic_and_limited_to_session_files(tmp_path: Path) -> None:
     service, root = make_service(tmp_path)
-    service.create_directory(FileRoot.SESSION, "files/subdirectory")
-    service.write_file(FileRoot.SESSION, "files/subdirectory/notes.txt", "old")
+    service.create_directory(FileRoot.SESSION, "subdirectory")
+    service.write_file(FileRoot.SESSION, "subdirectory/notes.txt", "old")
     service.write_file(
         FileRoot.SESSION,
-        "files/subdirectory/notes.txt",
+        "subdirectory/notes.txt",
         "new",
         mode="replace",
         expected_sha256=hashlib.sha256(b"old").hexdigest(),
@@ -116,38 +116,41 @@ def test_mutations_are_atomic_and_limited_to_session_files(tmp_path: Path) -> No
 
     assert target.read_text(encoding="utf-8") == "new"
     assert not list(target.parent.glob("*.tmp"))
-    for operation in (
-        lambda: service.write_file(FileRoot.SESSION, "generated/result.txt", "x"),
-        lambda: service.create_directory(FileRoot.SESSION, "attachments/new"),
-        lambda: service.delete_path(FileRoot.SESSION, ".", recursive=True),
-    ):
-        with pytest.raises(RootFileError) as exc_info:
-            operation()
-        assert exc_info.value.code in {
-            "file.rootMutationForbidden",
-            "file.sessionMutationForbidden",
-        }
+    assert not (root / "subdirectory").exists()
+    with pytest.raises(RootFileError) as exc_info:
+        service.delete_path(FileRoot.SESSION, ".", recursive=True)
+    assert exc_info.value.code == "file.rootMutationForbidden"
 
 
-def test_file_history_preserves_full_byte_revisions(tmp_path: Path) -> None:
+def test_file_history_is_append_only_and_survives_live_file_deletion(tmp_path: Path) -> None:
     service, root = make_service(tmp_path)
     service.create_file(
-        FileRoot.SESSION, "files/plan.md", BytesIO(b"# Plan\n"), max_bytes=100
+        FileRoot.SESSION, "plan.md", BytesIO(b"# Plan\n"), max_bytes=100
     )
     service.replace_text_file(
         FileRoot.SESSION,
-        "files/plan.md",
+        "plan.md",
         "# Updated\n",
         hashlib.sha256(b"# Plan\n").hexdigest(),
     )
 
-    revisions = service.list_revisions("files/plan.md")
-    assert [item.revision for item in revisions] == [2, 1]
+    original_revisions = service.list_revisions("plan.md")
+    file_id = original_revisions[0].file_id
+    restored = service.restore_revision("plan.md", 1)
+    revisions = service.list_revisions("plan.md")
+    assert restored == hashlib.sha256(b"# Plan\n").hexdigest()
+    assert [item.revision for item in revisions] == [3, 2, 1]
     assert revisions[0].current is True
     assert revisions[1].current is False
-    with service.open_revision("files/plan.md", 1) as original:
-        assert original.read() == b"# Plan\n"
-    assert (root / "files" / "plan.md").read_bytes() == b"# Updated\n"
+    with service.open_revision("plan.md", 2) as updated:
+        assert updated.read() == b"# Updated\n"
+    assert (root / "files" / "plan.md").read_bytes() == b"# Plan\n"
+
+    service.delete_path(FileRoot.SESSION, "plan.md", recursive=False)
+
+    assert service.list_revisions("plan.md") == ()
+    with service.open_revision_by_id(file_id, 2) as updated:
+        assert updated.read() == b"# Updated\n"
 
 
 def test_project_sessions_share_files_and_revision_identity(tmp_path: Path) -> None:
@@ -160,11 +163,11 @@ def test_project_sessions_share_files_and_revision_identity(tmp_path: Path) -> N
     first = RootFileService(first_id, session_storage=storage, project_id=project_id)
     second = RootFileService(second_id, session_storage=storage, project_id=project_id)
 
-    first.write_file(FileRoot.SESSION, "files/shared.txt", "shared")
+    first.write_file(FileRoot.SESSION, "shared.txt", "shared")
 
     assert second.root_identity(FileRoot.SESSION) == str(project_id)
-    assert second.read_file(FileRoot.SESSION, "files/shared.txt").content == "1: shared"
-    assert second.list_revisions("files/shared.txt")[0].current is True
+    assert second.read_file(FileRoot.SESSION, "shared.txt").content == "1: shared"
+    assert second.list_revisions("shared.txt")[0].current is True
 
 
 def test_upload_replace_rename_copy_and_move_preserve_session_contract(
@@ -173,7 +176,7 @@ def test_upload_replace_rename_copy_and_move_preserve_session_contract(
     service, root = make_service(tmp_path)
     created = service.create_file(
         FileRoot.SESSION,
-        "files/source.txt",
+        "source.txt",
         BytesIO(b"old"),
         max_bytes=10,
     )
@@ -188,21 +191,21 @@ def test_upload_replace_rename_copy_and_move_preserve_session_contract(
         FileRoot.SESSION,
         renamed.path,
         FileRoot.SESSION,
-        "files/copied.txt",
+        "copied.txt",
     )
     moved = service.move_path(
         FileRoot.SESSION,
         renamed.path,
         FileRoot.SESSION,
-        "files/moved.txt",
+        "moved.txt",
     )
 
     assert revision == hashlib.sha256(b"new").hexdigest()
-    assert copied == "files/copied.txt"
-    assert moved == "files/moved.txt"
-    assert not (root / renamed.path).exists()
-    assert (root / copied).read_text(encoding="utf-8") == "new"
-    assert (root / moved).read_text(encoding="utf-8") == "new"
+    assert copied == "copied.txt"
+    assert moved == "moved.txt"
+    assert not (root / "files" / renamed.path).exists()
+    assert (root / "files" / copied).read_text(encoding="utf-8") == "new"
+    assert (root / "files" / moved).read_text(encoding="utf-8") == "new"
 
 
 def test_never_follows_symlinks_and_deletes_only_the_link(tmp_path: Path) -> None:
@@ -213,29 +216,29 @@ def test_never_follows_symlinks_and_deletes_only_the_link(tmp_path: Path) -> Non
     link = root / "files" / "link"
     link.symlink_to(outside, target_is_directory=True)
 
-    listed = service.list_entries(FileRoot.SESSION, "files")
+    listed = service.list_entries(FileRoot.SESSION, ".")
     assert [(entry.name, entry.kind) for entry in listed.entries] == [
         ("link", "symlink")
     ]
     with pytest.raises(RootFileError) as exc_info:
-        service.read_file(FileRoot.SESSION, "files/link/secret.txt")
+        service.read_file(FileRoot.SESSION, "link/secret.txt")
     assert exc_info.value.code == "file.symlinkForbidden"
 
-    service.delete_path(FileRoot.SESSION, "files/link", recursive=False)
+    service.delete_path(FileRoot.SESSION, "link", recursive=False)
     assert outside.is_dir()
     assert (outside / "secret.txt").is_file()
 
 
 def test_revision_storage_rejects_symlinks(tmp_path: Path) -> None:
     service, root = make_service(tmp_path)
-    service.write_file(FileRoot.SESSION, "files/notes.txt", "safe")
+    service.write_file(FileRoot.SESSION, "notes.txt", "safe")
     history = next((root / "revisions").iterdir())
     (history / "1").unlink()
     (history / "1").symlink_to(tmp_path / "outside")
     (tmp_path / "outside").write_text("secret", encoding="utf-8")
 
     with pytest.raises(RootFileError) as exc_info:
-        service.list_revisions("files/notes.txt")
+        service.list_revisions("notes.txt")
 
     assert exc_info.value.code == "file.revisionInvalid"
 
@@ -248,7 +251,7 @@ def test_revision_limit_and_quota_fail_without_partial_publication(tmp_path: Pat
     with pytest.raises(RootFileError) as stale:
         service.replace_text_file(
             FileRoot.SESSION,
-            "files/notes.txt",
+            "notes.txt",
             "new",
             hashlib.sha256(b"stale").hexdigest(),
         )
@@ -256,7 +259,7 @@ def test_revision_limit_and_quota_fail_without_partial_publication(tmp_path: Pat
     with pytest.raises(RootFileError) as too_large:
         service.replace_text_file(
             FileRoot.SESSION,
-            "files/notes.txt",
+            "notes.txt",
             "x" * (MAX_EDITABLE_TEXT_BYTES + 1),
             hashlib.sha256(b"old").hexdigest(),
         )
@@ -264,7 +267,7 @@ def test_revision_limit_and_quota_fail_without_partial_publication(tmp_path: Pat
 
     service.SESSION_QUOTA_BYTES = service.session_usage()
     with pytest.raises(RootFileError) as quota:
-        service.write_file(FileRoot.SESSION, "files/new.txt", "x")
+        service.write_file(FileRoot.SESSION, "new.txt", "x")
     assert quota.value.code == "file.sessionQuotaExceeded"
     assert target.read_bytes() == b"old"
     assert not (root / "files" / "new.txt").exists()

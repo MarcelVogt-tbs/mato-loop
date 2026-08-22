@@ -116,7 +116,7 @@ async def test_download_streams_the_bound_session_file(tmp_path: Path, monkeypat
     response = await workspace_route.download_file(
         _user(),
         AsyncMock(spec=AsyncSession),
-        "files/report.bin",
+        "report.bin",
         scope=FileScope.SESSION,
         session_id=context.root_files.session_id,
     )
@@ -148,7 +148,7 @@ async def test_session_preview_edit_and_image_validation(tmp_path: Path, monkeyp
     entries = await workspace_route.list_entries(
         user,
         db,
-        path="files",
+        path=".",
         offset=0,
         scope=FileScope.SESSION,
         session_id=context.root_files.session_id,
@@ -156,20 +156,20 @@ async def test_session_preview_edit_and_image_validation(tmp_path: Path, monkeyp
     preview = await workspace_route.preview_file(
         user,
         db,
-        "files/readme.md",
+        "readme.md",
         scope=FileScope.SESSION,
         session_id=context.root_files.session_id,
     )
     image = await workspace_route.preview_image(
         user,
         db,
-        "files/image.png",
+        "image.png",
         scope=FileScope.SESSION,
         session_id=context.root_files.session_id,
     )
     updated = await workspace_route.update_file(
         UpdateFileRequest(
-            path="files/readme.md",
+            path="readme.md",
             content="updated",
             expected_revision=hashlib.sha256(markdown).hexdigest(),
         ),
@@ -180,37 +180,37 @@ async def test_session_preview_edit_and_image_validation(tmp_path: Path, monkeyp
     )
 
     assert {entry["path"] for entry in entries["entries"]} == {
-        "files/image.png",
-        "files/readme.md",
+        "image.png",
+        "readme.md",
     }
     assert preview["kind"] == "markdown"
     assert preview["revision"] == hashlib.sha256(markdown).hexdigest()
     assert image.media_type == "image/png"
     assert image.headers["cache-control"] == "private, no-store"
     assert updated["revision"] == hashlib.sha256(b"updated").hexdigest()
-    revisions = context.root_files.list_revisions("files/readme.md")
+    revisions = context.root_files.list_revisions("readme.md")
     assert [item.revision for item in revisions] == [2, 1]
-    with context.root_files.open_revision("files/readme.md", 1) as original:
+    with context.root_files.open_revision("readme.md", 1) as original:
         assert original.read() == markdown
     assert (root / "files" / "readme.md").read_text(encoding="utf-8") == "updated"
 
 
-async def test_revision_api_deletes_old_versions_and_restores_history(
+async def test_revision_api_rejects_deletion_and_restores_as_new_revision(
     tmp_path: Path, monkeypatch
 ) -> None:
     context, root = _session_context(tmp_path)
     service = context.root_files
-    service.write_file(FileRoot.SESSION, "files/notes.txt", "one")
+    service.write_file(FileRoot.SESSION, "notes.txt", "one")
     service.write_file(
         FileRoot.SESSION,
-        "files/notes.txt",
+        "notes.txt",
         "two",
         mode="replace",
         expected_sha256=hashlib.sha256(b"one").hexdigest(),
     )
     service.write_file(
         FileRoot.SESSION,
-        "files/notes.txt",
+        "notes.txt",
         "three",
         mode="replace",
         expected_sha256=hashlib.sha256(b"two").hexdigest(),
@@ -223,33 +223,32 @@ async def test_revision_api_deletes_old_versions_and_restores_history(
     user = _user()
     db = AsyncMock(spec=AsyncSession)
     listed = await workspace_route.list_file_revisions(
-        user, db, "files/notes.txt", service.session_id
+        user, db, "notes.txt", service.session_id
     )
     preview = await workspace_route.preview_file_revision(
-        1, user, db, "files/notes.txt", service.session_id
+        1, user, db, "notes.txt", service.session_id
     )
 
     assert [item["revision"] for item in listed["items"]] == [3, 2, 1]
     assert preview["content"] == "one"
-    await workspace_route.delete_file_revision(
-        2, user, db, "files/notes.txt", service.session_id
-    )
-    with pytest.raises(ApiError) as current:
+    with pytest.raises(ApiError) as immutable:
         await workspace_route.delete_file_revision(
-            3, user, db, "files/notes.txt", service.session_id
+            2, user, db, "notes.txt", service.session_id
         )
     restored = await workspace_route.restore_file_revision(
         1,
-        workspace_route.RestoreRevisionRequest(path="files/notes.txt"),
+        workspace_route.RestoreRevisionRequest(path="notes.txt"),
         user,
         db,
         service.session_id,
     )
 
-    assert current.value.code == "file.currentRevision"
+    assert immutable.value.code == "file.revisionImmutable"
     assert restored == {"revision": hashlib.sha256(b"one").hexdigest()}
     assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "one"
-    assert [item.revision for item in service.list_revisions("files/notes.txt")] == [1]
+    assert [item.revision for item in service.list_revisions("notes.txt")] == [4, 3, 2, 1]
+    with service.open_revision("notes.txt", 3) as later:
+        assert later.read() == b"three"
 
 
 async def test_preview_validates_stl_and_static_svg(tmp_path: Path, monkeypatch) -> None:
@@ -266,10 +265,10 @@ async def test_preview_validates_stl_and_static_svg(tmp_path: Path, monkeypatch)
     user = _user()
     db = AsyncMock(spec=AsyncSession)
 
-    stl_preview = await workspace_route.preview_file(user, db, "files/model.stl")
-    stl_content = await workspace_route.preview_image(user, db, "files/model.stl")
-    svg_preview = await workspace_route.preview_file(user, db, "files/image.svg")
-    svg_content = await workspace_route.preview_image(user, db, "files/image.svg")
+    stl_preview = await workspace_route.preview_file(user, db, "model.stl")
+    stl_content = await workspace_route.preview_image(user, db, "model.stl")
+    svg_preview = await workspace_route.preview_file(user, db, "image.svg")
+    svg_content = await workspace_route.preview_image(user, db, "image.svg")
 
     assert stl_preview == {"kind": "stl"}
     assert stl_content.media_type == "model/stl"
@@ -297,7 +296,7 @@ async def test_rename_session_entry_clears_exact_grants(tmp_path: Path, monkeypa
                 {"identity": str(session_id), "path": path, "root": "session"}
             ),
         )
-        for path in ("files/old.txt", "files/renamed.txt", "files/other.txt")
+        for path in ("old.txt", "renamed.txt", "other.txt")
     ]
     rows = MagicMock()
     rows.all.return_value = grants
@@ -305,14 +304,14 @@ async def test_rename_session_entry_clears_exact_grants(tmp_path: Path, monkeypa
     db.scalars.return_value = rows
 
     response = await workspace_route.rename_entry(
-        RenameEntryRequest(path="files/old.txt", name="renamed.txt"),
+        RenameEntryRequest(path="old.txt", name="renamed.txt"),
         _user(),
         db,
         scope=FileScope.SESSION,
         session_id=session_id,
     )
 
-    assert response["entry"]["path"] == "files/renamed.txt"
+    assert response["entry"]["path"] == "renamed.txt"
     assert [call.args[0] for call in db.delete.await_args_list] == grants[:2]
     assert (root / "files" / "renamed.txt").read_text(encoding="utf-8") == "old"
 

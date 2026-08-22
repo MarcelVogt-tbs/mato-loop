@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { useControlCenterStore } from 'src/stores/control-center'
+import { validRelativePath } from 'src/utils/attachments'
 
 export const MAX_WORKSPACE_UPLOADS = 4
 export const MAX_WORKSPACE_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -279,7 +280,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (
         action?.root !== 'session'
         || action.sessionId !== this.sessionId
-        || !action.path?.startsWith('files/')
+        || !validRelativePath(action.path)
         || !action.filename
       ) return
       const rootIdentity = this.rootIdentity
@@ -592,13 +593,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (this.scope !== 'session' || this.toolContext || !this.sessionId) return ''
       const params = new URLSearchParams({ path, session_id: this.sessionId })
       return `/api/workspace/files/revisions/${revision}/download?${params}`
-    },
-    async deleteRevision(path, revision) {
-      requireWritableContext(this)
-      await api.delete(`/workspace/files/revisions/${revision}`, {
-        params: { path, session_id: this.sessionId }
-      })
-      return this.loadRevisions(path)
     },
     async restoreRevision(path, revision) {
       requireWritableContext(this)

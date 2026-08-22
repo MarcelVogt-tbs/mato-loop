@@ -38,6 +38,7 @@ from mato_loop_backend.settings.models import (
     ReasoningEffort,
     TrustLevel,
 )
+from mato_loop_backend.workspace import RootFileService
 
 
 def _png_bytes() -> bytes:
@@ -48,13 +49,17 @@ def _png_bytes() -> bytes:
 
 def _attachment_reference(
     session_id,
-    storage_path: str,
+    storage_path: str | None,
     data: bytes,
     *,
     attachment_id=None,
     filename: str = "image.png",
-    category: str = "generated",
+    category: str = "user_upload",
     trust_level: TrustLevel = TrustLevel.PUBLIC,
+    file_root_id=None,
+    file_id=None,
+    file_revision: int | None = None,
+    file_path: str | None = None,
 ) -> dict:
     validated = validate_image(data, "image/png")
     return {
@@ -68,6 +73,10 @@ def _attachment_reference(
         "trust_level": trust_level.value,
         "session_id": str(session_id),
         "storage_path": storage_path,
+        "file_root_id": str(file_root_id) if file_root_id else None,
+        "file_id": str(file_id) if file_id else None,
+        "file_revision": file_revision,
+        "file_path": file_path,
     }
 
 
@@ -466,8 +475,9 @@ async def test_complete_does_not_touch_attachment_storage_without_image_capabili
                 "attachments": [
                     _attachment_reference(
                         uuid4(),
-                        "generated/00000000-0000-4000-8000-000000000000/missing.png",
+                        "attachments/00000000-0000-4000-8000-000000000000/missing.png",
                         _png_bytes(),
+                        category="user_upload",
                     )
                 ],
             }
@@ -494,8 +504,12 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
     sessions.provision(session_id)
     storage = AttachmentStorage(sessions)
     data = _png_bytes()
-    storage_path = storage.write(session_id, uuid4(), data, "image.png", "generated")
-    attachment = _attachment_reference(session_id, storage_path, data)
+    storage_path = storage.write(
+        session_id, uuid4(), data, "image.png", "user_upload"
+    )
+    attachment = _attachment_reference(
+        session_id, storage_path, data, category="user_upload"
+    )
     captured = {}
     async def fake_chat_completions(**kwargs):
         captured.update(kwargs)
@@ -525,6 +539,43 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
     assert base64.b64decode(request.media[0].data_url.split(",", 1)[1]) == data
     assert storage_path not in repr(request.messages)
     assert storage_path not in repr(request.media)
+
+
+async def test_projection_materializes_exact_revision_backed_image(
+    monkeypatch, tmp_path: Path
+) -> None:
+    session_id = uuid4()
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(session_id)
+    root_files = RootFileService(session_id, session_storage=sessions)
+    data = _png_bytes()
+    revision = root_files.create_output_file("image.png", data)
+    newer_buffer = BytesIO()
+    Image.new("RGB", (2, 2), (90, 80, 70)).save(newer_buffer, format="PNG")
+    newer_data = newer_buffer.getvalue()
+    root_files.append_output_revision(revision.file_id, newer_data)
+    reference = _attachment_reference(
+        session_id,
+        None,
+        data,
+        category="generated",
+        file_root_id=session_id,
+        file_id=revision.file_id,
+        file_revision=revision.revision,
+        file_path=revision.path,
+    )
+    monkeypatch.setattr(service_module, "RootFileService", lambda *_args, **_kwargs: root_files)
+
+    _projected, media = await service_module._provider_projection(
+        [{"role": "tool", "content": "Screenshot", "attachments": [reference]}],
+        supports_image_input=True,
+        target_trust_level=TrustLevel.PUBLIC,
+    )
+
+    projected_data = base64.b64decode(media[0].data_url.split(",", 1)[1])
+    assert media[0].status == "ready"
+    assert projected_data == data
+    assert projected_data != newer_data
 
 
 async def test_complete_uses_unavailable_marker_for_missing_attachment_file(
@@ -562,8 +613,9 @@ async def test_complete_uses_unavailable_marker_for_missing_attachment_file(
                 "attachments": [
                     _attachment_reference(
                         session_id,
-                        "generated/00000000-0000-4000-8000-000000000000/missing.png",
+                        "attachments/00000000-0000-4000-8000-000000000000/missing.png",
                         data,
+                        category="user_upload",
                     )
                 ],
             }
@@ -718,7 +770,7 @@ async def test_session_image_read_reactivates_historical_image(monkeypatch) -> N
     monkeypatch.setattr(
         service_module,
         "_read_image_data_url",
-        lambda _storage, attachment: f"data:image/png;base64,{attachment['id']}",
+        lambda attachment: f"data:image/png;base64,{attachment['id']}",
     )
 
     _projected, media = await service_module._provider_projection(
@@ -783,7 +835,7 @@ async def test_historical_image_limit_prefers_newest_references(monkeypatch) -> 
     monkeypatch.setattr(
         service_module,
         "_read_image_data_url",
-        lambda _storage, attachment: f"data:image/png;base64,{attachment['id']}",
+        lambda attachment: f"data:image/png;base64,{attachment['id']}",
     )
 
     _projected, media = await service_module._provider_projection(
@@ -807,8 +859,16 @@ async def test_historical_image_limit_prefers_newest_references(monkeypatch) -> 
 async def test_required_contact_sheet_leaves_room_for_seven_current_references(
     monkeypatch,
 ) -> None:
+    contact_sheet_session_id = uuid4()
     contact_sheet = _attachment_reference(
-        uuid4(), "generated/model-views.png", _png_bytes()
+        contact_sheet_session_id,
+        None,
+        _png_bytes(),
+        category="generated",
+        file_root_id=contact_sheet_session_id,
+        file_id=uuid4(),
+        file_revision=1,
+        file_path="model-views.png",
     )
     references = [
         _attachment_reference(uuid4(), f"attachments/reference-{index}.png", _png_bytes())
@@ -818,7 +878,7 @@ async def test_required_contact_sheet_leaves_room_for_seven_current_references(
     monkeypatch.setattr(
         service_module,
         "_read_image_data_url",
-        lambda _storage, attachment: f"data:image/png;base64,{attachment['id']}",
+        lambda attachment: f"data:image/png;base64,{attachment['id']}",
     )
 
     _projected, media = await service_module._provider_projection(
@@ -934,7 +994,7 @@ async def test_internal_storage_path_never_reaches_openai_payload(monkeypatch) -
     monkeypatch.setattr(
         service_module,
         "_read_image_data_url",
-        lambda _storage, _attachment: "data:image/png;base64,aW1hZ2U=",
+        lambda _attachment: "data:image/png;base64,aW1hZ2U=",
     )
 
     projected, media = await service_module._provider_projection(
@@ -999,7 +1059,7 @@ async def test_media_selection_precedes_pseudonymization(monkeypatch) -> None:
     monkeypatch.setattr(
         service_module,
         "_read_image_data_url",
-        lambda _storage, _attachment: "data:image/png;base64,aW1hZ2U=",
+        lambda _attachment: "data:image/png;base64,aW1hZ2U=",
     )
     monkeypatch.setattr(service_module, "chat_completions", fake_chat_completions)
 

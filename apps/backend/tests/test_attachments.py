@@ -26,6 +26,7 @@ from mato_loop_backend.attachments import (
 from mato_loop_backend.models import ChatSession, Message
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.video_processing import MediaInfo
+from mato_loop_backend.workspace import RootFileService
 
 
 def image_bytes(image_format: str) -> bytes:
@@ -123,26 +124,20 @@ def test_empty_and_oversized_general_files_are_rejected() -> None:
         classify_attachment(b"x" * (MAX_FILE_ATTACHMENT_BYTES + 1), "text/plain", "large.txt")
 
 
-@pytest.mark.parametrize(
-    ("category", "directory"),
-    [
-        ("user_upload", "attachments"),
-        ("generated", "generated"),
-        ("downloaded", "downloads"),
-    ],
-)
 def test_storage_writes_flat_paths_atomically_with_restrictive_permissions(
-    tmp_path: Path, category: str, directory: str
+    tmp_path: Path,
 ) -> None:
     session_id = uuid4()
     sessions, storage = provisioned_storage(tmp_path, session_id)
     attachment_id = uuid4()
     data = image_bytes("PNG")
 
-    storage_path = storage.write(session_id, attachment_id, data, "bild.png", category)
+    storage_path = storage.write(
+        session_id, attachment_id, data, "bild.png", "user_upload"
+    )
     target = storage.path(session_id, storage_path)
 
-    assert storage_path == f"{directory}/{attachment_id}/bild.png"
+    assert storage_path == f"attachments/{attachment_id}/bild.png"
     assert target.read_bytes() == data
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
@@ -154,7 +149,9 @@ def test_storage_rejects_cross_session_paths_and_symlinks(tmp_path: Path) -> Non
     other_id = uuid4()
     sessions, storage = provisioned_storage(tmp_path, session_id)
     sessions.provision(other_id)
-    storage_path = storage.write(session_id, uuid4(), b"data", "file.bin", "generated")
+    storage_path = storage.write(
+        session_id, uuid4(), b"data", "file.bin", "user_upload"
+    )
 
     with pytest.raises(AttachmentStorageError):
         storage.path(other_id, storage_path)
@@ -207,7 +204,16 @@ async def test_service_validates_and_persists_artifact_purpose(tmp_path: Path) -
     assert attachment.purpose == "artifact"
     assert attachment.category == "generated"
     assert attachment.mime_type == "application/octet-stream"
-    assert storage.path(session_id, attachment.storage_path).read_bytes() == b"\x00\x01tool-output"
+    assert attachment.storage_path is None
+    assert attachment.file_root_id == session_id
+    assert attachment.file_id is not None
+    assert attachment.file_revision == 1
+    assert attachment.file_path is not None
+    assert not attachment.file_path.startswith("files/")
+    root_files = RootFileService(session_id, session_storage=sessions)
+    assert root_files.revision_path(
+        attachment.file_id, attachment.file_revision
+    ).read_bytes() == b"\x00\x01tool-output"
     with pytest.raises(AttachmentError, match="attachment.invalidPurpose"):
         await AttachmentService(storage).create_attachment(
             db,
@@ -217,7 +223,7 @@ async def test_service_validates_and_persists_artifact_purpose(tmp_path: Path) -
             kind="file",
             purpose="other",  # type: ignore[arg-type]
         )
-    assert len(list((sessions.session_path(session_id) / "generated").iterdir())) == 1
+    assert len(root_files.list_revisions(attachment.file_path)) == 1
 
 
 async def test_image_read_revalidates_persisted_content(tmp_path: Path) -> None:
@@ -281,11 +287,17 @@ async def test_service_persists_audio_duration_and_safe_metadata(tmp_path: Path)
         filename="../aufnahme.wav",
         metadata={"created": 123, "secret": "nicht speichern"},
         category="generated",
+        purpose="artifact",
     )
 
     assert attachment.duration_ms == 10
     assert attachment.category == "generated"
-    assert attachment.storage_path.startswith("generated/")
+    assert attachment.storage_path is None
+    assert attachment.file_root_id == session_id
+    assert attachment.file_id is not None
+    assert attachment.file_revision == 1
+    assert attachment.file_path is not None
+    assert not attachment.file_path.startswith("files/")
     assert attachment.metadata_json == {
         "channels": 1,
         "sampleRate": 8_000,
@@ -320,7 +332,12 @@ async def test_service_persists_video_metadata_without_derivatives(
     assert (attachment.kind, attachment.duration_ms) == ("video", 2_500)
     assert (attachment.width, attachment.height) == (640, 360)
     assert attachment.metadata_json == {"format": "mp4"}
-    assert list((sessions.session_path(session_id) / "derived").iterdir()) == []
+    assert not (
+        sessions.session_path(session_id)
+        / "attachments"
+        / str(attachment.id)
+        / "derived"
+    ).exists()
 
 
 async def test_audio_read_rejects_integrity_mismatch(tmp_path: Path) -> None:
@@ -343,13 +360,17 @@ async def test_service_enforces_session_quota_before_writing(tmp_path: Path) -> 
     message = Message(id=uuid4(), session_id=session_id, role="assistant", content="Bild")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [chat_session(session_id)]
-    quota_file = sessions.session_path(session_id) / "files" / "quota.bin"
+    quota_directory = sessions.session_path(session_id) / "attachments" / str(uuid4())
+    quota_directory.mkdir()
+    quota_file = quota_directory / "quota.bin"
     with quota_file.open("wb") as handle:
         handle.truncate(SESSION_ATTACHMENT_QUOTA_BYTES)
 
     with pytest.raises(AttachmentError, match="attachment.sessionQuotaExceeded"):
         await AttachmentService(storage).create_image(db, message, image_bytes("PNG"), "image/png")
-    assert list((sessions.session_path(session_id) / "attachments").iterdir()) == []
+    assert list((sessions.session_path(session_id) / "attachments").iterdir()) == [
+        quota_directory
+    ]
 
 
 async def test_project_attachment_quota_uses_private_session_tree(tmp_path: Path) -> None:

@@ -296,7 +296,7 @@ describe('assistant markdown rendering', () => {
   })
 
   it('restricts links and handles incomplete streaming markdown', () => {
-    const downloadUrl = '/api/workspace/files/download?path=files%2Freport.pdf&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440000'
+    const downloadUrl = '/api/workspace/files/download?path=report.pdf&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440000'
     expect(safeMarkdownLinkUrl('https://example.com/path')).toBe('https://example.com/path')
     expect(safeMarkdownLinkUrl('mailto:test@example.com')).toBe('mailto:test@example.com')
     expect(safeMarkdownLinkUrl(downloadUrl)).toBe(downloadUrl)
@@ -411,7 +411,7 @@ describe('Markdown print requests', () => {
     const revision = 'a'.repeat(64)
     expect(markdownPrintRequest({
       content: '# must not travel',
-      path: 'files/report.md',
+      path: 'report.md',
       revision,
       root_identity: 'root-a',
       scope: 'session',
@@ -419,13 +419,13 @@ describe('Markdown print requests', () => {
     })).toEqual({
       expectedRevision: revision,
       params: {
-        path: 'files/report.md',
+        path: 'report.md',
         root_identity: 'root-a',
         scope: 'session',
         session_id: 'session-a'
       }
     })
-    expect(markdownPrintRequest({ path: 'files/report.md', scope: 'session' })).toBeNull()
+    expect(markdownPrintRequest({ path: 'report.md', scope: 'session' })).toBeNull()
     expect(markdownPrintRequest({ path: 'report.md', scope: 'invalid' })).toBeNull()
   })
 

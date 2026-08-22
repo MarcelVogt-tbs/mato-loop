@@ -457,8 +457,6 @@ def _active_file_payload(
         or identity != expected_identity
         or path != active_file.path
         or path == "."
-        or active_file.root == "session"
-        and not path.startswith("files/")
     ):
         raise ApiError(422, "validation.invalid", field="activeFile")
     return {
@@ -968,6 +966,12 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
                 "height": attachment.height,
                 "durationMs": attachment.duration_ms,
                 "metadata": attachment.metadata_json or {},
+                "fileRootId": (
+                    str(attachment.file_root_id) if attachment.file_root_id else None
+                ),
+                "fileId": str(attachment.file_id) if attachment.file_id else None,
+                "fileRevision": attachment.file_revision,
+                "filePath": attachment.file_path,
                 "url": (
                     f"/api/sessions/{item.session_id}/messages/{item.id}"
                     f"/attachments/{attachment.id}"
@@ -1653,10 +1657,13 @@ async def update_session(
     try:
         if target_project_id != source_project_id:
             if source_project_id is None and target_project_id is not None:
-                standalone_files = storage.session_path(
+                standalone_root = storage.session_path(
                     item.id, project_id=None, require_exists=True
-                ) / "files"
-                if any(standalone_files.iterdir()):
+                )
+                if any(
+                    any((standalone_root / name).iterdir())
+                    for name in ("files", "revisions")
+                ):
                     raise ApiError(409, "session.projectFilesConflict")
             await asyncio.to_thread(
                 storage.move_session,

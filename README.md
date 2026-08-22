@@ -134,11 +134,11 @@ Without additional configuration, `web_search` uses the built-in no-key metasear
 
 `webfetch` is configured independently of SearXNG under **Einstellungen > Tools**. It fetches concrete HTTP(S) URLs as Markdown, text, or HTML and supports image responses up to 5 MiB. By default, each fetch asks for approval. Policies can instead allow public targets, or public targets plus explicitly allowed private origins, automatically. Models can override the complete policy, but the global switch and origin allowlist remain host boundaries.
 
-Webfetch follows redirects only after renewed validation, pins validated DNS targets, and blocks link-local, metadata, and other dangerous addresses. Downloads are stored under `/data/sessions/<session-id>/downloads`. Image-capable models receive current or explicitly referenced images transiently in the provider request; text-only models receive only safe metadata and available text derivatives.
+Webfetch follows redirects only after renewed validation, pins validated DNS targets, and blocks link-local, metadata, and other dangerous addresses. Durable fetched images and rendered PDF pages become revisioned managed files; textual results remain message content. Image-capable models receive current or explicitly referenced images transiently in the provider request; text-only models receive only safe metadata and available text derivatives.
 
 ## Working Directories
 
-New sessions start without a working directory. The first message creates owner-bound internal session storage under `/data/sessions/<session-id>` with the five flat directories `files`, `attachments`, `generated`, `downloads`, and `derived`. Only `files` is mutable; the other directories are host-managed. This storage is not a workspace, and the backend has no `/data/home` workspace.
+New sessions start without a working directory. Standalone session storage under `/data/sessions/<session-id>` contains `files/`, `revisions/`, and private `attachments/`. Project sessions share `/data/projects/<project-id>/files` and `/data/projects/<project-id>/revisions`, while `/data/projects/<project-id>/sessions/<session-id>/attachments` remains private to one session. Attachment derivatives stay below their source attachment. Durable byte-valued backend tool outputs become revisioned managed files with exact message references; text, JSON, status, and error results remain relational message content. There are no separate generated, downloaded, or derived trees. This storage is not a workspace, and the backend has no `/data/home` workspace.
 
 Every `root=workspace` operation targets a root advertised by the selected, owner-bound Execution Agent. An agent may advertise multiple roots and an optional `homeDirectory` inside one root. The home initializes new sessions; each session then retains its selected root, root-relative working directory, and canonical current directory independently. Without a selected agent and root, workspace and agent-local operations are unavailable, while chat, backend tools, and persisted session files continue to work.
 
@@ -149,8 +149,8 @@ The authenticated application uses the full viewport without a global top bar. B
 A new session is created server-side only with its first message and appears in the sidebar afterward. Unsent text remains separately per session in browser-local storage.
 
 - `read-only`: only shared read operations (`read`, `glob`, `grep`, and file export) are offered for session storage and an optional computer workspace.
-- `read-write`: write, create, delete, copy, and move are also available. Only `files` is mutable in session storage; `attachments`, `generated`, `downloads`, and `derived` remain read-only and may only be read or used as copy sources.
-- File tools use an explicit `root` field with `session` or `workspace`. `root=session` always means the backend session tree; `root=workspace` always means the selected owned Execution Agent root and is unavailable without that agent and root.
+- `read-write`: write, create, delete, copy, and move are also available in the selected file root.
+- File tools use an explicit `root` field with `session` or `workspace`. `root=session` is directly the backend-managed `files/` directory, so paths never start with `files/`; `root=workspace` always means the selected owned Execution Agent root and is unavailable without that agent and root.
 - `Einmal erlauben`: applies only to the current action.
 - `Für Session erlauben`: creates a separate revocable permission grant.
 - `Später`: leaves the request pending and the agent run paused.

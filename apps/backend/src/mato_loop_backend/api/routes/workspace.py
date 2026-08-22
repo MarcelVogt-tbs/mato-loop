@@ -379,7 +379,7 @@ def _context_error(exc: RootFileError) -> ApiError:
         return ApiError(413, exc.code)
     if exc.code == "file.sessionQuotaExceeded":
         return ApiError(507, exc.code)
-    if exc.code == "file.currentRevision":
+    if exc.code in {"file.currentRevision", "file.revisionImmutable"}:
         return ApiError(409, exc.code)
     return ApiError(400, exc.code)
 

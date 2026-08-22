@@ -1214,7 +1214,7 @@ describe('chat drafts', () => {
     source.emit('tool.completed', {
       tool: 'write_file',
       metadata: {},
-      output: '{"root":"session","written":"files/live.txt"}'
+      output: '{"root":"session","written":"live.txt"}'
     })
     source.emit('tool.completed', {
       tool: 'write_file',
@@ -1236,8 +1236,8 @@ describe('chat drafts', () => {
     const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
     const action = {
       operation: 'write', root: 'session', rootIdentity,
-      path: 'files/result.md', filename: 'result.md', sizeBytes: 7,
-      downloadUrl: `/api/workspace/files/download?path=files%2Fresult.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
+      path: 'result.md', filename: 'result.md', sizeBytes: 7,
+      downloadUrl: `/api/workspace/files/download?path=result.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
     }
     api.get.mockResolvedValue({
       data: {
@@ -1264,7 +1264,7 @@ describe('chat drafts', () => {
     source.emit('run.phase', { phase: 'processing_tool', tool: 'write_file', toolCallId: 'call-1' })
     source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
 
-    await vi.waitFor(() => expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'files/result.md' })))
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'result.md' })))
   })
 
   it('does not hijack the file view after navigation during a tool call', async () => {
@@ -1273,8 +1273,8 @@ describe('chat drafts', () => {
     const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
     const action = {
       operation: 'write', root: 'session', rootIdentity,
-      path: 'files/result.md', filename: 'result.md', sizeBytes: 7,
-      downloadUrl: `/api/workspace/files/download?path=files%2Fresult.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
+      path: 'result.md', filename: 'result.md', sizeBytes: 7,
+      downloadUrl: `/api/workspace/files/download?path=result.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
     }
     api.get.mockResolvedValue({
       data: {
@@ -1297,7 +1297,7 @@ describe('chat drafts', () => {
     const source = EventSourceMock.instances[0]
 
     source.emit('run.phase', { phase: 'processing_tool', tool: 'write_file', toolCallId: 'call-1' })
-    workspace.selectPath('files', 'directory')
+    workspace.selectPath('notes', 'directory')
     source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
 
     await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(`/sessions/${sessionId}`, expect.any(Object)))
@@ -1311,8 +1311,8 @@ describe('chat drafts', () => {
     const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
     const action = {
       operation: 'write', root: 'session', rootIdentity,
-      path: 'files/result.md', filename: 'result.md', sizeBytes: 7,
-      downloadUrl: `/api/workspace/files/download?path=files%2Fresult.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
+      path: 'result.md', filename: 'result.md', sizeBytes: 7,
+      downloadUrl: `/api/workspace/files/download?path=result.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
     }
     api.get.mockResolvedValue({
       data: { id: sessionId, messages: [{ role: 'tool', toolCallId: 'call-1', fileActions: [action] }] }
@@ -1321,7 +1321,7 @@ describe('chat drafts', () => {
     workspace.sessionId = sessionId
     workspace.scope = 'session'
     workspace.rootIdentity = rootIdentity
-    workspace.openEntry({ kind: 'file', name: 'result.md', path: 'files/result.md' }, true)
+    workspace.openEntry({ kind: 'file', name: 'result.md', path: 'result.md' }, true)
     workspace.updateEditorDraft('lokal', 'alt')
     const chat = useChatStore()
     chat.current = { id: sessionId, messages: [] }
@@ -1351,7 +1351,7 @@ describe('chat drafts', () => {
             toolCalls: [{
               id: 'call-1',
               name: 'delete_path',
-              arguments: { root: 'session', path: 'files/result.md' }
+              arguments: { root: 'session', path: 'result.md' }
             }]
           },
           { role: 'tool', toolCallId: 'call-1' }
@@ -1362,7 +1362,7 @@ describe('chat drafts', () => {
     workspace.sessionId = sessionId
     workspace.scope = 'session'
     workspace.rootIdentity = rootIdentity
-    workspace.openEntry({ kind: 'file', name: 'result.md', path: 'files/result.md' }, true)
+    workspace.openEntry({ kind: 'file', name: 'result.md', path: 'result.md' }, true)
     workspace.updateEditorDraft('lokal', 'alt')
     const chat = useChatStore()
     chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }

@@ -53,7 +53,7 @@ def _message(session_id, role: str, content: str) -> Message:
 
 def _attach_image(
     message: Message,
-    storage_path: str = "generated/00000000-0000-4000-8000-000000000000/image.png",
+    storage_path: str = "attachments/00000000-0000-4000-8000-000000000000/image.png",
 ) -> MessageAttachment:
     attachment = MessageAttachment(
         id=uuid4(),
@@ -114,8 +114,9 @@ def test_attachment_only_message_focuses_the_model_on_its_contents() -> None:
 
 def test_user_attachment_excerpt_is_untrusted_and_strictly_budgeted() -> None:
     message = _message(uuid4(), "user", "Bitte zusammenfassen")
+    attachment_id = uuid4()
     attachment = MessageAttachment(
-        id=uuid4(),
+        id=attachment_id,
         message_id=message.id,
         position=0,
         kind="document",
@@ -123,9 +124,11 @@ def test_user_attachment_excerpt_is_untrusted_and_strictly_budgeted() -> None:
         mime_type="application/pdf",
         size_bytes=123,
         sha256="a" * 64,
-        storage_path=f"attachments/{uuid4()}/bericht.pdf",
+        storage_path=f"attachments/{attachment_id}/bericht.pdf",
         filename="bericht.pdf",
-        metadata_json={"derivedPath": f"derived/{uuid4()}/content.txt"},
+        metadata_json={
+            "derivedPath": f"attachments/{attachment_id}/derived/content.txt"
+        },
     )
     message.attachments = [attachment]
 
@@ -147,17 +150,26 @@ def test_user_attachment_excerpt_is_untrusted_and_strictly_budgeted() -> None:
 
 def test_attachment_excerpt_is_never_injected_into_tool_content() -> None:
     message = _message(uuid4(), "tool", "Tool-Ergebnis")
+    file_id = uuid4()
     attachment = MessageAttachment(
         id=uuid4(),
         message_id=message.id,
         position=0,
         kind="text",
+        category="generated",
+        purpose="artifact",
         processing_status="ready",
         mime_type="text/plain",
         size_bytes=10,
         sha256="a" * 64,
-        storage_path=f"generated/{uuid4()}/text.txt",
-        metadata_json={"derivedPath": f"derived/{uuid4()}/content.txt"},
+        storage_path=None,
+        file_root_id=message.session_id,
+        file_id=file_id,
+        file_revision=1,
+        file_path="text.txt",
+        metadata_json={
+            "derivedPath": f"revisions/{file_id}/derived/1/content.txt"
+        },
     )
     message.attachments = [attachment]
 
@@ -180,7 +192,7 @@ def test_message_projection_hides_internal_runtime_state() -> None:
         "responses_output_items": [{"id": "provider-state"}],
         "_matoloop": {
             "memoryOverview": {"hasMore": True},
-            "fileActions": [{"path": "files/result.txt"}],
+            "fileActions": [{"path": "result.txt"}],
         },
     }
 
@@ -216,7 +228,7 @@ def test_only_latest_user_active_file_is_added_to_model_context() -> None:
             "activeFile": {
                 "root": "session",
                 "rootIdentity": str(session_id),
-                "path": "files/old.txt",
+                "path": "old.txt",
                 "sha256": "a" * 64,
                 "dirty": False,
             }
@@ -227,7 +239,7 @@ def test_only_latest_user_active_file_is_added_to_model_context() -> None:
             "activeFile": {
                 "root": "session",
                 "rootIdentity": str(session_id),
-                "path": "files/current.txt",
+                "path": "current.txt",
                 "sha256": "b" * 64,
                 "dirty": True,
             }
@@ -295,7 +307,7 @@ def test_message_projection_never_restores_persisted_write_file_content() -> Non
             "name": "write_file",
             "arguments": {
                 "root": "session",
-                "path": "files/note.txt",
+                "path": "note.txt",
                 "content": {"characters": 17, "redacted": True},
             },
         }
@@ -922,6 +934,15 @@ def test_general_system_prompt_exposes_mermaid_rendering() -> None:
     assert "Never wrap the complete response in a `markdown` code fence" in prompt
 
 
+def test_general_system_prompt_requires_supported_factual_claims() -> None:
+    prompt = general_system_prompt(_session())
+
+    assert "Never invent facts or present uncertain inferences as facts" in prompt
+    assert "current, exact, or high-impact claims" in prompt
+    assert "briefly state uncertainty" in prompt
+    assert "otherwise omit the claim" in prompt
+
+
 def test_general_system_prompt_keeps_permission_denials_host_scoped() -> None:
     prompt = general_system_prompt(
         _session(), offered_tool_names=frozenset({"calendar_query_events"})
@@ -1097,6 +1118,8 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
 def test_compaction_prompt_preserves_opaque_values_verbatim() -> None:
     prompt = compaction_messages("Tool result: generated/package.zip, id abc")[1]["content"]
 
+    assert "Do not add facts or promote claims to confirmed facts" in prompt
+    assert "Preserve attribution and relevant uncertainty" in prompt
     assert "Copy every path, ID, filename, and other opaque value verbatim" in prompt
     assert "including values in tool effects" in prompt
 
@@ -1140,7 +1163,7 @@ def test_system_prompt_describes_managed_file_roots() -> None:
 
     assert "explicit root and relative POSIX path" in prompt
     assert "path='.' means the root" in prompt
-    assert "session root exposes only files/..." in prompt
+    assert "Never put a root name or absolute path in path" in prompt
     assert "exact new destination" in prompt
     assert "No computer directory selected. Use root=session." in prompt
     assert "paths and read output are not downloads" in prompt
@@ -1604,8 +1627,12 @@ def test_message_dict_contains_only_internal_attachment_reference() -> None:
             "source_role": "tool",
             "session_id": str(message.session_id),
             "storage_path": (
-                "generated/00000000-0000-4000-8000-000000000000/image.png"
+                "attachments/00000000-0000-4000-8000-000000000000/image.png"
             ),
+            "file_root_id": None,
+            "file_id": None,
+            "file_revision": None,
+            "file_path": None,
         }
     ]
     assert str(message.attachments[0].id) in projected["content"]
@@ -1710,7 +1737,7 @@ async def test_compaction_preserves_history_and_records_stable_summary_boundary(
     original_contents = [message.content for message in records]
     _attach_image(
         records[1],
-        "generated/00000000-0000-4000-8000-000000000002/image.png",
+        "attachments/00000000-0000-4000-8000-000000000002/image.png",
     )
     records[1].attachments[0].filename = "diagram.png"
     db = AsyncMock(spec=AsyncSession)

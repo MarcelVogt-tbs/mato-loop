@@ -79,6 +79,7 @@ _MESSAGES = {
     "file.renameUnavailable": "Files cannot be renamed on this system.",
     "file.rootMutationForbidden": "The file root itself cannot be changed.",
     "file.revisionInvalid": "The file revision history is invalid.",
+    "file.revisionImmutable": "File revisions cannot be deleted.",
     "file.revisionNotFound": "The file revision was not found.",
     "file.expectedSha256Required": "Replacing a file requires its expected SHA-256.",
     "file.sessionRequired": "A persisted session is required for this file root.",

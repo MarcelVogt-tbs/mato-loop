@@ -149,6 +149,7 @@ def select_provider_images(
             continue
 
         storage_path = attachment.get("storage_path")
+        file_path = attachment.get("file_path")
         filename = attachment.get("filename")
         matching_indices = [
             index
@@ -160,6 +161,10 @@ def select_provider_images(
             or (
                 isinstance(storage_path, str)
                 and _references_value(text, storage_path, boundary_characters=r"\w./-")
+            )
+            or (
+                isinstance(file_path, str)
+                and _references_value(text, file_path, boundary_characters=r"\w./-")
             )
             or (
                 isinstance(filename, str)

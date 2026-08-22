@@ -1494,7 +1494,7 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
     assert request.resource_scope == str(context.session.user_id)
     assert request.approval_details["skillPreview"]["name"] == "API research"
     draft_file = request.approval_details["draftFile"]
-    assert draft_file["path"].startswith("files/skill-draft-")
+    assert draft_file["path"].startswith("skill-draft-")
     draft_bytes = context.root_files.read_bytes(
         "session", draft_file["path"], limit=tools_module.SKILL_DRAFT_MAX_BYTES
     )
@@ -2195,11 +2195,16 @@ async def test_session_tool_result_read_exposes_attachment_references(tmp_path) 
         filename="generated.png",
         kind="image",
         category="generated",
+        purpose="artifact",
         processing_status="ready",
         mime_type="image/png",
         size_bytes=123,
         sha256="a" * 64,
-        storage_path=f"generated/{uuid4()}/generated.png",
+        storage_path=None,
+        file_root_id=message.session_id,
+        file_id=uuid4(),
+        file_revision=1,
+        file_path="generated.png",
     )
     message.attachments = [attachment]
     call = ToolCall(
@@ -2209,6 +2214,7 @@ async def test_session_tool_result_read_exposes_attachment_references(tmp_path) 
     )
     context = _context(tmp_path, call)
     message.session_id = context.session.id
+    attachment.file_root_id = context.session.id
     context.db.scalar.return_value = message
 
     result = await tool_registry.execute(call, context)
@@ -2221,7 +2227,9 @@ async def test_session_tool_result_read_exposes_attachment_references(tmp_path) 
             "mimeType": "image/png",
             "category": "generated",
             "processingStatus": "ready",
-            "path": attachment.storage_path,
+            "path": attachment.file_path,
+            "fileId": str(attachment.file_id),
+            "fileRevision": 1,
         }
     ]
 
@@ -2361,6 +2369,8 @@ async def test_session_read_exposes_historical_attachment_identity_and_path(tmp_
             "category": "user_upload",
             "processingStatus": "ready",
             "path": attachment.storage_path,
+            "fileId": None,
+            "fileRevision": None,
         }
     ]
 
@@ -2843,7 +2853,7 @@ async def test_provide_file_does_not_open_after_denial(tmp_path) -> None:
     call = ToolCall(
         id="provide",
         name="provide_file",
-        arguments={"root": "session", "path": "files/report.pdf"},
+        arguments={"root": "session", "path": "report.pdf"},
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
     context.root_files.open_file = Mock(side_effect=AssertionError("must not open"))
@@ -2858,10 +2868,10 @@ async def test_provide_file_supports_session_files(tmp_path) -> None:
     call = ToolCall(
         id="provide",
         name="provide_file",
-        arguments={"root": "session", "path": "files/report.pdf"},
+        arguments={"root": "session", "path": "report.pdf"},
     )
     context = _context(tmp_path, call)
-    context.root_files.write_file("session", "files/report.pdf", "report")
+    context.root_files.write_file("session", "report.pdf", "report")
 
     result = await tool_registry.execute(call, context)
 
@@ -2876,7 +2886,7 @@ async def test_provide_file_supports_session_files(tmp_path) -> None:
 async def test_read_does_not_access_path_after_denial(tmp_path) -> None:
     (tmp_path / "notes.txt").write_text("secret", encoding="utf-8")
     call = ToolCall(
-        id="read", name="read", arguments={"root": "session", "path": "files/notes.txt"}
+        id="read", name="read", arguments={"root": "session", "path": "notes.txt"}
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
     context.root_files.path_kind = Mock(side_effect=AssertionError("must not inspect"))
@@ -3399,7 +3409,7 @@ def test_permission_for_is_safe_for_webfetch_and_unknown_tools(tmp_path) -> None
     ).resource_type == "url"
     assert permission_for(
         "write_file",
-        {"root": "session", "path": "files/result.txt"},
+        {"root": "session", "path": "result.txt"},
         root_files,
     ).capability == "session.files.write"
     assert permission_for(

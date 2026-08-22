@@ -97,8 +97,8 @@ describe('tool display', () => {
     })).toBe('workspace:src · **/*.vue')
     expect(toolSummary({
       name: 'grep',
-      arguments: { root: 'session', path: 'files', pattern: 'TODO|FIXME' }
-    })).toBe('session:files · TODO|FIXME')
+      arguments: { root: 'session', path: '.', pattern: 'TODO|FIXME' }
+    })).toBe('session:. · TODO|FIXME')
     expect(toolSummary({ name: 'custom_tool', arguments: {} })).toBe('custom_tool')
     expect(toolIdentity('copy_path')).toEqual({ label: 'Pfad kopieren', icon: 'content_copy' })
     expect(toolIdentity('move_path')).toEqual({ label: 'Pfad verschieben', icon: 'drive_file_move' })

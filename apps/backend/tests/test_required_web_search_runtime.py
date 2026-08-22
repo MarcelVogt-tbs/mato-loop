@@ -204,7 +204,11 @@ async def _runtime_setup(
                 mime_type="image/jpeg",
                 size_bytes=100,
                 sha256="b" * 64,
-                storage_path=f"downloads/{uuid4()}/drawing-page-2.jpg",
+                storage_path=None,
+                file_root_id=session.id,
+                file_id=uuid4(),
+                file_revision=1,
+                file_path="drawing-page-2.jpg",
                 filename="drawing-page-2.jpg",
                 metadata_json={"pageNumber": 2},
             )
@@ -332,7 +336,7 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
                         name="write_file",
                         arguments={
                             "root": "session",
-                            "path": "files/cube.scad",
+                            "path": "cube.scad",
                             "content": "cube(1);\n",
                             "mode": "create",
                         },
@@ -347,7 +351,7 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
                         name="render_openscad",
                         arguments={
                             "root": "session",
-                            "path": "files/cube.scad",
+                            "path": "cube.scad",
                             "output": "stl",
                         },
                     )
@@ -361,7 +365,7 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
                         name="render_openscad",
                         arguments={
                             "root": "session",
-                            "path": "files/cube.scad",
+                            "path": "cube.scad",
                         },
                     )
                 ],
@@ -374,7 +378,7 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
                         name="read",
                         arguments={
                             "root": "session",
-                            "path": "files/other.scad",
+                            "path": "other.scad",
                         },
                     )
                 ],
@@ -387,7 +391,7 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
                         name="read",
                         arguments={
                             "root": "session",
-                            "path": "files/cube.scad",
+                            "path": "cube.scad",
                         },
                     )
                 ],
@@ -439,7 +443,7 @@ async def test_execution_agent_unavailable_stops_before_model_retry(monkeypatch)
                         name="render_openscad",
                         arguments={
                             "root": "session",
-                            "path": "files/model.scad",
+                            "path": "model.scad",
                             "output": "preview",
                         },
                     )
@@ -481,7 +485,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
                         name="write_file",
                         arguments={
                             "root": "session",
-                            "path": "files/model.scad",
+                            "path": "model.scad",
                             "content": "cube(1);",
                             "mode": "create",
                         },
@@ -496,7 +500,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
                         name="render_openscad",
                         arguments={
                             "root": "session",
-                            "path": "files/model.scad",
+                            "path": "model.scad",
                             "output": "preview",
                         },
                     )
@@ -520,7 +524,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
                         name="read",
                         arguments={
                             "root": "session",
-                            "path": "files/model.scad",
+                            "path": "model.scad",
                         },
                     )
                 ],
@@ -558,7 +562,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
         "_execute_definition",
         AsyncMock(
             side_effect=[
-                ToolResult.json({"written": "files/model.scad"}),
+                ToolResult.json({"written": "model.scad"}),
                 ToolResult(
                     json.dumps(
                         {
@@ -659,7 +663,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
                     name="write_file",
                     arguments={
                         "root": "session",
-                        "path": "files/model.scad",
+                        "path": "model.scad",
                         "content": "cube(1);",
                         "mode": "create",
                     },
@@ -672,7 +676,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
                 ToolCall(
                     id="render",
                     name="render_openscad",
-                    arguments={"root": "session", "path": "files/model.scad"},
+                    arguments={"root": "session", "path": "model.scad"},
                 )
             ],
             finish_reason="tool_calls",
@@ -699,7 +703,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
                     name="read",
                     arguments={
                         "root": "session",
-                        "path": "files/model.scad",
+                        "path": "model.scad",
                     },
                 )
             ],
@@ -741,7 +745,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
         "_execute_definition",
         AsyncMock(
             side_effect=[
-                ToolResult.json({"written": "files/model.scad"}),
+                ToolResult.json({"written": "model.scad"}),
                 ToolResult(
                     json.dumps(
                         {
@@ -826,7 +830,7 @@ async def test_private_openscad_source_uses_configured_vision_release(monkeypatc
                     ToolCall(
                         id="render",
                         name="render_openscad",
-                        arguments={"root": "session", "path": "files/model.scad"},
+                        arguments={"root": "session", "path": "model.scad"},
                     )
                 ],
                 finish_reason="tool_calls",
@@ -929,7 +933,7 @@ async def test_failed_active_openscad_verifier_does_not_fallback_and_counts_budg
                     ToolCall(
                         id="render",
                         name="render_openscad",
-                        arguments={"root": "session", "path": "files/model.scad"},
+                        arguments={"root": "session", "path": "model.scad"},
                     )
                 ],
                 finish_reason="tool_calls",
@@ -995,7 +999,7 @@ async def test_each_successful_openscad_preview_runs_a_verifier(monkeypatch) -> 
                     ToolCall(
                         id="render-1",
                         name="render_openscad",
-                        arguments={"root": "session", "path": "files/model.scad"},
+                        arguments={"root": "session", "path": "model.scad"},
                     )
                 ]
             ),
@@ -1013,7 +1017,7 @@ async def test_each_successful_openscad_preview_runs_a_verifier(monkeypatch) -> 
                     ToolCall(
                         id="render-2",
                         name="render_openscad",
-                        arguments={"root": "session", "path": "files/model.scad"},
+                        arguments={"root": "session", "path": "model.scad"},
                     )
                 ]
             ),
@@ -1110,14 +1114,14 @@ async def test_openscad_stl_and_failed_preview_do_not_run_verifier(monkeypatch) 
                         name="render_openscad",
                         arguments={
                             "root": "session",
-                            "path": "files/model.scad",
+                            "path": "model.scad",
                             "output": "stl",
                         },
                     ),
                     ToolCall(
                         id="failed-preview",
                         name="render_openscad",
-                        arguments={"root": "session", "path": "files/model.scad"},
+                        arguments={"root": "session", "path": "model.scad"},
                     ),
                 ]
             ),
@@ -1672,7 +1676,7 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
         "write",
         "workspace",
         root_id,
-        "files/report.txt",
+        "report.txt",
         "report.txt",
         7,
         execution_agent_id,
@@ -1690,7 +1694,7 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
                         name="write_file",
                         arguments={
                             "root": "session",
-                            "path": "files/report.txt",
+                            "path": "report.txt",
                             "content": "report",
                             "mode": "create",
                         },
@@ -1701,7 +1705,7 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
         tool_result=ToolResult.json(
-            {"root": "session", "written": "files/report.txt"},
+            {"root": "session", "written": "report.txt"},
             file_actions=(action,),
         ),
     )
@@ -1720,7 +1724,7 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
                     "operation": "write",
                     "root": "workspace",
                     "rootIdentity": action.root_identity,
-                    "path": "files/report.txt",
+                    "path": "report.txt",
                     "filename": "report.txt",
                     "sizeBytes": 7,
                     "executionAgentId": execution_agent_id,
@@ -2134,7 +2138,7 @@ async def test_failed_mutation_blocks_an_unconfirmed_final_response(monkeypatch)
                         "write_file",
                         {
                             "root": "session",
-                            "path": "files/note.txt",
+                            "path": "note.txt",
                             "content": "Hallo",
                             "mode": "create",
                         },
@@ -2169,7 +2173,7 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
                         "write_file",
                         {
                             "root": "session",
-                            "path": "files/wrong.txt",
+                            "path": "wrong.txt",
                             "content": "Hallo",
                             "mode": "create",
                         },
@@ -2185,7 +2189,7 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
                         "write_file",
                         {
                             "root": "session",
-                            "path": "files/note.txt",
+                            "path": "note.txt",
                             "content": "Hallo",
                             "mode": "create",
                         },
@@ -2199,7 +2203,7 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
     )
     tool_registry._execute_definition.side_effect = [
         ToolResult.error("tool.invalidArguments", field="path"),
-        ToolResult.json({"written": "files/note.txt"}),
+        ToolResult.json({"written": "note.txt"}),
     ]
 
     await AgentRuntime._execute_loop(db, run)
@@ -2332,7 +2336,7 @@ async def test_tool_call_limit_applies_after_required_gate(monkeypatch) -> None:
                     ToolCall(
                         id="read-1",
                         name="read",
-                        arguments={"root": "session", "path": "files/info.txt"},
+                        arguments={"root": "session", "path": "info.txt"},
                     )
                 ],
                 finish_reason="tool_calls",

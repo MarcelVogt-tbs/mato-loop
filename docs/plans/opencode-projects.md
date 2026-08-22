@@ -134,7 +134,7 @@ Do not add mutation, Git, terminal, or agent-execution methods to this interface
 
 Capabilities must independently describe listing, text reads, byte previews, downloads, and mutations. The frontend and agent tool schemas use the effective capability set instead of assuming every working directory is writable and downloadable.
 
-Keep backend-managed files separate. `root=session` exposes only `files`: standalone sessions own `/data/sessions/<session-id>/files` and project sessions share `/data/projects/<project-id>/files`. Immutable message assets remain private to their session and are available only through attachment APIs.
+Keep backend-managed files separate. `root=session` is directly `/data/sessions/<session-id>/files` for standalone sessions or the shared `/data/projects/<project-id>/files` for project sessions; paths do not include a leading `files/`. User message uploads remain in the session's private `attachments/` storage.
 
 The public UI term becomes **Arbeitsverzeichnis**. Existing internal API paths and the `root=workspace` identifier may remain for compatibility; do not perform a repository-wide naming refactor.
 
@@ -228,7 +228,7 @@ Planning flow:
 4. MatoLoop invokes the built-in OpenCode `plan` agent with mutation and shell tools disabled.
 5. OpenCode inspects the current code through its own read/search tools and returns one complete Markdown plan.
 6. MatoLoop validates and bounds the final text.
-7. MatoLoop stores the plan under `session:files/plans/<plan-id>.md`.
+7. MatoLoop stores the plan with `root=session` at `plans/<plan-id>.md`.
 8. MatoLoop persists project-plan metadata and returns a normal file action so the plan can be opened.
 
 Do not parse the Markdown into executable steps. The complete plan is the execution input.

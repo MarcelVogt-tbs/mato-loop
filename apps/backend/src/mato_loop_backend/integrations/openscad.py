@@ -852,7 +852,7 @@ def _contributions(_instance: IntegrationInstance) -> IntegrationContributions:
             "- Use the user's explicit safe path and exact .scad basename. The source entrypoint must "
             "end in .scad. Append it when no extension was given; when another output extension was "
             "given, use its stem.\n"
-            "- Render a new file directly from its returned files/... path. Pass its parent directory as "
+            "- Render a new file directly from its returned session-relative path. Pass its parent directory as "
             "projectPath; never copy it merely to render it. Use workspace only "
             "when requested or when editing an existing workspace project.\n"
             "OpenSCAD source rules:\n"

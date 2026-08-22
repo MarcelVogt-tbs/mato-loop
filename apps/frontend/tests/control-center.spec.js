@@ -36,9 +36,9 @@ function response(tabs, activeAppId) {
 
 const sessionFileView = {
   scope: 'session',
-  selectedPath: 'files/drafts/draft-1/plan.md',
+  selectedPath: 'drafts/draft-1/plan.md',
   selectedKind: 'file',
-  viewedFilePath: 'files/drafts/draft-1/plan.md',
+  viewedFilePath: 'drafts/draft-1/plan.md',
   rootIdentity: null,
   executionAgentId: null,
   rootId: null,

@@ -4,7 +4,7 @@
 
 Sie können Dateien über die Dateiauswahl oder die Zwischenablage an einen Nachrichtenentwurf anhängen. Anzahl, Einzelgröße und Gesamtgröße werden global von Administratoren unter **Einstellungen > Instanzlimits** festgelegt. Browserlokale Anhangsentwürfe bleiben über alle Sessions zusammen auf 256 MiB begrenzt.
 
-MatoLoop zeigt unterstützte Bilder, Audio, Text und Dokumente passend an. Office-Dokumente, PDFs, Audio und weitere Formate können serverseitig in lesbare Ableitungen umgewandelt werden. Die Originaldatei bleibt als Download verfügbar.
+MatoLoop zeigt unterstützte Bilder, Audio, Text und Dokumente passend an. Benutzer-Uploads bleiben private Nachrichtenanhänge. Office-Dokumente, PDFs, Audio und weitere Formate können serverseitig in lesbare Ableitungen umgewandelt werden; diese liegen unter dem jeweiligen Anhang. Die Originaldatei bleibt als Download verfügbar.
 
 ## Bildverarbeitung
 
@@ -32,4 +32,4 @@ Voraussetzungen sind:
 
 ## Mediengenerierung
 
-Je nach Provider, Modellfähigkeiten und Tool-Richtlinien kann der Agent Bilder, Sprache oder Audio erzeugen und Bilder bearbeiten. Ergebnisse erscheinen als unveränderliche Tool-Anhänge der jeweiligen Nachricht und nicht im Dateibaum.
+Je nach Provider, Modellfähigkeiten und Tool-Richtlinien kann der Agent Bilder, Sprache oder Audio erzeugen und Bilder bearbeiten. Dauerhafte erzeugte oder bearbeitete Bilder, QR-Codes, Sprach- und Audioausgaben, abgerufene Bilder, gerenderte PDF-Seiten sowie OpenSCAD-Exporte werden als verwaltete Dateien mit unveränderlichen Versionen gespeichert. Die jeweilige Nachricht verweist auf genau diese Version, auch wenn die Datei später bearbeitet, verschoben oder gelöscht wird.

@@ -60,6 +60,7 @@ from mato_loop_backend.settings.models import (
     effective_model_pseudonymization,
     effective_model_trust,
 )
+from mato_loop_backend.workspace import RootFileService
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +128,16 @@ def normalize_provider_image(data: bytes, validated: ValidatedImage) -> tuple[by
         raise AttachmentError("attachment.invalidImage") from exc
 
 
-def _read_image_data_url(storage: AttachmentStorage, attachment: dict[str, Any]) -> str:
-    path = storage.path(UUID(attachment["session_id"]), attachment["storage_path"])
+def _read_image_data_url(attachment: dict[str, Any]) -> str:
+    session_id = UUID(attachment["session_id"])
+    storage_path = attachment.get("storage_path")
+    if isinstance(storage_path, str):
+        path = AttachmentStorage().path(session_id, storage_path)
+    else:
+        root_id = UUID(attachment["file_root_id"])
+        path = RootFileService(
+            session_id, project_id=None if root_id == session_id else root_id
+        ).revision_path(UUID(attachment["file_id"]), attachment["file_revision"])
     with path.open("rb") as file:
         data = file.read(MAX_IMAGE_ATTACHMENT_BYTES + 1)
     if len(data) > MAX_IMAGE_ATTACHMENT_BYTES or len(data) != attachment["size_bytes"]:
@@ -171,15 +180,22 @@ async def _provider_projection(
         )
         for item in selected
     ]
-    storage = AttachmentStorage() if any(item.allow_raw for item in selected) else None
-
     async def materialize(position: int, attachment: dict[str, Any]) -> None:
-        assert storage is not None
         mime_type = attachment.get("mime_type")
         size_bytes = attachment.get("size_bytes")
         sha256 = attachment.get("sha256")
         session_id = attachment.get("session_id")
         storage_path = attachment.get("storage_path")
+        file_root_id = attachment.get("file_root_id")
+        file_id = attachment.get("file_id")
+        file_revision = attachment.get("file_revision")
+        valid_source = isinstance(storage_path, str) or (
+            isinstance(file_root_id, str)
+            and isinstance(file_id, str)
+            and isinstance(file_revision, int)
+            and not isinstance(file_revision, bool)
+            and file_revision > 0
+        )
         if (
             mime_type not in _IMAGE_MIME_TYPES
             or not isinstance(size_bytes, int)
@@ -188,18 +204,18 @@ async def _provider_projection(
             or not isinstance(sha256, str)
             or len(sha256) != 64
             or not isinstance(session_id, str)
-            or not isinstance(storage_path, str)
+            or not valid_source
         ):
             return
         try:
-            data_url = await asyncio.to_thread(_read_image_data_url, storage, attachment)
+            data_url = await asyncio.to_thread(_read_image_data_url, attachment)
         except (AttachmentError, AttachmentStorageError, OSError, ValueError):
             return
         media[position].data_url = data_url
         media[position].status = "ready"
 
     for position, item in enumerate(selected):
-        if item.allow_raw and storage is not None:
+        if item.allow_raw:
             await materialize(position, item.attachment)
     unavailable_count = sum(item.status != "ready" for item in media)
     if unavailable_count:

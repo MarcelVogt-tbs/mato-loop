@@ -390,6 +390,12 @@ class AttachmentStorage:
             raise AttachmentStorageError("Invalid attachment category")
         return f"{directory}/{attachment_id}/{filename}"
 
+    @staticmethod
+    def _ensure_attachment_directory(path: Path) -> None:
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise AttachmentStorageError("Invalid attachment directory")
+
     def _path(self, session_id: UUID, storage_path: str, *, require_exists: bool) -> Path:
         match = _STORAGE_PATH_PATTERN.fullmatch(storage_path)
         if (
@@ -478,16 +484,6 @@ class AttachmentStorage:
         except OSError:
             pass
 
-    def _derived_root(self, session_id: UUID) -> Path:
-        try:
-            root = self.sessions.session_path(session_id, require_exists=True) / "derived"
-            metadata = root.lstat()
-        except (OSError, SessionStorageError) as exc:
-            raise AttachmentStorageError("Invalid derived storage") from exc
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise AttachmentStorageError("Invalid derived storage")
-        return root
-
     def write_derived(
         self, session_id: UUID, attachment_id: UUID, files: dict[str, bytes]
     ) -> dict[str, str]:
@@ -495,9 +491,17 @@ class AttachmentStorage:
             return {}
         if set(files) - _DERIVED_FILENAMES:
             raise AttachmentStorageError("Invalid derived filename")
-        root = self._derived_root(session_id)
-        target = root / str(attachment_id)
-        temporary = root / f".{attachment_id}.{uuid4().hex}.tmp"
+        try:
+            attachment_root = (
+                self.sessions.session_path(session_id, require_exists=True)
+                / "attachments"
+                / str(attachment_id)
+            )
+            self._ensure_attachment_directory(attachment_root)
+        except (OSError, SessionStorageError) as exc:
+            raise AttachmentStorageError("Invalid derived storage") from exc
+        target = attachment_root / "derived"
+        temporary = attachment_root / f".derived.{uuid4().hex}.tmp"
         if target.exists() or target.is_symlink():
             raise AttachmentStorageError("Derived directory already exists")
         try:
@@ -513,7 +517,7 @@ class AttachmentStorage:
                 path.chmod(0o600)
             os.replace(temporary, target)
             target.chmod(0o700)
-            directory_descriptor = os.open(root, os.O_RDONLY)
+            directory_descriptor = os.open(attachment_root, os.O_RDONLY)
             try:
                 os.fsync(directory_descriptor)
             finally:
@@ -525,19 +529,25 @@ class AttachmentStorage:
                 shutil.rmtree(target)
             raise
         return {
-            name: f"derived/{attachment_id}/{name}" for name in files
+            name: f"attachments/{attachment_id}/derived/{name}" for name in files
         }
 
     def derived_path(
         self, session_id: UUID, attachment_id: UUID, derived_path: str
     ) -> Path:
-        expected_prefix = f"derived/{attachment_id}/"
+        expected_prefix = f"attachments/{attachment_id}/derived/"
         if not derived_path.startswith(expected_prefix):
             raise AttachmentStorageError("Invalid derived path")
         name = derived_path.removeprefix(expected_prefix)
         if name not in _DERIVED_FILENAMES:
             raise AttachmentStorageError("Invalid derived path")
-        target = self._derived_root(session_id) / str(attachment_id) / name
+        target = (
+            self.sessions.session_path(session_id, require_exists=True)
+            / "attachments"
+            / str(attachment_id)
+            / "derived"
+            / name
+        )
         try:
             parent_metadata = target.parent.lstat()
             metadata = target.lstat()
@@ -554,7 +564,12 @@ class AttachmentStorage:
 
     def delete_derived(self, session_id: UUID, attachment_id: UUID) -> None:
         try:
-            target = self._derived_root(session_id) / str(attachment_id)
+            target = (
+                self.sessions.session_path(session_id, require_exists=True)
+                / "attachments"
+                / str(attachment_id)
+                / "derived"
+            )
             metadata = target.lstat()
         except (AttachmentStorageError, FileNotFoundError):
             return
@@ -564,8 +579,14 @@ class AttachmentStorage:
 
     def derived_usage(self, session_id: UUID) -> int:
         total = 0
-        root = self._derived_root(session_id)
-        for directory in root.iterdir():
+        root = self.sessions.session_path(session_id, require_exists=True) / "attachments"
+        for attachment_directory in root.iterdir():
+            metadata = attachment_directory.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                raise AttachmentStorageError("Invalid derived storage")
+            directory = attachment_directory / "derived"
+            if not directory.exists():
+                continue
             metadata = directory.lstat()
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
                 raise AttachmentStorageError("Invalid derived storage")
@@ -609,6 +630,8 @@ class AttachmentService:
         category: str = "user_upload",
         purpose: Literal["attachment", "artifact"] = "attachment",
         processing_status: str | None = "ready",
+        source_file_root_id: UUID | None = None,
+        file_id: UUID | None = None,
     ) -> MessageAttachment:
         if not data:
             raise AttachmentError("attachment.empty")
@@ -685,6 +708,12 @@ class AttachmentService:
             )
         if category not in _CATEGORY_DIRECTORIES:
             raise AttachmentError("attachment.invalidCategory")
+        if purpose == "attachment" and (
+            category != "user_upload"
+            or source_file_root_id is not None
+            or file_id is not None
+        ):
+            raise AttachmentError("attachment.invalidCategory")
         if processing_status not in {None, "pending", "ready", "failed"}:
             raise AttachmentError("attachment.invalidProcessingStatus")
 
@@ -696,19 +725,18 @@ class AttachmentService:
         )
         if locked_session is None:
             raise AttachmentError("attachment.messageNotFound")
+        root_files = RootFileService(
+            message.session_id,
+            project_id=locked_session.project_id,
+            session_storage=self.storage.sessions,
+            session_quota_bytes=session_quota_bytes,
+        )
         try:
-            used_bytes = await asyncio.to_thread(
-                RootFileService(
-                    message.session_id,
-                    project_id=locked_session.project_id,
-                    session_storage=self.storage.sessions,
-                    session_quota_bytes=session_quota_bytes,
-                ).private_session_usage
-            )
+            used_bytes = await asyncio.to_thread(root_files.private_session_usage)
         except (RootFileError, AttachmentStorageError) as exc:
             raise AttachmentError("attachment.storageInvalid") from exc
         new_derived_bytes = sum(len(value) for value in derived_files.values())
-        if (
+        if purpose == "attachment" and (
             int(used_bytes or 0) + len(data) + new_derived_bytes
             > session_quota_bytes
         ):
@@ -723,7 +751,7 @@ class AttachmentService:
         if isinstance(position, bool) or position < 0:
             raise AttachmentError("attachment.invalidPosition")
 
-        def write_files() -> tuple[str, dict[str, str]]:
+        def write_upload() -> tuple[str, dict[str, str]]:
             storage_path = self.storage.write(
                 message.session_id,
                 attachment_id,
@@ -740,18 +768,51 @@ class AttachmentService:
                 raise
             return storage_path, paths
 
+        def write_output():
+            current_root_id = UUID(root_files.root_identity("session"))
+            revision = (
+                root_files.append_output_revision(file_id, data)
+                if file_id is not None and source_file_root_id == current_root_id
+                else root_files.create_output_file(cleaned_filename, data)
+            )
+            try:
+                paths = root_files.write_revision_derivatives(
+                    revision.file_id, revision.revision, derived_files
+                )
+            except BaseException:
+                root_files.discard_output_revision(
+                    revision.file_id, revision.revision
+                )
+                raise
+            return revision, paths
+
+        storage_path = None
+        file_revision = None
         write_task = asyncio.create_task(
-            asyncio.to_thread(write_files)
+            asyncio.to_thread(write_upload if purpose == "attachment" else write_output)
         )
         try:
-            storage_path, derived_paths = await asyncio.shield(write_task)
+            written, derived_paths = await asyncio.shield(write_task)
         except asyncio.CancelledError:
-            storage_path, _derived_paths = await write_task
-            await asyncio.to_thread(self.storage.delete, message.session_id, storage_path)
-            await asyncio.to_thread(
-                self.storage.delete_derived, message.session_id, attachment_id
-            )
+            written, _derived_paths = await write_task
+            if purpose == "attachment":
+                await asyncio.to_thread(
+                    self.storage.delete, message.session_id, written
+                )
+                await asyncio.to_thread(
+                    self.storage.delete_derived, message.session_id, attachment_id
+                )
+            else:
+                await asyncio.to_thread(
+                    root_files.discard_output_revision,
+                    written.file_id,
+                    written.revision,
+                )
             raise
+        if purpose == "attachment":
+            storage_path = written
+        else:
+            file_revision = written
         if derived_paths:
             safe_metadata["derivedPath"] = next(iter(derived_paths.values()))
         attachment = MessageAttachment(
@@ -766,6 +827,16 @@ class AttachmentService:
             size_bytes=len(data),
             sha256=hashlib.sha256(data).hexdigest(),
             storage_path=storage_path,
+            file_root_id=(
+                UUID(root_files.root_identity("session"))
+                if file_revision is not None
+                else None
+            ),
+            file_id=file_revision.file_id if file_revision is not None else None,
+            file_revision=(
+                file_revision.revision if file_revision is not None else None
+            ),
+            file_path=file_revision.path if file_revision is not None else None,
             filename=cleaned_filename,
             width=width,
             height=height,
@@ -776,27 +847,63 @@ class AttachmentService:
         try:
             await db.flush()
         except BaseException:
-            await asyncio.to_thread(self.storage.delete, message.session_id, storage_path)
-            await asyncio.to_thread(
-                self.storage.delete_derived, message.session_id, attachment_id
-            )
+            if storage_path is not None:
+                await asyncio.to_thread(
+                    self.storage.delete, message.session_id, storage_path
+                )
+                await asyncio.to_thread(
+                    self.storage.delete_derived, message.session_id, attachment_id
+                )
+            elif file_revision is not None:
+                await asyncio.to_thread(
+                    root_files.discard_output_revision,
+                    file_revision.file_id,
+                    file_revision.revision,
+                )
             raise
         return attachment
 
     async def verified_path(self, attachment: MessageAttachment, session_id: UUID) -> Path:
-        expected_directory = _CATEGORY_DIRECTORIES.get(attachment.category)
-        path_parts = PurePosixPath(attachment.storage_path).parts
-        if (
-            expected_directory is None
-            or len(path_parts) != 3
-            or path_parts[0] != expected_directory
-            or path_parts[1] != str(attachment.id)
-        ):
-            raise AttachmentError("attachment.notFound")
-        try:
-            path = self.storage.path(session_id, attachment.storage_path)
-        except AttachmentStorageError as exc:
-            raise AttachmentError("attachment.notFound") from exc
+        if attachment.file_id is not None:
+            if (
+                attachment.storage_path is not None
+                or attachment.file_root_id is None
+                or attachment.file_revision is None
+                or attachment.file_path is None
+            ):
+                raise AttachmentError("attachment.notFound")
+            project_id = (
+                None
+                if attachment.file_root_id == session_id
+                else attachment.file_root_id
+            )
+            try:
+                root_files = RootFileService(
+                    session_id,
+                    project_id=project_id,
+                    session_storage=self.storage.sessions,
+                )
+                path = root_files.revision_path(
+                    attachment.file_id, attachment.file_revision
+                )
+            except RootFileError as exc:
+                raise AttachmentError("attachment.notFound") from exc
+        else:
+            if attachment.storage_path is None:
+                raise AttachmentError("attachment.notFound")
+            expected_directory = _CATEGORY_DIRECTORIES.get(attachment.category)
+            path_parts = PurePosixPath(attachment.storage_path).parts
+            if (
+                expected_directory is None
+                or len(path_parts) != 3
+                or path_parts[0] != expected_directory
+                or path_parts[1] != str(attachment.id)
+            ):
+                raise AttachmentError("attachment.notFound")
+            try:
+                path = self.storage.path(session_id, attachment.storage_path)
+            except AttachmentStorageError as exc:
+                raise AttachmentError("attachment.notFound") from exc
 
         def verify() -> bool:
             digest = hashlib.sha256()
@@ -891,11 +998,29 @@ class AttachmentService:
         ):
             raise AttachmentError("attachment.notFound")
         try:
-            path = self.storage.derived_path(session_id, attachment.id, derived_path)
+            if attachment.file_id is not None and attachment.file_revision is not None:
+                if attachment.file_root_id is None:
+                    raise AttachmentError("attachment.notFound")
+                project_id = (
+                    None
+                    if attachment.file_root_id == session_id
+                    else attachment.file_root_id
+                )
+                path = RootFileService(
+                    session_id,
+                    project_id=project_id,
+                    session_storage=self.storage.sessions,
+                ).revision_derived_path(
+                    attachment.file_id, attachment.file_revision, expected_name
+                )
+            else:
+                path = self.storage.derived_path(
+                    session_id, attachment.id, derived_path
+                )
             if path.name != expected_name or path.stat().st_size != expected_size:
                 raise AttachmentError("attachment.notFound")
             data = path.read_bytes()
-        except (OSError, AttachmentStorageError) as exc:
+        except (OSError, AttachmentStorageError, RootFileError) as exc:
             raise AttachmentError("attachment.notFound") from exc
         if len(data) != expected_size or hashlib.sha256(data).hexdigest() != expected_sha256:
             raise AttachmentError("attachment.notFound")
@@ -913,5 +1038,26 @@ class AttachmentService:
             raise AttachmentError("attachment.notFound") from exc
 
     async def discard(self, attachment: MessageAttachment, session_id: UUID) -> None:
-        await asyncio.to_thread(self.storage.delete, session_id, attachment.storage_path)
-        await asyncio.to_thread(self.storage.delete_derived, session_id, attachment.id)
+        if attachment.file_id is not None and attachment.file_revision is not None:
+            if attachment.file_root_id is None:
+                return
+            project_id = (
+                None if attachment.file_root_id == session_id else attachment.file_root_id
+            )
+            await asyncio.to_thread(
+                RootFileService(
+                    session_id,
+                    project_id=project_id,
+                    session_storage=self.storage.sessions,
+                ).discard_output_revision,
+                attachment.file_id,
+                attachment.file_revision,
+            )
+            return
+        if attachment.storage_path is not None:
+            await asyncio.to_thread(
+                self.storage.delete, session_id, attachment.storage_path
+            )
+            await asyncio.to_thread(
+                self.storage.delete_derived, session_id, attachment.id
+            )
