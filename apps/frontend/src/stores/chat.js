@@ -1663,6 +1663,7 @@ export const useChatStore = defineStore('chat', {
         && !this.runId
         && !this.activeQueuedMessages.length
         && !this.queueDrainPromise
+        && !this.messageQueueActive
       if (submitImmediately) {
         this.running = true
         this.setActivity('submitting', { startedAt: new Date().toISOString() })
@@ -1685,7 +1686,6 @@ export const useChatStore = defineStore('chat', {
       }
       if (submitImmediately) {
         this.running = false
-        return this.submitOutboxEntry(entry)
       }
       return this.drainOutbox()
     },
@@ -2068,13 +2068,6 @@ export const useChatStore = defineStore('chat', {
       this.streamModelName = null
       this.processOutputs = {}
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
-      const localMessage = {
-        id: `local-${Date.now()}`,
-        role: 'user',
-        content,
-        createdAt: new Date().toISOString()
-      }
-      session.messages.push(localMessage)
       try {
         const activeFile = requestedActiveFile === undefined
           ? useWorkspaceStore().activeFileSnapshot()
@@ -2094,12 +2087,10 @@ export const useChatStore = defineStore('chat', {
           : await api.post(`/sessions/${session.id}/messages`, payload, ...config)
         if (data.message) {
           const canonicalIndex = session.messages.findIndex((message) => message.id === data.message.id)
-          const localIndex = session.messages.findIndex((message) => message.id === localMessage.id)
           if (canonicalIndex >= 0) {
             session.messages[canonicalIndex] = data.message
-            if (localIndex >= 0) session.messages.splice(localIndex, 1)
-          } else if (localIndex >= 0) {
-            session.messages[localIndex] = data.message
+          } else {
+            session.messages.push(data.message)
           }
           if (data.message.createdAt) {
             session.lastMessageAt = data.message.createdAt
@@ -2126,7 +2117,6 @@ export const useChatStore = defineStore('chat', {
         }
         return { created: false, sessionId: session.id }
       } catch (error) {
-        session.messages = session.messages.filter((message) => message.id !== localMessage.id)
         if (
           this.sessionLoadVersion === sessionLoadVersion
           && this.selectedSessionId === session.id

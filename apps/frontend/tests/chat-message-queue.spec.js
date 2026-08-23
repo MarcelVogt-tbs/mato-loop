@@ -96,6 +96,34 @@ describe('chat message queue', () => {
     expect(chat.queuedSendReady).toBe(false)
   })
 
+  it('keeps an idle submission queued until the server accepts it', async () => {
+    let resolveSend
+    api.post.mockReturnValue(new Promise((resolve) => { resolveSend = resolve }))
+    const chat = useChatStore()
+    activeSession(chat)
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+
+    const sending = chat.send('Jetzt senden')
+
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledOnce())
+    expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Jetzt senden'])
+    expect(chat.queueSendingEntryId).toBe(chat.activeQueuedMessages[0].id)
+    expect(chat.current.messages).toEqual([])
+
+    resolveSend({
+      data: {
+        runId: 'run-1',
+        message: { id: 'message-1', role: 'user', content: 'Jetzt senden' }
+      }
+    })
+    await sending
+
+    expect(chat.activeQueuedMessages).toEqual([])
+    expect(chat.current.messages).toEqual([
+      { id: 'message-1', role: 'user', content: 'Jetzt senden' }
+    ])
+  })
+
   it('restores the outbox with its stable id and file after a reload', async () => {
     const chat = useChatStore()
     activeSession(chat)
@@ -199,11 +227,13 @@ describe('chat message queue', () => {
     const approvals = useApprovalStore()
     const questions = useQuestionStore()
     activeSession(chat)
-    chat.running = true
-    await chat.queueMessage('Nachricht')
-    chat.running = false
 
     approvals.pending = [{ id: 'approval-1', sessionId: 'session-1' }]
+    await chat.send('Nachricht')
+
+    expect(api.post).not.toHaveBeenCalled()
+    expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Nachricht'])
+    expect(chat.activity.phase).toBe('idle')
     expect(chat.queuedSendReady).toBe(false)
 
     approvals.pending = []
