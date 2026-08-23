@@ -40,6 +40,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'project.notEmpty' } })).toBe(
       'Das Projekt enthält noch Sessions.'
     )
+    expect(apiErrorMessage({ error: { code: 'webPush.unavailable' } })).toBe(
+      'Push-Benachrichtigungen sind derzeit nicht verfügbar.'
+    )
     for (const code of [
       'cache.exportFailed',
       'cache.invalidContent',

@@ -41,5 +41,15 @@ export default configure(() => ({
     lang: 'de-DE',
     plugins: ['Dialog', 'Loading', 'Notify']
   },
+  pwa: {
+    workboxMode: 'InjectManifest',
+    swFilename: 'sw.js',
+    manifestFilename: 'manifest.webmanifest',
+    injectPwaMetaTags: false,
+    extendInjectManifestOptions(options) {
+      options.injectionPoint = undefined
+      options.globPatterns = []
+    }
+  },
   animations: ['fadeIn', 'fadeOut']
 }))

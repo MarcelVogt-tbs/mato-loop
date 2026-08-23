@@ -7,8 +7,9 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
@@ -16,6 +17,13 @@ from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import Notification, UserAccount
 from mato_loop_backend.notifications import NotificationError, NotificationService
 from mato_loop_backend.security import require_user
+from mato_loop_backend.web_push import (
+    VapidKeyStore,
+    WebPushConfigurationError,
+    WebPushRegistrationError,
+    WebPushService,
+    WebPushSubscriptionInput,
+)
 
 router = APIRouter(prefix="/notifications", dependencies=[Depends(require_user)])
 
@@ -69,6 +77,13 @@ class NotificationsReadAllResponse(BaseModel):
     unread_count: int = Field(alias="unreadCount")
 
 
+class WebPushConfigResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    public_key: str | None = Field(alias="publicKey")
+
+
 def _notification_payload(item: Notification) -> NotificationResponse:
     automation = item.automation_run.automation if item.automation_run is not None else None
     return NotificationResponse(
@@ -118,6 +133,51 @@ def _decode_cursor(value: str, user_id: UUID) -> tuple[datetime, UUID]:
         return created_at, UUID(payload[2])
     except (binascii.Error, UnicodeDecodeError, ValueError, TypeError) as exc:
         raise ApiError(400, "validation.invalid", field="cursor") from exc
+
+
+@router.get("/push/config", response_model=WebPushConfigResponse)
+async def get_web_push_config() -> WebPushConfigResponse:
+    store = VapidKeyStore()
+    try:
+        public_key = store.public_key()
+    except WebPushConfigurationError as exc:
+        raise ApiError(503, "webPush.unavailable") from exc
+    return WebPushConfigResponse(enabled=public_key is not None, publicKey=public_key)
+
+
+@router.put("/push/subscriptions/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def put_web_push_subscription(
+    device_id: UUID,
+    payload: WebPushSubscriptionInput,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    try:
+        await WebPushService.register(
+            db, user_id=user.id, device_id=device_id, subscription=payload
+        )
+        await db.commit()
+    except WebPushConfigurationError as exc:
+        await db.rollback()
+        raise ApiError(503, "webPush.disabled") from exc
+    except WebPushRegistrationError as exc:
+        await db.rollback()
+        raise ApiError(422, "validation.invalid", field="endpoint") from exc
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ApiError(409, "webPush.subscriptionConflict") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/push/subscriptions/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_web_push_subscription(
+    device_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    await WebPushService.delete(db, user_id=user.id, device_id=device_id)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("", response_model=NotificationListResponse)

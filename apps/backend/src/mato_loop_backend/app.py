@@ -49,6 +49,17 @@ def _static_path(static_root: Path, full_path: str) -> Path | None:
     return requested
 
 
+def _static_headers(full_path: str) -> dict[str, str]:
+    if full_path == "sw.js":
+        return {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Service-Worker-Allowed": "/",
+        }
+    if full_path in {"", "index.html", "manifest.webmanifest"}:
+        return {"Cache-Control": "no-cache, no-store, must-revalidate"}
+    return {}
+
+
 def _mount_documentation(target: FastAPI, docs_dir: Path) -> None:
     @target.get("/docs", include_in_schema=False)
     async def documentation_redirect() -> RedirectResponse:
@@ -171,8 +182,8 @@ if runtime_config.static_dir and runtime_config.static_dir.exists():
         if requested is None:
             raise HTTPException(status_code=404)
         if full_path and requested.is_file():
-            return FileResponse(requested)
+            return FileResponse(requested, headers=_static_headers(full_path))
         index = static_root / "index.html"
         if not index.exists():
             raise HTTPException(status_code=404)
-        return FileResponse(index)
+        return FileResponse(index, headers=_static_headers("index.html"))

@@ -29,6 +29,22 @@
 
     <q-scroll-area class="col">
       <div class="q-pa-md">
+        <q-item class="app-surface-tonal rounded-borders q-mb-md">
+          <q-item-section avatar><q-icon name="notifications_active" color="primary" /></q-item-section>
+          <q-item-section>
+            <q-item-label>Push-Benachrichtigungen</q-item-label>
+            <q-item-label caption aria-live="polite">{{ pushStatus }}</q-item-label>
+          </q-item-section>
+          <q-item-section side>
+            <q-toggle
+              color="primary"
+              :model-value="notifications.pushSubscribed"
+              :disable="pushToggleDisabled"
+              aria-label="Push-Benachrichtigungen aktivieren"
+              @update:model-value="setPushEnabled"
+            />
+          </q-item-section>
+        </q-item>
         <div v-if="notifications.loading && !notifications.loaded">
           <div v-for="index in 3" :key="index" class="row items-center no-wrap q-gutter-md q-py-sm">
             <q-skeleton type="QAvatar" />
@@ -81,7 +97,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
 import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
@@ -94,7 +110,35 @@ const emit = defineEmits(['close'])
 const router = useRouter()
 const notifications = useInAppNotificationStore()
 const timestampNow = ref(new Date())
+const pushToggleDisabled = computed(() => (
+  !notifications.pushSupported
+  || !notifications.pushLoaded
+  || notifications.pushLoadFailed
+  || !notifications.pushServerEnabled
+  || !notifications.pushPublicKey
+  || notifications.pushPermission === 'denied'
+  || notifications.pushLoading
+))
+const pushStatus = computed(() => {
+  if (!notifications.pushSupported) return 'Dieser Browser unterstützt Push-Benachrichtigungen nicht.'
+  if (notifications.pushLoadFailed) return 'Die Push-Einstellungen konnten nicht geladen werden.'
+  if (!notifications.pushLoaded) return 'Push-Einstellungen werden geladen.'
+  if (!notifications.pushServerEnabled) return 'Push-Benachrichtigungen sind auf diesem Server nicht verfügbar.'
+  if (notifications.pushPermission === 'denied') return 'Benachrichtigungen sind in den Browser-Einstellungen blockiert.'
+  return notifications.pushSubscribed
+    ? 'Push-Benachrichtigungen sind auf diesem Gerät aktiv.'
+    : 'Push-Benachrichtigungen sind auf diesem Gerät deaktiviert.'
+})
 let timestampTimer = null
+
+async function setPushEnabled(enabled) {
+  try {
+    if (enabled) await notifications.enablePush()
+    else await notifications.disablePush()
+  } catch {
+    // Axios errors are displayed centrally; browser permission state remains visible above.
+  }
+}
 
 async function refresh() {
   timestampNow.value = new Date()

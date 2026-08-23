@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent.permissions import PermissionRequest
 from mato_loop_backend.agent.runtime import AgentRuntime, ApprovalResolution
 from mato_loop_backend.api.errors import ApiError
@@ -148,8 +149,13 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     async def publish(*_args) -> None:
         created.set()
 
+    async def deliver(*_args) -> None:
+        assert db.commit.await_count == 1
+
     db.flush.side_effect = flush
     monkeypatch.setattr(run_events, "publish", publish)
+    push = AsyncMock(side_effect=deliver)
+    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", push)
     wait_for = AsyncMock(side_effect=AssertionError("approval wait must not time out"))
     monkeypatch.setattr(asyncio, "wait_for", wait_for)
 
@@ -187,6 +193,8 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     assert AgentRuntime.resolve_approval(approval_id, "allow_once") is True
     async with asyncio.timeout(1):
         assert await task == "allow_once"
+    assert push.await_args.args[0] == session.user_id
+    assert push.await_args.args[1].notification.target.type == "actions"
     wait_for.assert_not_awaited()
 
 

@@ -29,7 +29,7 @@ COPY apps/backend/src ./src
 COPY apps/backend/alembic ./alembic
 COPY apps/backend/alembic.ini ./alembic.ini
 RUN uv sync --frozen --no-dev
-COPY --from=frontend /build/frontend/dist/spa /app/static
+COPY --from=frontend /build/frontend/dist/pwa /app/static
 COPY --from=documentation /build/site /app/static/docs
 
 ENV MATO_LOOP_DATA_DIR=/data \

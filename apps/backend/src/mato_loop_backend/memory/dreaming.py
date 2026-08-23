@@ -32,6 +32,7 @@ from mato_loop_backend.memory.service import (
 )
 from mato_loop_backend.models import (
     AgentRun,
+    ApprovalRequest,
     ChatSession,
     MemoryAudience,
     MemoryCategory,
@@ -64,6 +65,11 @@ from mato_loop_backend.settings.models import (
     ModelAvailability,
     ModelCapability,
     ModelConfig,
+)
+from mato_loop_backend.web_push import (
+    WebPushActionsTarget,
+    WebPushService,
+    web_push_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -1508,6 +1514,8 @@ class DreamingService:
                 if result_category != MemoryCategory.IDENTITY:
                     raise DreamingContractError("memory.dreamingOutputInvalid")
 
+        created_approvals: list[ApprovalRequest] = []
+
         async def handle_pin(
             item: MemoryRecord,
             decision: DreamReconciliationDecision,
@@ -1545,6 +1553,7 @@ class DreamingService:
                     pin_kind=decision.pin_kind,
                     action_policy=memory.dreaming_pin_policy,
                     pin_policy=memory.dreaming_pin_policy,
+                    created=created_approvals,
                 )
 
         def pin_needed(
@@ -1591,6 +1600,7 @@ class DreamingService:
                         pin_kind=decision.pin_kind if requested_pin else None,
                         action_policy=memory.dreaming_update_policy,
                         pin_policy=memory.dreaming_pin_policy,
+                        created=created_approvals,
                     )
                     continue
                 mutation = await MemoryService.update_dreaming(
@@ -1635,6 +1645,7 @@ class DreamingService:
                         pin_kind=decision.pin_kind if requested_pin else None,
                         action_policy=memory.dreaming_merge_policy,
                         pin_policy=memory.dreaming_pin_policy,
+                        created=created_approvals,
                     )
                     continue
                 mutation = await MemoryService.merge_dreaming(
@@ -1704,6 +1715,20 @@ class DreamingService:
         run.completed_at = datetime.now(UTC)
         run.next_attempt_at = None
         await db.commit()
+        await asyncio.gather(
+            *(
+                WebPushService.deliver_after_commit(
+                    session.user_id,
+                    web_push_payload(
+                        title=approval.title,
+                        body=approval.summary,
+                        tag=f"approval:{approval.id}",
+                        target=WebPushActionsTarget(type="actions"),
+                    ),
+                )
+                for approval in created_approvals
+            )
+        )
 
     @staticmethod
     async def _block(db: AsyncSession, run: MemoryDreamRun, code: str) -> None:

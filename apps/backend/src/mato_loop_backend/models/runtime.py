@@ -293,6 +293,29 @@ class Notification(Base):
     )
 
 
+class WebPushSubscription(Base):
+    __tablename__ = "web_push_subscriptions"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "device_id", name="uq_web_push_subscriptions_user_device"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    device_id: Mapped[UUID] = mapped_column(nullable=False)
+    endpoint_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class Message(Base):
     __tablename__ = "messages"
     __table_args__ = (

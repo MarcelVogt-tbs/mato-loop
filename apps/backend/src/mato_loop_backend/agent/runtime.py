@@ -155,6 +155,12 @@ from mato_loop_backend.settings.models import (
 )
 from mato_loop_backend.skills import RunSkillState, SkillDraft, SkillEditPatch, SkillError
 from mato_loop_backend.video_processing import VideoAnalysisMode, VideoFrame
+from mato_loop_backend.web_push import (
+    WebPushActionsTarget,
+    WebPushService,
+    WebPushSessionTarget,
+    web_push_payload,
+)
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
 logger = logging.getLogger(__name__)
@@ -1103,6 +1109,32 @@ class AgentRuntime:
     _user_cancelled_runs: set[UUID] = set()
 
     @staticmethod
+    async def _deliver_run_push(db: AsyncSession, run: AgentRun, *, failed: bool) -> None:
+        if await db.scalar(
+            select(AutomationRun.id).where(AutomationRun.agent_run_id == run.id)
+        ) is not None:
+            return
+        chat_session = await db.get(ChatSession, run.session_id)
+        if chat_session is None:
+            return
+        result = await db.get(Message, run.result_message_id) if run.result_message_id else None
+        await WebPushService.deliver_after_commit(
+            chat_session.user_id,
+            web_push_payload(
+                title="Antwort fehlgeschlagen" if failed else f"Neue Antwort: {chat_session.title}",
+                body=(
+                    "Der Agent-Auftrag konnte nicht abgeschlossen werden."
+                    if failed
+                    else canonical_assistant_content(result.content)
+                    if result is not None
+                    else None
+                ),
+                tag=f"agent-run:{run.id}",
+                target=WebPushSessionTarget(type="session", sessionId=chat_session.id),
+            ),
+        )
+
+    @staticmethod
     async def _ensure_user_active(db: AsyncSession, user_id: UUID) -> None:
         active = await db.scalar(
             select(UserAccount.is_active).where(UserAccount.id == user_id)
@@ -1572,6 +1604,7 @@ class AgentRuntime:
                     await run_events.publish(
                         run_id, {"type": "run.completed", "runId": str(run_id)}
                     )
+                    await cls._deliver_run_push(db, run, failed=False)
                 except asyncio.CancelledError:
                     if run_completed:
                         raise
@@ -1628,6 +1661,8 @@ class AgentRuntime:
                     logger.exception("Agent run %s failed", run_id)
                     public_error = _public_run_error(exc)
                     error_message = None
+                    failed_run = None
+                    failure_committed = False
                     try:
                         await db.rollback()
                         await cls._terminalize_incomplete_tool_calls(db, session_id)
@@ -1640,6 +1675,7 @@ class AgentRuntime:
                                 db, failed_run, public_error
                             )
                             await db.commit()
+                            failure_committed = True
                     except Exception:
                         logger.exception("Could not persist failure state for agent run %s", run_id)
                     if error_message is not None:
@@ -1653,6 +1689,8 @@ class AgentRuntime:
                     await run_events.publish(
                         run_id, {"type": "run.failed", "error": public_error.payload()}
                     )
+                    if failure_committed and failed_run is not None:
+                        await cls._deliver_run_push(db, failed_run, failed=True)
         finally:
             cls._cancellable_runs.discard(run_id)
             cls._user_cancelled_runs.discard(run_id)
@@ -4522,6 +4560,15 @@ class AgentRuntime:
             run.id,
             {"type": "approval.created", "approval": approval_payload(approval)},
         )
+        await WebPushService.deliver_after_commit(
+            chat_session.user_id,
+            web_push_payload(
+                title="Freigabe erforderlich",
+                body=permission.summary,
+                tag=f"approval:{approval.id}",
+                target=WebPushActionsTarget(type="actions"),
+            ),
+        )
         try:
             decision = await asyncio.shield(waiter)
         except asyncio.CancelledError:
@@ -4581,6 +4628,15 @@ class AgentRuntime:
             await run_events.publish(
                 run.id,
                 {"type": "question.created", "question": question_payload(request)},
+            )
+            await WebPushService.deliver_after_commit(
+                chat_session.user_id,
+                web_push_payload(
+                    title="Rückfrage vom Agenten",
+                    body=questions.questions[0].question,
+                    tag=f"question:{request.id}",
+                    target=WebPushSessionTarget(type="session", sessionId=chat_session.id),
+                ),
             )
             answers = await asyncio.shield(waiter)
         except asyncio.CancelledError:

@@ -4,7 +4,7 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from mato_loop_backend.app import _mount_documentation, _static_path, app
+from mato_loop_backend.app import _mount_documentation, _static_headers, _static_path, app
 
 
 def test_liveness() -> None:
@@ -84,6 +84,14 @@ def test_notifications_require_authentication() -> None:
     assert response.json()["error"]["code"] == "auth.notAuthenticated"
 
 
+def test_web_push_config_requires_authentication() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/notifications/push/config")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "auth.notAuthenticated"
+
+
 def test_general_attachment_routes_replace_audio_only_routes() -> None:
     paths = app.openapi()["paths"]
 
@@ -99,6 +107,17 @@ def test_static_paths_cannot_escape_static_root(tmp_path: Path) -> None:
 
     assert _static_path(static_root, "assets/app.js") == static_root / "assets/app.js"
     assert _static_path(static_root, "../secret.txt") is None
+
+
+def test_pwa_entry_files_are_not_cached() -> None:
+    assert _static_headers("sw.js") == {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Service-Worker-Allowed": "/",
+    }
+    assert _static_headers("manifest.webmanifest")["Cache-Control"] == (
+        "no-cache, no-store, must-revalidate"
+    )
+    assert _static_headers("assets/app.js") == {}
 
 
 def test_documentation_serves_public_directory_urls(tmp_path: Path) -> None:

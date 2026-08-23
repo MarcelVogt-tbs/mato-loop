@@ -30,6 +30,7 @@ from mato_loop_backend.models.runtime import (
     QuestionRequest,
     TitleGenerationStatus,
     UserAccount,
+    WebPushSubscription,
     WebSearchPolicy,
 )
 from mato_loop_backend.models.setting import SettingRecord
@@ -71,5 +72,6 @@ __all__ = [
     "TitleGenerationStatus",
     "UserAccount",
     "UserAuthIdentity",
+    "WebPushSubscription",
     "WebSearchPolicy",
 ]

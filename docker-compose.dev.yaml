@@ -115,6 +115,7 @@ services:
         required: false
     environment:
       QUASAR_API_PROXY_TARGET: http://backend:${MATO_LOOP_BIND_BACKEND_PORT:-6020}
+      MATO_LOOP_FRONTEND_MODE: ${MATO_LOOP_FRONTEND_MODE:-spa}
     volumes:
       - .:/workspace
       - frontend_node_modules:/workspace/apps/frontend/node_modules
@@ -129,7 +130,7 @@ services:
       [
         "sh",
         "-c",
-        "yarn install --immutable && exec yarn dev --host 0.0.0.0 --port $${MATO_LOOP_BIND_FRONTEND_PORT:-10020}",
+        "yarn install --immutable && if [ \"$${MATO_LOOP_FRONTEND_MODE:-spa}\" = pwa ]; then exec yarn dev -m pwa --host 0.0.0.0 --port $${MATO_LOOP_BIND_FRONTEND_PORT:-10020}; else exec yarn dev --host 0.0.0.0 --port $${MATO_LOOP_BIND_FRONTEND_PORT:-10020}; fi",
       ]
     networks:
       - mato-loop

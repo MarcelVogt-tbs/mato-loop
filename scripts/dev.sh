@@ -18,7 +18,7 @@ usage() {
         "Usage: ./scripts/dev.sh <command> [args]" \
         "" \
         "Commands:" \
-        "  up [--build] [-d]   Start the development stack" \
+        "  up [--pwa] [--build] [-d] Start the development stack" \
         "  stop [service]      Stop services" \
         "  down                Remove containers" \
         "  reset-storage       Remove containers and volumes" \
@@ -93,7 +93,22 @@ run_target() {
 cd "$PROJECT_ROOT"
 
 case "${1:-}" in
-    up) shift; compose up "$@" ;;
+    up)
+        shift
+        up_args=()
+        pwa=false
+        for arg in "$@"; do
+            if [[ "$arg" == "--pwa" ]]; then
+                pwa=true
+            else
+                up_args+=("$arg")
+            fi
+        done
+        if [[ "$pwa" == true ]]; then
+            export MATO_LOOP_FRONTEND_MODE=pwa
+        fi
+        compose up "${up_args[@]}"
+        ;;
     stop) shift; compose stop "$@" ;;
     down) shift; compose down "$@" ;;
     reset-storage) compose down -v ;;

@@ -48,6 +48,9 @@ class RuntimeConfig(BaseSettings):
     embedding_query_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
     embedding_index_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     embedding_batch_size: int = Field(default=16, ge=1, le=64)
+    web_push_enabled: bool = False
+    web_push_vapid_subject: str = ""
+    web_push_allowed_origins: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -64,6 +67,14 @@ class RuntimeConfig(BaseSettings):
     @property
     def projects_dir(self) -> Path:
         return self.data_dir / "projects"
+
+    @property
+    def web_push_configured(self) -> bool:
+        return bool(
+            self.web_push_enabled
+            and self.web_push_vapid_subject.strip()
+            and self.web_push_allowed_origins.strip()
+        )
 
 
 @lru_cache

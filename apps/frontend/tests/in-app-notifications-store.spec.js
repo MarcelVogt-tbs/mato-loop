@@ -1,8 +1,8 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
-  api: { get: vi.fn(), post: vi.fn() }
+  api: { delete: vi.fn(), get: vi.fn(), post: vi.fn(), put: vi.fn() }
 }))
 
 vi.mock('src/boot/axios', () => ({ api }))
@@ -13,6 +13,10 @@ describe('in-app notification store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    delete global.window
   })
 
   it('loads the latest notifications and unread count', async () => {
@@ -172,5 +176,78 @@ describe('in-app notification store', () => {
     expect(api.post).toHaveBeenCalledWith('/notifications/read-all')
     expect(store.items.every((item) => item.readAt)).toBe(true)
     expect(store.unreadCount).toBe(0)
+  })
+
+  it('reconciles an existing granted push subscription without prompting', async () => {
+    const values = new Map()
+    const subscription = { toJSON: () => ({ endpoint: 'https://push.example/subscription' }) }
+    const requestPermission = vi.fn()
+    global.window = {
+      isSecureContext: true,
+      Notification: { permission: 'granted', requestPermission },
+      PushManager: function PushManager() {},
+      crypto: { randomUUID: () => '3e6e1d85-4c5e-4fb9-8b8b-77542d0e24ad' },
+      localStorage: {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, value)
+      },
+      navigator: {
+        serviceWorker: {
+          getRegistration: vi.fn().mockResolvedValue({
+            pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) }
+          })
+        }
+      }
+    }
+    api.get.mockResolvedValue({ data: { enabled: true, publicKey: 'AQID' } })
+    api.put.mockResolvedValue({ data: null })
+    const store = useInAppNotificationStore()
+
+    await store.reconcilePush({ suppressErrorToast: true })
+
+    expect(requestPermission).not.toHaveBeenCalled()
+    expect(api.put).toHaveBeenCalledWith(
+      '/notifications/push/subscriptions/3e6e1d85-4c5e-4fb9-8b8b-77542d0e24ad',
+      { endpoint: 'https://push.example/subscription' },
+      { suppressErrorToast: true }
+    )
+    expect(store.pushSubscribed).toBe(true)
+  })
+
+  it('requests permission and subscribes from the explicit enable action', async () => {
+    const subscription = { toJSON: () => ({ endpoint: 'https://push.example/new' }) }
+    const subscribe = vi.fn().mockResolvedValue(subscription)
+    const registration = {
+      pushManager: { getSubscription: vi.fn().mockResolvedValue(null), subscribe }
+    }
+    global.window = {
+      isSecureContext: true,
+      Notification: {
+        permission: 'default',
+        requestPermission: vi.fn().mockResolvedValue('granted')
+      },
+      PushManager: function PushManager() {},
+      crypto: { randomUUID: () => '3e6e1d85-4c5e-4fb9-8b8b-77542d0e24ad' },
+      localStorage: { getItem: () => null, setItem: vi.fn() },
+      navigator: {
+        serviceWorker: {
+          ready: Promise.resolve(registration),
+          getRegistration: vi.fn()
+        }
+      }
+    }
+    api.put.mockResolvedValue({ data: null })
+    const store = useInAppNotificationStore()
+    store.pushServerEnabled = true
+    store.pushPublicKey = 'AQID'
+
+    await store.enablePush()
+
+    expect(window.Notification.requestPermission).toHaveBeenCalledOnce()
+    expect(subscribe).toHaveBeenCalledWith({
+      userVisibleOnly: true,
+      applicationServerKey: new Uint8Array([1, 2, 3])
+    })
+    expect(store.pushSubscribed).toBe(true)
   })
 })

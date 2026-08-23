@@ -411,6 +411,7 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
     monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
     monkeypatch.setattr(AgentRuntime, "_execute_loop", fail)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
+    monkeypatch.setattr(AgentRuntime, "_deliver_run_push", AsyncMock())
     monkeypatch.setattr(run_events, "publish", publish)
 
     await AgentRuntime._run(run.id)
@@ -430,6 +431,52 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
     assert events[1]["message"]["content"] == "The model provider request failed."
     assert events[1]["message"]["createdAt"] == message.created_at.isoformat()
     assert "secret" not in str(events)
+
+
+@pytest.mark.parametrize(
+    ("failed", "expected_title", "expected_body"),
+    [
+        (False, "Neue Antwort: Test", "Fertige Antwort"),
+        (True, "Antwort fehlgeschlagen", "Der Agent-Auftrag konnte nicht abgeschlossen werden."),
+    ],
+)
+async def test_normal_run_push_uses_canonical_session_target(
+    monkeypatch, failed: bool, expected_title: str, expected_body: str
+) -> None:
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+    message = Message(id=uuid4(), session_id=session.id, role="assistant", content="Fertige Antwort")
+    run = AgentRun(id=uuid4(), session_id=session.id, result_message_id=message.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+
+    async def get(model_type, item_id):
+        return {(ChatSession, session.id): session, (Message, message.id): message}.get(
+            (model_type, item_id)
+        )
+
+    db.get.side_effect = get
+    deliver = AsyncMock()
+    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", deliver)
+
+    await AgentRuntime._deliver_run_push(db, run, failed=failed)
+
+    user_id, payload = deliver.await_args.args
+    assert user_id == session.user_id
+    assert payload.notification.title == expected_title
+    assert payload.notification.body == expected_body
+    assert payload.notification.target.session_id == session.id
+
+
+async def test_automation_run_does_not_emit_a_second_session_push(monkeypatch) -> None:
+    run = AgentRun(id=uuid4(), session_id=uuid4())
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = uuid4()
+    deliver = AsyncMock()
+    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", deliver)
+
+    await AgentRuntime._deliver_run_push(db, run, failed=False)
+
+    deliver.assert_not_awaited()
 
 
 async def test_user_cancel_persists_visible_response_before_terminal_event(monkeypatch) -> None:

@@ -1,9 +1,11 @@
+import asyncio
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.tools import QuestionArguments, validate_question_answers
 from mato_loop_backend.api.routes.questions import (
@@ -12,7 +14,8 @@ from mato_loop_backend.api.routes.questions import (
     reject_question,
 )
 from mato_loop_backend.events import run_events
-from mato_loop_backend.models import ChatSession, QuestionRequest, UserAccount
+from mato_loop_backend.models import AgentRun, ChatSession, QuestionRequest, UserAccount
+from mato_loop_backend.providers.base import ToolCall
 
 
 def _arguments() -> QuestionArguments:
@@ -78,6 +81,46 @@ def test_question_contract_rejects_invalid_questions_and_oversized_answers() -> 
         QuestionArguments.model_validate(invalid_default)
     with pytest.raises(ValueError, match="at most 13 items"):
         QuestionAnswerRequest(answers={"topics": [str(index) for index in range(14)]})
+
+
+async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:
+    request_id = uuid4()
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+    run = AgentRun(id=uuid4(), session_id=session.id)
+    db = AsyncMock(spec=AsyncSession)
+    created = asyncio.Event()
+
+    async def flush() -> None:
+        db.add.call_args.args[0].id = request_id
+
+    async def publish(*_args) -> None:
+        created.set()
+
+    async def deliver(*_args) -> None:
+        assert db.commit.await_count == 1
+
+    db.flush.side_effect = flush
+    monkeypatch.setattr(run_events, "publish", publish)
+    push = AsyncMock(side_effect=deliver)
+    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", push)
+    task = asyncio.create_task(
+        AgentRuntime._request_question(
+            db,
+            run,
+            session,
+            ToolCall(id="call-1", name="question", arguments={}),
+            _arguments(),
+        )
+    )
+    async with asyncio.timeout(1):
+        await created.wait()
+    assert AgentRuntime.claim_question_resolution(request_id) is True
+    assert AgentRuntime.resolve_question(request_id, {"format": ["Kurz"]}) is True
+    assert await task == {"format": ["Kurz"]}
+    user_id, payload = push.await_args.args
+    assert user_id == session.user_id
+    assert payload.notification.body == "Welches Format?"
+    assert payload.notification.target.session_id == session.id
 
 
 async def test_answer_is_persisted_before_agent_resumes(monkeypatch) -> None:

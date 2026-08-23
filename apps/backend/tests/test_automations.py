@@ -452,10 +452,11 @@ async def test_third_delivery_failure_is_terminal_and_notifies_once(
         delivery_status="pending",
         delivery_attempts=2,
     )
-    create = AsyncMock()
+    notification_id = uuid4()
+    create = AsyncMock(return_value=notification_id)
     monkeypatch.setattr(NotificationService, "create", create)
 
-    await AutomationService._delivery_failure(
+    push = await AutomationService._delivery_failure(
         AsyncMock(spec=AsyncSession), run, automation
     )
 
@@ -465,6 +466,8 @@ async def test_third_delivery_failure_is_terminal_and_notifies_once(
     draft = create.await_args.args[1]
     assert draft.kind == "automation.deliveryFailed"
     assert draft.automation_run_id == run.id
+    assert push.notification.tag == f"notification:{notification_id}"
+    assert push.notification.target.run_id == run.id
 
 
 def test_notification_exposes_automation_run_target() -> None:

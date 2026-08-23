@@ -33,6 +33,12 @@ from mato_loop_backend.settings import (
     SkillsSettings,
     load_effective_ai,
 )
+from mato_loop_backend.web_push import (
+    WebPushAutomationRunTarget,
+    WebPushPayload,
+    WebPushService,
+    web_push_payload,
+)
 
 logger = logging.getLogger(__name__)
 ACTIVE_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
@@ -629,9 +635,12 @@ class AutomationService:
             run.delivery_status = "cancelled"
             run.delivery_next_attempt_at = None
         automation = await db.get(Automation, run.automation_id)
+        push = None
         if automation is not None:
-            await AutomationService._notify_terminal(db, automation, run)
+            push = await AutomationService._notify_terminal(db, automation, run)
         await db.commit()
+        if push is not None:
+            await WebPushService.deliver_after_commit(automation.user_id, push)
 
     @staticmethod
     async def process_next(db: AsyncSession) -> bool:
@@ -692,9 +701,9 @@ class AutomationService:
     @staticmethod
     async def _notify_terminal(
         db: AsyncSession, automation: Automation, run: AutomationRun
-    ) -> None:
+    ) -> WebPushPayload | None:
         if run.status not in {"completed", "failed"}:
-            return
+            return None
         completed = run.status == "completed"
         body = f'„{automation.name[:120]}“ konnte nicht abgeschlossen werden.'
         if completed:
@@ -710,7 +719,7 @@ class AutomationService:
                 else ""
             )
             body = result[:1_000] or f'„{automation.name[:120]}“ wurde abgeschlossen.'
-        await NotificationService.create(
+        notification_id = await NotificationService.create(
             db,
             NotificationDraft(
                 user_id=automation.user_id,
@@ -719,6 +728,16 @@ class AutomationService:
                 title="Automation abgeschlossen" if completed else "Automation fehlgeschlagen",
                 body=body,
                 deduplication_key=f"automation-run:{run.id}:{run.status}",
+            ),
+        )
+        if notification_id is None:
+            return None
+        return web_push_payload(
+            title="Automation abgeschlossen" if completed else "Automation fehlgeschlagen",
+            body=body,
+            tag=f"notification:{notification_id}",
+            target=WebPushAutomationRunTarget(
+                type="automationRun", automationId=automation.id, runId=run.id
             ),
         )
 
@@ -736,6 +755,7 @@ class AutomationService:
             ).all()
         )
         changed = 0
+        pushes: list[tuple[UUID, WebPushPayload]] = []
         now = datetime.now(UTC)
         for run, automation, agent_run in rows:
             status = agent_run.status
@@ -759,7 +779,9 @@ class AutomationService:
                 elif status in {"failed", "cancelled"} and run.delivery_status == "pending":
                     run.delivery_status = "cancelled"
                     run.delivery_next_attempt_at = None
-                await AutomationService._notify_terminal(db, automation, run)
+                push = await AutomationService._notify_terminal(db, automation, run)
+                if push is not None:
+                    pushes.append((automation.user_id, push))
                 if (
                     status == "completed"
                     and automation.archive_after_success
@@ -772,20 +794,23 @@ class AutomationService:
                 ):
                     automation.archived_at = run.completed_at
         await db.commit()
+        await asyncio.gather(
+            *(WebPushService.deliver_after_commit(user_id, push) for user_id, push in pushes)
+        )
         return changed
 
     @staticmethod
     async def _delivery_failure(
         db: AsyncSession, run: AutomationRun, automation: Automation
-    ) -> None:
+    ) -> WebPushPayload | None:
         run.delivery_attempts += 1
         if run.delivery_attempts < 3:
             delay = timedelta(seconds=30) if run.delivery_attempts == 1 else timedelta(minutes=5)
             run.delivery_next_attempt_at = datetime.now(UTC) + delay
-            return
+            return None
         run.delivery_status = "failed"
         run.delivery_next_attempt_at = None
-        await NotificationService.create(
+        notification_id = await NotificationService.create(
             db,
             NotificationDraft(
                 user_id=automation.user_id,
@@ -794,6 +819,16 @@ class AutomationService:
                 title="Automation-Ergebnis nicht zugestellt",
                 body=f'Das Ergebnis von „{automation.name[:120]}“ konnte nicht zugestellt werden.',
                 deduplication_key=f"automation-run:{run.id}:delivery-failed",
+            ),
+        )
+        if notification_id is None:
+            return None
+        return web_push_payload(
+            title="Automation-Ergebnis nicht zugestellt",
+            body=f'Das Ergebnis von „{automation.name[:120]}“ konnte nicht zugestellt werden.',
+            tag=f"notification:{notification_id}",
+            target=WebPushAutomationRunTarget(
+                type="automationRun", automationId=automation.id, runId=run.id
             ),
         )
 
@@ -881,8 +916,10 @@ class AutomationService:
             else None
         )
         if source is None or source.role != "assistant" or not source.content.strip():
-            await AutomationService._delivery_failure(db, run, automation)
+            push = await AutomationService._delivery_failure(db, run, automation)
             await db.commit()
+            if push is not None:
+                await WebPushService.deliver_after_commit(automation.user_id, push)
             return True
         execution_session = await db.get(ChatSession, automation.execution_session_id)
         if execution_session is not None and execution_session.private_integration_data_used:
@@ -914,8 +951,10 @@ class AutomationService:
             run = await db.get(AutomationRun, run_id)
             automation = await db.get(Automation, run.automation_id) if run else None
             if run is not None and automation is not None and run.delivery_status == "pending":
-                await AutomationService._delivery_failure(db, run, automation)
+                push = await AutomationService._delivery_failure(db, run, automation)
                 await db.commit()
+                if push is not None:
+                    await WebPushService.deliver_after_commit(automation.user_id, push)
             return True
         run.output_message_id = message.id
         run.delivery_status = "delivered"

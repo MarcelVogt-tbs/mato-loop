@@ -981,6 +981,19 @@ function refreshSessionsWhenVisible() {
   void notifications.fetchLatest({ suppressErrorToast: true }).catch(() => {})
 }
 
+function refreshPushState() {
+  void notifications.reconcilePush({ suppressErrorToast: true }).catch(() => {})
+}
+
+function handlePushMessage(event) {
+  if (event.data?.type !== 'matoloop:push' || event.data.version !== 1) return
+  void Promise.allSettled([
+    notifications.fetchLatest({ suppressErrorToast: true }),
+    approvals.fetchPending({ suppressErrorToast: true }),
+    questions.fetchPending({ suppressErrorToast: true })
+  ])
+}
+
 async function refreshActiveSessions() {
   if (
     document.visibilityState !== 'visible'
@@ -1134,6 +1147,8 @@ onMounted(async () => {
   window.addEventListener('resize', updateVisualViewport)
   window.addEventListener('keydown', handleSearchShortcut)
   document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
+  window.addEventListener('matoloop:service-worker-ready', refreshPushState)
+  window.navigator.serviceWorker?.addEventListener('message', handlePushMessage)
   sessionActivityTimer = window.setInterval(refreshActiveSessions, SESSION_ACTIVITY_REFRESH_MS)
   await Promise.allSettled([
     loadProjects(),
@@ -1141,6 +1156,7 @@ onMounted(async () => {
     approvals.fetchPending(),
     questions.fetchPending(),
     notifications.fetchLatest({ suppressErrorToast: true }),
+    notifications.reconcilePush({ suppressErrorToast: true }),
     identity.fetchIdentity()
   ])
 })
@@ -1151,6 +1167,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', updateVisualViewport)
   window.removeEventListener('keydown', handleSearchShortcut)
   document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)
+  window.removeEventListener('matoloop:service-worker-ready', refreshPushState)
+  window.navigator.serviceWorker?.removeEventListener('message', handlePushMessage)
   window.clearInterval(sessionActivityTimer)
   sessionActivityTimer = null
 })

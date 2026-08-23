@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api, notifyError } = vi.hoisted(() => ({
   api: {
+    delete: vi.fn(),
     get: vi.fn(),
     post: vi.fn(),
     put: vi.fn()
@@ -106,6 +107,48 @@ describe('auth store', () => {
     expect(chat.activeDraft).toBe('')
     expect(identity.displayName).toBe('MatoLoop')
     expect(identity.loaded).toBe(false)
+  })
+
+  it('removes the authenticated push registration before logout and unsubscribes locally', async () => {
+    const deviceId = '3e6e1d85-4c5e-4fb9-8b8b-77542d0e24ad'
+    const values = new Map([['matoLoopPushDeviceId', deviceId]])
+    let subscribed = true
+    const unsubscribe = vi.fn().mockImplementation(() => {
+      subscribed = false
+      return Promise.resolve(true)
+    })
+    const getSubscription = vi.fn().mockImplementation(() => Promise.resolve(
+      subscribed ? { unsubscribe } : null
+    ))
+    global.window = {
+      isSecureContext: true,
+      Notification: { permission: 'granted' },
+      PushManager: function PushManager() {},
+      navigator: {
+        serviceWorker: {
+          getRegistration: vi.fn().mockResolvedValue({ pushManager: { getSubscription } })
+        }
+      },
+      localStorage: {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, value),
+        removeItem: (key) => values.delete(key)
+      },
+      location: { reload: vi.fn(), replace: vi.fn() }
+    }
+    api.delete.mockResolvedValue({ data: null })
+    api.post.mockResolvedValue({ data: null })
+    const auth = useAuthStore()
+    auth.authenticated = true
+
+    await auth.logout()
+
+    expect(api.delete).toHaveBeenCalledWith(
+      `/notifications/push/subscriptions/${deviceId}`,
+      { suppressErrorToast: true }
+    )
+    expect(api.delete.mock.invocationCallOrder[0]).toBeLessThan(api.post.mock.invocationCallOrder[0])
+    expect(unsubscribe).toHaveBeenCalledOnce()
   })
 
   it('leaves the authenticated UI when local logout cleanup fails', async () => {

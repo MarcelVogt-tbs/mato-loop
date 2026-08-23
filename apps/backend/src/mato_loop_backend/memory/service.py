@@ -858,6 +858,7 @@ class MemoryService:
         pin_kind: MemoryPinKind | None,
         action_policy: ToolExecutionPolicy,
         pin_policy: ToolExecutionPolicy,
+        created: list[ApprovalRequest] | None = None,
     ) -> ApprovalRequest:
         ordered_targets = sorted(targets, key=lambda item: str(item.id))
         if not ordered_targets or any(item.user_id != owner_id for item in ordered_targets):
@@ -985,6 +986,8 @@ class MemoryService:
         )
         db.add(approval)
         await db.flush()
+        if created is not None:
+            created.append(approval)
         return approval
 
     @staticmethod

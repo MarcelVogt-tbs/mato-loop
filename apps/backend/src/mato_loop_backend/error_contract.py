@@ -133,6 +133,9 @@ _MESSAGES = {
     "internal.unexpected": "An unexpected error occurred.",
     "notification.notFound": "The notification was not found.",
     "notification.targetNotFound": "The notification target was not found.",
+    "webPush.disabled": "Web Push is not configured.",
+    "webPush.subscriptionConflict": "The push subscription is already registered.",
+    "webPush.unavailable": "Web Push is temporarily unavailable.",
     "integration.authenticationFailed": "The integration credentials were rejected.",
     "integration.adapterDisabled": "This integration adapter is disabled by the administrator.",
     "integration.attachmentTooLarge": "The file is too large to be attached.",
@@ -286,6 +289,7 @@ _NAMESPACE_MESSAGES = {
     "validation": "The request contains invalid data.",
     "video": "The video could not be analyzed.",
     "webfetch": "The web request could not be completed.",
+    "webPush": "The Web Push request could not be completed.",
     "workspace": "The workspace operation could not be completed.",
 }
 

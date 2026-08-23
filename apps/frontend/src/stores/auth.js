@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useChatStore } from 'src/stores/chat'
+import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
 import { notifyError } from 'src/utils/notifications'
 
 function identityFrom(data, authenticated = data.authenticated) {
@@ -40,6 +41,7 @@ export const useAuthStore = defineStore('auth', {
       } finally {
         chat.setDraftOwner(null)
         useAgentIdentityStore().resetIdentity()
+        await useInAppNotificationStore().unsubscribePushLocally()
       }
     },
     async applyIdentity(data, authenticated = data.authenticated) {
@@ -100,6 +102,7 @@ export const useAuthStore = defineStore('auth', {
       hardReload('/login')
     },
     async logout() {
+      await useInAppNotificationStore().removePushForLogout()
       await api.post('/auth/logout')
       await this.clearIdentityState()
       this.authenticated = false

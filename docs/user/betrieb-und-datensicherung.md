@@ -18,6 +18,28 @@ Die Standardwerte der vorbereiteten Compose-Datei sind nicht als sichere Interne
 
 Setzen Sie bei einem Betrieb über HTTPS ausdrücklich `MATO_LOOP_SECURE_COOKIES=true`. Der vorbereitete Stack verwendet standardmäßig `false`; ohne die Umstellung besitzt das Anmelde-Cookie kein `Secure`-Attribut.
 
+## App und Push-Benachrichtigungen
+
+Der Produktionsbuild ist eine installierbare Web-App. Betreiben Sie MatoLoop über eine vertrauenswürdige HTTPS-Adresse und setzen Sie `MATO_LOOP_SECURE_COOKIES=true`. Unter iOS und iPadOS stehen Push-Benachrichtigungen ab Version 16.4 nur zur Verfügung, nachdem MatoLoop über **Zum Home-Bildschirm** installiert wurde. Die Berechtigung wird ausschließlich über den Schalter im Benachrichtigungsbereich angefordert.
+
+Web Push ist standardmäßig deaktiviert. Aktivieren Sie nur die tatsächlich verwendeten Push-Dienste mit exakten HTTPS-Ursprüngen:
+
+```env
+MATO_LOOP_WEB_PUSH_ENABLED=true
+MATO_LOOP_WEB_PUSH_VAPID_SUBJECT=mailto:admin@example.com
+MATO_LOOP_WEB_PUSH_ALLOWED_ORIGINS=https://fcm.googleapis.com,https://updates.push.services.mozilla.com,https://web.push.apple.com
+```
+
+Die VAPID-Kennung muss eine betreute `mailto:`-Adresse oder eine öffentliche HTTPS-Adresse sein. MatoLoop erzeugt beim ersten Abruf der Push-Konfiguration den privaten Schlüssel `/data/secrets/web-push-vapid.pem`. Sichern Sie ihn zusammen mit Datenbank und Datenverzeichnis; ein verlorener Schlüssel macht bestehende Geräte-Abonnements unbrauchbar. Push-Zustellung erfolgt bestmöglich und ersetzt weder die gespeicherten Benachrichtigungen noch den Chatverlauf.
+
+Für den PWA-Entwicklungsmodus auf dem normalen Entwicklungsport `10020` verwenden Sie:
+
+```bash
+./scripts/dev.sh up --pwa --build -d
+```
+
+`localhost` gilt im Desktop-Browser als vertrauenswürdig. Für Tests auf Mobilgeräten ist auch in der Entwicklung eine HTTPS-Adresse erforderlich. Der PWA-Worker speichert keine Anwendungs-, API-, SSE-, Datei- oder Authentifizierungsdaten offline.
+
 ## Optionalen Computer einrichten
 
 MatoLoop kann mehrere Computer verwalten. Öffnen Sie **Einstellungen > Computer**, wählen Sie **Computer hinzufügen**, vergeben Sie einen Namen und wählen Sie die Gültigkeit des Kopplungstokens zwischen 30 Minuten und 24 Stunden. Der Dialog zeigt Computer-ID, WebSocket-Adresse und das nur einmal sichtbare Token. Der Computer erzeugt damit beim ersten Start einen eigenen dauerhaften Zugangsschlüssel. Ein abgelaufenes oder verlorenes Kopplungstoken kann in der Übersicht ersetzt werden. Ein bereits gekoppelter Computer muss vor einer erneuten Kopplung ausdrücklich entkoppelt werden.
@@ -55,6 +77,7 @@ Für eine vollständige Wiederherstellung benötigen Sie gemeinsam:
 - PostgreSQL-Datenbank
 - MatoLoop-Datenverzeichnis `/data`
 - insbesondere `/data/secrets/credential.key`
+- `/data/secrets/web-push-vapid.pem`, falls Web Push aktiviert ist
 - alle benötigten Arbeitsbereiche der Computer
 - die externe Computer-Konfiguration und der sichere Computer-Zustand unter `dataDir/agent-state`
 
