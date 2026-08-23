@@ -184,7 +184,13 @@
                       @click="form.schedules.splice(index, 1)"
                     />
                   </div>
-                  <div class="col-12"><q-toggle v-model="schedule.enabled" dense color="primary" label="Zeitplan aktiv" /></div>
+                  <div v-if="schedule.kind === 'cron'" class="col-12 col-md-6">
+                    <q-input
+                      v-model="schedule.validUntil" outlined dense stack-label type="datetime-local"
+                      label="Gültig bis (optional)" hint="Lokale Uhrzeit dieses Geräts, letzter Termin inklusive"
+                    />
+                  </div>
+                  <div class="col-12 col-md-6"><q-toggle v-model="schedule.enabled" dense color="primary" label="Zeitplan aktiv" /></div>
                 </q-card-section>
               </q-card>
               <q-toggle
@@ -250,9 +256,10 @@
                 <q-item-section>
                   <q-item-label v-if="schedule.runAt">Einmalig am {{ formatDate(schedule.runAt) }}</q-item-label>
                   <q-item-label v-else><code>{{ schedule.cron }}</code> · {{ schedule.timezone }}</q-item-label>
-                  <q-item-label caption>{{ schedule.runAt ? 'Ausführung' : 'Nächster Lauf' }}: {{ automations.detail.archivedAt ? 'Archiviert' : automations.detail.enabled && schedule.enabled ? formatDate(schedule.nextRunAt) || 'Nicht geplant' : automations.detail.enabled ? 'Inaktiv' : 'Pausiert' }}</q-item-label>
+                  <q-item-label v-if="schedule.validUntil" caption>Gültig bis einschließlich {{ formatDate(schedule.validUntil) }}</q-item-label>
+                  <q-item-label caption>{{ schedule.runAt ? 'Ausführung' : 'Nächster Lauf' }}: {{ scheduleNextRunLabel(automations.detail, schedule) }}</q-item-label>
                 </q-item-section>
-                  <q-item-section side><q-chip dense :color="automations.detail.enabled && schedule.enabled && !automations.detail.archivedAt ? 'positive' : 'grey-6'" :text-color="statusTextColor(automations.detail.enabled && schedule.enabled && !automations.detail.archivedAt ? 'positive' : 'grey-6')">{{ automations.detail.archivedAt ? 'Archiviert' : automations.detail.enabled && schedule.enabled ? 'Aktiv' : automations.detail.enabled ? 'Inaktiv' : 'Pausiert' }}</q-chip></q-item-section>
+                  <q-item-section side><q-chip dense :color="automations.detail.enabled && schedule.enabled && !automations.detail.archivedAt ? 'positive' : 'grey-6'" :text-color="statusTextColor(automations.detail.enabled && schedule.enabled && !automations.detail.archivedAt ? 'positive' : 'grey-6')">{{ scheduleStateLabel(automations.detail, schedule) }}</q-chip></q-item-section>
               </q-item>
             </q-list>
           </q-expansion-item>
@@ -297,7 +304,7 @@
                 <div v-if="automations.selectedRun.scheduleSnapshots?.length" class="q-mt-md">
                   <div class="text-caption app-muted">Zeitplan-Snapshots</div>
                   <div v-for="(snapshot, index) in automations.selectedRun.scheduleSnapshots" :key="index" class="text-body2">
-                    <template v-if="snapshot.runAt">Einmalig</template><template v-else><code>{{ snapshot.cron }}</code> · {{ snapshot.timezone }}</template><span v-if="snapshot.scheduledFor"> · {{ formatDate(snapshot.scheduledFor) }}</span>
+                    <template v-if="snapshot.runAt">Einmalig</template><template v-else><code>{{ snapshot.cron }}</code> · {{ snapshot.timezone }}</template><span v-if="snapshot.scheduledFor"> · {{ formatDate(snapshot.scheduledFor) }}</span><span v-if="snapshot.validUntil"> · gültig bis {{ formatDate(snapshot.validUntil) }}</span>
                   </div>
                 </div>
                 <div v-if="automations.selectedRun.result?.content" class="q-mt-md">
@@ -437,7 +444,7 @@ const runtimeItems = computed(() => {
 })
 
 function blankSchedule() {
-  return { kind: 'cron', cron: '0 8 * * 1-5', timezone: 'Europe/Berlin', runAt: '', enabled: true }
+  return { kind: 'cron', cron: '0 8 * * 1-5', timezone: 'Europe/Berlin', runAt: '', validUntil: '', enabled: true }
 }
 
 async function loadAutomations() {
@@ -462,11 +469,12 @@ function resetForm(automation = null) {
     outputSessionId: automation?.outputSessionId || null,
     outputSessionRequired: automation?.outputSessionRequired || false,
     archiveAfterSuccess: automation?.archiveAfterSuccess || false,
-    schedules: automation?.schedules?.map(({ cron, timezone, runAt, enabled }) => ({
+    schedules: automation?.schedules?.map(({ cron, timezone, runAt, validUntil, enabled }) => ({
       kind: runAt ? 'once' : 'cron',
       cron: cron || '0 8 * * 1-5',
       timezone: timezone || 'Europe/Berlin',
       runAt: formatDateTimeLocalInput(runAt),
+      validUntil: formatDateTimeLocalInput(validUntil),
       enabled
     })) || [blankSchedule()]
   })
@@ -504,7 +512,12 @@ async function saveAutomation() {
     archiveAfterSuccess: Boolean(canArchiveAfterSuccess.value && form.archiveAfterSuccess),
     schedules: form.schedules.map((schedule) => schedule.kind === 'once'
       ? { runAt: localDateTimeToIso(schedule.runAt), enabled: schedule.enabled }
-      : { cron: schedule.cron.trim(), timezone: schedule.timezone.trim(), enabled: schedule.enabled })
+      : {
+          cron: schedule.cron.trim(),
+          timezone: schedule.timezone.trim(),
+          validUntil: schedule.validUntil ? localDateTimeToIso(schedule.validUntil) : null,
+          enabled: schedule.enabled
+        })
   }
   try {
     if (editingAutomation.value) {
@@ -653,6 +666,23 @@ function triggerLabel(trigger) {
 
 function activeScheduleCount(automation) {
   return automation.enabled ? automation.schedules.filter((schedule) => schedule.enabled).length : 0
+}
+
+function scheduleExpired(schedule) {
+  return schedule.validUntil && new Date(schedule.nextRunAt) > new Date(schedule.validUntil)
+}
+
+function scheduleStateLabel(automation, schedule) {
+  if (automation.archivedAt) return 'Archiviert'
+  if (!automation.enabled) return 'Pausiert'
+  if (scheduleExpired(schedule)) return 'Abgelaufen'
+  return schedule.enabled ? 'Aktiv' : 'Inaktiv'
+}
+
+function scheduleNextRunLabel(automation, schedule) {
+  return schedule.enabled && automation.enabled && !automation.archivedAt
+    ? formatDate(schedule.nextRunAt) || 'Nicht geplant'
+    : scheduleStateLabel(automation, schedule)
 }
 
 function statusTextColor(color) {

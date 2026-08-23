@@ -88,6 +88,10 @@ class AutomationSchedule(Base):
             "(cron_expression IS NOT NULL AND timezone IS NOT NULL)",
             name="cron_timezone_pair",
         ),
+        CheckConstraint(
+            "valid_until IS NULL OR cron_expression IS NOT NULL",
+            name="valid_until_requires_cron",
+        ),
         UniqueConstraint("automation_id", "cron_expression", "timezone"),
         Index("ix_automation_schedules_due", "enabled", "next_run_at", "id"),
     )
@@ -102,6 +106,9 @@ class AutomationSchedule(Base):
         Boolean, nullable=False, default=True, server_default=text("true")
     )
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

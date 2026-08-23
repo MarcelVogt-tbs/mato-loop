@@ -198,6 +198,9 @@ describe('API error messages', () => {
         params: { maxItems: 4 }
       }
     })).toBe('Die Audioauswahl darf höchstens 4 Einträge enthalten.')
+    expect(apiErrorMessage({
+      error: { code: 'validation.invalid', field: 'validUntil' }
+    })).toBe('Das Gültigkeitsende ist ungültig.')
   })
 
   it('translates execution, process and transfer errors without unsafe retry advice', () => {

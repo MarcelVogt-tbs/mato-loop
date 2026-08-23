@@ -32,6 +32,7 @@ const fieldLabels = {
   schedules: 'Die Zeitpläne',
   skillCreationModelId: 'Das Modell für die Skill-Erstellung',
   trustLevel: 'Die Vertrauensstufe',
+  validUntil: 'Das Gültigkeitsende',
   dreamingIntervalMinutes: 'Das Dreaming-Intervall',
   dreamingIdleMinutes: 'Die Dreaming-Leerlaufzeit',
   dreamingMaxBatchMessages: 'Die maximale Nachrichtenanzahl pro Dreaming-Lauf',

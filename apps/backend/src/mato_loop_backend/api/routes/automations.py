@@ -39,6 +39,7 @@ class ScheduleRequest(BaseModel):
     cron: str | None = Field(default=None, min_length=1, max_length=255)
     timezone: str | None = Field(default=None, min_length=1, max_length=100)
     run_at: datetime | None = Field(default=None, alias="runAt")
+    valid_until: datetime | None = Field(default=None, alias="validUntil")
     enabled: bool = True
 
     @field_validator("cron", "timezone")
@@ -50,11 +51,11 @@ class ScheduleRequest(BaseModel):
             raise ValueError("schedule value must not be blank")
         return cleaned
 
-    @field_validator("run_at")
+    @field_validator("run_at", "valid_until")
     @classmethod
-    def run_at_is_aware(cls, value: datetime | None) -> datetime | None:
+    def schedule_datetime_is_aware(cls, value: datetime | None) -> datetime | None:
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
-            raise ValueError("runAt must include a timezone offset")
+            raise ValueError("schedule datetime must include a timezone offset")
         return value
 
     @model_validator(mode="after")
@@ -62,8 +63,12 @@ class ScheduleRequest(BaseModel):
         if self.run_at is None:
             if self.cron is None or self.timezone is None:
                 raise ValueError("cron and timezone are required together")
-        elif self.cron is not None or self.timezone is not None:
-            raise ValueError("runAt cannot be combined with cron or timezone")
+        elif (
+            self.cron is not None
+            or self.timezone is not None
+            or self.valid_until is not None
+        ):
+            raise ValueError("runAt cannot be combined with recurrence fields")
         return self
 
 
@@ -127,6 +132,7 @@ def _schedule_payload(item) -> dict[str, Any]:
         "cron": item.cron_expression,
         "timezone": item.timezone,
         "runAt": item.next_run_at.isoformat() if item.cron_expression is None else None,
+        "validUntil": item.valid_until.isoformat() if item.valid_until else None,
         "enabled": item.enabled,
         "nextRunAt": item.next_run_at.isoformat(),
     }

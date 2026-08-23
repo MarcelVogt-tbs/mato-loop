@@ -67,6 +67,21 @@ def next_run_at(cron_expression: str, timezone: str, after: datetime) -> datetim
     return value.astimezone(UTC)
 
 
+def advance_schedule(schedule: AutomationSchedule, after: datetime) -> None:
+    if schedule.cron_expression is None:
+        schedule.enabled = False
+        return
+    assert schedule.timezone is not None
+    schedule.next_run_at = next_run_at(
+        schedule.cron_expression, schedule.timezone, after
+    )
+    if (
+        schedule.valid_until is not None
+        and schedule.next_run_at > schedule.valid_until
+    ):
+        schedule.enabled = False
+
+
 def runtime_snapshot(session: ChatSession) -> dict[str, Any]:
     return {
         "modelId": str(session.model_config_id) if session.model_config_id else None,
@@ -176,6 +191,15 @@ class AutomationService:
             cron = draft.get("cron")
             timezone = draft.get("timezone")
             run_at = draft.get("run_at")
+            valid_until = draft.get("valid_until")
+            if valid_until is not None:
+                if (
+                    not isinstance(valid_until, datetime)
+                    or valid_until.tzinfo is None
+                    or valid_until.utcoffset() is None
+                ):
+                    raise AutomationError("automation.scheduleInvalid", field="validUntil")
+                valid_until = valid_until.astimezone(UTC)
             if run_at is None:
                 if not isinstance(cron, str) or not isinstance(timezone, str):
                     raise AutomationError("automation.scheduleInvalid", field="schedules")
@@ -185,6 +209,7 @@ class AutomationService:
                 if (
                     cron is not None
                     or timezone is not None
+                    or valid_until is not None
                     or not isinstance(run_at, datetime)
                     or run_at.tzinfo is None
                     or run_at.utcoffset() is None
@@ -199,8 +224,10 @@ class AutomationService:
                 AutomationSchedule(
                     cron_expression=cron,
                     timezone=timezone,
-                    enabled=draft["enabled"],
+                    enabled=draft["enabled"]
+                    and (valid_until is None or next_at <= valid_until),
                     next_run_at=next_at,
+                    valid_until=valid_until,
                 )
             )
         automation.schedules = replacement
@@ -540,19 +567,18 @@ class AutomationService:
                         if item.cron_expression is None
                         else None
                     ),
+                    **(
+                        {"validUntil": item.valid_until.isoformat()}
+                        if item.valid_until
+                        else {}
+                    ),
                     "scheduledFor": item.next_run_at.isoformat(),
                 }
                 for item in due
             ]
             scheduled_for = min(item.next_run_at for item in due)
             for item in due:
-                if item.cron_expression is None:
-                    item.enabled = False
-                else:
-                    assert item.timezone is not None
-                    item.next_run_at = next_run_at(
-                        item.cron_expression, item.timezone, now
-                    )
+                advance_schedule(item, now)
             active = await db.scalar(
                 select(AutomationRun.id).where(
                     AutomationRun.automation_id == automation.id,
@@ -929,13 +955,7 @@ class AutomationService:
             ).all()
         )
         for schedule in schedules:
-            if schedule.cron_expression is None:
-                schedule.enabled = False
-            else:
-                assert schedule.timezone is not None
-                schedule.next_run_at = next_run_at(
-                    schedule.cron_expression, schedule.timezone, now
-                )
+            advance_schedule(schedule, now)
         await db.commit()
 
 

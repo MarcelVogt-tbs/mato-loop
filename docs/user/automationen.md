@@ -24,6 +24,8 @@ Minute Stunde Tag Monat Wochentag
 
 Das Beispiel `0 8 * * 1-5` startet die Automation montags bis freitags um 08:00 Uhr. Die IANA-Zeitzone, beispielsweise `Europe/Berlin`, bestimmt die lokale Uhrzeit.
 
+Wiederkehrende Zeitpläne können optional ein Gültigkeitsende besitzen. Ein Termin genau zu diesem Zeitpunkt wird noch ausgeführt; spätere Cron-Termine entfallen und der Zeitplan wird als abgelaufen angezeigt. Damit lässt sich beispielsweise eine tägliche Erinnerung auf eine Woche begrenzen. Die Automation und ihre Laufhistorie bleiben danach erhalten und können weiterhin manuell gestartet werden.
+
 Ein einmaliger Zeitplan verwendet stattdessen einen festen Ausführungszeitpunkt. Nach diesem Termin wird der Zeitplan deaktiviert und nicht erneut ausgeführt.
 
 Bei der Zeitumstellung wird eine nicht existente lokale Cron-Uhrzeit im Frühjahr einmal direkt nach dem Zeitsprung ausgeführt. Eine doppelte Uhrzeit im Herbst läuft nur einmal. Während einer Serverunterbrechung verpasste wiederkehrende und einmalige Termine werden nicht nachgeholt. Treffen mehrere Zeitpläne derselben Automation gleichzeitig, werden sie zu einem Lauf zusammengefasst.

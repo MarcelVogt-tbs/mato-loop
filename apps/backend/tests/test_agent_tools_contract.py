@@ -1010,6 +1010,22 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
             }
         )
 
+    recurring = tools_module.AutomationScheduleArguments.model_validate(
+        {
+            "cron": "0 8 * * *",
+            "timezone": "Europe/Berlin",
+            "valid_until": "2026-08-28T08:00:00+02:00",
+        }
+    )
+    assert recurring.valid_until == datetime(2026, 8, 28, 6, tzinfo=UTC)
+    with pytest.raises(ValueError):
+        tools_module.AutomationScheduleArguments.model_validate(
+            {
+                "run_at": "2026-08-21T10:30:00+02:00",
+                "valid_until": "2026-08-28T10:30:00+02:00",
+            }
+        )
+
 
 async def test_create_automation_approval_uses_current_session_boundaries(
     tmp_path, monkeypatch
@@ -1021,7 +1037,13 @@ async def test_create_automation_approval_uses_current_session_boundaries(
             "name": "Bericht",
             "task": "Erstelle den Bericht",
             "enabled": True,
-            "schedules": [{"cron": "0 8 * * *", "timezone": "Europe/Berlin"}],
+            "schedules": [
+                {
+                    "cron": "0 8 * * *",
+                    "timezone": "Europe/Berlin",
+                    "valid_until": "2026-08-28T08:00:00+02:00",
+                }
+            ],
             "deliver_to_current_session": False,
             "output_session_required": True,
         },
@@ -1052,9 +1074,15 @@ async def test_create_automation_approval_uses_current_session_boundaries(
     assert permission.capability == "automation.create"
     assert permission.title == "Automation erstellen?"
     assert permission.approval_details["automationPreview"]["output"] == "current"
+    assert permission.approval_details["automationPreview"]["schedules"][0][
+        "valid_until"
+    ] == "2026-08-28T08:00:00+02:00"
     assert create.await_args.kwargs["source_session_id"] == context.session.id
     assert create.await_args.kwargs["output_session_id"] == context.session.id
     assert create.await_args.kwargs["archive_after_success"] is False
+    assert create.await_args.kwargs["schedules"][0]["valid_until"] == datetime(
+        2026, 8, 28, 6, tzinfo=UTC
+    )
 
 
 async def test_run_automation_rechecks_revision_after_approval_and_queues_only(

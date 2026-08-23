@@ -12,6 +12,7 @@ from mato_loop_backend.api.routes.sessions import _automation_impact_token
 from mato_loop_backend.automations import (
     AutomationError,
     AutomationService,
+    advance_schedule,
     next_run_at,
     runtime_snapshot,
 )
@@ -57,6 +58,17 @@ def test_schedule_request_accepts_exactly_one_schedule_kind() -> None:
     with pytest.raises(ValidationError):
         ScheduleRequest.model_validate_json('{"enabled":true}')
 
+    recurring = ScheduleRequest.model_validate_json(
+        '{"cron":"0 8 * * *","timezone":"Europe/Berlin",'
+        '"validUntil":"2026-08-28T08:00:00+02:00"}'
+    )
+    assert recurring.valid_until == datetime(2026, 8, 28, 6, tzinfo=UTC)
+    with pytest.raises(ValidationError):
+        ScheduleRequest.model_validate_json(
+            '{"runAt":"2026-08-21T10:30:00+02:00",'
+            '"validUntil":"2026-08-28T10:30:00+02:00"}'
+        )
+
 
 def test_one_time_schedule_uses_existing_next_run_at() -> None:
     automation = Automation(
@@ -78,6 +90,38 @@ def test_one_time_schedule_uses_existing_next_run_at() -> None:
     assert automation.schedules[0].cron_expression is None
     assert automation.schedules[0].timezone is None
     assert automation.schedules[0].next_run_at == run_at
+
+
+def test_recurring_schedule_advances_until_inclusive_cutoff() -> None:
+    cutoff = datetime(2026, 8, 21, 8, tzinfo=UTC)
+    automation = Automation(
+        id=uuid4(),
+        user_id=uuid4(),
+        execution_session_id=uuid4(),
+        name="Erinnerung",
+        task="Erinnere mich",
+    )
+    AutomationService.set_schedules(
+        automation,
+        [
+            {
+                "cron": "0 8 * * *",
+                "timezone": "UTC",
+                "valid_until": datetime.fromisoformat("2026-08-21T10:00:00+02:00"),
+                "enabled": True,
+            }
+        ],
+        now=datetime(2026, 8, 20, 8, tzinfo=UTC),
+    )
+
+    schedule = automation.schedules[0]
+    assert schedule.next_run_at == cutoff
+    assert schedule.valid_until == cutoff
+    assert schedule.enabled is True
+
+    advance_schedule(schedule, cutoff)
+    assert schedule.next_run_at == datetime(2026, 8, 22, 8, tzinfo=UTC)
+    assert schedule.enabled is False
 
 
 def test_archive_policy_requires_one_one_time_schedule() -> None:
@@ -170,6 +214,7 @@ async def test_due_schedules_are_bundled_into_one_skipped_run() -> None:
             timezone="UTC",
             enabled=True,
             next_run_at=now,
+            valid_until=now,
         ),
         AutomationSchedule(
             id=uuid4(),
@@ -199,6 +244,9 @@ async def test_due_schedules_are_bundled_into_one_skipped_run() -> None:
     assert run.status == "skipped"
     assert run.error_code == "automation.alreadyRunning"
     assert len(run.schedule_snapshots) == 2
+    assert run.schedule_snapshots[0]["validUntil"] == now.isoformat()
+    assert automation.schedules[0].enabled is False
+    assert automation.schedules[1].enabled is True
     assert all(schedule.next_run_at > now for schedule in automation.schedules)
     db.commit.assert_awaited_once()
 

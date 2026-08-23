@@ -1819,6 +1819,7 @@ class AutomationScheduleArguments(ToolArguments):
         max_length=100,
     )
     run_at: datetime | None = None
+    valid_until: datetime | None = None
     enabled: bool = True
 
     @field_validator("cron", "timezone")
@@ -1832,16 +1833,23 @@ class AutomationScheduleArguments(ToolArguments):
 
     @model_validator(mode="after")
     def schedule_is_valid(self) -> AutomationScheduleArguments:
+        if self.valid_until is not None and (
+            self.valid_until.tzinfo is None or self.valid_until.utcoffset() is None
+        ):
+            raise ValueError("valid_until must be timezone-aware")
         if self.run_at is None:
             if self.cron is None or self.timezone is None:
                 raise ValueError("cron and timezone are required together")
             next_run_at(self.cron, self.timezone, datetime.now(UTC))
         elif (
             self.cron is not None
+            or self.valid_until is not None
             or self.run_at.tzinfo is None
             or self.run_at.utcoffset() is None
         ):
-            raise ValueError("run_at must be timezone-aware and cannot use cron")
+            raise ValueError(
+                "run_at must be timezone-aware and cannot use recurrence fields"
+            )
         else:
             self.timezone = None
         return self
@@ -4628,12 +4636,8 @@ def _automation_schedules(
 def _automation_schedule_json(schedules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
-            **item,
-            **(
-                {"run_at": item["run_at"].isoformat()}
-                if isinstance(item.get("run_at"), datetime)
-                else {}
-            ),
+            key: value.isoformat() if isinstance(value, datetime) else value
+            for key, value in item.items()
         }
         for item in schedules
     ]
@@ -4643,6 +4647,7 @@ def _automation_schedule_lines(schedules: list[dict[str, Any]]) -> tuple[str, ..
     return tuple(
         f'{item.get("run_at") or "{} | {}".format(item["cron"], item["timezone"])} | '
         f'{"aktiv" if item["enabled"] else "inaktiv"}'
+        f'{" | gültig bis " + item["valid_until"] if item.get("valid_until") else ""}'
         for item in _automation_schedule_json(schedules)
     )
 
@@ -4672,6 +4677,9 @@ async def _automation_definition_payload(
                     item.next_run_at.isoformat()
                     if item.cron_expression is None
                     else None
+                ),
+                "validUntil": (
+                    item.valid_until.isoformat() if item.valid_until else None
                 ),
                 "enabled": item.enabled,
                 "nextRunAt": item.next_run_at.isoformat(),
@@ -4867,7 +4875,15 @@ def _automation_edit_diff(
             **(
                 {"run_at": item.next_run_at.isoformat()}
                 if item.cron_expression is None
-                else {"cron": item.cron_expression, "timezone": item.timezone}
+                else {
+                    "cron": item.cron_expression,
+                    "timezone": item.timezone,
+                    **(
+                        {"valid_until": item.valid_until.isoformat()}
+                        if item.valid_until
+                        else {}
+                    ),
+                }
             ),
             "enabled": item.enabled,
         }
@@ -5774,7 +5790,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "create_automation",
-            "Create only if latest asks. Schedules use cron+timezone or run_at alone; archive_after_success needs one run_at.",
+            "Create if asked. Use cron+timezone or run_at alone; valid_until inclusively limits cron. Archiving needs one run_at.",
             CreateAutomationArguments,
             _create_automation,
             group="automations",
@@ -5784,7 +5800,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "edit_automation",
-            "Edit exact revision only if latest asks; cron+timezone or run_at alone. archive_after_success needs one run_at.",
+            "Edit an exact revision if asked. Use cron+timezone or run_at alone; valid_until inclusively limits cron. Archiving needs one run_at.",
             EditAutomationArguments,
             _edit_automation,
             group="automations",

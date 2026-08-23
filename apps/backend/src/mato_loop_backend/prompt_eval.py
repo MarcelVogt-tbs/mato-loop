@@ -4046,18 +4046,18 @@ _COMPACT_FIELD_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "focus": "Requested result or question.",
     },
     "create_automation": {
-        "schedule": "Use cron with timezone, or one timezone-aware run_at.",
+        "schedule": "Use cron+timezone with optional valid_until, or run_at with an offset.",
     },
     "edit_automation": {
-        "schedule": "Use cron with timezone, or one timezone-aware run_at.",
+        "schedule": "Use cron+timezone with optional valid_until, or run_at with an offset.",
     },
 }
 
 _NULL_EQUIVALENT_TO_OMISSION = {
     "question": {"description", "placeholder"},
     "analyze_video": {"language", "focus"},
-    "create_automation": {"skill_id", "cron", "timezone", "run_at"},
-    "edit_automation": {"skill_id", "cron", "timezone", "run_at"},
+    "create_automation": {"skill_id", "cron", "timezone", "run_at", "valid_until"},
+    "edit_automation": {"skill_id", "cron", "timezone", "run_at", "valid_until"},
     "memory_retrieve": {"query", "category", "cursor_updated_at", "cursor_id"},
     "calendar_create_event": {"description", "location"},
     "calendar_update_event": {"summary", "timing"},
