@@ -2076,6 +2076,24 @@ CASES = (
         expected_no_tools=True,
         content_contains=("4.2",),
     ),
+    PromptCase(
+        id="research_url_is_not_turned_into_qr_code",
+        kind="general",
+        user="Fasse die typischen Use-Cases aus der vorhandenen Quelle zusammen.",
+        tools=("generate_qr_code",),
+        system_options={
+            "research_tool_calls_used": 8,
+            "research_tool_call_limit": 8,
+            "research_tools_exhausted": True,
+        },
+        continuation=_exchange(
+            "webfetch",
+            {"url": "https://arabold-docs-mcp-server.mintlify.app/"},
+            '{"title":"Grounded Docs","content":"Typical uses include version-specific documentation."}',
+        ),
+        expected_no_tools=True,
+        forbidden_tools=("generate_qr_code",),
+    ),
     # Required memory workflow outcomes.
     PromptCase(
         id="memory_write_pending_requires_tool",
@@ -3686,6 +3704,7 @@ _SEMANTIC_CONTRACTS = (
         (
             "generate_image_uses_prompt",
             "generate_qr_code_avoids_image_generation",
+            "research_url_is_not_turned_into_qr_code",
             "read_qr_code_uses_attachment_uuid",
             "successful_qr_result_is_not_repeated",
             "edit_image_preserves_unspecified_content",

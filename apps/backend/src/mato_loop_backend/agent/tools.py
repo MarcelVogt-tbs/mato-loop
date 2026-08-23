@@ -5579,8 +5579,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "generate_qr_code",
-            "Create a deterministic, scannable QR code PNG that encodes content exactly. Use this "
-            "instead of generate_image for QR codes.",
+            "Create an exact, scannable QR code PNG only when the latest user asks for one. Never "
+            "use it to open, fetch, or cite a URL.",
             GenerateQrCodeArguments,
             _generate_qr_code,
             group="media",

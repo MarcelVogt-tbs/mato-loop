@@ -183,6 +183,26 @@ def test_transcript_routing_uses_the_production_tool_contract() -> None:
     assert {tool["name"] for tool in webfetch_tools} == {"web_search", "webfetch"}
 
 
+def test_qr_generation_requires_an_explicit_user_request() -> None:
+    messages, tools = build_case(_case("research_url_is_not_turned_into_qr_code"))
+
+    assert [tool["name"] for tool in tools] == ["generate_qr_code"]
+    assert "only when the latest user asks" in tools[0]["description"]
+    assert "Research tools are unavailable for the rest of this turn" in messages[0]["content"]
+    assert evaluate(
+        _case("research_url_is_not_turned_into_qr_code"),
+        ProviderResult(
+            tool_calls=[
+                ToolCall(
+                    "qr",
+                    "generate_qr_code",
+                    {"content": "https://arabold-docs-mcp-server.mintlify.app/"},
+                )
+            ]
+        ),
+    ) == ["expected no tools, got ['generate_qr_code']", "forbidden tool called: generate_qr_code"]
+
+
 def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     required = _case("required_search_calls_search")
     messages, tools = build_case(required)
@@ -1748,10 +1768,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 132
-    assert payload["contractCount"] == 288
-    assert "Cases: 156" in report
+    assert payload["contractCount"] == 289
+    assert "Cases: 157" in report
     assert "Semantic contracts: 132" in report
-    assert "All inventory rows: 288" in report
+    assert "All inventory rows: 289" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report
