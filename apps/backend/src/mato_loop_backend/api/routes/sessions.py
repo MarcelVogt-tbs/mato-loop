@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -61,7 +61,11 @@ from mato_loop_backend.models import (
     WebSearchPolicy,
 )
 from mato_loop_backend.security import require_user
-from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
+from mato_loop_backend.session_storage import (
+    SessionMoveReceipt,
+    SessionStorage,
+    SessionStorageError,
+)
 from mato_loop_backend.settings import (
     AiSettings,
     InstanceLimits,
@@ -84,6 +88,9 @@ router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
 
 
+_LAST_MESSAGE_AT_UNSET = object()
+_VISIBLE_MESSAGE_ROLES = ("user", "assistant")
+
 def _automation_impact_token(automations: list[Automation]) -> str:
     value = "|".join(
         f"{item.id}:{item.revision}:{int(item.output_session_required)}"
@@ -91,9 +98,6 @@ def _automation_impact_token(automations: list[Automation]) -> str:
     )
     return hashlib.sha256(value.encode()).hexdigest()
 
-
-_LAST_MESSAGE_AT_UNSET = object()
-_VISIBLE_MESSAGE_ROLES = ("user", "assistant")
 
 
 def _encode_session_cursor(
@@ -274,6 +278,71 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
             }
         )
     return actions
+
+
+def _rebind_session_file_metadata(
+    session: ChatSession,
+    messages: list[Message],
+    source_identity: UUID,
+    target_identity: UUID | None,
+) -> None:
+    source = str(source_identity)
+    target = str(target_identity) if target_identity is not None else None
+    control_center = dict(session.control_center or {})
+    file_view = control_center.get("file_view")
+    if (
+        isinstance(file_view, dict)
+        and file_view.get("scope") == "session"
+        and file_view.get("root_identity") == source
+    ):
+        control_center["file_view"] = (
+            {**file_view, "root_identity": target} if target is not None else None
+        )
+        session.control_center = control_center
+    for message in messages:
+        provider_data = dict(message.provider_data or {})
+        runtime_data = provider_data.get("_matoloop")
+        if not isinstance(runtime_data, dict):
+            continue
+        rebound_runtime = dict(runtime_data)
+        actions = runtime_data.get("fileActions")
+        if isinstance(actions, list):
+            rebound_runtime["fileActions"] = [
+                {
+                    **action,
+                    "rootIdentity": target,
+                }
+                if target is not None
+                and isinstance(action, dict)
+                and action.get("root") == "session"
+                and action.get("rootIdentity") == source
+                else action
+                for action in actions
+                if target is not None
+                or not (
+                    isinstance(action, dict)
+                    and action.get("root") == "session"
+                    and action.get("rootIdentity") == source
+                )
+            ]
+        active_file = runtime_data.get("activeFile")
+        if (
+            isinstance(active_file, dict)
+            and active_file.get("root") == "session"
+            and active_file.get("rootIdentity") == source
+        ):
+            if target is None:
+                rebound_runtime.pop("activeFile", None)
+            else:
+                rebound_runtime["activeFile"] = {
+                    **active_file,
+                    "rootIdentity": target,
+                }
+        if rebound_runtime != runtime_data:
+            provider_data["_matoloop"] = rebound_runtime
+            message.provider_data = provider_data
+
+
 def _model_available(ai: AiSettings, model_id: UUID | None) -> bool:
     if not ai.enabled or model_id is None:
         return False
@@ -1638,45 +1707,131 @@ async def update_session(
             db, item.id, agent_id, root_id, root_revision, item.current_directory
         )
     storage = SessionStorage()
-    moved = False
+    move_receipt: SessionMoveReceipt | None = None
 
     async def restore_storage() -> None:
-        if not moved:
+        nonlocal move_receipt
+        if move_receipt is None:
             return
+        receipt, move_receipt = move_receipt, None
         try:
             await asyncio.to_thread(
-                storage.move_session,
-                item.id,
-                target_project_id,
-                source_project_id,
+                storage.rollback_session_move,
+                receipt,
             )
         except BaseException:
             logger.exception("Session storage could not be restored after project move")
 
+    async def finalize_storage() -> None:
+        nonlocal move_receipt
+        if move_receipt is None:
+            return
+        receipt, move_receipt = move_receipt, None
+        try:
+            await asyncio.to_thread(storage.finalize_session_move, receipt)
+        except BaseException:
+            logger.exception("Session storage move could not be finalized")
+
+    async def resolve_storage_after_commit_error() -> None:
+        nonlocal move_receipt
+        await db.rollback()
+        if move_receipt is None:
+            return
+        receipt, move_receipt = move_receipt, None
+        try:
+            row = (
+                await db.execute(
+                    select(ChatSession.project_id)
+                    .where(ChatSession.id == item.id)
+                    .with_for_update()
+                )
+            ).one_or_none()
+            persisted_project_id = row[0] if row is not None else None
+        except BaseException:
+            try:
+                await db.rollback()
+            except BaseException:
+                logger.exception("Database rollback failed while resolving session move")
+            await asyncio.to_thread(
+                storage.abandon_session_move,
+                receipt,
+            )
+            logger.exception(
+                "Session storage move outcome remains journaled after commit failure"
+            )
+            return
+        try:
+            if row is not None and persisted_project_id == receipt.source_project_id:
+                await asyncio.to_thread(storage.rollback_session_move, receipt)
+            else:
+                await asyncio.to_thread(storage.finalize_session_move, receipt)
+        except BaseException:
+            logger.exception("Session storage move could not be reconciled after commit failure")
+        finally:
+            await db.rollback()
+
     commit_task: asyncio.Task[None] | None = None
     try:
         if target_project_id != source_project_id:
+            quota_bytes = None
             if source_project_id is None and target_project_id is not None:
-                standalone_root = storage.session_path(
-                    item.id, project_id=None, require_exists=True
+                quota_bytes = (
+                    await SettingsStore.load(db, InstanceLimits)
+                ).session_quota_bytes
+            stage_task = asyncio.create_task(
+                asyncio.to_thread(
+                    storage.stage_session_move,
+                    item.id,
+                    source_project_id,
+                    target_project_id,
+                    quota_bytes=quota_bytes,
                 )
-                if any(
-                    any((standalone_root / name).iterdir())
-                    for name in ("files", "revisions")
-                ):
-                    raise ApiError(409, "session.projectFilesConflict")
-            await asyncio.to_thread(
-                storage.move_session,
-                item.id,
-                source_project_id,
-                target_project_id,
             )
-            moved = True
+            try:
+                move_receipt = await asyncio.shield(stage_task)
+            except asyncio.CancelledError:
+                move_receipt = await stage_task
+                raise
             item.project_id = target_project_id
+            if source_project_id is None and target_project_id is not None:
+                await db.execute(
+                    update(MessageAttachment)
+                    .where(
+                        MessageAttachment.file_root_id == item.id,
+                        MessageAttachment.message_id.in_(
+                            select(Message.id).where(Message.session_id == item.id)
+                        ),
+                    )
+                    .values(file_root_id=target_project_id)
+                )
+            elif source_project_id is not None:
+                await db.execute(
+                    delete(MessageAttachment).where(
+                        MessageAttachment.file_root_id == source_project_id,
+                        MessageAttachment.message_id.in_(
+                            select(Message.id).where(Message.session_id == item.id)
+                        ),
+                    )
+                )
+            source_identity = source_project_id or item.id
+            stored_messages = list(
+                (
+                    await db.scalars(
+                        select(Message).where(Message.session_id == item.id)
+                    )
+                ).all()
+            )
+            _rebind_session_file_metadata(
+                item,
+                stored_messages,
+                source_identity,
+                target_project_id if source_project_id is None else None,
+            )
         await db.flush()
         await db.refresh(item)
         commit_task = asyncio.create_task(db.commit())
         await asyncio.shield(commit_task)
+        await finalize_storage()
     except asyncio.CancelledError:
         if commit_task is None:
             await db.rollback()
@@ -1685,16 +1840,28 @@ async def update_session(
         try:
             await commit_task
         except BaseException:
-            await db.rollback()
-            await restore_storage()
+            await resolve_storage_after_commit_error()
+        else:
+            await finalize_storage()
         raise
-    except (OSError, SessionStorageError) as exc:
+    except SessionStorageError as exc:
+        await db.rollback()
+        await restore_storage()
+        if exc.code == "file.pathAlreadyExists":
+            raise ApiError(409, exc.code) from exc
+        if exc.code == "file.sessionQuotaExceeded":
+            raise ApiError(507, exc.code) from exc
+        raise ApiError(500, "session.storageUnavailable") from exc
+    except OSError as exc:
         await db.rollback()
         await restore_storage()
         raise ApiError(500, "session.storageUnavailable") from exc
     except BaseException:
-        await db.rollback()
-        await restore_storage()
+        if commit_task is None:
+            await db.rollback()
+            await restore_storage()
+        else:
+            await resolve_storage_after_commit_error()
         raise
     return await _session_payload(db, item)
 

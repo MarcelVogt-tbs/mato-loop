@@ -441,6 +441,14 @@
               label="Ziel"
               :options="projectOptions"
             />
+            <q-banner
+              v-if="!moveSourceProjectId && moveProjectId"
+              dense
+              rounded
+              class="app-surface-tonal q-mt-md"
+            >
+              Die Dateien der Session werden zu gemeinsamen Projektdateien. Sie bleiben im Projekt, wenn die Session später wieder verschoben wird.
+            </q-banner>
           </q-card-section>
           <q-card-actions align="right" class="q-pa-md q-pt-none">
             <q-btn flat no-caps label="Abbrechen" :disable="movingSession" v-close-popup />

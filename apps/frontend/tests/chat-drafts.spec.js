@@ -19,7 +19,11 @@ import { useControlCenterStore } from '../src/stores/control-center'
 import { controlCenterIntegrationIds } from 'src/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
-import { clearChatOutbox } from '../src/utils/chat-outbox'
+import {
+  clearChatOutbox,
+  loadChatOutbox,
+  saveChatOutboxEntry
+} from '../src/utils/chat-outbox'
 
 const originalURL = globalThis.URL
 
@@ -1630,6 +1634,40 @@ describe('chat drafts', () => {
     })
     expect(chat.sessions).toEqual([])
     expect(chat.current.projectId).toBe('project-2')
+  })
+
+  it('rebinds queued session files when a standalone session joins a project', async () => {
+    api.patch.mockResolvedValue({
+      data: { id: 'session-1', title: 'Session', projectId: 'project-2' }
+    })
+    const chat = useChatStore()
+    chat.cancelQueueDrain()
+    setSessions(chat, [{ id: 'session-1', title: 'Session', projectId: null }])
+    chat.current = { id: 'session-1', title: 'Session', projectId: null, messages: [] }
+    const queued = {
+      id: 'queue-1',
+      ownerUserId: 'user-1',
+      sessionId: 'session-1',
+      projectId: null,
+      activeFile: {
+        root: 'session',
+        root_identity: 'session-1',
+        path: 'note.txt',
+        sha256: 'a'.repeat(64),
+        dirty: false
+      },
+      queuedAt: '2026-07-20T12:00:00Z',
+      attachments: []
+    }
+    await saveChatOutboxEntry(queued)
+    chat.queuedMessages['session-1'] = [queued]
+
+    await chat.moveSession('session-1', 'project-2')
+
+    expect(chat.queuedMessages['session-1'][0].projectId).toBe('project-2')
+    expect(chat.queuedMessages['session-1'][0].activeFile.root_identity).toBe('project-2')
+    const persisted = await loadChatOutbox('user-1')
+    expect(persisted[0].activeFile.root_identity).toBe('project-2')
   })
 
   it('does not let a stale destination refresh erase a moved session', async () => {

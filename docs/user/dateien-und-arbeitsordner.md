@@ -20,6 +20,8 @@ Computer gehören genau einem Benutzer und können nicht von anderen Konten ausg
 
 Vom Benutzer an Nachrichten angehängte Dateien bleiben im privaten Ordner `/data/projects/<projekt-id>/sessions/<session-id>/attachments` beziehungsweise im `attachments/`-Ordner der eigenständigen Session; daraus erzeugte Ableitungen liegen unter dem jeweiligen Anhang. Dauerhafte Binärausgaben von Backend-Tools werden dagegen zu verwalteten Dateien mit unveränderlichen Versionen.
 
+Wird eine eigenständige Session in ein Projekt verschoben, übernimmt MatoLoop ihre Backend-Dateien samt Versionsverlauf in den gemeinsamen Projektbereich. Vorhandene Projektordner werden zusammengeführt, bestehende gleichnamige Pfade aber niemals überschrieben; bei einem Konflikt bleibt die Session unverändert. Die übernommenen Dateien sind anschließend für alle Sessions des Projekts sichtbar und bleiben im Projekt, wenn die ursprüngliche Session später wieder herausgeschoben wird. Private Nachrichtenanhänge bleiben weiterhin nur der jeweiligen Session zugeordnet.
+
 ## Dateien im Control Center
 
 In der App **Dateien** können Sie:

@@ -123,20 +123,169 @@ def test_reconciliation_restores_uncommitted_delete_from_trash(tmp_path: Path) -
     assert list(storage.trash_dir.iterdir()) == []
 
 
-@pytest.mark.parametrize("managed_directory", ["files", "revisions"])
-def test_standalone_session_with_managed_data_cannot_join_project(
-    tmp_path: Path, managed_directory: str
+def test_standalone_session_files_and_revisions_join_project(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    project_id = uuid4()
+    source = storage.provision(session_id)
+    (source / "files" / "docs").mkdir()
+    (source / "files" / "docs" / "note.txt").write_text("session", encoding="utf-8")
+    (source / "revisions" / "file-id").mkdir()
+    (source / "revisions" / "file-id" / "1").write_text("revision", encoding="utf-8")
+    (source / "attachments" / "upload.bin").write_bytes(b"private")
+    project_session = storage.provision(uuid4(), project_id)
+    project_root = storage.logical_root_path(project_session.name, project_id)
+    (project_root / "files" / "shared.txt").write_text("project", encoding="utf-8")
+
+    receipt = storage.stage_session_move(session_id, None, project_id)
+
+    assert (source / "files" / "docs" / "note.txt").read_text() == "session"
+    assert (project_root / "files" / "shared.txt").read_text() == "project"
+    assert (project_root / "files" / "docs" / "note.txt").read_text() == "session"
+    assert (project_root / "revisions" / "file-id" / "1").read_text() == "revision"
+    assert (receipt.target / "attachments" / "upload.bin").read_bytes() == b"private"
+
+    storage.finalize_session_move(receipt)
+
+    assert not source.exists()
+
+
+def test_standalone_project_import_conflict_leaves_both_roots_unchanged(
+    tmp_path: Path,
 ) -> None:
     storage = SessionStorage(tmp_path / "sessions")
     session_id = uuid4()
-    managed = storage.provision(session_id) / managed_directory / "managed"
-    managed.write_text("data", encoding="utf-8")
+    project_id = uuid4()
+    source = storage.provision(session_id)
+    (source / "files" / "same.txt").write_text("session", encoding="utf-8")
+    project_root = storage.logical_root_path(
+        storage.provision(uuid4(), project_id).name, project_id
+    )
+    target = project_root / "files" / "same.txt"
+    target.write_text("project", encoding="utf-8")
 
     with pytest.raises(SessionStorageError) as exc_info:
-        storage.move_session(session_id, None, uuid4())
+        storage.stage_session_move(session_id, None, project_id)
 
-    assert exc_info.value.code == "sessionStorage.projectFilesConflict"
-    assert managed.read_text(encoding="utf-8") == "data"
+    assert exc_info.value.code == "file.pathAlreadyExists"
+    assert (source / "files" / "same.txt").read_text() == "session"
+    assert target.read_text() == "project"
+    assert not storage.session_path(session_id, project_id=project_id).exists()
+
+
+def test_no_replace_copy_does_not_delete_existing_destination(tmp_path: Path) -> None:
+    source = tmp_path / "source.txt"
+    target = tmp_path / "target.txt"
+    source.write_text("session", encoding="utf-8")
+    target.write_text("project", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        SessionStorage._copy_file_no_replace(source, target)
+
+    assert target.read_text(encoding="utf-8") == "project"
+
+
+def test_standalone_project_import_rolls_back_copied_files(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    project_id = uuid4()
+    source = storage.provision(session_id)
+    (source / "files" / "nested").mkdir()
+    (source / "files" / "nested" / "note.txt").write_text("session", encoding="utf-8")
+
+    receipt = storage.stage_session_move(session_id, None, project_id)
+    storage.rollback_session_move(receipt)
+
+    assert (source / "files" / "nested" / "note.txt").read_text() == "session"
+    assert (source / "attachments").is_dir()
+    assert not storage.session_path(session_id, project_id=project_id).exists()
+    assert not (storage.logical_root_path(session_id, project_id) / "files" / "nested").exists()
+
+
+def test_standalone_project_import_does_not_rollback_changed_project_copy(
+    tmp_path: Path,
+) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    project_id = uuid4()
+    source = storage.provision(session_id)
+    (source / "files" / "note.txt").write_text("session", encoding="utf-8")
+    receipt = storage.stage_session_move(session_id, None, project_id)
+    imported = storage.logical_root_path(session_id, project_id) / "files" / "note.txt"
+    imported.write_text("project change", encoding="utf-8")
+
+    with pytest.raises(SessionStorageError) as exc_info:
+        storage.rollback_session_move(receipt)
+
+    assert exc_info.value.code == "sessionStorage.moveDataChanged"
+    assert imported.read_text() == "project change"
+    assert (source / "files" / "note.txt").read_text() == "session"
+    assert receipt.journal is not None and receipt.journal.exists()
+
+
+def test_project_with_pending_session_import_cannot_be_trashed(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    project_id = uuid4()
+    source = storage.provision(session_id)
+    (source / "attachments" / "private.bin").write_bytes(b"private")
+    receipt = storage.stage_session_move(session_id, None, project_id)
+    storage.abandon_session_move(receipt)
+
+    with pytest.raises(SessionStorageError) as exc_info:
+        storage.trash_project(project_id)
+
+    assert exc_info.value.code == "sessionStorage.projectMovePending"
+    assert (receipt.target / "attachments" / "private.bin").read_bytes() == b"private"
+
+
+def test_standalone_project_import_enforces_combined_quota(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    project_id = uuid4()
+    source = storage.provision(session_id)
+    (source / "files" / "session.bin").write_bytes(b"1234")
+    project_root = storage.logical_root_path(
+        storage.provision(uuid4(), project_id).name, project_id
+    )
+    (project_root / "files" / "project.bin").write_bytes(b"5678")
+
+    with pytest.raises(SessionStorageError) as exc_info:
+        storage.stage_session_move(session_id, None, project_id, quota_bytes=7)
+
+    assert exc_info.value.code == "file.sessionQuotaExceeded"
+    assert (source / "files" / "session.bin").exists()
+    assert not storage.session_path(session_id, project_id=project_id).exists()
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_reconciliation_recovers_interrupted_standalone_project_import(
+    tmp_path: Path, committed: bool
+) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    project_id = uuid4()
+    source = storage.provision(session_id)
+    (source / "files" / "note.txt").write_text("session", encoding="utf-8")
+    receipt = storage.stage_session_move(session_id, None, project_id)
+    storage._release_locks(receipt.lock_descriptors)
+
+    storage.reconcile(
+        {session_id: project_id if committed else None},
+        projects={project_id},
+        stale_staging_after_seconds=0,
+    )
+
+    project_file = storage.logical_root_path(session_id, project_id) / "files" / "note.txt"
+    if committed:
+        assert not source.exists()
+        assert project_file.read_text() == "session"
+        assert storage.session_path(session_id, project_id=project_id).is_dir()
+    else:
+        assert (source / "files" / "note.txt").read_text() == "session"
+        assert not project_file.exists()
+        assert not storage.session_path(session_id, project_id=project_id).exists()
+    assert list(storage.staging_dir.iterdir()) == []
 
 
 def test_empty_session_moves_project_to_project_to_standalone(tmp_path: Path) -> None:

@@ -51,6 +51,7 @@ from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AiSettings,
+    InstanceLimits,
     MemorySettings,
     SettingsStore,
     TrustLevel,
@@ -271,10 +272,24 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
     db.scalar.side_effect = [session.id, None, target_project_id]
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
     db.commit.side_effect = RuntimeError("commit failed")
+    persisted_location = MagicMock()
+    persisted_location.one_or_none.return_value = (None,)
+    db.execute.side_effect = [MagicMock(), persisted_location]
     storage = MagicMock()
+    receipt = MagicMock(
+        journal=Path("move.json"),
+        source_project_id=None,
+        target_project_id=target_project_id,
+    )
+    storage.stage_session_move.return_value = receipt
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     monkeypatch.setattr(
         sessions_route, "_owned_session", AsyncMock(return_value=session)
+    )
+    monkeypatch.setattr(
+        sessions_route.SettingsStore,
+        "load",
+        AsyncMock(return_value=InstanceLimits(session_quota_mib=512)),
     )
 
     with pytest.raises(RuntimeError, match="commit failed"):
@@ -285,11 +300,134 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
             db,
         )
 
-    assert [entry.args for entry in storage.move_session.call_args_list] == [
-        (session.id, None, target_project_id),
-        (session.id, target_project_id, None),
+    storage.stage_session_move.assert_called_once_with(
+        session.id,
+        None,
+        target_project_id,
+        quota_bytes=512 * 1024 * 1024,
+    )
+    storage.rollback_session_move.assert_called_once_with(receipt)
+    storage.finalize_session_move.assert_not_called()
+    artifact_update = db.execute.await_args_list[0].args[0]
+    assert artifact_update.is_update
+    assert "message_attachments.file_root_id" in str(artifact_update)
+    assert {session.id, target_project_id}.issubset(
+        artifact_update.compile().params.values()
+    )
+    assert db.rollback.await_count == 2
+
+
+async def test_standalone_project_move_rebinds_managed_file_references(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    project_id = uuid4()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Move")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session.id, None, project_id]
+    db.scalars.side_effect = [
+        MagicMock(all=MagicMock(return_value=[])),
+        MagicMock(all=MagicMock(return_value=[])),
     ]
-    db.rollback.assert_awaited_once()
+    storage = MagicMock()
+    receipt = storage.stage_session_move.return_value
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
+    monkeypatch.setattr(
+        sessions_route, "_owned_session", AsyncMock(return_value=session)
+    )
+    monkeypatch.setattr(
+        sessions_route.SettingsStore,
+        "load",
+        AsyncMock(return_value=InstanceLimits(session_quota_mib=512)),
+    )
+    monkeypatch.setattr(sessions_route, "_session_payload", AsyncMock(return_value={}))
+
+    await update_session(
+        session.id,
+        SessionUpdateRequest(project_id=project_id),
+        user,
+        db,
+    )
+
+    storage.stage_session_move.assert_called_once_with(
+        session.id,
+        None,
+        project_id,
+        quota_bytes=512 * 1024 * 1024,
+    )
+    storage.finalize_session_move.assert_called_once_with(receipt)
+    storage.rollback_session_move.assert_not_called()
+    artifact_update = db.execute.await_args.args[0]
+    assert artifact_update.is_update
+    assert "message_attachments.file_root_id" in str(artifact_update)
+    assert {session.id, project_id}.issubset(artifact_update.compile().params.values())
+    assert session.project_id == project_id
+
+
+def test_standalone_project_move_rebinds_file_action_and_control_center_metadata() -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    session_id = uuid4()
+    project_id = uuid4()
+    session = ChatSession(
+        id=session_id,
+        user_id=uuid4(),
+        title="Move",
+        control_center={
+            "tabs": [{"app_id": "files", "pinned": False}],
+            "active_app_id": "files",
+            "open": True,
+            "file_view": {
+                "scope": "session",
+                "selected_path": "note.txt",
+                "selected_kind": "file",
+                "viewed_file_path": "note.txt",
+                "root_identity": str(session_id),
+            },
+        },
+    )
+    message = Message(
+        session_id=session_id,
+        role="tool",
+        content="saved",
+        provider_data={
+            "_matoloop": {
+                "activeFile": {
+                    "root": "session",
+                    "rootIdentity": str(session_id),
+                    "path": "note.txt",
+                },
+                "fileActions": [
+                    {
+                        "root": "session",
+                        "rootIdentity": str(session_id),
+                        "path": "note.txt",
+                    }
+                ]
+            }
+        },
+    )
+
+    sessions_route._rebind_session_file_metadata(
+        session, [message], session_id, project_id
+    )
+
+    assert session.control_center["file_view"]["root_identity"] == str(project_id)
+    assert (
+        message.provider_data["_matoloop"]["fileActions"][0]["rootIdentity"]
+        == str(project_id)
+    )
+    assert message.provider_data["_matoloop"]["activeFile"]["rootIdentity"] == str(
+        project_id
+    )
+
+    sessions_route._rebind_session_file_metadata(
+        session, [message], project_id, None
+    )
+
+    assert session.control_center["file_view"] is None
+    assert message.provider_data["_matoloop"]["fileActions"] == []
+    assert "activeFile" not in message.provider_data["_matoloop"]
 
 
 async def test_mark_session_read_uses_owned_assistant_message_monotonically() -> None:

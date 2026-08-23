@@ -328,7 +328,6 @@ const messages = {
   'session.modelUnavailable': () => 'Das ausgewählte Modell ist nicht verfügbar.',
   'session.modelToolsUnavailable': () => 'Das ausgewählte Modell unterstützt keine Tools und kann nicht als Agentmodell verwendet werden.',
   'session.notFound': () => 'Die Session wurde nicht gefunden.',
-  'session.projectFilesConflict': () => 'Die Session enthält eigene Dateien und kann deshalb keinem Projekt hinzugefügt werden.',
   'session.retryUnavailable': () => 'Diese fehlgeschlagene Antwort kann nicht mehr erneut versucht werden.',
   'session.runAlreadyActive': () => 'In dieser Session läuft bereits eine Anfrage.',
   'session.runInactive': () => 'Der Agent-Run kann nicht mehr gestoppt werden.',

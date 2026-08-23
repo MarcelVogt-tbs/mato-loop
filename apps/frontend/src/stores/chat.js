@@ -1212,6 +1212,23 @@ export const useChatStore = defineStore('chat', {
     async moveSession(id, projectId) {
       const catalogHadSession = this.sessionCatalog.some((session) => session.id === id)
       const { data } = await api.patch(`/sessions/${id}`, { project_id: projectId || null })
+      const queued = this.queuedMessages[id] || []
+      for (const entry of queued) {
+        entry.projectId = projectId || null
+        if (entry.activeFile?.root !== 'session') continue
+        entry.activeFile = projectId && entry.activeFile.root_identity === id
+          ? { ...entry.activeFile, root_identity: projectId }
+          : null
+      }
+      if (queued.length) {
+        try {
+          await saveChatOutboxEntries(queued.map((entry) => toRaw(entry)))
+        } catch {
+          for (const entry of queued) entry.paused = true
+          this.queuedSendPausedSessions[id] = true
+          notifyError({}, 'Die vorgemerkten Nachrichten konnten lokal nicht aktualisiert werden.')
+        }
+      }
       this.removeCachedSession(id)
       const targetList = this.sessionLists[sessionScopeKey(projectId)]
       if (targetList?.loadRequest) {
