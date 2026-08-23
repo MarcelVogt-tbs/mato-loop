@@ -32,4 +32,4 @@ Voraussetzungen sind:
 
 ## Mediengenerierung
 
-Je nach Provider, Modellfähigkeiten und Tool-Richtlinien kann der Agent Bilder, Sprache oder Audio erzeugen und Bilder bearbeiten. Dauerhafte erzeugte oder bearbeitete Bilder, QR-Codes, Sprach- und Audioausgaben, abgerufene Bilder, gerenderte PDF-Seiten sowie OpenSCAD-Exporte werden als verwaltete Dateien mit unveränderlichen Versionen gespeichert. Die jeweilige Nachricht verweist auf genau diese Version, auch wenn die Datei später bearbeitet, verschoben oder gelöscht wird.
+Je nach Provider, Modellfähigkeiten und Tool-Richtlinien kann der Agent Bilder, Sprache oder Audio erzeugen und Bilder bearbeiten. Dauerhafte erzeugte oder bearbeitete Bilder, QR-Codes, Sprach- und Audioausgaben, abgerufene Bilder, gerenderte PDF-Seiten sowie OpenSCAD-Exporte werden als verwaltete Dateien mit gespeicherten Vollversionen abgelegt. Die jeweilige Nachricht verweist auf genau diese Version. Normales Bearbeiten, Verschieben und Löschen durch den Agenten erhält diesen Verweis, soweit die Aktion eine verwaltete Datei betrifft; das manuelle Löschen oder Wiederherstellen im Versionsverlauf kann ihn dagegen unbrauchbar machen.

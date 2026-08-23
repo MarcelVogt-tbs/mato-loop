@@ -8,11 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.routes.automations import ScheduleRequest
 from mato_loop_backend.api.routes.notifications import _notification_payload
-from mato_loop_backend.api.routes.sessions import _automation_impact_token
 from mato_loop_backend.automations import (
     AutomationError,
     AutomationService,
     advance_schedule,
+    automation_impact_token,
     next_run_at,
     runtime_snapshot,
 )
@@ -406,10 +406,10 @@ def test_session_delete_impact_changes_with_linked_automation_revision() -> None
         output_session_required=False,
     )
 
-    original = _automation_impact_token([automation])
+    original = automation_impact_token([automation])
     automation.revision = 2
 
-    assert _automation_impact_token([automation]) != original
+    assert automation_impact_token([automation]) != original
 
 
 async def test_start_failure_cancels_pending_delivery(monkeypatch) -> None:

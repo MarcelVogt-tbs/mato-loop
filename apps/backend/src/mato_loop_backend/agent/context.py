@@ -509,21 +509,21 @@ def general_system_prompt(
         )
     if file_tools_available:
         parts.append(
-            "File tools require an explicit root and relative POSIX path; path='.' means the root. Never "
-            "put a root name or absolute path in path. "
-            "Copy and move require an exact new destination and never overwrite."
+            "File tools: explicit root plus relative POSIX path; '.' is root. Path has no root name, files/ "
+            "prefix, or absolute form. Copy and move need an exact unused destination."
         )
     if "write_file" in offered_tool_names:
         parts.append(
-            "For requested reusable text, templates, samples, Markdown, config, code, or OpenSCAD, "
-            "call write_file with mode=create and the complete artifact instead of returning it only in "
-            "chat. Use mode=replace only for an existing file after reading its exact SHA-256."
+            "Reusable email or drafts and other requested writing: one file per artifact, mode=create. "
+            "Default to root=session; "
+            "workspace only when explicit. Use the requested path or a descriptive .md; never files/. Revise "
+            "the same path with mode=replace after reading its exact SHA-256; never make version copies. Ask "
+            "if ambiguous; never overwrite a dirty active file. Reply only with status and path, not the body."
         )
     if "provide_file" in offered_tool_names:
         parts.append(
-            "Writes, copies, and moves already expose file destinations. Use provide_file only for another "
-            "existing file; paths and read output are not downloads. After success, use the download card "
-            "and never repeat its internal URL."
+            "Writes, copies, and moves expose destinations. provide_file is only for another file; paths and "
+            "reads are not downloads. Use its card, never its internal URL."
         )
     if "transcribe_audio" in offered_tool_names:
         parts.append("transcribe_audio uses the verified PCM audio derivative automatically.")

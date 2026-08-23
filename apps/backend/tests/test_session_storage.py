@@ -346,6 +346,25 @@ def test_reconciliation_restores_project_storage_from_trash(tmp_path: Path) -> N
     assert shared.read_text(encoding="utf-8") == "shared"
 
 
+def test_nonempty_project_tree_can_be_trashed_and_restored(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    project_id = uuid4()
+    session_id = uuid4()
+    session_path = storage.provision(session_id, project_id)
+    private_upload = session_path / "attachments" / "upload.bin"
+    private_upload.write_bytes(b"private")
+    shared = storage.logical_root_path(session_id, project_id) / "files" / "shared.txt"
+    shared.write_text("shared", encoding="utf-8")
+
+    trashed = storage.trash_project(project_id)
+
+    assert trashed is not None
+    assert not shared.exists()
+    storage.restore_project(project_id, trashed)
+    assert private_upload.read_bytes() == b"private"
+    assert shared.read_text(encoding="utf-8") == "shared"
+
+
 def test_project_storage_rejects_symlinked_project_root(tmp_path: Path) -> None:
     storage = SessionStorage(tmp_path / "sessions")
     storage.prepare()

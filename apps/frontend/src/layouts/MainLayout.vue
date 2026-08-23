@@ -166,7 +166,6 @@
                               v-ripple
                               v-close-popup
                               class="text-negative"
-                              :disable="project.sessionCount > 0"
                               @click="deleteProject(project)"
                             >
                               <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
@@ -200,8 +199,20 @@
             </section>
 
             <section class="q-mt-md" aria-labelledby="sessions-heading">
-              <q-item dense tag="div" class="q-px-md q-py-xs">
-                <q-item-section>
+              <q-item
+                dense
+                tag="div"
+                class="q-px-md q-py-xs"
+              >
+                <q-item-section
+                  role="button"
+                  tabindex="0"
+                  aria-controls="standalone-session-list"
+                  :aria-expanded="sessionsSectionOpen"
+                  @click="sessionsSectionOpen = !sessionsSectionOpen"
+                  @keydown.enter="sessionsSectionOpen = !sessionsSectionOpen"
+                  @keydown.space.prevent="sessionsSectionOpen = !sessionsSectionOpen"
+                >
                   <q-item-label
                     id="sessions-heading"
                     header
@@ -209,6 +220,7 @@
                     :class="$q.dark.isActive ? 'text-grey-5' : 'text-grey-7'"
                   >
                     Sessions
+                    <q-icon :name="sessionsSectionOpen ? 'expand_more' : 'chevron_right'" size="18px" />
                   </q-item-label>
                 </q-item-section>
                 <q-item-section side>
@@ -220,13 +232,15 @@
                     icon="add_comment"
                     class="drawer-section__action"
                     aria-label="Neue Session"
-                    @click="openNewSession(null)"
+                    @click.stop="openNewSession(null)"
                   >
                     <q-tooltip>Neue Session</q-tooltip>
                   </q-btn>
                 </q-item-section>
               </q-item>
               <SidebarSessionList
+                id="standalone-session-list"
+                v-show="sessionsSectionOpen"
                 :list="standaloneSessionList"
                 :active-session-id="routeSessionId"
                 :statuses="sessionStatuses"
@@ -442,6 +456,14 @@
               :options="projectOptions"
             />
             <q-banner
+              v-if="moveSourceProjectId && moveProjectId !== moveSourceProjectId"
+              dense
+              rounded
+              class="app-surface-tonal q-mt-md"
+            >
+              Verweise auf gemeinsame Projektdateien in dieser Session werden entfernt.
+            </q-banner>
+            <q-banner
               v-if="!moveSourceProjectId && moveProjectId"
               dense
               rounded
@@ -534,6 +556,7 @@ const questions = useQuestionStore()
 const search = useSearchStore()
 const projects = useProjectStore()
 const projectsSectionOpen = ref(true)
+const sessionsSectionOpen = ref(true)
 const expandedProjects = reactive({})
 const selectedProjectId = computed(() => (
   typeof route.query.project === 'string' ? route.query.project : null
@@ -713,28 +736,95 @@ async function saveProject() {
 }
 
 async function deleteProject(project) {
-  if (!project || project.sessionCount > 0) return
+  if (!project) return
+  let impact
+  try {
+    impact = await projects.deleteImpact(project.id, { suppressErrorToast: true })
+  } catch (error) {
+    notifyError(error)
+    return
+  }
   const accepted = await confirm(
-    `Projekt „${project.name}“ mit allen gemeinsamen Dateien und Versionen dauerhaft löschen?`,
+    `Projekt „${project.name}“ mit ${impact.sessionCount} ${impact.sessionCount === 1 ? 'Session' : 'Sessions'} sowie allen gemeinsamen Projektdateien und deren Versionen dauerhaft löschen?`,
     'Projekt löschen?',
     { okLabel: 'Löschen', okColor: 'negative' }
   )
   if (!accepted) return
-  try {
-    await projects.remove(project.id)
-    delete expandedProjects[project.id]
-    $q.notify({ type: 'positive', message: 'Projekt gelöscht.' })
-    if (selectedProjectId.value === project.id) {
-      try {
-        await chat.setSessionScope(null)
-      } catch {
-        // Navigation still leaves the deleted scope; the standalone list keeps its retry state.
+  let automationMode = null
+  if (impact.requiredAutomationCount) {
+    const count = impact.automationCount
+    const automationsAccepted = await confirm(
+      `Beim Fortfahren werden ${count} verknüpfte Automation${count === 1 ? '' : 'en'} samt Historie dauerhaft gelöscht.`,
+      'Abhängige Automationen löschen?',
+      { okLabel: 'Alles löschen' }
+    )
+    if (!automationsAccepted) return
+    automationMode = 'deleteAutomations'
+  } else if (impact.automationCount) {
+    const count = impact.automationCount
+    const automationsAccepted = await confirm(
+      `Das Projekt enthält Ausgabeziele von ${count} Automation${count === 1 ? '' : 'en'}. Verknüpfungen lösen und Projekt löschen?`,
+      'Verknüpfte Sessions löschen?',
+      { okLabel: 'Lösen und löschen' }
+    )
+    if (!automationsAccepted) return
+    automationMode = 'unlink'
+  }
+  const workspaceEdit = selectedProjectId.value === project.id && workspace.editorDirty
+    ? {
+        sessionId: workspace.sessionId,
+        rootIdentity: workspace.rootIdentity,
+        viewVersion: workspace.viewVersion,
+        draft: workspace.editorDraft
       }
-      await router.push({ name: 'chat' })
-    }
-    chat.removeProjectScope(project.id)
+    : null
+  if (workspaceEdit && !await confirmDiscardedEdit({ discard: false })) return
+  let outboxDeletion
+  try {
+    outboxDeletion = await chat.prepareProjectOutboxDeletion(project.id, impact.sessionIds)
+  } catch {
+    return
+  }
+  try {
+    await projects.remove(project.id, {
+      automationMode,
+      automationImpact: impact.automationImpact
+    })
   } catch {
     // The central API interceptor displays the error.
+    await chat.restoreProjectOutboxDeletion(outboxDeletion)
+    return
+  }
+  if (
+    selectedProjectId.value === project.id
+    && workspaceEdit
+    && workspace.editorDirty
+    && workspace.sessionId === workspaceEdit.sessionId
+    && workspace.rootIdentity === workspaceEdit.rootIdentity
+    && workspace.viewVersion === workspaceEdit.viewVersion
+    && workspace.editorDraft === workspaceEdit.draft
+  ) workspace.discardEdit()
+  delete expandedProjects[project.id]
+  if (selectedProjectId.value === project.id) {
+    try {
+      await chat.setSessionScope(null)
+    } catch {
+      // Navigation still leaves the deleted scope; the standalone list keeps its retry state.
+    }
+  }
+  await chat.removeProjectScope(project.id, impact.sessionIds, outboxDeletion)
+  if (automationMode) {
+    void automations.fetchAutomations({
+      archived: automations.listArchived,
+      suppressErrorToast: true
+    }).catch(() => {})
+    if (automationMode === 'deleteAutomations') {
+      void notifications.fetchLatest({ suppressErrorToast: true }).catch(() => {})
+    }
+  }
+  $q.notify({ type: 'positive', message: 'Projekt gelöscht.' })
+  if (selectedProjectId.value === project.id) {
+    await router.push({ name: 'chat' })
   }
 }
 
@@ -1008,10 +1098,12 @@ watch(
 
 watch(
   selectedProjectId,
-  (projectId) => {
+  (projectId, previousProjectId) => {
     if (projectId) {
       projectsSectionOpen.value = true
       expandedProjects[projectId] = true
+    } else if (previousProjectId) {
+      sessionsSectionOpen.value = true
     }
     void chat.setSessionScope(projectId).catch(() => {})
   },

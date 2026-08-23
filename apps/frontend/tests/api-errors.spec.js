@@ -166,6 +166,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({
       error: { code: 'session.automationOutputRequired', params: { automationCount: 2 } }
     })).toBe('Die Session wird von 2 Automationen als Ausgabeziel benötigt.')
+    expect(apiErrorMessage({ error: { code: 'session.automationImpactChanged' } })).toBe(
+      'Die Sessions oder verknüpften Automationen wurden zwischenzeitlich geändert. Bitte versuche es erneut.'
+    )
     expect(apiErrorMessage({ error: { code: 'privacy.pseudonymizationUnavailable' } })).toBe(
       'Die lokale Pseudonymisierung ist derzeit nicht verfügbar.'
     )

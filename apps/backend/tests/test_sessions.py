@@ -266,54 +266,49 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
     from mato_loop_backend.api.routes import sessions as sessions_route
 
     user = _user()
-    session = ChatSession(id=uuid4(), user_id=user.id, title="Move", project_id=None)
-    target_project_id = uuid4()
+    source_project_id = uuid4()
+    session = ChatSession(
+        id=uuid4(), user_id=user.id, title="Move", project_id=source_project_id
+    )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None, target_project_id]
+    db.scalar.side_effect = [session.id, None]
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
     db.commit.side_effect = RuntimeError("commit failed")
     persisted_location = MagicMock()
-    persisted_location.one_or_none.return_value = (None,)
+    persisted_location.one_or_none.return_value = (source_project_id,)
     db.execute.side_effect = [MagicMock(), persisted_location]
     storage = MagicMock()
     receipt = MagicMock(
-        journal=Path("move.json"),
-        source_project_id=None,
-        target_project_id=target_project_id,
+        journal=None,
+        source_project_id=source_project_id,
+        target_project_id=None,
     )
     storage.stage_session_move.return_value = receipt
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     monkeypatch.setattr(
         sessions_route, "_owned_session", AsyncMock(return_value=session)
     )
-    monkeypatch.setattr(
-        sessions_route.SettingsStore,
-        "load",
-        AsyncMock(return_value=InstanceLimits(session_quota_mib=512)),
-    )
 
     with pytest.raises(RuntimeError, match="commit failed"):
         await update_session(
             session.id,
-            SessionUpdateRequest(project_id=target_project_id),
+            SessionUpdateRequest(project_id=None),
             user,
             db,
         )
 
     storage.stage_session_move.assert_called_once_with(
-        session.id,
-        None,
-        target_project_id,
-        quota_bytes=512 * 1024 * 1024,
+        session.id, source_project_id, None, quota_bytes=None
     )
     storage.rollback_session_move.assert_called_once_with(receipt)
     storage.finalize_session_move.assert_not_called()
-    artifact_update = db.execute.await_args_list[0].args[0]
-    assert artifact_update.is_update
-    assert "message_attachments.file_root_id" in str(artifact_update)
-    assert {session.id, target_project_id}.issubset(
-        artifact_update.compile().params.values()
-    )
+    cleanup = db.execute.await_args_list[0].args[0]
+    cleanup_sql = str(cleanup)
+    assert cleanup.is_delete
+    assert "message_attachments.file_root_id" in cleanup_sql
+    assert "messages.session_id" in cleanup_sql
+    assert "storage_key" not in cleanup_sql
+    assert {source_project_id, session.id}.issubset(cleanup.compile().params.values())
     assert db.rollback.await_count == 2
 
 

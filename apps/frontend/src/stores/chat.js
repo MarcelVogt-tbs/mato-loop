@@ -10,7 +10,11 @@ import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { agentActivityDisplayKey } from 'src/utils/agent-activity'
 import { errorDescriptor } from 'src/utils/api-errors'
-import { safeAttachmentUrl, toolFileActions } from 'src/utils/attachments'
+import {
+  managedSessionFileTarget,
+  safeAttachmentUrl,
+  toolFileActions
+} from 'src/utils/attachments'
 import {
   clearChatOutbox,
   deleteChatOutboxEntry,
@@ -348,6 +352,7 @@ export const useChatStore = defineStore('chat', {
     historyActionPending: false,
     sessionSettingsPending: 0,
     sessionRequestController: null,
+    sessionRefreshPromise: null,
     loadError: null,
     sessionDefaults: defaultSessionOptions(),
     draftOwnerUserId: null,
@@ -471,8 +476,107 @@ export const useChatStore = defineStore('chat', {
       if (this.sessionCatalog.some((session) => session.id === id)) this.sessionCatalogVersion += 1
       this.sessionCatalog = this.sessionCatalog.filter((session) => session.id !== id)
     },
-    removeProjectScope(projectId) {
+    async prepareProjectOutboxDeletion(projectId, sessionIds = []) {
+      if (this.outboxLoadPromise) await this.outboxLoadPromise
+      if (!this.outboxLoaded || this.outboxLoadFailed) {
+        notifyError({}, 'Vorgemerkte Nachrichten konnten nicht geladen werden.')
+        throw new Error('Chat outbox is unavailable')
+      }
+      this.cancelQueueDrain()
+      if (this.queueDrainPromise) await this.queueDrainPromise
+      this.cancelQueueDrain()
+      const ids = new Set(sessionIds)
+      const entries = Object.values(this.queuedMessages).flat().filter((entry) => (
+        entry.projectId === projectId || ids.has(entry.sessionId)
+      ))
+      const snapshot = {
+        entries: [...entries],
+        ownerUserId: this.draftOwnerUserId,
+        loadVersion: this.outboxLoadVersion
+      }
+      if (!entries.length) return snapshot
+      try {
+        await deleteChatOutboxEntries(entries.map((entry) => entry.id))
+      } catch (error) {
+        this.scheduleQueueDrain(0)
+        notifyError({}, 'Vorgemerkte Nachrichten konnten nicht gelöscht werden.')
+        throw error
+      }
+      const entryIds = new Set(entries.map((entry) => entry.id))
+      for (const [key, queue] of Object.entries(this.queuedMessages)) {
+        const remaining = queue.filter((entry) => !entryIds.has(entry.id))
+        if (remaining.length) this.queuedMessages[key] = remaining
+        else delete this.queuedMessages[key]
+        if (remaining[0]?.paused) this.queuedSendPausedSessions[key] = true
+        else delete this.queuedSendPausedSessions[key]
+      }
+      return snapshot
+    },
+    async restoreProjectOutboxDeletion(snapshot) {
+      if (
+        snapshot?.entries.length
+        && snapshot.ownerUserId === this.draftOwnerUserId
+        && snapshot.loadVersion === this.outboxLoadVersion
+      ) {
+        try {
+          await saveChatOutboxEntries(snapshot.entries.map((entry) => toRaw(entry)))
+        } catch {
+          notifyError({}, 'Vorgemerkte Nachrichten konnten nicht wiederhergestellt werden.')
+        }
+        for (const entry of snapshot.entries) {
+          const key = queueKeyForEntry(entry)
+          const queue = this.queuedMessages[key] || []
+          if (!queue.some((item) => item.id === entry.id)) queue.push(entry)
+          queue.sort((left, right) => left.queuedAt.localeCompare(right.queuedAt))
+          this.queuedMessages[key] = queue
+          if (queue[0]?.paused) this.queuedSendPausedSessions[key] = true
+          else delete this.queuedSendPausedSessions[key]
+        }
+      }
+      this.scheduleQueueDrain(0)
+    },
+    async removeProjectScope(projectId, projectSessionIds = [], outboxDeletion = null) {
+      if (this.outboxLoadPromise) await this.outboxLoadPromise
       const scope = sessionScopeKey(projectId)
+      this.sessionCatalogVersion += 1
+      const sessionIds = new Set(projectSessionIds)
+      for (const session of this.cachedSessions) {
+        if (session.projectId === projectId) sessionIds.add(session.id)
+      }
+      if (this.current?.projectId === projectId) sessionIds.add(this.current.id)
+      for (const entries of Object.values(this.queuedMessages)) {
+        for (const entry of entries) {
+          if (entry.projectId === projectId && entry.sessionId) sessionIds.add(entry.sessionId)
+        }
+      }
+      if (this.sessionsProjectId === projectId) {
+        if (this.selectedSessionId) sessionIds.add(this.selectedSessionId)
+        if (this.runSessionId) sessionIds.add(this.runSessionId)
+      }
+
+      this.cancelQueueDrain()
+      const queueKeys = Object.entries(this.queuedMessages)
+        .filter(([key, entries]) => (
+          key === newSessionQueueKey(projectId)
+          || entries.some((entry) => entry.projectId === projectId || sessionIds.has(entry.sessionId))
+        ))
+        .map(([key]) => key)
+      for (const key of queueKeys) {
+        releaseAttachmentDrafts((this.queuedMessages[key] || []).flatMap((entry) => entry.attachments))
+        delete this.queuedMessages[key]
+        delete this.queuedSendPausedSessions[key]
+      }
+
+      const activeSessionAffected = sessionIds.has(this.current?.id)
+        || sessionIds.has(this.selectedSessionId)
+        || sessionIds.has(this.runSessionId)
+      if (activeSessionAffected) await this.loadSession(null)
+      for (const id of sessionIds) {
+        this.removeCachedSession(id)
+        delete this.drafts.sessionMessages[id]
+        this.clearAttachmentDraft(id)
+        this.setAudioDictation(null, id)
+      }
       for (const attachment of this.attachmentDrafts.newSessions[scope] || []) {
         if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
       }
@@ -480,7 +584,27 @@ export const useChatStore = defineStore('chat', {
       delete this.drafts.newSessions[scope]
       delete this.attachmentDrafts.newSessions[scope]
       delete this.audioDictations.newSessions[scope]
+      if (this.sessionsProjectId === projectId) {
+        this.sessionsProjectId = null
+        this.ensureSessionList(null)
+        if (!this.drafts.newSessions.standalone) {
+          this.drafts.newSessions.standalone = normalizedNewSessionDraft(null)
+        }
+        if (!this.attachmentDrafts.newSessions.standalone) {
+          this.attachmentDrafts.newSessions.standalone = []
+        }
+        if (!Object.hasOwn(this.audioDictations.newSessions, 'standalone')) {
+          this.audioDictations.newSessions.standalone = null
+        }
+        this.drafts.newSession = this.drafts.newSessions.standalone
+        this.attachmentDrafts.newSession = this.attachmentDrafts.newSessions.standalone
+        this.audioDictations.newSession = this.audioDictations.newSessions.standalone
+      }
       this.persistDrafts()
+      releaseAttachmentDrafts((outboxDeletion?.entries || []).flatMap((entry) => entry.attachments))
+      if (Object.values(this.queuedMessages).some((queue) => queue.length)) {
+        this.scheduleQueueDrain(0)
+      }
     },
     setActivity(phase, details = {}) {
       const nextActivity = {
@@ -1092,27 +1216,37 @@ export const useChatStore = defineStore('chat', {
     },
     async refreshSession(id) {
       if (this.selectedSessionId !== id || this.loading) return
-      this.sessionRequestController?.abort()
-      this.sessionLoadVersion += 1
-      const loadVersion = this.sessionLoadVersion
-      const controller = markRaw(new AbortController())
-      this.sessionRequestController = controller
-      try {
-        const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
-        if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
-          this.current = session
-          void this.markSessionRead(session).catch(() => {})
-          this.loadError = null
-          if (session.activeRun && this.runId !== session.activeRun.id) {
-            this.watchRun(id, session.activeRun.id, session.activeRun)
-          } else if (!session.activeRun && !this.running) {
-            this.clearActivity()
+      const refresh = (this.sessionRefreshPromise || Promise.resolve()).catch(() => {}).then(async () => {
+        if (this.selectedSessionId !== id || this.loading) return
+        this.sessionRequestController?.abort()
+        this.sessionLoadVersion += 1
+        const loadVersion = this.sessionLoadVersion
+        const controller = markRaw(new AbortController())
+        this.sessionRequestController = controller
+        try {
+          const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
+          if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
+            this.current = session
+            void this.markSessionRead(session).catch(() => {})
+            this.loadError = null
+            if (session.activeRun && this.runId !== session.activeRun.id) {
+              this.watchRun(id, session.activeRun.id, session.activeRun)
+            } else if (!session.activeRun && !this.running) {
+              this.clearActivity()
+            }
+            return session
           }
+        } catch (error) {
+          if (!controller.signal.aborted) throw error
+        } finally {
+          if (this.sessionRequestController === controller) this.sessionRequestController = null
         }
-      } catch (error) {
-        if (!controller.signal.aborted) throw error
+      })
+      this.sessionRefreshPromise = markRaw(refresh)
+      try {
+        return await refresh
       } finally {
-        if (this.sessionRequestController === controller) this.sessionRequestController = null
+        if (this.sessionRefreshPromise === refresh) this.sessionRefreshPromise = null
       }
     },
     async updateActive(patch) {
@@ -2141,23 +2275,27 @@ export const useChatStore = defineStore('chat', {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
         const refresh = this.refreshSession(sessionId)
-        void refresh?.then(async () => {
+        void refresh?.then(async (session) => {
           const start = toolViewContexts.get(payload.toolCallId)
           toolViewContexts.delete(payload.toolCallId)
-          if (!start || this.current?.id !== sessionId) return
-          const result = this.current.messages?.find((message) => (
+          if (!start || !session || this.current?.id !== sessionId) return
+          const result = session.messages?.find((message) => (
             message.role === 'tool' && message.toolCallId === payload.toolCallId
           ))
           const workspace = useWorkspaceStore()
-          const action = toolFileActions(result)[0]
-          const toolCall = this.current.messages
+          const fileAction = toolFileActions(result)[0]
+          const attachmentAction = result?.attachments
+            ?.map((attachment) => managedSessionFileTarget(attachment, sessionId))
+            .find(Boolean)
+          const action = fileAction || attachmentAction
+          const toolCall = session.messages
             ?.flatMap((message) => message.toolCalls || [])
             .find((item) => item.id === payload.toolCallId)
           const argumentsValue = toolCall?.arguments || {}
           const sourceRoot = argumentsValue.source_root || argumentsValue.root
           const sourcePath = argumentsValue.source_path || argumentsValue.path
           const sourceRootIdentity = sourceRoot === 'session'
-            ? this.current.projectId || sessionId
+            ? session.projectId || sessionId
             : useExecutionAgentStore().workspaceContextFor(this.activeContext)?.rootId
           const sourceMatchesOpenFile = ['delete_path', 'move_path'].includes(payload.tool)
             && workspace.viewedEntry?.path
@@ -2178,8 +2316,9 @@ export const useChatStore = defineStore('chat', {
             workspace.noteFileMutation(action.path)
             return
           }
-          const created = ['copy', 'move'].includes(action.operation)
-            || toolCall?.arguments?.mode === 'create'
+          const created = fileAction
+            ? ['copy', 'move'].includes(action.operation) || toolCall?.arguments?.mode === 'create'
+            : attachmentAction.fileRevision === 1
           if (!created) return
           const controlCenter = useControlCenterStore()
           if (
@@ -2191,8 +2330,8 @@ export const useChatStore = defineStore('chat', {
           ) return
           workspace.configure({
             sessionId,
-            rootIdentity: this.current.projectId || sessionId,
-            workingDirectory: this.current.workingDirectory,
+            rootIdentity: session.projectId || sessionId,
+            workingDirectory: session.workingDirectory,
             workspaceContext: useExecutionAgentStore().workspaceContextFor(this.activeContext)
           })
           await workspace.openToolFile(action)

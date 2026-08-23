@@ -307,11 +307,14 @@ Keep the existing route shape initially:
 The navigation gains:
 
 - current-project selection
-- project creation, rename, and empty-project deletion
+- project creation, rename, and deletion with contained sessions
 - sessions for the selected project
 - new-session creation inside the selected project
 
 Store new-session drafts per project. Existing persisted-session drafts remain keyed by session ID.
+Moving a session out of a project removes its message attachment references to that project's
+shared file revisions. Deleting a project removes its contained sessions and shared storage in
+one coordinated operation.
 
 Replace the visible file-explorer action with **Projektwerkzeuge**. Reuse the existing desktop splitter and mobile maximized dialog. Add a small panel with Quasar tabs:
 
@@ -392,7 +395,7 @@ A later remote MatoLoop integration may implement the proven working-directory r
 
 Minimum backend coverage:
 
-- project ownership, migration backfill, empty-project deletion, and integration references
+- project ownership, migration backfill, cascading project deletion, and integration references
 - project working-directory inheritance and runtime override
 - same-project retrieval with existing trust boundaries
 - OpenCode URL/auth validation and secret non-exposure

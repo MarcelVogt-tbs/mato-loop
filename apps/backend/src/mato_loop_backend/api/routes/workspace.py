@@ -113,10 +113,29 @@ class UpdateFileRequest(BaseModel):
     expected_revision: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
 
 
-class RestoreRevisionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+class RevisionMutationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    path: str = Field(min_length=1, max_length=1_200)
+    path: str = Field(strict=True, min_length=1, max_length=1_200)
+    file_id: UUID = Field(alias="fileId")
+    expected_current_revision: int = Field(
+        alias="expectedCurrentRevision", strict=True, ge=1
+    )
+    expected_current_sha256: str | None = Field(
+        default=None,
+        alias="expectedCurrentSha256",
+        strict=True,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class RevisionMutationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    file_deleted: bool = Field(alias="fileDeleted")
+    file_id: UUID = Field(alias="fileId")
+    current_revision: int | None = Field(alias="currentRevision")
+    current_sha256: str | None = Field(alias="currentSha256")
 
 
 class OpenScadFileRenderRequest(BaseModel):
@@ -379,8 +398,6 @@ def _context_error(exc: RootFileError) -> ApiError:
         return ApiError(413, exc.code)
     if exc.code == "file.sessionQuotaExceeded":
         return ApiError(507, exc.code)
-    if exc.code in {"file.currentRevision", "file.revisionImmutable"}:
-        return ApiError(409, exc.code)
     return ApiError(400, exc.code)
 
 
@@ -1261,43 +1278,75 @@ async def download_file_revision(
     )
 
 
-@router.delete("/files/revisions/{revision}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/files/revisions/{revision}", response_model=RevisionMutationResponse
+)
 async def delete_file_revision(
     revision: int,
+    payload: RevisionMutationRequest,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-    path: str,
     session_id: UUID,
-) -> None:
+) -> RevisionMutationResponse:
     context = await _file_context(
         FileScope.SESSION, session_id, user, db, for_update=True
     )
     assert context.root_files is not None
     try:
-        await asyncio.to_thread(context.root_files.delete_revision, path, revision)
-    except RootFileError as exc:
-        raise _context_error(exc) from exc
-
-
-@router.post("/files/revisions/{revision}/restore")
-async def restore_file_revision(
-    revision: int,
-    payload: RestoreRevisionRequest,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    session_id: UUID,
-) -> dict[str, str]:
-    context = await _file_context(
-        FileScope.SESSION, session_id, user, db, for_update=True
-    )
-    assert context.root_files is not None
-    try:
-        sha256 = await asyncio.to_thread(
-            context.root_files.restore_revision, payload.path, revision
+        result = await asyncio.to_thread(
+            context.root_files.delete_revision,
+            payload.path,
+            revision,
+            expected_file_id=payload.file_id,
+            expected_current_revision=payload.expected_current_revision,
+            expected_current_sha256=payload.expected_current_sha256,
         )
     except RootFileError as exc:
         raise _context_error(exc) from exc
-    return {"revision": sha256}
+    if result.deleted:
+        await _clear_file_grants(db, user, context, (payload.path,))
+        await db.commit()
+    return RevisionMutationResponse(
+        fileDeleted=result.deleted,
+        fileId=result.file_id,
+        currentRevision=result.current_revision,
+        currentSha256=result.sha256,
+    )
+
+
+@router.post(
+    "/files/revisions/{revision}/restore", response_model=RevisionMutationResponse
+)
+async def restore_file_revision(
+    revision: int,
+    payload: RevisionMutationRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    session_id: UUID,
+) -> RevisionMutationResponse:
+    context = await _file_context(
+        FileScope.SESSION, session_id, user, db, for_update=True
+    )
+    assert context.root_files is not None
+    try:
+        result = await asyncio.to_thread(
+            context.root_files.restore_revision,
+            payload.path,
+            revision,
+            expected_file_id=payload.file_id,
+            expected_current_revision=payload.expected_current_revision,
+            expected_current_sha256=payload.expected_current_sha256,
+        )
+    except RootFileError as exc:
+        raise _context_error(exc) from exc
+    await _clear_file_grants(db, user, context, (payload.path,))
+    await db.commit()
+    return RevisionMutationResponse(
+        fileDeleted=result.deleted,
+        fileId=result.file_id,
+        currentRevision=result.current_revision,
+        currentSha256=result.sha256,
+    )
 
 
 @router.get("/files/content")

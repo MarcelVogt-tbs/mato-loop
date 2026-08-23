@@ -135,8 +135,56 @@ export function toolFileAttachment(
     filename,
     url: imageMimeType
       ? safeUrl.replace(INTERNAL_FILE_DOWNLOAD_PATH, INTERNAL_FILE_CONTENT_PATH)
-      : safeUrl
+      : safeUrl,
+    fileRootId: params.get('root_identity'),
+    filePath: path
   }
+}
+
+function attachmentFileTarget(attachment) {
+  const safeUrl = safeFileDownloadUrl(attachment?.url) || safeFileContentUrl(attachment?.url)
+  if (safeUrl) {
+    const params = new URL(safeUrl, 'https://mato-loop.invalid').searchParams
+    return { rootIdentity: params.get('root_identity'), path: params.get('path') }
+  }
+  const rootIdentity = typeof attachment?.fileRootId === 'string' ? attachment.fileRootId : ''
+  const path = typeof attachment?.filePath === 'string' ? attachment.filePath : ''
+  return UUID_PATTERN.test(rootIdentity) && validRelativePath(path)
+    ? { rootIdentity, path }
+    : null
+}
+
+export function managedSessionFileTarget(attachment, sessionId) {
+  const size = Number(attachment?.sizeBytes)
+  const target = attachmentFileTarget(attachment)
+  const fileRevision = Number(attachment?.fileRevision)
+  const filename = target?.path.split('/').at(-1) || ''
+  if (
+    !UUID_PATTERN.test(sessionId || '')
+    || !UUID_PATTERN.test(attachment?.fileId || '')
+    || !Number.isSafeInteger(fileRevision)
+    || fileRevision < 1
+    || !target
+    || !filename
+    || !Number.isSafeInteger(size)
+    || size < 0
+  ) return null
+  return {
+    root: 'session',
+    ...target,
+    filename,
+    sizeBytes: size,
+    sessionId,
+    fileRevision
+  }
+}
+
+export function deduplicateFileOutputAttachments(attachments, fileActions) {
+  const actionKeys = new Set(fileActions.map((action) => `${action.rootIdentity}:${action.path}`))
+  return attachments.filter((attachment) => {
+    const target = attachmentFileTarget(attachment)
+    return !target || !actionKeys.has(`${target.rootIdentity}:${target.path}`)
+  })
 }
 
 export function toolFileActions(result) {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -49,6 +50,14 @@ class AutomationError(ValueError):
         self.code = code
         self.field = field
         self.params = params
+
+
+def automation_impact_token(automations: list[Automation]) -> str:
+    value = "|".join(
+        f"{item.id}:{item.revision}:{int(item.output_session_required)}"
+        for item in sorted(automations, key=lambda item: item.id)
+    )
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 def next_run_at(cron_expression: str, timezone: str, after: datetime) -> datetime:

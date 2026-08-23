@@ -14,6 +14,7 @@ export const useAutomationStore = defineStore('automations', {
     loading: false,
     loadingDetail: false,
     loadingRuns: false,
+    listArchived: false,
     listRevision: 0,
     detailRevision: 0,
     runsRevision: 0,
@@ -22,6 +23,7 @@ export const useAutomationStore = defineStore('automations', {
   actions: {
     async fetchAutomations({ archived = false, suppressErrorToast = false } = {}) {
       const revision = ++this.listRevision
+      this.listArchived = archived
       this.loading = true
       try {
         const { data } = await (suppressErrorToast

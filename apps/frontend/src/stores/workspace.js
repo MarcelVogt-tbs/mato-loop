@@ -333,10 +333,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorDirty = this.editorActive && content !== original
     },
     discardEdit() {
+      const refreshPath = this.editorExternalChange ? this.viewedEntry?.path : null
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
       this.editorExternalChange = false
+      if (refreshPath) {
+        this.fileChangeVersions[refreshPath] = (this.fileChangeVersions[refreshPath] || 0) + 1
+      }
     },
     noteFileMutation(path) {
       if (this.viewedEntry?.path !== path) return
@@ -344,6 +348,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.editorExternalChange = true
         return
       }
+      this.editorDraft = null
       this.fileChangeVersions[path] = (this.fileChangeVersions[path] || 0) + 1
     },
     activeFileSnapshot() {
@@ -596,17 +601,73 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     async restoreRevision(path, revision) {
       requireWritableContext(this)
+      const contextVersion = this.contextVersion
+      const viewVersion = this.viewVersion
+      const sessionId = this.sessionId
+      const state = this.fileRevisions[path] || {}
       const { data } = await api.post(`/workspace/files/revisions/${revision}/restore`, {
-        path
+        path,
+        file_id: state.fileId,
+        expected_current_revision: state.items?.find((item) => item.current)?.revision
       }, {
-        params: { session_id: this.sessionId }
+        params: { session_id: sessionId }
       })
-      await Promise.all([
+      if (
+        contextVersion !== this.contextVersion
+        || viewVersion !== this.viewVersion
+        || sessionId !== this.sessionId
+      ) return null
+      await Promise.allSettled([
         this.preview(path),
         this.loadRevisions(path),
         this.load(parentPath(path), false, true)
       ])
+      if (
+        contextVersion !== this.contextVersion
+        || viewVersion !== this.viewVersion
+        || sessionId !== this.sessionId
+      ) return null
       this.fileChangeVersions[path] = (this.fileChangeVersions[path] || 0) + 1
+      return data
+    },
+    async deleteRevision(path, revision) {
+      requireWritableContext(this)
+      const contextVersion = this.contextVersion
+      const viewVersion = this.viewVersion
+      const sessionId = this.sessionId
+      const state = this.fileRevisions[path] || {}
+      const currentRevision = state.items?.find((item) => item.current)?.revision
+      const { data } = await api.delete(`/workspace/files/revisions/${revision}`, {
+        params: { session_id: sessionId },
+        data: {
+          path,
+          file_id: state.fileId,
+          expected_current_revision: currentRevision
+        }
+      })
+      if (
+        contextVersion !== this.contextVersion
+        || viewVersion !== this.viewVersion
+        || sessionId !== this.sessionId
+      ) return null
+      if (!data.fileDeleted) {
+        await this.loadRevisions(path).catch(() => null)
+        if (viewVersion !== this.viewVersion) return null
+        return data
+      }
+      delete this.fileRevisions[path]
+      delete this.filePreviews[path]
+      this.closeViewer()
+      this.selectedPath = parentPath(path)
+      this.selectedKind = 'directory'
+      this.persistView()
+      const closedViewVersion = this.viewVersion
+      await this.load(this.selectedPath, false, true).catch(() => null)
+      if (
+        contextVersion !== this.contextVersion
+        || closedViewVersion !== this.viewVersion
+        || sessionId !== this.sessionId
+      ) return null
       return data
     },
     async saveFile(path, content, expectedRevision) {

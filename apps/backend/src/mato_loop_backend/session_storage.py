@@ -807,17 +807,22 @@ class SessionStorage:
                 )
         project_root = self.projects_dir / str(normalized)
         if not project_root.exists() and not project_root.is_symlink():
-            return False
+            return None
         if project_root.is_symlink() or not project_root.is_dir():
             raise SessionStorageError(
                 "sessionStorage.invalidDirectory", "Invalid project storage"
             )
         sessions = project_root / "sessions"
         self._validate_directory(sessions)
-        if sessions.exists() and any(sessions.iterdir()):
-            raise SessionStorageError(
-                "sessionStorage.projectNotEmpty", "Project storage is not empty"
-            )
+        if sessions.exists():
+            for session in sessions.iterdir():
+                try:
+                    self.normalize_session_id(session.name)
+                except SessionStorageError as exc:
+                    raise SessionStorageError(
+                        "sessionStorage.invalidProjectTree", "Invalid project storage"
+                    ) from exc
+                self._validate_tree(session)
         trashed = self.trash_dir / f"project-{normalized}.{uuid4().hex}"
         project_root.rename(trashed)
         return trashed

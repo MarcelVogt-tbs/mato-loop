@@ -18,7 +18,7 @@ Computer gehören genau einem Benutzer und können nicht von anderen Konten ausg
 
 `root=session` zeigt direkt den Inhalt des Backend-Ordners `files/`; Pfade beginnen daher nie mit `files/`. Eine Session ohne Projekt verwendet `/data/sessions/<session-id>/files`, `/data/sessions/<session-id>/revisions` und `/data/sessions/<session-id>/attachments`. Alle Sessions eines Projekts verwenden dagegen gemeinsam `/data/projects/<projekt-id>/files` und `/data/projects/<projekt-id>/revisions`; die Projekt-ID ist dabei die Wurzelidentität.
 
-Vom Benutzer an Nachrichten angehängte Dateien bleiben im privaten Ordner `/data/projects/<projekt-id>/sessions/<session-id>/attachments` beziehungsweise im `attachments/`-Ordner der eigenständigen Session; daraus erzeugte Ableitungen liegen unter dem jeweiligen Anhang. Dauerhafte Binärausgaben von Backend-Tools werden dagegen zu verwalteten Dateien mit unveränderlichen Versionen.
+Vom Benutzer an Nachrichten angehängte Dateien bleiben im privaten Ordner `/data/projects/<projekt-id>/sessions/<session-id>/attachments` beziehungsweise im `attachments/`-Ordner der eigenständigen Session; daraus erzeugte Ableitungen liegen unter dem jeweiligen Anhang. Dauerhafte Binärausgaben von Backend-Tools werden dagegen zu verwalteten Dateien mit gespeicherten Vollversionen.
 
 Wird eine eigenständige Session in ein Projekt verschoben, übernimmt MatoLoop ihre Backend-Dateien samt Versionsverlauf in den gemeinsamen Projektbereich. Vorhandene Projektordner werden zusammengeführt, bestehende gleichnamige Pfade aber niemals überschrieben; bei einem Konflikt bleibt die Session unverändert. Die übernommenen Dateien sind anschließend für alle Sessions des Projekts sichtbar und bleiben im Projekt, wenn die ursprüngliche Session später wieder herausgeschoben wird. Private Nachrichtenanhänge bleiben weiterhin nur der jeweiligen Session zugeordnet.
 
@@ -34,10 +34,12 @@ In der App **Dateien** können Sie:
 - leere Text- oder Markdown-Dateien anlegen
 - Ordner anlegen
 - Dateien und Ordner umbenennen oder löschen
-- frühere Dateiversionen anzeigen, herunterladen oder wiederherstellen
+- Dateiversionen anzeigen, herunterladen, wiederherstellen oder gezielt löschen
 - Session-Freigaben anzeigen und widerrufen
 
-Nachrichten verweisen bei dauerhaften Binärausgaben von Tools auf die exakte Dateiversion. Dieser Verweis bleibt auch nach späterem Bearbeiten, Verschieben oder Löschen der Datei unverändert gültig. Reine Text-, JSON-, Status- und Fehlerergebnisse bleiben Teil der Nachricht und erzeugen keine zusätzlichen Dateien.
+Nachrichten verweisen bei dauerhaften Binärausgaben von Tools auf die exakte Dateiversion. Normales Bearbeiten und Verschieben erhalten diese Verweise; auch ein Löschen durch den laufenden Agenten bewahrt den Verlauf, soweit die Aktion eine verwaltete Datei betrifft. Reine Text-, JSON-, Status- und Fehlerergebnisse bleiben Teil der Nachricht und erzeugen keine zusätzlichen Dateien.
+
+Nach erfolgreichen Schreib-, Kopier- und Verschiebeaktionen erscheint die vorhandene Dateikarte zum Ansehen oder Herunterladen; für erzeugte Session-Dateien gibt es keine zusätzliche Entwurfskarte. Eine neu erzeugte Session-Datei öffnet MatoLoop automatisch im vorhandenen Dateibrowser, solange Sie dessen Navigation während des Agentenlaufs nicht gewechselt haben und kein ungespeicherter Entwurf verdrängt würde. Ist dieselbe aktuelle Datei bereits geöffnet, bleibt sie ausgewählt und wird aktualisiert, statt eine weitere Ansicht zu öffnen. Textvorschauen lassen sich direkt kopieren. **Kopieren** erzeugt am Ziel eine eigenständige verwaltete Datei mit eigenem Versionsverlauf.
 
 `root=session` bezeichnet immer die Backend-Dateiwurzel der Session oder ihres Projekts. `root=workspace` bezeichnet immer eine Wurzel des für den Lauf gewählten, dem Benutzer gehörenden Computers. Ohne Computer und Wurzel ist nur dieser Workspace-Zugriff nicht verfügbar. Änderungen dort bleiben Eigentum des Execution Agents; nur an das Backend zurückgegebene oder importierte Bytes werden zu verwalteten Dateien. Kopien zwischen beiden Bereichen werden vom Backend vermittelt und anhand von Größe und SHA-256 geprüft. Der Computer darf verwendete Backend-Dateien in einem begrenzten, unvollständigen Cache halten. Dieser Cache ist keine maßgebliche Kopie und kann jederzeit geleert werden.
 
@@ -47,7 +49,9 @@ Bis zu vier Dateien können im Browser gemeinsam ausgewählt und nacheinander ho
 
 ## Vorschau und Bearbeitung
 
-Die Vorschaugrößen für unterstützte Bilder sowie geeignete UTF-8-Text- und Markdown-Dateien werden global festgelegt; das Textlimit gilt auch für den integrierten Editor. Sichere SVG-Vorschauen bleiben unabhängig davon auf 5 MiB begrenzt. Andere Formate stehen zum Download bereit. Eine neue Datei beginnt mit einer vollständigen Version; Kopieren erzeugt ebenfalls eine neue Identität mit Anfangsversion. Ersetzen hängt nach Prüfung des erwarteten SHA-256-Werts eine Vollversion an. Umbenennen und Verschieben behalten Identität und Verlauf. Wiederherstellen macht die gewählte Version wieder aktuell. Exakte Versionsverweise in älteren Nachrichten bleiben durch Wiederherstellen, Bearbeiten, Verschieben und Löschen unverändert.
+Die Vorschaugrößen für unterstützte Bilder sowie geeignete UTF-8-Text- und Markdown-Dateien werden global festgelegt; das Textlimit gilt auch für den integrierten Editor. Sichere SVG-Vorschauen bleiben unabhängig davon auf 5 MiB begrenzt. Andere Formate stehen zum Download bereit. Eine neue Datei beginnt mit einer vollständigen Version. Normales Ersetzen hängt nach Prüfung des erwarteten SHA-256-Werts eine Vollversion an; Umbenennen und Verschieben behalten Identität und Verlauf.
+
+Aktionen im Versionsverlauf sind dagegen ausdrücklich destruktive Benutzeraktionen. Sie können eine historische Version dauerhaft löschen. Löschen Sie die aktuelle Version, werden die Datei und ihr gesamter Versionsverlauf entfernt. Beim Wiederherstellen wird die gewählte ältere Version zur aktuellen Version; alle späteren Versionen werden entfernt. Diese manuellen Aktionen können deshalb exakte Dateiversionsverweise in älteren Nachrichten unbrauchbar machen.
 
 Beim Senden einer Nachricht übermittelt MatoLoop für die aktuell geöffnete Datei nur Wurzel, Wurzelidentität, Pfad, SHA-256 und den Status ungespeicherter Änderungen. Dateiinhalte werden dadurch nicht automatisch an den Agenten gesendet.
 
@@ -56,4 +60,4 @@ Markdown kann als Quelltext oder visuell bearbeitet werden. In der schreibgesch�
 Gespeicherte Markdown-Dateien können über **Als PDF speichern** in einer hellen Druckansicht geöffnet werden. Nach dem Rendern von Formeln und Mermaid-Diagrammen erscheint der Druckdialog des Browsers; dort kann das Dokument als PDF gespeichert werden. Ungespeicherte Änderungen werden nicht exportiert.
 
 !!! warning "Löschen"
-    Das Löschen eines Ordners wirkt rekursiv. Prüfen Sie den angezeigten Pfad vor der Bestätigung.
+    Das Löschen eines Ordners wirkt rekursiv. Das Löschen der aktuellen Dateiversion entfernt Datei und Verlauf; Wiederherstellen entfernt alle späteren Versionen. Prüfen Sie Pfad und Version vor der Bestätigung.

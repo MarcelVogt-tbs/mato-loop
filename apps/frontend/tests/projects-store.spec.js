@@ -61,12 +61,48 @@ describe('projects store', () => {
 
     await store.create(project.name)
     await store.update(project.id, renamed.name)
-    await store.remove(project.id)
+    await store.remove(project.id, { automationImpact: 'impact-token' })
 
     expect(api.post).toHaveBeenCalledWith('/projects', { name: project.name })
     expect(api.patch).toHaveBeenCalledWith('/projects/project-1', { name: renamed.name })
-    expect(api.delete).toHaveBeenCalledWith('/projects/project-1')
+    expect(api.delete).toHaveBeenCalledWith('/projects/project-1', {
+      params: { automationImpact: 'impact-token' }
+    })
     expect(store.items).toEqual([])
+  })
+
+  it('loads deletion impact and passes automation parameters when deleting', async () => {
+    const impact = {
+      sessionCount: 2,
+      sessionIds: ['session-1', 'session-2'],
+      automationCount: 1,
+      requiredAutomationCount: 1,
+      automationImpact: 'impact-token'
+    }
+    api.get.mockResolvedValue({ data: impact })
+    api.delete.mockResolvedValue({})
+    const store = useProjectStore()
+
+    await expect(store.deleteImpact(project.id, { suppressErrorToast: true })).resolves.toEqual(impact)
+    await store.remove(project.id, {
+      automationMode: 'deleteAutomations',
+      automationImpact: impact.automationImpact
+    })
+
+    expect(api.get).toHaveBeenCalledWith('/projects/project-1/delete-impact', {
+      suppressErrorToast: true
+    })
+    expect(api.delete).toHaveBeenCalledWith('/projects/project-1', {
+      params: {
+        automationMode: 'deleteAutomations',
+        automationImpact: 'impact-token'
+      }
+    })
+
+    await store.remove(project.id, { automationImpact: 'impact-token' })
+    expect(api.delete).toHaveBeenLastCalledWith('/projects/project-1', {
+      params: { automationImpact: 'impact-token' }
+    })
   })
 
   it('invalidates a pending read only after a mutation succeeds', async () => {
@@ -94,7 +130,7 @@ describe('projects store', () => {
 
     await expect(store.create('Neu')).rejects.toThrow('request failed')
     await expect(store.update(project.id, 'Neu')).rejects.toThrow('request failed')
-    await expect(store.remove(project.id)).rejects.toThrow('request failed')
+    await expect(store.remove(project.id, { automationImpact: 'impact-token' })).rejects.toThrow('request failed')
 
     expect(store.items).toEqual([project])
     expect(store.revision).toBe(0)

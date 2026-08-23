@@ -1161,14 +1161,33 @@ def test_system_prompt_describes_managed_file_roots() -> None:
         offered_tool_names=frozenset({"read", "glob", "grep", "provide_file"}),
     )
 
-    assert "explicit root and relative POSIX path" in prompt
-    assert "path='.' means the root" in prompt
-    assert "Never put a root name or absolute path in path" in prompt
-    assert "exact new destination" in prompt
+    assert "explicit root plus relative POSIX path" in prompt
+    assert "'.' is root" in prompt
+    assert "Path has no root name, files/ prefix, or absolute form" in prompt
+    assert "exact unused destination" in prompt
     assert "No computer directory selected. Use root=session." in prompt
-    assert "paths and read output are not downloads" in prompt
-    assert "Use provide_file only for another existing file" in prompt
-    assert "use the download card" in prompt
+    assert "paths and reads are not downloads" in prompt
+    assert "provide_file is only for another file" in prompt
+    assert "Use its card" in prompt
+
+
+def test_system_prompt_enforces_managed_writing_contract() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"question", "read", "write_file"}),
+    )
+
+    assert "Reusable email or drafts" in prompt
+    assert "one file per artifact" in prompt
+    assert "Default to root=session; workspace only when explicit" in prompt
+    assert "descriptive .md; never files/" in prompt
+    assert "mode=create" in prompt
+    assert "same path with mode=replace after reading its exact SHA-256" in prompt
+    assert "exact SHA-256" in prompt
+    assert "never make version copies" in prompt
+    assert "Ask if ambiguous" in prompt
+    assert "never overwrite a dirty active file" in prompt
+    assert "Reply only with status and path, not the body" in prompt
 
 
 def test_missing_computer_directory_uses_structured_question_when_available() -> None:

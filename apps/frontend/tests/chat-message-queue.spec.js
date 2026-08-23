@@ -19,7 +19,7 @@ import { useChatStore, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/stores/chat'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
-import { clearChatOutbox } from '../src/utils/chat-outbox'
+import { clearChatOutbox, loadChatOutbox } from '../src/utils/chat-outbox'
 
 const originalURL = globalThis.URL
 
@@ -441,6 +441,80 @@ describe('chat message queue', () => {
     } finally {
       globalThis.indexedDB = indexedDB
     }
+  })
+
+  it('removes project outbox entries before deletion and restores them after failure', async () => {
+    const chat = useChatStore()
+    chat.current = { id: 'session-project', projectId: 'project-1', messages: [] }
+    chat.selectedSessionId = 'session-project'
+    chat.running = true
+    const projectEntry = await chat.queueMessage('Projekt behalten')
+    chat.current = { id: 'session-other', projectId: 'project-2', messages: [] }
+    chat.selectedSessionId = 'session-other'
+    const otherEntry = await chat.queueMessage('Andere Queue')
+    vi.spyOn(chat, 'scheduleQueueDrain').mockImplementation(() => {})
+
+    const snapshot = await chat.prepareProjectOutboxDeletion('project-1', ['session-project'])
+
+    expect(chat.queuedMessages['session-project']).toBeUndefined()
+    expect(chat.queuedMessages['session-other']).toHaveLength(1)
+    expect((await loadChatOutbox('user-1')).map((entry) => entry.id)).toEqual([otherEntry.id])
+
+    await chat.restoreProjectOutboxDeletion(snapshot)
+
+    expect(chat.queuedMessages['session-project']).toHaveLength(1)
+    expect((await loadChatOutbox('user-1')).map((entry) => entry.id).sort())
+      .toEqual([projectEntry.id, otherEntry.id].sort())
+  })
+
+  it('aborts project outbox preparation without changing memory when persistence fails', async () => {
+    const chat = useChatStore()
+    chat.current = { id: 'session-project', projectId: 'project-1', messages: [] }
+    chat.selectedSessionId = 'session-project'
+    chat.running = true
+    await chat.queueMessage('Nicht verlieren')
+    vi.spyOn(chat, 'scheduleQueueDrain').mockImplementation(() => {})
+    const indexedDB = globalThis.indexedDB
+    globalThis.indexedDB = undefined
+
+    try {
+      await expect(chat.prepareProjectOutboxDeletion('project-1', ['session-project']))
+        .rejects.toThrow()
+      expect(chat.queuedMessages['session-project']).toHaveLength(1)
+    } finally {
+      globalThis.indexedDB = indexedDB
+    }
+  })
+
+  it('aborts project deletion cleanup when the persisted outbox is unavailable', async () => {
+    const chat = useChatStore()
+    chat.outboxLoaded = false
+    chat.outboxLoadFailed = true
+
+    await expect(chat.prepareProjectOutboxDeletion('project-1'))
+      .rejects.toThrow('Chat outbox is unavailable')
+  })
+
+  it('clears successful project queues locally and reschedules unrelated queues', async () => {
+    const chat = useChatStore()
+    chat.current = { id: 'session-project', projectId: 'project-1', messages: [] }
+    chat.selectedSessionId = 'session-project'
+    chat.running = true
+    const projectEntry = await chat.queueMessage('Projekt löschen')
+    chat.current = { id: 'session-other', projectId: 'project-2', messages: [] }
+    chat.selectedSessionId = 'session-other'
+    const otherEntry = await chat.queueMessage('Andere Queue')
+    const scheduleQueueDrain = vi.spyOn(chat, 'scheduleQueueDrain').mockImplementation(() => {})
+    await chat.prepareProjectOutboxDeletion('project-1', ['session-project'])
+    scheduleQueueDrain.mockClear()
+
+    await chat.removeProjectScope('project-1', ['session-project'])
+
+    expect(chat.queuedMessages['session-project']).toBeUndefined()
+    expect(chat.queuedMessages['session-other']).toHaveLength(1)
+    expect(scheduleQueueDrain).toHaveBeenCalledWith(0)
+    expect((await loadChatOutbox('user-1')).map((entry) => entry.id)).toEqual([otherEntry.id])
+    expect((await loadChatOutbox('user-1')).some((entry) => entry.id === projectEntry.id)).toBe(false)
   })
 
   it('restores the persistent queue when session deletion fails', async () => {

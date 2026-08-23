@@ -179,6 +179,7 @@ import AgentActivityEntry from 'components/AgentActivityEntry.vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import {
+  deduplicateFileOutputAttachments,
   toolOutputAttachments,
   toolFileActions,
   toolFileAttachment
@@ -272,21 +273,30 @@ const errorLabel = computed(() => (
 const warningLabel = computed(() => (
   `${warningItems.value.length} ${warningItems.value.length === 1 ? 'Warnung' : 'Warnungen'}`
 ))
-const outputs = computed(() => items.value.flatMap((item) => {
-  const providedFile = toolFileAttachment(
-    item.tool,
-    item.result,
-    instanceLimits.maxImagePreviewBytes
-  )
-  const attachments = toolOutputAttachments(item.tool, [
-    ...(item.result?.attachments || []),
-    ...(providedFile ? [providedFile] : [])
-  ])
-  const fileActions = toolFileActions(item.result)
-  return attachments.length || fileActions.length
-    ? [{ key: `output-${item.key}`, attachments, fileActions }]
-    : []
-}))
+const outputs = computed(() => {
+  const prepared = items.value.map((item) => {
+    const providedFile = toolFileAttachment(
+      item.tool,
+      item.result,
+      instanceLimits.maxImagePreviewBytes
+    )
+    return {
+      key: `output-${item.key}`,
+      attachments: toolOutputAttachments(item.tool, [
+        ...(item.result?.attachments || []),
+        ...(providedFile ? [providedFile] : [])
+      ]),
+      fileActions: toolFileActions(item.result)
+    }
+  })
+  const fileActions = prepared.flatMap((output) => output.fileActions)
+  return prepared.flatMap((output) => {
+    const attachments = deduplicateFileOutputAttachments(output.attachments, fileActions)
+    return attachments.length || output.fileActions.length
+      ? [{ ...output, attachments }]
+      : []
+  })
+})
 
 function updateTimer(running) {
   clearInterval(timer)

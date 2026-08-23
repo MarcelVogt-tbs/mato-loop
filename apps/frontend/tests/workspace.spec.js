@@ -683,7 +683,19 @@ describe('workspace store', () => {
     expect(workspace.fileChangeVersions['notes.md']).toBeUndefined()
 
     workspace.discardEdit()
+    expect(workspace.fileChangeVersions['notes.md']).toBe(1)
+    expect(workspace.editorExternalChange).toBe(false)
+  })
+
+  it('clears a clean active editor before refreshing an externally changed file', () => {
+    const workspace = useWorkspaceStore()
+    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' }, true)
+    workspace.editorDraft = 'stale'
+
     workspace.noteFileMutation('notes.md')
+
+    expect(workspace.editorActive).toBe(true)
+    expect(workspace.editorDraft).toBeNull()
     expect(workspace.fileChangeVersions['notes.md']).toBe(1)
   })
 
@@ -737,12 +749,76 @@ describe('workspace store', () => {
       params
     })
     expect(api.post).toHaveBeenCalledWith('/workspace/files/revisions/1/restore', {
-      path: 'notes.md'
+      path: 'notes.md',
+      file_id: 'file-1',
+      expected_current_revision: 2
     }, {
       params: { session_id: 'session-a' }
     })
     expect(workspace.fileRevisions['notes.md'].items[0].revision).toBe(2)
     expect(workspace.filePreviews['notes.md'].revision).toBe('b'.repeat(64))
+  })
+
+  it('deletes historical and current revisions with optimistic history state', async () => {
+    const workspace = useWorkspaceStore()
+    workspace.sessionId = 'session-a'
+    workspace.scope = 'session'
+    workspace.openEntry({ kind: 'file', name: 'archive.bin', path: 'archive.bin' })
+    workspace.fileRevisions['archive.bin'] = {
+      fileId: 'file-1',
+      items: [{ revision: 3, current: true }, { revision: 2 }]
+    }
+    api.delete
+      .mockResolvedValueOnce({ data: { fileDeleted: false } })
+      .mockResolvedValueOnce({ data: { fileDeleted: true } })
+    api.get
+      .mockResolvedValueOnce({ data: { fileId: 'file-1', items: [{ revision: 3, current: true }] } })
+      .mockResolvedValueOnce({ data: { entries: [] } })
+
+    await workspace.deleteRevision('archive.bin', 2)
+
+    expect(api.delete).toHaveBeenNthCalledWith(1, '/workspace/files/revisions/2', {
+      params: { session_id: 'session-a' },
+      data: {
+        path: 'archive.bin',
+        file_id: 'file-1',
+        expected_current_revision: 3
+      }
+    })
+    expect(workspace.viewedEntry?.path).toBe('archive.bin')
+
+    await workspace.deleteRevision('archive.bin', 3)
+
+    expect(api.delete).toHaveBeenNthCalledWith(2, '/workspace/files/revisions/3', {
+      params: { session_id: 'session-a' },
+      data: {
+        path: 'archive.bin',
+        file_id: 'file-1',
+        expected_current_revision: 3
+      }
+    })
+    expect(workspace.viewedEntry).toBeNull()
+    expect(workspace.selectedPath).toBe('.')
+  })
+
+  it('does not reconcile a completed revision mutation after navigation', async () => {
+    let resolveDelete
+    api.delete.mockReturnValue(new Promise((resolve) => { resolveDelete = resolve }))
+    const workspace = useWorkspaceStore()
+    workspace.sessionId = 'session-a'
+    workspace.scope = 'session'
+    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' })
+    workspace.fileRevisions['notes.md'] = {
+      fileId: 'file-1',
+      items: [{ revision: 1, current: true }]
+    }
+
+    const request = workspace.deleteRevision('notes.md', 1)
+    workspace.openEntry({ kind: 'file', name: 'other.md', path: 'other.md' })
+    resolveDelete({ data: { fileDeleted: true } })
+
+    await expect(request).resolves.toBeNull()
+    expect(workspace.viewedEntry?.path).toBe('other.md')
   })
 
   it('creates an empty UTF-8 file and opens the returned entry for editing', async () => {

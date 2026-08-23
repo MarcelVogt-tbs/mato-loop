@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import hashlib
 import json
 import logging
 from datetime import datetime
@@ -32,6 +31,7 @@ from mato_loop_backend.attachments import (
     processing_limits,
     safe_filename,
 )
+from mato_loop_backend.automations import automation_impact_token
 from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
@@ -90,14 +90,6 @@ logger = logging.getLogger(__name__)
 
 _LAST_MESSAGE_AT_UNSET = object()
 _VISIBLE_MESSAGE_ROLES = ("user", "assistant")
-
-def _automation_impact_token(automations: list[Automation]) -> str:
-    value = "|".join(
-        f"{item.id}:{item.revision}:{int(item.output_session_required)}"
-        for item in sorted(automations, key=lambda item: item.id)
-    )
-    return hashlib.sha256(value.encode()).hexdigest()
-
 
 
 def _encode_session_cursor(
@@ -1887,7 +1879,7 @@ async def session_delete_impact(
     return {
         "automationCount": len(linked),
         "requiredAutomationCount": sum(item.output_session_required for item in linked),
-        "automationImpact": _automation_impact_token(linked),
+        "automationImpact": automation_impact_token(linked),
     }
 
 
@@ -1925,7 +1917,7 @@ async def delete_session(
         ).all()
     )
     required_count = sum(item.output_session_required for item in linked_automations)
-    if automation_mode is not None and automation_impact != _automation_impact_token(
+    if automation_mode is not None and automation_impact != automation_impact_token(
         linked_automations
     ):
         raise ApiError(409, "session.automationImpactChanged")
@@ -2006,7 +1998,7 @@ async def delete_session(
         ).all()
     )
     required_count = sum(item.output_session_required for item in linked_automations)
-    if automation_mode is not None and automation_impact != _automation_impact_token(
+    if automation_mode is not None and automation_impact != automation_impact_token(
         linked_automations
     ):
         raise ApiError(409, "session.automationImpactChanged")

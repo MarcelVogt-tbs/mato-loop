@@ -1,4 +1,5 @@
 import hashlib
+import json
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -21,6 +22,16 @@ def make_service(tmp_path: Path) -> tuple[RootFileService, Path]:
     session_id = uuid4()
     root = storage.provision(session_id)
     return RootFileService(session_id, session_storage=storage), root
+
+
+def revision_preconditions(service: RootFileService, path: str) -> dict:
+    revisions = service.list_revisions(path)
+    current = next(item for item in revisions if item.current)
+    return {
+        "expected_file_id": current.file_id,
+        "expected_current_revision": current.revision,
+        "expected_current_sha256": current.sha256,
+    }
 
 
 @pytest.mark.parametrize(
@@ -122,7 +133,7 @@ def test_mutations_are_atomic_and_limited_to_session_files(tmp_path: Path) -> No
     assert exc_info.value.code == "file.rootMutationForbidden"
 
 
-def test_file_history_is_append_only_and_survives_live_file_deletion(tmp_path: Path) -> None:
+def test_file_history_survives_regular_live_file_deletion(tmp_path: Path) -> None:
     service, root = make_service(tmp_path)
     service.create_file(
         FileRoot.SESSION, "plan.md", BytesIO(b"# Plan\n"), max_bytes=100
@@ -136,21 +147,118 @@ def test_file_history_is_append_only_and_survives_live_file_deletion(tmp_path: P
 
     original_revisions = service.list_revisions("plan.md")
     file_id = original_revisions[0].file_id
-    restored = service.restore_revision("plan.md", 1)
     revisions = service.list_revisions("plan.md")
-    assert restored == hashlib.sha256(b"# Plan\n").hexdigest()
-    assert [item.revision for item in revisions] == [3, 2, 1]
+    assert [item.revision for item in revisions] == [2, 1]
     assert revisions[0].current is True
     assert revisions[1].current is False
     with service.open_revision("plan.md", 2) as updated:
         assert updated.read() == b"# Updated\n"
-    assert (root / "files" / "plan.md").read_bytes() == b"# Plan\n"
+    assert (root / "files" / "plan.md").read_bytes() == b"# Updated\n"
 
     service.delete_path(FileRoot.SESSION, "plan.md", recursive=False)
 
     assert service.list_revisions("plan.md") == ()
     with service.open_revision_by_id(file_id, 2) as updated:
         assert updated.read() == b"# Updated\n"
+
+
+def test_deleting_historical_revision_removes_blob_derivatives_and_reference(
+    tmp_path: Path,
+) -> None:
+    service, root = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "notes.txt", "one")
+    service.replace_text_file(
+        FileRoot.SESSION, "notes.txt", "two", hashlib.sha256(b"one").hexdigest()
+    )
+    service.replace_text_file(
+        FileRoot.SESSION, "notes.txt", "three", hashlib.sha256(b"two").hexdigest()
+    )
+    file_id = service.list_revisions("notes.txt")[0].file_id
+    service.write_revision_derivatives(file_id, 2, {"preview.bin": b"derived"})
+
+    result = service.delete_revision(
+        "notes.txt", 2, **revision_preconditions(service, "notes.txt")
+    )
+
+    history = root / "revisions" / str(file_id)
+    assert result.deleted is False
+    assert result.current_revision == 3
+    assert [item.revision for item in service.list_revisions("notes.txt")] == [3, 1]
+    assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "three"
+    assert not (history / "2").exists()
+    assert not (history / "derived" / "2").exists()
+    with pytest.raises(RootFileError) as unavailable:
+        service.open_revision_by_id(file_id, 2)
+    assert unavailable.value.code == "file.revisionNotFound"
+
+
+def test_deleting_current_revision_removes_file_and_complete_identity(
+    tmp_path: Path,
+) -> None:
+    service, root = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "notes.txt", "one")
+    service.replace_text_file(
+        FileRoot.SESSION, "notes.txt", "two", hashlib.sha256(b"one").hexdigest()
+    )
+    file_id = service.list_revisions("notes.txt")[0].file_id
+    service.write_revision_derivatives(file_id, 1, {"old.bin": b"old"})
+    service.write_revision_derivatives(file_id, 2, {"new.bin": b"new"})
+
+    result = service.delete_revision(
+        "notes.txt", 2, **revision_preconditions(service, "notes.txt")
+    )
+
+    assert result.deleted is True
+    assert result.current_revision is None
+    assert not (root / "files" / "notes.txt").exists()
+    assert not (root / "revisions" / str(file_id)).exists()
+    assert service.list_revisions("notes.txt") == ()
+    with pytest.raises(RootFileError) as unavailable:
+        service.open_revision_by_id(file_id, 1)
+    assert unavailable.value.code == "file.revisionNotFound"
+
+
+def test_restore_truncates_later_revisions_and_derivatives_without_reusing_numbers(
+    tmp_path: Path,
+) -> None:
+    service, root = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "notes.txt", "one")
+    service.replace_text_file(
+        FileRoot.SESSION, "notes.txt", "two", hashlib.sha256(b"one").hexdigest()
+    )
+    service.replace_text_file(
+        FileRoot.SESSION, "notes.txt", "three", hashlib.sha256(b"two").hexdigest()
+    )
+    file_id = service.list_revisions("notes.txt")[0].file_id
+    service.write_revision_derivatives(file_id, 2, {"two.bin": b"two"})
+    service.write_revision_derivatives(file_id, 3, {"three.bin": b"three"})
+    history = root / "revisions" / str(file_id)
+    index = json.loads((history / "index.json").read_text(encoding="utf-8"))
+    del index["maxRevision"]  # Old indexes infer their high-water mark.
+    (history / "index.json").write_text(json.dumps(index), encoding="utf-8")
+
+    restored = service.restore_revision(
+        "notes.txt", 1, **revision_preconditions(service, "notes.txt")
+    )
+
+    assert restored.current_revision == 1
+    assert restored.sha256 == hashlib.sha256(b"one").hexdigest()
+    assert [item.revision for item in service.list_revisions("notes.txt")] == [1]
+    assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "one"
+    assert not (history / "2").exists()
+    assert not (history / "3").exists()
+    assert not (history / "derived" / "2").exists()
+    assert not (history / "derived" / "3").exists()
+    with pytest.raises(RootFileError):
+        service.open_revision_by_id(file_id, 3)
+    assert json.loads((history / "index.json").read_text(encoding="utf-8"))[
+        "maxRevision"
+    ] == 3
+
+    service.replace_text_file(
+        FileRoot.SESSION, "notes.txt", "four", hashlib.sha256(b"one").hexdigest()
+    )
+    assert [item.revision for item in service.list_revisions("notes.txt")] == [4, 1]
 
 
 def test_project_sessions_share_files_and_revision_identity(tmp_path: Path) -> None:

@@ -89,6 +89,18 @@
         <q-tooltip>Als PDF speichern</q-tooltip>
       </q-btn>
       <q-btn
+        v-if="textualPreview(preview) && !workspace.editorActive"
+        class="file-icon-action"
+        flat
+        round
+        dense
+        icon="content_copy"
+        aria-label="Dateiinhalt kopieren"
+        @click="copyPreview(preview)"
+      >
+        <q-tooltip>Inhalt kopieren</q-tooltip>
+      </q-btn>
+      <q-btn
         v-if="entry && workspace.scope === 'session' && !workspace.toolContext && !workspace.editorActive"
         class="file-icon-action"
         flat
@@ -256,17 +268,26 @@
                 <q-item-label>Version {{ revisionLabel(revision) }}</q-item-label>
                 <q-item-label caption>{{ revisionDate(revision) }}</q-item-label>
               </q-item-section>
-              <q-item-section v-if="isCurrentRevision(revision)" side>
-                <q-chip dense color="primary" text-color="white">Aktuell</q-chip>
-              </q-item-section>
-              <q-item-section v-else-if="editable" side>
-                <q-btn
-                  flat round dense icon="restore" color="primary"
-                  :loading="restoringRevisionId === revisionId(revision)"
-                  :disable="Boolean(revisionActionPending)"
-                  :aria-label="`Version ${revisionLabel(revision)} wiederherstellen`"
-                  @click.stop="restoreRevision(revision)"
-                ><q-tooltip>Wiederherstellen</q-tooltip></q-btn>
+              <q-item-section side>
+                <div class="row items-center no-wrap q-gutter-xs">
+                  <q-chip v-if="isCurrentRevision(revision)" dense color="primary" text-color="white">Aktuell</q-chip>
+                  <q-btn
+                    v-if="!isCurrentRevision(revision) && canRestoreRevision"
+                    flat round dense icon="restore" color="primary"
+                    :loading="restoringRevisionId === revisionId(revision)"
+                    :disable="Boolean(revisionActionPending)"
+                    :aria-label="`Version ${revisionLabel(revision)} wiederherstellen`"
+                    @click.stop="restoreRevision(revision)"
+                  ><q-tooltip>Wiederherstellen</q-tooltip></q-btn>
+                  <q-btn
+                    v-if="canDeleteRevision"
+                    flat round dense icon="delete_outline" color="negative"
+                    :loading="deletingRevisionId === revisionId(revision)"
+                    :disable="Boolean(revisionActionPending)"
+                    :aria-label="`Version ${revisionLabel(revision)} löschen`"
+                    @click.stop="deleteRevision(revision)"
+                  ><q-tooltip>Löschen</q-tooltip></q-btn>
+                </div>
               </q-item-section>
             </q-item>
           </q-list>
@@ -276,9 +297,16 @@
             <div class="row items-center q-mb-sm">
               <div class="text-subtitle2">Vorschau</div>
               <q-space />
+              <q-btn
+                v-if="textualPreview(revisionPreview)"
+                flat round dense icon="content_copy"
+                aria-label="Versionsinhalt kopieren"
+                @click="copyPreview(revisionPreview)"
+              ><q-tooltip>Inhalt kopieren</q-tooltip></q-btn>
               <q-btn flat no-caps icon="download" label="Herunterladen" @click="downloadRevision" />
             </div>
-            <pre class="file-viewer__text">{{ revisionPreview }}</pre>
+            <pre v-if="textualPreview(revisionPreview)" class="file-viewer__text">{{ revisionPreview.content }}</pre>
+            <div v-else class="app-muted">Für diese Version ist keine Textvorschau verfügbar.</div>
           </div>
         </q-card-section>
       </q-card>
@@ -288,7 +316,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useQuasar } from 'quasar'
+import { copyToClipboard, useQuasar } from 'quasar'
 import { useRouter } from 'vue-router'
 import ImageViewerPanel from 'components/ImageViewerPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
@@ -332,8 +360,9 @@ const revisionsOpen = ref(false)
 const revisionsLoading = ref(false)
 const selectedRevisionId = ref(null)
 const revisionPreviewLoading = ref(false)
-const revisionPreview = ref('')
+const revisionPreview = ref(null)
 const restoringRevisionId = ref(null)
+const deletingRevisionId = ref(null)
 let renderController
 let renderVersion = 0
 let exportController
@@ -352,6 +381,18 @@ const editable = computed(() => (
   && !workspace.toolContext
   && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
   && workspace.operationAvailable('workspace.write')
+))
+const canRestoreRevision = computed(() => Boolean(
+  props.entry?.path
+  && workspace.scope === 'session'
+  && !workspace.toolContext
+  && workspace.operationAvailable('workspace.write')
+))
+const canDeleteRevision = computed(() => Boolean(
+  props.entry?.path
+  && workspace.scope === 'session'
+  && !workspace.toolContext
+  && workspace.operationAvailable('workspace.delete')
 ))
 const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('workspace.export'))
 const stlUrl = computed(() => directModel.value?.url
@@ -415,7 +456,7 @@ const currentRevisionId = computed(() => (
   ?? revisionState.value.currentRevision
   ?? preview.value.revision
 ))
-const revisionActionPending = computed(() => restoringRevisionId.value)
+const revisionActionPending = computed(() => restoringRevisionId.value || deletingRevisionId.value)
 const unavailableMessage = computed(() => ({
   invalidImage: 'Die Bilddatei ist beschädigt oder ungültig.',
   unsafeSvg: 'Die SVG-Datei enthält aktive oder externe Inhalte und kann nicht sicher angezeigt werden.',
@@ -472,6 +513,21 @@ function isCurrentRevision(revision) {
   return revision.current === true || revisionId(revision) === currentRevisionId.value
 }
 
+function textualPreview(value) {
+  return ['text', 'markdown', 'openscad'].includes(value?.kind)
+    && typeof value.content === 'string'
+}
+
+async function copyPreview(value) {
+  if (!textualPreview(value)) return
+  try {
+    await copyToClipboard(value.content)
+    $q.notify({ type: 'positive', message: 'Dateiinhalt kopiert.' })
+  } catch {
+    $q.notify({ type: 'negative', message: 'Dateiinhalt konnte nicht kopiert werden.' })
+  }
+}
+
 async function openRevisions() {
   revisionsOpen.value = true
   revisionsLoading.value = true
@@ -489,7 +545,7 @@ async function previewRevision(revision) {
   const path = props.entry?.path
   selectedRevisionId.value = id
   revisionPreviewLoading.value = true
-  revisionPreview.value = ''
+  revisionPreview.value = null
   try {
     const result = await workspace.revisionPreview(path, id)
     if (
@@ -498,7 +554,7 @@ async function previewRevision(revision) {
       || selectedRevisionId.value !== id
       || !result
     ) return
-    revisionPreview.value = result.content || 'Für diese Version ist keine Textvorschau verfügbar.'
+    revisionPreview.value = result
   } catch {
     if (props.entry?.path === path && selectedRevisionId.value === id) {
       selectedRevisionId.value = null
@@ -511,20 +567,61 @@ async function previewRevision(revision) {
 }
 
 async function restoreRevision(revision) {
+  const id = revisionId(revision)
+  const path = props.entry?.path
+  const contextVersion = workspace.contextVersion
+  const viewVersion = workspace.viewVersion
   const accepted = await confirm(
-    `Soll Version ${revisionLabel(revision)} als neue aktuelle Version wiederhergestellt werden?`,
+    `Soll Version ${revisionLabel(revision)} wiederhergestellt werden? Alle späteren Versionen werden dauerhaft gelöscht. Verknüpfte Dateien in älteren Nachrichten sind danach möglicherweise nicht mehr verfügbar.`,
     'Version wiederherstellen?',
     { okLabel: 'Wiederherstellen', okColor: 'warning' }
   )
-  if (!accepted) return
-  const id = revisionId(revision)
+  if (
+    !accepted
+    || props.entry?.path !== path
+    || workspace.contextVersion !== contextVersion
+    || workspace.viewVersion !== viewVersion
+  ) return
   restoringRevisionId.value = id
   try {
-    await workspace.restoreRevision(props.entry.path, id)
+    const result = await workspace.restoreRevision(path, id)
+    if (!result) return
     clearRevisionPreview()
     $q.notify({ type: 'positive', message: 'Version wiederhergestellt.' })
   } finally {
     restoringRevisionId.value = null
+  }
+}
+
+async function deleteRevision(revision) {
+  const current = isCurrentRevision(revision)
+  const id = revisionId(revision)
+  const path = props.entry?.path
+  const name = props.entry?.name
+  const contextVersion = workspace.contextVersion
+  const viewVersion = workspace.viewVersion
+  const accepted = await confirm(
+    current
+      ? `Soll „${name}“ gelöscht werden? Die Datei und ihr gesamter Versionsverlauf werden dauerhaft entfernt. Verknüpfte Dateien in älteren Nachrichten sind danach nicht mehr verfügbar.`
+      : `Soll Version ${revisionLabel(revision)} dauerhaft gelöscht werden? Verknüpfte Dateien in älteren Nachrichten sind danach möglicherweise nicht mehr verfügbar.`,
+    current ? 'Datei mit Versionsverlauf löschen?' : 'Version löschen?',
+    { okLabel: 'Löschen', okColor: 'negative' }
+  )
+  if (
+    !accepted
+    || props.entry?.path !== path
+    || workspace.contextVersion !== contextVersion
+    || workspace.viewVersion !== viewVersion
+  ) return
+  deletingRevisionId.value = id
+  try {
+    const result = await workspace.deleteRevision(path, id)
+    if (!result) return
+    if (current) revisionsOpen.value = false
+    else if (selectedRevisionId.value === id) clearRevisionPreview()
+    $q.notify({ type: 'positive', message: current ? 'Datei gelöscht.' : 'Version gelöscht.' })
+  } finally {
+    deletingRevisionId.value = null
   }
 }
 
@@ -537,7 +634,8 @@ function downloadRevision() {
 
 function clearRevisionPreview() {
   selectedRevisionId.value = null
-  revisionPreview.value = ''
+  revisionPreview.value = null
+  revisionPreviewLoading.value = false
 }
 
 function startEditing() {

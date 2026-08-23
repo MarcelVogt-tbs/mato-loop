@@ -195,7 +195,7 @@ async def test_session_preview_edit_and_image_validation(tmp_path: Path, monkeyp
     assert (root / "files" / "readme.md").read_text(encoding="utf-8") == "updated"
 
 
-async def test_revision_api_rejects_deletion_and_restores_as_new_revision(
+async def test_revision_api_deletes_restores_and_rejects_stale_confirmation(
     tmp_path: Path, monkeypatch
 ) -> None:
     context, root = _session_context(tmp_path)
@@ -220,6 +220,8 @@ async def test_revision_api_rejects_deletion_and_restores_as_new_revision(
         return context
 
     monkeypatch.setattr(workspace_route, "_file_context", file_context)
+    clear_grants = AsyncMock()
+    monkeypatch.setattr(workspace_route, "_clear_file_grants", clear_grants)
     user = _user()
     db = AsyncMock(spec=AsyncSession)
     listed = await workspace_route.list_file_revisions(
@@ -231,24 +233,65 @@ async def test_revision_api_rejects_deletion_and_restores_as_new_revision(
 
     assert [item["revision"] for item in listed["items"]] == [3, 2, 1]
     assert preview["content"] == "one"
-    with pytest.raises(ApiError) as immutable:
+    current = listed["items"][0]
+    payload = workspace_route.RevisionMutationRequest(
+        path="notes.txt",
+        fileId=listed["fileId"],
+        expectedCurrentRevision=current["revision"],
+    )
+    stale_identity = workspace_route.RevisionMutationRequest(
+        path="notes.txt",
+        fileId=uuid4(),
+        expectedCurrentRevision=current["revision"],
+    )
+    with pytest.raises(ApiError) as stale:
         await workspace_route.delete_file_revision(
-            2, user, db, "notes.txt", service.session_id
+            3, stale_identity, user, db, service.session_id
         )
+    assert stale.value.code == "file.changed"
+    clear_grants.assert_not_awaited()
+
+    deleted_historical = await workspace_route.delete_file_revision(
+        2, payload, user, db, service.session_id
+    )
     restored = await workspace_route.restore_file_revision(
         1,
-        workspace_route.RestoreRevisionRequest(path="notes.txt"),
+        payload,
         user,
         db,
         service.session_id,
     )
 
-    assert immutable.value.code == "file.revisionImmutable"
-    assert restored == {"revision": hashlib.sha256(b"one").hexdigest()}
+    assert deleted_historical.file_deleted is False
+    assert deleted_historical.current_revision == 3
+    assert restored.file_deleted is False
+    assert restored.current_revision == 1
+    assert restored.current_sha256 == hashlib.sha256(b"one").hexdigest()
     assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "one"
-    assert [item.revision for item in service.list_revisions("notes.txt")] == [4, 3, 2, 1]
-    with service.open_revision("notes.txt", 3) as later:
-        assert later.read() == b"three"
+    assert [item.revision for item in service.list_revisions("notes.txt")] == [1]
+
+    with pytest.raises(ApiError) as stale:
+        await workspace_route.delete_file_revision(
+            1, payload, user, db, service.session_id
+        )
+    assert stale.value.code == "file.changed"
+
+    current = service.list_revisions("notes.txt")[0]
+    current_payload = workspace_route.RevisionMutationRequest(
+        path="notes.txt",
+        fileId=current.file_id,
+        expectedCurrentRevision=current.revision,
+        expectedCurrentSha256=current.sha256,
+    )
+    deleted_current = await workspace_route.delete_file_revision(
+        1, current_payload, user, db, service.session_id
+    )
+    assert deleted_current.file_deleted is True
+    assert deleted_current.model_dump(by_alias=True)["fileDeleted"] is True
+    assert deleted_current.current_revision is None
+    assert not (root / "files" / "notes.txt").exists()
+    assert clear_grants.await_count == 2
+    assert db.commit.await_count == 2
 
 
 async def test_preview_validates_stl_and_static_svg(tmp_path: Path, monkeypatch) -> None:

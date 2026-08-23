@@ -734,6 +734,109 @@ describe('chat drafts', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:old')
   })
 
+  it('clears all known session and draft state for a deleted project scope', async () => {
+    const revokeObjectURL = vi.fn()
+    global.URL = { revokeObjectURL }
+    const chat = useChatStore()
+    vi.spyOn(chat, 'scheduleQueueDrain').mockImplementation(() => {})
+    chat.sessionsProjectId = 'project-1'
+    chat.sessionLists = {
+      standalone: { ...chat.ensureSessionList(null), items: [] },
+      'project-1': {
+        ...chat.ensureSessionList('project-1'),
+        items: [{ id: 'session-list', projectId: 'project-1' }]
+      },
+      'project-2': {
+        ...chat.ensureSessionList('project-2'),
+        items: [
+          { id: 'session-list', projectId: 'project-1' },
+          { id: 'session-keep', projectId: 'project-2' }
+        ]
+      }
+    }
+    chat.sessionCatalog = [
+      { id: 'session-catalog', projectId: 'project-1' },
+      { id: 'session-keep', projectId: 'project-2' }
+    ]
+    chat.current = { id: 'session-current', projectId: 'project-1' }
+    chat.selectedSessionId = 'session-current'
+    chat.runSessionId = 'session-current'
+    chat.runId = 'run-1'
+    chat.running = true
+    chat.drafts.newSessions['project-1'] = { message: 'Neu', options: {} }
+    chat.drafts.newSession = chat.drafts.newSessions['project-1']
+    chat.drafts.sessionMessages = {
+      'session-list': 'Liste',
+      'session-catalog': 'Katalog',
+      'session-current': 'Aktiv',
+      'session-queued': 'Queue',
+      'session-unloaded': 'Nicht geladen',
+      'session-keep': 'Behalten'
+    }
+    chat.attachmentDrafts.newSessions['project-1'] = [{ objectUrl: 'blob:new-project' }]
+    chat.attachmentDrafts.newSession = chat.attachmentDrafts.newSessions['project-1']
+    chat.attachmentDrafts.sessionMessages = {
+      'session-list': [{ objectUrl: 'blob:list' }],
+      'session-catalog': [{ objectUrl: 'blob:catalog' }],
+      'session-current': [{ objectUrl: 'blob:current' }],
+      'session-queued': [{ objectUrl: 'blob:queued' }],
+      'session-unloaded': [{ objectUrl: 'blob:unloaded' }],
+      'session-keep': [{ objectUrl: 'blob:keep' }]
+    }
+    chat.audioDictations.newSessions['project-1'] = { status: 'ready' }
+    chat.audioDictations.newSession = chat.audioDictations.newSessions['project-1']
+    chat.audioDictations.sessionMessages = {
+      'session-list': { status: 'ready' },
+      'session-catalog': { status: 'ready' },
+      'session-current': { status: 'ready' },
+      'session-queued': { status: 'ready' },
+      'session-unloaded': { status: 'ready' },
+      'session-keep': { status: 'ready' }
+    }
+    chat.queuedMessages = {
+      'session-queued': [{ id: 'queue-1', sessionId: 'session-queued', projectId: 'project-1', attachments: [] }],
+      'new:project-1': [{ id: 'queue-2', sessionId: null, projectId: 'project-1', attachments: [] }],
+      'session-keep': [{ id: 'queue-3', sessionId: 'session-keep', projectId: 'project-2', attachments: [] }]
+    }
+
+    await chat.removeProjectScope('project-1', [
+      'session-list',
+      'session-catalog',
+      'session-current',
+      'session-queued',
+      'session-unloaded'
+    ])
+
+    expect(chat.sessionsProjectId).toBeNull()
+    expect(chat.sessionLists['project-1']).toBeUndefined()
+    expect(chat.sessionLists['project-2'].items).toEqual([{ id: 'session-keep', projectId: 'project-2' }])
+    expect(chat.sessionCatalog).toEqual([{ id: 'session-keep', projectId: 'project-2' }])
+    expect(chat.current).toBeNull()
+    expect(chat.selectedSessionId).toBeNull()
+    expect(chat.runSessionId).toBeNull()
+    expect(chat.runId).toBeNull()
+    expect(chat.drafts.sessionMessages).toEqual({ 'session-keep': 'Behalten' })
+    expect(chat.attachmentDrafts.sessionMessages).toEqual({
+      'session-keep': [{ objectUrl: 'blob:keep' }]
+    })
+    expect(chat.audioDictations.sessionMessages).toEqual({
+      'session-keep': { status: 'ready' }
+    })
+    expect(chat.queuedMessages).toEqual({
+      'session-keep': [{ id: 'queue-3', sessionId: 'session-keep', projectId: 'project-2', attachments: [] }]
+    })
+    expect(chat.drafts.newSessions['project-1']).toBeUndefined()
+    expect(chat.attachmentDrafts.newSessions['project-1']).toBeUndefined()
+    expect(chat.audioDictations.newSessions['project-1']).toBeUndefined()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:new-project')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:list')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:catalog')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:current')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:queued')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:unloaded')
+    expect(revokeObjectURL).not.toHaveBeenCalledWith('blob:keep')
+  })
+
   it('clears persisted text and attachment drafts together', () => {
     const chat = useChatStore()
     chat.setDraft('Vertraulicher Entwurf')
@@ -1271,6 +1374,196 @@ describe('chat drafts', () => {
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'result.md' })))
   })
 
+  it('opens a newly managed binary attachment through the guarded file view', async () => {
+    global.EventSource = EventSourceMock
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    const attachment = {
+      filename: 'generated.bin',
+      sizeBytes: 12,
+      fileRootId: rootIdentity,
+      fileId: '550e8400-e29b-41d4-a716-446655440008',
+      fileRevision: 1,
+      filePath: 'generated/generated.bin'
+    }
+    api.get.mockResolvedValue({
+      data: {
+        id: sessionId,
+        projectId: rootIdentity,
+        messages: [
+          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'generate_file', arguments: {} }] },
+          { role: 'tool', toolCallId: 'call-1', attachments: [attachment] }
+        ]
+      }
+    })
+    const workspace = useWorkspaceStore()
+    workspace.sessionId = sessionId
+    workspace.scope = 'session'
+    workspace.rootIdentity = rootIdentity
+    const open = vi.spyOn(workspace, 'openToolFile').mockResolvedValue([])
+    const controlCenter = useControlCenterStore()
+    vi.spyOn(controlCenter, 'openApp').mockResolvedValue()
+    const chat = useChatStore()
+    chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
+    chat.selectedSessionId = sessionId
+    chat.watchRun(sessionId, 'run-1', { status: 'running' })
+    const source = EventSourceMock.instances[0]
+
+    source.emit('run.phase', { phase: 'processing_tool', tool: 'generate_file', toolCallId: 'call-1' })
+    source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
+
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith({
+      root: 'session',
+      rootIdentity,
+      path: 'generated/generated.bin',
+      filename: 'generated.bin',
+      sizeBytes: 12,
+      sessionId,
+      fileRevision: 1
+    }))
+  })
+
+  it('does not open a newly managed attachment over a dirty edit', async () => {
+    global.EventSource = EventSourceMock
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    api.get.mockResolvedValue({
+      data: {
+        id: sessionId,
+        projectId: rootIdentity,
+        messages: [{
+          role: 'tool',
+          toolCallId: 'call-1',
+          attachments: [{
+            filename: 'generated.bin',
+            sizeBytes: 12,
+            fileRootId: rootIdentity,
+            fileId: '550e8400-e29b-41d4-a716-446655440008',
+            fileRevision: 1,
+            filePath: 'generated.bin'
+          }]
+        }]
+      }
+    })
+    const workspace = useWorkspaceStore()
+    workspace.sessionId = sessionId
+    workspace.scope = 'session'
+    workspace.rootIdentity = rootIdentity
+    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' }, true)
+    workspace.updateEditorDraft('lokal', 'alt')
+    const open = vi.spyOn(workspace, 'openToolFile').mockResolvedValue([])
+    const chat = useChatStore()
+    chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
+    chat.selectedSessionId = sessionId
+    chat.watchRun(sessionId, 'run-1', { status: 'running' })
+    const source = EventSourceMock.instances[0]
+
+    source.emit('run.phase', { phase: 'processing_tool', tool: 'generate_file', toolCallId: 'call-1' })
+    source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
+
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(`/sessions/${sessionId}`, expect.any(Object)))
+    expect(open).not.toHaveBeenCalled()
+    expect(workspace.editorDraft).toBe('lokal')
+  })
+
+  it('refreshes an open managed attachment update without auto-opening another file', async () => {
+    global.EventSource = EventSourceMock
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    api.get.mockResolvedValue({
+      data: {
+        id: sessionId,
+        projectId: rootIdentity,
+        messages: [{
+          role: 'tool',
+          toolCallId: 'call-1',
+          attachments: [{
+            filename: 'generated.bin',
+            sizeBytes: 13,
+            fileRootId: rootIdentity,
+            fileId: '550e8400-e29b-41d4-a716-446655440008',
+            fileRevision: 2,
+            filePath: 'generated.bin'
+          }]
+        }]
+      }
+    })
+    const workspace = useWorkspaceStore()
+    workspace.sessionId = sessionId
+    workspace.scope = 'session'
+    workspace.rootIdentity = rootIdentity
+    workspace.openEntry({ kind: 'file', name: 'generated.bin', path: 'generated.bin' }, true)
+    workspace.editorDraft = 'stale'
+    const open = vi.spyOn(workspace, 'openToolFile')
+    const chat = useChatStore()
+    chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
+    chat.selectedSessionId = sessionId
+    chat.watchRun(sessionId, 'run-1', { status: 'running' })
+    const source = EventSourceMock.instances[0]
+
+    source.emit('run.phase', { phase: 'processing_tool', tool: 'generate_file', toolCallId: 'call-1' })
+    source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
+
+    await vi.waitFor(() => expect(workspace.fileChangeVersions['generated.bin']).toBe(1))
+    expect(workspace.editorDraft).toBeNull()
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('keeps the tool completion refresh alive when message completion follows', async () => {
+    global.EventSource = EventSourceMock
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    const action = {
+      operation: 'write', root: 'session', rootIdentity,
+      path: 'result.md', filename: 'result.md', sizeBytes: 7,
+      downloadUrl: `/api/workspace/files/download?path=result.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
+    }
+    let resolveToolRefresh
+    let sessionRefreshCalls = 0
+    api.get.mockImplementation((url) => {
+      if (url !== `/sessions/${sessionId}`) return Promise.resolve({ data: { entries: [] } })
+      sessionRefreshCalls += 1
+      return sessionRefreshCalls === 1
+        ? new Promise((resolve) => { resolveToolRefresh = resolve })
+        : Promise.resolve({ data: { id: sessionId, messages: [] } })
+    })
+    const workspace = useWorkspaceStore()
+    workspace.sessionId = sessionId
+    workspace.scope = 'session'
+    workspace.rootIdentity = rootIdentity
+    const open = vi.spyOn(workspace, 'openToolFile').mockResolvedValue([])
+    const controlCenter = useControlCenterStore()
+    vi.spyOn(controlCenter, 'openApp').mockResolvedValue()
+    const chat = useChatStore()
+    chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
+    chat.selectedSessionId = sessionId
+    chat.watchRun(sessionId, 'run-1', { status: 'running' })
+    const source = EventSourceMock.instances[0]
+
+    source.emit('run.phase', { phase: 'processing_tool', tool: 'write_file', toolCallId: 'call-1' })
+    source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
+    source.emit('message.completed', {
+      message: { id: 'assistant-1', role: 'assistant', content: 'Fertig', toolCalls: [] }
+    })
+    await vi.waitFor(() => expect(sessionRefreshCalls).toBe(1))
+    const sessionRequests = () => api.get.mock.calls.filter(([url]) => url === `/sessions/${sessionId}`)
+    expect(sessionRequests()[0][1].signal.aborted).toBe(false)
+    resolveToolRefresh({
+      data: {
+        id: sessionId,
+        projectId: rootIdentity,
+        messages: [
+          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { mode: 'create' } }] },
+          { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
+        ]
+      }
+    })
+
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'result.md' })))
+    expect(sessionRefreshCalls).toBe(2)
+    expect(sessionRequests()[1][1].signal.aborted).toBe(false)
+  })
+
   it('does not hijack the file view after navigation during a tool call', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
@@ -1529,6 +1822,7 @@ describe('chat drafts', () => {
       }
     })
     expect(chat.streamModelName).toBe('Antwortmodell')
+    await vi.waitFor(() => expect(resolveRefresh).toBeTypeOf('function'))
     resolveRefresh({
       data: {
         id: 'session-1',

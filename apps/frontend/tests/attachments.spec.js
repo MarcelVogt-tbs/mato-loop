@@ -7,12 +7,14 @@ import {
   audioAttachments,
   formatAttachmentDuration,
   imageAttachments,
+  managedSessionFileTarget,
   safeAttachmentUrl,
   safeFileDownloadUrl,
   supportedAttachments,
   toolFileActions,
   toolFileAttachment,
   toolOutputAttachments,
+  deduplicateFileOutputAttachments,
   videoAttachments,
   videoMimeTypeSupported
 } from '../src/utils/attachments'
@@ -63,7 +65,9 @@ describe('persisted attachments', () => {
       mimeType: 'application/octet-stream',
       sizeBytes: 3_000_000_000,
       filename: 'large.zip',
-      url: downloadUrl
+      url: downloadUrl,
+      fileRootId: rootId,
+      filePath: 'reports/large.zip'
     })
     expect(toolFileAttachment({ id: 'call-1', name: 'read_file' }, result)).toBeNull()
     expect(toolFileAttachment({ id: 'call-1', name: 'provide_file' }, {
@@ -100,7 +104,9 @@ describe('persisted attachments', () => {
       mimeType,
       sizeBytes: 1024,
       filename,
-      url: contentUrl
+      url: contentUrl,
+      fileRootId: rootId,
+      filePath: `images/${filename}`
     })
     expect(imageAttachments([attachment])[0].safeUrl).toBe(contentUrl)
   })
@@ -145,7 +151,9 @@ describe('persisted attachments', () => {
       mimeType: 'application/octet-stream',
       sizeBytes: 5 * 1024 * 1024 + 1,
       filename: 'photo.png',
-      url: imageDownloadUrl
+      url: imageDownloadUrl,
+      fileRootId: rootId,
+      filePath: 'images/photo.png'
     })
   })
 
@@ -187,6 +195,55 @@ describe('persisted attachments', () => {
     }
 
     expect(toolFileActions({ fileActions: [action] })).toEqual([{ ...action, sessionId }])
+  })
+
+  it('derives an open target only for a newly managed session file', () => {
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const attachment = {
+      filename: 'friendly-name.bin',
+      sizeBytes: 12,
+      fileRootId: '550e8400-e29b-41d4-a716-446655440009',
+      fileId: '550e8400-e29b-41d4-a716-446655440008',
+      fileRevision: 1,
+      filePath: 'generated/generated.bin'
+    }
+
+    expect(managedSessionFileTarget(attachment, sessionId)).toEqual({
+      root: 'session',
+      rootIdentity: attachment.fileRootId,
+      path: attachment.filePath,
+      filename: 'generated.bin',
+      sizeBytes: 12,
+      sessionId,
+      fileRevision: 1
+    })
+    expect(managedSessionFileTarget({ ...attachment, fileRevision: 2 }, sessionId))
+      .toMatchObject({ path: attachment.filePath, fileRevision: 2 })
+    expect(managedSessionFileTarget({ ...attachment, fileRevision: 0 }, sessionId)).toBeNull()
+    expect(managedSessionFileTarget({ ...attachment, filePath: '../generated.bin' }, sessionId)).toBeNull()
+  })
+
+  it('removes only attachments represented by the same file action', () => {
+    const attachments = [
+      { id: 'same', fileRootId: rootId, filePath: 'reports/large.zip' },
+      { id: 'other', fileRootId: rootId, filePath: 'reports/other.zip' },
+      { id: 'managed', fileRootId: rootId, filePath: 'reports/generated.bin' }
+    ]
+
+    expect(deduplicateFileOutputAttachments(attachments, [{
+      rootIdentity: rootId,
+      path: 'reports/large.zip'
+    }]).map((attachment) => attachment.id)).toEqual(['other', 'managed'])
+    expect(deduplicateFileOutputAttachments(attachments, [])).toEqual(attachments)
+  })
+
+  it('uses the bound file URL rather than untrusted attachment metadata for deduplication', () => {
+    expect(deduplicateFileOutputAttachments([{
+      id: 'provided',
+      fileRootId: rootId,
+      filePath: 'reports/other.zip',
+      url: downloadUrl
+    }], [{ rootIdentity: rootId, path: 'reports/large.zip' }])).toEqual([])
   })
 
   it('does not expose legacy draft actions as reusable file outputs', () => {

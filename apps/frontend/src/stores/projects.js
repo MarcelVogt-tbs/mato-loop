@@ -40,11 +40,25 @@ export const useProjectStore = defineStore('projects', {
       this.items = this.items.map((project) => project.id === id ? data : project)
       return data
     },
-    async remove(id) {
-      await api.delete(`/projects/${id}`)
+    async remove(id, { automationMode = null, automationImpact, suppressErrorToast = false } = {}) {
+      const config = {
+        ...(suppressErrorToast ? { suppressErrorToast: true } : {}),
+        params: {
+          ...(automationMode ? { automationMode } : {}),
+          automationImpact
+        }
+      }
+      await api.delete(`/projects/${id}`, config)
       this.revision += 1
       this.loading = false
       this.items = this.items.filter((project) => project.id !== id)
+    },
+    async deleteImpact(id, { suppressErrorToast = false } = {}) {
+      const { data } = await api.get(
+        `/projects/${id}/delete-impact`,
+        suppressErrorToast ? { suppressErrorToast: true } : undefined
+      )
+      return data
     }
   }
 })

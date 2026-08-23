@@ -73,7 +73,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 26
+INVENTORY_VERSION = 27
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -328,6 +328,7 @@ class PromptCase:
     content_contains_any: tuple[tuple[str, ...], ...] = ()
     content_exact_values: tuple[str, ...] = ()
     content_excludes: tuple[str, ...] = ()
+    max_content_words: int | None = None
     forbidden_success_terms: tuple[str, ...] = ()
     required_headings: tuple[str, ...] = ()
     expected_candidate_count: int | None = None
@@ -616,18 +617,34 @@ CASES = (
         expected_arguments={"root": "workspace", "path": "README.md"},
     ),
     PromptCase(
-        id="workspace_write_uses_explicit_create",
+        id="email_revision_replaces_same_path_with_exact_sha256",
         kind="general",
-        user='Erstelle im Arbeitsverzeichnis die Datei note.txt mit dem exakten Inhalt "Hallo".',
+        user=(
+            "Überarbeite die vorhandene Session-Datei terminanfrage.md: Bitte frage nun "
+            "nach einem Termin am Dienstag."
+        ),
         tools=("read", "write_file"),
-        working_directory="/data/home/project",
+        continuation=_exchange(
+            "read",
+            {"root": "session", "path": "terminanfrage.md"},
+            json.dumps(
+                {
+                    "root": "session",
+                    "path": "terminanfrage.md",
+                    "content": "Betreff: Terminanfrage\n\nGuten Tag Frau Sommer, ...",
+                    "sha256": "c" * 64,
+                },
+                ensure_ascii=False,
+            ),
+        ),
         expected_tool="write_file",
         expected_arguments={
-            "root": "workspace",
-            "path": "note.txt",
-            "content": "Hallo",
-            "mode": "create",
+            "root": "session",
+            "path": "terminanfrage.md",
+            "mode": "replace",
+            "expected_sha256": "c" * 64,
         },
+        argument_contains={"content": ("Dienstag",)},
     ),
     PromptCase(
         id="console_diagnostics_use_assistant_text",
@@ -749,11 +766,11 @@ CASES = (
         openscad_fixture=True,
         continuation=_exchange(
             "create_directory",
-            {"root": "session", "path": "files/abstandshalter"},
+            {"root": "session", "path": "abstandshalter"},
             json.dumps(
                 {
                     "root": "session",
-                    "path": "files/abstandshalter",
+                    "path": "abstandshalter",
                     "created": True,
                 }
             ),
@@ -762,7 +779,7 @@ CASES = (
         expected_tool_call_count=1,
         expected_arguments={
             "root": "session",
-            "path": "files/abstandshalter/spacer.scad",
+            "path": "abstandshalter/spacer.scad",
         },
         argument_contains={
             "content": ("20", "6", "10", "difference", "cylinder")
@@ -1281,20 +1298,20 @@ CASES = (
     PromptCase(
         id="glob_uses_session_root_and_path",
         kind="general",
-        user="Finde alle Markdown-Dateien im Session-Ordner files.",
+        user="Finde alle Markdown-Dateien direkt in der Session-Dateiwurzel.",
         tools=("glob",),
         expected_tool="glob",
-        expected_arguments={"root": "session", "path": "files", "pattern": "*.md"},
+        expected_arguments={"root": "session", "path": ".", "pattern": "*.md"},
     ),
     PromptCase(
         id="grep_uses_session_root_path_and_include",
         kind="general",
-        user="Suche im Session-Ordner files in Markdown-Dateien nach dem Wort Aurora.",
+        user="Suche in der Session-Dateiwurzel in Markdown-Dateien nach dem Wort Aurora.",
         tools=("grep",),
         expected_tool="grep",
         expected_arguments={
             "root": "session",
-            "path": "files",
+            "path": ".",
             "pattern": "Aurora",
             "include": "*.md",
         },
@@ -1302,23 +1319,25 @@ CASES = (
     PromptCase(
         id="provide_file_creates_download",
         kind="general",
-        user="Stelle mir die Session-Datei files/report.pdf zum Download bereit.",
+        user="Stelle mir die Session-Datei report.pdf zum Download bereit.",
         tools=("provide_file",),
         expected_tool="provide_file",
-        expected_arguments={"root": "session", "path": "files/report.pdf"},
+        expected_arguments={"root": "session", "path": "report.pdf"},
     ),
     PromptCase(
-        id="new_text_deliverable_creates_draft",
+        id="initial_email_creates_one_session_markdown_file",
         kind="general",
-        user="Erstelle einen Markdown-Entwurf plan.md mit dem Inhalt # Plan.",
-        tools=("write_file",),
+        user=(
+            "Schreibe eine freundliche E-Mail an Frau Sommer und frage nach einem Termin "
+            "in der nächsten Woche."
+        ),
+        tools=("question", "write_file"),
         expected_tool="write_file",
-        expected_arguments={
-            "root": "session",
-            "path": "files/plan.md",
-            "content": "# Plan",
-            "mode": "create",
-        },
+        expected_tool_call_count=1,
+        expected_arguments={"root": "session", "mode": "create"},
+        argument_contains={"path": (".md",), "content": ("Frau Sommer", "Termin")},
+        argument_excludes={"path": ("files/",)},
+        forbidden_tools=("question",),
     ),
     PromptCase(
         id="generic_application_sample_creates_draft",
@@ -1362,27 +1381,27 @@ CASES = (
     PromptCase(
         id="copy_path_uses_exact_destination",
         kind="general",
-        user="Kopiere attachments/report.pdf nach files/report.pdf in der Session.",
+        user="Kopiere eingang/report.pdf nach report.pdf in der Session.",
         tools=("copy_path",),
         expected_tool="copy_path",
         expected_arguments={
             "source_root": "session",
-            "source_path": "attachments/report.pdf",
+            "source_path": "eingang/report.pdf",
             "destination_root": "session",
-            "destination_path": "files/report.pdf",
+            "destination_path": "report.pdf",
         },
     ),
     PromptCase(
         id="move_path_uses_exact_destination",
         kind="general",
-        user="Verschiebe files/draft.txt nach files/archive/draft.txt in der Session.",
+        user="Verschiebe draft.txt nach archive/draft.txt in der Session.",
         tools=("move_path",),
         expected_tool="move_path",
         expected_arguments={
             "source_root": "session",
-            "source_path": "files/draft.txt",
+            "source_path": "draft.txt",
             "destination_root": "session",
-            "destination_path": "files/archive/draft.txt",
+            "destination_path": "archive/draft.txt",
         },
     ),
     PromptCase(
@@ -1852,7 +1871,7 @@ CASES = (
         tools=("session_tool_result_read",),
         history=_exchange(
             "read_file",
-            {"root": "session", "path": "files/large.txt"},
+            {"root": "session", "path": "large.txt"},
             json.dumps(
                 {
                     "toolResultOmitted": True,
@@ -1908,14 +1927,15 @@ CASES = (
         kind="general",
         user="Erstelle note.txt mit Hallo und bestätige erst nach Erfolg.",
         tools=("write_file",),
-        working_directory="/data/home/project",
         continuation=_exchange(
             "write_file",
-            {"root": "workspace", "path": "note.txt", "content": "Hallo"},
-            '{"root":"workspace","written":"note.txt"}',
+            {"root": "session", "path": "note.txt", "content": "Hallo", "mode": "create"},
+            '{"root":"session","written":"note.txt"}',
         ),
         expected_no_tools=True,
         content_contains=("note.txt",),
+        content_excludes=("Hallo",),
+        max_content_words=12,
     ),
     PromptCase(
         id="successful_qr_result_is_not_repeated",
@@ -2159,12 +2179,12 @@ CASES = (
     PromptCase(
         id="privacy_placeholder_is_copied_in_tool_arguments",
         kind="general",
-        user=f"Schreibe exakt {PRIVACY_MARKER} in files/contact.txt.",
+        user=f"Schreibe exakt {PRIVACY_MARKER} in contact.txt.",
         tools=("write_file",),
         expected_tool="write_file",
         expected_arguments={
             "root": "session",
-            "path": "files/contact.txt",
+            "path": "contact.txt",
             "content": PRIVACY_MARKER,
         },
         expected_marker=PRIVACY_MARKER,
@@ -2287,7 +2307,7 @@ CASES = (
         user="Ist der frühere private Tool-Inhalt für dich verfügbar? Erfinde ihn nicht.",
         history=_exchange(
             "read_file",
-            {"root": "session", "path": "files/private.txt"},
+            {"root": "session", "path": "private.txt"},
             "[Historical private tool output unavailable to the current model.]",
         ),
         expected_no_tools=True,
@@ -2300,7 +2320,7 @@ CASES = (
         user="Ist das folgende Tool-Ergebnis vollständig? Antworte wahrheitsgemäß.",
         continuation=_exchange(
             "read_file",
-            {"root": "session", "path": "files/large.txt"},
+            {"root": "session", "path": "large.txt"},
             "Anfang\n[Tool output shortened in the active context. "
             "Use session_read to retrieve the original message if needed.]",
         ),
@@ -2794,7 +2814,7 @@ CASES = (
         history=(
             *_exchange(
                 "read_file",
-                {"root": "session", "path": "files/old.txt"},
+                {"root": "session", "path": "old.txt"},
                 "[Historical tool output omitted from the active context.]",
             ),
         ),
@@ -2809,7 +2829,7 @@ CASES = (
         tools=("read", "glob"),
         continuation=_exchange(
             "write_file",
-            {"root": "session", "path": "files/note.txt", "content": "Hallo"},
+            {"root": "session", "path": "note.txt", "content": "Hallo"},
             json.dumps(error_payload("tool.executionInterrupted")),
         ),
         expected_tools=("read", "glob"),
@@ -2829,7 +2849,7 @@ CASES = (
             ),
             *_exchange(
                 "read_file",
-                {"root": "session", "path": "files/a.txt"},
+                {"root": "session", "path": "a.txt"},
                 '{"error":{"code":"tool.unavailable","message":"The tool is unavailable."}}',
                 "unavailable-call",
             ),
@@ -2841,7 +2861,7 @@ CASES = (
             ),
             *_exchange(
                 "read_file",
-                {"root": "session", "path": "files/b.txt"},
+                {"root": "session", "path": "b.txt"},
                 '{"error":{"code":"tool.executionFailed","message":"Tool execution failed."}}',
                 "failed-call",
             ),
@@ -2990,7 +3010,7 @@ _SCHEMA_AB_BASE_CASE_IDS = (
     "calendar_information_request_skips_question",
     "stable_knowledge_avoids_search",
     "application_explanation_stays_in_chat",
-    "workspace_write_uses_explicit_create",
+    "initial_email_creates_one_session_markdown_file",
 )
 _SCHEMA_AB_CASES_BY_ID = {case.id: case for case in CASES}
 SCHEMA_AB_CASES = tuple(_SCHEMA_AB_CASES_BY_ID[case_id] for case_id in _SCHEMA_AB_BASE_CASE_IDS) + (
@@ -3212,7 +3232,9 @@ _SEMANTIC_CONTRACTS = (
         "file",
         (
             "readwrite_write_uses_tool",
-            "new_text_deliverable_creates_draft",
+            "initial_email_creates_one_session_markdown_file",
+            "email_revision_replaces_same_path_with_exact_sha256",
+            "successful_tool_result_allows_confirmation",
             "generic_application_sample_creates_draft",
             "application_explanation_stays_in_chat",
         ),
@@ -3225,7 +3247,7 @@ _SEMANTIC_CONTRACTS = (
         "file.read_only_read_write_missing_workspace",
         "file",
         (
-            "workspace_write_uses_explicit_create",
+            "email_revision_replaces_same_path_with_exact_sha256",
             "readwrite_write_uses_tool",
             "missing_workspace_is_not_invented",
         ),
@@ -3766,7 +3788,7 @@ _SEMANTIC_CONTRACTS = (
         "tool-error",
         (
             "safe_tool_error_envelopes_do_not_become_success",
-            "workspace_write_uses_explicit_create",
+            "initial_email_creates_one_session_markdown_file",
         ),
     ),
     ContractCoverage(
@@ -4409,12 +4431,6 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
                 "or required to disambiguate. "
                 "Do not call question for informational or complete requests."
             )
-        elif paragraph.startswith("Root-based file tools"):
-            paragraph = (
-                "File tools require an explicit root and relative POSIX path; path='.' means the root. "
-                "Never put a root name or absolute path in path. Managed session assets are read-only; "
-                "only files/... is writable. Copy and move require an exact new destination and never overwrite."
-            )
         elif paragraph.startswith("Use session_read for compacted details"):
             paragraph = (
                 "Use session_read for needed compacted details or historical attachments; do not claim "
@@ -4589,10 +4605,10 @@ def slimming_system_prompt(
             continue
         if paragraph.startswith(("A default calendar is configured", "A default task list is configured")):
             continue
-        if paragraph.startswith("Root-based file tools"):
+        if paragraph.startswith("File tools:"):
             paragraph = (
                 "File tools use an explicit root and relative POSIX path; `.` means the root. Never put "
-                "a root name or absolute path in path. Managed session assets are read-only."
+                "a root name, files/ prefix, or absolute path in path."
             )
         elif paragraph.startswith("For calendar_update_event and calendar_delete_event"):
             paragraph = (
@@ -5430,6 +5446,8 @@ def evaluate(
     for value in case.content_excludes:
         if value.casefold() in folded_content:
             failures.append(f"content contains forbidden value {value!r}")
+    if case.max_content_words is not None and len(result.content.split()) > case.max_content_words:
+        failures.append(f"content exceeds {case.max_content_words} words")
     for heading in case.required_headings:
         if heading.casefold() not in folded_content:
             failures.append(f"missing heading {heading!r}")
