@@ -415,7 +415,7 @@ async def test_sync_updates_models_following_provider_context(monkeypatch) -> No
         context_window_tokens=64_000,
         discovered_context_window_tokens=64_000,
         use_discovered_context_window=True,
-        max_output_tokens=8_000,
+        max_output_tokens=16_000,
     )
     settings = AiSettings(providers=[provider], models=[model])
     _mock_settings(monkeypatch, settings)
@@ -423,7 +423,13 @@ async def test_sync_updates_models_following_provider_context(monkeypatch) -> No
         ProviderService,
         "discover_models",
         AsyncMock(
-            return_value=[DiscoveredModel(id="auto-context", max_model_len=32_000)]
+            return_value=[
+                DiscoveredModel(
+                    id="auto-context",
+                    context_length=32_000,
+                    max_context_window=128_000,
+                )
+            ]
         ),
     )
 

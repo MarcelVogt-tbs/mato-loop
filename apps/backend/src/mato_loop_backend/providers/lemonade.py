@@ -50,7 +50,9 @@ class _LemonadeModel(BaseModel):
     labels: list[_Label] = Field(default_factory=list, max_length=64)
     recipe: _Recipe = ""
     downloaded: StrictBool | None = None
+    context_length: StrictInt | None = Field(default=None, ge=1, le=10_000_000)
     max_context_window: StrictInt | None = Field(default=None, ge=1, le=10_000_000)
+    recipe_options: dict[str, Any] = Field(default_factory=dict)
     image_defaults: dict[str, _SafeScalar] | None = None
     supports_tools: StrictBool | None = None
     supports_parallel_tool_calls: StrictBool | None = None
@@ -122,9 +124,20 @@ def _safe_image_defaults(value: dict[str, _SafeScalar] | None) -> dict[str, _Saf
 def _metadata(model: _LemonadeModel) -> dict[str, Any]:
     labels = [label[:100] for label in model.labels]
     normalized_labels = _label_set(model.labels)
+    configured_context = model.recipe_options.get("ctx_size")
+    context_length = (
+        model.context_length
+        if model.context_length is not None
+        else configured_context
+        if isinstance(configured_context, int)
+        and not isinstance(configured_context, bool)
+        and configured_context > 1
+        else None
+    )
     metadata: dict[str, Any] = {
         "labels": labels,
         "recipe": _normalized(model.recipe),
+        "context_length": context_length,
         "max_context_window": model.max_context_window,
         "image_defaults": _safe_image_defaults(model.image_defaults),
         "supports_image_input": "vision" in normalized_labels,

@@ -1319,6 +1319,7 @@ async def test_lemonade_discovery_maps_capabilities_and_filters_missing(monkeypa
                         "recipe": " LlamaCpp ",
                         "downloaded": True,
                         "max_context_window": 8192,
+                        "recipe_options": {"ctx_size": 4096},
                         "image_defaults": None,
                     },
                     {
@@ -1333,6 +1334,9 @@ async def test_lemonade_discovery_maps_capabilities_and_filters_missing(monkeypa
                         "labels": [],
                         "recipe": "llamacpp",
                         "downloaded": True,
+                        "context_length": 6000,
+                        "max_context_window": 12000,
+                        "recipe_options": {"ctx_size": 4000},
                         "supports_parallel_tool_calls": True,
                     },
                     {
@@ -1380,9 +1384,12 @@ async def test_lemonade_discovery_maps_capabilities_and_filters_missing(monkeypa
     assert models[0].metadata["supports_image_input"] is True
     assert models[0].metadata["supports_tools"] is True
     assert models[0].metadata["supports_parallel_tool_calls"] is False
+    assert models[0].metadata["context_length"] == 4096
+    assert models[0].metadata["max_context_window"] == 8192
     assert models[1].capabilities == {ModelCapability.IMAGE_GENERATION}
     assert models[2].metadata["supports_tools"] is True
     assert models[2].metadata["supports_parallel_tool_calls"] is True
+    assert models[2].metadata["context_length"] == 6000
     assert models[3].capabilities == {ModelCapability.AUDIO_GENERATION}
     assert ModelCapability.CHAT not in models[4].capabilities
     assert "capabilities" not in models[1].metadata

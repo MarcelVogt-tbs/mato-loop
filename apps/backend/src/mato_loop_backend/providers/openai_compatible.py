@@ -64,6 +64,7 @@ class DiscoveredModel(BaseModel):
             "owned_by",
             "root",
             "parent",
+            "context_length",
             "max_model_len",
             "max_context_window",
             "recipe",

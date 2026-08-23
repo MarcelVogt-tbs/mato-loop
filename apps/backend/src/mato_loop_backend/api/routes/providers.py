@@ -136,9 +136,10 @@ def _to_camel(value: str) -> str:
 
 
 def _discovered_context_window(metadata: dict[str, Any]) -> int | None:
-    value = metadata.get("max_context_window", metadata.get("max_model_len"))
-    if isinstance(value, int) and not isinstance(value, bool) and value > 1:
-        return value
+    for key in ("context_length", "max_context_window", "max_model_len"):
+        value = metadata.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 1:
+            return value
     return None
 
 
