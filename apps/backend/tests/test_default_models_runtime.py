@@ -170,6 +170,29 @@ async def test_title_generation_waits_for_agent_run(monkeypatch) -> None:
     assert factory_calls == 1
 
 
+async def test_title_generation_skips_cancelled_agent_run(monkeypatch) -> None:
+    session = ChatSession(
+        title="Erste Nachricht",
+        title_generation_status=TitleGenerationStatus.RUNNING.value,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    complete = AsyncMock()
+    monkeypatch.setattr(ProviderService, "complete", complete)
+    run_task = asyncio.create_task(asyncio.sleep(10))
+    run_task.cancel()
+    await asyncio.gather(run_task, return_exceptions=True)
+
+    await AgentRuntime._generate_title(
+        uuid4(), session.id, "Erste Nachricht", "Erste Nachricht", after=run_task
+    )
+
+    complete.assert_not_awaited()
+    assert session.title_generation_status == TitleGenerationStatus.SKIPPED.value
+    db.commit.assert_awaited_once()
+
+
 async def test_title_generation_does_not_overwrite_manual_title(monkeypatch) -> None:
     session = ChatSession(
         title="Manuell gesetzt",

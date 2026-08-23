@@ -1742,7 +1742,7 @@ describe('chat drafts', () => {
     expect(chat.running).toBe(true)
   })
 
-  it('stops an active run and waits for the terminal event', async () => {
+  it('releases the composer immediately while cancellation finishes', async () => {
     global.EventSource = EventSourceMock
     api.post.mockResolvedValue({ data: { status: 'cancelled' } })
     api.get.mockImplementation((url) => Promise.resolve({
@@ -1759,8 +1759,11 @@ describe('chat drafts', () => {
     await chat.stop()
 
     expect(api.post).toHaveBeenCalledWith('/sessions/session-1/runs/run-1/cancel')
-    expect(chat.running).toBe(true)
-    expect(chat.stopping).toBe(true)
+    expect(chat.running).toBe(false)
+    expect(chat.stopping).toBe(false)
+    expect(chat.messageQueueActive).toBe(true)
+    expect(chat.queuedSendReady).toBe(false)
+    expect(chat.runId).toBe('run-1')
 
     EventSourceMock.instances[0].emit('run.cancelled', { runId: 'run-1' })
 
@@ -1884,7 +1887,8 @@ describe('chat drafts', () => {
 
     const sending = chat.send('Bitte stoppen')
     await chat.stop()
-    expect(chat.stopping).toBe(true)
+    expect(chat.running).toBe(false)
+    expect(chat.stopping).toBe(false)
 
     await vi.waitFor(() => expect(resolveCreate).toBeTypeOf('function'))
 
@@ -1897,8 +1901,8 @@ describe('chat drafts', () => {
     await sending
 
     expect(api.post).toHaveBeenNthCalledWith(2, '/sessions/session-1/runs/run-1/cancel')
-    expect(chat.running).toBe(true)
-    expect(chat.stopping).toBe(true)
+    expect(chat.running).toBe(false)
+    expect(chat.stopping).toBe(false)
   })
 
   it('undoes a user message and restores its text as the session draft', async () => {

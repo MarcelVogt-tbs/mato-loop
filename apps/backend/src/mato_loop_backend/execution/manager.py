@@ -28,7 +28,6 @@ from mato_loop_backend.execution.protocol import (
 )
 
 EventHandler = Callable[[EventMessage], Awaitable[None] | None]
-StateHandler = Callable[[], None]
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 CANCEL_SEND_TIMEOUT_SECONDS = 1.0
 MAX_IGNORED_REQUESTS = 1_024
@@ -175,7 +174,6 @@ class ExecutionAgentConnectionManager:
         *,
         timeout: float | None = None,
         on_event: EventHandler | None = None,
-        on_cancellation_deferred: StateHandler | None = None,
     ) -> ResponseMessage:
         request = RequestMessage(id=uuid4(), operation=operation, arguments=arguments)
         payload = request.model_dump_json(by_alias=True)
@@ -220,15 +218,6 @@ class ExecutionAgentConnectionManager:
                 else "executionAgent.timeout"
             ) from exc
         except asyncio.CancelledError:
-            if pending.dispatched and operation in _MUTATING_WORKSPACE_OPERATIONS:
-                if on_cancellation_deferred is not None:
-                    on_cancellation_deferred()
-                try:
-                    async with asyncio.timeout(effective_timeout):
-                        return await asyncio.shield(pending.future)
-                except TimeoutError as exc:
-                    self._remember_ignored(connection, request.id)
-                    raise ExecutionAgentError("executionAgent.outcomeUnknown") from exc
             await self._abandon(agent_id, connection, generation, request.id)
             raise
         except ExecutionAgentError:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
 from uuid import UUID
@@ -281,13 +281,9 @@ class ExecutionClient:
     working_directory: str | None
     operations: frozenset[str]
     current_directory: str | None = None
-    cancellation_deferred: bool = field(default=False, init=False)
 
     def supports(self, operation: str) -> bool:
         return operation in self.operations
-
-    def _mark_cancellation_deferred(self) -> None:
-        self.cancellation_deferred = True
 
     async def read_bytes(self, path: str, *, limit: int) -> bytes:
         stat_result = await self.request(
@@ -377,7 +373,6 @@ class ExecutionClient:
                 },
                 timeout=timeout,
                 on_event=on_event,
-                on_cancellation_deferred=self._mark_cancellation_deferred,
             )
         except ExecutionAgentError as exc:
             raise ExecutionClientError(

@@ -2545,7 +2545,8 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
             ),
         )
     path = context.root_files.normalize_relative_path(arguments.path)
-    written = context.root_files.write_file(
+    written = await asyncio.to_thread(
+        context.root_files.write_file,
         arguments.root,
         path,
         arguments.content,
@@ -2591,7 +2592,9 @@ async def _create_directory(
         assert isinstance(result, WorkspacePathResult)
         _require_workspace_path(result.path, path)
         return ToolResult.json({"root": arguments.root, "created": result.path})
-    created = context.root_files.create_directory(arguments.root, arguments.path)
+    created = await asyncio.to_thread(
+        context.root_files.create_directory, arguments.root, arguments.path
+    )
     return ToolResult.json({"root": arguments.root, "created": created})
 
 
@@ -2617,8 +2620,11 @@ async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> 
             WorkspaceDeleteResult,
         )
     else:
-        context.root_files.delete_path(
-            arguments.root, arguments.path, recursive=arguments.recursive
+        await asyncio.to_thread(
+            context.root_files.delete_path,
+            arguments.root,
+            arguments.path,
+            recursive=arguments.recursive,
         )
     return ToolResult.json({"root": arguments.root, "deleted": arguments.path})
 
@@ -2687,7 +2693,8 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
         )
     if "workspace" in {arguments.source_root, arguments.destination_root}:
         return ToolResult.error("executionAgent.operationUnavailable")
-    copied = context.root_files.copy_path(
+    copied = await asyncio.to_thread(
+        context.root_files.copy_path,
         arguments.source_root,
         arguments.source_path,
         arguments.destination_root,
@@ -2765,7 +2772,8 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
         )
     if "workspace" in {arguments.source_root, arguments.destination_root}:
         return ToolResult.error("executionAgent.operationUnavailable")
-    moved = context.root_files.move_path(
+    moved = await asyncio.to_thread(
+        context.root_files.move_path,
         arguments.source_root,
         arguments.source_path,
         arguments.destination_root,

@@ -80,7 +80,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(received["hello"]["protocolVersion"], 3)
             self.assertEqual(received["hello"]["roots"][0]["id"], ROOT_ID)
 
-    async def test_mutation_cancellation_waits_for_actual_outcome(self) -> None:
+    async def test_mutation_cancellation_returns_before_actual_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             configuration = AgentConfig.model_validate(
@@ -121,10 +121,11 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             task = asyncio.create_task(agent.dispatch(request))
             await asyncio.to_thread(started.wait, 1)
             task.cancel()
-            await asyncio.sleep(0.02)
-            self.assertFalse(task.done())
-            release.set()
-            self.assertEqual((await task)["path"], "file.txt")
+            try:
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            finally:
+                release.set()
 
     async def test_connection_retry_reloads_rotated_access_key(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -2369,7 +2369,10 @@ async def get_run(
     return run_payload(run)
 
 
-@router.post("/{session_id}/runs/{run_id}/cancel")
+@router.post(
+    "/{session_id}/runs/{run_id}/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def cancel_run(
     session_id: UUID,
     run_id: UUID,
@@ -2384,9 +2387,7 @@ async def cancel_run(
     if run.status in {"completed", "failed", "cancelled"}:
         return run_payload(run)
 
-    await AgentRuntime.cancel_and_wait(run_id)
-    await db.refresh(run)
-    if run.status not in {"completed", "failed", "cancelled"}:
+    if not AgentRuntime.cancel(run_id):
         raise ApiError(409, "session.runInactive")
     return run_payload(run)
 

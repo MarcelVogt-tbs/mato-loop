@@ -76,18 +76,8 @@ def serialize_message(message, max_bytes: int = MAX_WIRE_BYTES) -> str:
     return payload
 
 
-async def _defer_cancellation(awaitable: Awaitable[dict[str, Any]]) -> dict[str, Any]:
-    task = asyncio.ensure_future(awaitable)
-    while True:
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if task.done():
-                return task.result()
-
-
 async def _run_mutation(function: Callable, *args, **kwargs) -> dict[str, Any]:
-    return await _defer_cancellation(asyncio.to_thread(function, *args, **kwargs))
+    return await asyncio.to_thread(function, *args, **kwargs)
 
 
 class ExecutionAgent:
@@ -361,9 +351,7 @@ class ExecutionAgent:
         if isinstance(arguments, CacheEnsureArguments):
             if arguments.artifact.backend_id != backend_id:
                 raise AgentError("cache.invalidDescriptor", "Artifact backend does not match")
-            return await _defer_cancellation(
-                self.cache.ensure(arguments.artifact, arguments.transfer, self.transfer)
-            )
+            return await self.cache.ensure(arguments.artifact, arguments.transfer, self.transfer)
         if isinstance(arguments, CacheExportArguments):
             if arguments.artifact.backend_id != backend_id:
                 raise AgentError("cache.invalidDescriptor", "Artifact backend does not match")
@@ -452,15 +440,13 @@ class ExecutionAgent:
                 six_views=request.operation == "integration.openscad.render6",
             )
         if isinstance(arguments, GitCloneArguments):
-            return await _defer_cancellation(
-                self.git.clone(
-                    arguments.root_id,
-                    arguments.root_revision,
-                    arguments.current_directory,
-                    arguments.source,
-                    arguments.destination,
-                    arguments.allow_network,
-                )
+            return await self.git.clone(
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.current_directory,
+                arguments.source,
+                arguments.destination,
+                arguments.allow_network,
             )
         if isinstance(arguments, GitStatusArguments):
             return await self.git.status(
@@ -483,23 +469,19 @@ class ExecutionAgent:
                 arguments.paths,
             )
         if isinstance(arguments, GitAddArguments):
-            return await _defer_cancellation(
-                self.git.add(
-                    arguments.root_id,
-                    arguments.root_revision,
-                    arguments.current_directory,
-                    arguments.paths,
-                )
+            return await self.git.add(
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.current_directory,
+                arguments.paths,
             )
         if isinstance(arguments, GitCommitArguments):
-            return await _defer_cancellation(
-                self.git.commit(
-                    arguments.root_id,
-                    arguments.root_revision,
-                    arguments.current_directory,
-                    arguments.message,
-                    arguments.expected_index_tree,
-                )
+            return await self.git.commit(
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.current_directory,
+                arguments.message,
+                arguments.expected_index_tree,
             )
         # CacheClearArguments has no fields and is intentionally last.
         if request.operation == "cache.clear":

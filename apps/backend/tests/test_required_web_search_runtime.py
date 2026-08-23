@@ -25,7 +25,6 @@ from mato_loop_backend.agent.tools import (
     tool_registry,
 )
 from mato_loop_backend.events import run_events
-from mato_loop_backend.execution.protocol import ResponseMessage
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -1738,7 +1737,7 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
     assert "download" not in str(tool_message.provider_data).casefold()
 
 
-async def test_cancelled_dispatched_workspace_write_commits_before_run_stops(
+async def test_cancelled_dispatched_workspace_write_stops_without_waiting(
     monkeypatch,
 ) -> None:
     db, run, requests, _projections, _events = await _runtime_setup(
@@ -1769,38 +1768,15 @@ async def test_cancelled_dispatched_workspace_write_commits_before_run_stops(
     run.working_directory_snapshot = "project"
     run.execution_operations = ["workspace.write"]
     dispatched = asyncio.Event()
-    release_response = asyncio.Event()
-    timeline = []
 
     async def request(
         _agent_id,
         _operation,
         _arguments,
-        *,
-        on_cancellation_deferred,
         **_kwargs,
     ):
         dispatched.set()
-        try:
-            await release_response.wait()
-        except asyncio.CancelledError:
-            on_cancellation_deferred()
-            await release_response.wait()
-        return ResponseMessage.model_validate(
-            {
-                "type": "response",
-                "id": uuid4(),
-                "ok": True,
-                "result": {"path": "a.txt", "sha256": "b" * 64, "size": 1},
-            }
-        )
-
-    async def commit() -> None:
-        if any(
-            isinstance(call.args[0], Message) and call.args[0].role == "tool"
-            for call in db.add.call_args_list
-        ) and "tool committed" not in timeline:
-            timeline.append("tool committed")
+        await asyncio.Future()
 
     original_execute = ToolRegistry._execute_definition
 
@@ -1815,38 +1791,17 @@ async def test_cancelled_dispatched_workspace_write_commits_before_run_stops(
         AgentRuntime, "_authorize", AsyncMock(return_value=PermissionDecision.ALLOW)
     )
     tool_registry._execute_definition.side_effect = execute
-    db.commit.side_effect = commit
 
     task = asyncio.create_task(AgentRuntime._execute_loop(db, run))
     await dispatched.wait()
     task.cancel()
-    await asyncio.sleep(0)
-    release_response.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    timeline.append("run cancelled")
 
-    tool_message = next(
-        call.args[0]
+    assert not any(
+        isinstance(call.args[0], Message) and call.args[0].role == "tool"
         for call in db.add.call_args_list
-        if isinstance(call.args[0], Message) and call.args[0].role == "tool"
     )
-    assert timeline == ["tool committed", "run cancelled"]
-    assert tool_message.tool_call_id == "write-1"
-    assert tool_message.provider_data["_matoloop"]["fileActions"] == [
-        {
-            "operation": "write",
-            "root": "workspace",
-            "rootIdentity": str(run.execution_root_id),
-            "path": "a.txt",
-            "filename": "a.txt",
-            "sizeBytes": 1,
-            "executionAgentId": str(run.execution_agent_id),
-            "rootId": str(run.execution_root_id),
-            "rootRevision": run.execution_root_revision,
-            "workingDirectory": "project",
-        }
-    ]
     assert len(requests) == 1
 
 

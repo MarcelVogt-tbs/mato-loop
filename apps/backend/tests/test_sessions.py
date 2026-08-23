@@ -861,26 +861,21 @@ async def test_session_owner_cannot_read_another_users_session() -> None:
     db.scalars.assert_not_awaited()
 
 
-async def test_active_run_can_be_cancelled(monkeypatch) -> None:
+async def test_active_run_cancellation_is_requested_without_waiting(monkeypatch) -> None:
     user = _user()
     session_id = uuid4()
     session = ChatSession(id=session_id, user_id=user.id, title="Test")
     run = AgentRun(id=uuid4(), session_id=session_id, status="running")
-    cancel_and_wait = AsyncMock(return_value=True)
+    cancel = MagicMock(return_value=True)
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [session, run]
-
-    async def refresh(_run) -> None:
-        run.status = "cancelled"
-        run.completed_at = datetime.now(UTC)
-
-    db.refresh.side_effect = refresh
-    monkeypatch.setattr(AgentRuntime, "cancel_and_wait", cancel_and_wait)
+    monkeypatch.setattr(AgentRuntime, "cancel", cancel)
 
     result = await cancel_run(session_id, run.id, user, db)
 
-    cancel_and_wait.assert_awaited_once_with(run.id)
-    assert result["status"] == "cancelled"
+    cancel.assert_called_once_with(run.id)
+    db.refresh.assert_not_awaited()
+    assert result["status"] == "running"
 
 
 async def test_terminal_run_cancel_is_idempotent(monkeypatch) -> None:
@@ -888,14 +883,14 @@ async def test_terminal_run_cancel_is_idempotent(monkeypatch) -> None:
     session_id = uuid4()
     session = ChatSession(id=session_id, user_id=user.id, title="Test")
     run = AgentRun(id=uuid4(), session_id=session_id, status="completed")
-    cancel_and_wait = AsyncMock()
+    cancel = MagicMock()
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [session, run]
-    monkeypatch.setattr(AgentRuntime, "cancel_and_wait", cancel_and_wait)
+    monkeypatch.setattr(AgentRuntime, "cancel", cancel)
 
     result = await cancel_run(session_id, run.id, user, db)
 
-    cancel_and_wait.assert_not_awaited()
+    cancel.assert_not_called()
     assert result["status"] == "completed"
 
 

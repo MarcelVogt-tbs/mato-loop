@@ -220,29 +220,22 @@ async def test_caller_cancellation_sends_cancel_and_ignores_late_response() -> N
     assert manager.is_connected(hello.agent_id)
 
 
-async def test_caller_cancellation_waits_for_dispatched_workspace_mutation() -> None:
+async def test_caller_cancellation_abandons_dispatched_workspace_mutation() -> None:
     manager = ExecutionAgentConnectionManager()
     websocket = FakeWebSocket()
     hello = _hello(operations=["workspace.write"])
     await manager.register(hello, websocket)  # type: ignore[arg-type]
-    deferred = []
     task = asyncio.create_task(
-        manager.request(
-            hello.agent_id,
-            "workspace.write",
-            {},
-            on_cancellation_deferred=lambda: deferred.append(True),
-        )
+        manager.request(hello.agent_id, "workspace.write", {})
     )
     await asyncio.sleep(0)
     request_id = json.loads(websocket.sent[0])["id"]
 
     task.cancel()
-    await asyncio.sleep(0)
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
-    assert deferred == [True]
-    assert not task.done()
-    assert [json.loads(item)["type"] for item in websocket.sent] == ["request"]
+    assert [json.loads(item)["type"] for item in websocket.sent] == ["request", "cancel"]
 
     await manager.receive(
         hello.agent_id,
@@ -256,27 +249,7 @@ async def test_caller_cancellation_waits_for_dispatched_workspace_mutation() -> 
             }
         ),
     )
-    assert (await task).result == {"path": "a.txt"}
-
-
-async def test_cancelled_dispatched_workspace_mutation_disconnect_is_outcome_unknown() -> None:
-    manager = ExecutionAgentConnectionManager()
-    websocket = FakeWebSocket()
-    hello = _hello(operations=["workspace.write"])
-    await manager.register(hello, websocket)  # type: ignore[arg-type]
-    task = asyncio.create_task(
-        manager.request(hello.agent_id, "workspace.write", {})
-    )
-    await asyncio.sleep(0)
-
-    task.cancel()
-    await asyncio.sleep(0)
-    await manager.unregister(hello.agent_id, websocket)  # type: ignore[arg-type]
-
-    with pytest.raises(ExecutionAgentError) as exc_info:
-        await task
-    assert exc_info.value.code == "executionAgent.outcomeUnknown"
-    assert [json.loads(item)["type"] for item in websocket.sent] == ["request"]
+    assert manager.request_ids(hello.agent_id) == ()
 
 
 async def test_default_timeout_is_bounded_and_cancels_request() -> None:

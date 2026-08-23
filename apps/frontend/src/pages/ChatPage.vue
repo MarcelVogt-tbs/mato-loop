@@ -308,7 +308,7 @@
         @undo="undoQueuedMessage"
       />
       <QuestionDock
-        v-if="activeQuestion"
+        v-if="activeQuestion && chat.running"
         :key="activeQuestion.id"
         :request="activeQuestion"
         :stopping="chat.stopping"

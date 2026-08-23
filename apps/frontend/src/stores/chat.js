@@ -419,7 +419,7 @@ export const useChatStore = defineStore('chat', {
     messageQueueActive() {
       if (this.activeQueuedMessages.length) return true
       if (!this.current) return false
-      if (this.running || this.stopping) return true
+      if (this.running || this.stopping || this.runId) return true
       const sessionId = this.current.id
       return Boolean(
         useApprovalStore().forSession(sessionId).length
@@ -428,7 +428,7 @@ export const useChatStore = defineStore('chat', {
     },
     queuedSendReady() {
       if (!this.outboxLoaded || this.queuedSendPaused) return false
-      if (this.loading || this.sessionRequestController || this.running || this.stopping) return false
+      if (this.loading || this.sessionRequestController || this.running || this.stopping || this.runId) return false
       if (this.historyActionPending || this.sessionSettingsPending > 0) return false
       if (!this.activeQueuedMessages.length) return false
       const sessionId = this.current?.id
@@ -1526,6 +1526,7 @@ export const useChatStore = defineStore('chat', {
       this.outboxSaving = true
       const submitImmediately = !this.running
         && !this.stopping
+        && !this.runId
         && !this.activeQueuedMessages.length
         && !this.queueDrainPromise
       if (submitImmediately) {
@@ -1797,8 +1798,9 @@ export const useChatStore = defineStore('chat', {
     async stop() {
       if (!this.running || this.stopping) return
       this.cancelRequested = true
-      this.stopping = true
-      await this.cancelActiveRun()
+      this.running = false
+      this.stopping = false
+      void this.cancelActiveRun()
     },
     async cancelActiveRun() {
       if (!this.cancelRequested || !this.runSessionId || !this.runId) return
@@ -1810,6 +1812,7 @@ export const useChatStore = defineStore('chat', {
         if (this.runSessionId === sessionId && this.runId === runId) {
           this.cancelRequested = false
           this.stopping = false
+          this.running = true
         }
       }
     },
@@ -1828,7 +1831,7 @@ export const useChatStore = defineStore('chat', {
       const sessionLoadVersion = this.sessionLoadVersion
       const selectedSessionId = this.selectedSessionId
       const projectId = requestedProjectId === undefined ? this.sessionsProjectId : requestedProjectId
-      this.running = true
+      this.running = !this.cancelRequested
       this.streamContent = ''
       this.streamReasoning = null
       this.streamModelName = null
@@ -1925,7 +1928,7 @@ export const useChatStore = defineStore('chat', {
     ) {
       const session = this.current
       const sessionLoadVersion = this.sessionLoadVersion
-      this.running = true
+      this.running = !this.cancelRequested
       this.streamContent = ''
       this.streamReasoning = null
       this.streamModelName = null
@@ -2014,7 +2017,7 @@ export const useChatStore = defineStore('chat', {
       this.eventSource = markRaw(source)
       this.runSessionId = sessionId
       this.runId = runId
-      this.running = true
+      this.running = !this.cancelRequested
       if (run.status) this.setSessionRunStatus(sessionId, run.status)
       this.streamModelName = run.modelName || this.streamModelName
       source.onopen = () => {
@@ -2309,8 +2312,8 @@ export const useChatStore = defineStore('chat', {
         this.streamContent = ''
         this.streamReasoning = null
         if (finished) return
-        this.running = true
-        this.setActivity('reconnecting')
+        this.running = !this.cancelRequested
+        if (!this.cancelRequested) this.setActivity('reconnecting')
         this.reconnectAttempts += 1
 
         const stopDisconnectedRun = () => {

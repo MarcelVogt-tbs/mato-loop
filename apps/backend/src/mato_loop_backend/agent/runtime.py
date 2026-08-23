@@ -3745,8 +3745,6 @@ class AgentRuntime:
                         for attachment in created_attachments:
                             await attachment_service.discard(attachment, chat_session.id)
                     raise
-                if execution_client is not None and execution_client.cancellation_deferred:
-                    raise asyncio.CancelledError
                 error_code = metadata.get("errorCode")
                 if not isinstance(error_code, str):
                     if call.name == "render_openscad" and call.arguments.get(
@@ -4175,9 +4173,11 @@ class AgentRuntime:
         *,
         after: asyncio.Task[None] | None = None,
     ) -> None:
+        run_cancelled = False
         if after is not None:
             try:
                 await asyncio.shield(asyncio.gather(after, return_exceptions=True))
+                run_cancelled = after.cancelled()
             except asyncio.CancelledError:
                 async with AsyncSessionFactory() as db:
                     await AgentRuntime._fail_title_generation(db, session_id)
@@ -4190,6 +4190,10 @@ class AgentRuntime:
                     or chat_session.title_generation_status
                     != TitleGenerationStatus.RUNNING.value
                 ):
+                    return
+                if run_cancelled:
+                    chat_session.title_generation_status = TitleGenerationStatus.SKIPPED.value
+                    await db.commit()
                     return
                 if chat_session.title != expected_title:
                     chat_session.title_generation_status = (
