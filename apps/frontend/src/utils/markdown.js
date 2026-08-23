@@ -30,6 +30,7 @@ const LINK_PROTOCOL = /^(?:https?:|mailto:)/i
 const IMAGE_PROTOCOL = /^https?:/i
 const SAFE_FRAGMENT = /^#[A-Za-z0-9_-]+$/
 const LANGUAGE_NAME = /^[A-Za-z0-9_+-]+$/
+const STREAMING_MARKDOWN_ENVELOPE = /^ {0,3}(`{3,}|~{3,})[\t ]*(?:markdown|md)[\t ]*\r?\n/i
 const MAX_MERMAID_BLOCKS = 12
 
 function currentOrigin() {
@@ -76,6 +77,18 @@ function isClosedStreamingFence(token, source) {
   return markerLength >= marker.length
     && candidate.slice(markerLength).trim() === ''
     && line.length - candidate.length <= 3
+}
+
+function streamingMarkdownSource(content) {
+  const source = String(content || '')
+  const opening = STREAMING_MARKDOWN_ENVELOPE.exec(source)
+  if (!opening) return source
+  const body = source.slice(opening[0].length)
+  const marker = opening[1]
+  const closing = new RegExp(
+    `(?:^|\\r?\\n) {0,3}${marker[0]}{${marker.length},}[\\t ]*(?:\\r?\\n[\\t ]*)*$`
+  )
+  return body.replace(closing, '')
 }
 
 function renderedMath(content, displayMode) {
@@ -379,6 +392,7 @@ export function renderMarkdown(
     trustedImageOrigins = []
   } = {}
 ) {
+  const source = streaming ? streamingMarkdownSource(content) : String(content || '')
   const sourceMap = new Map()
   for (const source of researchSources) {
     const url = canonicalResearchSourceUrl(source?.url)
@@ -393,10 +407,10 @@ export function renderMarkdown(
     interactive,
     researchSources: sourceMap,
     streaming,
-    source: String(content || ''),
+    source,
     trustedOrigins: new Set(trustedImageOrigins)
   }
-  const rendered = markdown.render(String(content || ''), env)
+  const rendered = markdown.render(source, env)
   const html = DOMPurify.sanitize(rendered, {
     ALLOWED_ATTR,
     ALLOWED_TAGS,

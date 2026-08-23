@@ -86,6 +86,29 @@ describe('assistant markdown rendering', () => {
     expect(html).not.toContain('data-markdown-code="const answer')
   })
 
+  it('renders an enveloped streaming table as soon as its delimiter arrives', () => {
+    const header = [
+      '```markdown',
+      'Vergleich:',
+      '',
+      '| Name | Wert |'
+    ].join('\n')
+    expect(renderedDom(header, { streaming: true }).root.querySelector('table')).toBeNull()
+
+    const table = `${header}\n| --- | --- |`
+    const streaming = renderedDom(table, { streaming: true }).root
+    expect(streaming.querySelectorAll('table thead th')).toHaveLength(2)
+    expect(streaming.querySelector('pre')).toBeNull()
+
+    const completed = renderedDom(`${table}\n| Eins | 1 |\n\`\`\``, { streaming: true }).root
+    expect(completed.querySelectorAll('table tbody td')).toHaveLength(2)
+    expect(completed.querySelector('pre')).toBeNull()
+
+    const codeExample = renderedDom('```markdown\n# Beispiel\n```').root
+    expect(codeExample.querySelector('pre code')?.textContent).toContain('# Beispiel')
+    expect(codeExample.querySelector('h1')).toBeNull()
+  })
+
   it('renders safe HTML breaks without enabling raw HTML', () => {
     const { root } = renderedDom([
       'Eins<br>Zwei<br/>Drei<br />Vier',
