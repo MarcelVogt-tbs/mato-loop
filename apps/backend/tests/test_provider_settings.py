@@ -826,26 +826,50 @@ async def test_duplicate_model_id_is_rejected_per_provider(monkeypatch) -> None:
     assert exc_info.value.code == "provider.modelIdConflict"
 
 
-async def test_model_delete_rejects_discovered_and_referenced_models(monkeypatch) -> None:
+@pytest.mark.parametrize("scope", ["instance", "personal"])
+@pytest.mark.parametrize("origin", [ModelOrigin.MANUAL, ModelOrigin.DISCOVERED])
+async def test_model_delete_clears_defaults_and_sessions_in_its_scope(
+    monkeypatch, scope, origin
+) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=True)
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
-    discovered = ModelConfig(
-        provider_id=provider.id,
-        model_id="discovered",
-        origin=ModelOrigin.DISCOVERED,
+    model = ModelConfig(provider_id=provider.id, model_id="model", origin=origin)
+    default_fields = (
+        "default_model_id",
+        "compaction_model_id",
+        "title_generation_model_id",
+        "skill_creation_model_id",
+        "dreaming_model_id",
+        "vision_model_id",
+        "video_model_id",
+        "image_generation_model_id",
+        "speech_generation_model_id",
+        "audio_generation_model_id",
+        "audio_transcription_model_id",
     )
-    manual = ModelConfig(provider_id=provider.id, model_id="manual")
-    settings = AiSettings(providers=[provider], models=[discovered, manual])
+    settings_type = AiSettings if scope == "instance" else UserAiSettings
+    settings = settings_type(
+        providers=[provider],
+        models=[model],
+        **{field: model.id for field in default_fields},
+    )
+    instance = settings if scope == "instance" else AiSettings(personal_providers_enabled=True)
+
+    async def load(_db, loaded_type, **_kwargs):
+        return settings if loaded_type is settings_type else instance
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     db = _db()
-    _mock_settings(monkeypatch, settings)
 
-    with pytest.raises(ApiError) as discovered_error:
-        await delete_model(discovered.id, db)
-    assert discovered_error.value.code == "provider.discoveredModelDeleteForbidden"
+    await delete_model(model.id, db, scope=scope, user=user)
 
-    db.scalar.return_value = uuid4()
-    with pytest.raises(ApiError) as referenced_error:
-        await delete_model(manual.id, db)
-    assert referenced_error.value.code == "provider.modelInUse"
+    assert settings.models == []
+    assert all(getattr(settings, field) is None for field in default_fields)
+    statement = db.execute.await_args.args[0]
+    sql = str(statement)
+    assert ("chat_sessions.user_id" in sql) is (scope == "personal")
+    assert user.id in statement.compile().params.values() if scope == "personal" else True
 
 
 async def test_model_specific_test_uses_selected_model(monkeypatch) -> None:

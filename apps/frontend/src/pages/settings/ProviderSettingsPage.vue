@@ -249,13 +249,11 @@
                           <q-item-section avatar><q-icon name="tune" /></q-item-section>
                           <q-item-section>{{ modelSupportsCapability(model, 'chat') ? 'Laufzeit bearbeiten' : 'Modell bearbeiten' }}</q-item-section>
                         </q-item>
-                        <template v-if="model.origin === 'manual'">
-                          <q-separator />
-                          <q-item v-close-popup clickable :disable="personalBlocked" class="text-negative" @click="removeModel(model)">
-                            <q-item-section avatar><q-icon name="delete" /></q-item-section>
-                            <q-item-section>Entfernen</q-item-section>
-                          </q-item>
-                        </template>
+                        <q-separator />
+                        <q-item v-close-popup clickable :disable="personalBlocked" class="text-negative" @click="removeModel(model)">
+                          <q-item-section avatar><q-icon name="delete" /></q-item-section>
+                          <q-item-section>Löschen</q-item-section>
+                        </q-item>
                       </q-list>
                     </q-menu>
                   </q-btn>
@@ -529,13 +527,13 @@ async function testModel(model) {
 
 async function removeModel(model) {
   const confirmed = await confirm(
-    `Das manuelle Modell „${model.name || model.modelId}“ entfernen?`,
-    'Modell entfernen',
-    { okLabel: 'Entfernen' }
+    `Modell „${model.name || model.modelId}“ löschen? Zugewiesene Sessions verwenden danach das Standardmodell.`,
+    'Modell löschen',
+    { okLabel: 'Löschen' }
   )
   if (!confirmed) return
   await providers.removeModel(model.id)
-  $q.notify({ type: 'positive', message: 'Modell entfernt' })
+  $q.notify({ type: 'positive', message: 'Modell gelöscht' })
 }
 
 async function removeProvider(provider) {

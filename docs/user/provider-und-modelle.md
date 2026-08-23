@@ -24,6 +24,8 @@ Neu erkannte Modelle beginnen in der Regel deaktiviert; vom Provider als natives
 
 Bei Providern ohne Modellerkennung kann eine Modell-ID manuell eingetragen werden.
 
+Manuell eingetragene und automatisch erkannte Modelle können gelöscht werden. Dabei werden ihre Standardmodell-Einstellungen im betroffenen Einstellungsbereich entfernt; betroffene Sessions verwenden anschließend wieder das wirksame Standardmodell. Bietet ein Provider ein gelöschtes Modell weiterhin an, erscheint es bei der nächsten Synchronisierung erneut als neu erkanntes Modell.
+
 ## Laufzeiteinstellungen
 
 Je Modell können unter anderem Kontextfenster, Ausgabelimit, Streaming, Tool-Unterstützung, Bildunterstützung, Datenfreigabe, Memory-Policy, Webfetch und Reasoning-Zusammenfassungen konfiguriert werden. MatoLoop bietet den Reasoning-Aufwand im Chat nur für ausdrücklich unterstützte Modelle an und berücksichtigt deren verfügbare Stufen und Providerformat. Qwen3.8-27B unterstützt **Aus**, **Niedrig**, **Mittel** und **Sehr hoch**; MatoLoop verwendet **Mittel** als Standard. Codex übernimmt die unterstützten Stufen einschließlich **Maximum** und **Ultra** sowie den Standardwert aus dem synchronisierten Modellkatalog.

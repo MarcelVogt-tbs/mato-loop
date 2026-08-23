@@ -15,7 +15,7 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
-from sqlalchemy import select, update
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
@@ -1168,18 +1168,14 @@ async def delete_model(
         db, scope, user, for_update=True, mutation=True
     )
     model = _model(settings, model_id)
-    if model.origin != ModelOrigin.MANUAL:
-        raise ApiError(409, "provider.discoveredModelDeleteForbidden")
-    referenced_query = select(ChatSession.id).where(
+    settings.models.remove(model)
+    _clear_removed_defaults(settings, {model.id})
+    clear_sessions = update(ChatSession).where(
         ChatSession.model_config_id == model.id
     )
     if owner_id is not None:
-        referenced_query = referenced_query.where(ChatSession.user_id == owner_id)
-    referenced = await db.scalar(referenced_query.limit(1))
-    if referenced is not None:
-        raise ApiError(409, "provider.modelInUse")
-    settings.models.remove(model)
-    _clear_removed_defaults(settings, {model.id})
+        clear_sessions = clear_sessions.where(ChatSession.user_id == owner_id)
+    await db.execute(clear_sessions.values(model_config_id=None))
     _clear_invalid_defaults(settings)
     await _save_scoped_ai(db, settings, owner_id)
     await db.commit()
