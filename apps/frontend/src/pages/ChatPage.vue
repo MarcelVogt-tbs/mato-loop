@@ -397,6 +397,7 @@ import {
 } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
+import { useMailStore } from 'stores/mail'
 import { useProviderStore } from 'stores/providers'
 import { useProjectStore } from 'stores/projects'
 import { useQuestionStore } from 'stores/questions'
@@ -427,6 +428,7 @@ const questions = useQuestionStore()
 const executionAgents = useExecutionAgentStore()
 const instanceLimits = useInstanceLimitsStore()
 const integrations = useIntegrationStore()
+const mail = useMailStore()
 const providers = useProviderStore()
 const projects = useProjectStore()
 const toolSettings = useToolSettingsStore()
@@ -754,9 +756,10 @@ async function revealRouteMessage() {
 }
 
 async function loadBackgroundData() {
-  const [providerResult, integrationResult, , , defaultsResult] = await Promise.allSettled([
+  const [providerResult, integrationResult, , , , defaultsResult] = await Promise.allSettled([
     providers.fetchEffective(),
     integrations.fetchEffectiveSearch(),
+    mail.fetchAccounts(),
     approvals.fetchPending(),
     questions.fetchPending(),
     chat.fetchDefaults(),

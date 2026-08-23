@@ -141,6 +141,7 @@ import { useApprovalStore } from 'stores/approvals'
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
+import { useMailStore } from 'stores/mail'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import {
@@ -148,6 +149,7 @@ import {
   controlCenterGlobalSections,
   controlCenterIntegrations
 } from 'src/control-center/apps'
+import { mailControlCenterAvailable } from 'src/control-center/manifest'
 
 defineOptions({ name: 'ControlCenterPanel' })
 
@@ -158,12 +160,15 @@ const workspace = useWorkspaceStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
 const notifications = useInAppNotificationStore()
+const mail = useMailStore()
 const draggedIntegrationId = ref(null)
 const dropTarget = ref(null)
 const closedIntegrations = computed(() => controlCenterIntegrations.filter(
   (item) => !controlCenter.tabs.some((tab) => tab.appId === item.id)
 ))
-const launcherIntegrations = computed(() => closedIntegrations.value)
+const launcherIntegrations = computed(() => closedIntegrations.value.filter(
+  (item) => item.id !== 'mail' || mailControlCenterAvailable(mail)
+))
 
 function content(contentId) {
   return controlCenterContentsById.get(contentId)

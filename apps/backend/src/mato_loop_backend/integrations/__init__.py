@@ -12,6 +12,11 @@ from mato_loop_backend.integrations.caldav import (
 )
 from mato_loop_backend.integrations.evidence import evidence_source_id
 from mato_loop_backend.integrations.git import GitConfig
+from mato_loop_backend.integrations.mail import (
+    MAIL_CREDENTIAL_KIND,
+    MailConfig,
+    mail_error_code,
+)
 from mato_loop_backend.integrations.mealie import (
     MEALIE_CREDENTIAL_KIND,
     MealieConfig,
@@ -34,6 +39,7 @@ from mato_loop_backend.integrations.service import (
     CalDavIntegrationService,
     GitIntegrationService,
     IntegrationSettingsError,
+    MailIntegrationService,
     MealieIntegrationService,
     OpenScadIntegrationService,
     SearchIntegrationService,
@@ -63,6 +69,7 @@ __all__ = [
     "BOOKSTACK_CREDENTIAL_KIND",
     "CALDAV_CREDENTIAL_KIND",
     "MEALIE_CREDENTIAL_KIND",
+    "MAIL_CREDENTIAL_KIND",
     "BookStackConfig",
     "BookStackIntegrationService",
     "CalDavConfig",
@@ -73,6 +80,8 @@ __all__ = [
     "MealieConfig",
     "MealieError",
     "MealieIntegrationService",
+    "MailConfig",
+    "MailIntegrationService",
     "OpenScadIntegrationService",
     "IntegrationSettingsError",
     "PdfVisionHandler",
@@ -88,6 +97,7 @@ __all__ = [
     "bookstack_error_code",
     "caldav_error_code",
     "mealie_error_code",
+    "mail_error_code",
     "evidence_source_id",
     "effective_search_providers",
     "effective_execution_integration_settings",

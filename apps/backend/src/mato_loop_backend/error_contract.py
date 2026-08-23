@@ -137,6 +137,7 @@ _MESSAGES = {
     "webPush.subscriptionConflict": "The push subscription is already registered.",
     "webPush.unavailable": "Web Push is temporarily unavailable.",
     "integration.authenticationFailed": "The integration credentials were rejected.",
+    "mail.alreadyConfigured": "This mail account is already configured.",
     "integration.adapterDisabled": "This integration adapter is disabled by the administrator.",
     "integration.attachmentTooLarge": "The file is too large to be attached.",
     "integration.searchUnavailable": "The required web search integration is unavailable.",

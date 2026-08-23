@@ -224,6 +224,7 @@ const messages = {
   'integration.responseTooLarge': () => 'Die Antwort der Integration ist zu groß.',
   'integration.searchUnavailable': () => 'Richte zuerst eine aktive Websuche mit Standardanbieter ein.',
   'integration.unavailable': () => 'Die Integration ist derzeit nicht erreichbar.',
+  'mail.alreadyConfigured': () => 'Dieses Mail-Konto ist bereits eingerichtet.',
   'memory.disabled': () => 'Memory ist deaktiviert.',
   'memory.backendRestarted': () => 'Der Dreaming-Lauf wurde nach einem Backend-Neustart erneut eingeplant.',
   'memory.changed': () => 'Die Erinnerung wurde zwischenzeitlich geändert. Bitte rufe sie erneut ab.',

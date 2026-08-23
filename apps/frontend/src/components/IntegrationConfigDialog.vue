@@ -49,7 +49,7 @@
               :rules="[requiredRule]"
             />
             <q-input
-              v-if="!['git', 'openscad'].includes(form.integration_type)"
+              v-if="!['git', 'openscad', 'mail'].includes(form.integration_type)"
               v-model="form.base_url"
               outlined
               :label="baseUrlLabel"
@@ -57,6 +57,31 @@
               lazy-rules
               :rules="[requiredRule, urlRule]"
             />
+            <template v-if="form.integration_type === 'mail'">
+              <div class="text-subtitle2 text-weight-medium">Posteingang (IMAP)</div>
+              <div class="row q-col-gutter-sm">
+                <q-input v-model="form.imap_host" outlined label="IMAP-Host" class="col-12 col-sm" lazy-rules :rules="[requiredRule]" />
+                <q-input v-model.number="form.imap_port" outlined type="number" label="IMAP-Port" class="col-5 col-sm-3" lazy-rules :rules="[portRule]" />
+                <q-select v-model="form.imap_security" outlined emit-value map-options label="IMAP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
+              </div>
+              <div class="text-subtitle2 text-weight-medium">Postausgang (SMTP)</div>
+              <div class="row q-col-gutter-sm">
+                <q-input v-model="form.smtp_host" outlined label="SMTP-Host" class="col-12 col-sm" lazy-rules :rules="[requiredRule]" />
+                <q-input v-model.number="form.smtp_port" outlined type="number" label="SMTP-Port" class="col-5 col-sm-3" lazy-rules :rules="[portRule]" />
+                <q-select v-model="form.smtp_security" outlined emit-value map-options label="SMTP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
+              </div>
+              <q-input v-model="form.username" outlined label="Benutzername" lazy-rules :rules="[requiredRule]" />
+              <q-input v-model="form.from_address" outlined type="email" label="Fester Absender" hint="Diese Absenderadresse wird für ausgehende E-Mails verwendet." lazy-rules :rules="[requiredRule, emailRule]" />
+              <q-input
+                v-model="form.password"
+                outlined
+                type="password"
+                :label="integration?.hasCredential ? 'Neues Passwort (optional)' : 'Passwort'"
+                :hint="integration?.hasCredential ? 'Leer lassen, um das gespeicherte Passwort beizubehalten.' : ''"
+                lazy-rules
+                :rules="isEditing ? [] : [requiredRule]"
+              />
+            </template>
             <q-banner
               v-if="form.integration_type === 'recipes' && form.base_url.trim().toLowerCase().startsWith('http://')"
               dense
@@ -221,6 +246,7 @@ const saving = ref(false)
 const allIntegrationTypes = [
   { label: 'Websuche', value: 'search' },
   { label: 'Kalender & Aufgaben', value: 'calendar' },
+  { label: 'Mail', value: 'mail' },
   { label: 'Wissensdatenbank', value: 'knowledge' },
   { label: 'Rezepte & Essensplanung', value: 'recipes' },
   { label: 'Versionsverwaltung', value: 'git' },
@@ -229,6 +255,7 @@ const allIntegrationTypes = [
 const PROVIDER_DEFAULTS = {
   search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
   calendar: { provider: 'caldav', label: 'CalDAV', placeholder: 'https://calendar.example.com' },
+  mail: { provider: 'imap_smtp', label: 'IMAP/SMTP', placeholder: '' },
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
   recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
   git: { provider: 'git', label: 'Git', placeholder: '' },
@@ -249,7 +276,11 @@ const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
 )
 const requiresHttps = computed(() => !['search', 'recipes'].includes(form.integration_type))
-const dialogIcon = computed(() => form.integration_type === 'openscad' ? 'view_in_ar' : 'extension')
+const dialogIcon = computed(() => ({ mail: 'mail', openscad: 'view_in_ar' })[form.integration_type] || 'extension')
+const securityOptions = [
+  { label: 'TLS', value: 'tls' },
+  { label: 'STARTTLS', value: 'starttls' }
+]
 const executionAgentOptions = computed(() => {
   const options = executionAgents.items.map((agent) => ({ label: agent.name, value: agent.id }))
   if (form.executionAgentId && !executionAgents.byId(form.executionAgentId)) {
@@ -276,6 +307,13 @@ function defaultForm() {
     base_url: '',
     username: '',
     password: '',
+    imap_host: '',
+    imap_port: 993,
+    imap_security: 'tls',
+    smtp_host: '',
+    smtp_port: 465,
+    smtp_security: 'tls',
+    from_address: '',
     token_id: '',
     token_secret: '',
     token: '',
@@ -308,6 +346,15 @@ function requiredRule(value) {
 
 function absolutePathRule(value) {
   return String(value || '').trim().startsWith('/') || 'Bitte gib einen absoluten Pfad ein.'
+}
+
+function portRule(value) {
+  const port = Number(value)
+  return (Number.isInteger(port) && port >= 1 && port <= 65535) || 'Bitte gib einen gültigen Port ein.'
+}
+
+function emailRule(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '')) || 'Bitte gib eine gültige E-Mail-Adresse ein.'
 }
 
 async function discoverOpenScad() {
@@ -397,6 +444,28 @@ async function save() {
       close()
       return
     }
+    if (form.integration_type === 'mail') {
+      const payload = {
+        integration_type: 'mail',
+        provider_type: 'imap_smtp',
+        name: form.name.trim(),
+        imap_host: form.imap_host.trim(),
+        imap_port: Number(form.imap_port),
+        imap_security: form.imap_security,
+        smtp_host: form.smtp_host.trim(),
+        smtp_port: Number(form.smtp_port),
+        smtp_security: form.smtp_security,
+        username: form.username.trim(),
+        from_address: form.from_address.trim(),
+        password: form.password,
+        enabled: form.enabled
+      }
+      if (props.integration) await integrations.updateMail(props.integration.id, payload)
+      else await integrations.createMail(payload)
+      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
+      close()
+      return
+    }
     const payload = {
       integration_type: form.integration_type,
       provider_type: form.provider_type,
@@ -441,6 +510,13 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     name: props.integration.name,
     base_url: props.integration.config?.baseUrl || '',
     username: props.integration.config?.username || '',
+    imap_host: props.integration.config?.imapHost || '',
+    imap_port: props.integration.config?.imapPort || 993,
+    imap_security: props.integration.config?.imapSecurity || 'tls',
+    smtp_host: props.integration.config?.smtpHost || '',
+    smtp_port: props.integration.config?.smtpPort || 465,
+    smtp_security: props.integration.config?.smtpSecurity || 'tls',
+    from_address: props.integration.config?.fromAddress || '',
     password: '',
     token_id: '',
     token_secret: '',

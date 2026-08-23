@@ -14,6 +14,7 @@ from mato_loop_backend.integrations.contracts import (
     ToolOptionContribution,
 )
 from mato_loop_backend.integrations.git import GIT_ADAPTER
+from mato_loop_backend.integrations.mail import MAIL_ADAPTER
 from mato_loop_backend.integrations.mealie import MEALIE_ADAPTER
 from mato_loop_backend.integrations.openscad import OPENSCAD_ADAPTER
 from mato_loop_backend.settings.models import (
@@ -53,6 +54,7 @@ _ADAPTERS = {
         contribution_factory=_searxng_contributions,
     ),
     ("calendar", "caldav"): CALDAV_ADAPTER,
+    ("mail", "imap_smtp"): MAIL_ADAPTER,
     ("knowledge", "bookstack"): BOOKSTACK_ADAPTER,
     ("recipes", "mealie"): MEALIE_ADAPTER,
     ("git", "git"): GIT_ADAPTER,

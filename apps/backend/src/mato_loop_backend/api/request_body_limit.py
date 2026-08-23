@@ -14,6 +14,7 @@ _MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 TRANSCRIPTION_REQUEST_LIMIT = ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
 SESSION_ATTACHMENTS_REQUEST_LIMIT = 512 * 1024 * 1024 + _MULTIPART_OVERHEAD_BYTES
 WORKSPACE_UPLOAD_REQUEST_LIMIT = ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
+MAIL_UPLOAD_REQUEST_LIMIT = ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
 # JSON escapes each ASCII control byte as up to six bytes.
 WORKSPACE_FILE_EDIT_REQUEST_LIMIT = 6 * 16 * 1024 * 1024 + 64 * 1024
 QUESTION_ANSWERS_REQUEST_LIMIT = 8 * 1024 * 1024
@@ -49,6 +50,14 @@ def _request_limit(scope: Scope) -> int | None:
     method = scope.get("method")
     if path == "/api/workspace/files" and method == "PUT":
         return WORKSPACE_FILE_EDIT_REQUEST_LIMIT
+    parts = str(path).split("/")
+    if (
+        method in {"POST", "PUT"}
+        and len(parts) >= 6
+        and parts[1:4] == ["api", "mail", "accounts"]
+        and ("drafts" in parts[5:] or parts[-2:] == ["messages", "send"])
+    ):
+        return MAIL_UPLOAD_REQUEST_LIMIT
     if method != "POST":
         return None
     if _is_question_answer_path(path):
@@ -59,7 +68,6 @@ def _request_limit(scope: Scope) -> int | None:
         return SESSION_ATTACHMENTS_REQUEST_LIMIT
     if path == "/api/workspace/files":
         return WORKSPACE_UPLOAD_REQUEST_LIMIT
-    parts = str(path).split("/")
     if (
         len(parts) == 6
         and parts[1:3] == ["api", "sessions"]

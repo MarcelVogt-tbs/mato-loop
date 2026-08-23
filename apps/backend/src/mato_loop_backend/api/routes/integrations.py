@@ -21,11 +21,13 @@ from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.integrations import (
     BOOKSTACK_CREDENTIAL_KIND,
     CALDAV_CREDENTIAL_KIND,
+    MAIL_CREDENTIAL_KIND,
     MEALIE_CREDENTIAL_KIND,
     BookStackIntegrationService,
     CalDavIntegrationService,
     GitIntegrationService,
     IntegrationSettingsError,
+    MailIntegrationService,
     MealieClient,
     MealieConfig,
     MealieError,
@@ -43,6 +45,8 @@ from mato_loop_backend.integrations import (
 from mato_loop_backend.integrations.bookstack_client import BookStackError
 from mato_loop_backend.integrations.caldav_client import CalDavError
 from mato_loop_backend.integrations.contracts import IntegrationResource
+from mato_loop_backend.integrations.mail import MailConfig, client_for, mail_error_code
+from mato_loop_backend.integrations.mail_client import MailError
 from mato_loop_backend.integrations.openscad import (
     OpenScadConfig,
     OpenScadDiscoverResult,
@@ -171,6 +175,47 @@ class CalendarIntegrationRequest(BaseModel):
 
 
 class CalendarIntegrationCreateRequest(CalendarIntegrationRequest):
+    password: str = Field(min_length=1, max_length=10_000)
+
+
+class MailIntegrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    integration_type: Literal["mail"] = "mail"
+    provider_type: Literal["imap_smtp"] = "imap_smtp"
+    name: str = Field(min_length=1, max_length=160)
+    imap_host: str = Field(min_length=1, max_length=253)
+    imap_port: int = Field(ge=1, le=65535)
+    imap_security: Literal["tls", "starttls"]
+    smtp_host: str = Field(min_length=1, max_length=253)
+    smtp_port: int = Field(ge=1, le=65535)
+    smtp_security: Literal["tls", "starttls"]
+    username: str = Field(min_length=1, max_length=320)
+    from_address: str = Field(min_length=3, max_length=320)
+    password: str | None = Field(default=None, max_length=10_000)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_mail_config(self) -> MailIntegrationRequest:
+        MailConfig.model_validate(self.config())
+        return self
+
+    def config(self) -> dict:
+        return self.model_dump(
+            include={
+                "imap_host",
+                "imap_port",
+                "imap_security",
+                "smtp_host",
+                "smtp_port",
+                "smtp_security",
+                "username",
+                "from_address",
+            }
+        )
+
+
+class MailIntegrationCreateRequest(MailIntegrationRequest):
     password: str = Field(min_length=1, max_length=10_000)
 
 
@@ -318,17 +363,31 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
         "providerType": provider.adapter_type,
         "enabled": provider.enabled,
         "hasCredential": provider.credential_id is not None,
+        "supportsIntegrationPolicies": bool(resource_actions),
         "supportsResourcePolicies": bool(
             adapter and resource_actions and adapter.resource_loader
         ),
-        "config": {
-            "baseUrl": provider.config.get("base_url"),
-            **(
-                {"username": provider.config.get("username")}
-                if "username" in provider.config
-                else {}
-            ),
-        },
+        "config": (
+            {
+                "imapHost": provider.config.get("imap_host"),
+                "imapPort": provider.config.get("imap_port"),
+                "imapSecurity": provider.config.get("imap_security"),
+                "smtpHost": provider.config.get("smtp_host"),
+                "smtpPort": provider.config.get("smtp_port"),
+                "smtpSecurity": provider.config.get("smtp_security"),
+                "username": provider.config.get("username"),
+                "fromAddress": provider.config.get("from_address"),
+            }
+            if provider.integration_type == "mail"
+            else {
+                "baseUrl": provider.config.get("base_url"),
+                **(
+                    {"username": provider.config.get("username")}
+                    if "username" in provider.config
+                    else {}
+                ),
+            }
+        ),
     }
 
 
@@ -342,13 +401,13 @@ async def _integration_resources(
     db: AsyncSession, instance: IntegrationInstance
 ) -> tuple:
     adapter = integration_adapter(instance.integration_type, instance.adapter_type)
-    if adapter is None or not adapter.resource_actions or adapter.resource_loader is None:
+    if adapter is None or not adapter.resource_actions:
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
     if not tool_registry.integration_resource_actions(instance):
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
     credential = None
     try:
-        if instance.credential_id is not None:
+        if adapter.resource_loader is not None and instance.credential_id is not None:
             record = await load_credential(
                 db,
                 instance.credential_id,
@@ -542,6 +601,30 @@ def calendar_settings_payload(settings: IntegrationSettings) -> dict:
         instance
         for instance in settings.instances
         if instance.integration_type == "calendar" and instance.adapter_type == "caldav"
+    ]
+    return {
+        **(
+            {
+                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
+                    "enabled"
+                ],
+                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
+                    "allowedAdapterTypes"
+                ],
+            }
+            if isinstance(settings, IntegrationSettings)
+            else {}
+        ),
+        "configured": bool(accounts),
+        "accounts": [_provider_payload(account) for account in accounts],
+    }
+
+
+def mail_settings_payload(settings: IntegrationSettingsDocument) -> dict:
+    accounts = [
+        instance
+        for instance in settings.instances
+        if instance.integration_type == "mail" and instance.adapter_type == "imap_smtp"
     ]
     return {
         **(
@@ -1126,6 +1209,136 @@ async def test_calendar_integration(
         logger.warning(
             "CalDAV integration test failed with %s", type(exc).__name__
         )
+        raise ApiError(502, "integration.unavailable") from exc
+    return {"status": "ok"}
+
+
+@router.get("/mail")
+async def get_mail_integrations(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    return mail_settings_payload(settings)
+
+
+@router.post("/mail/accounts", status_code=status.HTTP_201_CREATED)
+async def create_mail_integration(
+    payload: MailIntegrationCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="imap_smtp"
+    )
+    try:
+        settings = await MailIntegrationService.create(
+            db,
+            name=payload.name,
+            config=payload.config(),
+            password=payload.password,
+            enabled=payload.enabled,
+            owner_id=owner_id,
+        )
+    except IntegrationSettingsError as exc:
+        raise ApiError(
+            409 if exc.code == "mail.alreadyConfigured" else 422,
+            exc.code,
+            field="username" if exc.code == "mail.alreadyConfigured" else "password",
+        ) from exc
+    return mail_settings_payload(settings)
+
+
+@router.put("/mail/accounts/{integration_id}")
+async def update_mail_integration(
+    integration_id: UUID,
+    payload: MailIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="imap_smtp"
+    )
+    try:
+        settings = await MailIntegrationService.update(
+            db,
+            integration_id,
+            name=payload.name,
+            config=payload.config(),
+            password=payload.password,
+            enabled=payload.enabled,
+            owner_id=owner_id,
+        )
+    except IntegrationSettingsError as exc:
+        raise ApiError(
+            404
+            if exc.code == "integration.notFound"
+            else 409
+            if exc.code == "mail.alreadyConfigured"
+            else 422,
+            exc.code,
+        ) from exc
+    return mail_settings_payload(settings)
+
+
+@router.delete("/mail/accounts/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_mail_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> None:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, mutation=True
+    )
+    try:
+        await MailIntegrationService.delete(db, integration_id, owner_id=owner_id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+
+
+@router.post("/mail/accounts/{integration_id}/test")
+async def test_mail_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict[str, str]:
+    settings, _owner_id = await _load_scoped_integrations(
+        db, scope, user, adapter_type="imap_smtp"
+    )
+    account = MailIntegrationService._find(settings, integration_id)
+    if account is None:
+        raise ApiError(404, "integration.notFound")
+    try:
+        if account.credential_id is None:
+            raise MailError("mail.authenticationFailed")
+        record = await load_credential(
+            db,
+            account.credential_id,
+            owner_id=account.owner_id,
+            populate_existing=True,
+        )
+        if record is None or record.kind != MAIL_CREDENTIAL_KIND:
+            raise MailError("mail.authenticationFailed")
+        credential = read_credential(record)
+        if set(credential) != {"password"} or not isinstance(
+            credential["password"], str
+        ):
+            raise MailError("mail.authenticationFailed")
+        await db.rollback()
+        await client_for(account, credential["password"]).test_connection()
+    except MailError as exc:
+        await db.rollback()
+        code = mail_error_code(exc)
+        logger.warning("Mail integration test failed: %s", code)
+        raise ApiError(502, code) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("Mail integration test failed with %s", type(exc).__name__)
         raise ApiError(502, "integration.unavailable") from exc
     return {"status": "ok"}
 

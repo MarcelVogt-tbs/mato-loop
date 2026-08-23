@@ -14,6 +14,11 @@ const emptyCalendar = () => ({
   accounts: []
 })
 
+const emptyMail = () => ({
+  configured: false,
+  accounts: []
+})
+
 const emptyKnowledge = () => ({
   configured: false,
   bases: []
@@ -49,6 +54,7 @@ function contextIsCurrent(store, context) {
 function clearIntegrations(store) {
   store.search = emptySearch()
   store.calendar = emptyCalendar()
+  store.mail = emptyMail()
   store.knowledge = emptyKnowledge()
   store.recipes = emptyRecipes()
   store.git = emptyGit()
@@ -59,6 +65,7 @@ export const useIntegrationStore = defineStore('integrations', {
   state: () => ({
     search: emptySearch(),
     calendar: emptyCalendar(),
+    mail: emptyMail(),
     knowledge: emptyKnowledge(),
     recipes: emptyRecipes(),
     git: emptyGit(),
@@ -133,6 +140,7 @@ export const useIntegrationStore = defineStore('integrations', {
         await Promise.all([
           this.fetchSearch(),
           this.fetchCalendar(),
+          this.fetchMail(),
           this.fetchKnowledge(),
           this.fetchRecipes(),
           this.fetchGit(),
@@ -217,6 +225,32 @@ export const useIntegrationStore = defineStore('integrations', {
     async testCalendar(id) {
       const scope = this.scope
       return (await api.post(`/integrations/calendar/accounts/${id}/test`, null, scopeConfig(scope))).data
+    },
+    fetchMail() {
+      return this.fetchResource('mail', '/integrations/mail')
+    },
+    async createMail(payload) {
+      const context = scopeContext(this)
+      await api.post('/integrations/mail/accounts', payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchMail()
+    },
+    async updateMail(id, payload) {
+      const request = { ...payload }
+      if (request.password === '') delete request.password
+      const context = scopeContext(this)
+      await api.put(`/integrations/mail/accounts/${id}`, request, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchMail()
+    },
+    async removeMail(id) {
+      const context = scopeContext(this)
+      await api.delete(`/integrations/mail/accounts/${id}`, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return
+      delete this.accessByIntegration[id]
+      await this.fetchMail()
+    },
+    async testMail(id) {
+      const scope = this.scope
+      return (await api.post(`/integrations/mail/accounts/${id}/test`, null, scopeConfig(scope))).data
     },
     fetchKnowledge() {
       return this.fetchResource('knowledge', '/integrations/knowledge')

@@ -165,6 +165,9 @@
               </template>
               <template v-else>{{ integration.config.binaryPath }}</template>
             </q-item-label>
+            <q-item-label v-else-if="integration.integrationType === 'mail'" caption lines="1">
+              IMAP: {{ integration.config.imapHost }}:{{ integration.config.imapPort }} · SMTP: {{ integration.config.smtpHost }}:{{ integration.config.smtpPort }}
+            </q-item-label>
             <q-item-label v-else caption lines="1">
               {{ integration.config.baseUrl }}{{ integration.config.username ? ` · ${integration.config.username}` : '' }}
             </q-item-label>
@@ -172,7 +175,7 @@
           <q-item-section side top>
             <div class="row items-center no-wrap q-gutter-xs">
               <q-btn
-                v-if="integration.supportsResourcePolicies"
+                v-if="integration.supportsResourcePolicies || integration.supportsIntegrationPolicies"
                 flat
                 dense
                 no-caps
@@ -257,6 +260,7 @@ const showAccessPage = computed(() => route.name === 'settings-integration-acces
 const showInstances = computed(() => !auth.isAdmin || section.value === 'instances')
 const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)
+const mailAccounts = computed(() => integrations.mail.accounts)
 const knowledgeBases = computed(() => integrations.knowledge.bases)
 const recipeAccounts = computed(() => integrations.recipes.accounts)
 const gitInstances = computed(() => integrations.git.instances)
@@ -265,6 +269,7 @@ const configuredIntegrations = computed(
   () => [
     ...searchProviders.value,
     ...calendarAccounts.value,
+    ...mailAccounts.value,
     ...knowledgeBases.value,
     ...recipeAccounts.value,
     ...gitInstances.value,
@@ -315,7 +320,7 @@ function openEditDialog(integration) {
 
 function providerLabel(providerType) {
   return {
-    searxng: 'SearXNG', caldav: 'CalDAV', bookstack: 'BookStack', mealie: 'Mealie', git: 'Git', openscad: 'OpenSCAD'
+    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', bookstack: 'BookStack', mealie: 'Mealie', git: 'Git', openscad: 'OpenSCAD'
   }[providerType] || providerType
 }
 
@@ -323,6 +328,7 @@ function typeLabel(integrationType) {
   return {
     search: 'Websuche',
     calendar: 'Kalender & Aufgaben',
+    mail: 'E-Mail',
     knowledge: 'Wissensdatenbank',
     recipes: 'Rezepte & Essensplanung',
     git: 'Versionsverwaltung',
@@ -332,7 +338,7 @@ function typeLabel(integrationType) {
 
 function typeIcon(integrationType) {
   return {
-    search: 'travel_explore', calendar: 'calendar_month', knowledge: 'menu_book', recipes: 'restaurant_menu', git: 'account_tree', openscad: 'view_in_ar'
+    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', knowledge: 'menu_book', recipes: 'restaurant_menu', git: 'account_tree', openscad: 'view_in_ar'
   }[integrationType] || 'extension'
 }
 
@@ -368,6 +374,7 @@ async function testIntegration(integration) {
   try {
     let result
     if (integration.integrationType === 'calendar') result = await integrations.testCalendar(integration.id)
+    else if (integration.integrationType === 'mail') result = await integrations.testMail(integration.id)
     else if (integration.integrationType === 'knowledge') result = await integrations.testKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') result = await integrations.testRecipes(integration.id)
     else if (integration.integrationType === 'openscad') result = await integrations.testOpenScad(integration.id)
@@ -397,6 +404,7 @@ async function removeIntegration(integration) {
   removingId.value = integration.id
   try {
     if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
+    else if (integration.integrationType === 'mail') await integrations.removeMail(integration.id)
     else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') await integrations.removeRecipes(integration.id)
     else if (integration.integrationType === 'git') await integrations.removeGit(integration.id)

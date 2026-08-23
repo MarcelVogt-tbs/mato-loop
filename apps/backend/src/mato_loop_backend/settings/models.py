@@ -705,7 +705,7 @@ class IntegrationSettings(IntegrationSettingsBase):
             return value
         data = dict(value)
         availability = dict(data.get("adapter_availability", {}))
-        backend_adapters = {"searxng", "caldav", "bookstack", "mealie"}
+        backend_adapters = {"searxng", "caldav", "bookstack", "mealie", "imap_smtp"}
         agent_adapters = {"git", "openscad"}
         legacy_adapters = backend_adapters | agent_adapters
         if (

@@ -16,7 +16,9 @@
           {{ integration ? `Zugriff für ${integration.name}` : 'Zugriff verwalten' }}
         </div>
         <div class="text-body2 app-muted">
-          Standardwerte und Abweichungen für einzelne Ressourcen festlegen.
+          {{ accountPoliciesOnly
+            ? 'Festlegen, wie der Agent dieses Mail-Konto verwenden darf.'
+            : 'Standardwerte und Abweichungen für einzelne Ressourcen festlegen.' }}
         </div>
       </q-toolbar-title>
       <q-btn
@@ -48,7 +50,7 @@
     </q-banner>
 
     <q-banner v-if="loadFailed" rounded class="app-surface-tonal q-mb-md">
-      Die Ressourcen konnten nicht geladen werden.
+      Die Zugriffsrichtlinien konnten nicht geladen werden.
       <template #action>
         <q-btn flat no-caps color="primary" label="Erneut laden" @click="load" />
       </template>
@@ -119,8 +121,14 @@
 
       <q-card flat class="app-surface-tonal">
         <q-card-section>
-          <div class="text-subtitle1 text-weight-bold">Standard für Integration</div>
-          <div class="text-caption app-muted">Gilt für Ressourcen ohne eigene Einstellung.</div>
+          <div class="text-subtitle1 text-weight-bold">
+            {{ accountPoliciesOnly ? 'Richtlinien für dieses Konto' : 'Standard für Integration' }}
+          </div>
+          <div class="text-caption app-muted">
+            {{ accountPoliciesOnly
+              ? 'Diese Richtlinien gelten für alle IMAP-Ordner des Kontos.'
+              : 'Gilt für Ressourcen ohne eigene Einstellung.' }}
+          </div>
         </q-card-section>
         <q-separator />
         <q-card-section>
@@ -132,7 +140,7 @@
                 dense
                 emit-value
                 map-options
-                :label="action.label"
+                :label="actionLabel(action)"
                 :options="policyOptions(action, action.globalPolicy)"
                 :hint="`Wirksam: ${policyLabel(action.effectiveIntegrationPolicy)}`"
                 :disable="adapterBlocked || action.globalPolicy === 'disabled'"
@@ -143,7 +151,7 @@
         </q-card-section>
       </q-card>
 
-      <q-banner v-if="!access.resources.length" rounded class="app-surface-tonal">
+      <q-banner v-if="!accountPoliciesOnly && !access.resources.length" rounded class="app-surface-tonal">
         Diese Integration stellt derzeit keine konfigurierbaren Ressourcen bereit.
       </q-banner>
 
@@ -174,7 +182,7 @@
                   dense
                   emit-value
                   map-options
-                  :label="action.label"
+                  :label="actionLabel(action)"
                   :options="policyOptions(action, action.effectiveIntegrationPolicy)"
                   :hint="effectiveHint(resource, action)"
                   :disable="adapterBlocked || action.globalPolicy === 'disabled' || resource.hardUnavailableCapabilities.includes(action.capability)"
@@ -250,11 +258,13 @@ const scope = computed(() => (
 const integration = computed(() => [
   ...integrations.search.providers,
   ...integrations.calendar.accounts,
+  ...integrations.mail.accounts,
   ...integrations.knowledge.bases
 ].find((item) => item.id === integrationId.value))
 const adapterBlocked = computed(() => (
   !integration.value || !integrations.adapterAvailable(integration.value.providerType, scope.value)
 ))
+const accountPoliciesOnly = computed(() => integration.value?.integrationType === 'mail')
 const dirty = computed(() => Boolean(
   access.value && JSON.stringify(requestPayload()) !== savedPayload.value
 ))
@@ -291,6 +301,15 @@ function policyLabel(policy) {
     ask: 'Nachfragen',
     auto: 'Automatisch'
   }[policy] || policy
+}
+
+function actionLabel(action) {
+  return {
+    'mail.read': 'E-Mails lesen',
+    'mail.send': 'E-Mails senden',
+    'mail.drafts': 'E-Mail-Entwürfe verwalten',
+    'mail.delete': 'E-Mails löschen'
+  }[action.capability] || action.label
 }
 
 function policyOptions(action, inheritedPolicy) {

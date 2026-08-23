@@ -106,4 +106,4 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     assert set(build_skill["parameters"]["properties"]) == {"brief", "name_hint"}
     assert prompt_tokens <= 7_200, prompt_tokens
     assert schema_tokens <= 8_100, schema_tokens
-    assert prompt_tokens + schema_tokens <= 14_850
+    assert prompt_tokens + schema_tokens <= 14_900

@@ -1,5 +1,6 @@
 export const controlCenterIntegrationManifest = Object.freeze([
-  { id: 'files', label: 'Dateien', icon: 'folder_open' }
+  { id: 'files', label: 'Dateien', icon: 'folder_open' },
+  { id: 'mail', label: 'E-Mail', icon: 'mail' }
 ])
 
 export const controlCenterGlobalSectionManifest = Object.freeze([
@@ -9,3 +10,7 @@ export const controlCenterGlobalSectionManifest = Object.freeze([
 
 export const controlCenterIntegrationIds = new Set(controlCenterIntegrationManifest.map((item) => item.id))
 export const controlCenterGlobalSectionIds = new Set(controlCenterGlobalSectionManifest.map((item) => item.id))
+
+export function mailControlCenterAvailable(mail) {
+  return mail.accountsLoaded && mail.accounts.length > 0
+}

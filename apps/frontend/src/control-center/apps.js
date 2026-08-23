@@ -1,6 +1,7 @@
 import ApprovalCenterApp from 'components/ApprovalCenterApp.vue'
 import FileExplorerPanel from 'components/FileExplorerPanel.vue'
 import NotificationCenterApp from 'components/NotificationCenterApp.vue'
+import MailApp from 'components/MailApp.vue'
 import {
   controlCenterGlobalSectionManifest,
   controlCenterIntegrationManifest
@@ -8,6 +9,7 @@ import {
 
 const components = {
   files: FileExplorerPanel,
+  mail: MailApp,
   notifications: NotificationCenterApp,
   approvals: ApprovalCenterApp
 }
