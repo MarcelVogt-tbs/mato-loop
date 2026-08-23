@@ -26,15 +26,15 @@ export const useProjectStore = defineStore('projects', {
         if (revision === this.revision) this.loading = false
       }
     },
-    async create(name) {
-      const { data } = await api.post('/projects', { name })
+    async create(name, instructions = '') {
+      const { data } = await api.post('/projects', { name, instructions })
       this.revision += 1
       this.loading = false
       this.items = [...this.items, data]
       return data
     },
-    async update(id, name) {
-      const { data } = await api.patch(`/projects/${id}`, { name })
+    async update(id, name, instructions = '') {
+      const { data } = await api.patch(`/projects/${id}`, { name, instructions })
       this.revision += 1
       this.loading = false
       this.items = this.items.map((project) => project.id === id ? data : project)

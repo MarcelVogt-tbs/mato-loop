@@ -1155,6 +1155,17 @@ def test_general_system_prompt_contains_bounded_agent_identity() -> None:
     assert prompt.index("Host security") < prompt.index("User-configured agent identity")
 
 
+def test_general_system_prompt_contains_bounded_project_instructions() -> None:
+    prompt = general_system_prompt(
+        _session(), project_instructions="Use Python and keep changes small."
+    )
+
+    assert '"instructions": "Use Python and keep changes small."' in prompt
+    assert "override the user-configured agent identity" in prompt
+    assert "latest explicit user request and host rules override them" in prompt
+    assert prompt.index("Host security") < prompt.index("User-configured project instructions")
+
+
 def test_system_prompt_describes_managed_file_roots() -> None:
     prompt = general_system_prompt(
         _session(),

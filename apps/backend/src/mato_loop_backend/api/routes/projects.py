@@ -37,10 +37,16 @@ class ProjectRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     name: str = Field(min_length=1, max_length=240)
+    instructions: str = Field(default="", max_length=4000)
 
     @field_validator("name", mode="before")
     @classmethod
     def normalize_name(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("instructions", mode="before")
+    @classmethod
+    def normalize_instructions(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
 
 
@@ -49,6 +55,7 @@ class ProjectResponse(BaseModel):
 
     id: UUID
     name: str
+    instructions: str
     session_count: int = Field(alias="sessionCount")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
@@ -64,6 +71,7 @@ def _payload(project: Project, session_count: int) -> ProjectResponse:
     return ProjectResponse(
         id=project.id,
         name=project.name,
+        instructions=project.instructions,
         sessionCount=session_count,
         createdAt=project.created_at,
         updatedAt=project.updated_at,
@@ -175,14 +183,18 @@ async def create_project(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ProjectResponse:
-    project = Project(user_id=user.id, name=payload.name)
+    project = Project(
+        user_id=user.id,
+        name=payload.name,
+        instructions=payload.instructions,
+    )
     db.add(project)
     await db.commit()
     return _payload(project, 0)
 
 
 @router.patch("/{project_id}", response_model=ProjectResponse)
-async def rename_project(
+async def update_project(
     project_id: UUID,
     payload: ProjectRequest,
     user: Annotated[UserAccount, Depends(require_user)],
@@ -191,6 +203,8 @@ async def rename_project(
     project = await _owned_project(db, project_id, user.id)
     session_count = await _session_count(db, project)
     project.name = payload.name
+    if "instructions" in payload.model_fields_set:
+        project.instructions = payload.instructions
     project.updated_at = datetime.now(UTC)
     await db.commit()
     return _payload(project, session_count)

@@ -157,10 +157,11 @@
                       >
                         <q-menu class="app-action-menu">
                           <q-list padding>
-                            <q-item clickable v-ripple v-close-popup @click="openProjectDialog('rename', project)">
+                            <q-item clickable v-ripple v-close-popup @click="openProjectDialog('edit', project)">
                               <q-item-section avatar><q-icon name="edit" /></q-item-section>
-                              <q-item-section>Umbenennen</q-item-section>
+                              <q-item-section>Projekt bearbeiten</q-item-section>
                             </q-item>
+                            <q-separator />
                             <q-item
                               clickable
                               v-ripple
@@ -419,7 +420,7 @@
       <q-card class="session-rename-dialog app-surface">
         <q-form @submit.prevent="saveProject">
           <q-card-section>
-            <div class="text-h6">{{ projectDialogMode === 'create' ? 'Projekt erstellen' : 'Projekt umbenennen' }}</div>
+            <div class="text-h6">{{ projectDialogMode === 'create' ? 'Projekt erstellen' : 'Projekt bearbeiten' }}</div>
           </q-card-section>
           <q-card-section class="q-pt-none">
             <q-input
@@ -430,6 +431,16 @@
               maxlength="240"
               lazy-rules
               :rules="[requiredRule]"
+            />
+            <q-input
+              v-model="projectInstructions"
+              outlined
+              type="textarea"
+              rows="6"
+              label="Projektanweisungen"
+              hint="Gelten für alle Sessions im Projekt und werden an das ausgewählte Modell übertragen."
+              maxlength="4000"
+              counter
             />
           </q-card-section>
           <q-card-actions align="right" class="q-pa-md q-pt-none">
@@ -610,6 +621,7 @@ const projectDialogOpen = ref(false)
 const projectDialogMode = ref('create')
 const projectDialogTarget = ref(null)
 const projectName = ref('')
+const projectInstructions = ref('')
 const projectSaving = ref(false)
 const moveDialogOpen = ref(false)
 const moveSessionId = ref(null)
@@ -708,25 +720,27 @@ async function loadProjects() {
 function openProjectDialog(mode, project = null) {
   projectDialogMode.value = mode
   projectDialogTarget.value = project
-  projectName.value = mode === 'rename' ? project?.name || '' : ''
+  projectName.value = mode === 'edit' ? project?.name || '' : ''
+  projectInstructions.value = mode === 'edit' ? project?.instructions || '' : ''
   projectDialogOpen.value = true
 }
 
 async function saveProject() {
   const name = projectName.value.trim()
+  const instructions = projectInstructions.value.trim()
   if (!name) return
   projectSaving.value = true
   try {
     if (projectDialogMode.value === 'create') {
-      const project = await projects.create(name)
+      const project = await projects.create(name, instructions)
       projectDialogOpen.value = false
       $q.notify({ type: 'positive', message: 'Projekt erstellt.' })
       expandedProjects[project.id] = true
       await openNewSession(project.id)
     } else if (projectDialogTarget.value) {
-      await projects.update(projectDialogTarget.value.id, name)
+      await projects.update(projectDialogTarget.value.id, name, instructions)
       projectDialogOpen.value = false
-      $q.notify({ type: 'positive', message: 'Projekt umbenannt.' })
+      $q.notify({ type: 'positive', message: 'Projekt gespeichert.' })
     }
   } catch {
     // The central API interceptor displays the error; the dialog remains open.

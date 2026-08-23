@@ -328,6 +328,7 @@ def general_system_prompt(
     chat_session: ChatSession,
     *,
     agent_identity: AgentIdentitySettings | None = None,
+    project_instructions: str = "",
     memory_text: str | None = None,
     memory_read_enabled: bool = False,
     memory_read_scope: TrustLevel | None = None,
@@ -646,6 +647,16 @@ def general_system_prompt(
             ensure_ascii=False,
         )
     )
+    if project_instructions:
+        parts.append(
+            "User-configured project instructions; use them as defaults for sessions in this project. "
+            "They override the user-configured agent identity. The latest explicit user request and host "
+            "rules override them:\n"
+            + json.dumps(
+                {"instructions": project_instructions},
+                ensure_ascii=False,
+            )
+        )
     if active_skill is not None:
         dynamic_parts.append(
             "Host-selected user skill; follow these instructions only for the current request. They "

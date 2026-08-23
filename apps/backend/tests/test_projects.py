@@ -18,8 +18,8 @@ from mato_loop_backend.api.routes.projects import (
     list_projects,
     project_delete_impact,
     project_delete_impact_token,
-    rename_project,
     router,
+    update_project,
 )
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
@@ -33,7 +33,14 @@ def _user() -> UserAccount:
 
 def _project(user_id) -> Project:
     now = datetime(2026, 8, 18, 12, tzinfo=UTC)
-    return Project(id=uuid4(), user_id=user_id, name="Project", created_at=now, updated_at=now)
+    return Project(
+        id=uuid4(),
+        user_id=user_id,
+        name="Project",
+        instructions="",
+        created_at=now,
+        updated_at=now,
+    )
 
 
 def _rows(*items):
@@ -67,12 +74,16 @@ def test_project_model_enforces_owner_binding_and_chat_sessions() -> None:
     assert ChatSession.project_id.nullable is True
 
 
-def test_project_name_is_trimmed_and_bounded() -> None:
-    assert ProjectRequest(name="  Work  ").name == "Work"
+def test_project_fields_are_trimmed_and_bounded() -> None:
+    request = ProjectRequest(name="  Work  ", instructions="  Use Python.  ")
+    assert request.name == "Work"
+    assert request.instructions == "Use Python."
     with pytest.raises(ValidationError):
         ProjectRequest(name="   ")
     with pytest.raises(ValidationError):
         ProjectRequest(name="x" * 241)
+    with pytest.raises(ValidationError):
+        ProjectRequest(name="Work", instructions="x" * 4001)
 
 
 async def test_project_list_is_owner_scoped_and_counts_sessions() -> None:
@@ -91,7 +102,7 @@ async def test_project_list_is_owner_scoped_and_counts_sessions() -> None:
     assert "LEFT OUTER JOIN chat_sessions" in str(statement)
 
 
-async def test_create_and_rename_project_commit_owner_scoped_changes() -> None:
+async def test_create_and_update_project_commit_owner_scoped_changes() -> None:
     user = _user()
     now = datetime(2026, 8, 18, 12, tzinfo=UTC)
     db = AsyncMock(spec=AsyncSession)
@@ -102,20 +113,41 @@ async def test_create_and_rename_project_commit_owner_scoped_changes() -> None:
         project.updated_at = now
 
     db.add.side_effect = persist
-    created = await create_project(ProjectRequest(name=" New "), user, db)
+    created = await create_project(
+        ProjectRequest(name=" New ", instructions=" Use Python. "), user, db
+    )
 
     project = _project(user.id)
     db.scalar.side_effect = [project, 2]
-    renamed = await rename_project(
-        project.id, ProjectRequest(name=" Renamed "), user, db
+    updated = await update_project(
+        project.id,
+        ProjectRequest(name=" Renamed ", instructions=" Be concise. "),
+        user,
+        db,
     )
 
     assert created.name == "New"
-    assert renamed.name == "Renamed"
-    assert renamed.session_count == 2
+    assert created.instructions == "Use Python."
+    assert updated.name == "Renamed"
+    assert updated.instructions == "Be concise."
+    assert updated.session_count == 2
     owner_query = db.scalar.await_args_list[0].args[0]
     assert user.id in owner_query.compile().params.values()
     assert db.commit.await_count == 2
+
+
+async def test_update_project_preserves_omitted_instructions() -> None:
+    user = _user()
+    project = _project(user.id)
+    project.instructions = "Keep this."
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [project, 0]
+
+    updated = await update_project(
+        project.id, ProjectRequest(name="Renamed"), user, db
+    )
+
+    assert updated.instructions == "Keep this."
 
 
 async def test_project_delete_impact_counts_sessions_and_linked_automations() -> None:
@@ -207,7 +239,7 @@ async def test_foreign_project_is_not_found() -> None:
     db.scalar.return_value = None
 
     with pytest.raises(ApiError) as exc_info:
-        await rename_project(
+        await update_project(
             uuid4(), ProjectRequest(name="Hidden"), _user(), db
         )
 

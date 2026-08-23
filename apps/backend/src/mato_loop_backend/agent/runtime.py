@@ -107,6 +107,7 @@ from mato_loop_backend.models import (
     ExecutionAgent,
     MemoryRecord,
     Message,
+    Project,
     QuestionRequest,
     TitleGenerationStatus,
     UserAccount,
@@ -1667,6 +1668,12 @@ class AgentRuntime:
         chat_session = await db.get(ChatSession, run.session_id)
         if chat_session is None:
             raise AgentRunError("session.notFound")
+        project = (
+            await db.get(Project, chat_session.project_id)
+            if chat_session.project_id is not None
+            else None
+        )
+        project_instructions = project.instructions if project is not None else ""
         await cls._ensure_user_active(db, chat_session.user_id)
         ai_settings = await load_effective_ai(db, chat_session.user_id)
         runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
@@ -2156,6 +2163,7 @@ class AgentRuntime:
                 general_system_prompt,
                 chat_session,
                 agent_identity=agent_identity,
+                project_instructions=project_instructions,
                 memory_read_enabled=memory_state.read_enabled,
                 memory_read_scope=model_trust_level,
                 memory_scope=(

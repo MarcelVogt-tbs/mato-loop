@@ -12,6 +12,7 @@ import { useProjectStore } from '../src/stores/projects'
 const project = {
   id: 'project-1',
   name: 'MatoLoop',
+  instructions: 'Use Vue and FastAPI.',
   sessionCount: 2,
   createdAt: '2026-08-18T08:00:00Z',
   updatedAt: '2026-08-18T09:00:00Z'
@@ -53,18 +54,24 @@ describe('projects store', () => {
   })
 
   it('creates, updates, and deletes projects after successful requests', async () => {
-    const renamed = { ...project, name: 'Mato Loop', updatedAt: '2026-08-18T10:00:00Z' }
+    const renamed = { ...project, name: 'Mato Loop', instructions: 'Be concise.', updatedAt: '2026-08-18T10:00:00Z' }
     api.post.mockResolvedValue({ data: project })
     api.patch.mockResolvedValue({ data: renamed })
     api.delete.mockResolvedValue({})
     const store = useProjectStore()
 
-    await store.create(project.name)
-    await store.update(project.id, renamed.name)
+    await store.create(project.name, project.instructions)
+    await store.update(project.id, renamed.name, renamed.instructions)
     await store.remove(project.id, { automationImpact: 'impact-token' })
 
-    expect(api.post).toHaveBeenCalledWith('/projects', { name: project.name })
-    expect(api.patch).toHaveBeenCalledWith('/projects/project-1', { name: renamed.name })
+    expect(api.post).toHaveBeenCalledWith('/projects', {
+      name: project.name,
+      instructions: project.instructions
+    })
+    expect(api.patch).toHaveBeenCalledWith('/projects/project-1', {
+      name: renamed.name,
+      instructions: renamed.instructions
+    })
     expect(api.delete).toHaveBeenCalledWith('/projects/project-1', {
       params: { automationImpact: 'impact-token' }
     })
