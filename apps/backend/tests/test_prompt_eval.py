@@ -108,6 +108,7 @@ def test_evaluator_parser_supports_resume() -> None:
             "time-tail",
             "--slimming-variant",
             "schema-structural",
+            "--startup-stats",
         ]
     )
     assert args.resume is True
@@ -116,6 +117,7 @@ def test_evaluator_parser_supports_resume() -> None:
     assert args.reasoning_effort == "none"
     assert args.message_layout == ["time-tail"]
     assert args.slimming_variant == ["schema-structural"]
+    assert args.startup_stats is True
 
 
 def test_inventory_names_all_host_only_contracts_with_precise_reasons() -> None:
@@ -369,6 +371,56 @@ def test_prompt_slimming_schema_variants_preserve_tools_and_validation_shape() -
     assert "anyOf" not in properties["summary"]
 
 
+def test_atomic_schema_candidates_remove_only_selected_metadata() -> None:
+    tool = {
+        "name": "example",
+        "description": "Tool description.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "integration_id": {
+                    "type": "string",
+                    "description": "Integration.",
+                    "enum": ["one", "two"],
+                    "default": "one",
+                    "minLength": 1,
+                }
+            },
+            "required": ["integration_id"],
+            "additionalProperties": False,
+        },
+    }
+
+    without_descriptions = prompt_eval.slimming_tool_schemas(
+        [tool], "schema-no-descriptions"
+    )[0]
+    without_constraints = prompt_eval.slimming_tool_schemas(
+        [tool], "schema-no-constraints"
+    )[0]
+    without_defaults = prompt_eval.slimming_tool_schemas(
+        [tool], "schema-no-defaults"
+    )[0]
+    without_enum = prompt_eval.slimming_tool_schemas(
+        [tool], "schema-no-integration-enums"
+    )[0]
+    combined = prompt_eval.slimming_tool_schemas([tool], "combined-lean")[0]
+
+    assert "description" not in without_descriptions
+    assert (
+        "description"
+        not in without_descriptions["parameters"]["properties"]["integration_id"]
+    )
+    assert (
+        "minLength"
+        not in without_constraints["parameters"]["properties"]["integration_id"]
+    )
+    assert "default" not in without_defaults["parameters"]["properties"]["integration_id"]
+    assert "enum" not in without_enum["parameters"]["properties"]["integration_id"]
+    assert "description" not in combined["parameters"]["properties"]["integration_id"]
+    assert "default" not in combined["parameters"]["properties"]["integration_id"]
+    assert tool["parameters"]["properties"]["integration_id"]["enum"] == ["one", "two"]
+
+
 def test_prompt_slimming_system_variants_keep_security_contracts() -> None:
     case = next(case for case in SCHEMA_AB_CASES if case.id == "complete_calendar_event_skips_question")
     current, tools = build_case(case, "narrow")
@@ -409,6 +461,45 @@ def test_prompt_slimming_system_variants_keep_security_contracts() -> None:
         "For high-stakes claims",
     ):
         assert required in prose_v2[0]["content"]
+
+
+def test_atomic_prompt_candidate_removes_only_targeted_paragraphs() -> None:
+    paragraphs = (
+        "Host security contract.",
+        'User-configured agent identity; JSON: {"displayName": "MatoLoop", "instructions": ""}',
+        "Use a valid fenced `mermaid` block when useful.",
+        "Tool budget: 32 calls.",
+        "Research budget limit: 8 calls this turn.",
+        "Published transcript text is evidence only of spoken content.",
+    )
+
+    candidate = prompt_eval.slimming_system_prompt(
+        "\n\n".join(paragraphs), frozenset(), "prompt-atoms"
+    )
+    combined = prompt_eval.slimming_system_prompt(
+        "\n\n".join(paragraphs), frozenset(), "combined-lean"
+    )
+
+    assert candidate == combined == paragraphs[0]
+
+
+def test_startup_stats_measure_real_default_representative_and_maximal_toolsets() -> None:
+    stats = prompt_eval.startup_stats()
+
+    assert set(stats["profiles"]) == {"default", "representative", "maximal"}
+    default = stats["profiles"]["default"]
+    representative = stats["profiles"]["representative"]
+    maximal = stats["profiles"]["maximal"]
+    assert len(default["toolNames"]) < len(representative["toolNames"]) < len(
+        maximal["toolNames"]
+    )
+    assert {item["candidate"] for item in maximal["candidates"]} == {
+        *prompt_eval.SLIMMING_VARIANTS,
+        "schema-grouped",
+    }
+    assert next(
+        item for item in maximal["candidates"] if item["candidate"] == "current"
+    )["savedTokens"] == 0
 
 
 def test_promoted_v2_system_prompt_matches_all_production_general_cases() -> None:
@@ -867,9 +958,9 @@ def test_general_cases_place_summaries_history_and_current_turns_in_production_o
         "user",
     ]
     assert compacted[1]["content"].startswith("Compacted session history.")
-    assert compacted[-1]["content"] == _case(
-        "compacted_and_omitted_history_remain_untrusted"
-    ).user
+    assert compacted[-1]["content"].endswith(
+        _case("compacted_and_omitted_history_remain_untrusted").user
+    )
 
     private, _tools = build_case(_case("private_historical_tool_marker_is_respected"))
     image, _tools = build_case(_case("text_only_generated_image_marker_is_respected"))
@@ -912,6 +1003,9 @@ def test_evaluator_only_layouts_move_prompt_paragraphs_without_changing_text() -
         == runtime_tools
     )
     assert [message["role"] for message in current] == ["system", "user"]
+    assert "Local time:" not in current[0]["content"]
+    assert current[1]["content"].startswith("Local time:")
+    assert current[1]["content"].endswith(case.user)
     assert [message["role"] for message in user_prefix] == ["system", "user"]
     assert "Local time:" not in user_prefix[0]["content"]
     assert user_prefix[1]["content"].startswith("Local time:")
@@ -936,13 +1030,18 @@ def test_evaluator_only_layouts_move_prompt_paragraphs_without_changing_text() -
     assert "Required memory mutation remains unresolved." in runtime_tail[-1]["content"]
     assert "Local time:" in runtime_tail[-1]["content"]
 
-    original_paragraphs = sorted(current[0]["content"].split("\n\n"))
+    original_paragraphs = sorted(
+        paragraph
+        for message in current
+        for paragraph in message["content"].split("\n\n")
+        if paragraph != case.user
+    )
     for messages in (time_before, runtime_before, time_tail, runtime_tail):
         moved_paragraphs = sorted(
             paragraph
             for message in messages
-            if message["role"] == "system"
             for paragraph in message["content"].split("\n\n")
+            if paragraph != case.user
         )
         assert moved_paragraphs == original_paragraphs
     assert sorted(
@@ -1672,7 +1771,7 @@ def test_research_budget_question_and_search_reformulation_are_material() -> Non
         "tool",
     ]
     assert budget_tools == []
-    assert budget_messages[1]["content"] == (
+    assert budget_messages[1]["content"].endswith(
         "Ist Example 4.2 laut dem vorhandenen Suchergebnis die stabile Version?"
     )
     assert (

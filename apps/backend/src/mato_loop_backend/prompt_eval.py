@@ -16,7 +16,12 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from mato_loop_backend.agent.context import compaction_messages, general_system_prompt
+from mato_loop_backend.agent.context import (
+    _local_time_prompt,
+    compaction_messages,
+    estimate_tokens,
+    general_system_prompt,
+)
 from mato_loop_backend.agent.file_roots import model_file_roots
 from mato_loop_backend.agent.media_prompt_profiles import (
     GPT_IMAGE_2_EDIT_INSTRUCTIONS,
@@ -32,6 +37,7 @@ from mato_loop_backend.agent.title_generation import (
 )
 from mato_loop_backend.agent.tools import EffectiveToolSet, tool_registry
 from mato_loop_backend.error_contract import error_payload
+from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.memory.dreaming import (
     DREAMING_SYSTEM_PROMPT,
     RECONCILIATION_SYSTEM_PROMPT,
@@ -98,6 +104,21 @@ SlimmingVariant = Literal[
     "schema-prose-v2",
     "prompt-prose-v2",
     "combined-v2",
+    "schema-no-field-descriptions",
+    "schema-no-descriptions",
+    "schema-no-constraints",
+    "schema-no-defaults",
+    "schema-no-integration-enums",
+    "schema-lean",
+    "schema-selective-lean",
+    "prompt-no-inactive",
+    "prompt-no-default-identity",
+    "prompt-no-mermaid",
+    "prompt-no-budgets",
+    "prompt-no-transcript-duplicate",
+    "prompt-atoms",
+    "combined-lean",
+    "combined-selective-lean",
 ]
 SLIMMING_VARIANTS: tuple[SlimmingVariant, ...] = (
     "current",
@@ -114,6 +135,21 @@ SLIMMING_VARIANTS: tuple[SlimmingVariant, ...] = (
     "schema-prose-v2",
     "prompt-prose-v2",
     "combined-v2",
+    "schema-no-field-descriptions",
+    "schema-no-descriptions",
+    "schema-no-constraints",
+    "schema-no-defaults",
+    "schema-no-integration-enums",
+    "schema-lean",
+    "schema-selective-lean",
+    "prompt-no-inactive",
+    "prompt-no-default-identity",
+    "prompt-no-mermaid",
+    "prompt-no-budgets",
+    "prompt-no-transcript-duplicate",
+    "prompt-atoms",
+    "combined-lean",
+    "combined-selective-lean",
 )
 MessageLayout = Literal[
     "current",
@@ -245,7 +281,12 @@ SOURCE_FILES = (
     "src/mato_loop_backend/agent/tools.py",
     "src/mato_loop_backend/error_contract.py",
     "src/mato_loop_backend/integrations/caldav.py",
+    "src/mato_loop_backend/integrations/bookstack.py",
+    "src/mato_loop_backend/integrations/git.py",
+    "src/mato_loop_backend/integrations/mail.py",
+    "src/mato_loop_backend/integrations/mealie.py",
     "src/mato_loop_backend/integrations/openscad.py",
+    "src/mato_loop_backend/integrations/registry.py",
     "src/mato_loop_backend/memory/dreaming.py",
     "src/mato_loop_backend/memory/embeddings.py",
     "src/mato_loop_backend/privacy/pseudonymization.py",
@@ -3944,6 +3985,154 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
     )
 
 
+def _startup_integrations(maximal: bool) -> tuple[IntegrationSettings, ToolSettings]:
+    calendar = IntegrationInstance(
+        id=CALENDAR_INTEGRATION_ID,
+        name="Calendar",
+        integration_type="calendar",
+        adapter_type="caldav",
+        config={"base_url": "https://calendar.example.com", "username": "evaluator"},
+    )
+    instances = [calendar]
+    if maximal:
+        instances.extend(
+            [
+                IntegrationInstance(
+                    name="Mail",
+                    integration_type="mail",
+                    adapter_type="imap_smtp",
+                    config={
+                        "imap_host": "imap.example.com",
+                        "imap_port": 993,
+                        "imap_security": "tls",
+                        "smtp_host": "smtp.example.com",
+                        "smtp_port": 587,
+                        "smtp_security": "starttls",
+                        "username": "evaluator@example.com",
+                        "from_address": "evaluator@example.com",
+                    },
+                ),
+                IntegrationInstance(
+                    name="BookStack",
+                    integration_type="knowledge",
+                    adapter_type="bookstack",
+                    config={"base_url": "https://wiki.example.com"},
+                ),
+                IntegrationInstance(
+                    name="Mealie",
+                    integration_type="recipes",
+                    adapter_type="mealie",
+                    config={"base_url": "https://mealie.example.com"},
+                ),
+                IntegrationInstance(
+                    name="Search",
+                    integration_type="search",
+                    adapter_type="searxng",
+                    config={"base_url": "https://search.example.com"},
+                ),
+                IntegrationInstance(
+                    name="Git",
+                    integration_type="git",
+                    adapter_type="git",
+                    execution_agent_id=OPENSCAD_AGENT_ID,
+                    config={"allow_network": True},
+                ),
+                IntegrationInstance(
+                    id=OPENSCAD_INTEGRATION_ID,
+                    name="OpenSCAD",
+                    integration_type="openscad",
+                    adapter_type="openscad",
+                    execution_agent_id=OPENSCAD_AGENT_ID,
+                    config={"binary_path": "/usr/bin/openscad"},
+                ),
+            ]
+        )
+    integration_operations = frozenset(
+        operation
+        for instance in instances
+        if (adapter := integration_adapter(instance.integration_type, instance.adapter_type))
+        for tool in adapter.execution_tools
+        if (operation := tool.execution_operation)
+    )
+    for instance in instances:
+        if instance.execution_agent_id is not None:
+            instance._execution_operations = integration_operations
+    return IntegrationSettings(instances=instances), ToolSettings.model_validate(
+        {
+            "defaultCalendar": {
+                "integrationId": str(CALENDAR_INTEGRATION_ID),
+                "calendarKey": CALENDAR_KEY,
+            },
+            "defaultTaskList": {
+                "integrationId": str(CALENDAR_INTEGRATION_ID),
+                "taskListKey": TASK_LIST_KEY,
+            },
+        }
+    )
+
+
+def _startup_toolset(profile: str) -> EffectiveToolSet:
+    if profile == "default":
+        integration_settings = IntegrationSettings()
+        tool_settings = ToolSettings()
+    elif profile in {"representative", "maximal"}:
+        integration_settings, tool_settings = _startup_integrations(
+            profile == "maximal"
+        )
+    else:
+        raise ValueError(f"Unknown startup profile: {profile}")
+    capabilities = {
+        definition.required_capability
+        for definition in tool_registry._definitions.values()
+        if definition.required_capability is not None
+    }
+    execution_operations = (
+        {
+            definition.required_operation
+            for definition in tool_registry._operation_definitions.values()
+            if definition.required_operation is not None
+        }
+        if profile == "maximal"
+        else set()
+    )
+    return tool_registry.effective(
+        integration_settings,
+        webfetch_enabled=True,
+        web_search_enabled=True,
+        memory_enabled=True,
+        memory_write_enabled=True,
+        tool_capabilities=capabilities,
+        tool_settings=tool_settings,
+        execution_operations=execution_operations,
+    )
+
+
+def _startup_system_prompt(effective: EffectiveToolSet) -> str:
+    session = ChatSession(
+        id=SESSION_ID,
+        user_id=USER_ID,
+        title="Startup prompt evaluation",
+        memory_mode="full",
+        web_search_policy="available",
+    )
+    offered_names = frozenset(effective.tools)
+    return general_system_prompt(
+        session,
+        memory_read_enabled=True,
+        memory_scope={"total": 0, "pinned": 0},
+        current_datetime=FIXED_NOW,
+        include_local_time=False,
+        offered_tool_names=offered_names,
+        tool_instructions=effective.prompt_fragments,
+        tool_call_limit=32,
+        research_tool_call_limit=8,
+        execution_agent_name="Evaluator" if len(offered_names) > 50 else None,
+        execution_agent_platform="linux" if len(offered_names) > 50 else None,
+        execution_agent_connected=len(offered_names) > 50,
+        current_directory="." if len(offered_names) > 50 else None,
+    ) + "\n\n" + _local_time_prompt(FIXED_NOW)
+
+
 def _prefixed_schema_refs(value: Any, prefix: str) -> Any:
     if isinstance(value, dict):
         return {
@@ -4322,9 +4511,104 @@ def _rewrite_schema_prose_v2(tool: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+_SCHEMA_CONSTRAINT_KEYS = {
+    "exclusiveMaximum",
+    "exclusiveMinimum",
+    "format",
+    "maxItems",
+    "maxLength",
+    "maximum",
+    "minItems",
+    "minLength",
+    "minimum",
+    "pattern",
+}
+_FULL_SCHEMA_TOOL_PREFIXES = ("calendar_", "tasks_")
+_FULL_SCHEMA_TOOLS = {
+    "question",
+    "memory_retrieve",
+    "memory_write",
+    "create_automation",
+    "edit_automation",
+    "edit_image",
+    "analyze_video",
+}
+
+
+def _atomic_schema_candidate(
+    tool: dict[str, Any], variant: SlimmingVariant
+) -> dict[str, Any]:
+    schema_variant: SlimmingVariant = (
+        "schema-lean"
+        if variant == "combined-lean"
+        else "schema-selective-lean"
+        if variant == "combined-selective-lean"
+        else variant
+    )
+    result = copy.deepcopy(tool)
+    remove_field_descriptions = schema_variant in {
+        "schema-no-field-descriptions",
+        "schema-no-descriptions",
+        "schema-lean",
+        "schema-selective-lean",
+    }
+    remove_constraints = schema_variant in {
+        "schema-no-constraints",
+        "schema-lean",
+        "schema-selective-lean",
+    }
+    remove_defaults = schema_variant in {"schema-no-defaults", "schema-lean"}
+    remove_integration_enums = schema_variant == "schema-no-integration-enums"
+    if schema_variant == "schema-selective-lean" and (
+        result["name"] in _FULL_SCHEMA_TOOLS
+        or result["name"].startswith(_FULL_SCHEMA_TOOL_PREFIXES)
+        or "$defs" in result["parameters"]
+    ):
+        return result
+    if schema_variant == "schema-no-descriptions":
+        result.pop("description", None)
+
+    def compact(value: Any, property_name: str | None = None) -> Any:
+        if isinstance(value, list):
+            return [compact(item, property_name) for item in value]
+        if not isinstance(value, dict):
+            return value
+        output = {}
+        for key, item in value.items():
+            if remove_field_descriptions and key == "description":
+                continue
+            if remove_constraints and key in _SCHEMA_CONSTRAINT_KEYS:
+                continue
+            if remove_defaults and key == "default":
+                continue
+            if (
+                remove_integration_enums
+                and property_name == "integration_id"
+                and key == "enum"
+            ):
+                continue
+            if key == "properties" and isinstance(item, dict):
+                output[key] = {
+                    name: compact(nested, name) for name, nested in item.items()
+                }
+            else:
+                output[key] = compact(item, property_name)
+        return output
+
+    result["parameters"] = compact(result["parameters"])
+    return result
+
+
 def slimming_tool_schemas(
     tools: list[dict[str, Any]], variant: SlimmingVariant
 ) -> list[dict[str, Any]]:
+    if variant.startswith("schema-no-") or variant in {
+        "schema-lean",
+        "schema-selective-lean",
+        "combined-lean",
+        "combined-selective-lean",
+    }:
+        return [_atomic_schema_candidate(tool, variant) for tool in tools]
     if variant in {"schema-prose-v2", "combined-v2"}:
         return [_rewrite_schema_prose_v2(tool) for tool in tools]
     schema_variants = {
@@ -4604,6 +4888,52 @@ def slimming_system_prompt(
     offered_names: frozenset[str],
     variant: SlimmingVariant,
 ) -> str:
+    prompt_variant: SlimmingVariant = (
+        "prompt-atoms"
+        if variant in {"combined-lean", "combined-selective-lean"}
+        else variant
+    )
+    atomic_prompt_variants = {
+        "prompt-no-inactive",
+        "prompt-no-default-identity",
+        "prompt-no-mermaid",
+        "prompt-no-budgets",
+        "prompt-no-transcript-duplicate",
+        "prompt-atoms",
+    }
+    if prompt_variant in atomic_prompt_variants:
+        paragraphs = []
+        for paragraph in prompt.split("\n\n"):
+            if prompt_variant in {"prompt-no-inactive", "prompt-atoms"} and paragraph.startswith(
+                "Inactive installed capabilities"
+            ):
+                continue
+            if (
+                prompt_variant in {"prompt-no-default-identity", "prompt-atoms"}
+                and paragraph.startswith("User-configured agent identity;")
+                and '"displayName": "MatoLoop"' in paragraph
+                and '"instructions": ""' in paragraph
+            ):
+                continue
+            if prompt_variant in {"prompt-no-mermaid", "prompt-atoms"} and paragraph.startswith(
+                "Use a valid fenced `mermaid` block"
+            ):
+                continue
+            if prompt_variant in {"prompt-no-budgets", "prompt-atoms"} and paragraph.startswith(
+                (
+                    "Tool budget:",
+                    "Tool budget limit for this run:",
+                    "Research budget limit:",
+                )
+            ):
+                continue
+            if prompt_variant in {
+                "prompt-no-transcript-duplicate",
+                "prompt-atoms",
+            } and paragraph.startswith("Published transcript text is evidence"):
+                continue
+            paragraphs.append(paragraph)
+        return "\n\n".join(paragraphs)
     if variant in {"prompt-prose-v2", "combined-v2"}:
         return _rewrite_system_prompt_v2(prompt)
     prompt_variants = {
@@ -4725,16 +5055,19 @@ def _grouped_prompt(prompt: str) -> str:
     return prompt
 
 
-def _split_layout_prompt(prompt: str, layout: MessageLayout) -> tuple[str, str | None]:
-    if layout in {"current", "memory-tool-driven", "memory-tool-result"}:
+def _split_layout_prompt(
+    prompt: str, layout: MessageLayout, local_time_prompt: str
+) -> tuple[str, str | None]:
+    if layout in {
+        "current",
+        "memory-tool-driven",
+        "memory-tool-result",
+        "time-user-prefix",
+    }:
         return prompt, None
-    paragraphs = prompt.split("\n\n")
     if layout in {"time-user-prefix", "time-before-user", "time-tail"}:
-        indices = [index for index, value in enumerate(paragraphs) if value.startswith("Local time:")]
-        if len(indices) != 1:
-            raise ValueError(f"Expected one local-time paragraph, found {len(indices)}")
-        index = indices[0]
-        return "\n\n".join((*paragraphs[:index], *paragraphs[index + 1 :])), paragraphs[index]
+        return prompt, local_time_prompt
+    paragraphs = prompt.split("\n\n")
     index = next(
         (
             index
@@ -4744,8 +5077,10 @@ def _split_layout_prompt(prompt: str, layout: MessageLayout) -> tuple[str, str |
         None,
     )
     if index is None:
-        raise ValueError("Runtime paragraph suffix not found")
-    return "\n\n".join(paragraphs[:index]), "\n\n".join(paragraphs[index:])
+        return prompt, local_time_prompt
+    return "\n\n".join(paragraphs[:index]), "\n\n".join(
+        (*paragraphs[index:], local_time_prompt)
+    )
 
 
 def _general_case(
@@ -4807,6 +5142,7 @@ def _general_case(
             *system_options.get("tool_instructions", ()),
             *effective.prompt_fragments,
         )
+    local_time_prompt = _local_time_prompt(FIXED_NOW)
     prompt = general_system_prompt(
         session,
         agent_identity=(
@@ -4835,6 +5171,7 @@ def _general_case(
             )
         ),
         current_datetime=FIXED_NOW,
+        include_local_time=False,
         web_search_required=case.web_search_required,
         offered_tool_names=offered_names,
         **system_options,
@@ -4869,7 +5206,9 @@ def _general_case(
     if schema_variant == "grouped":
         prompt = _grouped_prompt(prompt)
     prompt = slimming_system_prompt(prompt, offered_names, slimming_variant)
-    prompt, runtime_prompt = _split_layout_prompt(prompt, message_layout)
+    prompt, runtime_prompt = _split_layout_prompt(
+        prompt, message_layout, local_time_prompt
+    )
     if case.expected_marker:
         prompt += "\n\n" + PRIVACY_MARKER_INSTRUCTION
     messages = [{"role": "system", "content": prompt}]
@@ -4893,6 +5232,14 @@ def _general_case(
             "content": (
                 runtime_prompt + "\n\n" + case.user
                 if runtime_prompt is not None and message_layout == "time-user-prefix"
+                else local_time_prompt + "\n\n" + case.user
+                if message_layout
+                in {
+                    "current",
+                    "memory-tool-driven",
+                    "memory-tool-result",
+                    "time-user-prefix",
+                }
                 else case.user
             ),
         }
@@ -6184,6 +6531,85 @@ async def run(args: argparse.Namespace) -> int:
     return int(args.fail_on_error and passed != len(records))
 
 
+def startup_stats() -> dict[str, Any]:
+    profiles = {}
+    summary = []
+    for profile in ("default", "representative", "maximal"):
+        effective = _startup_toolset(profile)
+        current_tools = effective.schemas()
+        current_prompt = _startup_system_prompt(effective)
+        candidates = []
+        for variant in SLIMMING_VARIANTS:
+            tools = slimming_tool_schemas(current_tools, variant)
+            prompt = slimming_system_prompt(
+                current_prompt,
+                frozenset(effective.tools),
+                variant,
+            )
+            schema_tokens = estimate_tokens(tools, 4.0)
+            prompt_tokens = estimate_tokens(prompt, 4.0)
+            candidates.append(
+                {
+                    "candidate": variant,
+                    "toolCount": len(tools),
+                    "schemaTokens": schema_tokens,
+                    "systemTokens": prompt_tokens,
+                    "combinedTokens": schema_tokens + prompt_tokens,
+                }
+            )
+        grouped_tools = grouped_tool_schemas(current_tools)
+        grouped_prompt = _grouped_prompt(current_prompt)
+        grouped_schema_tokens = estimate_tokens(grouped_tools, 4.0)
+        grouped_prompt_tokens = estimate_tokens(grouped_prompt, 4.0)
+        candidates.append(
+            {
+                "candidate": "schema-grouped",
+                "toolCount": len(grouped_tools),
+                "schemaTokens": grouped_schema_tokens,
+                "systemTokens": grouped_prompt_tokens,
+                "combinedTokens": grouped_schema_tokens + grouped_prompt_tokens,
+            }
+        )
+        baseline = next(item for item in candidates if item["candidate"] == "current")
+        for item in candidates:
+            item["savedTokens"] = baseline["combinedTokens"] - item["combinedTokens"]
+            item["savedPercent"] = round(
+                item["savedTokens"] / baseline["combinedTokens"] * 100,
+                1,
+            )
+            summary.append({"profile": profile, **item})
+        profiles[profile] = {
+            "toolNames": list(effective.tools),
+            "promptParagraphs": [
+                {
+                    "index": index,
+                    "characters": len(paragraph),
+                    "tokens": estimate_tokens(paragraph, 4.0),
+                    "text": paragraph,
+                }
+                for index, paragraph in enumerate(current_prompt.split("\n\n"), 1)
+            ],
+            "tools": [
+                {
+                    "name": tool["name"],
+                    "tokens": estimate_tokens(tool, 4.0),
+                    "descriptionTokens": estimate_tokens(
+                        tool.get("description", ""), 4.0
+                    ),
+                }
+                for tool in current_tools
+            ],
+            "candidates": candidates,
+        }
+    return {
+        "generatedAt": datetime.now(UTC).isoformat(),
+        "inventoryVersion": INVENTORY_VERSION,
+        "sourceFingerprints": source_fingerprints(),
+        "summary": summary,
+        "profiles": profiles,
+    }
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description="Run serial live MatoLoop prompt evaluations.")
     value.add_argument("--base-url", default="http://192.168.1.32:13305/v1")
@@ -6220,6 +6646,11 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--resume-allow-source-drift", action="store_true")
     value.add_argument("--list-cases", action="store_true")
     value.add_argument("--slimming-stats", action="store_true")
+    value.add_argument(
+        "--startup-stats",
+        action="store_true",
+        help="Write evaluator-only startup prompt and schema size decomposition without provider calls.",
+    )
     value.add_argument("--skip-warmup", action="store_true")
     value.add_argument("--fail-on-error", action="store_true")
     return value
@@ -6263,6 +6694,17 @@ def main() -> None:
                 f"systemTokens={round(system_characters / 4)}\t"
                 f"combinedTokens={round((len(schema_json) + system_characters) / 4)}"
             )
+        return
+    if args.startup_stats:
+        payload = startup_stats()
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(payload["summary"], ensure_ascii=False, indent=2))
+        print(f"Results: {output}")
         return
     if not args.model:
         args.model = list(DEFAULT_MODELS)
