@@ -138,7 +138,7 @@ _RUNTIME_PARAGRAPH_PREFIXES = (
     "Tool budget exhausted.",
     "Tool budget limit for this run:",
     "Research tools are unavailable for the rest of this turn;",
-    "Research budget:",
+    "Research budget limit:",
     "OpenSCAD source was generated but has not been rendered successfully.",
     "The rendered OpenSCAD source must be reviewed before finalizing.",
     "Required memory mutation remains unresolved.",
@@ -146,7 +146,6 @@ _RUNTIME_PARAGRAPH_PREFIXES = (
     "Persistent memory status:",
     "Inactive skill catalog for the latest request only.",
     "Local time:",
-    "Current-turn research results are present.",
     "The previous model turn returned neither assistant text nor a tool call.",
     "Mandatory web research is active and pending.",
 )
@@ -1914,10 +1913,13 @@ CASES = (
     PromptCase(
         id="memory_retrieve_uses_context_search",
         kind="general",
-        user="Was weißt du über mein Klavierspiel? Suche im Langzeitgedächtnis.",
-        tools=("memory_retrieve",),
+        user="Erstelle eine konkrete llama.cpp-Konfiguration passend zu meiner Hardware.",
+        tools=("memory_retrieve", "question"),
+        memory_scope={"total": 1, "pinned": 0},
         expected_tool="memory_retrieve",
+        expected_tool_call_count=1,
         expected_arguments={"purpose": "context", "mode": "search"},
+        forbidden_tools=("question",),
     ),
     # Deterministic tool-result continuations.
     PromptCase(
@@ -4411,19 +4413,18 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
                 f"Tool budget: {limit.group(0) if limit else '?'} calls; parallel calls count "
                 "individually. Prioritize required actions; exhausted budget removes tools."
             )
-        elif paragraph.startswith("Research budget:"):
-            counts = re.findall(r"\d+", paragraph)
-            if len(counts) >= 3:
-                paragraph = (
-                    f"Research budget: {counts[0]}/{counts[1]} used, {counts[2]} remaining. "
-                    "Do not repeat successful calls."
-                )
+        elif paragraph.startswith("Research budget limit:"):
+            limit = re.search(r"\d+", paragraph)
+            paragraph = (
+                f"Research budget limit: {limit.group(0) if limit else '?'} calls this turn. "
+                "Do not repeat successful calls."
+            )
         elif paragraph.startswith("Missing-information contract:"):
             paragraph = (
-                "Missing-information contract: If an action lacks required user-specific details, "
-                "call question now; never ask in assistant text. Ask all missing required details in "
-                "one call. Never ask optional details such as location or description unless mentioned "
-                "or required to disambiguate. "
+                "Missing-information contract: For missing required stable user context, call memory_retrieve "
+                "first when available; call question only if retrieval is unavailable or insufficient; never "
+                "ask in assistant text. Ask all missing required details in one call. Never ask optional "
+                "details such as location or description unless mentioned or required to disambiguate. "
                 "Do not call question for informational or complete requests."
             )
         elif paragraph.startswith("Use session_read for compacted details"):
@@ -4596,8 +4597,6 @@ def slimming_system_prompt(
     for paragraph in prompt.split("\n\n"):
         if paragraph.startswith("Inactive installed capabilities"):
             continue
-        if not safe and paragraph.startswith("Current-turn research results"):
-            continue
         if paragraph.startswith(("A default calendar is configured", "A default task list is configured")):
             continue
         if paragraph.startswith("File tools:"):
@@ -4615,10 +4614,9 @@ def slimming_system_prompt(
         elif paragraph.startswith("Tool budget limit for this run:"):
             limit = re.search(r"\d+", paragraph)
             paragraph = f"Tool budget: {limit.group(0) if limit else '?'} calls; parallel calls count individually."
-        elif paragraph.startswith("Research budget:"):
-            counts = re.findall(r"\d+", paragraph)
-            if len(counts) >= 3:
-                paragraph = f"Research budget: {counts[0]}/{counts[1]} used, {counts[2]} remaining."
+        elif paragraph.startswith("Research budget limit:"):
+            limit = re.search(r"\d+", paragraph)
+            paragraph = f"Research budget limit: {limit.group(0) if limit else '?'} calls this turn."
         if full:
             if paragraph.startswith("The chat renders fenced Mermaid blocks"):
                 paragraph = (

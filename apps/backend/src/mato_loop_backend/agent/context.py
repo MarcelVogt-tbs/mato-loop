@@ -290,11 +290,18 @@ def message_dict(
     }
 
 
+def _local_time_prompt(current_datetime: datetime | None = None) -> str:
+    local_now = (current_datetime or datetime.now(UTC)).astimezone(_LOCAL_TIMEZONE)
+    return (
+        f"Local time: {local_now.isoformat(timespec='minutes')} (Europe/Berlin, "
+        f"{WEEKDAY_NAMES[local_now.weekday()]}). Resolve relative dates from it; prior knowledge remains stale."
+    )
+
+
 def _timestamp_user_message(message: Message, content: str) -> str:
     if message.role != "user" or message.created_at is None:
         return content
-    timestamp = message.created_at.astimezone(_LOCAL_TIMEZONE).isoformat(timespec="minutes")
-    return f"[{timestamp}]\n{content}"
+    return f"{_local_time_prompt(message.created_at)}\n\n{content}"
 
 
 def _active_file_marker(message: Message) -> str | None:
@@ -346,6 +353,7 @@ def general_system_prompt(
     memory_overview_prefetched: bool = False,
     memory_overview_has_more: bool = False,
     current_datetime: datetime | None = None,
+    include_local_time: bool = True,
     web_search_required: bool = False,
     web_search_completed: bool = False,
     web_search_retry: int = 0,
@@ -370,8 +378,6 @@ def general_system_prompt(
     current_directory: str | None = None,
 ) -> str:
     identity = agent_identity or AgentIdentitySettings()
-    now = current_datetime or datetime.now(UTC)
-    local_now = now.astimezone(_LOCAL_TIMEZONE)
     file_tool_names = {
         "read",
         "glob",
@@ -428,8 +434,9 @@ def general_system_prompt(
             )
     if "question" in offered_tool_names:
         parts.append(
-            "Missing-information contract: If an action lacks required user-specific details, call "
-            "question now; never ask in assistant text. Ask all missing required details in one call. "
+            "Missing-information contract: For missing required stable user context, call memory_retrieve "
+            "first when available; call question only if retrieval is unavailable or insufficient; never ask "
+            "in assistant text. Ask all missing required details in one call. "
             "Never ask optional details such as location or description unless mentioned or required "
             "to disambiguate. Do not call question for informational or complete requests."
         )
@@ -484,15 +491,14 @@ def general_system_prompt(
             "two links per claim and stop when evidence supports a useful answer."
         )
         if research_tool_call_limit is not None:
-            remaining = max(0, research_tool_call_limit - research_tool_calls_used)
             if research_tools_exhausted:
                 runtime_parts.append(
                     "Research tools are unavailable for the rest of this turn; finalize from gathered evidence."
                 )
             else:
                 runtime_parts.append(
-                    f"Research budget: {research_tool_calls_used}/{research_tool_call_limit} used, "
-                    f"{remaining} remaining. Do not repeat successful calls."
+                    f"Research budget limit: {research_tool_call_limit} calls this turn. "
+                    "Do not repeat successful calls."
                 )
         parts.append("Web research contract:\n- " + "\n- ".join(research_instructions))
     if "session_read" in offered_tool_names:
@@ -766,16 +772,8 @@ def general_system_prompt(
                 ensure_ascii=False,
             )
         )
-    runtime_parts.append(
-        f"Local time: {local_now.isoformat(timespec='minutes')} (Europe/Berlin, "
-        f"{WEEKDAY_NAMES[local_now.weekday()]}). Resolve relative dates from it; prior knowledge remains stale."
-    )
-    if research_tool_calls_used:
-        runtime_parts.append(
-            "Current-turn research results are present. Before finalizing, cite every used result by "
-            "copying its exact title and URL into [title](URL), or use [hostname](URL) when no title "
-            "exists. A researched answer without these links is not final."
-        )
+    if include_local_time:
+        runtime_parts.append(_local_time_prompt(current_datetime))
     if response_repair_required:
         runtime_parts.append(
             "The previous model turn returned neither assistant text nor a tool call. Continue the "
@@ -861,12 +859,11 @@ def _projection_messages(
             ),
             include_attachment_markers=not private_resources,
         )
-        if item.id == latest_user_id:
-            marker = _active_file_marker(item)
-            if marker is not None:
-                projected["content"] = "\n\n".join(
-                    part for part in (projected.get("content"), marker) if part
-                )
+        marker = _active_file_marker(item)
+        if marker is not None:
+            projected["content"] = "\n\n".join(
+                part for part in (projected.get("content"), marker) if part
+            )
         if private_resources and projected.get("tool_calls"):
             for call in projected["tool_calls"]:
                 call["arguments"] = {}

@@ -1292,7 +1292,6 @@ class AgentRuntime:
         tool_calls_used = 0
         failed_tool_call_signatures: set[str] = set()
         unresolved_mutation_errors: dict[str, str] = {}
-        turn_datetime = run.created_at or datetime.now(UTC)
         automatic_episodes: list[EpisodeReference] | None = None
         memory_scope = None
         memory_overview_required: bool | None = None
@@ -1729,7 +1728,7 @@ class AgentRuntime:
                 research_tools_exhausted=(
                     research_budget_exhausted or tool_budget_exhausted
                 ),
-                current_datetime=turn_datetime,
+                include_local_time=False,
                 offered_tool_names=frozenset(
                     effective_toolset.tools if effective_toolset else ()
                 ),

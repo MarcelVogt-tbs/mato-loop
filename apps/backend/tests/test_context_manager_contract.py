@@ -212,14 +212,16 @@ def test_message_projection_timestamps_only_user_content() -> None:
         message.created_at = datetime(2026, 8, 16, 18, 59, tzinfo=UTC)
 
     assert message_dict(user)["content"] == (
-        "[2026-08-16T20:59+02:00]\nokay abgeschickt"
+        "Local time: 2026-08-16T20:59+02:00 (Europe/Berlin, Sunday). "
+        "Resolve relative dates from it; prior knowledge remains stale.\n\n"
+        "okay abgeschickt"
     )
     assert message_dict(assistant)["content"] == "Antwort"
     assert message_dict(tool)["content"] == '{"ok":true}'
     assert user.content == "okay abgeschickt"
 
 
-def test_only_latest_user_active_file_is_added_to_model_context() -> None:
+def test_user_active_file_context_remains_stable_between_turns() -> None:
     session_id = uuid4()
     previous = _message(session_id, "user", "Vorher")
     latest = _message(session_id, "user", "Jetzt")
@@ -246,14 +248,18 @@ def test_only_latest_user_active_file_is_added_to_model_context() -> None:
         }
     }
 
-    projected = _projection_messages(
+    first_turn = _projection_messages(
+        "System", None, [previous], TrustLevel.PRIVATE
+    )
+    second_turn = _projection_messages(
         "System", None, [previous, latest], TrustLevel.PRIVATE
     )
 
-    assert "old.txt" not in projected[1]["content"]
-    assert "current.txt" in projected[2]["content"]
-    assert "unsaved changes" in projected[2]["content"]
-    assert "file content" in projected[2]["content"]
+    assert first_turn[1] == second_turn[1]
+    assert "old.txt" in second_turn[1]["content"]
+    assert "current.txt" in second_turn[2]["content"]
+    assert "unsaved changes" in second_turn[2]["content"]
+    assert "file content" in second_turn[2]["content"]
 
 
 def test_runtime_error_message_is_excluded_from_model_projection() -> None:
@@ -1085,11 +1091,11 @@ def test_summary_source_and_prompt_preserve_relevant_user_timestamp() -> None:
     assistant.created_at = datetime(2026, 8, 16, 19, 0, tzinfo=UTC)
 
     source = _summary_source(None, [user, assistant])
-    timestamp = "[2026-08-16T20:59+02:00]"
+    timestamp = "Local time: 2026-08-16T20:59+02:00 (Europe/Berlin, Sunday)."
     prompt = compaction_messages(source)[1]["content"]
 
     assert source.count(timestamp) == 1
-    assert "[2026-08-16T21:00+02:00]" not in source
+    assert "2026-08-16T21:00+02:00" not in source
     assert timestamp in prompt
     assert "exact user-message timestamps relevant to actions" in prompt
 
@@ -1131,9 +1137,8 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "never use sourceId" in prompt
     assert "directly after each supported claim" in prompt
     assert "use at most two links per claim" in prompt
-    assert "Research budget: 2/8 used, 6 remaining" in prompt
-    assert "Current-turn research results are present" in prompt
-    assert "copying its exact title and URL" in prompt
+    assert "Research budget limit: 8 calls this turn" in prompt
+    assert "Copy it exactly" in prompt
 
 
 def test_compaction_prompt_preserves_opaque_values_verbatim() -> None:
@@ -1381,6 +1386,38 @@ def test_general_system_prompt_contains_local_datetime(
     assert "prior knowledge remains stale" in prompt
 
 
+def test_time_and_research_usage_do_not_change_the_cached_prompt_prefix() -> None:
+    session_id = uuid4()
+    previous = _message(session_id, "user", "Vorher")
+    latest = _message(session_id, "user", "Jetzt")
+    previous.created_at = datetime(2026, 7, 27, 8, 30, tzinfo=UTC)
+    latest.created_at = datetime(2026, 7, 27, 8, 31, tzinfo=UTC)
+    prompts = [
+        general_system_prompt(
+            _session(),
+            include_local_time=False,
+            offered_tool_names=frozenset({"web_search", "webfetch"}),
+            research_tool_calls_used=used,
+            research_tool_call_limit=8,
+        )
+        for used in (0, 2, 5)
+    ]
+
+    first_turn = _projection_messages(
+        prompts[0], None, [previous], TrustLevel.PUBLIC
+    )
+    second_turn = _projection_messages(
+        prompts[1], None, [previous, latest], TrustLevel.PUBLIC
+    )
+
+    assert prompts[0] == prompts[1] == prompts[2]
+    assert "Local time:" not in prompts[0]
+    assert first_turn[1] == second_turn[1]
+    assert second_turn[2]["content"].startswith(
+        "Local time: 2026-07-27T10:31+02:00 (Europe/Berlin, Monday)."
+    )
+
+
 def test_runtime_state_follows_the_stable_prompt_contract() -> None:
     prompt = general_system_prompt(
         _session(),
@@ -1400,11 +1437,10 @@ def test_runtime_state_follows_the_stable_prompt_contract() -> None:
     )
     runtime_prefixes = (
         "Tool budget: 8 calls",
-        "Research budget: 1/4 used, 3 remaining.",
+        "Research budget limit: 4 calls this turn.",
         "Required memory mutation remains unresolved.",
         "Persistent memory status:",
         "Local time:",
-        "Current-turn research results are present.",
         "The previous model turn returned neither assistant text nor a tool call.",
         "Mandatory web research is active and pending.",
     )
