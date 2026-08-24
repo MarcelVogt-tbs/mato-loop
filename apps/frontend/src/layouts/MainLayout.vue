@@ -336,17 +336,7 @@
         aria-controls="app-navigation-drawer"
         :aria-expanded="drawerOpen"
         @click="openNavigation"
-      >
-        <q-badge
-          v-if="notificationBadgeCount"
-          floating
-          rounded
-          :color="attentionCount ? 'warning' : 'primary'"
-          :text-color="attentionCount ? 'dark' : 'white'"
-          :label="notificationBadgeLabel"
-          aria-hidden="true"
-        />
-      </q-btn>
+      />
       <q-space />
       <q-btn
         v-if="showFloatingControlCenter"
