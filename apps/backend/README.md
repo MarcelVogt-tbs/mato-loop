@@ -23,10 +23,13 @@ The backend container uses reload mode and mounts the source tree through `/work
 ## Structure
 
 - `src/mato_loop_backend/api`: routers, dependencies, and the central error contract
-- `src/mato_loop_backend/auth`: local authentication and external-identity account foundations
-- `src/mato_loop_backend/agent`: model and tool loop, permissions, and approvals
-- `src/mato_loop_backend/providers`: Codex and OpenAI-compatible transports
-- `src/mato_loop_backend/models`: relational SQLAlchemy models
+- `src/mato_loop_backend/auth`: local authentication, login sessions, and credential storage
+- `src/mato_loop_backend/sessions`: session workflows and API payload serialization
+- `src/mato_loop_backend/agent`: model/tool loop, research and memory preparation, tool contracts, permissions, and approvals
+- `src/mato_loop_backend/providers`: adapter registry, provider settings workflows, and provider transports
+- `src/mato_loop_backend/api/workspace_service.py`: reusable HTTP workspace context and Execution Agent dispatch
+- `src/mato_loop_backend/workspace.py`: backend-managed file roots and revisions
+- `src/mato_loop_backend/models`: relational models split by aggregate and exported through one package
 - `src/mato_loop_backend/settings`: typed operational settings
 - `src/mato_loop_backend/integrations/contracts.py`: static adapter and tool contribution contracts
 - `src/mato_loop_backend/integrations/search.py`: no-key metasearch and SearXNG with controlled fallback
@@ -35,7 +38,6 @@ The backend container uses reload mode and mounts the source tree through `/work
 - `src/mato_loop_backend/integrations/webfetch.py`: SSRF-protected fetching of concrete HTTP(S) URLs
 - `src/mato_loop_backend/attachments.py`: validated persistent image storage
 - `src/mato_loop_backend/memory`: durable-memory CRUD, optional dreaming, local indexing, and hybrid durable/episodic retrieval
-- `src/mato_loop_backend/workspace.py`: session paths and Execution Agent workspace dispatch
 - `alembic`: migrations and Alembic runtime
 - `tests`: backend unit and contract tests
 
@@ -124,6 +126,7 @@ Standalone storage contains `/data/sessions/<session-id>/files`, `/data/sessions
 From the repository root:
 
 ```bash
+./scripts/dev.sh format backend
 ./scripts/dev.sh check backend
 ./scripts/dev.sh test backend
 ./scripts/dev.sh test rag

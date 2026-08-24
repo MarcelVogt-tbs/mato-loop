@@ -1,0 +1,10 @@
+.auth-shell {
+  background:
+    radial-gradient(circle at 20% 15%, rgba(37, 99, 235, 0.12), transparent 35%),
+    var(--app-page-bg);
+}
+
+.auth-card {
+  width: min(420px, 100%);
+  padding: 12px;
+}

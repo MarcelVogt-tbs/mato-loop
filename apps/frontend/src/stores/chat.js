@@ -8,11 +8,40 @@ import { useExecutionAgentStore } from 'src/stores/execution-agents'
 import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import {
+  attachmentKind,
+  attachmentPreviewUrl,
+  buildAttachmentFormData,
+  downloadMessageAttachmentFiles,
+  MAX_ATTACHMENT_DRAFT_BYTES,
+  normalizedMimeType,
+  releaseAttachmentDrafts
+} from 'src/features/chat/attachments'
+import {
+  clearPersistedDrafts,
+  defaultSessionOptions,
+  emptyActivity,
+  emptyDrafts,
+  emptySessionList,
+  groupedOutbox,
+  lastAssistantMessage,
+  loadDrafts,
+  newSessionQueueKey,
+  normalizedNewSessionDraft,
+  optionsFromSession,
+  persistDrafts,
+  queueKeyForEntry,
+  sanitizedSessionOptions,
+  sessionBeforeFailedResponse,
+  sessionBeforeUserMessage,
+  sessionScopeKey,
+  sessionScopeParams,
+  sortSessions
+} from 'src/features/chat/state'
 import { agentActivityDisplayKey } from 'src/utils/agent-activity'
 import { errorDescriptor } from 'src/utils/api-errors'
 import {
   managedSessionFileTarget,
-  safeAttachmentUrl,
   toolFileActions
 } from 'src/utils/attachments'
 import {
@@ -25,7 +54,6 @@ import {
 } from 'src/utils/chat-outbox'
 import { notifyError } from 'src/utils/notifications'
 
-const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
 const SESSION_PAGE_SIZE = 20
 const ACTIVE_TITLE_GENERATION_STATUSES = new Set(['pending', 'running'])
 const FILESYSTEM_MUTATION_TOOLS = new Set([
@@ -35,131 +63,7 @@ const FILESYSTEM_MUTATION_TOOLS = new Set([
   'copy_path',
   'move_path'
 ])
-export const MAX_ATTACHMENT_DRAFTS = 8
-export const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
-export const MAX_ATTACHMENT_DRAFT_BYTES = 256 * 1024 * 1024
-
-function normalizedMimeType(file) {
-  return String(file?.type || '').split(';', 1)[0].trim().toLowerCase()
-}
-
-function releaseAttachmentDrafts(attachments = []) {
-  for (const attachment of attachments) {
-    if (attachment?.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
-  }
-}
-
-function attachmentKind(file) {
-  const mimeType = normalizedMimeType(file)
-  if (mimeType.startsWith('image/')) return 'image'
-  if (mimeType.startsWith('audio/')) return 'audio'
-  if (mimeType.startsWith('video/')) return 'video'
-  return 'file'
-}
-
-function attachmentPreviewUrl(file) {
-  if (attachmentKind(file) !== 'image' || typeof globalThis.URL?.createObjectURL !== 'function') {
-    return null
-  }
-  try {
-    return globalThis.URL.createObjectURL(file)
-  } catch {
-    return null
-  }
-}
-
-export async function downloadMessageAttachmentFiles(message) {
-  return Promise.all((message?.attachments || []).map(async (attachment) => {
-    const url = safeAttachmentUrl(attachment.url)
-    if (!url) throw new Error('Invalid internal attachment URL')
-    const { data } = await api.get(url, {
-      baseURL: '',
-      responseType: 'blob',
-      suppressErrorToast: true
-    })
-    const type = attachment.mimeType || data?.type || 'application/octet-stream'
-    return new File([data], attachment.filename || 'datei', { type })
-  }))
-}
-
 const OUTBOX_RETRY_MS = 4000
-
-export function buildAttachmentFormData(payload, attachments) {
-  const formData = new FormData()
-  formData.append('payload', JSON.stringify(payload))
-  for (const attachment of attachments) {
-    formData.append('attachments', attachment.file, attachment.file.name || attachment.name || 'datei')
-  }
-  return formData
-}
-
-function defaultSessionOptions() {
-  return {
-    modelId: null,
-    reasoningEffort: null,
-    memoryMode: 'full',
-    effectiveMemoryMode: 'full',
-    memoryToolsAvailable: true,
-    memoryUnavailableReason: null,
-    webSearchPolicy: 'available',
-    preferredExecutionAgentId: null,
-    preferredRootId: null,
-    workingDirectory: null,
-    currentDirectory: null,
-    workspaceContext: null
-  }
-}
-
-function sanitizedSessionOptions(options) {
-  const sanitized = { ...options, workspaceContext: null }
-  if (!sanitized.preferredExecutionAgentId) {
-    sanitized.preferredRootId = null
-    sanitized.workingDirectory = null
-    sanitized.currentDirectory = null
-  } else if (!sanitized.preferredRootId) {
-    sanitized.workingDirectory = null
-    sanitized.currentDirectory = null
-  }
-  return sanitized
-}
-
-function optionsFromSession(session) {
-  return sanitizedSessionOptions({
-    modelId: session.modelId,
-    reasoningEffort: session.reasoningEffort ?? null,
-    memoryMode: session.memoryMode,
-    effectiveMemoryMode: session.effectiveMemoryMode,
-    memoryToolsAvailable: session.memoryToolsAvailable,
-    memoryUnavailableReason: session.memoryUnavailableReason,
-    webSearchPolicy: session.webSearchPolicy,
-    preferredExecutionAgentId: session.preferredExecutionAgentId,
-    preferredRootId: session.preferredRootId,
-    workingDirectory: session.workingDirectory,
-    currentDirectory: session.currentDirectory,
-    workspaceContext: session.workspaceContext || null
-  })
-}
-
-function emptyDrafts() {
-  const newSession = { message: '', options: defaultSessionOptions() }
-  return {
-    newSession,
-    newSessions: { standalone: newSession },
-    sessionMessages: {}
-  }
-}
-
-function sessionScopeKey(projectId) {
-  return projectId || 'standalone'
-}
-
-function newSessionQueueKey(projectId) {
-  return `new:${sessionScopeKey(projectId)}`
-}
-
-function queueKeyForEntry(entry) {
-  return entry.sessionId || newSessionQueueKey(entry.projectId)
-}
 
 function newSubmissionId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
@@ -169,119 +73,6 @@ function newSubmissionId() {
   bytes[8] = (bytes[8] & 0x3f) | 0x80
   const value = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`
-}
-
-function groupedOutbox(entries) {
-  const grouped = {}
-  for (const entry of entries) {
-    const key = queueKeyForEntry(entry)
-    if (!grouped[key]) grouped[key] = []
-    grouped[key].push(entry)
-  }
-  return grouped
-}
-
-function emptySessionList() {
-  return {
-    items: [],
-    loaded: false,
-    loading: false,
-    loadFailed: false,
-    nextCursor: null,
-    loadingMore: false,
-    loadMoreFailed: false,
-    loadRequest: null,
-    pageRequest: null,
-    version: 0
-  }
-}
-
-function normalizedNewSessionDraft(value) {
-  const options = value?.options || {}
-  return {
-    message: typeof value?.message === 'string' ? value.message : '',
-    options: sanitizedSessionOptions({
-      modelId: typeof options.modelId === 'string' ? options.modelId : null,
-      reasoningEffort: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.reasoningEffort)
-        ? options.reasoningEffort
-        : null,
-      memoryMode: ['full', 'read_only', 'disabled'].includes(options.memoryMode)
-        ? options.memoryMode
-        : 'full',
-      effectiveMemoryMode: ['full', 'read_only', 'disabled'].includes(options.effectiveMemoryMode)
-        ? options.effectiveMemoryMode
-        : 'full',
-      memoryToolsAvailable: options.memoryToolsAvailable !== false,
-      memoryUnavailableReason: typeof options.memoryUnavailableReason === 'string'
-        ? options.memoryUnavailableReason
-        : null,
-      webSearchPolicy: ['required', 'available', 'disabled'].includes(options.webSearchPolicy)
-        ? options.webSearchPolicy
-        : (options.forceWebSearch === true ? 'required' : 'available'),
-      preferredExecutionAgentId: typeof options.preferredExecutionAgentId === 'string'
-        ? options.preferredExecutionAgentId
-        : null,
-      preferredRootId: typeof options.preferredRootId === 'string' ? options.preferredRootId : null,
-      workingDirectory: typeof options.workingDirectory === 'string' ? options.workingDirectory : null,
-      currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
-      workspaceContext: null
-    })
-  }
-}
-
-function emptyActivity(revision = 0) {
-  return {
-    phase: 'idle',
-    startedAt: null,
-    tool: null,
-    toolCallId: null,
-    modelRequest: null,
-    providerAttempt: null,
-    providerAttemptTotal: null,
-    index: null,
-    total: null,
-    revision
-  }
-}
-
-function sortSessions(sessions) {
-  return [...sessions].sort((left, right) => {
-    if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1
-    const leftLastMessageAt = Date.parse(left.lastMessageAt || left.createdAt || '') || 0
-    const rightLastMessageAt = Date.parse(right.lastMessageAt || right.createdAt || '') || 0
-    return rightLastMessageAt - leftLastMessageAt
-  })
-}
-
-function sessionScopeParams(projectId) {
-  return projectId ? { projectId } : { standalone: true }
-}
-
-function lastVisibleMessageAt(messages) {
-  return [...messages]
-    .reverse()
-    .find((message) => ['user', 'assistant'].includes(message.role))
-    ?.createdAt || null
-}
-
-function lastAssistantMessage(messages) {
-  return [...(messages || [])].reverse().find((message) => message.role === 'assistant')
-}
-
-function sessionBeforeUserMessage(session, messageId) {
-  const index = session.messages?.findIndex((message) => message.id === messageId) ?? -1
-  if (index < 0) return session
-  const messages = session.messages.slice(0, index)
-  return { ...session, messages, activeRun: null, lastMessageAt: lastVisibleMessageAt(messages) }
-}
-
-function sessionBeforeFailedResponse(session, messageId, activeRun) {
-  const errorIndex = session.messages?.findIndex((message) => message.id === messageId) ?? -1
-  if (errorIndex < 0) return { ...session, activeRun }
-  let userIndex = errorIndex - 1
-  while (userIndex >= 0 && session.messages[userIndex].role !== 'user') userIndex -= 1
-  const messages = userIndex >= 0 ? session.messages.slice(0, userIndex + 1) : session.messages
-  return { ...session, messages, activeRun, lastMessageAt: lastVisibleMessageAt(messages) }
 }
 
 async function sessionStateAfterMutation(sessionId, messageId) {
@@ -297,32 +88,6 @@ async function sessionStateAfterMutation(sessionId, messageId) {
       return { deleted: true, messageRemoved: true, session: null }
     }
     throw error
-  }
-}
-
-function loadDrafts(ownerUserId) {
-  if (!ownerUserId || typeof window === 'undefined') return emptyDrafts()
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(DRAFT_STORAGE_KEY) || '{}')
-    if (stored.ownerUserId !== ownerUserId) return emptyDrafts()
-    const sessionMessages = Object.fromEntries(
-      Object.entries(stored.sessionMessages || {}).filter(([, value]) => typeof value === 'string')
-    )
-    const newSessions = Object.fromEntries(
-      Object.entries(stored.newSessions || {}).map(([key, value]) => [
-        key,
-        normalizedNewSessionDraft(value)
-      ])
-    )
-    const newSession = newSessions.standalone || normalizedNewSessionDraft(stored.newSession)
-    newSessions.standalone = newSession
-    return {
-      newSession,
-      newSessions,
-      sessionMessages
-    }
-  } catch {
-    return emptyDrafts()
   }
 }
 
@@ -636,10 +401,7 @@ export const useChatStore = defineStore('chat', {
       if (!this.draftOwnerUserId || typeof window === 'undefined') return
       try {
         this.drafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = this.drafts.newSession
-        window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({
-          ownerUserId: this.draftOwnerUserId,
-          ...this.drafts
-        }))
+        persistDrafts(this.draftOwnerUserId, this.drafts)
       } catch {
         // Chat remains usable when local storage is blocked or full.
       }
@@ -867,7 +629,7 @@ export const useChatStore = defineStore('chat', {
         this.audioDictations.newSessions[scope] = null
         this.audioDictations.newSession = null
       }
-      if (typeof window !== 'undefined') window.localStorage.removeItem(DRAFT_STORAGE_KEY)
+      if (typeof window !== 'undefined') clearPersistedDrafts()
       return ownerUserId ? clearChatOutbox(ownerUserId) : Promise.resolve()
     },
     attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
@@ -2491,3 +2253,11 @@ export const useChatStore = defineStore('chat', {
     }
   }
 })
+
+export {
+  buildAttachmentFormData,
+  downloadMessageAttachmentFiles,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_DRAFT_BYTES,
+  MAX_ATTACHMENT_DRAFTS
+} from 'src/features/chat/attachments'

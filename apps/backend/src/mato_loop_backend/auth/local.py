@@ -1,8 +1,18 @@
+from pwdlib import PasswordHash
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.models import UserAccount
-from mato_loop_backend.security import verify_password
+
+password_hash = PasswordHash.recommended()
+
+
+def hash_password(password: str) -> str:
+    return password_hash.hash(password)
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    return password_hash.verify(password, hashed)
 
 
 class LocalAuthProvider:

@@ -1,0 +1,216 @@
+const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
+
+export function defaultSessionOptions() {
+  return {
+    modelId: null,
+    reasoningEffort: null,
+    memoryMode: 'full',
+    effectiveMemoryMode: 'full',
+    memoryToolsAvailable: true,
+    memoryUnavailableReason: null,
+    webSearchPolicy: 'available',
+    preferredExecutionAgentId: null,
+    preferredRootId: null,
+    workingDirectory: null,
+    currentDirectory: null,
+    workspaceContext: null
+  }
+}
+
+export function sanitizedSessionOptions(options) {
+  const sanitized = { ...options, workspaceContext: null }
+  if (!sanitized.preferredExecutionAgentId) {
+    sanitized.preferredRootId = null
+    sanitized.workingDirectory = null
+    sanitized.currentDirectory = null
+  } else if (!sanitized.preferredRootId) {
+    sanitized.workingDirectory = null
+    sanitized.currentDirectory = null
+  }
+  return sanitized
+}
+
+export function optionsFromSession(session) {
+  return sanitizedSessionOptions({
+    modelId: session.modelId,
+    reasoningEffort: session.reasoningEffort ?? null,
+    memoryMode: session.memoryMode,
+    effectiveMemoryMode: session.effectiveMemoryMode,
+    memoryToolsAvailable: session.memoryToolsAvailable,
+    memoryUnavailableReason: session.memoryUnavailableReason,
+    webSearchPolicy: session.webSearchPolicy,
+    preferredExecutionAgentId: session.preferredExecutionAgentId,
+    preferredRootId: session.preferredRootId,
+    workingDirectory: session.workingDirectory,
+    currentDirectory: session.currentDirectory,
+    workspaceContext: session.workspaceContext || null
+  })
+}
+
+export function emptyDrafts() {
+  const newSession = { message: '', options: defaultSessionOptions() }
+  return {
+    newSession,
+    newSessions: { standalone: newSession },
+    sessionMessages: {}
+  }
+}
+
+export function sessionScopeKey(projectId) {
+  return projectId || 'standalone'
+}
+
+export function newSessionQueueKey(projectId) {
+  return `new:${sessionScopeKey(projectId)}`
+}
+
+export function queueKeyForEntry(entry) {
+  return entry.sessionId || newSessionQueueKey(entry.projectId)
+}
+
+export function groupedOutbox(entries) {
+  const grouped = {}
+  for (const entry of entries) {
+    const key = queueKeyForEntry(entry)
+    if (!grouped[key]) grouped[key] = []
+    grouped[key].push(entry)
+  }
+  return grouped
+}
+
+export function emptySessionList() {
+  return {
+    items: [],
+    loaded: false,
+    loading: false,
+    loadFailed: false,
+    nextCursor: null,
+    loadingMore: false,
+    loadMoreFailed: false,
+    loadRequest: null,
+    pageRequest: null,
+    version: 0
+  }
+}
+
+export function normalizedNewSessionDraft(value) {
+  const options = value?.options || {}
+  return {
+    message: typeof value?.message === 'string' ? value.message : '',
+    options: sanitizedSessionOptions({
+      modelId: typeof options.modelId === 'string' ? options.modelId : null,
+      reasoningEffort: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.reasoningEffort)
+        ? options.reasoningEffort
+        : null,
+      memoryMode: ['full', 'read_only', 'disabled'].includes(options.memoryMode)
+        ? options.memoryMode
+        : 'full',
+      effectiveMemoryMode: ['full', 'read_only', 'disabled'].includes(options.effectiveMemoryMode)
+        ? options.effectiveMemoryMode
+        : 'full',
+      memoryToolsAvailable: options.memoryToolsAvailable !== false,
+      memoryUnavailableReason: typeof options.memoryUnavailableReason === 'string'
+        ? options.memoryUnavailableReason
+        : null,
+      webSearchPolicy: ['required', 'available', 'disabled'].includes(options.webSearchPolicy)
+        ? options.webSearchPolicy
+        : (options.forceWebSearch === true ? 'required' : 'available'),
+      preferredExecutionAgentId: typeof options.preferredExecutionAgentId === 'string'
+        ? options.preferredExecutionAgentId
+        : null,
+      preferredRootId: typeof options.preferredRootId === 'string' ? options.preferredRootId : null,
+      workingDirectory: typeof options.workingDirectory === 'string' ? options.workingDirectory : null,
+      currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
+      workspaceContext: null
+    })
+  }
+}
+
+export function emptyActivity(revision = 0) {
+  return {
+    phase: 'idle',
+    startedAt: null,
+    tool: null,
+    toolCallId: null,
+    modelRequest: null,
+    providerAttempt: null,
+    providerAttemptTotal: null,
+    index: null,
+    total: null,
+    revision
+  }
+}
+
+export function sortSessions(sessions) {
+  return [...sessions].sort((left, right) => {
+    if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1
+    const leftLastMessageAt = Date.parse(left.lastMessageAt || left.createdAt || '') || 0
+    const rightLastMessageAt = Date.parse(right.lastMessageAt || right.createdAt || '') || 0
+    return rightLastMessageAt - leftLastMessageAt
+  })
+}
+
+export function sessionScopeParams(projectId) {
+  return projectId ? { projectId } : { standalone: true }
+}
+
+function lastVisibleMessageAt(messages) {
+  return [...messages]
+    .reverse()
+    .find((message) => ['user', 'assistant'].includes(message.role))
+    ?.createdAt || null
+}
+
+export function lastAssistantMessage(messages) {
+  return [...(messages || [])].reverse().find((message) => message.role === 'assistant')
+}
+
+export function sessionBeforeUserMessage(session, messageId) {
+  const index = session.messages?.findIndex((message) => message.id === messageId) ?? -1
+  if (index < 0) return session
+  const messages = session.messages.slice(0, index)
+  return { ...session, messages, activeRun: null, lastMessageAt: lastVisibleMessageAt(messages) }
+}
+
+export function sessionBeforeFailedResponse(session, messageId, activeRun) {
+  const errorIndex = session.messages?.findIndex((message) => message.id === messageId) ?? -1
+  if (errorIndex < 0) return { ...session, activeRun }
+  let userIndex = errorIndex - 1
+  while (userIndex >= 0 && session.messages[userIndex].role !== 'user') userIndex -= 1
+  const messages = userIndex >= 0 ? session.messages.slice(0, userIndex + 1) : session.messages
+  return { ...session, messages, activeRun, lastMessageAt: lastVisibleMessageAt(messages) }
+}
+
+export function loadDrafts(ownerUserId) {
+  if (!ownerUserId || typeof window === 'undefined') return emptyDrafts()
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(DRAFT_STORAGE_KEY) || '{}')
+    if (stored.ownerUserId !== ownerUserId) return emptyDrafts()
+    const sessionMessages = Object.fromEntries(
+      Object.entries(stored.sessionMessages || {}).filter(([, value]) => typeof value === 'string')
+    )
+    const newSessions = Object.fromEntries(
+      Object.entries(stored.newSessions || {}).map(([key, value]) => [
+        key,
+        normalizedNewSessionDraft(value)
+      ])
+    )
+    const newSession = newSessions.standalone || normalizedNewSessionDraft(stored.newSession)
+    newSessions.standalone = newSession
+    return {
+      newSession,
+      newSessions,
+      sessionMessages
+    }
+  } catch {
+    return emptyDrafts()
+  }
+}
+
+export function persistDrafts(ownerUserId, drafts) {
+  window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ownerUserId, ...drafts }))
+}
+
+export function clearPersistedDrafts() {
+  window.localStorage.removeItem(DRAFT_STORAGE_KEY)
+}

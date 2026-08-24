@@ -19,11 +19,14 @@ The Web UI is then available at `http://localhost:10020`. Installed packages liv
 - `src/layouts`: shared navigation and page frames
 - `src/components`: reusable UI components
 - `src/stores`: Pinia stores for server and runtime state
+- `src/app`: application-shell styles and other app-level concerns
+- `src/features`: feature-owned state helpers, route metadata, and styles
+- `src/shared`: cross-feature foundation and responsive styles
 - `src/boot`: Quasar boot files, Axios, and global directives
 - `src/composables`: reusable Composition API logic
 - `src/directives`: global Vue directives
 - `src/utils`: stateless helpers such as error localization
-- `src/css`: global styles and theme adjustments
+- `src/css`: the ordered global stylesheet entry point and theme variables
 - `tests`: Vitest tests
 
 ## API Errors and Toasts

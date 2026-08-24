@@ -16,6 +16,22 @@ MatoLoop is a provider-neutral monorepo. FastAPI provides REST and SSE interface
 - Persistence: SQLAlchemy models, Alembic migrations, and settings documents
 - Frontend: presentation, user interaction, and localization
 
+MatoLoop is a modular monolith, not a collection of internal microservices. Backend API
+routes retain HTTP schemas, dependencies, status codes, and controlled error mapping. The
+`sessions` and provider settings services own their application workflows, while the API
+workspace service owns reusable HTTP context and dispatch rules. Transaction and
+filesystem compensation boundaries stay in those application services. Provider adapters,
+the agent runtime, integrations, and Execution Agent operations expose explicit module-level
+contracts and do not depend on FastAPI routes.
+
+The agent package separates research projection, memory preparation, and tool argument
+contracts from the central runtime and registry while preserving one provider-neutral loop.
+SQLAlchemy models are split by aggregate and re-exported through `models`; Alembic still sees
+one metadata graph. The frontend keeps Pinia stores as stable feature facades and moves
+cohesive state helpers, route metadata, and styles under `features`, `app`, and `shared`.
+Execution Agent implementations live under `operations`; the former top-level modules remain
+compatibility aliases for existing imports and test patch points.
+
 ## Authentication and Ownership Boundary
 
 `UserAccount` is the stable internal principal and is independent of a login method. The first local setup account is an active administrator; upgrades promote the earliest existing account. Administrators can create local accounts, reset passwords, activate or deactivate users, assign administrator status, and delete deactivated users. The last active administrator is protected. The role grants account administration and instance-settings mutation only: every content API still applies the authenticated owner's ID, there is no impersonation path, and an administrator cannot inspect another user's sessions, messages, files, memories, credentials, personal settings, approvals, or Execution Agents.

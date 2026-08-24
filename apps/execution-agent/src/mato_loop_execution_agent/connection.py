@@ -15,9 +15,11 @@ from pydantic import ValidationError
 
 from .cache import SessionCache
 from .config import AgentConfig
-from .git import GIT_OPERATIONS, GitRunner
-from .openscad import OpenScadRunner
-from .process import ProcessRunner
+from .operations.git import GIT_OPERATIONS, GitRunner
+from .operations.openscad import OpenScadRunner
+from .operations.process import ProcessRunner
+from .operations.search import WorkspaceSearch
+from .operations.workspace import AgentError, Workspace
 from .protocol import (
     ARGUMENT_MODELS,
     CacheEnsureArguments,
@@ -61,9 +63,7 @@ from .protocol import (
     parse_inbound,
     validate_arguments,
 )
-from .search import WorkspaceSearch
 from .transfer import TransferClient
-from .workspace import AgentError, Workspace
 
 logger = logging.getLogger(__name__)
 MAX_WIRE_BYTES = 1024 * 1024

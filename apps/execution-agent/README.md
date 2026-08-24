@@ -2,6 +2,12 @@
 
 Standalone Linux agent for bounded workspace, process, transfer, and sparse session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
+Operation implementations are grouped under `src/mato_loop_execution_agent/operations` by
+workspace, search, process, Git, and OpenSCAD responsibility. Connection, protocol,
+configuration, credential, transfer, and cache modules remain separate orchestration
+boundaries. The former top-level operation modules are compatibility aliases, so existing
+imports and patch points keep resolving to the same implementation modules.
+
 The agent owns every filesystem root it advertises. `homeDirectory` is optional and, when set, must resolve inside one configured root; it provides the initial directory for new MatoLoop sessions but does not replace the root boundary. MatoLoop stores only root identity and per-session current and root-relative working directories. The backend neither owns nor deletes files below agent roots.
 
 ## Configuration

@@ -1,0 +1,485 @@
+from __future__ import annotations
+
+import json
+import logging
+import re
+from collections.abc import Iterator
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
+from pathlib import PurePosixPath
+from typing import BinaryIO
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.execution import ExecutionAgentError, execution_agent_connections
+from mato_loop_backend.models import (
+    ChatSession,
+    ExecutionAgent,
+    PermissionGrant,
+    UserAccount,
+)
+from mato_loop_backend.settings import InstanceLimits, SettingsStore
+from mato_loop_backend.workspace import (
+    FileRoot,
+    RootFileEntry,
+    RootFileError,
+    RootFileService,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class FileScope(StrEnum):
+    FILESYSTEM = "filesystem"
+    SESSION = "session"
+
+
+@dataclass(slots=True)
+class _FileContext:
+    root_files: RootFileService | None = None
+    root: FileRoot | None = None
+    working_directory: str | None = None
+    agent_id: UUID | None = None
+    agent_root_id: UUID | None = None
+    agent_root_revision: str | None = None
+    agent_writable: bool = True
+    agent_operations: frozenset[str] = frozenset()
+    instance_limits: InstanceLimits = field(default_factory=InstanceLimits)
+
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_AGENT_ERROR_CODES = {
+    "file.changed": (409, "file.changed"),
+    "file.invalidEncoding": (400, "file.invalidEncoding"),
+    "file.tooLarge": (413, "file.tooLarge"),
+    "operation.tooLarge": (413, "file.operationTooLarge"),
+    "path.exists": (409, "file.pathAlreadyExists"),
+    "path.invalid": (400, "file.invalidPath"),
+    "path.invalidDestination": (400, "file.invalidDestination"),
+    "path.notDirectory": (404, "file.directoryNotFound"),
+    "path.notEmpty": (409, "file.directoryNotEmpty"),
+    "path.notFile": (400, "file.notAFile"),
+    "path.notFound": (404, "file.pathNotFound"),
+    "path.rootMutation": (400, "file.rootMutationForbidden"),
+    "path.unsupportedType": (400, "file.unsupportedType"),
+    "root.stale": (503, "executionAgent.unavailable"),
+    "root.unavailable": (503, "executionAgent.unavailable"),
+    "root.unknown": (503, "executionAgent.unavailable"),
+}
+_MANAGER_ERROR_CODES = {
+    "executionAgent.operationUnavailable",
+    "executionAgent.outcomeUnknown",
+    "executionAgent.protocolError",
+    "executionAgent.replaced",
+    "executionAgent.requestTooLarge",
+    "executionAgent.responseTooLarge",
+    "executionAgent.revoked",
+    "executionAgent.timeout",
+    "executionAgent.unavailable",
+}
+
+
+def _normalize_agent_path(path: str) -> str:
+    if not isinstance(path, str) or not path or "\\" in path:
+        raise ApiError(400, "file.invalidPath")
+    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in path):
+        raise ApiError(400, "file.invalidPath")
+    if path == ".":
+        return path
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute() or any(part in {"", ".", ".."} for part in path.split("/")):
+        raise ApiError(400, "file.invalidPath")
+    return parsed.as_posix()
+
+
+async def _agent_context(
+    db: AsyncSession,
+    user: UserAccount,
+    agent_id: UUID,
+    root_id: UUID,
+    working_directory: str | None,
+    root_identity: str | None,
+    *,
+    writable: bool = True,
+    expected_revision: str | None = None,
+) -> _FileContext:
+    owned = await db.scalar(
+        select(ExecutionAgent)
+        .options(selectinload(ExecutionAgent.roots))
+        .where(
+            ExecutionAgent.id == agent_id,
+            ExecutionAgent.user_id == user.id,
+            ExecutionAgent.revoked_at.is_(None),
+        )
+    )
+    if owned is None:
+        raise ApiError(404, "executionAgent.notFound")
+    snapshot = execution_agent_connections.snapshot(agent_id)
+    if snapshot is None:
+        raise ApiError(503, "executionAgent.unavailable")
+    operations, roots = snapshot
+    stored_root = next((item for item in owned.roots if item.id == root_id), None)
+    root = next((item for item in roots if item.id == root_id), None)
+    if (
+        stored_root is None
+        or root is None
+        or root.revision != stored_root.revision
+        or expected_revision is not None and root.revision != expected_revision
+        or not _SHA256_RE.fullmatch(root.revision)
+    ):
+        raise ApiError(404, "file.workspaceNotSelected")
+    if root_identity is not None and root_identity != str(root_id):
+        raise ApiError(404, "file.fileNotFound")
+    return _FileContext(
+        root=FileRoot.WORKSPACE,
+        working_directory=_normalize_agent_path(working_directory or "."),
+        agent_id=agent_id,
+        agent_root_id=root_id,
+        agent_root_revision=root.revision,
+        agent_writable=writable,
+        agent_operations=operations,
+    )
+
+
+async def _file_context(
+    scope: FileScope,
+    session_id: UUID | None,
+    user: UserAccount,
+    db: AsyncSession,
+    *,
+    working_directory: str | None = None,
+    root_identity: str | None = None,
+    execution_agent_id: UUID | None = None,
+    root_id: UUID | None = None,
+    root_revision: str | None = None,
+    for_update: bool = False,
+    instance_limits: InstanceLimits | None = None,
+) -> _FileContext:
+    instance_limits = instance_limits or await SettingsStore.load(db, InstanceLimits)
+    session = None
+    if session_id is not None:
+        if for_update:
+            candidate = await db.scalar(
+                select(ChatSession)
+                .where(ChatSession.id == session_id, ChatSession.user_id == user.id)
+                .with_for_update()
+            )
+        else:
+            candidate = await db.get(ChatSession, session_id)
+        if candidate is None or candidate.user_id != user.id:
+            raise ApiError(404, "session.notFound")
+        session = candidate
+    if scope is FileScope.SESSION:
+        if session is None:
+            raise ApiError(400, "file.sessionRequired")
+        if root_identity is not None and root_identity != str(
+            session.project_id or session.id
+        ):
+            raise ApiError(404, "file.fileNotFound")
+        return _FileContext(
+            root_files=RootFileService(
+                session.id,
+                project_id=session.project_id,
+                session_quota_bytes=instance_limits.session_quota_bytes,
+                max_editable_text_bytes=instance_limits.max_editable_text_bytes,
+            ),
+            root=FileRoot.SESSION,
+            instance_limits=instance_limits,
+        )
+    if root_revision is not None:
+        if (
+            execution_agent_id is None
+            or root_id is None
+            or working_directory is None
+        ):
+            raise ApiError(400, "file.invalidRoot")
+        return replace(
+            await _agent_context(
+                db,
+                user,
+                execution_agent_id,
+                root_id,
+                working_directory,
+                root_identity,
+                expected_revision=root_revision,
+            ),
+            instance_limits=instance_limits,
+        )
+    if session is not None:
+        selected_agent_id = session.preferred_execution_agent_id
+        selected_root_id = session.preferred_root_id
+        if selected_agent_id is None or selected_root_id is None:
+            raise ApiError(400, "file.workspaceNotSelected")
+        if (
+            execution_agent_id is not None and execution_agent_id != selected_agent_id
+        ) or (root_id is not None and root_id != selected_root_id):
+            raise ApiError(404, "file.fileNotFound")
+        return replace(
+            await _agent_context(
+                db,
+                user,
+                selected_agent_id,
+                selected_root_id,
+                session.working_directory,
+                root_identity,
+            ),
+            instance_limits=instance_limits,
+        )
+    if execution_agent_id is not None or root_id is not None:
+        if execution_agent_id is None or root_id is None:
+            raise ApiError(400, "file.workspaceNotSelected")
+        return replace(
+            await _agent_context(
+                db,
+                user,
+                execution_agent_id,
+                root_id,
+                working_directory,
+                root_identity,
+            ),
+            instance_limits=instance_limits,
+        )
+    raise ApiError(400, "file.workspaceNotSelected")
+
+
+def _root_entry_payload(entry: RootFileEntry) -> dict:
+    return {
+        "name": entry.name,
+        "path": entry.path,
+        "kind": entry.kind,
+        "size": entry.size,
+        "modifiedAt": entry.modified_at,
+        "hasChildren": entry.kind == "directory",
+    }
+
+
+def _context_error(exc: RootFileError) -> ApiError:
+    if exc.code in {"file.changed", "file.pathAlreadyExists"}:
+        return ApiError(409, exc.code)
+    if exc.code in {
+        "file.directoryNotFound",
+        "file.fileNotFound",
+        "file.pathNotFound",
+        "file.revisionNotFound",
+    }:
+        return ApiError(404, exc.code)
+    if exc.code in {
+        "file.operationTooLarge",
+        "file.tooLarge",
+    }:
+        return ApiError(413, exc.code)
+    if exc.code == "file.sessionQuotaExceeded":
+        return ApiError(507, exc.code)
+    return ApiError(400, exc.code)
+
+
+def _join_path(parent: str, name: str) -> str:
+    return name if parent == "." else f"{parent}/{name}"
+
+
+def _is_same_or_descendant(path: str, parent: str) -> bool:
+    path_parts = PurePosixPath(path).parts
+    parent_parts = PurePosixPath(parent).parts
+    return path_parts[: len(parent_parts)] == parent_parts
+
+
+async def _clear_file_grants(
+    db: AsyncSession,
+    user: UserAccount,
+    context: _FileContext,
+    affected_paths: tuple[str, ...],
+) -> None:
+    root_name = context.root.value if context.root is not None else None
+    root_identity = None
+    if context.root_files is not None and context.root is not None:
+        root_identity = context.root_files.root_identity(context.root)
+    grants = list(
+        (
+            await db.scalars(
+                select(PermissionGrant)
+                .where(
+                    PermissionGrant.resource_type.in_(("execution_root_path", "root_path"))
+                )
+                .join(ChatSession, ChatSession.id == PermissionGrant.session_id)
+                .where(ChatSession.user_id == user.id)
+            )
+        ).all()
+    )
+    for grant in grants:
+        remove = False
+        if grant.resource_type == "execution_root_path":
+            if context.agent_id is None:
+                continue
+            try:
+                scope = json.loads(grant.resource_scope)
+                grant_path = scope["path"]
+                remove = (
+                    scope["agentId"] == str(context.agent_id)
+                    and scope["rootId"] == str(context.agent_root_id)
+                    and scope["rootRevision"] == context.agent_root_revision
+                    and scope["workingDirectory"] == context.working_directory
+                    and isinstance(grant_path, str)
+                    and any(
+                        _is_same_or_descendant(grant_path, path)
+                        for path in affected_paths
+                    )
+                )
+            except (KeyError, TypeError, json.JSONDecodeError):
+                remove = True
+        elif grant.resource_type == "root_path":
+            try:
+                scope = json.loads(grant.resource_scope)
+                grant_path = scope["path"]
+                remove = (
+                    scope["root"] == root_name
+                    and scope["identity"] == root_identity
+                    and isinstance(grant_path, str)
+                    and any(
+                        _is_same_or_descendant(grant_path, path)
+                        for path in affected_paths
+                    )
+                )
+            except (KeyError, TypeError, json.JSONDecodeError):
+                remove = True
+        if remove:
+            await db.delete(grant)
+
+
+async def _clear_context_grants(
+    db: AsyncSession,
+    user: UserAccount,
+    context: _FileContext,
+    paths: tuple[str, ...],
+) -> None:
+    await _clear_file_grants(db, user, context, paths)
+
+
+def _require_agent_operations(context: _FileContext, *operations: str) -> None:
+    if context.agent_id is not None and not set(operations) <= context.agent_operations:
+        raise ApiError(503, "executionAgent.operationUnavailable")
+
+
+def _list_context(
+    context: _FileContext, path: str, offset: int
+) -> tuple[list[dict], bool, int | None]:
+    assert context.root_files is not None and context.root is not None
+    result = context.root_files.list_entries(context.root, path, offset=offset, limit=1_000)
+    return (
+        [_root_entry_payload(entry) for entry in result.entries],
+        result.has_more,
+        result.next_offset,
+    )
+
+
+def _read_context(context: _FileContext, path: str, limit: int) -> bytes:
+    assert context.root_files is not None and context.root is not None
+    return context.root_files.read_bytes(context.root, path, limit=limit)
+
+
+def _replace_text_context(
+    context: _FileContext, path: str, content: str, expected_revision: str
+) -> str:
+    assert context.root_files is not None and context.root is not None
+    return context.root_files.replace_text_file(
+        context.root, path, content, expected_revision
+    )
+
+
+def _open_context(context: _FileContext, path: str) -> BinaryIO:
+    assert context.root_files is not None and context.root is not None
+    return context.root_files.open_file(context.root, path)
+
+
+def _stream_file(handle: BinaryIO) -> Iterator[bytes]:
+    with handle:
+        while chunk := handle.read(1024 * 1024):
+            yield chunk
+
+
+def _execution_error(code: str, *, manager: bool = False) -> ApiError:
+    if code in _AGENT_ERROR_CODES:
+        status_code, safe_code = _AGENT_ERROR_CODES[code]
+        return ApiError(status_code, safe_code)
+    if manager and code in _MANAGER_ERROR_CODES:
+        return ApiError(503, code)
+    return ApiError(502, "executionAgent.protocolError")
+
+
+async def _agent_request(
+    context: _FileContext, operation: str, arguments: dict
+) -> dict:
+    if (
+        context.agent_id is None
+        or context.agent_root_id is None
+        or context.agent_root_revision is None
+    ):
+        raise ApiError(500, "internal.unexpected")
+    if not context.agent_writable and operation in {
+        "workspace.copy",
+        "workspace.delete",
+        "workspace.import",
+        "workspace.mkdir",
+        "workspace.move",
+        "workspace.rename",
+        "workspace.write",
+    }:
+        raise ApiError(403, "http.forbidden")
+    payload = {
+        "rootId": str(context.agent_root_id),
+        "rootRevision": context.agent_root_revision,
+        "workingDirectory": context.working_directory or ".",
+        **arguments,
+    }
+    try:
+        response = await execution_agent_connections.request(
+            context.agent_id, operation, payload
+        )
+    except ExecutionAgentError as exc:
+        raise _execution_error(exc.code, manager=True) from exc
+    if not response.ok:
+        error_code = response.error.code if response.error else ""
+        logger.warning("Execution agent operation %s failed: %s", operation, error_code)
+        raise _execution_error(error_code)
+    if not isinstance(response.result, dict):
+        raise ApiError(502, "executionAgent.protocolError")
+    return response.result
+
+
+def _agent_entry(value: object, *, expected_path: str | None = None) -> dict:
+    if not isinstance(value, dict):
+        raise ApiError(502, "executionAgent.protocolError")
+    try:
+        path = _normalize_agent_path(value["path"])
+    except (ApiError, KeyError, TypeError) as exc:
+        raise ApiError(502, "executionAgent.protocolError") from exc
+    if expected_path is not None and path != expected_path:
+        raise ApiError(502, "executionAgent.protocolError")
+    kind = value.get("kind")
+    if kind not in {"directory", "file", "symlink", "other"}:
+        raise ApiError(502, "executionAgent.protocolError")
+    size = value.get("size")
+    modified_at = value.get("modifiedAt")
+    if size is not None and (not isinstance(size, int) or isinstance(size, bool) or size < 0):
+        raise ApiError(502, "executionAgent.protocolError")
+    if modified_at is not None and not isinstance(modified_at, int | float):
+        raise ApiError(502, "executionAgent.protocolError")
+    return {
+        "name": PurePosixPath(path).name if path != "." else ".",
+        "path": path,
+        "kind": kind,
+        "size": size,
+        "modifiedAt": modified_at,
+        "hasChildren": kind == "directory",
+    }
+
+
+async def _agent_stat(context: _FileContext, path: str) -> dict:
+    normalized = _normalize_agent_path(path)
+    return _agent_entry(
+        await _agent_request(context, "workspace.stat", {"path": normalized}),
+        expected_path=normalized,
+    )

@@ -1,0 +1,221 @@
+.settings-page {
+  height: 100dvh;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+.settings-page .app-page-header {
+  flex: 0 0 auto;
+}
+
+.settings-layout {
+  min-height: 0;
+  width: min(1180px, 100%);
+}
+
+.settings-category-nav {
+  height: 100%;
+  flex: 0 0 220px;
+}
+
+.settings-category-list .q-item {
+  border-radius: 10px;
+}
+
+.settings-category-tabs {
+  display: none;
+  width: min(1180px, 100%);
+}
+
+.settings-category-content {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.provider-list-card,
+.integration-list-card,
+.execution-agent-list-card,
+.user-list-card,
+.tool-settings-card,
+.default-models-card {
+  position: relative;
+  min-height: 150px;
+}
+
+.execution-agent-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.user-dialog {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.default-model-setting {
+  display: grid;
+  grid-template-columns: auto minmax(190px, 0.8fr) minmax(260px, 1.2fr);
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+}
+
+.provider-card-list {
+  display: grid;
+  gap: 12px;
+}
+
+.provider-settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-scope-toggle {
+  flex: 0 0 auto;
+}
+
+.provider-card {
+  overflow: hidden;
+}
+
+.provider-card__identity {
+  min-width: 0;
+}
+
+.provider-card__header-actions,
+.provider-model-actions {
+  align-items: center;
+  flex-direction: row;
+  gap: 4px;
+}
+
+.provider-models-section {
+  padding: 20px 24px 24px;
+}
+
+.provider-models-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-models-empty {
+  padding: 28px;
+  border-radius: 12px;
+  text-align: center;
+}
+
+.provider-model-list {
+  border: 1px solid var(--app-surface-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.provider-model-item {
+  padding-block: 12px;
+}
+
+.model-technical-id {
+  overflow-wrap: anywhere;
+}
+
+.provider-list-item {
+  padding-block: 16px;
+}
+
+.provider-list-actions {
+  align-items: center;
+  flex-direction: row;
+  gap: 4px;
+}
+
+.provider-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: 760px;
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.q-dialog__inner--minimized > .provider-dialog {
+  max-width: min(760px, calc(100vw - 32px));
+}
+
+.provider-dialog__body {
+  min-height: 0;
+}
+
+.integration-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: 560px;
+  max-height: calc(100dvh - 32px);
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.integration-dialog > .scroll {
+  min-height: 0;
+}
+
+.provider-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.provider-form-section {
+  grid-column: 1 / -1;
+}
+
+.model-runtime-expansion {
+  border-top: 1px solid var(--app-surface-border);
+}
+
+.model-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.model-runtime-context-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+.model-runtime-toggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  grid-column: 1 / -1;
+}
+
+.model-runtime-wide {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+.tool-origin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.tool-settings-detail {
+  margin-top: 20px;
+}

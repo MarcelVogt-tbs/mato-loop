@@ -1,0 +1,276 @@
+.file-explorer {
+  container-type: inline-size;
+  background: var(--app-shell-bg);
+}
+
+.file-explorer__toolbar,
+.file-viewer__toolbar {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding-top: env(safe-area-inset-top);
+}
+
+.file-explorer__toolbar .q-toolbar__title,
+.file-viewer__toolbar .q-toolbar__title {
+  min-width: 0;
+}
+
+.file-explorer__controls {
+  flex: 0 0 auto;
+}
+
+.file-explorer__actions {
+  min-width: 0;
+}
+
+.file-toolbar-menu {
+  min-width: 244px;
+}
+
+.file-breadcrumbs {
+  min-width: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: none;
+}
+
+.file-breadcrumbs .q-breadcrumbs__el,
+.file-breadcrumbs .q-breadcrumbs__separator {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.file-load-state,
+.file-save-error {
+  border: 1px solid var(--app-surface-border);
+  border-radius: 10px;
+  background: var(--app-surface-tonal);
+}
+
+.file-inline-state {
+  overflow-wrap: anywhere;
+}
+
+.file-tree-row {
+  min-height: 38px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  color: var(--app-muted);
+  cursor: pointer;
+}
+
+.file-tree-row:focus-visible,
+.file-tree-row__main:focus-visible {
+  outline: 2px solid var(--q-primary);
+  outline-offset: -2px;
+}
+
+.file-tree-row__main {
+  min-width: 0;
+  min-height: 30px;
+  border-radius: 8px;
+}
+
+.file-tree-row__menu {
+  flex: 0 0 auto;
+}
+
+.file-actions-menu {
+  min-width: 168px;
+}
+
+.file-tree-row:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+
+.file-tree-row--selected {
+  background: var(--app-active);
+  color: var(--app-text);
+}
+
+.file-tree-spacer {
+  display: inline-block;
+  width: 32px;
+}
+
+.file-viewer {
+  container-type: inline-size;
+  width: 100%;
+  height: 100%;
+  background: var(--app-shell-bg);
+}
+
+.file-viewer__path {
+  min-width: 0;
+}
+
+.file-viewer__editor {
+  min-width: 0;
+  min-height: 0;
+}
+
+.file-viewer__content {
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-editor {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-editor__actions {
+  flex: 0 0 auto;
+}
+
+.workspace-editor__status {
+  min-width: 0;
+}
+
+.workspace-editor__visual,
+.workspace-editor__toast,
+.workspace-editor__textarea,
+.workspace-editor__textarea .q-field__inner,
+.workspace-editor__textarea .q-field__control,
+.workspace-editor__textarea .q-field__control-container {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.workspace-editor__textarea textarea.workspace-editor__textarea-input {
+  height: 100% !important;
+  resize: none;
+  color: var(--app-text);
+  font: 0.875rem/1.55 monospace;
+  tab-size: 2;
+}
+
+.workspace-editor__toast .toastui-editor-defaultUI {
+  height: 100% !important;
+  border: 0;
+  border-radius: 0;
+}
+
+.workspace-editor__toast .toastui-editor-toolbar {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.workspace-editor__toast .toastui-editor-toolbar-group {
+  flex: 0 0 auto;
+}
+
+.workspace-editor__toast .toastui-editor-mode-switch {
+  display: none;
+}
+
+.workspace-editor__toast .toastui-editor-main {
+  height: calc(100% - 46px) !important;
+}
+
+.file-viewer__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.file-viewer__text {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--app-text);
+  font: 0.875rem/1.55 monospace;
+}
+
+.file-viewer__markdown {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.file-rename-dialog,
+.file-create-dialog,
+.file-permissions-dialog {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.file-permissions-dialog__content {
+  max-height: min(65vh, 520px);
+  overflow: auto;
+}
+
+.file-path-value {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+body.body--dark .file-explorer .app-muted,
+body.body--dark .file-viewer .app-muted {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+@container (max-width: 390px) {
+  .workspace-editor__actions {
+    flex-wrap: wrap;
+  }
+
+  .workspace-editor__actions .q-space {
+    display: none;
+  }
+
+  .workspace-editor__status {
+    flex: 1 0 100%;
+  }
+
+  .file-viewer__edit .q-btn__content .block,
+  .file-viewer__view-toggle .q-btn__content .block,
+  .file-upload-action .q-btn__content .block {
+    display: none;
+  }
+
+  .file-viewer__edit,
+  .file-upload-action {
+    min-width: 40px;
+    padding-inline: 8px;
+  }
+}
+
+@media (pointer: coarse) {
+  .chat-markdown__block-action {
+    width: 44px;
+    height: 44px;
+  }
+
+  .attachment-preview__actions .q-btn,
+  .file-attachment .q-btn,
+  .work-history__file-output .q-btn,
+  .tool-call__file-actions .q-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .file-explorer .q-btn,
+  .file-viewer .q-btn,
+  .file-create-dialog .q-btn,
+  .file-rename-dialog .q-btn,
+  .file-permissions-dialog .q-btn,
+  .file-tree-row,
+  .file-tree-row__main {
+    min-height: 48px;
+    min-width: 48px;
+  }
+
+  .file-icon-action {
+    min-width: 48px;
+  }
+}
+
+.app-file-dialog {
+  padding-bottom: env(safe-area-inset-bottom);
+}

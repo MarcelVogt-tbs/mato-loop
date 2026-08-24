@@ -50,7 +50,7 @@
 <script setup>
 import { computed } from 'vue'
 import AppPageHeader from 'components/AppPageHeader.vue'
-import { settingsRoutes } from 'src/router/routes'
+import { settingsRoutes } from 'src/features/settings/routes'
 import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'SettingsPage' })

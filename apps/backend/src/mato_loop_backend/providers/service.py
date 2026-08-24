@@ -27,6 +27,7 @@ from mato_loop_backend.privacy import (
     StreamingPseudonymRestorer,
 )
 from mato_loop_backend.providers import codex_oauth, lemonade, openai_compatible
+from mato_loop_backend.providers.adapters import PROVIDER_ADAPTERS, AdapterRuntime
 from mato_loop_backend.providers.base import (
     MAX_PROVIDER_AUDIO_BYTES,
     MAX_PROVIDER_IMAGE_BYTES,
@@ -75,6 +76,19 @@ _AUDIO_FORMATS = {
     "audio/x-wav": "wav",
 }
 _VIDEO_MIME_TYPES = {"video/mp4", "video/mpeg", "video/quicktime", "video/webm"}
+
+
+def _adapter_runtime() -> AdapterRuntime:
+    return AdapterRuntime(
+        read_credential=read_credential,
+        refresh_codex_credential=refresh_codex_credential,
+        codex_headers=codex_headers,
+        discover_openai=openai_compatible.discover_models,
+        discover_codex=codex_oauth.discover_models,
+        discover_lemonade=lemonade.discover_models,
+        chat_completions=chat_completions,
+        responses_api=responses_api,
+    )
 
 
 def _pseudonymization_provider_error(exc: PseudonymizationError) -> ProviderError:
@@ -412,45 +426,14 @@ class ProviderService:
             if provider.credential_id
             else None
         )
-        if provider.adapter_type == "openai-codex":
-            if credential is None:
-                raise ProviderError(
-                    "ChatGPT Codex is not connected", code="provider.notConnected"
-                )
-            refreshed = await refresh_codex_credential(
-                db, credential, owner_id=provider.owner_id
-            )
-            return await codex_oauth.discover_models(
-                access_token=refreshed["access"],
-                account_id=refreshed.get("account_id"),
-                timeout=timeout,
-            )
-        payload = read_credential(credential) if credential else {}
-        if provider.adapter_type == "lemonade":
-            base_url = str(provider.config.get("base_url") or "").rstrip("/")
-            if not base_url:
-                raise ProviderError(
-                    "Provider base URL is missing", code="provider.configurationInvalid"
-                )
-            return await lemonade.discover_models(
-                base_url=base_url,
-                api_key=payload.get("api_key"),
-                timeout=timeout,
-            )
-        if provider.adapter_type != "openai-compatible":
+        adapter = PROVIDER_ADAPTERS.get(provider.adapter_type)
+        if adapter is None:
             raise ProviderError(
                 "Provider does not support model discovery",
                 code="provider.discoveryUnsupported",
             )
-        base_url = str(provider.config.get("base_url") or "").rstrip("/")
-        if not base_url:
-            raise ProviderError(
-                "Provider base URL is missing", code="provider.configurationInvalid"
-            )
-        return await openai_compatible.discover_models(
-            base_url=base_url,
-            api_key=payload.get("api_key"),
-            timeout=timeout,
+        return await adapter.discover(
+            _adapter_runtime(), db, provider, credential, timeout
         )
 
     @staticmethod
@@ -485,19 +468,14 @@ class ProviderService:
                 "Model does not support chat",
                 code="provider.modelCapabilityUnavailable",
             )
-        if provider.adapter_type not in {"openai-compatible", "openai-codex", "lemonade"}:
+        adapter = PROVIDER_ADAPTERS.get(provider.adapter_type)
+        if adapter is None:
             raise ProviderError(
                 "Unsupported provider adapter", code="provider.configurationInvalid"
             )
         model_trust_level = target_trust_level or effective_model_trust(provider, model)
-        api_type = (
-            "chat_completions"
-            if provider.adapter_type == "lemonade"
-            else str(provider.config.get("api_type") or "chat_completions")
-        )
-        if media_inputs and (
-            provider.adapter_type != "openai-compatible" or api_type != "chat_completions"
-        ):
+        api_type = adapter.api_type(provider)
+        if media_inputs and api_type not in adapter.native_media_api_types:
             raise ProviderError(
                 "Native audio and video require OpenAI-compatible Chat Completions",
                 code="provider.modelCapabilityUnavailable",
@@ -525,10 +503,9 @@ class ProviderService:
             if provider.credential_id
             else None
         )
-        is_codex = provider.adapter_type == "openai-codex"
         profile = (
             reasoning_profile(model.model_id, model.discovery_metadata)
-            if is_codex or api_type == "chat_completions"
+            if api_type == "chat_completions" or adapter.reasoning_profile_for_responses
             else None
         )
         effective_reasoning_effort = (
@@ -541,12 +518,8 @@ class ProviderService:
                 "Model does not support the selected reasoning effort",
                 code="provider.modelCapabilityUnavailable",
             )
-        payload = read_credential(credential) if credential and not is_codex else {}
-        endpoint = (
-            codex_oauth.CODEX_RESPONSES_URL
-            if is_codex
-            else str(provider.config.get("base_url") or "").rstrip("/")
-        )
+        payload = read_credential(credential) if credential and not adapter.codex_auth else {}
+        endpoint = adapter.endpoint(provider)
         continuation_scope = {
             "adapterType": provider.adapter_type,
             "providerId": str(provider.id),
@@ -574,26 +547,30 @@ class ProviderService:
                 raise _pseudonymization_provider_error(exc) from exc
         request = ProviderRequest(
             model=(
-                model.model_id.removeprefix("openai-codex/") if is_codex else model.model_id
+                model.model_id.removeprefix(adapter.model_prefix)
+                if adapter.model_prefix
+                else model.model_id
             ),
             messages=provider_messages,
             tools=tools,
             tool_choice=tool_choice,
             stream=model.supports_streaming,
-            include_usage=(
-                provider.adapter_type == "lemonade" and model.supports_streaming
-            ),
+            include_usage=adapter.include_stream_usage and model.supports_streaming,
             supports_parallel_tool_calls=(
                 model.supports_tools and model.supports_parallel_tool_calls
             ),
             max_output_tokens=(
                 None
-                if is_codex
+                if adapter.omit_generation_options
                 else min(max_output_tokens or model.max_output_tokens, model.max_output_tokens)
             ),
-            temperature=None if is_codex else _temperature_option(model.config),
+            temperature=(
+                None
+                if adapter.omit_generation_options
+                else _temperature_option(model.config)
+            ),
             timeout=timeout,
-            reasoning_summary=is_codex or model.reasoning_summary,
+            reasoning_summary=adapter.force_reasoning_summary or model.reasoning_summary,
             reasoning_effort=(
                 None
                 if profile
@@ -607,11 +584,11 @@ class ProviderService:
                 and (
                     profile is not None
                     and profile.supports_disable
-                    or provider.adapter_type == "lemonade"
+                    or adapter.controls_thinking_without_profile
                 )
                 else None
             ),
-            prompt_cache_key=prompt_cache_key if is_codex else None,
+            prompt_cache_key=prompt_cache_key if adapter.supports_prompt_cache else None,
             continuation_scope=continuation_scope,
             media=media,
         )
@@ -689,64 +666,15 @@ class ProviderService:
         def can_retry() -> bool:
             return not stream_started
 
-        if is_codex:
-            if credential is None:
-                raise ProviderError(
-                    "ChatGPT Codex is not connected", code="provider.notConnected"
-                )
-            refreshed = await refresh_codex_credential(
-                db, credential, owner_id=provider.owner_id
-            )
-            headers = codex_headers(
-                refreshed,
-                accept="text/event-stream" if request.stream else "application/json",
-            )
-            headers["OpenAI-Beta"] = "responses=experimental"
-
-            async def execute_codex() -> ProviderResult:
-                return await responses_api(
-                    url=codex_oauth.CODEX_RESPONSES_URL,
-                    headers=headers,
-                    request=request,
-                    on_delta=delta_callback,
-                    on_reasoning=reasoning_callback,
-                )
-
-            return await finalize(
-                await _with_retries(execute_codex, can_retry, on_retry)
-            )
-
-        base_url = str(provider.config.get("base_url") or "").rstrip("/")
-        if not base_url:
-            raise ProviderError(
-                "Provider base URL is missing", code="provider.configurationInvalid"
-            )
-        api_key = payload.get("api_key")
-        if api_type == "responses":
-            headers = {"Content-Type": "application/json"}
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
-
-            async def execute_responses() -> ProviderResult:
-                return await responses_api(
-                    url=f"{base_url}/responses",
-                    headers=headers,
-                    request=request,
-                    on_delta=delta_callback,
-                    on_reasoning=reasoning_callback,
-                )
-
-            return await finalize(
-                await _with_retries(execute_responses, can_retry, on_retry)
-            )
-
-        async def execute_chat() -> ProviderResult:
-            return await chat_completions(
-                base_url=base_url,
-                api_key=api_key,
-                request=request,
-                on_delta=delta_callback,
-                on_reasoning=reasoning_callback,
-            )
-
-        return await finalize(await _with_retries(execute_chat, can_retry, on_retry))
+        operation = await adapter.operation(
+            _adapter_runtime(),
+            db,
+            provider,
+            credential,
+            payload.get("api_key"),
+            api_type,
+            request,
+            delta_callback,
+            reasoning_callback,
+        )
+        return await finalize(await _with_retries(operation, can_retry, on_retry))

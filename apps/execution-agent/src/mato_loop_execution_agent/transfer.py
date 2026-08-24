@@ -11,8 +11,8 @@ from uuid import UUID, uuid4
 
 import httpx
 
+from .operations.workspace import AgentError
 from .protocol import TransferSpec
-from .workspace import AgentError
 
 
 class TransferClient:

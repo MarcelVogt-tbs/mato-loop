@@ -27,6 +27,7 @@ usage() {
         "  doctor              Check pgvector and the embedding index" \
         "  db [args]           Run Alembic" \
         "  lock <target>       Update the backend or frontend lockfile" \
+        "  format backend      Apply safe backend lint fixes" \
         "  check [target]      Check backend, frontend, and execution agent" \
         "  test [target]       Test backend, frontend, execution agent, or local RAG stack" \
         "  eval-prompts [args] Run serial live prompt evaluations"
@@ -71,6 +72,10 @@ test_execution_agent() {
 test_rag() {
     compose up -d --wait --wait-timeout 600 db embedding
     run_backend "uv sync --frozen && MATO_LOOP_RAG_INTEGRATION=1 uv run pytest tests/test_memory_rag_integration.py"
+}
+
+format_backend() {
+    run_backend "uv sync --frozen && uv run ruff check --fix src tests"
 }
 
 run_target() {
@@ -138,6 +143,12 @@ case "${1:-}" in
             frontend) run_frontend "yarn install --mode=update-lockfile" ;;
             execution-agent) run_execution_agent "uv lock" ;;
             *) printf 'Unbekanntes Lock-Target: %s\n' "${2:-}" >&2; exit 1 ;;
+        esac
+        ;;
+    format)
+        case "${2:-}" in
+            backend) format_backend ;;
+            *) printf 'Unbekanntes Format-Target: %s\n' "${2:-}" >&2; exit 1 ;;
         esac
         ;;
     check) run_target check "${2:-all}" ;;

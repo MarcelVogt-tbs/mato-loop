@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import BinaryIO
 from uuid import uuid4
 
+from .operations.workspace import AgentError, _parts
 from .protocol import ArtifactDescriptor, TransferSpec
 from .transfer import TransferClient
-from .workspace import AgentError, _parts
 
 
 class SessionCache:

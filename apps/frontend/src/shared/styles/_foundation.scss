@@ -1,0 +1,150 @@
+:root {
+  --app-drawer-width: 288px;
+  --app-page-bg: #f8fafc;
+  --app-shell-bg: #f8fafc;
+  --app-surface: #ffffff;
+  --app-surface-tonal: rgba(37, 99, 235, 0.045);
+  --app-surface-border: rgba(15, 23, 42, 0.09);
+  --app-text: rgba(15, 23, 42, 0.94);
+  --app-muted: rgba(15, 23, 42, 0.6);
+  --app-hover: rgba(37, 99, 235, 0.055);
+  --app-active: rgba(37, 99, 235, 0.1);
+  --app-scrollbar-size: 10px;
+  --app-scrollbar-thumb: rgba(15, 23, 42, 0.3);
+  --app-scrollbar-thumb-hover: rgba(15, 23, 42, 0.46);
+  --app-scrollbar-track: transparent;
+  --app-code-bg: #f3f6fa;
+  --app-code-text: #24292f;
+  --app-code-keyword: #cf222e;
+  --app-code-string: #0a3069;
+  --app-code-comment: #6e7781;
+  --app-code-function: #8250df;
+  --app-code-number: #0550ae;
+}
+
+body.body--dark {
+  --app-page-bg: #0f0f0f;
+  --app-shell-bg: #0f0f0f;
+  --app-surface: #191919;
+  --app-surface-tonal: rgba(96, 165, 250, 0.07);
+  --app-surface-border: rgba(255, 255, 255, 0.09);
+  --app-text: rgba(255, 255, 255, 0.94);
+  --app-muted: rgba(255, 255, 255, 0.6);
+  --app-hover: rgba(96, 165, 250, 0.07);
+  --app-active: rgba(96, 165, 250, 0.14);
+  --app-scrollbar-thumb: rgba(255, 255, 255, 0.3);
+  --app-scrollbar-thumb-hover: rgba(255, 255, 255, 0.48);
+  --app-code-bg: #151b23;
+  --app-code-text: #e6edf3;
+  --app-code-keyword: #ff7b72;
+  --app-code-string: #a5d6ff;
+  --app-code-comment: #8b949e;
+  --app-code-function: #d2a8ff;
+  --app-code-number: #79c0ff;
+}
+
+html {
+  min-height: 100%;
+  background: transparent;
+  overscroll-behavior-y: none;
+  touch-action: pan-x pan-y;
+}
+
+body,
+#q-app {
+  min-height: 100%;
+  background: var(--app-page-bg);
+  color: var(--app-text);
+}
+
+body {
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
+  touch-action: pan-x pan-y;
+}
+
+.app-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--app-scrollbar-thumb) var(--app-scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: var(--app-scrollbar-size);
+  height: var(--app-scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--app-scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  min-width: 40px;
+  min-height: 40px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--app-scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--app-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.q-scrollarea .q-scrollarea__bar--v,
+.q-scrollarea .q-scrollarea__thumb--v {
+  width: var(--app-scrollbar-size);
+}
+
+.q-scrollarea .q-scrollarea__bar--h,
+.q-scrollarea .q-scrollarea__thumb--h {
+  height: var(--app-scrollbar-size);
+}
+
+.q-scrollarea .q-scrollarea__thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--app-scrollbar-thumb);
+  background-clip: padding-box;
+  opacity: 1;
+}
+
+.q-scrollarea .q-scrollarea__thumb:hover,
+.q-scrollarea .q-scrollarea__thumb:active {
+  background: var(--app-scrollbar-thumb-hover);
+  background-clip: padding-box;
+  opacity: 1;
+}
+
+@media (forced-colors: active) {
+  * {
+    scrollbar-color: auto;
+  }
+
+  .q-scrollarea .q-scrollarea__thumb {
+    border: 0;
+    background: CanvasText;
+  }
+}
+
+.app-shell,
+.q-page-container,
+.q-page {
+  background: var(--app-page-bg);
+}

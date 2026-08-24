@@ -1,14 +1,28 @@
+# Model imports are ordered for dependency-safe SQLAlchemy registration.
+# ruff: noqa: I001
+
 from mato_loop_backend.models.authentication import AuthenticationProvider, UserAuthIdentity
 from mato_loop_backend.models.automation import Automation, AutomationRun, AutomationSchedule
 from mato_loop_backend.models.execution_agent import ExecutionAgent, ExecutionAgentRoot
 from mato_loop_backend.models.project import Project
-from mato_loop_backend.models.runtime import (
-    AgentRun,
-    ApprovalRequest,
+from mato_loop_backend.models.account import Credential, LoginSession, UserAccount
+from mato_loop_backend.models.session import (
     ChatSession,
     ContextSummary,
-    Credential,
-    LoginSession,
+    Message,
+    MessageAttachment,
+    MessageSearchChunk,
+    TitleGenerationStatus,
+    WebSearchPolicy,
+)
+from mato_loop_backend.models.agent import (
+    AgentRun,
+    ApprovalRequest,
+    PermissionGrant,
+    QuestionRequest,
+)
+from mato_loop_backend.models.notification import Notification, WebPushSubscription
+from mato_loop_backend.models.memory import (
     MemoryAudience,
     MemoryCategory,
     MemoryDreamRun,
@@ -22,16 +36,6 @@ from mato_loop_backend.models.runtime import (
     MemoryRecord,
     MemorySourceMessage,
     MemorySourceType,
-    Message,
-    MessageAttachment,
-    MessageSearchChunk,
-    Notification,
-    PermissionGrant,
-    QuestionRequest,
-    TitleGenerationStatus,
-    UserAccount,
-    WebPushSubscription,
-    WebSearchPolicy,
 )
 from mato_loop_backend.models.setting import SettingRecord
 
