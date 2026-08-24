@@ -1286,7 +1286,6 @@ class AgentRuntime:
         research_sources: dict[str, str] = {}
         research_source_titles: dict[str, str] = {}
         research_used = False
-        research_budget_exhausted = False
         research_tool_calls_used = 0
         successful_research_calls: dict[str, dict[str, Any]] = {}
         tool_calls_used = 0
@@ -1655,8 +1654,6 @@ class AgentRuntime:
                 and effective_toolset is not None
             ):
                 effective_toolset = effective_toolset.only("read")
-            elif research_budget_exhausted and effective_toolset is not None:
-                effective_toolset = effective_toolset.without(*_RESEARCH_TOOL_NAMES)
             effective_tool_count = len(effective_toolset.tools) if effective_toolset else 0
             if effective_toolset is not None:
                 effective_toolset = with_media_prompt_profiles(
@@ -1725,9 +1722,7 @@ class AgentRuntime:
                     if chat_session.web_search_policy != WebSearchPolicy.DISABLED
                     else None
                 ),
-                research_tools_exhausted=(
-                    research_budget_exhausted or tool_budget_exhausted
-                ),
+                research_tools_exhausted=tool_budget_exhausted,
                 include_local_time=False,
                 offered_tool_names=frozenset(
                     effective_toolset.tools if effective_toolset else ()
@@ -3504,10 +3499,8 @@ class AgentRuntime:
                 research_budget_reached
                 or research_tool_calls_used
                 >= runtime_settings.max_research_tool_calls
-            ):
-                research_budget_exhausted = True
-                if search_pending and not required_search_completed:
-                    raise AgentRunError("agent.requiredWebSearchFailed")
+            ) and search_pending and not required_search_completed:
+                raise AgentRunError("agent.requiredWebSearchFailed")
         raise AgentRunError("agent.stepLimitReached")
 
     @staticmethod

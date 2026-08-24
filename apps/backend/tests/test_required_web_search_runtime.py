@@ -2204,7 +2204,7 @@ async def test_directory_change_allows_retrying_a_failed_workspace_call(monkeypa
 
 
 async def test_available_uses_the_shared_research_budget(monkeypatch) -> None:
-    db, run, requests, _, _ = await _runtime_setup(
+    db, run, requests, projections, _ = await _runtime_setup(
         monkeypatch,
         [
             ProviderResult(
@@ -2224,9 +2224,12 @@ async def test_available_uses_the_shared_research_budget(monkeypatch) -> None:
     await AgentRuntime._execute_loop(db, run)
 
     assert tool_registry._execute_definition.await_count == 1
-    assert "web_search" not in {tool["name"] for tool in requests[1]["tools"]}
-    assert "webfetch" not in {tool["name"] for tool in requests[1]["tools"]}
-    assert "fetch_transcript" not in {tool["name"] for tool in requests[1]["tools"]}
+    assert {"web_search", "webfetch", "fetch_transcript"} <= {
+        tool["name"] for tool in requests[1]["tools"]
+    }
+    assert requests[0]["tools"] == requests[1]["tools"] == requests[2]["tools"]
+    assert projections[0]["system_prompt"] == projections[1]["system_prompt"]
+    assert projections[1]["system_prompt"] == projections[2]["system_prompt"]
     tool_messages = [
         call.args[0]
         for call in db.add.call_args_list
@@ -2262,11 +2265,10 @@ async def test_repeated_successful_research_call_does_not_hit_the_network(monkey
         if isinstance(call.args[0], Message) and call.args[0].role == "tool"
     ]
     assert any('"alreadyCompleted": true' in content for content in tool_contents)
-    assert "web_search" not in {tool["name"] for tool in requests[2]["tools"]}
-    assert "Research tools are unavailable for the rest of this turn" in projections[2][
-        "system_prompt"
-    ]
-    assert "7 remaining" not in projections[2]["system_prompt"]
+    assert requests[0]["tools"] == requests[1]["tools"] == requests[2]["tools"]
+    assert projections[0]["system_prompt"] == projections[1]["system_prompt"]
+    assert projections[1]["system_prompt"] == projections[2]["system_prompt"]
+    assert "Research budget limit: 8 calls this turn" in projections[2]["system_prompt"]
 
 
 async def test_tool_call_limit_applies_after_required_gate(monkeypatch) -> None:
