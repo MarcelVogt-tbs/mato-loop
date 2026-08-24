@@ -2520,6 +2520,26 @@ CASES = (
         expected_tool="session_read",
     ),
     PromptCase(
+        id="invalid_session_cursor_retries_without_cursor",
+        kind="general",
+        user="Lies das aus dem aktiven Kontext entfernte Detail aus der Session-Historie.",
+        tools=("session_read",),
+        compacted_summary="Goal: recover a detail. The exact detail was compacted out.",
+        continuation=_exchange(
+            "session_read",
+            {"around_message_id": str(TOOL_RESULT_MESSAGE_ID), "limit": 30},
+            json.dumps(
+                error_payload(
+                    "tool.cursorInvalid",
+                    field="around_message_id",
+                    params={"retryArguments": {"limit": 30}},
+                )
+            ),
+        ),
+        expected_tool="session_read",
+        expected_arguments={"limit": 30},
+    ),
+    PromptCase(
         id="tool_result_pagination_uses_next_offset",
         kind="general",
         user="Lies den nächsten Abschnitt des ausgelagerten Tool-Ergebnisses.",

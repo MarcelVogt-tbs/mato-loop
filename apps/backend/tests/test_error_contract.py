@@ -52,6 +52,11 @@ def test_chat_history_errors_have_controlled_fallbacks() -> None:
         == "The tool execution was interrupted and its outcome is unknown. Do not infer success or "
         "failure without verification."
     )
+    assert (
+        describe_error("tool.cursorInvalid").message
+        == "The session cursor is unavailable. Retry session_read with "
+        "error.params.retryArguments exactly."
+    )
 
 
 def test_changed_file_error_has_controlled_fallback() -> None:

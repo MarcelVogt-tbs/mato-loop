@@ -351,6 +351,7 @@ const messages = {
   'skill.notFound': () => 'Der Skill wurde nicht gefunden.',
   'stream.connectionLost': () => 'Die Verbindung zum laufenden Agent-Run wurde unterbrochen.',
   'permission.denied': () => 'Die Tool-Aktion wurde nicht erlaubt.',
+  'tool.cursorInvalid': () => 'Der referenzierte Nachrichtenabschnitt ist nicht mehr verfügbar.',
   'tool.executionFailed': () => 'Die Tool-Aktion ist fehlgeschlagen.',
   'tool.executionInterrupted': () => 'Die Tool-Aktion wurde unterbrochen.',
   'tool.invalidArguments': () => 'Das Modell hat ungültige Tool-Argumente erzeugt.',

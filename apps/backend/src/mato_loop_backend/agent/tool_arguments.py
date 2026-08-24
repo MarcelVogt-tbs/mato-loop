@@ -396,11 +396,11 @@ class SessionReadArguments(ToolArguments):
     )
     after_message_id: UUID | None = Field(
         default=None,
-        description="Continue forward after this message UUID.",
+        description="Continue after session_read nextAfterMessageId; never invent it.",
     )
     around_message_id: UUID | None = Field(
         default=None,
-        description="Read a bounded context window around this message UUID.",
+        description="Use an ID from session discovery or compacted history; never invent it.",
     )
     limit: int = Field(default=30, ge=1, le=50)
 

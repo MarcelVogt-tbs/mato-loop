@@ -42,7 +42,7 @@ _PRIVATE_TOOL_OUTPUT = "[Historical private tool output unavailable to the curre
 _HOST_TOOL_RESULT_REFERENCE = "_matoloopToolResultReference"
 _SHORTENED_TOOL_OUTPUT = (
     "\n[Tool output shortened in the active context. "
-    "Use session_read to retrieve the original message if needed.]"
+    "Use session_read without a message cursor to locate the original if needed.]"
 )
 COMPACTION_SYSTEM_PROMPT = "Summarize conversation data. Do not call tools."
 
@@ -1554,7 +1554,8 @@ def _prune_tool_outputs_to_budget(
             if shortened is None:
                 shortened = (
                     content[:keep_chars]
-                    + "\n[Tool output shortened in active context. Use session_read for the original.]"
+                    + "\n[Tool output shortened in active context. Use session_read without a message "
+                    "cursor to locate the original.]"
                 )
             if len(shortened) >= len(content):
                 continue

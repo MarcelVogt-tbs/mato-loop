@@ -219,6 +219,9 @@ _MESSAGES = {
         "The tool execution was interrupted and its outcome is unknown. Do not infer success or "
         "failure without verification."
     ),
+    "tool.cursorInvalid": (
+        "The session cursor is unavailable. Retry session_read with error.params.retryArguments exactly."
+    ),
     "tool.personalSettingsDisabled": "Personal tool settings are disabled by the administrator.",
     "tool.unavailable": "The tool is unavailable.",
     "transcript.requestFailed": "The published transcript could not be retrieved.",

@@ -2755,7 +2755,13 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             -1,
         )
         if anchor < 0:
-            return ToolResult.error("tool.cursorInvalid")
+            retry_arguments = arguments.model_dump(mode="json", exclude_none=True)
+            retry_arguments.pop("around_message_id")
+            return ToolResult.error(
+                "tool.cursorInvalid",
+                field="around_message_id",
+                params={"retryArguments": retry_arguments},
+            )
         start = min(
             max(0, anchor - arguments.limit // 2),
             max(0, len(records) - arguments.limit),
@@ -2766,7 +2772,13 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             -1,
         )
         if start < 0:
-            return ToolResult.error("tool.cursorInvalid")
+            retry_arguments = arguments.model_dump(mode="json", exclude_none=True)
+            retry_arguments.pop("after_message_id")
+            return ToolResult.error(
+                "tool.cursorInvalid",
+                field="after_message_id",
+                params={"retryArguments": retry_arguments},
+            )
     page = records[start : start + arguments.limit]
     tool_names = _tool_names_by_message_id(records)
     remaining = 50_000
@@ -4193,7 +4205,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "session_read",
-            "Read original messages from this or another session around an anchor or after a message.",
+            "Read session messages. Omit cursors to start at the earliest message.",
             SessionReadArguments,
             _session_read,
             group="sessions",

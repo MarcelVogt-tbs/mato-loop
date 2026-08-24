@@ -1452,6 +1452,11 @@ def test_added_trajectories_use_exact_runtime_fields_and_repair_shapes() -> None
     assert pagination_messages[-1]["content"]
     assert pagination_messages[-1]["tool_call_id"] == "eval-call-1"
 
+    cursor_messages, _tools = build_case(_case("invalid_session_cursor_retries_without_cursor"))
+    cursor_error = json.loads(cursor_messages[-1]["content"])["error"]
+    assert cursor_error["field"] == "around_message_id"
+    assert cursor_error["params"]["retryArguments"] == {"limit": 30}
+
     overview_messages, _tools = build_case(
         replace(
             _case("prefetched_memory_overview_reports_partial_status"),
@@ -1768,10 +1773,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 132
-    assert payload["contractCount"] == 289
-    assert "Cases: 157" in report
+    assert payload["contractCount"] == 290
+    assert "Cases: 158" in report
     assert "Semantic contracts: 132" in report
-    assert "All inventory rows: 289" in report
+    assert "All inventory rows: 290" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

@@ -2012,6 +2012,44 @@ async def test_session_read_cursor_uses_last_emitted_message(tmp_path) -> None:
     assert payload["nextAfterMessageId"] == str(messages[4].id)
 
 
+@pytest.mark.parametrize("cursor_field", ["around_message_id", "after_message_id"])
+async def test_session_read_invalid_cursor_returns_safe_retry_arguments(
+    tmp_path, cursor_field: str
+) -> None:
+    session_id = uuid4()
+    call = ToolCall(
+        id="read",
+        name="session_read",
+        arguments={"session_id": str(session_id), cursor_field: str(uuid4()), "limit": 5},
+    )
+    context = _context(tmp_path, call)
+    context.db.scalar.return_value = ChatSession(
+        id=session_id,
+        user_id=context.session.user_id,
+        title="Ziel",
+    )
+    rows = Mock()
+    rows.all.return_value = []
+    context.db.scalars.return_value = rows
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.is_error is True
+    assert json.loads(result.content) == {
+        "error": {
+            "code": "tool.cursorInvalid",
+            "message": (
+                "The session cursor is unavailable. Retry session_read with "
+                "error.params.retryArguments exactly."
+            ),
+            "field": cursor_field,
+            "params": {
+                "retryArguments": {"session_id": str(session_id), "limit": 5},
+            },
+        }
+    }
+
+
 @pytest.mark.parametrize(
     ("name", "result_key"),
     [("session_browse", "sessions"), ("session_search", "results")],
