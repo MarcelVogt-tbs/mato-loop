@@ -1,5 +1,6 @@
 import hashlib
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
@@ -36,7 +37,6 @@ from mato_loop_backend.api.routes.sessions import (
 from mato_loop_backend.attachments import (
     AttachmentInput,
     AttachmentService,
-    AttachmentStorage,
 )
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import (
@@ -62,6 +62,7 @@ from mato_loop_backend.settings.models import (
     ModelAvailability,
     ModelConfig,
 )
+from mato_loop_backend.workspace import FileRoot, RootFileService
 
 
 def _user() -> UserAccount:
@@ -276,7 +277,7 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
     db.commit.side_effect = RuntimeError("commit failed")
     persisted_location = MagicMock()
     persisted_location.one_or_none.return_value = (source_project_id,)
-    db.execute.side_effect = [MagicMock(), persisted_location]
+    db.execute.side_effect = [persisted_location]
     storage = MagicMock()
     receipt = MagicMock(
         journal=None,
@@ -302,13 +303,7 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
     )
     storage.rollback_session_move.assert_called_once_with(receipt)
     storage.finalize_session_move.assert_not_called()
-    cleanup = db.execute.await_args_list[0].args[0]
-    cleanup_sql = str(cleanup)
-    assert cleanup.is_delete
-    assert "message_attachments.file_root_id" in cleanup_sql
-    assert "messages.session_id" in cleanup_sql
-    assert "storage_key" not in cleanup_sql
-    assert {source_project_id, session.id}.issubset(cleanup.compile().params.values())
+    assert len(db.execute.await_args_list) == 1
     assert db.rollback.await_count == 2
 
 
@@ -355,7 +350,10 @@ async def test_standalone_project_move_rebinds_managed_file_references(monkeypat
     artifact_update = db.execute.await_args.args[0]
     assert artifact_update.is_update
     assert "message_attachments.file_root_id" in str(artifact_update)
-    assert {session.id, project_id}.issubset(artifact_update.compile().params.values())
+    params = artifact_update.compile().params.values()
+    assert session.id in params
+    assert project_id in params
+    assert {"companionFileRootId": str(project_id)} in params
     assert session.project_id == project_id
 
 
@@ -580,7 +578,10 @@ async def test_first_session_retry_returns_canonical_session_and_attachment() ->
             mime_type="text/plain",
             size_bytes=7,
             sha256="a" * 64,
-            storage_path=f"attachments/{uuid4()}/note.txt",
+            file_root_id=session.id,
+            file_id=uuid4(),
+            file_revision=1,
+            file_path="attachments/note/note.txt",
             filename="note.txt",
         )
     ]
@@ -704,7 +705,7 @@ async def test_session_is_not_created_for_blank_first_message() -> None:
     db.add.assert_not_called()
 
 
-async def test_failed_first_commit_removes_provisioned_session_tree(
+async def test_uncertain_first_commit_preserves_provisioned_session_tree(
     tmp_path: Path, monkeypatch
 ) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
@@ -730,7 +731,9 @@ async def test_failed_first_commit_removes_provisioned_session_tree(
     with pytest.raises(RuntimeError, match="commit failed"):
         await create_session(SessionCreateRequest(content="Erste Nachricht"), user, db)
 
-    assert [item for item in sessions.sessions_dir.iterdir() if not item.name.startswith(".")] == []
+    assert len(
+        [item for item in sessions.sessions_dir.iterdir() if not item.name.startswith(".")]
+    ) == 1
     db.rollback.assert_awaited()
 
 
@@ -1247,7 +1250,6 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             mime_type="image/png",
             size_bytes=123,
             sha256="a" * 64,
-            storage_path=None,
             file_root_id=session_id,
             file_id=file_id,
             file_revision=3,
@@ -1299,11 +1301,15 @@ async def test_attachment_download_has_secure_headers_and_checks_hierarchy(
     attachment_id = uuid4()
     sessions = SessionStorage(tmp_path / "sessions")
     sessions.provision(session_id)
-    storage = AttachmentStorage(sessions)
     data = b"image-data"
-    storage_path = storage.write(
-        session_id, attachment_id, data, "bild.png", "user_upload"
+    root_files = RootFileService(session_id, session_storage=sessions)
+    root_files.create_directory(FileRoot.SESSION, "attachments")
+    root_files.create_directory(FileRoot.SESSION, f"attachments/{attachment_id}")
+    file_path = f"attachments/{attachment_id}/bild.png"
+    root_files.create_file(
+        FileRoot.SESSION, file_path, BytesIO(data), max_bytes=100
     )
+    revision = root_files.list_revisions(file_path)[0]
     attachment = MessageAttachment(
         id=attachment_id,
         message_id=message_id,
@@ -1313,13 +1319,16 @@ async def test_attachment_download_has_secure_headers_and_checks_hierarchy(
         mime_type="image/png",
         size_bytes=10,
         sha256=hashlib.sha256(data).hexdigest(),
-        storage_path=storage_path,
+        file_root_id=session_id,
+        file_id=revision.file_id,
+        file_revision=revision.revision,
+        file_path=file_path,
         filename="bild.png",
     )
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = attachment
     monkeypatch.setattr(
-        sessions_route, "AttachmentService", lambda: AttachmentService(storage)
+        sessions_route, "AttachmentService", lambda: AttachmentService(sessions)
     )
 
     response = await download_attachment(
@@ -1502,7 +1511,7 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
     assert result["runId"] == str(run.id)
 
 
-async def test_existing_session_retry_returns_original_message_before_active_rejection() -> None:
+async def test_existing_session_retry_reschedules_queued_run(monkeypatch) -> None:
     user = _user()
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
     message = Message(
@@ -1512,12 +1521,14 @@ async def test_existing_session_retry_returns_original_message_before_active_rej
         id=uuid4(),
         session_id=session.id,
         input_message_id=message.id,
-        status="running",
+        status="queued",
         model_name="Test",
     )
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [session, run, message]
     db.get.return_value = session
+    schedule = MagicMock()
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
 
     result = await send_message(
         session.id,
@@ -1529,6 +1540,7 @@ async def test_existing_session_retry_returns_original_message_before_active_rej
     assert result["runId"] == str(run.id)
     assert result["message"]["content"] == "Original"
     assert len(db.scalar.await_args_list) == 3
+    schedule.assert_called_once_with(run)
 
 
 async def test_existing_session_retry_rejects_owned_run_from_another_session() -> None:

@@ -68,7 +68,7 @@ Task tools list task collections, query one collection, and create one or a boun
 
 Validated resource discovery stores bounded resource labels in `ToolSettings.resource_labels` for later approval display. CalDAV approvals combine that label with the configured account name and summarize the requested event fields and timing. Missing labels fall back to the stable opaque resource key; labels remain display metadata and never replace the key in policy or grant matching.
 
-CalDAV tools release private integration data. A public model therefore needs an explicit session release in addition to the configured calendar action policy. This release is a data-transport boundary and cannot be replaced by `calendar.read=auto`.
+CalDAV data remains subject to ownership, integration access, and the configured calendar action policy. Selecting the active model is the provider-release decision; public models do not require an additional session-wide release.
 
 The `tasks_create_many` tool creates at most 50 tasks in one selected `VTODO` collection under one `tasks.write` approval. It reads the current open titles as a mutation precondition, compares whitespace-normalized titles case-insensitively, and skips matching existing or repeated requested titles. Completed tasks do not block a new item. Each created task retains a deterministic host-generated UID. The operation is additive only: it neither deletes nor rewrites existing tasks and therefore needs no synchronization state.
 

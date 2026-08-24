@@ -337,7 +337,12 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'components/ComposerAttachments.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
-import { useExecutionAgentStore } from 'stores/execution-agents'
+import {
+  executionHomeRoot,
+  executionRootPatch,
+  usableExecutionRoots,
+  useExecutionAgentStore
+} from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useChatStore } from 'stores/chat'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
@@ -393,6 +398,7 @@ const executionAgents = useExecutionAgentStore()
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(props.session?.preferredExecutionAgentId)
 ))
+const selectedExecutionRoots = computed(() => usableExecutionRoots(selectedExecutionAgent.value))
 const executionAgentOptions = computed(() => {
   const options = [
     { label: 'Kein Computer', value: null, connected: null, caption: 'Nur Backend-Funktionen verwenden' },
@@ -420,17 +426,18 @@ const executionAgentOptions = computed(() => {
 const liveWorkspaceContext = computed(() => executionAgents.workspaceContextFor(props.session))
 const executionAgentMessage = computed(() => {
   if (executionAgents.loadFailed) return 'Der Status der Computer konnte nicht geladen werden.'
-  if (!props.session?.preferredExecutionAgentId) return 'Ohne Computer stehen keine lokalen Arbeitsbereiche zur Verfügung.'
+  if (!props.session?.preferredExecutionAgentId) return 'Ohne Computer stehen keine lokal freigegebenen Bereiche zur Verfügung.'
   if (!selectedExecutionAgent.value) return 'Der ausgewählte Computer ist nicht mehr eingerichtet.'
   if (selectedExecutionAgent.value.pairingState === 'pending') return 'Die Kopplung des ausgewählten Computers steht noch aus.'
   if (selectedExecutionAgent.value.pairingState === 'unpaired') return 'Der ausgewählte Computer ist nicht gekoppelt.'
   if (!selectedExecutionAgent.value.connected) return 'Der ausgewählte Computer ist offline. Es erfolgt kein automatischer Wechsel.'
-  if (!selectedExecutionAgent.value.roots?.length) return 'Auf dem ausgewählten Computer sind keine Arbeitsbereiche verfügbar.'
-  if (!props.session?.preferredRootId) return 'Wähle im Datei-Explorer einen Arbeitsbereich aus.'
-  if (!selectedExecutionAgent.value.roots.some((root) => root.id === props.session.preferredRootId)) {
-    return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
+  if (!selectedExecutionAgent.value.roots?.length) return 'Auf dem ausgewählten Computer sind keine freigegebenen Bereiche verfügbar.'
+  if (!selectedExecutionAgent.value.operations?.includes('workspace.list')) return 'Der ausgewählte Computer bietet keinen Dateizugriff an.'
+  if (!props.session?.preferredRootId) return 'Wähle im Datei-Explorer einen freigegebenen Bereich aus.'
+  if (!selectedExecutionRoots.value.some((root) => root.id === props.session.preferredRootId)) {
+    return 'Der ausgewählte freigegebene Bereich ist nicht mehr verfügbar.'
   }
-  if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
+  if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte freigegebene Bereich ist nicht mehr verfügbar.'
   return ''
 })
 const effectiveModelId = computed(() => props.session?.modelId || providers.defaultModelId)
@@ -578,11 +585,11 @@ function selectModel(modelId) {
 
 async function selectExecutionAgent(value) {
   const agent = executionAgents.byId(value)
+  const roots = usableExecutionRoots(agent)
+  const root = executionHomeRoot(agent, roots) || (roots.length === 1 ? roots[0] : null)
   await chat.updateActive({
     preferred_execution_agent_id: value,
-    preferred_root_id: agent?.homeRootId || null,
-    working_directory: agent?.homeRelativeDirectory || null,
-    current_directory: agent?.homeDirectory || null
+    ...executionRootPatch(agent, root)
   })
 }
 

@@ -107,8 +107,9 @@ async def lifespan(_app: FastAPI):
                 (await db.execute(select(ChatSession.id, ChatSession.project_id))).all()
             )
             project_ids = set((await db.scalars(select(Project.id))).all())
+            session_storage = SessionStorage()
             reconciliation = await asyncio.to_thread(
-                SessionStorage().reconcile,
+                session_storage.reconcile,
                 session_locations,
                 projects=project_ids,
                 stale_staging_after_seconds=0,
@@ -119,6 +120,15 @@ async def lifespan(_app: FastAPI):
                     len(reconciliation.provisioned),
                     len(reconciliation.restored),
                     len(reconciliation.trashed),
+                )
+            removed_legacy_files = await asyncio.to_thread(
+                session_storage.cleanup_legacy_attachment_storage,
+                session_locations,
+            )
+            if removed_legacy_files:
+                logger.info(
+                    "Removed %s legacy attachment storage entries",
+                    removed_legacy_files,
                 )
             if runtime_config.embedding_enabled:
                 await MemoryIndexService.recover(db)

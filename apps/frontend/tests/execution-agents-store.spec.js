@@ -7,7 +7,13 @@ const { api } = vi.hoisted(() => ({
 
 vi.mock('src/boot/axios', () => ({ api }))
 
-import { absoluteWebsocketUrl, useExecutionAgentStore } from '../src/stores/execution-agents'
+import {
+  absoluteWebsocketUrl,
+  executionHomeRoot,
+  executionRootPatch,
+  usableExecutionRoots,
+  useExecutionAgentStore
+} from '../src/stores/execution-agents'
 
 const agent = {
   id: 'agent-1',
@@ -72,6 +78,31 @@ describe('execution agent store', () => {
     })).toMatchObject({
       connected: true,
       operations: agent.operations
+    })
+  })
+
+  it('selects only usable roots and applies a valid computer home', () => {
+    const configured = {
+      ...agent,
+      homeDirectory: '/home/user',
+      homeRootId: 'root-1',
+      homeRootRevision: 'root-revision',
+      homeRelativeDirectory: 'user'
+    }
+    const roots = usableExecutionRoots(configured)
+
+    expect(roots).toEqual(agent.roots)
+    expect(executionHomeRoot(configured, roots)).toEqual(agent.roots[0])
+    expect(executionRootPatch(configured, roots[0])).toEqual({
+      preferred_root_id: 'root-1',
+      working_directory: 'user',
+      current_directory: '/home/user'
+    })
+    expect(usableExecutionRoots({ ...configured, connected: false })).toEqual([])
+    expect(executionRootPatch(configured, { id: 'root-2', revision: 'other' })).toEqual({
+      preferred_root_id: 'root-2',
+      working_directory: null,
+      current_directory: null
     })
   })
 

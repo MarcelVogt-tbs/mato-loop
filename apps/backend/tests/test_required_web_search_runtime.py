@@ -178,7 +178,7 @@ async def _runtime_setup(
                 mime_type="image/png",
                 size_bytes=100,
                 sha256="a" * 64,
-                storage_path=f"attachments/{uuid4()}/reference.png",
+                file_path=f"attachments/{uuid4()}/reference.png",
                 filename=f"reference-{position}.png",
             )
             for position in range(user_image_count)
@@ -203,7 +203,6 @@ async def _runtime_setup(
                 mime_type="image/jpeg",
                 size_bytes=100,
                 sha256="b" * 64,
-                storage_path=None,
                 file_root_id=session.id,
                 file_id=uuid4(),
                 file_revision=1,
@@ -809,7 +808,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
     )
 
 
-async def test_private_openscad_source_uses_configured_vision_release(monkeypatch) -> None:
+async def test_private_openscad_source_uses_public_active_vision_model(monkeypatch) -> None:
     agent_id = uuid4()
     integration = IntegrationInstance(
         name="OpenSCAD",
@@ -879,7 +878,7 @@ async def test_private_openscad_source_uses_configured_vision_release(monkeypatc
 
     assert [request["model"].model_id for request in requests] == [
         "local-model",
-        "vision-model",
+        "local-model",
         "local-model",
     ]
     assert requests[1]["target_trust_level"] == TrustLevel.PUBLIC

@@ -68,7 +68,7 @@ describe('API error messages', () => {
       'Die Datei kann nur als UTF-8-Text gelesen werden.'
     )
     expect(apiErrorMessage({ error: { code: 'file.workspaceNotSelected' } })).toBe(
-      'Für diese Session ist kein Arbeitsverzeichnis ausgewählt.'
+      'Für diese Session ist kein aktueller Ordner auf dem Computer ausgewählt.'
     )
     expect(apiErrorMessage({ error: { code: 'file.pathAlreadyExists' } })).toBe(
       'Der exakte Zielpfad existiert bereits. Dateien werden nicht überschrieben.'

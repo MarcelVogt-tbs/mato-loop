@@ -652,6 +652,7 @@ class AiSettingsBase(SettingsDocument):
     default_model_id: UUID | None = None
     compaction_model_id: UUID | None = None
     title_generation_model_id: UUID | None = None
+    title_vision_fallback_enabled: bool = True
     skill_creation_model_id: UUID | None = None
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None

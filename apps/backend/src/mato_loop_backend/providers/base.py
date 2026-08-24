@@ -148,7 +148,6 @@ def select_provider_images(
             candidates.append((1, -source_order, message_index, source_order, attachment))
             continue
 
-        storage_path = attachment.get("storage_path")
         file_path = attachment.get("file_path")
         filename = attachment.get("filename")
         matching_indices = [
@@ -157,10 +156,6 @@ def select_provider_images(
             if (
                 isinstance(attachment_id, str)
                 and _references_value(text, attachment_id, boundary_characters=r"\w-")
-            )
-            or (
-                isinstance(storage_path, str)
-                and _references_value(text, storage_path, boundary_characters=r"\w./-")
             )
             or (
                 isinstance(file_path, str)
@@ -181,24 +176,21 @@ def select_provider_images(
     for group, _priority, message_index, source_order, attachment in candidates:
         if len(selected) >= max_images:
             break
-        source_trust = attachment.get("trust_level")
-        allow_raw = target_trust_level == "private" or source_trust == "public"
         size_bytes = attachment.get("size_bytes")
-        if allow_raw:
-            if (
-                not isinstance(size_bytes, int)
-                or isinstance(size_bytes, bool)
-                or size_bytes <= 0
-                or selected_bytes + size_bytes > max_bytes
-            ):
-                continue
-            selected_bytes += size_bytes
+        if (
+            not isinstance(size_bytes, int)
+            or isinstance(size_bytes, bool)
+            or size_bytes <= 0
+            or selected_bytes + size_bytes > max_bytes
+        ):
+            continue
+        selected_bytes += size_bytes
         selected.append(
             (
                 group,
                 message_index,
                 source_order,
-                ProviderImageSelection(message_index, attachment, allow_raw),
+                ProviderImageSelection(message_index, attachment, True),
             )
         )
 

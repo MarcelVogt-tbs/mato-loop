@@ -4,7 +4,7 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Computer</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Lokale Arbeitsbereiche und Ausführungsfunktionen mit MatoLoop verbinden.
+          Lokal freigegebene Bereiche und Ausführungsfunktionen mit MatoLoop verbinden.
         </p>
       </div>
       <q-btn color="primary" unelevated no-caps icon="add" label="Computer hinzufügen" @click="openCreate" />
@@ -51,7 +51,7 @@
             </q-item-label>
 
             <div class="q-mt-sm">
-              <div class="text-caption app-muted">Home-Verzeichnis</div>
+              <div class="text-caption app-muted">Aktueller Ordner</div>
               <div class="text-body2">{{ agent.homeDirectory || 'Nicht konfiguriert' }}</div>
               <div class="text-caption app-muted">
                 Stammt aus der lokalen Agent-Konfiguration und ist der initiale aktuelle Ordner für neue oder manuell zugewiesene Sessions.
@@ -59,13 +59,13 @@
             </div>
 
             <div class="q-mt-sm">
-              <div class="text-caption app-muted">Arbeitsbereiche</div>
+              <div class="text-caption app-muted">Freigegebene Bereiche</div>
               <div v-if="agent.roots?.length" class="row q-gutter-xs q-mt-xs">
                 <q-chip v-for="root in agent.roots" :key="root.id" dense outline icon="folder">
                   {{ root.label }}
                 </q-chip>
               </div>
-              <div v-else class="text-caption">Keine Arbeitsbereiche gemeldet.</div>
+              <div v-else class="text-caption">Keine freigegebenen Bereiche gemeldet.</div>
             </div>
 
             <div class="q-mt-sm">

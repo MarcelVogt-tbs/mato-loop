@@ -159,6 +159,13 @@ class ReadArguments(SessionFileReadArguments):
     path: str = Field(min_length=1, max_length=1_000)
     offset: int = Field(default=1, ge=1)
     limit: int = Field(default=1_000, ge=1, le=1_000)
+    revision: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def revision_requires_managed_files(self) -> ReadArguments:
+        if self.revision is not None and self.root != "session":
+            raise ValueError("revision requires root=files")
+        return self
 
 
 class GlobArguments(SessionFileReadArguments):

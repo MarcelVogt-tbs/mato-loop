@@ -18,7 +18,7 @@ Each session has a mutable `memoryMode`:
 
 The owner-scoped memory switch and the effective instance or personal provider and model memory policies can further restrict these capabilities. A provider or model with memory policy `deny` disables memory even when the session mode permits it. Tool support affects memory tools and dreaming, but automatic retrieval itself does not require a model tool call.
 
-Every run persists its effective model trust snapshot. Prior-session messages retain `public` or `private` provenance: public models receive only public messages, while private models may receive both trust levels. Durable memories instead have an independent audience: `public_only` is visible only to public models, `private_only` only to private models, and `both` to both. Ownership, current-session exclusion, and release restrictions are applied before retrieval limits. Local embeddings do not weaken these SQL filters. Changing models within a session does not retroactively hide canonical current-session messages.
+Every run persists its effective model trust snapshot. Prior-session messages retain `public` or `private` provenance, but selecting a model is the release decision for messages already authorized by ownership and session access. Durable memories retain their independent `public_only`, `private_only`, or `both` audience. Ownership, current-session exclusion, and memory audiences are applied before retrieval limits. Local embeddings do not weaken these SQL filters.
 
 Durable memories and prior-session references are explicitly untrusted data, never instructions. Conflict priority is:
 
@@ -27,7 +27,7 @@ Durable memories and prior-session references are explicitly untrusted data, nev
 3. Retrieved durable memory
 4. A retrieved prior-session excerpt or transcript
 
-An automatic episode contains session metadata, one bounded anchor preview, and a bounded trust-filtered excerpt. The model uses the excerpt directly when sufficient and calls `session_read` only for omitted details or attachments. `session_read` remains separately controlled: the current session is host-allowed, while another session requires the normal exact `session.read` grant or approval. Public session tools also retain their public-only release boundary.
+An automatic episode contains session metadata, one bounded anchor preview, and a bounded excerpt. The model uses the excerpt directly when sufficient and calls `session_read` only for omitted details or attachments. The current session is host-allowed; another session requires the normal exact `session.read` grant or approval.
 
 ## Automatic Context
 

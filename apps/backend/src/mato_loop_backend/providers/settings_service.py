@@ -689,7 +689,7 @@ class ProviderSettingsService:
         settings: AiSettingsDocument,
         validation_settings: AiSettingsBase,
         owner_id: UUID | None,
-        values: dict[str, UUID | None],
+        values: dict[str, Any],
         fields_set: set[str],
     ) -> None:
         for field, (api_field, capability) in DEFAULT_MODEL_FIELDS.items():
@@ -745,6 +745,9 @@ class ProviderSettingsService:
             if field in additive_fields and field not in fields_set:
                 continue
             setattr(settings, field, values[field])
+        settings.title_vision_fallback_enabled = values[
+            "title_vision_fallback_enabled"
+        ]
         await cls.save(db, settings, owner_id)
         await db.commit()
 

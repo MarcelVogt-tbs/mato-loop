@@ -467,7 +467,7 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
             mime_type="image/png",
             size_bytes=5,
             sha256="0" * 64,
-            storage_path=f"attachments/{attachment_id}/image.png",
+            file_path=f"attachments/{attachment_id}/image.png",
             metadata_json=(
                 {"authorizationSourceAttachmentIds": [str(original_attachment_id)]}
                 if position == 0
@@ -511,7 +511,7 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     )
 
 
-async def test_edit_image_blocks_private_sources_for_public_target(
+async def test_edit_image_sends_authorized_private_sources_to_public_target(
     tmp_path, monkeypatch
 ) -> None:
     attachment_id = uuid4()
@@ -544,18 +544,27 @@ async def test_edit_image_blocks_private_sources_for_public_target(
         mime_type="image/png",
         size_bytes=5,
         sha256="0" * 64,
-        storage_path=f"attachments/{attachment_id}/image.png",
+        file_path=f"attachments/{attachment_id}/image.png",
     )
     scalars = MagicMock()
     scalars.all.return_value = [attachment]
     tool_context.db.scalars.return_value = scalars
-    edit = AsyncMock()
+    monkeypatch.setattr(AttachmentService, "read_image", AsyncMock(return_value=b"private"))
+    edit = AsyncMock(
+        return_value=MediaResult(
+            b"result",
+            "image/png",
+            "generated.png",
+            trust_level=TrustLevel.PUBLIC,
+        )
+    )
     monkeypatch.setattr(MediaService, "edit_image", edit)
 
     result = await tool_registry.execute(call, tool_context)
 
-    assert result.metadata == {"errorCode": "privacy.privateContentBlocked"}
-    edit.assert_not_awaited()
+    assert result.is_error is False
+    assert edit.await_args.kwargs["images"] == ((b"private", "image/png"),)
+    tool_context.ask_handler.assert_not_awaited()
 
 
 async def test_policy_revocation_during_approval_stops_media_service(

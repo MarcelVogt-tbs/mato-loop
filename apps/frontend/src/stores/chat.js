@@ -1040,8 +1040,8 @@ export const useChatStore = defineStore('chat', {
         Object.hasOwn(patch, 'preferred_root_id')
         && patch.preferred_root_id !== options.preferredRootId
       ) {
-        normalizedPatch.working_directory = null
-        normalizedPatch.current_directory = null
+        if (!Object.hasOwn(patch, 'working_directory')) normalizedPatch.working_directory = null
+        if (!Object.hasOwn(patch, 'current_directory')) normalizedPatch.current_directory = null
       } else if (Object.hasOwn(patch, 'working_directory')) {
         normalizedPatch.current_directory = null
       }
@@ -1087,7 +1087,7 @@ export const useChatStore = defineStore('chat', {
         Object.hasOwn(patch, 'preferred_root_id')
         && patch.preferred_root_id !== session.preferredRootId
       ) {
-        normalizedPatch.working_directory = null
+        if (!Object.hasOwn(patch, 'working_directory')) normalizedPatch.working_directory = null
       }
       this.sessionSettingsPending += 1
       try {
@@ -2047,7 +2047,7 @@ export const useChatStore = defineStore('chat', {
           const argumentsValue = toolCall?.arguments || {}
           const sourceRoot = argumentsValue.source_root || argumentsValue.root
           const sourcePath = argumentsValue.source_path || argumentsValue.path
-          const sourceRootIdentity = sourceRoot === 'session'
+          const sourceRootIdentity = sourceRoot === 'files'
             ? session.projectId || sessionId
             : useExecutionAgentStore().workspaceContextFor(this.activeContext)?.rootId
           const sourceMatchesOpenFile = ['delete_path', 'move_path'].includes(payload.tool)
@@ -2056,8 +2056,8 @@ export const useChatStore = defineStore('chat', {
               || workspace.viewedEntry.path.startsWith(`${sourcePath}/`))
             && workspace.rootIdentity === sourceRootIdentity
             && !workspace.toolContext
-            && ((sourceRoot === 'session' && workspace.scope === 'session')
-              || (sourceRoot === 'workspace' && workspace.scope === 'filesystem'))
+            && ((sourceRoot === 'files' && workspace.scope === 'session')
+              || (sourceRoot === 'computer' && workspace.scope === 'filesystem'))
           if (sourceMatchesOpenFile) workspace.noteFileMutation(workspace.viewedEntry.path)
           if (!action) return
           const sameOpenFile = workspace.viewedEntry?.path === action.path

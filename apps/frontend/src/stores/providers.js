@@ -16,6 +16,7 @@ function assignProviderPayload(store, payload) {
   store.defaultModelId = payload.defaultModelId ?? null
   store.compactionModelId = payload.compactionModelId ?? null
   store.titleGenerationModelId = payload.titleGenerationModelId ?? null
+  store.titleVisionFallbackEnabled = payload.titleVisionFallbackEnabled !== false
   store.dreamingModelId = payload.dreamingModelId ?? null
   store.visionModelId = payload.visionModelId ?? null
   store.videoModelId = payload.videoModelId ?? null
@@ -117,6 +118,7 @@ export const useProviderStore = defineStore('providers', {
     defaultModelId: null,
     compactionModelId: null,
     titleGenerationModelId: null,
+    titleVisionFallbackEnabled: true,
     dreamingModelId: null,
     visionModelId: null,
     videoModelId: null,
@@ -311,6 +313,7 @@ export const useProviderStore = defineStore('providers', {
       defaultModelId,
       compactionModelId,
       titleGenerationModelId,
+      titleVisionFallbackEnabled,
       dreamingModelId,
       visionModelId,
       videoModelId,
@@ -324,6 +327,7 @@ export const useProviderStore = defineStore('providers', {
         default_model_id: defaultModelId || null,
         compaction_model_id: compactionModelId || null,
         title_generation_model_id: titleGenerationModelId || null,
+        title_vision_fallback_enabled: titleVisionFallbackEnabled !== false,
         dreaming_model_id: dreamingModelId || null,
         vision_model_id: visionModelId || null,
         video_model_id: videoModelId || null,

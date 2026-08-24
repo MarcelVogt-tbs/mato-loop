@@ -1,3 +1,4 @@
+import json
 import stat
 from pathlib import Path
 from uuid import uuid4
@@ -30,7 +31,7 @@ def test_session_storage_provisions_standalone_and_project_trees_atomically(
     project_session = storage.provision(uuid4(), project_id)
 
     assert target == tmp_path / "sessions" / str(session_id)
-    assert SESSION_DIRECTORIES == ("attachments",)
+    assert SESSION_DIRECTORIES == ()
     for directory in (storage.sessions_dir, storage.staging_dir, storage.trash_dir, target):
         assert directory.is_dir()
         assert stat.S_IMODE(directory.stat().st_mode) == 0o700
@@ -38,7 +39,7 @@ def test_session_storage_provisions_standalone_and_project_trees_atomically(
         directory = target / relative_path
         assert directory.is_dir()
         assert stat.S_IMODE(directory.stat().st_mode) == 0o700
-    assert {item.name for item in project_session.iterdir()} == {"attachments"}
+    assert list(project_session.iterdir()) == []
     assert {
         item.name for item in storage.logical_root_path(session_id, project_id).iterdir()
     } == {"files", "revisions", "sessions"}
@@ -88,6 +89,25 @@ def test_session_storage_can_trash_purge_and_remove_complete_trees(tmp_path: Pat
     assert storage.remove_session(removed_id) is False
 
 
+def test_cleanup_removes_legacy_attachments_and_deleted_histories(tmp_path: Path) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id = uuid4()
+    root = storage.provision(session_id)
+    (root / "attachments" / "old").mkdir(parents=True)
+    (root / "attachments" / "old" / "upload.bin").write_bytes(b"old")
+    history = root / "revisions" / "deleted-file"
+    history.mkdir()
+    (history / "index.json").write_text(
+        json.dumps({"deleted": True}), encoding="utf-8"
+    )
+
+    removed = storage.cleanup_legacy_attachment_storage({session_id: None})
+
+    assert removed == 2
+    assert not (root / "attachments").exists()
+    assert not history.exists()
+
+
 def test_session_storage_reconciles_missing_orphaned_and_staged_trees(tmp_path: Path) -> None:
     storage = SessionStorage(tmp_path / "sessions")
     expected_id = uuid4()
@@ -132,7 +152,6 @@ def test_standalone_session_files_and_revisions_join_project(tmp_path: Path) -> 
     (source / "files" / "docs" / "note.txt").write_text("session", encoding="utf-8")
     (source / "revisions" / "file-id").mkdir()
     (source / "revisions" / "file-id" / "1").write_text("revision", encoding="utf-8")
-    (source / "attachments" / "upload.bin").write_bytes(b"private")
     project_session = storage.provision(uuid4(), project_id)
     project_root = storage.logical_root_path(project_session.name, project_id)
     (project_root / "files" / "shared.txt").write_text("project", encoding="utf-8")
@@ -143,7 +162,7 @@ def test_standalone_session_files_and_revisions_join_project(tmp_path: Path) -> 
     assert (project_root / "files" / "shared.txt").read_text() == "project"
     assert (project_root / "files" / "docs" / "note.txt").read_text() == "session"
     assert (project_root / "revisions" / "file-id" / "1").read_text() == "revision"
-    assert (receipt.target / "attachments" / "upload.bin").read_bytes() == b"private"
+    assert list(receipt.target.iterdir()) == []
 
     storage.finalize_session_move(receipt)
 
@@ -197,7 +216,7 @@ def test_standalone_project_import_rolls_back_copied_files(tmp_path: Path) -> No
     storage.rollback_session_move(receipt)
 
     assert (source / "files" / "nested" / "note.txt").read_text() == "session"
-    assert (source / "attachments").is_dir()
+    assert (source / "files").is_dir()
     assert not storage.session_path(session_id, project_id=project_id).exists()
     assert not (storage.logical_root_path(session_id, project_id) / "files" / "nested").exists()
 
@@ -227,8 +246,7 @@ def test_project_with_pending_session_import_cannot_be_trashed(tmp_path: Path) -
     storage = SessionStorage(tmp_path / "sessions")
     session_id = uuid4()
     project_id = uuid4()
-    source = storage.provision(session_id)
-    (source / "attachments" / "private.bin").write_bytes(b"private")
+    storage.provision(session_id)
     receipt = storage.stage_session_move(session_id, None, project_id)
     storage.abandon_session_move(receipt)
 
@@ -236,7 +254,7 @@ def test_project_with_pending_session_import_cannot_be_trashed(tmp_path: Path) -
         storage.trash_project(project_id)
 
     assert exc_info.value.code == "sessionStorage.projectMovePending"
-    assert (receipt.target / "attachments" / "private.bin").read_bytes() == b"private"
+    assert list(receipt.target.iterdir()) == []
 
 
 def test_standalone_project_import_enforces_combined_quota(tmp_path: Path) -> None:
@@ -301,14 +319,13 @@ def test_empty_session_moves_project_to_project_to_standalone(tmp_path: Path) ->
         tmp_path / "projects" / str(first_project_id) / "sessions" / str(session_id)
     )
     assert storage.session_path(session_id, require_exists=True) == target
-    assert {item.name for item in target.iterdir()} == {"attachments"}
+    assert list(target.iterdir()) == []
 
     second = storage.move_session(session_id, first_project_id, second_project_id)
     standalone = storage.move_session(session_id, second_project_id, None)
 
     assert not second.exists()
     assert standalone == tmp_path / "sessions" / str(session_id)
-    assert standalone.joinpath("attachments").is_dir()
     assert standalone.joinpath("files").is_dir()
     assert standalone.joinpath("revisions").is_dir()
 
@@ -317,16 +334,16 @@ def test_reconciliation_relocates_session_to_database_project(tmp_path: Path) ->
     storage = SessionStorage(tmp_path / "sessions")
     session_id = uuid4()
     project_id = uuid4()
-    stored_file = storage.provision(session_id) / "attachments" / "important.txt"
+    stored_file = storage.provision(session_id) / "files" / "important.txt"
     stored_file.write_text("Inhalt", encoding="utf-8")
 
     result = storage.reconcile({session_id: project_id}, stale_staging_after_seconds=0)
 
     assert result.provisioned == ()
-    target = storage.session_path(
-        session_id, project_id=project_id, require_exists=True
-    )
-    assert target.joinpath("attachments/important.txt").read_text() == "Inhalt"
+    storage.session_path(session_id, project_id=project_id, require_exists=True)
+    assert storage.logical_root_path(session_id, project_id).joinpath(
+        "files/important.txt"
+    ).read_text() == "Inhalt"
     assert not storage.session_path(session_id, project_id=None).exists()
 
 
@@ -350,9 +367,7 @@ def test_nonempty_project_tree_can_be_trashed_and_restored(tmp_path: Path) -> No
     storage = SessionStorage(tmp_path / "sessions")
     project_id = uuid4()
     session_id = uuid4()
-    session_path = storage.provision(session_id, project_id)
-    private_upload = session_path / "attachments" / "upload.bin"
-    private_upload.write_bytes(b"private")
+    storage.provision(session_id, project_id)
     shared = storage.logical_root_path(session_id, project_id) / "files" / "shared.txt"
     shared.write_text("shared", encoding="utf-8")
 
@@ -361,7 +376,6 @@ def test_nonempty_project_tree_can_be_trashed_and_restored(tmp_path: Path) -> No
     assert trashed is not None
     assert not shared.exists()
     storage.restore_project(project_id, trashed)
-    assert private_upload.read_bytes() == b"private"
     assert shared.read_text(encoding="utf-8") == "shared"
 
 

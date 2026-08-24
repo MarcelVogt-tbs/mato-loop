@@ -53,7 +53,7 @@ def _message(session_id, role: str, content: str) -> Message:
 
 def _attach_image(
     message: Message,
-    storage_path: str = "attachments/00000000-0000-4000-8000-000000000000/image.png",
+    file_path: str = "attachments/00000000-0000-4000-8000-000000000000/image.png",
 ) -> MessageAttachment:
     attachment = MessageAttachment(
         id=uuid4(),
@@ -63,7 +63,7 @@ def _attach_image(
         mime_type="image/png",
         size_bytes=123,
         sha256="a" * 64,
-        storage_path=storage_path,
+        file_path=file_path,
     )
     message.attachments = [attachment]
     return attachment
@@ -79,7 +79,7 @@ def test_audio_projection_uses_reference_marker_without_file_data() -> None:
         mime_type="audio/wav",
         size_bytes=123,
         sha256="a" * 64,
-        storage_path=(
+        file_path=(
             "attachments/00000000-0000-4000-8000-000000000001/aufnahme.wav"
         ),
         filename="aufnahme.wav",
@@ -92,7 +92,7 @@ def test_audio_projection_uses_reference_marker_without_file_data() -> None:
     assert str(attachment.id) in projected["content"]
     assert "aufnahme.wav" in projected["content"]
     assert "audio/wav" in projected["content"]
-    assert attachment.storage_path in projected["content"]
+    assert attachment.file_path in projected["content"]
     assert "00:00:01.250" in projected["content"]
     assert projected["attachments"] == []
     assert "secret-storage-key" not in str(projected)
@@ -124,7 +124,7 @@ def test_user_attachment_excerpt_is_untrusted_and_strictly_budgeted() -> None:
         mime_type="application/pdf",
         size_bytes=123,
         sha256="a" * 64,
-        storage_path=f"attachments/{attachment_id}/bericht.pdf",
+        file_path=f"attachments/{attachment_id}/bericht.pdf",
         filename="bericht.pdf",
         metadata_json={
             "derivedPath": f"attachments/{attachment_id}/derived/content.txt"
@@ -162,7 +162,6 @@ def test_attachment_excerpt_is_never_injected_into_tool_content() -> None:
         mime_type="text/plain",
         size_bytes=10,
         sha256="a" * 64,
-        storage_path=None,
         file_root_id=message.session_id,
         file_id=file_id,
         file_revision=1,
@@ -201,6 +200,26 @@ def test_message_projection_hides_internal_runtime_state() -> None:
     assert projected["provider_data"] == {
         "responses_output_items": [{"id": "provider-state"}]
     }
+
+
+def test_message_projection_translates_provider_replay_file_roots() -> None:
+    message = _message(uuid4(), "assistant", "")
+    message.provider_data = {
+        "responses_output_items": [
+            {
+                "type": "function_call",
+                "name": "read",
+                "arguments": '{"root":"workspace","path":"README.md"}',
+            }
+        ]
+    }
+
+    projected = message_dict(message)
+
+    arguments = json.loads(
+        projected["provider_data"]["responses_output_items"][0]["arguments"]
+    )
+    assert arguments == {"root": "computer", "path": "README.md"}
 
 
 def test_message_projection_timestamps_only_user_content() -> None:
@@ -322,6 +341,7 @@ def test_message_projection_never_restores_persisted_write_file_content() -> Non
     projected = message_dict(message)
 
     content = projected["tool_calls"][0]["arguments"]["content"]
+    assert projected["tool_calls"][0]["arguments"]["root"] == "files"
     assert content == (
         "[Persisted file content omitted: 17 characters. Regenerate content before retrying.]"
     )
@@ -347,6 +367,38 @@ def test_message_projection_never_restores_persisted_edit_file_text() -> None:
 
     assert arguments["oldText"].startswith("[Persisted edit text omitted: 11")
     assert arguments["newText"].startswith("[Persisted edit text omitted: 12")
+
+
+def test_message_projection_translates_historical_file_roots_for_models() -> None:
+    session_id = uuid4()
+    user = _message(session_id, "user", "Kopiere die Datei")
+    assistant = _message(session_id, "assistant", "")
+    assistant.tool_calls = [
+        {
+            "id": "copy",
+            "name": "copy_path",
+            "arguments": {
+                "source_root": "session",
+                "source_path": "a.txt",
+                "destination_root": "workspace",
+                "destination_path": "a.txt",
+            },
+        }
+    ]
+    tool = _message(session_id, "tool", '{"root":"workspace","copied":"a.txt"}')
+    tool.tool_call_id = "copy"
+
+    projected = _projection_messages(
+        "System", None, [user, assistant, tool], TrustLevel.PRIVATE
+    )
+
+    assert projected[2]["tool_calls"][0]["arguments"] == {
+        "source_root": "files",
+        "source_path": "a.txt",
+        "destination_root": "computer",
+        "destination_path": "a.txt",
+    }
+    assert json.loads(projected[3]["content"])["root"] == "computer"
 
 
 def test_message_projection_does_not_present_redacted_qr_content_as_failure() -> None:
@@ -643,7 +695,7 @@ def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
     assert "toolResultReference" not in summary_source
 
 
-def test_public_projection_does_not_reference_private_historical_tool_results() -> None:
+def test_public_projection_receives_authorized_private_history() -> None:
     session = _session()
     assistant = _message(session.id, "assistant", "Normale Antwort")
     assistant.trust_level = TrustLevel.PRIVATE.value
@@ -667,18 +719,25 @@ def test_public_projection_does_not_reference_private_historical_tool_results() 
         [assistant, tool_result, latest_user],
         TrustLevel.PUBLIC,
     )
+    private_projection = _projection_messages(
+        "System",
+        None,
+        [assistant, tool_result, latest_user],
+        TrustLevel.PRIVATE,
+    )
 
+    assert projected == private_projection
     content = next(item["content"] for item in projected if item["role"] == "tool")
-    assert content == "[Historical private tool output unavailable to the current model.]"
-    assert str(tool_result.id) not in content
+    assert str(tool_result.id) in content
     projected_assistant = next(
         item for item in projected if item["role"] == "assistant"
     )
-    assert projected_assistant["content"] == "Normale Antwort"
-    assert projected_assistant["tool_calls"][0]["arguments"] == {}
-    assert "secret.example.test" not in str(projected)
-    assert "private.png" not in projected_assistant["content"]
-    assert attachment.storage_path not in projected_assistant["content"]
+    assert projected_assistant["content"].startswith("Normale Antwort")
+    assert projected_assistant["tool_calls"][0]["arguments"] == {
+        "url": "https://secret.example.test/private"
+    }
+    assert projected_assistant["attachments"][0]["id"] == str(attachment.id)
+    assert "private.png" in projected_assistant["content"]
     summary_source = _summary_source(None, [assistant, tool_result])
     assert "privater Toolinhalt" not in summary_source
     assert str(tool_result.id) not in summary_source
@@ -1080,7 +1139,7 @@ def test_summary_source_keeps_chat_text_without_attachment_metadata() -> None:
 
     assert user.content in source
     assert str(attachment.id) not in source
-    assert attachment.storage_path not in source
+    assert attachment.file_path not in source
 
 
 def test_summary_source_and_prompt_preserve_relevant_user_timestamp() -> None:
@@ -1202,7 +1261,8 @@ def test_system_prompt_describes_managed_file_roots() -> None:
     assert "'.' is root" in prompt
     assert "Path has no root name, files/ prefix, or absolute form" in prompt
     assert "exact unused destination" in prompt
-    assert "No computer directory selected. Use root=session." in prompt
+    assert "root=files is managed and revisioned" in prompt
+    assert "No computer directory selected. Use root=files." in prompt
     assert "paths and reads are not downloads" in prompt
     assert "provide_file is only for another file" in prompt
     assert "Use its card" in prompt
@@ -1216,7 +1276,7 @@ def test_system_prompt_enforces_managed_writing_contract() -> None:
 
     assert "Reusable email or drafts" in prompt
     assert "one file per artifact" in prompt
-    assert "Default to root=session; workspace only when explicit" in prompt
+    assert "Default to root=files; computer only when explicit" in prompt
     assert "descriptive .md; never files/" in prompt
     assert "one file per artifact with write_file" in prompt
     assert "same path with edit_file after reading it" in prompt
@@ -1714,17 +1774,16 @@ def test_message_dict_contains_only_internal_attachment_reference() -> None:
             "trust_level": "public",
             "source_role": "tool",
             "session_id": str(message.session_id),
-            "storage_path": (
-                "attachments/00000000-0000-4000-8000-000000000000/image.png"
-            ),
             "file_root_id": None,
             "file_id": None,
             "file_revision": None,
-            "file_path": None,
+            "file_path": (
+                "attachments/00000000-0000-4000-8000-000000000000/image.png"
+            ),
         }
     ]
     assert str(message.attachments[0].id) in projected["content"]
-    assert message.attachments[0].storage_path in projected["content"]
+    assert message.attachments[0].file_path in projected["content"]
     assert "data:" not in str(projected)
 
 
@@ -1856,7 +1915,7 @@ async def test_compaction_preserves_history_and_records_stable_summary_boundary(
     assert str(records[1].id) in source
     assert str(records[2].id) not in source
     assert str(records[1].attachments[0].id) not in source
-    assert records[1].attachments[0].storage_path not in source
+    assert records[1].attachments[0].file_path not in source
     assert "diagram.png" not in source
     assert "cd/cdef" not in source
     assert "base64" not in source

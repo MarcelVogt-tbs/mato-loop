@@ -11,10 +11,14 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.file_roots import (
+    internal_file_roots,
+    model_file_root_schema,
+    model_file_roots,
+)
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionRequest,
-    private_integration_data_release_permission,
 )
 from mato_loop_backend.agent.tool_arguments import QuestionArguments
 from mato_loop_backend.agent.tool_contracts import ToolAction
@@ -105,6 +109,8 @@ class ToolAttachment:
     metadata: dict[str, Any] = field(default_factory=dict)
     file_root_id: UUID | None = None
     file_id: UUID | None = None
+    file_revision: int | None = None
+    file_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +146,7 @@ class ToolResult:
         trust_level: TrustLevel | None = None,
     ) -> ToolResult:
         return cls(
-            json.dumps(value, ensure_ascii=False),
+            json.dumps(model_file_roots(value), ensure_ascii=False),
             metadata or {},
             file_actions=file_actions,
             trust_level=trust_level,
@@ -246,7 +252,11 @@ class ToolDefinition:
     def schema(self) -> dict[str, Any]:
         schema = self.arguments_model.model_json_schema()
         _remove_schema_titles(schema)
+        model_file_root_schema(schema)
         return {"name": self.name, "description": self.description, "parameters": schema}
+
+    def validate_arguments(self, value: object) -> BaseModel:
+        return self.arguments_model.model_validate(internal_file_roots(value))
 
 
 def _actions_enabled(
@@ -985,7 +995,7 @@ class ToolRegistry:
         if tool.default_arguments and tool.default_arguments.keys().isdisjoint(raw_arguments):
             raw_arguments = {**tool.default_arguments, **raw_arguments}
         try:
-            arguments = definition.arguments_model.model_validate(raw_arguments)
+            arguments = definition.validate_arguments(raw_arguments)
         except ValidationError as exc:
             field_name = next(
                 (
@@ -1033,15 +1043,6 @@ class ToolRegistry:
                 if tool.integration_revisions
                 else tool.source_revision
             )
-        if (
-            definition.releases_private_data
-            and context.model_trust_level == TrustLevel.PUBLIC
-            and not await self._allow(
-                context,
-                private_integration_data_release_permission(context.session.id),
-            )
-        ):
-            return ToolResult.error("permission.denied")
         try:
             if definition.actions and (
                 selected_integration_id is not None or aggregate_integration_ids

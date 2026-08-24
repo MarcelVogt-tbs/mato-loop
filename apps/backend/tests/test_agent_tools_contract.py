@@ -31,7 +31,7 @@ from mato_loop_backend.agent.tools import (
     tool_execution_policy,
     tool_registry,
 )
-from mato_loop_backend.attachments import AttachmentService, AttachmentStorage
+from mato_loop_backend.attachments import AttachmentService
 from mato_loop_backend.integrations import (
     TranscriptResult,
     WebFetchError,
@@ -74,7 +74,7 @@ from mato_loop_backend.settings import (
     WebFetchPolicy,
 )
 from mato_loop_backend.skills import SkillDraft
-from mato_loop_backend.workspace import RootFileService
+from mato_loop_backend.workspace import FileRoot, RootFileService
 
 
 class _RequiredArguments(BaseModel):
@@ -359,7 +359,10 @@ async def test_read_qr_code_uses_current_session_image_and_source_trust(
         mime_type="image/png",
         size_bytes=len(generated.attachments[0].data),
         sha256="0" * 64,
-        storage_path=f"attachments/{attachment_id}/qr.png",
+        file_root_id=context.session.id,
+        file_id=uuid4(),
+        file_revision=1,
+        file_path=f"attachments/{attachment_id}/qr.png",
     )
     context.db.scalar.return_value = attachment
     read_image = AsyncMock(return_value=generated.attachments[0].data)
@@ -679,7 +682,7 @@ async def test_aggregate_shared_tool_binds_all_current_instances(
     assert request.policy_integration_id is None
 
 
-async def test_private_integration_tool_requires_release_before_action(
+async def test_private_integration_tool_uses_only_operation_authorization(
     tmp_path, monkeypatch
 ) -> None:
     handler = AsyncMock(return_value=ToolResult.json({"ok": True}))
@@ -702,11 +705,7 @@ async def test_private_integration_tool_requires_release_before_action(
     result = await effective.execute(call, context)
 
     requests = [item.args[0] for item in context.ask_handler.await_args_list]
-    assert [request.capability for request in requests] == [
-        "integration.private_data.release",
-        "tasks.read",
-    ]
-    assert requests[0].available_decisions == ("allow_session", "deny")
+    assert [request.capability for request in requests] == ["tasks.read"]
     assert result.metadata["privateIntegrationData"] is True
 
 
@@ -860,10 +859,13 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
     }:
         parameters = schemas[name]["parameters"]
         assert "root" in parameters["required"]
-        assert parameters["properties"]["root"]["enum"] == ["session", "workspace"]
+        assert parameters["properties"]["root"]["enum"] == ["files", "computer"]
         assert "path" in parameters["properties"]
     assert schemas["read"]["parameters"]["properties"]["offset"]["default"] == 1
     assert schemas["read"]["parameters"]["properties"]["limit"]["default"] == 1000
+    assert schemas["read"]["parameters"]["properties"]["revision"]["anyOf"][0][
+        "minimum"
+    ] == 1
     assert schemas["glob"]["parameters"]["properties"]["path"]["default"] == "."
     assert schemas["grep"]["parameters"]["properties"]["path"]["default"] == "."
     assert "pattern" in schemas["glob"]["parameters"]["required"]
@@ -876,6 +878,13 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
             "destination_root",
             "destination_path",
         }
+        assert schemas[name]["parameters"]["properties"]["source_root"]["enum"] == [
+            "files",
+            "computer",
+        ]
+        assert schemas[name]["parameters"]["properties"]["destination_root"][
+            "enum"
+        ] == ["files", "computer"]
         assert "exact new destination path" in schemas[name]["description"]
 
 
@@ -1385,7 +1394,7 @@ async def test_missing_workspace_returns_structured_error_without_approval(tmp_p
     call = ToolCall(
         id="read",
         name="read",
-        arguments={"root": "workspace", "path": "notes.txt"},
+        arguments={"root": "computer", "path": "notes.txt"},
     )
     context = _context(tmp_path, call)
 
@@ -1875,6 +1884,7 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
         memory_mode="disabled",
         web_search_policy="available",
         working_directory=None,
+        private_integration_data_used=True,
     )
     messages = Mock()
     messages.all.return_value = []
@@ -1884,7 +1894,10 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
     result = await tool_registry.execute(call, context)
 
     assert result.is_error is False
-    assert json.loads(result.content)["session"] == {"id": str(expected_id), "title": None}
+    assert json.loads(result.content)["session"] == {
+        "id": str(expected_id),
+        "title": "Ziel",
+    }
     request = context.ask_handler.await_args.args[0]
     assert request.resource_scope == str(expected_id)
     context.db.scalar.assert_awaited_once()
@@ -1895,12 +1908,12 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
     ("source_trust", "reader_trust", "expected_title"),
     [
         (TrustLevel.PUBLIC, TrustLevel.PUBLIC, "Ziel"),
-        (TrustLevel.PRIVATE, TrustLevel.PUBLIC, None),
+        (TrustLevel.PRIVATE, TrustLevel.PUBLIC, "Ziel"),
         (TrustLevel.PUBLIC, TrustLevel.PRIVATE, "Ziel"),
         (TrustLevel.PRIVATE, TrustLevel.PRIVATE, "Ziel"),
     ],
 )
-async def test_session_read_derives_title_visibility_from_first_user_message(
+async def test_session_read_exposes_authorized_messages_regardless_of_source_trust(
     tmp_path,
     source_trust: TrustLevel,
     reader_trust: TrustLevel,
@@ -1934,6 +1947,7 @@ async def test_session_read_derives_title_visibility_from_first_user_message(
     result = await tool_registry.execute(call, context)
 
     assert json.loads(result.content)["session"]["title"] == expected_title
+    assert "Start" in result.content
 
 
 async def test_session_read_returns_a_window_around_discovery_anchor(tmp_path) -> None:
@@ -2076,7 +2090,6 @@ async def test_session_discovery_returns_private_anchor_for_direct_read(
             "user",
             "Aurora bleibt unser Hauptprojekt.",
             message_at,
-            TrustLevel.PRIVATE.value,
         )
     ]
     context.db.execute.return_value = rows
@@ -2115,7 +2128,6 @@ async def test_session_browse_shows_public_derived_titles_to_public_models(
             "user",
             "Öffentlicher Ausschnitt",
             datetime.now(UTC),
-            TrustLevel.PUBLIC.value,
         )
     ]
     context.db.execute.return_value = rows
@@ -2125,10 +2137,10 @@ async def test_session_browse_shows_public_derived_titles_to_public_models(
 
     assert item["title"] == "Öffentlicher Titel"
     assert item["anchorMessage"]["preview"] == "Öffentlicher Ausschnitt"
-    assert "messages.trust_level" in str(context.db.execute.await_args.args[0])
+    assert "messages.trust_level" not in str(context.db.execute.await_args.args[0])
 
 
-async def test_session_search_hides_private_derived_titles_from_public_models(
+async def test_session_search_shows_private_derived_titles_to_public_models(
     tmp_path,
 ) -> None:
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Projekt Aurora")
@@ -2147,7 +2159,6 @@ async def test_session_search_hides_private_derived_titles_from_public_models(
             "user",
             "Öffentlicher Ausschnitt",
             datetime.now(UTC),
-            TrustLevel.PRIVATE.value,
         )
     ]
     context.db.execute.return_value = rows
@@ -2155,10 +2166,10 @@ async def test_session_search_hides_private_derived_titles_from_public_models(
     result = await tool_registry.execute(call, context)
     item = json.loads(result.content)["results"][0]
 
-    assert item["title"] is None
+    assert item["title"] == "Projekt Aurora"
     statement = str(context.db.execute.await_args.args[0])
     assert "chat_sessions.title" in statement
-    assert "messages.trust_level" in statement
+    assert "messages.trust_level =" not in statement
 
 
 def test_session_tool_result_read_schema_uses_a_fixed_host_chunk_size() -> None:
@@ -2208,7 +2219,7 @@ async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_
         session_id=uuid4(),
         role="tool",
         content="a" * 12_000 + "rest",
-        trust_level=TrustLevel.PUBLIC.value,
+        trust_level=TrustLevel.PRIVATE.value,
     )
     call = ToolCall(
         id="read-result",
@@ -2266,7 +2277,6 @@ async def test_session_tool_result_read_exposes_attachment_references(tmp_path) 
         mime_type="image/png",
         size_bytes=123,
         sha256="a" * 64,
-        storage_path=None,
         file_root_id=message.session_id,
         file_id=uuid4(),
         file_revision=1,
@@ -2318,7 +2328,7 @@ async def test_session_tool_result_read_hides_unavailable_messages(tmp_path) -> 
     assert "messages.session_id" in statement
     assert "messages.role" in statement
     assert "messages.error_code IS NULL" in statement
-    assert "messages.trust_level" in statement
+    assert "messages.trust_level =" not in statement
     context.ask_handler.assert_not_awaited()
 
 
@@ -2415,7 +2425,10 @@ async def test_session_read_exposes_historical_attachment_identity_and_path(tmp_
         mime_type="application/pdf",
         size_bytes=123,
         sha256="a" * 64,
-        storage_path=f"attachments/{uuid4()}/bericht.pdf",
+        file_root_id=target.id,
+        file_id=uuid4(),
+        file_revision=1,
+        file_path=f"attachments/{uuid4()}/bericht.pdf",
     )
     message.attachments = [attachment]
     records = Mock()
@@ -2434,9 +2447,9 @@ async def test_session_read_exposes_historical_attachment_identity_and_path(tmp_
             "mimeType": "application/pdf",
             "category": "user_upload",
             "processingStatus": "ready",
-            "path": attachment.storage_path,
-            "fileId": None,
-            "fileRevision": None,
+            "path": attachment.file_path,
+            "fileId": str(attachment.file_id),
+            "fileRevision": 1,
         }
     ]
 
@@ -2840,7 +2853,7 @@ async def test_workspace_video_uses_execution_client_bytes(tmp_path) -> None:
     call = ToolCall(
         id="video",
         name="analyze_video",
-        arguments={"root": "workspace", "path": "video.mp4"},
+        arguments={"root": "computer", "path": "video.mp4"},
     )
     context = _context(tmp_path, call)
     context.session.working_directory = "project"
@@ -2856,9 +2869,7 @@ async def test_workspace_video_uses_execution_client_bytes(tmp_path) -> None:
     context.video_analysis_handler = AsyncMock(return_value={"summary": "ok"})
     context.tool_settings.analyze_video.policy = ToolExecutionPolicy.AUTO
     context.root_files.open_file = Mock(side_effect=AssertionError("must not read locally"))
-    arguments = tool_registry._definitions["analyze_video"].arguments_model.model_validate(
-        call.arguments
-    )
+    arguments = tool_registry._definitions["analyze_video"].validate_arguments(call.arguments)
 
     result = await tools_module._analyze_video(arguments, context)
 
@@ -2919,7 +2930,7 @@ async def test_provide_file_does_not_open_after_denial(tmp_path) -> None:
     call = ToolCall(
         id="provide",
         name="provide_file",
-        arguments={"root": "session", "path": "report.pdf"},
+        arguments={"root": "files", "path": "report.pdf"},
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
     context.root_files.open_file = Mock(side_effect=AssertionError("must not open"))
@@ -2934,7 +2945,7 @@ async def test_provide_file_supports_session_files(tmp_path) -> None:
     call = ToolCall(
         id="provide",
         name="provide_file",
-        arguments={"root": "session", "path": "report.pdf"},
+        arguments={"root": "files", "path": "report.pdf"},
     )
     context = _context(tmp_path, call)
     context.root_files.write_file("session", "report.pdf", "report")
@@ -2944,9 +2955,28 @@ async def test_provide_file_supports_session_files(tmp_path) -> None:
     payload = json.loads(result.content)
     query = parse_qs(urlparse(payload["downloadUrl"]).query)
     assert payload["filename"] == "report.pdf"
+    assert payload["root"] == "files"
     assert payload["sizeBytes"] == 6
-    assert query["scope"] == ["session"]
-    assert query["root_identity"] == [str(context.session.id)]
+    assert payload["revision"] == 1
+    assert query["session_id"] == [str(context.session.id)]
+    assert "scope" not in query
+    assert result.attachments[0].file_id is not None
+    assert result.attachments[0].file_revision == 1
+    assert result.attachments[0].file_path == "report.pdf"
+
+
+async def test_provide_file_rejects_empty_managed_file(tmp_path) -> None:
+    call = ToolCall(
+        id="provide",
+        name="provide_file",
+        arguments={"root": "files", "path": "empty.txt"},
+    )
+    context = _context(tmp_path, call)
+    context.root_files.write_file("session", "empty.txt", "")
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "attachment.empty"}
 
 
 async def test_read_does_not_access_path_after_denial(tmp_path) -> None:
@@ -2964,7 +2994,35 @@ async def test_read_does_not_access_path_after_denial(tmp_path) -> None:
     context.db.scalar.assert_not_awaited()
 
 
-async def test_read_does_not_expose_managed_session_images(tmp_path) -> None:
+async def test_public_model_can_select_same_project_session_files(tmp_path) -> None:
+    target_id = uuid4()
+    call = ToolCall(
+        id="read-project-file",
+        name="read",
+        arguments={"root": "session", "path": "notes.txt", "session_id": str(target_id)},
+    )
+    context = _context(tmp_path, call)
+    project_id = uuid4()
+    context.session.project_id = project_id
+    context.model_trust_level = TrustLevel.PUBLIC
+    context.db.scalar.return_value = ChatSession(
+        id=target_id,
+        user_id=context.session.user_id,
+        project_id=project_id,
+        session_type="chat",
+    )
+    arguments = tool_registry._definitions["read"].validate_arguments(call.arguments)
+
+    selected = await tools_module._project_read_files(arguments, context)
+
+    assert selected is not None
+    assert selected[1] == target_id
+    statement = str(context.db.scalar.await_args.args[0])
+    assert "chat_sessions.user_id" in statement
+    assert "chat_sessions.project_id" in statement
+
+
+async def test_read_exposes_managed_session_images(tmp_path) -> None:
     attachment_id = uuid4()
     call = ToolCall(
         id="read-image",
@@ -2975,10 +3033,15 @@ async def test_read_does_not_expose_managed_session_images(tmp_path) -> None:
         },
     )
     context = _context(tmp_path, call)
-    storage = AttachmentStorage(context.root_files.session_storage)
-    storage_path = storage.write(
-        context.session.id, attachment_id, b"\x89PNG\r\n\x1a\n", "diagram.png", "user_upload"
+    context.root_files.create_directory(FileRoot.SESSION, "attachments")
+    context.root_files.create_directory(
+        FileRoot.SESSION, f"attachments/{attachment_id}"
     )
+    file_path = f"attachments/{attachment_id}/diagram.png"
+    context.root_files.create_file(
+        FileRoot.SESSION, file_path, BytesIO(b"\x89PNG\r\n\x1a\n"), max_bytes=100
+    )
+    revision = context.root_files.list_revisions(file_path)[0]
     attachment = MessageAttachment(
         id=attachment_id,
         message_id=uuid4(),
@@ -2990,19 +3053,25 @@ async def test_read_does_not_expose_managed_session_images(tmp_path) -> None:
         mime_type="image/png",
         size_bytes=8,
         sha256="a" * 64,
-        storage_path=storage_path,
+        file_root_id=context.session.id,
+        file_id=revision.file_id,
+        file_revision=revision.revision,
+        file_path=file_path,
     )
     context.db.scalar.return_value = attachment
     context.root_files.read_file = Mock(side_effect=AssertionError("must not decode image"))
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata == {"errorCode": "file.pathNotFound"}
+    assert result.metadata == {}
     context.root_files.read_file.assert_not_called()
-    context.db.scalar.assert_not_awaited()
+    context.db.scalar.assert_awaited_once()
+    statement = str(context.db.scalar.await_args.args[0])
+    assert "messages.trust_level" not in statement
+    assert "message_attachments.file_path" not in statement.partition("WHERE")[2]
 
 
-async def test_read_does_not_reactivate_unmanaged_binary_file(tmp_path) -> None:
+async def test_read_reports_invalid_encoding_for_managed_binary_file(tmp_path) -> None:
     attachment_id = uuid4()
     call = ToolCall(
         id="read-binary",
@@ -3013,15 +3082,21 @@ async def test_read_does_not_reactivate_unmanaged_binary_file(tmp_path) -> None:
         },
     )
     context = _context(tmp_path, call)
-    storage = AttachmentStorage(context.root_files.session_storage)
-    storage.write(
-        context.session.id, attachment_id, b"\xff", "unknown.bin", "user_upload"
+    context.root_files.create_directory(FileRoot.SESSION, "attachments")
+    context.root_files.create_directory(
+        FileRoot.SESSION, f"attachments/{attachment_id}"
+    )
+    context.root_files.create_file(
+        FileRoot.SESSION,
+        f"attachments/{attachment_id}/unknown.bin",
+        BytesIO(b"\xff"),
+        max_bytes=100,
     )
     context.db.scalar.return_value = None
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata == {"errorCode": "file.pathNotFound"}
+    assert result.metadata == {"errorCode": "file.invalidEncoding"}
 
 
 def test_webfetch_schema_has_the_expected_contract() -> None:
@@ -3475,12 +3550,12 @@ def test_permission_for_is_safe_for_webfetch_and_unknown_tools(tmp_path) -> None
     ).resource_type == "url"
     assert permission_for(
         "write_file",
-        {"root": "session", "path": "result.txt"},
+        {"root": "files", "path": "result.txt"},
         root_files,
     ).capability == "session.files.write"
     assert permission_for(
         "write_file",
-        {"root": "workspace", "path": "result.txt"},
+        {"root": "computer", "path": "result.txt"},
         root_files,
     ) is None
     assert permission_for("webfetch", {"url": "not a URL"}, root_files) is None

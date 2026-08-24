@@ -19,6 +19,27 @@ export function absoluteWebsocketUrl(value, location = globalThis.location) {
   }
 }
 
+export function usableExecutionRoots(agent) {
+  if (!agent?.connected || !agent.operations?.includes('workspace.list')) return []
+  return (agent.roots || []).filter((root) => root?.id && root.revision)
+}
+
+export function executionHomeRoot(agent, roots = usableExecutionRoots(agent)) {
+  if (!agent?.homeDirectory || typeof agent.homeRelativeDirectory !== 'string') return null
+  return roots.find((root) => (
+    root.id === agent.homeRootId && root.revision === agent.homeRootRevision
+  )) || null
+}
+
+export function executionRootPatch(agent, root) {
+  const home = root && executionHomeRoot(agent, [root])
+  return {
+    preferred_root_id: root?.id || null,
+    working_directory: home ? agent.homeRelativeDirectory : null,
+    current_directory: home ? agent.homeDirectory : null
+  }
+}
+
 export const useExecutionAgentStore = defineStore('execution-agents', {
   state: () => ({
     items: [],

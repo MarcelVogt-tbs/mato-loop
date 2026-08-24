@@ -225,9 +225,7 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
     assert [call.args[0] for call in db.delete.await_args_list] == [session, project]
     db.commit.assert_awaited_once()
     assert not shared_file.exists()
-    attachment_delete = db.execute.await_args.args[0]
-    assert attachment_delete.is_delete
-    assert project.id in attachment_delete.compile().params.values()
+    db.execute.assert_not_awaited()
     assert list(storage.trash_dir.iterdir()) == []
     locked_automation_query = db.scalars.await_args_list[4].args[0]
     assert locked_automation_query.get_execution_options()["populate_existing"] is True
@@ -421,7 +419,7 @@ async def test_delete_project_restores_storage_when_commit_fails(
     storage.provision(session.id, project.id)
     shared_file = storage.logical_root_path(session.id, project.id) / "files" / "shared.txt"
     shared_file.write_text("shared", encoding="utf-8")
-    execution_file = storage.provision(execution_session.id) / "attachments" / "run.txt"
+    execution_file = storage.provision(execution_session.id) / "files" / "run.txt"
     execution_file.write_text("history", encoding="utf-8")
     monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)

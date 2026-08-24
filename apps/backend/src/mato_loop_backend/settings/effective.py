@@ -64,6 +64,7 @@ async def load_effective_ai(db: AsyncSession, user_id: UUID) -> AiSettings:
         personal_id = getattr(personal, field)
         if personal_id in effective_model_ids:
             setattr(instance, field, personal_id)
+    instance.title_vision_fallback_enabled = personal.title_vision_fallback_enabled
     return instance
 
 

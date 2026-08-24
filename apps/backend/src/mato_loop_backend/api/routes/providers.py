@@ -299,6 +299,7 @@ class DefaultModelsRequest(ApiRequest):
     default_model_id: UUID | None
     compaction_model_id: UUID | None
     title_generation_model_id: UUID | None
+    title_vision_fallback_enabled: bool = True
     skill_creation_model_id: UUID | None = None
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
@@ -364,6 +365,7 @@ def _settings_payload(
             if settings.title_generation_model_id
             else None
         ),
+        "titleVisionFallbackEnabled": settings.title_vision_fallback_enabled,
         "skillCreationModelId": (
             str(settings.skill_creation_model_id)
             if settings.skill_creation_model_id

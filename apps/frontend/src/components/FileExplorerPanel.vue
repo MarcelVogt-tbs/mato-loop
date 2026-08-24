@@ -47,7 +47,7 @@
               @click="setWorkspaceRoot"
             >
               <q-item-section avatar><q-icon name="vertical_align_top" /></q-item-section>
-              <q-item-section>Zur Arbeitsbereichswurzel wechseln</q-item-section>
+              <q-item-section>Zum freigegebenen Bereich wechseln</q-item-section>
             </q-item>
             <q-item v-if="chat.current" clickable v-ripple v-close-popup @click="openPermissionsDialog">
               <q-item-section avatar><q-icon name="verified_user" /></q-item-section>
@@ -57,6 +57,37 @@
       </template>
     </ControlCenterContentHeader>
     <div class="file-explorer__controls q-px-md q-pb-md q-gutter-y-sm">
+      <q-btn-toggle
+        v-if="sourceSwitchAvailable"
+        :model-value="workspace.scope"
+        :options="sourceOptions"
+        spread
+        outline
+        no-caps
+        dense
+        color="primary"
+        toggle-color="primary"
+        toggle-text-color="white"
+        :disable="chat.running || chat.sessionSettingsPending > 0"
+        aria-label="Dateiquelle"
+        @update:model-value="selectSource"
+      />
+      <q-select
+        v-if="showRootSelector"
+        :model-value="chat.activeContext?.preferredRootId"
+        :options="rootOptions"
+        outlined
+        dense
+        emit-value
+        map-options
+        options-dense
+        label="Freigegebener Bereich"
+        :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+        :disable="chat.running || chat.sessionSettingsPending > 0"
+        @update:model-value="selectRoot"
+      >
+        <template #prepend><q-icon name="folder_shared" /></template>
+      </q-select>
       <div class="row items-center no-wrap q-gutter-sm">
         <div class="col text-caption app-muted ellipsis">{{ scopeDescription }}</div>
         <q-btn
@@ -370,7 +401,12 @@ import { apiErrorMessage } from 'src/utils/api-errors'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
-import { useExecutionAgentStore } from 'stores/execution-agents'
+import {
+  executionHomeRoot,
+  executionRootPatch,
+  usableExecutionRoots,
+  useExecutionAgentStore
+} from 'stores/execution-agents'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 import {
   MAX_WORKSPACE_UPLOADS,
@@ -421,9 +457,28 @@ const selectedIsDirectory = computed(() => workspace.selectedKind === 'directory
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
 ))
-const selectedRoot = computed(() => selectedExecutionAgent.value?.roots?.find((root) => (
+const selectedExecutionRoots = computed(() => usableExecutionRoots(selectedExecutionAgent.value))
+const selectedHomeRoot = computed(() => executionHomeRoot(selectedExecutionAgent.value, selectedExecutionRoots.value))
+const selectedRoot = computed(() => selectedExecutionRoots.value.find((root) => (
   root.id === chat.activeContext?.preferredRootId
 )) || null)
+const automaticRootAttempt = ref(null)
+const sourceSwitchAvailable = computed(() => (
+  !workspace.toolContext && Boolean(workspace.sessionId) && selectedExecutionRoots.value.length > 0
+))
+const managedSourceLabel = computed(() => 'Ablage')
+const computerSourceLabel = computed(() => 'Computer')
+const sourceOptions = computed(() => [
+  { label: managedSourceLabel.value, value: 'session', icon: 'inventory_2', attrs: { 'aria-label': managedSourceLabel.value } },
+  { label: computerSourceLabel.value, value: 'filesystem', icon: 'computer', attrs: { 'aria-label': computerSourceLabel.value } }
+])
+const rootOptions = computed(() => selectedExecutionRoots.value.map((root) => ({
+  label: root.label,
+  value: root.id
+})))
+const showRootSelector = computed(() => sourceSwitchAvailable.value
+  && workspace.scope === 'filesystem'
+  && (selectedExecutionRoots.value.length > 1 || !selectedHomeRoot.value || automaticRootAttempt.value))
 const hasOverflowActions = computed(() => Boolean(
   (workspace.scope === 'filesystem' && explorerAvailable.value && selectedIsDirectory.value)
   || (workspace.scope === 'filesystem' && explorerAvailable.value && chat.activeContext?.workingDirectory)
@@ -446,13 +501,15 @@ const canRename = computed(() => Boolean(
   && renameName.value.trim() !== renameTarget.value.name
 ))
 const rootLabel = computed(() => {
-  return 'Dateien'
+  return workspace.scope === 'session'
+    ? managedSourceLabel.value
+    : selectedRoot.value?.label || 'Computer'
 })
 const explorerAvailable = computed(() => workspace.operationAvailable('workspace.list'))
 const explorerUnavailableMessage = computed(() => {
   if (explorerAvailable.value) return ''
   if (workspace.scope === 'session') {
-    return 'Session-Dateien sind verfügbar, sobald die Session erstellt wurde.'
+    return `${managedSourceLabel.value} sind verfügbar, sobald die Session erstellt wurde.`
   }
   if (!chat.activeContext?.preferredExecutionAgentId) {
     return workspace.sessionId
@@ -466,26 +523,24 @@ const explorerUnavailableMessage = computed(() => {
     return 'Der ausgewählte Computer ist offline.'
   }
   if (!selectedExecutionAgent.value.roots?.length) {
-    return 'Auf dem ausgewählten Computer sind keine Arbeitsbereiche verfügbar.'
+    return 'Auf dem ausgewählten Computer sind keine freigegebenen Bereiche verfügbar.'
   }
   if (!chat.activeContext?.preferredRootId) {
-    return 'Wähle einen Arbeitsbereich aus.'
+    return 'Wähle einen freigegebenen Bereich aus.'
   }
   if (!selectedRoot.value) {
-    return 'Der ausgewählte Arbeitsbereich ist nicht mehr verfügbar.'
+    return 'Der ausgewählte freigegebene Bereich ist nicht mehr verfügbar.'
   }
-  return 'Der ausgewählte Arbeitsbereich bietet keinen Dateizugriff an.'
+  return 'Der ausgewählte freigegebene Bereich bietet keinen Dateizugriff an.'
 })
 const explorerUnavailableIcon = computed(() => (
   selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'folder_off'
 ))
 const scopeDescription = computed(() => {
   if (workspace.toolContext) return 'Gespeicherter Dateistand · nur Lesen'
-  if (workspace.scope === 'session') return 'Session-Dateien'
-  if (!workspace.operationAvailable('workspace.list')) return 'Der ausgewählte Arbeitsbereich ist nicht verfügbar.'
-  return workspace.workingDirectory
-    ? `Aktueller Ordner · ${chat.activeContext?.currentDirectory || workspace.workingDirectory}`
-    : 'Computer · noch kein aktueller Ordner ausgewählt'
+  if (workspace.scope === 'session') return managedSourceLabel.value
+  if (!workspace.operationAvailable('workspace.list')) return 'Der ausgewählte freigegebene Bereich ist nicht verfügbar.'
+  return `Aktueller Ordner · ${chat.activeContext?.currentDirectory || workspace.workingDirectory || selectedRoot.value?.label}`
 })
 const selectedParentPath = computed(() => parentPath(workspace.selectedPath))
 const selectedBreadcrumbs = computed(() => [
@@ -519,6 +574,17 @@ function parentPath(path) {
 
 function grantDisplay(grant) {
   return permissionGrantDisplay(grant, chat.cachedSessions)
+}
+
+async function selectSource(scope) {
+  if (scope === workspace.scope || !await confirmDiscard()) return
+  await workspace.setScope(scope)
+}
+
+async function selectRoot(rootId) {
+  const root = selectedExecutionRoots.value.find((item) => item.id === rootId)
+  if (!root || root.id === chat.activeContext?.preferredRootId || !await confirmDiscard()) return
+  await chat.updateActive(executionRootPatch(selectedExecutionAgent.value, root))
 }
 
 async function loadPermissions() {
@@ -802,6 +868,47 @@ watch(
 )
 
 watch(() => workspace.contextVersion, () => { treeFocusPath.value = '.' })
+watch(
+  [
+    () => selectedExecutionAgent.value?.id,
+    () => selectedExecutionRoots.value.map((root) => `${root.id}:${root.revision}`).join(','),
+    () => selectedHomeRoot.value?.id,
+    () => chat.activeContext?.preferredRootId,
+    () => workspace.editorDirty,
+    () => chat.running,
+    () => chat.sessionSettingsPending,
+    () => chat.loading,
+    () => chat.selectedSessionId,
+    () => chat.current?.id
+  ],
+  async () => {
+    if (!sourceSwitchAvailable.value) {
+      automaticRootAttempt.value = null
+      return
+    }
+    if (selectedRoot.value) {
+      automaticRootAttempt.value = null
+      return
+    }
+    if (
+      workspace.editorDirty
+      || chat.running
+      || chat.sessionSettingsPending > 0
+      || chat.loading
+      || (chat.selectedSessionId && chat.current?.id !== chat.selectedSessionId)
+    ) return
+    const root = selectedHomeRoot.value || (selectedExecutionRoots.value.length === 1 ? selectedExecutionRoots.value[0] : null)
+    const attempt = root && `${chat.current?.id || 'draft'}:${selectedExecutionAgent.value.id}:${root.id}:${root.revision}`
+    if (!attempt || automaticRootAttempt.value === attempt) return
+    automaticRootAttempt.value = attempt
+    try {
+      await chat.updateActive(executionRootPatch(selectedExecutionAgent.value, root))
+    } catch {
+      // The central API interceptor reports the failed automatic selection.
+    }
+  },
+  { immediate: true }
+)
 watch(() => workspace.viewedEntry, (entry) => {
   if (!entry) viewerFullscreen.value = false
 })

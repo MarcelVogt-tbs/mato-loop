@@ -20,12 +20,14 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from mato_loop_backend.agent.context import (
     _inferred_tool_name,
+    _model_file_tool_result,
     _sanitize_tool_result_reference_fields,
     _shorten_evidence_output,
     _target_tool_result,
     _tool_names_by_message_id,
     _tool_result_reference,
 )
+from mato_loop_backend.agent.file_roots import internal_file_roots
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionDisplayItem,
@@ -155,7 +157,11 @@ from mato_loop_backend.agent.video_analysis import (
     ResolvedVideoModel,
     VideoAnalysisError,
 )
-from mato_loop_backend.attachments import AttachmentError, AttachmentService
+from mato_loop_backend.attachments import (
+    MAX_FILE_ATTACHMENT_BYTES,
+    AttachmentError,
+    AttachmentService,
+)
 from mato_loop_backend.automations import (
     AutomationError,
     AutomationScheduler,
@@ -465,10 +471,7 @@ async def _project_read_files(
     target_id = arguments.session_id or context.session.id
     if arguments.root == "workspace" or target_id == context.session.id:
         return context.root_files, context.session.id
-    if (
-        context.session.project_id is None
-        or context.model_trust_level == TrustLevel.PUBLIC
-    ):
+    if context.session.project_id is None:
         return None
     target = await context.db.scalar(
         select(ChatSession).where(
@@ -511,7 +514,9 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         return ToolResult.error("permission.denied")
     normalized_path = root_files.normalize_relative_path(arguments.path)
     kind: str
-    if arguments.root == "workspace":
+    if arguments.revision is not None:
+        kind = "file"
+    elif arguments.root == "workspace":
         stat_result = await _workspace_request(
             context,
             "workspace.stat",
@@ -565,32 +570,32 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     if kind != "file":
         return ToolResult.error("file.unsupportedType")
     if arguments.root == "session" and target_session_id == context.session.id:
-        current_revision = next(
+        selected_revision = next(
             (
                 revision
                 for revision in root_files.list_revisions(normalized_path)
-                if revision.current
+                if (
+                    revision.revision == arguments.revision
+                    if arguments.revision is not None
+                    else revision.current
+                )
             ),
             None,
         )
+        revision_filter = and_(
+            selected_revision is not None,
+            MessageAttachment.file_id
+            == (selected_revision.file_id if selected_revision else None),
+            MessageAttachment.file_revision
+            == (selected_revision.revision if selected_revision else None),
+        )
         filters = [
-            or_(
-                and_(
-                    current_revision is not None,
-                    MessageAttachment.file_id
-                    == (current_revision.file_id if current_revision else None),
-                    MessageAttachment.file_revision
-                    == (current_revision.revision if current_revision else None),
-                ),
-                MessageAttachment.storage_path == normalized_path,
-            ),
+            revision_filter,
             MessageAttachment.kind == "image",
             MessageAttachment.processing_status == "ready",
             Message.session_id == context.session.id,
             Message.error_code.is_(None),
         ]
-        if context.model_trust_level == TrustLevel.PUBLIC:
-            filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
         attachment = await context.db.scalar(
             select(MessageAttachment)
             .join(Message, Message.id == MessageAttachment.message_id)
@@ -607,6 +612,11 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
                         "kind": "image",
                         "mimeType": attachment.mime_type,
                     },
+                    **(
+                        {"revision": arguments.revision}
+                        if arguments.revision is not None
+                        else {}
+                    ),
                     "contentIsUntrusted": True,
                 }
             )
@@ -623,11 +633,20 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             WorkspaceReadResult,
         )
     else:
-        result = root_files.read_file(
-            arguments.root,
-            arguments.path,
-            offset=arguments.offset,
-            limit=arguments.limit,
+        result = (
+            root_files.read_revision(
+                arguments.path,
+                arguments.revision,
+                offset=arguments.offset,
+                limit=arguments.limit,
+            )
+            if arguments.revision is not None
+            else root_files.read_file(
+                arguments.root,
+                arguments.path,
+                offset=arguments.offset,
+                limit=arguments.limit,
+            )
         )
     content = result.content
     notices = []
@@ -653,6 +672,11 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             "nextOffset": result.next_offset,
             "truncatedLines": list(result.truncated_lines),
             "sha256": result.sha256,
+            **(
+                {"revision": arguments.revision}
+                if arguments.revision is not None
+                else {}
+            ),
         },
     )
 
@@ -749,6 +773,13 @@ async def _provide_file(
     if selected is None:
         return ToolResult.error("permission.denied")
     root_files, target_session_id = selected
+    if arguments.root == "workspace":
+        client = _workspace_client(context)
+        if not all(
+            client.supports(operation)
+            for operation in ("workspace.stat", "workspace.export")
+        ):
+            return ToolResult.error("executionAgent.operationUnavailable")
     request = _filesystem_permission(
         context,
         root=arguments.root,
@@ -764,46 +795,67 @@ async def _provide_file(
     path = root_files.normalize_relative_path(arguments.path)
     if arguments.root == "workspace":
         client = _workspace_client(context)
-        result = await client.request(
-            "workspace.stat", {"path": path}, WorkspaceStatResult
+        data = await client.read_bytes(path, limit=MAX_FILE_ATTACHMENT_BYTES)
+        result = ToolResult.json(
+            {
+                "root": arguments.root,
+                "path": path,
+                "filename": path.rsplit("/", 1)[-1],
+                "sizeBytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "snapshotImported": True,
+            }
         )
-        assert isinstance(result, WorkspaceStatResult)
-        if result.path != path or result.kind != "file" or result.size is None:
-            return ToolResult.error("file.notAFile", field="path")
-        size = result.size
-    else:
-        with root_files.open_file(arguments.root, path) as handle:
-            size = os.fstat(handle.fileno()).st_size
-    scope = "session" if arguments.root == "session" else "filesystem"
-    query = {
-        "path": path,
-        "scope": scope,
-        "session_id": str(target_session_id),
-        "root_identity": (
-            str(_workspace_client(context).root_id)
-            if arguments.root == "workspace"
-            else root_files.root_identity(arguments.root)
-        ),
-    }
-    if arguments.root == "workspace":
-        client = _workspace_client(context)
-        query.update(
-            execution_agent_id=str(client.agent_id),
-            root_id=str(client.root_id),
-            root_revision=client.root_revision,
-            working_directory=client.working_directory,
+        result.attachments = (
+            ToolAttachment(
+                data,
+                "application/octet-stream",
+                path.rsplit("/", 1)[-1],
+                kind="file",
+                category="downloaded",
+            ),
         )
-    download_url = "/api/workspace/files/download?" + urlencode(query)
-    return ToolResult.json(
+        return result
+
+    revision = next(
+        (item for item in root_files.list_revisions(path) if item.current), None
+    )
+    if revision is None:
+        return ToolResult.error("file.notAFile", field="path")
+    if revision.size_bytes == 0:
+        return ToolResult.error("attachment.empty")
+    download_url = (
+        f"/api/workspace/files/revisions/{revision.revision}/download?"
+        + urlencode({"path": path, "session_id": str(target_session_id)})
+    )
+    result = ToolResult.json(
         {
             "root": arguments.root,
             "sessionId": str(target_session_id),
             "path": path,
             "filename": path.rsplit("/", 1)[-1],
-            "sizeBytes": size,
+            "sizeBytes": revision.size_bytes,
+            "sha256": revision.sha256,
+            "fileId": str(revision.file_id),
+            "revision": revision.revision,
             "downloadUrl": download_url,
-        }
+        },
+        metadata={"providedFile": True},
     )
+    result.attachments = (
+        ToolAttachment(
+            b"",
+            "application/octet-stream",
+            path.rsplit("/", 1)[-1],
+            kind="file",
+            category="downloaded",
+            file_root_id=UUID(root_files.root_identity(FileRoot.SESSION)),
+            file_id=revision.file_id,
+            file_revision=revision.revision,
+            file_path=revision.path,
+        ),
+    )
+    return result
 
 
 def _regular_file_action(
@@ -1046,6 +1098,16 @@ async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> 
 
 
 async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> ToolResult:
+    cross_root = arguments.source_root != arguments.destination_root
+    if cross_root:
+        client = _workspace_client(context)
+        required = (
+            ("workspace.stat", "workspace.export")
+            if arguments.source_root == "workspace"
+            else ("workspace.import",)
+        )
+        if not all(client.supports(operation) for operation in required):
+            return ToolResult.error("executionAgent.operationUnavailable")
     source_request = _filesystem_permission(
         context,
         root=arguments.source_root,
@@ -1107,8 +1169,41 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
             {"root": arguments.destination_root, "copied": result.path},
             file_actions=file_actions,
         )
-    if "workspace" in {arguments.source_root, arguments.destination_root}:
-        return ToolResult.error("executionAgent.operationUnavailable")
+    if cross_root:
+        source = context.root_files.normalize_relative_path(arguments.source_path)
+        destination = context.root_files.normalize_relative_path(
+            arguments.destination_path
+        )
+        client = _workspace_client(context)
+        if arguments.source_root == "workspace":
+            data = await client.read_bytes(
+                source, limit=context.root_files.MAX_OPERATION_BYTES
+            )
+            copied = await asyncio.to_thread(
+                context.root_files.create_file,
+                FileRoot.SESSION,
+                destination,
+                BytesIO(data),
+                max_bytes=context.root_files.MAX_OPERATION_BYTES,
+            )
+            return ToolResult.json(
+                {"root": arguments.destination_root, "copied": copied.path},
+                file_actions=_regular_file_action(
+                    context, "copy", arguments.destination_root, copied.path
+                ),
+            )
+        with context.root_files.open_file(FileRoot.SESSION, source) as handle:
+            copied = await client.write_bytes(
+                destination,
+                handle,
+                limit=context.root_files.MAX_OPERATION_BYTES,
+            )
+        return ToolResult.json(
+            {"root": arguments.destination_root, "copied": copied.path},
+            file_actions=_workspace_file_action(
+                context, "copy", copied.path, copied.size
+            ),
+        )
     copied = await asyncio.to_thread(
         context.root_files.copy_path,
         arguments.source_root,
@@ -1125,6 +1220,8 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
 
 
 async def _move_path(arguments: MovePathArguments, context: ToolContext) -> ToolResult:
+    if arguments.source_root != arguments.destination_root:
+        return ToolResult.error("file.crossBoundaryMoveUnavailable")
     source_request = _filesystem_permission(
         context,
         root=arguments.source_root,
@@ -1186,8 +1283,6 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
             {"root": arguments.destination_root, "moved": result.path},
             file_actions=file_actions,
         )
-    if "workspace" in {arguments.source_root, arguments.destination_root}:
-        return ToolResult.error("executionAgent.operationUnavailable")
     moved = await asyncio.to_thread(
         context.root_files.move_path,
         arguments.source_root,
@@ -2316,12 +2411,6 @@ async def _edit_image(
     ordered = [by_id[attachment_id] for attachment_id in arguments.attachment_ids]
     if sum(attachment.size_bytes for attachment in ordered) > MAX_PROVIDER_IMAGE_BYTES:
         return ToolResult.error("attachment.tooLarge")
-    if target_trust_level == TrustLevel.PUBLIC and any(
-        (attachment.message.trust_level or TrustLevel.PUBLIC.value)
-        == TrustLevel.PRIVATE.value
-        for attachment in ordered
-    ):
-        return ToolResult.error("privacy.privateContentBlocked")
     source_attachment_ids = tuple(arguments.attachment_ids)
     authorization_source_ids = []
     for attachment in ordered:
@@ -2516,15 +2605,12 @@ async def _analyze_video(
             .join(Message, Message.id == MessageAttachment.message_id)
             .options(joinedload(MessageAttachment.message))
             .where(
-                or_(
-                    and_(
-                        current_revision is not None,
-                        MessageAttachment.file_id
-                        == (current_revision.file_id if current_revision else None),
-                        MessageAttachment.file_revision
-                        == (current_revision.revision if current_revision else None),
-                    ),
-                    MessageAttachment.storage_path == normalized_path,
+                and_(
+                    current_revision is not None,
+                    MessageAttachment.file_id
+                    == (current_revision.file_id if current_revision else None),
+                    MessageAttachment.file_revision
+                    == (current_revision.revision if current_revision else None),
                 ),
                 Message.session_id == context.session.id,
             )
@@ -2610,7 +2696,7 @@ def _attachment_items(message: Message) -> list[dict[str, Any]]:
             "mimeType": attachment.mime_type,
             "category": attachment.category,
             "processingStatus": attachment.processing_status,
-            "path": attachment.file_path or attachment.storage_path,
+            "path": attachment.file_path,
             "fileId": str(attachment.file_id) if attachment.file_id else None,
             "fileRevision": attachment.file_revision,
         }
@@ -2632,6 +2718,7 @@ def _message_item(
         content = _target_tool_result(
             tool_names.get(message.id), message.content, target_trust_level
         )
+        content = _model_file_tool_result(content)
     if message.role == "tool":
         content = _sanitize_tool_result_reference_fields(content)
     full_content = content
@@ -2672,8 +2759,6 @@ async def _session_tool_result_read(
         Message.role == "tool",
         Message.error_code.is_(None),
     ]
-    if context.memory_trust_level == TrustLevel.PUBLIC:
-        filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
     message = await context.db.scalar(
         select(Message).options(selectinload(Message.attachments)).where(*filters)
     )
@@ -2682,6 +2767,7 @@ async def _session_tool_result_read(
 
     tool_name = _inferred_tool_name(message.content)
     content = _target_tool_result(tool_name, message.content, context.memory_trust_level)
+    content = _model_file_tool_result(content)
     content = _sanitize_tool_result_reference_fields(content)
     end = min(len(content), arguments.offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
     has_more = end < len(content)
@@ -2717,12 +2803,6 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
     )
     if target is None:
         return ToolResult.error("session.notFound")
-    if (
-        target.id != context.session.id
-        and context.memory_trust_level == TrustLevel.PUBLIC
-        and target.private_integration_data_used
-    ):
-        return ToolResult.error("permission.denied")
     records = list(
         (
             await context.db.scalars(
@@ -2733,17 +2813,6 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             )
         ).all()
     )
-    title_trust = next(
-        (message.trust_level for message in records if message.role == "user"),
-        None,
-    )
-    if context.memory_trust_level == TrustLevel.PUBLIC:
-        records = [
-            message
-            for message in records
-            if (message.trust_level or TrustLevel.PUBLIC.value)
-            == TrustLevel.PUBLIC.value
-        ]
     start = 0
     if arguments.around_message_id is not None:
         anchor = next(
@@ -2800,9 +2869,7 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
         {
             "session": {
                 "id": str(target.id),
-                "title": _session_title(
-                    target, title_trust, context.memory_trust_level
-                ),
+                "title": target.title,
             },
             "messages": messages,
             "hasEarlier": start > 0,
@@ -2815,9 +2882,7 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
     )
 
 
-def _ranked_visible_session_messages(
-    context: ToolContext, *, pattern: str | None = None
-):
+def _ranked_visible_session_messages(*, pattern: str | None = None):
     filters = [
         Message.role.in_(("user", "assistant")),
         Message.content != "",
@@ -2826,8 +2891,6 @@ def _ranked_visible_session_messages(
     ]
     if pattern is not None:
         filters.append(Message.content.ilike(pattern, escape="\\"))
-    if context.memory_trust_level == TrustLevel.PUBLIC:
-        filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
     return (
         select(
             Message.id.label("message_id"),
@@ -2847,27 +2910,6 @@ def _ranked_visible_session_messages(
     )
 
 
-def _session_title_trust():
-    return (
-        select(Message.trust_level)
-        .where(Message.session_id == ChatSession.id, Message.role == "user")
-        .order_by(Message.created_at, Message.id)
-        .limit(1)
-        .correlate(ChatSession)
-        .scalar_subquery()
-    )
-
-
-def _session_title(
-    session: ChatSession,
-    title_trust: str | None,
-    readable_by: TrustLevel,
-) -> str | None:
-    if readable_by == TrustLevel.PRIVATE or title_trust == TrustLevel.PUBLIC.value:
-        return session.title
-    return None
-
-
 def _session_discovery_item(
     session: ChatSession,
     *,
@@ -2875,15 +2917,13 @@ def _session_discovery_item(
     role: str | None,
     content: str | None,
     message_at: datetime | None,
-    title_trust: str | None,
-    readable_by: TrustLevel,
 ) -> dict[str, Any]:
     read_arguments: dict[str, str] = {"session_id": str(session.id)}
     if message_id is not None:
         read_arguments["around_message_id"] = str(message_id)
     return {
         "id": str(session.id),
-        "title": _session_title(session, title_trust, readable_by),
+        "title": session.title,
         "anchorMessage": (
             {
                 "id": str(message_id),
@@ -2903,8 +2943,7 @@ async def _session_browse(
 ) -> ToolResult:
     if not await _allow(context, session_browse_permission()):
         return ToolResult.error("permission.denied")
-    messages = _ranked_visible_session_messages(context)
-    title_trust = _session_title_trust().label("title_trust")
+    messages = _ranked_visible_session_messages()
     rows = (
         await context.db.execute(
             select(
@@ -2913,7 +2952,6 @@ async def _session_browse(
                 messages.c.role,
                 messages.c.content,
                 messages.c.created_at,
-                title_trust,
             )
             .join(
                 messages,
@@ -2927,11 +2965,6 @@ async def _session_browse(
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
                 ChatSession.project_id == context.session.project_id,
-                *(
-                    [ChatSession.private_integration_data_used.is_(False)]
-                    if context.memory_trust_level == TrustLevel.PUBLIC
-                    else []
-                ),
             )
             .order_by(messages.c.created_at.desc(), ChatSession.id.desc())
             .limit(arguments.limit)
@@ -2946,10 +2979,8 @@ async def _session_browse(
                     role=role,
                     content=content,
                     message_at=message_at,
-                    title_trust=source_trust,
-                    readable_by=context.memory_trust_level,
                 )
-                for session, message_id, role, content, message_at, source_trust in rows
+                for session, message_id, role, content, message_at in rows
             ],
             "contentIsUntrusted": True,
         }
@@ -2965,18 +2996,9 @@ async def _session_search(
         arguments.query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     )
     pattern = f"%{escaped}%"
-    messages = _ranked_visible_session_messages(context, pattern=pattern)
-    title_trust = _session_title_trust().label("title_trust")
+    messages = _ranked_visible_session_messages(pattern=pattern)
     match_conditions = [messages.c.message_id.is_not(None)]
-    if context.memory_trust_level == TrustLevel.PRIVATE:
-        match_conditions.append(ChatSession.title.ilike(pattern, escape="\\"))
-    else:
-        match_conditions.append(
-            and_(
-                title_trust == TrustLevel.PUBLIC.value,
-                ChatSession.title.ilike(pattern, escape="\\"),
-            )
-        )
+    match_conditions.append(ChatSession.title.ilike(pattern, escape="\\"))
     rows = (
         await context.db.execute(
             select(
@@ -2985,7 +3007,6 @@ async def _session_search(
                 messages.c.role,
                 messages.c.content,
                 messages.c.created_at,
-                title_trust,
             )
             .outerjoin(
                 messages,
@@ -2999,11 +3020,6 @@ async def _session_search(
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
                 ChatSession.project_id == context.session.project_id,
-                *(
-                    [ChatSession.private_integration_data_used.is_(False)]
-                    if context.memory_trust_level == TrustLevel.PUBLIC
-                    else []
-                ),
                 or_(*match_conditions),
             )
             .order_by(
@@ -3022,10 +3038,8 @@ async def _session_search(
                     role=role,
                     content=content,
                     message_at=message_at,
-                    title_trust=source_trust,
-                    readable_by=context.memory_trust_level,
                 )
-                for session, message_id, role, content, message_at, source_trust in rows
+                for session, message_id, role, content, message_at in rows
             ],
             "contentIsUntrusted": True,
         }
@@ -3904,7 +3918,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "read",
-            "Read a directory, UTF-8 text file, or managed session image; continue with offset and limit.",
+            "Read a directory, text, image, or exact files revision with optional pagination.",
             ReadArguments,
             _read,
             tool_type="shared",
@@ -3937,7 +3951,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "provide_file",
-            "Expose one existing regular file as a download without reading or copying it.",
+            "Provide an exact files revision or fixed computer snapshot.",
             ProvideFileArguments,
             _provide_file,
             tool_type="shared",
@@ -4185,8 +4199,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "analyze_video",
-            "Analyze one MP4 or WebM file from session or workspace for speech and/or visuals. It does "
-            "not accept URLs or published caption tracks. Choose speech for spoken content, overview "
+            "Analyze one MP4/WebM from files or computer. It does not accept URLs or published captions. "
+            "Choose speech for spoken content, overview "
             "for visual summaries, or fine_grained for exact visual steps. Do not repeat a successful "
             "analysis; timeout does not indicate video length.",
             AnalyzeVideoArguments,
@@ -4466,6 +4480,7 @@ def permission_for(
     arguments: dict[str, Any],
     root_files: RootFileService,
 ) -> PermissionRequest | None:
+    arguments = internal_file_roots(arguments)
     if tool_name in {
         "web_search",
         "session_read",

@@ -94,9 +94,6 @@ def _candidate_filters(
         filters.append(ChatSession.id != current_session_id)
     if not all_projects:
         filters.append(ChatSession.project_id == project_id)
-    if readable_by == TrustLevel.PUBLIC:
-        filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
-        filters.append(ChatSession.private_integration_data_used.is_(False))
     return filters
 
 
@@ -433,8 +430,6 @@ class EpisodeRetrievalService:
                 Message.tool_calls == JSON.NULL,
             ),
         ]
-        if readable_by == TrustLevel.PUBLIC:
-            visible.append(Message.trust_level == TrustLevel.PUBLIC.value)
         before_limit = (excerpt_messages + 1) // 2
         before = list(
             (
@@ -498,13 +493,9 @@ class EpisodeRetrievalService:
             )
             for message in messages
         )
-        title_visible = (
-            readable_by == TrustLevel.PRIVATE
-            or title_trust == TrustLevel.PUBLIC.value
-        )
         return EpisodeReference(
             session_id=session.id,
-            session_title=session.title if title_visible else None,
+            session_title=session.title,
             anchor_message_id=anchor.id,
             anchor_created_at=anchor.created_at,
             anchor_role=anchor.role,

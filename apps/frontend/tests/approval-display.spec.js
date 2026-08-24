@@ -54,7 +54,7 @@ describe('approval display', () => {
       resourceType: 'execution_workspace',
       resourceScope: '{opaque}',
       resourceDisplay: '/home/user/projekt'
-    })).toEqual({ label: 'Arbeitsverzeichnis', value: '/home/user/projekt' })
+    })).toEqual({ label: 'Aktueller Ordner', value: '/home/user/projekt' })
     expect(approvalResource({
       resourceType: 'root_path',
       resourceScope: '{opaque}',

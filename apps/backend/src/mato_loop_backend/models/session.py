@@ -230,11 +230,9 @@ class MessageAttachment(Base):
         ),
         UniqueConstraint("message_id", "position"),
         CheckConstraint(
-            "(storage_key IS NOT NULL AND file_root_id IS NULL AND file_id IS NULL "
-            "AND file_revision IS NULL AND file_path IS NULL) OR "
-            "(storage_key IS NULL AND file_root_id IS NOT NULL AND file_id IS NOT NULL "
-            "AND file_revision IS NOT NULL AND file_path IS NOT NULL)",
-            name="message_attachment_source_valid",
+            "file_root_id IS NOT NULL AND file_id IS NOT NULL "
+            "AND file_revision IS NOT NULL AND file_path IS NOT NULL",
+            name="message_attachment_file_valid",
         ),
     )
 
@@ -254,15 +252,10 @@ class MessageAttachment(Base):
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    # Keep the existing column for schema evolution while storing a relative path
-    # inside the associated session tree.
-    storage_path: Mapped[str | None] = mapped_column(
-        "storage_key", String(500), nullable=True, unique=True
-    )
-    file_root_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
-    file_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
-    file_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    file_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    file_root_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    file_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    file_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
     filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)

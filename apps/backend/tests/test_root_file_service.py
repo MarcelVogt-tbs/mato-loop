@@ -153,7 +153,7 @@ def test_agent_upsert_and_exact_edit_preserve_line_endings(tmp_path: Path) -> No
     assert (root / "files" / "notes.txt").read_bytes() == b"one\r\nthree\r\nthree\r\n"
 
 
-def test_file_history_survives_regular_live_file_deletion(tmp_path: Path) -> None:
+def test_file_deletion_removes_complete_history(tmp_path: Path) -> None:
     service, root = make_service(tmp_path)
     service.create_file(
         FileRoot.SESSION, "plan.md", BytesIO(b"# Plan\n"), max_bytes=100
@@ -178,64 +178,10 @@ def test_file_history_survives_regular_live_file_deletion(tmp_path: Path) -> Non
     service.delete_path(FileRoot.SESSION, "plan.md", recursive=False)
 
     assert service.list_revisions("plan.md") == ()
-    with service.open_revision_by_id(file_id, 2) as updated:
-        assert updated.read() == b"# Updated\n"
-
-
-def test_deleting_historical_revision_removes_blob_derivatives_and_reference(
-    tmp_path: Path,
-) -> None:
-    service, root = make_service(tmp_path)
-    service.write_file(FileRoot.SESSION, "notes.txt", "one")
-    service.replace_text_file(
-        FileRoot.SESSION, "notes.txt", "two", hashlib.sha256(b"one").hexdigest()
-    )
-    service.replace_text_file(
-        FileRoot.SESSION, "notes.txt", "three", hashlib.sha256(b"two").hexdigest()
-    )
-    file_id = service.list_revisions("notes.txt")[0].file_id
-    service.write_revision_derivatives(file_id, 2, {"preview.bin": b"derived"})
-
-    result = service.delete_revision(
-        "notes.txt", 2, **revision_preconditions(service, "notes.txt")
-    )
-
-    history = root / "revisions" / str(file_id)
-    assert result.deleted is False
-    assert result.current_revision == 3
-    assert [item.revision for item in service.list_revisions("notes.txt")] == [3, 1]
-    assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "three"
-    assert not (history / "2").exists()
-    assert not (history / "derived" / "2").exists()
     with pytest.raises(RootFileError) as unavailable:
         service.open_revision_by_id(file_id, 2)
     assert unavailable.value.code == "file.revisionNotFound"
-
-
-def test_deleting_current_revision_removes_file_and_complete_identity(
-    tmp_path: Path,
-) -> None:
-    service, root = make_service(tmp_path)
-    service.write_file(FileRoot.SESSION, "notes.txt", "one")
-    service.replace_text_file(
-        FileRoot.SESSION, "notes.txt", "two", hashlib.sha256(b"one").hexdigest()
-    )
-    file_id = service.list_revisions("notes.txt")[0].file_id
-    service.write_revision_derivatives(file_id, 1, {"old.bin": b"old"})
-    service.write_revision_derivatives(file_id, 2, {"new.bin": b"new"})
-
-    result = service.delete_revision(
-        "notes.txt", 2, **revision_preconditions(service, "notes.txt")
-    )
-
-    assert result.deleted is True
-    assert result.current_revision is None
-    assert not (root / "files" / "notes.txt").exists()
     assert not (root / "revisions" / str(file_id)).exists()
-    assert service.list_revisions("notes.txt") == ()
-    with pytest.raises(RootFileError) as unavailable:
-        service.open_revision_by_id(file_id, 1)
-    assert unavailable.value.code == "file.revisionNotFound"
 
 
 def test_restore_truncates_later_revisions_and_derivatives_without_reusing_numbers(

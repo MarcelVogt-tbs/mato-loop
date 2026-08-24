@@ -10,12 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.attachments import AttachmentService
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
     Message,
-    MessageAttachment,
 )
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 
@@ -131,17 +129,6 @@ class ChatHistoryService:
             await db.rollback()
         raise ChatHistoryError("session.runInactive", 409)
 
-    @staticmethod
-    async def _discard_attachments(
-        attachments: list[MessageAttachment], session_id: UUID
-    ) -> None:
-        service = AttachmentService()
-        for attachment in attachments:
-            try:
-                await service.discard(attachment, session_id)
-            except BaseException:
-                logger.exception("Could not discard attachment %s after history update", attachment.id)
-
     @classmethod
     async def _delete_message_suffix(
         cls,
@@ -150,36 +137,23 @@ class ChatHistoryService:
         boundary_index: int,
         *,
         include_boundary: bool,
-    ) -> list[MessageAttachment]:
+    ) -> None:
         start = boundary_index if include_boundary else boundary_index + 1
         removed = messages[start:]
         if not removed:
-            return []
-        attachments = [
-            attachment
-            for message in removed
-            for attachment in message.attachments
-            if attachment.storage_path is not None
-        ]
+            return
         await db.execute(
             delete(Message)
             .where(Message.id.in_([message.id for message in removed]))
             .execution_options(synchronize_session=False)
         )
-        return attachments
 
     @classmethod
-    async def _commit_and_discard(
-        cls,
-        db: AsyncSession,
-        attachments: list[MessageAttachment],
-        session_id: UUID,
-    ) -> None:
-        async def commit_and_discard() -> None:
+    async def _commit(cls, db: AsyncSession) -> None:
+        async def commit() -> None:
             await db.commit()
-            await cls._discard_attachments(attachments, session_id)
 
-        task = asyncio.create_task(commit_and_discard())
+        task = asyncio.create_task(commit())
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -273,10 +247,10 @@ class ChatHistoryService:
             await cls._delete_session(db, session)
             return UndoUserMessageResult(content, True)
 
-        attachments = await cls._delete_message_suffix(
+        await cls._delete_message_suffix(
             db, messages, target_index, include_boundary=True
         )
-        await cls._commit_and_discard(db, attachments, session_id)
+        await cls._commit(db)
         return UndoUserMessageResult(content, False)
 
     @classmethod
@@ -302,7 +276,7 @@ class ChatHistoryService:
             raise ChatHistoryError("session.retryUnavailable", 409)
         failed_run, user_index = source
 
-        attachments = await cls._delete_message_suffix(
+        await cls._delete_message_suffix(
             db, messages, user_index, include_boundary=False
         )
         try:
@@ -310,5 +284,4 @@ class ChatHistoryService:
         except BaseException:
             await db.rollback()
             raise
-        await cls._discard_attachments(attachments, session_id)
         return RetryFailedMessageResult(run)

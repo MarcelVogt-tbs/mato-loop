@@ -128,7 +128,7 @@
               v-else v-model="form.sourceSessionId" outlined emit-value map-options clearable
               label="Laufzeit aus Session übernehmen (optional)" :options="sessionOptions"
               :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-              hint="Übernimmt Modell, Memory, Websuche und Arbeitsbereich."
+              hint="Übernimmt Modell, Memory, Websuche, Computer und freigegebenen Bereich."
             />
 
             <q-select
@@ -371,6 +371,7 @@ import { apiErrorMessage } from 'src/utils/api-errors'
 import { formatAbsoluteDateTime, formatDateTimeLocalInput, localDateTimeToIso } from 'src/utils/date-time'
 import { useAutomationStore } from 'stores/automations'
 import { useChatStore } from 'stores/chat'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useSkillStore } from 'stores/skills'
 
 defineOptions({ name: 'AutomationSettingsPage' })
@@ -382,6 +383,7 @@ const router = useRouter()
 const { confirm } = useConfirm()
 const automations = useAutomationStore()
 const chat = useChatStore()
+const executionAgents = useExecutionAgentStore()
 const skills = useSkillStore()
 const loaded = ref(false)
 const loadFailed = ref(false)
@@ -425,6 +427,8 @@ const sessionOptions = computed(() => {
 const skillOptions = computed(() => skills.items.map((skill) => ({ label: skill.name, value: skill.id })))
 const runtimeItems = computed(() => {
   const runtime = automations.detail?.runtime || {}
+  const computer = executionAgents.byId(runtime.preferredExecutionAgentId)
+  const root = computer?.roots?.find((item) => item.id === runtime.preferredRootId)
   const labels = {
     full: 'Vollständig',
     read_only: 'Nur lesen',
@@ -436,10 +440,9 @@ const runtimeItems = computed(() => {
     ['Modell', runtime.modelId],
     ['Memory', runtime.memoryMode],
     ['Websuche', runtime.webSearchPolicy],
-    ['Computer', runtime.preferredExecutionAgentId],
-    ['Arbeitsbereich', runtime.preferredRootId],
-    ['Arbeitsordner', runtime.workingDirectory],
-    ['Aktueller Ordner', runtime.currentDirectory]
+    ['Computer', runtime.preferredExecutionAgentId ? computer?.name || 'Nicht verfügbar' : null],
+    ['Freigegebener Bereich', runtime.preferredRootId ? root?.label || 'Nicht verfügbar' : null],
+    ['Aktueller Ordner', runtime.currentDirectory || runtime.workingDirectory]
   ].map(([label, value]) => ({ label, value: labels[value] || value || 'Nicht festgelegt' }))
 })
 
@@ -730,6 +733,7 @@ watch(showArchived, () => {
 
 onMounted(() => {
   void loadAutomations()
+  void executionAgents.fetchAll().catch(() => {})
   void skills.fetchSkills().catch(() => {})
   void loadSessions()
   refreshTimer = window.setInterval(refreshAutomationState, 5000)

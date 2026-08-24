@@ -886,42 +886,6 @@ async def download_file_revision(
     )
 
 
-@router.delete(
-    "/files/revisions/{revision}", response_model=RevisionMutationResponse
-)
-async def delete_file_revision(
-    revision: int,
-    payload: RevisionMutationRequest,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    session_id: UUID,
-) -> RevisionMutationResponse:
-    context = await _file_context(
-        FileScope.SESSION, session_id, user, db, for_update=True
-    )
-    assert context.root_files is not None
-    try:
-        result = await asyncio.to_thread(
-            context.root_files.delete_revision,
-            payload.path,
-            revision,
-            expected_file_id=payload.file_id,
-            expected_current_revision=payload.expected_current_revision,
-            expected_current_sha256=payload.expected_current_sha256,
-        )
-    except RootFileError as exc:
-        raise _context_error(exc) from exc
-    if result.deleted:
-        await _clear_file_grants(db, user, context, (payload.path,))
-        await db.commit()
-    return RevisionMutationResponse(
-        fileDeleted=result.deleted,
-        fileId=result.file_id,
-        currentRevision=result.current_revision,
-        currentSha256=result.sha256,
-    )
-
-
 @router.post(
     "/files/revisions/{revision}/restore", response_model=RevisionMutationResponse
 )
@@ -1509,9 +1473,16 @@ async def _copy_or_move_entry(
     source_path = _normalize_agent_path(payload.path)
     destination_path = _normalize_agent_path(payload.destination)
     same_agent = source.agent_id is not None and source.agent_id == destination.agent_id
-    if move and not same_agent and (
-        source.agent_id is not None or destination.agent_id is not None
-    ):
+    same_agent_root = same_agent and source.agent_root_id == destination.agent_root_id
+    same_managed_root = (
+        source.root_files is not None
+        and destination.root_files is not None
+        and source.root is not None
+        and destination.root is not None
+        and source.root_files.root_identity(source.root)
+        == destination.root_files.root_identity(destination.root)
+    )
+    if move and not (same_agent_root or same_managed_root):
         raise ApiError(400, "file.crossBoundaryMoveUnavailable")
     if destination.agent_id is not None and not destination.agent_writable:
         raise ApiError(403, "http.forbidden")
@@ -1551,14 +1522,7 @@ async def _copy_or_move_entry(
             raise ApiError(502, "executionAgent.protocolError")
         return {"entry": await _agent_stat(destination, destination_path)}
 
-    if (
-        source.root_files is not None
-        and destination.root_files is not None
-        and source.root is not None
-        and destination.root is not None
-        and source.root_files.root_identity(source.root)
-        == destination.root_files.root_identity(destination.root)
-    ):
+    if same_managed_root:
         operation = source.root_files.move_path if move else source.root_files.copy_path
         try:
             await asyncio.to_thread(

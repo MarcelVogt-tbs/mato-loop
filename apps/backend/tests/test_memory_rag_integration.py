@@ -101,7 +101,7 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
         await db.rollback()
 
 
-async def test_local_episode_rag_finds_prior_session_without_leaking_private() -> None:
+async def test_public_model_episode_rag_can_use_authorized_private_session() -> None:
     async with AsyncSessionFactory() as db:
         user = UserAccount(username=f"episode-{uuid4().hex}", password_hash="test")
         db.add(user)
@@ -166,26 +166,21 @@ async def test_local_episode_rag_finds_prior_session_without_leaking_private() -
             owner_id=user.id,
             current_session_id=current_session.id,
             readable_by=TrustLevel.PUBLIC,
-            query="Which database did we choose for the architecture?",
+            query="What was the secret Oracle alternative?",
             limit=2,
             max_semantic_distance=0.25,
             latest_messages=2,
         )
 
         assert result.references
-        assert result.references[0].session_id == public_session.id
-        assert all(
-            reference.session_id != private_session.id
+        private_reference = next(
+            reference
             for reference in result.references
+            if reference.session_id == private_session.id
         )
-        assert "PostgreSQL" in " ".join(
-            message.content
-            for message in result.references[0].excerpt
+        assert "Oracle" in " ".join(
+            message.content for message in private_reference.excerpt
         )
-        assert {message.content for message in result.references[0].excerpt} >= {
-            latest_user.content,
-            latest_assistant.content,
-        }
         await db.rollback()
 
 

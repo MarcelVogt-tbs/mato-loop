@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import Any, BinaryIO, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -13,7 +13,7 @@ from mato_loop_backend.execution.manager import (
     execution_agent_connections,
 )
 from mato_loop_backend.execution.protocol import EventMessage
-from mato_loop_backend.execution.transfers import transfer_tickets
+from mato_loop_backend.execution.transfers import TransferError, stage_file, transfer_tickets
 
 
 class ExecutionResult(BaseModel):
@@ -321,6 +321,44 @@ class ExecutionClient:
             ):
                 raise ExecutionClientError("executionAgent.protocolError")
             return ticket.content.read(limit + 1)
+        finally:
+            transfer_tickets.revoke(grant.ticket_id)
+
+    async def write_bytes(
+        self, path: str, source: BinaryIO, *, limit: int
+    ) -> WorkspaceWriteResult:
+        try:
+            staged, size, digest = stage_file(source, max_bytes=limit)
+        except TransferError as exc:
+            raise ExecutionClientError(
+                "file.tooLarge"
+                if exc.code == "transfer.tooLarge"
+                else "executionAgent.protocolError"
+            ) from exc
+        grant, _ = transfer_tickets.create_download(
+            self.agent_id, staged, size=size, sha256=digest
+        )
+        try:
+            result = await self.request(
+                "workspace.import",
+                {
+                    "path": path,
+                    "transfer": {
+                        "url": execution_agent_connections.transfer_url(
+                            self.agent_id, grant.ticket_id
+                        ),
+                        "token": grant.token,
+                    },
+                    "size": size,
+                    "sha256": digest,
+                    "overwrite": False,
+                },
+                WorkspaceWriteResult,
+            )
+            assert isinstance(result, WorkspaceWriteResult)
+            if result.path != path or result.size != size or result.sha256 != digest:
+                raise ExecutionClientError("executionAgent.protocolError")
+            return result
         finally:
             transfer_tickets.revoke(grant.ticket_id)
 

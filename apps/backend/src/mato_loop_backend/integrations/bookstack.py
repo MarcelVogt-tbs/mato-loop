@@ -2238,7 +2238,7 @@ BOOKSTACK_SHARED_TOOLS = (
         description=(
             "Attach a file or a link to one page. Provide exactly one source: url "
             "downloads the document from the internet and uploads it to BookStack, "
-            "root with path uploads an existing file from session or workspace "
+            "root with path uploads an existing file from files or computer "
             "storage, and link stores the URL as a reference without downloading "
             "anything. Use url for datasheets and manuals the user wants stored "
             "permanently, and link when a reference is enough. Some sites block "

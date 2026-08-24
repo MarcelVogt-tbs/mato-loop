@@ -28,6 +28,8 @@ from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 def test_personal_settings_models_and_instance_flags_have_safe_defaults() -> None:
     assert AiSettings().personal_providers_enabled is True
+    assert AiSettings().title_vision_fallback_enabled is True
+    assert UserAiSettings().title_vision_fallback_enabled is True
     integrations = IntegrationSettings(adapter_availability={"caldav": "full"})
     assert integrations.adapter_availability == {}
     assert (
@@ -87,12 +89,14 @@ async def test_effective_ai_combines_providers_and_uses_only_effective_personal_
         default_model_id=instance_model.id,
         compaction_model_id=instance_model.id,
         title_generation_model_id=instance_model.id,
+        title_vision_fallback_enabled=False,
     )
     personal = UserAiSettings(
         providers=[personal_provider],
         models=[personal_model, unavailable_model],
         default_model_id=personal_model.id,
         compaction_model_id=unavailable_model.id,
+        title_vision_fallback_enabled=True,
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
@@ -103,6 +107,7 @@ async def test_effective_ai_combines_providers_and_uses_only_effective_personal_
     assert effective.default_model_id == personal_model.id
     assert effective.compaction_model_id == instance_model.id
     assert effective.title_generation_model_id == instance_model.id
+    assert effective.title_vision_fallback_enabled is True
     assert instance_provider.owner_id is None
     assert personal_provider.owner_id is None
     assert "owner_id" not in effective.providers[1].model_dump()

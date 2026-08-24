@@ -213,7 +213,7 @@
         <div class="default-model-setting__description">
           <div class="text-subtitle1 text-weight-bold">Titelgenerierung</div>
           <div class="text-body2 app-muted">
-            Erstellt parallel zum ersten Agent-Run einen kurzen Titel aus der ersten Nutzernachricht.
+            Erstellt parallel zum ersten Agent-Run einen kurzen Titel aus der ersten Nachricht und ihren Anhängen.
           </div>
         </div>
         <div>
@@ -229,6 +229,13 @@
             :options="providers.selectionOptions(form.titleGenerationModelId)"
             :disable="personalBlocked"
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+          />
+          <q-checkbox
+            v-model="form.titleVisionFallbackEnabled"
+            class="q-mt-sm"
+            color="primary"
+            label="Fallback auf Vision-Modell bei Bildinhalten"
+            :disable="personalBlocked"
           />
         </div>
       </q-card-section>
@@ -351,6 +358,7 @@ const form = reactive({
   defaultModelId: null,
   compactionModelId: null,
   titleGenerationModelId: null,
+  titleVisionFallbackEnabled: true,
   dreamingModelId: null,
   visionModelId: null,
   videoModelId: null,
@@ -364,6 +372,7 @@ const changed = computed(() => (
   form.defaultModelId !== providers.defaultModelId
   || form.compactionModelId !== providers.compactionModelId
   || form.titleGenerationModelId !== providers.titleGenerationModelId
+  || form.titleVisionFallbackEnabled !== providers.titleVisionFallbackEnabled
   || form.dreamingModelId !== providers.dreamingModelId
   || form.visionModelId !== providers.visionModelId
   || form.videoModelId !== providers.videoModelId
@@ -378,6 +387,7 @@ function assignForm() {
   form.defaultModelId = providers.defaultModelId
   form.compactionModelId = providers.compactionModelId
   form.titleGenerationModelId = providers.titleGenerationModelId
+  form.titleVisionFallbackEnabled = providers.titleVisionFallbackEnabled
   form.dreamingModelId = providers.dreamingModelId
   form.visionModelId = providers.visionModelId
   form.videoModelId = providers.videoModelId

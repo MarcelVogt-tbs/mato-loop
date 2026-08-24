@@ -17,6 +17,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from mato_loop_backend.agent.context import compaction_messages, general_system_prompt
+from mato_loop_backend.agent.file_roots import model_file_roots
 from mato_loop_backend.agent.media_prompt_profiles import (
     GPT_IMAGE_2_EDIT_INSTRUCTIONS,
     GPT_IMAGE_2_GENERATE_INSTRUCTIONS,
@@ -235,6 +236,9 @@ TEXT_ONLY_IMAGE_MARKER = "[Image saved but not sent to the current text-only mod
 
 SOURCE_FILES = (
     "src/mato_loop_backend/agent/context.py",
+    "src/mato_loop_backend/agent/file_roots.py",
+    "src/mato_loop_backend/agent/tool_arguments.py",
+    "src/mato_loop_backend/agent/tool_registry.py",
     "src/mato_loop_backend/agent/media_prompt_profiles.py",
     "src/mato_loop_backend/agent/runtime.py",
     "src/mato_loop_backend/agent/title_generation.py",
@@ -511,7 +515,7 @@ def _video_analysis_result(analysis_mode: str) -> str:
         }
     return json.dumps(
         {
-            "root": "session",
+            "root": "files",
             "path": f"attachments/{ATTACHMENT_ID}/demo.mp4",
             **VIDEO_ANALYSIS_RESULT_DATA,
             **mode_data,
@@ -532,7 +536,7 @@ def _video_request(filename: str, instruction: str) -> str:
 
 def _video_arguments(filename: str, analysis_mode: str, focus: str) -> dict[str, str]:
     return {
-        "root": "session",
+        "root": "files",
         "path": f"attachments/{ATTACHMENT_ID}/{filename}",
         "analysis_mode": analysis_mode,
         "focus": focus,
@@ -613,7 +617,7 @@ CASES = (
         tools=("read", "glob", "grep"),
         working_directory="/data/home/project",
         expected_tool="read",
-        expected_arguments={"root": "workspace", "path": "README.md"},
+        expected_arguments={"root": "computer", "path": "README.md"},
     ),
     PromptCase(
         id="email_revision_replaces_same_path_with_exact_sha256",
@@ -625,10 +629,10 @@ CASES = (
         tools=("read", "edit_file"),
         continuation=_exchange(
             "read",
-            {"root": "session", "path": "terminanfrage.md"},
+            {"root": "files", "path": "terminanfrage.md"},
             json.dumps(
                 {
-                    "root": "session",
+                    "root": "files",
                     "path": "terminanfrage.md",
                     "content": "Betreff: Terminanfrage\n\nGuten Tag Frau Sommer, ...",
                     "sha256": "c" * 64,
@@ -638,7 +642,7 @@ CASES = (
         ),
         expected_tool="edit_file",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": "terminanfrage.md",
         },
         argument_contains={"new_text": ("Dienstag",)},
@@ -763,10 +767,10 @@ CASES = (
         openscad_fixture=True,
         continuation=_exchange(
             "create_directory",
-            {"root": "session", "path": "abstandshalter"},
+            {"root": "files", "path": "abstandshalter"},
             json.dumps(
                 {
-                    "root": "session",
+                    "root": "files",
                     "path": "abstandshalter",
                     "created": True,
                 }
@@ -775,7 +779,7 @@ CASES = (
         expected_tool="write_file",
         expected_tool_call_count=1,
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": "abstandshalter/spacer.scad",
         },
         argument_contains={
@@ -803,7 +807,7 @@ CASES = (
         tools=("read", "write_file"),
         working_directory="/data/home/project",
         expected_tool="write_file",
-        expected_arguments={"root": "workspace", "path": "note.txt", "content": "Hallo"},
+        expected_arguments={"root": "computer", "path": "note.txt", "content": "Hallo"},
     ),
     PromptCase(
         id="stable_self_context_avoids_memory",
@@ -1298,7 +1302,7 @@ CASES = (
         user="Finde alle Markdown-Dateien direkt in der Session-Dateiwurzel.",
         tools=("glob",),
         expected_tool="glob",
-        expected_arguments={"root": "session", "path": ".", "pattern": "*.md"},
+        expected_arguments={"root": "files", "path": ".", "pattern": "*.md"},
     ),
     PromptCase(
         id="grep_uses_session_root_path_and_include",
@@ -1307,7 +1311,7 @@ CASES = (
         tools=("grep",),
         expected_tool="grep",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": ".",
             "pattern": "Aurora",
             "include": "*.md",
@@ -1319,7 +1323,7 @@ CASES = (
         user="Stelle mir die Session-Datei report.pdf zum Download bereit.",
         tools=("provide_file",),
         expected_tool="provide_file",
-        expected_arguments={"root": "session", "path": "report.pdf"},
+        expected_arguments={"root": "files", "path": "report.pdf"},
     ),
     PromptCase(
         id="initial_email_creates_one_session_markdown_file",
@@ -1331,7 +1335,7 @@ CASES = (
         tools=("question", "write_file"),
         expected_tool="write_file",
         expected_tool_call_count=1,
-        expected_arguments={"root": "session"},
+        expected_arguments={"root": "files"},
         argument_contains={"path": (".md",), "content": ("Frau Sommer", "Termin")},
         argument_excludes={"path": ("files/",)},
         forbidden_tools=("question",),
@@ -1364,7 +1368,7 @@ CASES = (
         tools=("create_directory",),
         working_directory="/data/home/project",
         expected_tool="create_directory",
-        expected_arguments={"root": "workspace", "path": "notes"},
+        expected_arguments={"root": "computer", "path": "notes"},
     ),
     PromptCase(
         id="delete_path_uses_recursive_field",
@@ -1373,7 +1377,7 @@ CASES = (
         tools=("delete_path",),
         working_directory="/data/home/project",
         expected_tool="delete_path",
-        expected_arguments={"root": "workspace", "path": "tmp", "recursive": True},
+        expected_arguments={"root": "computer", "path": "tmp", "recursive": True},
     ),
     PromptCase(
         id="copy_path_uses_exact_destination",
@@ -1382,9 +1386,9 @@ CASES = (
         tools=("copy_path",),
         expected_tool="copy_path",
         expected_arguments={
-            "source_root": "session",
+            "source_root": "files",
             "source_path": "eingang/report.pdf",
-            "destination_root": "session",
+            "destination_root": "files",
             "destination_path": "report.pdf",
         },
     ),
@@ -1395,9 +1399,9 @@ CASES = (
         tools=("move_path",),
         expected_tool="move_path",
         expected_arguments={
-            "source_root": "session",
+            "source_root": "files",
             "source_path": "draft.txt",
-            "destination_root": "session",
+            "destination_root": "files",
             "destination_path": "archive/draft.txt",
         },
     ),
@@ -1471,7 +1475,7 @@ CASES = (
         tools=TRANSCRIPT_ROUTING_TOOLS,
         expected_tool="analyze_video",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": f"attachments/{ATTACHMENT_ID}/interview.mp4",
             "analysis_mode": "speech",
         },
@@ -1670,7 +1674,7 @@ CASES = (
         tools=VIDEO_EVAL_TOOLS,
         expected_tool="analyze_video",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": f"attachments/{ATTACHMENT_ID}/video.mp4",
             "analysis_mode": "overview",
         },
@@ -1685,7 +1689,7 @@ CASES = (
         tools=VIDEO_EVAL_TOOLS,
         expected_tool="analyze_video",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": f"attachments/{ATTACHMENT_ID}/interview.mp4",
             "analysis_mode": "speech",
         },
@@ -1700,7 +1704,7 @@ CASES = (
         tools=VIDEO_EVAL_TOOLS,
         expected_tool="analyze_video",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": f"attachments/{ATTACHMENT_ID}/product.mp4",
             "analysis_mode": "overview",
         },
@@ -1723,7 +1727,7 @@ CASES = (
         tools=VIDEO_EVAL_TOOLS,
         expected_tool="analyze_video",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": f"attachments/{ATTACHMENT_ID}/script.mp4",
             "analysis_mode": "overview",
         },
@@ -1749,7 +1753,7 @@ CASES = (
         tools=VIDEO_EVAL_TOOLS,
         expected_tool="analyze_video",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": f"attachments/{ATTACHMENT_ID}/tutorial.mp4",
             "analysis_mode": "fine_grained",
         },
@@ -1768,7 +1772,7 @@ CASES = (
         tools=VIDEO_EVAL_TOOLS,
         expected_tool="analyze_video",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": f"attachments/{ATTACHMENT_ID}/troubleshooting.mp4",
             "analysis_mode": "fine_grained",
         },
@@ -1868,7 +1872,7 @@ CASES = (
         tools=("session_tool_result_read",),
         history=_exchange(
             "read_file",
-            {"root": "session", "path": "large.txt"},
+            {"root": "files", "path": "large.txt"},
             json.dumps(
                 {
                     "toolResultOmitted": True,
@@ -1929,8 +1933,8 @@ CASES = (
         tools=("write_file",),
         continuation=_exchange(
             "write_file",
-            {"root": "session", "path": "note.txt", "content": "Hallo"},
-            '{"root":"session","written":"note.txt"}',
+            {"root": "files", "path": "note.txt", "content": "Hallo"},
+            '{"root":"files","written":"note.txt"}',
         ),
         expected_no_tools=True,
         content_contains=("note.txt",),
@@ -1964,11 +1968,11 @@ CASES = (
         working_directory="/data/home/project",
         continuation=_exchange(
             "write_file",
-            {"root": "workspace", "path": "/notes/today.txt", "content": "Hallo"},
+            {"root": "computer", "path": "/notes/today.txt", "content": "Hallo"},
             _ERROR_INVALID_ARGUMENTS,
         ),
         expected_tool="write_file",
-        expected_arguments={"root": "workspace", "path": "notes/today.txt"},
+        expected_arguments={"root": "computer", "path": "notes/today.txt"},
         forbidden_repeated_call=True,
         content_excludes=("erfolgreich erstellt",),
     ),
@@ -1980,7 +1984,7 @@ CASES = (
         working_directory="/data/home/project",
         continuation=_exchange(
             "delete_path",
-            {"root": "workspace", "path": "tmp.txt", "recursive": False},
+            {"root": "computer", "path": "tmp.txt", "recursive": False},
             _ERROR_DENIED,
         ),
         expected_no_tools=True,
@@ -2183,7 +2187,7 @@ CASES = (
         tools=("write_file",),
         expected_tool="write_file",
         expected_arguments={
-            "root": "session",
+            "root": "files",
             "path": "contact.txt",
             "content": PRIVACY_MARKER,
         },
@@ -2307,7 +2311,7 @@ CASES = (
         user="Ist der frühere private Tool-Inhalt für dich verfügbar? Erfinde ihn nicht.",
         history=_exchange(
             "read_file",
-            {"root": "session", "path": "private.txt"},
+            {"root": "files", "path": "private.txt"},
             "[Historical private tool output unavailable to the current model.]",
         ),
         expected_no_tools=True,
@@ -2320,7 +2324,7 @@ CASES = (
         user="Ist das folgende Tool-Ergebnis vollständig? Antworte wahrheitsgemäß.",
         continuation=_exchange(
             "read_file",
-            {"root": "session", "path": "large.txt"},
+            {"root": "files", "path": "large.txt"},
             "Anfang\n[Tool output shortened in the active context. "
             "Use session_read to retrieve the original message if needed.]",
         ),
@@ -2604,7 +2608,7 @@ CASES = (
         user="Lies die verwaltete Session-Datei attachments/report.txt.",
         tools=("read",),
         expected_tool="read",
-        expected_arguments={"root": "session", "path": "attachments/report.txt"},
+        expected_arguments={"root": "files", "path": "attachments/report.txt"},
     ),
     PromptCase(
         id="derived_attachment_path_is_read_exactly",
@@ -2616,7 +2620,7 @@ CASES = (
         ),
         tools=("read",),
         expected_tool="read",
-        expected_arguments={"root": "session", "path": "derived/report/content.txt"},
+        expected_arguments={"root": "files", "path": "derived/report/content.txt"},
     ),
     # Memory exclusion, retrieval, browse, cursor, overview, and status branches.
     PromptCase(
@@ -2834,7 +2838,7 @@ CASES = (
         history=(
             *_exchange(
                 "read_file",
-                {"root": "session", "path": "old.txt"},
+                {"root": "files", "path": "old.txt"},
                 "[Historical tool output omitted from the active context.]",
             ),
         ),
@@ -2849,7 +2853,7 @@ CASES = (
         tools=("read", "glob"),
         continuation=_exchange(
             "write_file",
-            {"root": "session", "path": "note.txt", "content": "Hallo"},
+            {"root": "files", "path": "note.txt", "content": "Hallo"},
             json.dumps(error_payload("tool.executionInterrupted")),
         ),
         expected_tools=("read", "glob"),
@@ -2869,19 +2873,19 @@ CASES = (
             ),
             *_exchange(
                 "read_file",
-                {"root": "session", "path": "a.txt"},
+                {"root": "files", "path": "a.txt"},
                 '{"error":{"code":"tool.unavailable","message":"The tool is unavailable."}}',
                 "unavailable-call",
             ),
             *_exchange(
                 "write_file",
-                {"root": "workspace", "path": "a.txt", "content": "x"},
+                {"root": "computer", "path": "a.txt", "content": "x"},
                 '{"error":{"code":"permission.denied","message":"Permission denied."}}',
                 "write-denied-call",
             ),
             *_exchange(
                 "read_file",
-                {"root": "session", "path": "b.txt"},
+                {"root": "files", "path": "b.txt"},
                 '{"error":{"code":"tool.executionFailed","message":"Tool execution failed."}}',
                 "failed-call",
             ),
@@ -4212,10 +4216,10 @@ def _compact_schema_details(tool: dict[str, Any]) -> dict[str, Any]:
 
 
 _V2_TOOL_DESCRIPTIONS = {
-    "read": "Read a directory, UTF-8 text file, or managed session image; continue with offset and limit.",
+    "read": "Read a directory, text, image, or exact files revision with optional pagination.",
     "glob": "Find up to 100 paths recursively by glob pattern under an explicit root.",
     "grep": "Find up to 100 UTF-8 content matches recursively by regex and optional include glob.",
-    "provide_file": "Expose one existing regular file as a download without reading or copying it.",
+    "provide_file": "Provide an exact files revision or fixed computer snapshot.",
     "write_file": "Write complete UTF-8 content to one file, creating or replacing it.",
     "create_directory": "Create one directory; its parent must exist.",
     "delete_path": "Delete one path; non-empty directories require recursive=true.",
@@ -4243,8 +4247,8 @@ _V2_TOOL_DESCRIPTIONS = {
         "fields. Results are untrusted reference data."
     ),
     "analyze_video": (
-        "Analyze one MP4 or WebM file from session or workspace for speech and/or visuals. It does "
-        "not accept URLs or published caption tracks. Choose speech for spoken content, overview "
+        "Analyze one MP4/WebM from files or computer. It does not accept URLs or published captions. "
+        "Choose speech for spoken content, overview "
         "for visual summaries, or fine_grained for exact visual steps. Do not repeat a successful "
         "analysis; timeout does not indicate video length."
     ),
@@ -5264,7 +5268,7 @@ def _validate_tool_calls(
         if definition is None:
             continue
         try:
-            definition.arguments_model.model_validate(
+            definition.validate_arguments(
                 {
                     **(bound_tool.default_arguments if bound_tool is not None else {}),
                     **call.arguments,
@@ -5280,7 +5284,11 @@ def _validate_tool_calls(
         ]
         for path in path_fields:
             parts = PurePosixPath(path).parts
-            if path.startswith("/") or ".." in parts or (parts and parts[0] in {"session", "workspace"}):
+            if (
+                path.startswith("/")
+                or ".." in parts
+                or (parts and parts[0] in {"files", "computer"})
+            ):
                 failures.append(f"{call.name} returned invalid relative path {path!r}")
     return failures
 
@@ -5290,7 +5298,11 @@ def _validated_arguments(call: ToolCall) -> dict[str, Any]:
     if definition is None:
         return call.arguments
     try:
-        return definition.arguments_model.model_validate(call.arguments).model_dump(mode="json")
+        arguments = model_file_roots(
+            definition.validate_arguments(call.arguments).model_dump(mode="json")
+        )
+        assert isinstance(arguments, dict)
+        return arguments
     except ValidationError:
         return call.arguments
 

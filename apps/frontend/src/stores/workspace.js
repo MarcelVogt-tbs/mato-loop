@@ -17,7 +17,7 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 
 export const useWorkspaceStore = defineStore('workspace', {
   state: () => ({
-    scope: 'filesystem',
+    scope: 'session',
     sessionId: null,
     workingDirectory: null,
     workspaceContext: null,
@@ -105,8 +105,17 @@ export const useWorkspaceStore = defineStore('workspace', {
       return this.load('.')
     },
     configure({ sessionId = null, rootIdentity = null, workingDirectory = null, workspaceContext = null } = {}) {
-      if (!this.toolContext) this.scope = sessionId ? 'session' : 'filesystem'
-      const changed = this.sessionId !== sessionId
+      const sessionChanged = this.sessionId !== sessionId
+      if (sessionChanged) this.scope = sessionId ? 'session' : 'filesystem'
+      else if (
+        !this.toolContext
+        && !sessionId
+        && !this.workspaceContext
+        && workspaceContext?.executionAgentId
+        && workspaceContext.rootId
+        && workspaceContext.connected === true
+      ) this.scope = 'filesystem'
+      const changed = sessionChanged
         || (!this.toolContext && this.rootIdentity !== rootIdentity)
         || this.workingDirectory !== workingDirectory
         || workspaceContextKey(this.workspaceContext) !== workspaceContextKey(workspaceContext)
@@ -118,7 +127,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!this.toolContext) this.rootIdentity = rootIdentity
     },
     setScope(scope) {
-      if (scope === 'session' && !this.sessionId) return
       if (scope === this.scope && !this.rootIdentity) return
       this.scope = scope
       this.reset(false)
@@ -554,46 +562,6 @@ export const useWorkspaceStore = defineStore('workspace', {
         || sessionId !== this.sessionId
       ) return null
       this.fileChangeVersions[path] = (this.fileChangeVersions[path] || 0) + 1
-      return data
-    },
-    async deleteRevision(path, revision) {
-      requireWritableContext(this)
-      const contextVersion = this.contextVersion
-      const viewVersion = this.viewVersion
-      const sessionId = this.sessionId
-      const state = this.fileRevisions[path] || {}
-      const currentRevision = state.items?.find((item) => item.current)?.revision
-      const { data } = await api.delete(`/workspace/files/revisions/${revision}`, {
-        params: { session_id: sessionId },
-        data: {
-          path,
-          file_id: state.fileId,
-          expected_current_revision: currentRevision
-        }
-      })
-      if (
-        contextVersion !== this.contextVersion
-        || viewVersion !== this.viewVersion
-        || sessionId !== this.sessionId
-      ) return null
-      if (!data.fileDeleted) {
-        await this.loadRevisions(path).catch(() => null)
-        if (viewVersion !== this.viewVersion) return null
-        return data
-      }
-      delete this.fileRevisions[path]
-      delete this.filePreviews[path]
-      this.closeViewer()
-      this.selectedPath = parentPath(path)
-      this.selectedKind = 'directory'
-      this.persistView()
-      const closedViewVersion = this.viewVersion
-      await this.load(this.selectedPath, false, true).catch(() => null)
-      if (
-        contextVersion !== this.contextVersion
-        || closedViewVersion !== this.viewVersion
-        || sessionId !== this.sessionId
-      ) return null
       return data
     },
     async saveFile(path, content, expectedRevision) {

@@ -413,6 +413,56 @@ describe('chat drafts', () => {
     })
   })
 
+  it('keeps an explicitly supplied current folder when the computer area changes', async () => {
+    const chat = useChatStore()
+    Object.assign(chat.activeContext, {
+      preferredExecutionAgentId: 'agent-1',
+      preferredRootId: 'root-old'
+    })
+
+    await chat.updateActive({
+      preferred_root_id: 'root-home',
+      working_directory: 'user',
+      current_directory: '/home/user'
+    })
+
+    expect(chat.activeContext).toMatchObject({
+      preferredRootId: 'root-home',
+      workingDirectory: 'user',
+      currentDirectory: '/home/user'
+    })
+  })
+
+  it('sends an explicitly supplied current folder with a persisted area change', async () => {
+    api.patch.mockResolvedValue({
+      data: {
+        id: 'session-1',
+        preferredRootId: 'root-home',
+        workingDirectory: 'user',
+        currentDirectory: '/home/user'
+      }
+    })
+    const chat = useChatStore()
+    chat.current = {
+      id: 'session-1',
+      preferredExecutionAgentId: 'agent-1',
+      preferredRootId: 'root-old'
+    }
+    chat.selectedSessionId = 'session-1'
+
+    await chat.updateActive({
+      preferred_root_id: 'root-home',
+      working_directory: 'user',
+      current_directory: '/home/user'
+    })
+
+    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
+      preferred_root_id: 'root-home',
+      working_directory: 'user'
+    })
+    expect(chat.current.currentDirectory).toBe('/home/user')
+  })
+
   it('sends reset fields in one request when a persisted session changes executor', async () => {
     api.patch.mockResolvedValue({
       data: {
@@ -1338,7 +1388,7 @@ describe('chat drafts', () => {
       data: {
         id: sessionId,
         messages: [
-          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'session', path: 'result.md', content: 'Fertig' } }] },
+          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'files', path: 'result.md', content: 'Fertig' } }] },
           { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
         ]
       }
@@ -1541,7 +1591,7 @@ describe('chat drafts', () => {
         id: sessionId,
         projectId: rootIdentity,
         messages: [
-          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'session', path: 'result.md', content: 'Fertig' } }] },
+          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'files', path: 'result.md', content: 'Fertig' } }] },
           { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
         ]
       }
@@ -1565,7 +1615,7 @@ describe('chat drafts', () => {
       data: {
         id: sessionId,
         messages: [
-          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'session', path: 'result.md', content: 'Fertig' } }] },
+          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'files', path: 'result.md', content: 'Fertig' } }] },
           { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
         ]
       }
@@ -1636,7 +1686,7 @@ describe('chat drafts', () => {
             toolCalls: [{
               id: 'call-1',
               name: 'delete_path',
-              arguments: { root: 'session', path: 'result.md' }
+              arguments: { root: 'files', path: 'result.md' }
             }]
           },
           { role: 'tool', toolCallId: 'call-1' }

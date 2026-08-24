@@ -296,6 +296,7 @@ describe('provider store', () => {
         defaultModelId: 'agent',
         compactionModelId: 'compact',
         titleGenerationModelId: null,
+        titleVisionFallbackEnabled: false,
         dreamingModelId: 'compact',
         visionModelId: 'vision',
         videoModelId: 'video',
@@ -311,6 +312,7 @@ describe('provider store', () => {
       defaultModelId: 'agent',
       compactionModelId: 'compact',
       titleGenerationModelId: null,
+      titleVisionFallbackEnabled: false,
       dreamingModelId: 'compact',
       visionModelId: 'vision',
       videoModelId: 'video',
@@ -326,6 +328,7 @@ describe('provider store', () => {
       default_model_id: 'agent',
       compaction_model_id: 'compact',
       title_generation_model_id: null,
+      title_vision_fallback_enabled: false,
       dreaming_model_id: 'compact',
       vision_model_id: 'vision',
       video_model_id: 'video',
@@ -338,6 +341,7 @@ describe('provider store', () => {
     expect(store.defaultModelId).toBe('agent')
     expect(store.compactionModelId).toBe('compact')
     expect(store.titleGenerationModelId).toBeNull()
+    expect(store.titleVisionFallbackEnabled).toBe(false)
     expect(store.dreamingModelId).toBe('compact')
     expect(store.visionModelId).toBe('vision')
     expect(store.videoModelId).toBe('video')

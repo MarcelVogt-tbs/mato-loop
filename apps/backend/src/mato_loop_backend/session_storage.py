@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from mato_loop_backend.config import get_runtime_config
 
-SESSION_DIRECTORIES = ("attachments",)
+SESSION_DIRECTORIES: tuple[str, ...] = ()
 _AUTO_LOCATION = object()
 
 
@@ -277,6 +277,45 @@ class SessionStorage:
             target.unlink(missing_ok=True)
         elif target.is_dir():
             shutil.rmtree(target)
+
+    @staticmethod
+    def _remove_empty_legacy_directories(target: Path) -> None:
+        for name in ("attachments", "generated", "downloads", "derived"):
+            try:
+                (target / name).rmdir()
+            except FileNotFoundError:
+                pass
+
+    def cleanup_legacy_attachment_storage(
+        self, session_locations: dict[UUID, UUID | None]
+    ) -> int:
+        removed = 0
+        logical_roots: set[Path] = set()
+        for session_id, project_id in session_locations.items():
+            session = self.session_path(session_id, project_id=project_id)
+            logical_roots.add(self.logical_root_path(session_id, project_id))
+            for name in ("attachments", "generated", "downloads", "derived"):
+                target = session / name
+                if target.exists() or target.is_symlink():
+                    self._remove_path(target)
+                    removed += 1
+        for root in logical_roots:
+            revisions = root / "revisions"
+            if not revisions.is_dir() or revisions.is_symlink():
+                continue
+            for history in revisions.iterdir():
+                if history.is_symlink() or not history.is_dir():
+                    continue
+                try:
+                    payload = json.loads(
+                        (history / "index.json").read_text(encoding="utf-8")
+                    )
+                except (FileNotFoundError, json.JSONDecodeError, OSError):
+                    continue
+                if payload.get("deleted") is True:
+                    self._remove_path(history)
+                    removed += 1
+        return removed
 
     def remove_session(
         self,
@@ -593,8 +632,6 @@ class SessionStorage:
                     self._copy_file_no_replace(source_root / relative, target_root / relative)
                 self._fsync_imported_tree(target_root, entries, directories)
             self.provision(session_id, target_project_id)
-            self._remove_path(target / "attachments")
-            (source / "attachments").rename(target / "attachments")
             self._fsync_directory(target)
             self._fsync_directory(target.parent)
             self._fsync_directory(source)
@@ -647,10 +684,8 @@ class SessionStorage:
                 "sessionStorage.sessionAlreadyExists", "Session storage already exists"
             )
         self.provision(normalized, normalized_target)
-        target_attachments = target / "attachments"
-        self._remove_path(target_attachments)
         try:
-            (source / "attachments").rename(target_attachments)
+            self._remove_empty_legacy_directories(source)
             if normalized_source is None:
                 (source / "files").rmdir()
                 (source / "revisions").rmdir()
@@ -659,8 +694,6 @@ class SessionStorage:
             self._fsync_directory(target.parent)
             self._fsync_directory(source.parent)
         except BaseException:
-            if target_attachments.exists() and not (source / "attachments").exists():
-                target_attachments.rename(source / "attachments")
             self._remove_path(target)
             raise
         return SessionMoveReceipt(
@@ -726,12 +759,6 @@ class SessionStorage:
                             "sessionStorage.moveDataChanged",
                             "Imported session data changed before rollback",
                         )
-            source_attachments = source / "attachments"
-            target_attachments = target / "attachments"
-            if target_attachments.exists() and not source_attachments.exists():
-                target_attachments.rename(source_attachments)
-                self._fsync_directory(source)
-                self._fsync_directory(target)
             for root_name, entries, directories in (
                 ("files", payload.get("files"), payload.get("fileDirectories")),
                 ("revisions", payload.get("revisions"), payload.get("revisionDirectories")),

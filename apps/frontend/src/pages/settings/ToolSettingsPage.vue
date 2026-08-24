@@ -410,7 +410,7 @@ const TOOL_DESCRIPTIONS = {
   generate_speech: 'Erzeugt gesprochene WAV-Audiodateien aus Text.',
   generate_audio: 'Erzeugt Audio oder Musik aus einem Prompt.',
   transcribe_audio: 'Transkribiert WAV-Anhänge aus der aktuellen Session.',
-  analyze_video: 'Analysiert MP4- und WebM-Videos aus Session oder Workspace.',
+  analyze_video: 'Analysiert MP4- und WebM-Videos aus Sessiondateien oder von einem Computer.',
   session_read: 'Liest Nachrichten aus der aktuellen oder einer anderen Session.',
   session_tool_result_read: 'Liest ein persistiertes Tool-Ergebnis der aktuellen Session.',
   session_browse: 'Listet letzte Sessions auf. Nutzt dieselbe Richtlinie wie die Session-Suche.',
@@ -472,7 +472,7 @@ const TOOL_DESCRIPTIONS = {
   knowledge_delete_shelf: 'Löscht ein Regal, ohne die enthaltenen Bücher zu löschen.',
   knowledge_list_attachments: 'Listet die Anhänge einer zuvor gelesenen Seite auf.',
   knowledge_create_attachment:
-    'Hängt eine Datei oder einen Link an eine Seite: Download aus dem Internet, Datei aus Session- oder Workspace-Speicher oder reiner Verweis.',
+    'Hängt eine Datei oder einen Link an eine Seite: Download aus dem Internet, Datei aus Sessiondateien oder von einem Computer oder reiner Verweis.',
   knowledge_delete_attachment: 'Löscht einen zuvor aufgelisteten Anhang einer Seite.',
   git_clone: 'Klont ein Git-Repository auf den zugewiesenen Computer.',
   git_status: 'Zeigt den Zustand des Git-Arbeitsverzeichnisses an.',

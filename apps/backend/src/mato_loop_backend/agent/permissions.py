@@ -147,23 +147,6 @@ def integration_operation_permission(
     )
 
 
-def private_integration_data_release_permission(session_id: UUID) -> PermissionRequest:
-    return PermissionRequest(
-        capability="integration.private_data.release",
-        resource_type="session",
-        resource_scope=str(session_id),
-        action_kind="integration_private_data_release",
-        risk_level="high",
-        title="Private Integrationsdaten freigeben?",
-        summary=(
-            "Private Daten aus Integrationen dürfen in dieser Session an das "
-            "öffentliche Modell übermittelt werden."
-        ),
-        resource_display="Aktuelle Session",
-        available_decisions=("allow_session", "deny"),
-    )
-
-
 def _integration_operation_scope(resource_scope: str) -> dict[str, str] | None:
     try:
         value = json.loads(resource_scope)

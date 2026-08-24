@@ -1,7 +1,9 @@
+import hashlib
 import json
 from dataclasses import replace
+from io import BytesIO
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +25,7 @@ from mato_loop_backend.execution import (
     WorkspaceReadResult,
     WorkspaceStatResult,
     WorkspaceWriteResult,
+    transfer_tickets,
 )
 from mato_loop_backend.execution.client import ExecutionResult, WorkspaceGrepMatch
 from mato_loop_backend.execution.protocol import EventMessage, ResponseMessage
@@ -60,6 +63,19 @@ class FakeExecutionClient:
             )
         response = self.responses[operation]
         return response(arguments) if callable(response) else response
+
+    async def read_bytes(self, path, *, limit):
+        self.requests.append(("workspace.export", {"path": path, "limit": limit}))
+        response = self.responses["workspace.export"]
+        return response(path) if callable(response) else response
+
+    async def write_bytes(self, path, source, *, limit):
+        data = source.read(limit + 1)
+        self.requests.append(
+            ("workspace.import", {"path": path, "content": data, "limit": limit})
+        )
+        response = self.responses["workspace.import"]
+        return response(path, data) if callable(response) else response
 
 
 def _context(tmp_path, call, client, *, decision=PermissionDecision.ALLOW):
@@ -171,6 +187,61 @@ async def test_execution_client_adds_only_snapshot_root_and_sanitizes_agent_erro
     assert exc_info.value.code == "executionAgent.protocolError"
     assert exc_info.value.params == {"secret": "value"}
     assert "secret" not in str(exc_info.value)
+
+
+async def test_execution_client_imports_fixed_bytes_with_transfer_ticket(monkeypatch) -> None:
+    agent_id = uuid4()
+    root_id = uuid4()
+    data = b"managed snapshot"
+    digest = hashlib.sha256(data).hexdigest()
+    client = ExecutionClient(
+        agent_id,
+        root_id,
+        "a" * 64,
+        "project",
+        frozenset({"workspace.import"}),
+    )
+
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.transfer_url",
+        lambda _agent_id, ticket_id: f"https://backend.test/transfers/{ticket_id}",
+    )
+
+    async def request(selected_agent_id, operation, arguments, **_kwargs):
+        ticket_id = UUID(arguments["transfer"]["url"].rsplit("/", 1)[-1])
+        ticket = transfer_tickets.claim(
+            ticket_id,
+            arguments["transfer"]["token"],
+            "download",
+            owner_id=selected_agent_id,
+        )
+        assert ticket.content is not None
+        with ticket.content:
+            assert ticket.content.read() == data
+        return ResponseMessage.model_validate(
+            {
+                "type": "response",
+                "id": uuid4(),
+                "ok": True,
+                "result": {
+                    "path": "snapshot.bin",
+                    "size": len(data),
+                    "sha256": digest,
+                },
+            }
+        )
+
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.request",
+        request,
+    )
+
+    result = await client.write_bytes(
+        "snapshot.bin", BytesIO(data), limit=len(data)
+    )
+
+    assert result.path == "snapshot.bin"
+    assert result.sha256 == digest
 
 
 async def test_execution_client_supports_root_independent_operations(monkeypatch) -> None:
@@ -376,7 +447,7 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
         "write-1",
         "write_file",
         {
-            "root": "workspace",
+            "root": "computer",
             "path": "a.txt",
             "content": "x",
         },
@@ -389,15 +460,21 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
             "workspace.stat": WorkspaceStatResult(
                 path="a.txt", kind="file", size=1, modified_at=1.0
             ),
+            "workspace.export": b"x",
         },
-        {"workspace.upsert", "workspace.edit", "workspace.stat"},
+        {
+            "workspace.upsert",
+            "workspace.edit",
+            "workspace.stat",
+            "workspace.export",
+        },
     )
     context = _context(tmp_path, call, client)
     context.ask_handler = AsyncMock(return_value=PermissionDecision.ALLOW)
 
     written = await _tools(client.operations).execute(call, context)
     assert json.loads(written.content) == {
-        "root": "workspace",
+        "root": "computer",
         "written": "a.txt",
         "sizeBytes": 1,
     }
@@ -422,7 +499,7 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
         "edit-1",
         "edit_file",
         {
-            "root": "workspace",
+            "root": "computer",
             "path": "a.txt",
             "oldText": "x",
             "newText": "y",
@@ -431,7 +508,7 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
     context.tool_call = edit
     edited = await _tools(client.operations).execute(edit, context)
     assert json.loads(edited.content) == {
-        "root": "workspace",
+        "root": "computer",
         "edited": "a.txt",
         "sizeBytes": 1,
     }
@@ -441,21 +518,152 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
     )
 
     provide = ToolCall(
-        "provide-1", "provide_file", {"root": "workspace", "path": "a.txt"}
+        "provide-1", "provide_file", {"root": "computer", "path": "a.txt"}
     )
     context.tool_call = provide
     provided = await _tools(client.operations).execute(provide, context)
     payload = json.loads(provided.content)
     assert payload["sizeBytes"] == 1
-    assert f"root_identity={client.root_id}" in payload["downloadUrl"]
-    assert client.requests[-1] == ("workspace.stat", {"path": "a.txt"})
+    assert payload["root"] == "computer"
+    assert payload["snapshotImported"] is True
+    assert provided.attachments[0].data == b"x"
+    assert "downloadUrl" not in payload
+
+
+async def test_managed_read_and_provide_use_exact_revisions(tmp_path) -> None:
+    call = ToolCall("read", "read", {"root": "files", "path": "note.txt", "revision": 1})
+    context = _context(tmp_path, call, FakeExecutionClient({}, set()))
+    context.root_files.upsert_text_file("session", "note.txt", "one")
+    context.root_files.upsert_text_file("session", "note.txt", "two")
+
+    read = await _tools(set()).execute(call, context)
+
+    assert read.content == "1: one"
+    assert read.metadata["revision"] == 1
+
+    provide_call = ToolCall(
+        "provide", "provide_file", {"root": "files", "path": "note.txt"}
+    )
+    context.tool_call = provide_call
+    provided = await _tools(set()).execute(provide_call, context)
+    payload = json.loads(provided.content)
+
+    assert payload["root"] == "files"
+    assert payload["revision"] == 2
+    assert "/files/revisions/2/download?" in payload["downloadUrl"]
+    assert "scope=" not in payload["downloadUrl"]
+    assert provided.attachments[0].file_id is not None
+    assert provided.attachments[0].file_revision == 2
+    assert provided.attachments[0].file_path == "note.txt"
+
+
+async def test_computer_revision_is_rejected_without_permission(tmp_path) -> None:
+    call = ToolCall(
+        "read",
+        "read",
+        {"root": "computer", "path": "note.txt", "revision": 1},
+    )
+    context = _context(tmp_path, call, FakeExecutionClient({}, {"workspace.read"}))
+
+    result = await _tools({"workspace.read"}).execute(call, context)
+
+    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+    context.ask_handler.assert_not_awaited()
+
+
+async def test_copy_path_transfers_files_between_managed_and_computer_roots(tmp_path) -> None:
+    client = FakeExecutionClient(
+        {
+            "workspace.export": b"from computer",
+            "workspace.import": WorkspaceWriteResult(
+                path="on-computer.txt",
+                sha256="a" * 64,
+                size=len(b"from files"),
+            ),
+        },
+        {"workspace.stat", "workspace.export", "workspace.import"},
+    )
+    first = ToolCall(
+        "to-computer",
+        "copy_path",
+        {
+            "source_root": "files",
+            "source_path": "from-files.txt",
+            "destination_root": "computer",
+            "destination_path": "on-computer.txt",
+        },
+    )
+    context = _context(tmp_path, first, client)
+    context.root_files.upsert_text_file("session", "from-files.txt", "from files")
+
+    to_computer = await _tools(client.operations).execute(first, context)
+
+    assert json.loads(to_computer.content) == {
+        "root": "computer",
+        "copied": "on-computer.txt",
+    }
+    assert client.requests[-1][0] == "workspace.import"
+
+    second = ToolCall(
+        "to-files",
+        "copy_path",
+        {
+            "source_root": "computer",
+            "source_path": "from-computer.txt",
+            "destination_root": "files",
+            "destination_path": "on-files.txt",
+        },
+    )
+    context.tool_call = second
+    to_files = await _tools(client.operations).execute(second, context)
+
+    assert json.loads(to_files.content) == {
+        "root": "files",
+        "copied": "on-files.txt",
+    }
+    assert context.root_files.read_bytes("session", "on-files.txt", limit=100) == b"from computer"
+
+
+async def test_cross_root_copy_and_move_validate_before_permissions(tmp_path) -> None:
+    copy = ToolCall(
+        "copy",
+        "copy_path",
+        {
+            "source_root": "files",
+            "source_path": "a.txt",
+            "destination_root": "computer",
+            "destination_path": "a.txt",
+        },
+    )
+    context = _context(tmp_path, copy, FakeExecutionClient({}, set()))
+
+    unsupported = await _tools(set()).execute(copy, context)
+
+    assert unsupported.metadata == {"errorCode": "executionAgent.operationUnavailable"}
+    context.ask_handler.assert_not_awaited()
+
+    move = ToolCall(
+        "move",
+        "move_path",
+        {
+            "source_root": "files",
+            "source_path": "a.txt",
+            "destination_root": "computer",
+            "destination_path": "a.txt",
+        },
+    )
+    context.tool_call = move
+    rejected = await _tools(set()).execute(move, context)
+
+    assert rejected.metadata == {"errorCode": "file.crossBoundaryMoveUnavailable"}
+    context.ask_handler.assert_not_awaited()
 
 
 async def test_write_file_blocks_matching_dirty_active_file(tmp_path) -> None:
     call = ToolCall(
         "write-1",
         "write_file",
-        {"root": "workspace", "path": "a.txt", "content": "x"},
+        {"root": "computer", "path": "a.txt", "content": "x"},
     )
     client = FakeExecutionClient({}, {"workspace.upsert"})
     context = _context(tmp_path, call, client)
@@ -485,7 +693,7 @@ async def test_execution_workspace_grants_match_only_same_snapshot_descendants(
     tmp_path,
 ) -> None:
     call = ToolCall(
-        "read-1", "read", {"root": "workspace", "path": "docs"}
+        "read-1", "read", {"root": "computer", "path": "docs"}
     )
     client = FakeExecutionClient({}, {"workspace.stat", "workspace.read"})
     client.current_directory = None
@@ -596,19 +804,19 @@ async def test_all_workspace_model_operations_use_the_execution_client(tmp_path)
         operations,
     )
     calls = [
-        ToolCall("list", "read", {"root": "workspace", "path": "."}),
-        ToolCall("read", "read", {"root": "workspace", "path": "a.txt"}),
-        ToolCall("glob", "glob", {"root": "workspace", "pattern": "*.txt"}),
-        ToolCall("grep", "grep", {"root": "workspace", "pattern": "x"}),
-        ToolCall("mkdir", "create_directory", {"root": "workspace", "path": "new"}),
-        ToolCall("delete", "delete_path", {"root": "workspace", "path": "old"}),
+        ToolCall("list", "read", {"root": "computer", "path": "."}),
+        ToolCall("read", "read", {"root": "computer", "path": "a.txt"}),
+        ToolCall("glob", "glob", {"root": "computer", "pattern": "*.txt"}),
+        ToolCall("grep", "grep", {"root": "computer", "pattern": "x"}),
+        ToolCall("mkdir", "create_directory", {"root": "computer", "path": "new"}),
+        ToolCall("delete", "delete_path", {"root": "computer", "path": "old"}),
         ToolCall(
             "copy",
             "copy_path",
             {
-                "source_root": "workspace",
+                "source_root": "computer",
                 "source_path": "a.txt",
-                "destination_root": "workspace",
+                "destination_root": "computer",
                 "destination_path": "copy.txt",
             },
         ),
@@ -616,9 +824,9 @@ async def test_all_workspace_model_operations_use_the_execution_client(tmp_path)
             "move",
             "move_path",
             {
-                "source_root": "workspace",
+                "source_root": "computer",
                 "source_path": "copy.txt",
-                "destination_root": "workspace",
+                "destination_root": "computer",
                 "destination_path": "moved.txt",
             },
         ),

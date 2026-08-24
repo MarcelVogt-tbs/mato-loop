@@ -11,7 +11,7 @@
         <div class="col">
           <div class="text-h6">{{ isEditing ? 'Computer bearbeiten' : 'Computer hinzufügen' }}</div>
           <div class="text-body2 app-muted">
-            {{ isEditing ? 'Name und Home-Verzeichnis konfigurieren.' : 'Computer anlegen und anschließend koppeln.' }}
+            {{ isEditing ? 'Name und aktuellen Ordner konfigurieren.' : 'Computer anlegen und anschließend koppeln.' }}
           </div>
         </div>
         <q-btn
@@ -44,19 +44,19 @@
               v-model="homeDirectory"
               outlined
               clearable
-              label="Home-Verzeichnis"
+              label="Aktueller Ordner"
               maxlength="4096"
-              hint="Leer entfernt das Home-Verzeichnis."
+              hint="Leer entfernt den aktuellen Ordner."
               persistent-hint
               lazy-rules
               :rules="[absolutePathRule]"
             />
             <div class="text-body2 app-muted">
-              Absoluter Pfad aus Sicht des Computers oder Containers. Der Pfad muss innerhalb eines lokal freigegebenen Bereichs liegen.
+              Absoluter Pfad aus Sicht des Computers oder Containers. Der Pfad muss innerhalb eines freigegebenen Bereichs liegen.
             </div>
             <q-banner v-if="homeRequiresConnection" rounded class="app-surface-tonal">
               <template #avatar><q-icon name="cloud_off" color="warning" /></template>
-              Der Computer muss verbunden sein, um einen neuen Pfad zu prüfen und zu speichern. Ein vorhandenes Home-Verzeichnis kann offline entfernt werden.
+              Der Computer muss verbunden sein, um einen neuen Pfad zu prüfen und zu speichern. Ein vorhandener aktueller Ordner kann offline entfernt werden.
             </q-banner>
             <q-checkbox
               v-model="useAsDefault"

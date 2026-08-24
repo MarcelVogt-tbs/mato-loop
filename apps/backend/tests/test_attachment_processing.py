@@ -8,7 +8,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from docx import Document
@@ -22,7 +22,6 @@ import mato_loop_backend.attachments as attachment_module
 from mato_loop_backend.attachments import (
     AttachmentError,
     AttachmentService,
-    AttachmentStorage,
     classify_attachment,
 )
 from mato_loop_backend.models import ChatSession, Message
@@ -280,8 +279,7 @@ async def test_compressed_audio_uses_verified_pcm_derivative_and_discards_both(
     session_id = uuid4()
     sessions = SessionStorage(tmp_path / "sessions")
     sessions.provision(session_id)
-    storage = AttachmentStorage(sessions)
-    service = AttachmentService(storage)
+    service = AttachmentService(sessions)
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Audio")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [
@@ -313,23 +311,23 @@ async def test_compressed_audio_uses_verified_pcm_derivative_and_discards_both(
         filename="aufnahme.mp3",
     )
 
-    derived_path = storage.derived_path(
-        session_id, attachment.id, attachment.metadata_json["derivedPath"]
+    metadata = attachment.metadata_json
+    root_files = RootFileService(session_id, session_storage=sessions)
+    companion_path = root_files.revision_path(
+        UUID(metadata["companionFileId"]), metadata["companionFileRevision"]
     )
-    assert attachment.metadata_json["derivedPath"] == (
-        f"attachments/{attachment.id}/derived/audio.wav"
-    )
-    assert derived_path.read_bytes() == derived_wav
-    assert stat.S_IMODE(derived_path.stat().st_mode) == 0o600
+    assert metadata["companionFilePath"] == f"attachments/{attachment.id}/aufnahme.wav"
+    assert companion_path.read_bytes() == derived_wav
+    assert stat.S_IMODE(companion_path.stat().st_mode) == 0o600
     assert await service.read_audio(attachment, session_id) == derived_wav
 
-    derived_path.write_bytes(b"manipuliert")
+    companion_path.write_bytes(b"manipuliert")
     with pytest.raises(AttachmentError, match="attachment.notFound"):
         await service.read_audio(attachment, session_id)
 
     await service.discard(attachment, session_id)
-    assert not derived_path.parent.exists()
-    assert not (sessions.session_path(session_id) / attachment.storage_path).exists()
+    assert not companion_path.exists()
+    assert not (sessions.session_path(session_id) / "files" / attachment.file_path).exists()
 
 
 async def test_invalid_compressed_audio_is_rejected_without_persisted_files(
@@ -338,7 +336,7 @@ async def test_invalid_compressed_audio_is_rejected_without_persisted_files(
     session_id = uuid4()
     sessions = SessionStorage(tmp_path / "sessions")
     sessions.provision(session_id)
-    service = AttachmentService(AttachmentStorage(sessions))
+    service = AttachmentService(sessions)
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Audio")
     db = AsyncMock(spec=AsyncSession)
     monkeypatch.setattr(
@@ -356,7 +354,7 @@ async def test_invalid_compressed_audio_is_rejected_without_persisted_files(
             kind="audio",
             filename="kaputt.mp3",
         )
-    assert list((sessions.session_path(session_id) / "attachments").iterdir()) == []
+    assert list((sessions.session_path(session_id) / "files").iterdir()) == []
 
 
 async def test_session_quota_includes_new_derived_content(
@@ -365,7 +363,7 @@ async def test_session_quota_includes_new_derived_content(
     session_id = uuid4()
     sessions = SessionStorage(tmp_path / "sessions")
     sessions.provision(session_id)
-    service = AttachmentService(AttachmentStorage(sessions))
+    service = AttachmentService(sessions)
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Text")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [ChatSession(id=session_id, user_id=uuid4(), title="Test")]
@@ -380,7 +378,7 @@ async def test_session_quota_includes_new_derived_content(
             kind="text",
             filename="lang.txt",
         )
-    assert list((sessions.session_path(session_id) / "attachments").iterdir()) == []
+    assert list((sessions.session_path(session_id) / "files").iterdir()) == []
 
 
 async def test_artifact_derivative_is_stored_with_its_exact_revision(
@@ -389,7 +387,7 @@ async def test_artifact_derivative_is_stored_with_its_exact_revision(
     session_id = uuid4()
     sessions = SessionStorage(tmp_path / "sessions")
     sessions.provision(session_id)
-    service = AttachmentService(AttachmentStorage(sessions))
+    service = AttachmentService(sessions)
     message = Message(id=uuid4(), session_id=session_id, role="tool", content="Audio")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [
@@ -423,14 +421,12 @@ async def test_artifact_derivative_is_stored_with_its_exact_revision(
         purpose="artifact",
     )
 
-    assert attachment.storage_path is None
     assert attachment.file_id is not None
     assert attachment.file_revision == 1
-    assert attachment.metadata_json["derivedPath"] == (
-        f"revisions/{attachment.file_id}/derived/1/audio.wav"
-    )
+    metadata = attachment.metadata_json
+    assert metadata["companionFilePath"].endswith(".wav")
     root_files = RootFileService(session_id, session_storage=sessions)
     assert root_files.revision_path(attachment.file_id, 1).read_bytes() == original
-    assert root_files.revision_derived_path(
-        attachment.file_id, 1, "audio.wav"
+    assert root_files.revision_path(
+        UUID(metadata["companionFileId"]), metadata["companionFileRevision"]
     ).read_bytes() == derived_wav

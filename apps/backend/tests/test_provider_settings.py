@@ -588,6 +588,7 @@ async def test_default_models_are_saved_atomically(monkeypatch) -> None:
             default_model_id=agent.id,
             compaction_model_id=compaction.id,
             title_generation_model_id=title.id,
+            title_vision_fallback_enabled=False,
             skill_creation_model_id=skill_builder.id,
         ),
         _db(),
@@ -596,10 +597,12 @@ async def test_default_models_are_saved_atomically(monkeypatch) -> None:
     assert settings.default_model_id == agent.id
     assert settings.compaction_model_id == compaction.id
     assert settings.title_generation_model_id == title.id
+    assert settings.title_vision_fallback_enabled is False
     assert settings.skill_creation_model_id == skill_builder.id
     assert result["defaultModelId"] == str(agent.id)
     assert result["compactionModelId"] == str(compaction.id)
     assert result["titleGenerationModelId"] == str(title.id)
+    assert result["titleVisionFallbackEnabled"] is False
     assert result["skillCreationModelId"] == str(skill_builder.id)
 
     skill_builder.supports_tools = False
@@ -1098,4 +1101,15 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
     ]
     assert payload["compactionModelId"] is None
     assert payload["titleGenerationModelId"] is None
+    assert payload["titleVisionFallbackEnabled"] is True
     assert "compressionModelId" not in payload["models"][0]
+
+
+def test_default_models_request_enables_title_vision_fallback_by_default() -> None:
+    request = DefaultModelsRequest(
+        default_model_id=None,
+        compaction_model_id=None,
+        title_generation_model_id=None,
+    )
+
+    assert request.title_vision_fallback_enabled is True

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from collections.abc import Awaitable, Callable
@@ -12,6 +13,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.file_roots import model_file_roots
 from mato_loop_backend.attachments import AttachmentError, AttachmentService
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.memory.service import memory_visible_to
@@ -38,7 +40,6 @@ WEEKDAY_NAMES = (
     "Sunday",
 )
 _OMITTED_TOOL_OUTPUT = "[Historical tool output omitted from the active context.]"
-_PRIVATE_TOOL_OUTPUT = "[Historical private tool output unavailable to the current model.]"
 _HOST_TOOL_RESULT_REFERENCE = "_matoloopToolResultReference"
 _SHORTENED_TOOL_OUTPUT = (
     "\n[Tool output shortened in the active context. "
@@ -135,6 +136,42 @@ def _sanitize_tool_result_reference_fields(content: str) -> str:
     )
 
 
+def _model_file_tool_result(content: str) -> str:
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return content
+    translated = model_file_roots(payload)
+    return (
+        json.dumps(translated, ensure_ascii=False, separators=(",", ":"))
+        if translated != payload
+        else content
+    )
+
+
+def _model_provider_file_roots(provider_data: dict[str, Any]) -> dict[str, Any]:
+    translated = model_file_roots(provider_data)
+    replay_items = translated.get("responses_output_items")
+    if not isinstance(replay_items, list):
+        return translated
+    for item in replay_items:
+        if not isinstance(item, dict):
+            continue
+        arguments = item.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(parsed, dict):
+                item["arguments"] = json.dumps(
+                    model_file_roots(parsed), ensure_ascii=True, separators=(",", ":")
+                )
+        elif isinstance(arguments, dict):
+            item["arguments"] = model_file_roots(arguments)
+    return translated
+
+
 def _model_tool_calls(
     tool_calls: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]] | None:
@@ -188,7 +225,7 @@ def _model_tool_calls(
                         "configured identity instead of retrying this update.]"
                     )
                 projected_arguments["instructions"] = preview
-            item["arguments"] = projected_arguments
+            item["arguments"] = model_file_roots(projected_arguments)
         projected.append(item)
     return projected
 
@@ -205,6 +242,7 @@ def message_dict(
         content = f"{content}\n\n[Response interrupted by the user.]".strip()
     provider_data = dict(message.provider_data or {})
     provider_data.pop("_matoloop", None)
+    provider_data = _model_provider_file_roots(provider_data)
     attachment_markers = []
     for attachment in message.attachments:
         if attachment.duration_ms is not None:
@@ -217,13 +255,14 @@ def message_dict(
         else:
             duration = ""
         metadata = attachment.metadata_json or {}
-        derived_path = metadata.get("derivedPath")
-        derived = f", derivative {derived_path}" if isinstance(derived_path, str) else ""
-        attachment_path = attachment.file_path or attachment.storage_path
+        companion_path = metadata.get("companionFilePath")
+        companion = (
+            f", companion {companion_path}" if isinstance(companion_path, str) else ""
+        )
         attachment_markers.append(
             f"[Session attachment: ID {attachment.id}, file "
             f"{attachment.filename or 'attachment'}, kind {attachment.kind}, "
-            f"MIME {attachment.mime_type}, path {attachment_path}{derived}{duration}]"
+            f"MIME {attachment.mime_type}, path {attachment.file_path}{companion}{duration}]"
         )
     if include_attachment_markers and attachment_markers:
         if message.role == "user" and not content.strip():
@@ -276,7 +315,6 @@ def message_dict(
                 "trust_level": message.trust_level or TrustLevel.PUBLIC.value,
                 "source_role": message.role,
                 "session_id": str(message.session_id),
-                "storage_path": attachment.storage_path,
                 "file_root_id": (
                     str(attachment.file_root_id) if attachment.file_root_id else None
                 ),
@@ -327,6 +365,7 @@ def _active_file_marker(message: Message) -> str | None:
         or not isinstance(active.get("dirty"), bool)
     ):
         return None
+    active = model_file_roots(active)
     marker = (
         "[Host active file context: "
         + json.dumps(active, ensure_ascii=True, separators=(",", ":"))
@@ -525,21 +564,22 @@ def general_system_prompt(
         )
     if file_tools_available:
         parts.append(
-            "File tools: explicit root plus relative POSIX path; '.' is root. Path has no root name, files/ "
-            "prefix, or absolute form. Copy and move need an exact unused destination."
+            "explicit root plus relative POSIX path; '.' is root. Path has no root name, files/ prefix, "
+            "or absolute form. root=files is managed and revisioned; root=computer is its selected directory. "
+            "Copy and move need an exact unused destination."
         )
     if "write_file" in offered_tool_names:
         parts.append(
             "Reusable email or drafts and other requested writing: one file per artifact with write_file. "
-            "Default to root=session; "
-            "workspace only when explicit. Use the requested path or a descriptive .md; never files/. Revise "
+            "Default to root=files; "
+            "computer only when explicit. Use the requested path or a descriptive .md; never files/. Revise "
             "the same path with edit_file after reading it; never make version copies. Ask if ambiguous; "
             "never overwrite a dirty active file. Reply only with status and path, not the body."
         )
     if "provide_file" in offered_tool_names:
         parts.append(
-            "Writes, copies, and moves expose destinations. provide_file is only for another file; paths and "
-            "reads are not downloads. Use its card, never its internal URL."
+            "provide_file is only for another file; exact files revision or fixed computer snapshot; paths and reads are "
+            "not downloads. Use its card."
         )
     if "transcribe_audio" in offered_tool_names:
         parts.append("transcribe_audio uses the verified PCM audio derivative automatically.")
@@ -689,7 +729,7 @@ def general_system_prompt(
     can_request_directory = {"question", "change_directory"} <= offered_tool_names
     if file_tools_available and chat_session.current_directory:
         dynamic_parts.append(
-            "Current computer directory selected; root=workspace is host-bound to it."
+            "Current computer directory selected; root=computer is host-bound to it."
         )
     elif file_tools_available and chat_session.working_directory:
         dynamic_parts.append(
@@ -703,10 +743,10 @@ def general_system_prompt(
     elif file_tools_available and can_request_directory:
         dynamic_parts.append(
             "No computer directory selected. If required, question for its absolute path, then "
-            "change_directory; approval is separate. Otherwise use root=session."
+            "change_directory; approval is separate. Otherwise use root=files."
         )
     elif file_tools_available:
-        dynamic_parts.append("No computer directory selected. Use root=session.")
+        dynamic_parts.append("No computer directory selected. Use root=files.")
     if memory_read_enabled and memory_scope is not None:
         runtime_parts.append(
             "Persistent memory status: read access is enabled for the "
@@ -845,28 +885,18 @@ def _projection_messages(
     historical_omitted_markers: dict[int, str] = {}
     current_tool_indices: list[int] = []
     for record_index, item in enumerate(records):
-        private_resources = (
-            target_trust_level == TrustLevel.PUBLIC
-            and (item.trust_level or TrustLevel.PUBLIC.value)
-            == TrustLevel.PRIVATE.value
-        )
         projected = message_dict(
             item,
             include_attachment_text=(
                 include_attachment_text
                 and item.id == latest_user_id
-                and not private_resources
             ),
-            include_attachment_markers=not private_resources,
         )
         marker = _active_file_marker(item)
         if marker is not None:
             projected["content"] = "\n\n".join(
                 part for part in (projected.get("content"), marker) if part
             )
-        if private_resources and projected.get("tool_calls"):
-            for call in projected["tool_calls"]:
-                call["arguments"] = {}
         for attachment in projected.get("attachments") or []:
             attachment["source_order"] = source_order.get(item.id, len(source_order))
             projected_attachment_ids.add(str(attachment.get("id") or ""))
@@ -877,6 +907,7 @@ def _projection_messages(
                 str(projected.get("content") or ""),
                 target_trust_level,
             )
+            projected["content"] = _model_file_tool_result(projected["content"])
         if item.role == "tool":
             tool_name = tool_names.get(item.id)
             projected["content"] = _sanitize_tool_result_reference_fields(
@@ -884,22 +915,14 @@ def _projection_messages(
             )
             if record_index < latest_user_index:
                 original_content = str(projected.get("content") or "")
-                private_for_target = (
-                    target_trust_level == TrustLevel.PUBLIC
-                    and (item.trust_level or TrustLevel.PUBLIC.value)
-                    == TrustLevel.PRIVATE.value
-                )
-                projected["content"] = (
-                    _PRIVATE_TOOL_OUTPUT
-                    if private_for_target
-                    else _historical_tool_result(tool_name, original_content, item.id)
+                projected["content"] = _historical_tool_result(
+                    tool_name, original_content, item.id
                 )
                 historical_tool_indices.append(len(messages))
-                if not private_for_target:
-                    projected[_HOST_TOOL_RESULT_REFERENCE] = True
-                    historical_omitted_markers[len(messages)] = _omitted_tool_result(
-                        item.id, original_content
-                    )
+                projected[_HOST_TOOL_RESULT_REFERENCE] = True
+                historical_omitted_markers[len(messages)] = _omitted_tool_result(
+                    item.id, original_content
+                )
             else:
                 current_tool_indices.append(len(messages))
         messages.append(projected)
@@ -1614,10 +1637,11 @@ class ContextManager:
         characters_per_token = model.characters_per_token
         tools_tokens = estimate_tokens(tool_schemas, characters_per_token) if tool_schemas else 0
 
-        def project(
+        async def project(
             summary: ContextSummary | None, selected: list[Message]
         ) -> tuple[list[dict[str, Any]], int]:
-            messages = _projection_messages(
+            messages = await asyncio.to_thread(
+                _projection_messages,
                 system_prompt,
                 summary,
                 selected,
@@ -1638,7 +1662,7 @@ class ContextManager:
             )
             return messages, total
 
-        messages, estimated = project(latest, active_records)
+        messages, estimated = await project(latest, active_records)
         trigger_tokens = min(
             input_budget,
             max(1, int(model.context_window_tokens * settings.compaction_trigger_ratio))
@@ -1687,7 +1711,7 @@ class ContextManager:
                 is_fallback=result.is_fallback,
             )
             latest = pending_summary
-            messages, estimated = project(latest, suffix)
+            messages, estimated = await project(latest, suffix)
             compacted = True
 
         current_tool_indices = _current_tool_output_indices(messages)

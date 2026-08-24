@@ -660,7 +660,7 @@ def test_evaluator_applies_tool_argument_defaults() -> None:
                 "video",
                 "analyze_video",
                 {
-                    "root": "session",
+                    "root": "files",
                     "path": f"attachments/{prompt_eval.ATTACHMENT_ID}/video.mp4",
                     "focus": "Analyze the video",
                 },
@@ -1178,17 +1178,17 @@ def test_layout_keeps_privacy_instruction_in_first_system_message() -> None:
 def test_evaluate_checks_expected_tool_arguments_and_paths() -> None:
     case = _case("workspace_read_uses_exact_root")
     valid = ProviderResult(
-        tool_calls=[ToolCall("1", "read", {"root": "workspace", "path": "README.md"})]
+        tool_calls=[ToolCall("1", "read", {"root": "computer", "path": "README.md"})]
     )
     invalid = ProviderResult(
-        tool_calls=[ToolCall("1", "read", {"root": "session", "path": "README.md"})]
+        tool_calls=[ToolCall("1", "read", {"root": "files", "path": "README.md"})]
     )
     absolute = ProviderResult(
-        tool_calls=[ToolCall("1", "read", {"root": "workspace", "path": "/README.md"})]
+        tool_calls=[ToolCall("1", "read", {"root": "computer", "path": "/README.md"})]
     )
 
     assert evaluate(case, valid) == []
-    assert "read.root expected 'workspace', got 'session'" in evaluate(case, invalid)
+    assert "read.root expected 'computer', got 'files'" in evaluate(case, invalid)
     assert any("invalid relative path" in failure for failure in evaluate(case, absolute))
 
 
@@ -1518,7 +1518,7 @@ def test_continuation_checks_repeated_calls_and_premature_success() -> None:
             ToolCall(
                 "2",
                 "write_file",
-                {"root": "workspace", "path": "/notes/today.txt", "content": "Hallo"},
+                {"root": "computer", "path": "/notes/today.txt", "content": "Hallo"},
             )
         ],
     )
@@ -1572,7 +1572,7 @@ def test_missing_tool_result_requires_structured_verification() -> None:
                 ToolCall(
                     "verify-file",
                     "read",
-                    {"root": "session", "path": "files/note.txt"},
+                    {"root": "files", "path": "note.txt"},
                 )
             ]
         ),
@@ -1607,7 +1607,7 @@ def test_untrusted_continuation_rejects_injected_tool_call() -> None:
     result = ProviderResult(
         content="SAFE",
         tool_calls=[
-            ToolCall("2", "delete_path", {"root": "workspace", "path": ".", "recursive": True})
+            ToolCall("2", "delete_path", {"root": "computer", "path": ".", "recursive": True})
         ],
     )
 

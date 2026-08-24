@@ -23,14 +23,14 @@ async def test_undo_removes_user_message_suffix_and_returns_draft(monkeypatch) -
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
     messages = _records(session.id)
     db = AsyncMock(spec=AsyncSession)
-    remove_suffix = AsyncMock(return_value=[])
+    remove_suffix = AsyncMock()
     commit = AsyncMock()
     monkeypatch.setattr(
         ChatHistoryService, "_lock_after_cancelling_active_run", AsyncMock(return_value=session)
     )
     monkeypatch.setattr(ChatHistoryService, "_messages", AsyncMock(return_value=messages))
     monkeypatch.setattr(ChatHistoryService, "_delete_message_suffix", remove_suffix)
-    monkeypatch.setattr(ChatHistoryService, "_commit_and_discard", commit)
+    monkeypatch.setattr(ChatHistoryService, "_commit", commit)
 
     result = await ChatHistoryService.undo_user_message(
         db, session_id=session.id, user_id=user.id, message_id=messages[2].id
@@ -39,7 +39,7 @@ async def test_undo_removes_user_message_suffix_and_returns_draft(monkeypatch) -
     assert result.content == "Wiederherstellen"
     assert result.session_deleted is False
     remove_suffix.assert_awaited_once_with(db, messages, 2, include_boundary=True)
-    commit.assert_awaited_once_with(db, [], session.id)
+    commit.assert_awaited_once_with(db)
 
 
 async def test_undo_cancels_active_run_before_locking_session(monkeypatch) -> None:
@@ -114,13 +114,12 @@ async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeyp
     replacement_run = AgentRun(id=uuid4(), session_id=session.id, status="queued")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = failed_run
-    remove_suffix = AsyncMock(return_value=[])
+    remove_suffix = AsyncMock()
     retry = AsyncMock(return_value=replacement_run)
     monkeypatch.setattr(ChatHistoryService, "_owned_session", AsyncMock(return_value=session))
     monkeypatch.setattr(ChatHistoryService, "_active_run", AsyncMock(return_value=None))
     monkeypatch.setattr(ChatHistoryService, "_messages", AsyncMock(return_value=messages))
     monkeypatch.setattr(ChatHistoryService, "_delete_message_suffix", remove_suffix)
-    monkeypatch.setattr(ChatHistoryService, "_discard_attachments", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "retry", retry)
 
     result = await ChatHistoryService.retry_failed_message(

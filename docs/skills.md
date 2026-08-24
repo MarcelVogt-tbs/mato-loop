@@ -35,13 +35,13 @@ It receives no earlier conversation, memory, retrieved episode, attachment conte
 
 ## Draft And Approval
 
-The builder output is validated as strict JSON. A creation contains exactly `name`, `description`, and `instructions`; an edit patch contains at least one of those fields. Extra fields and non-string values are rejected. MatoLoop writes the complete formatted editable draft to `root=session` at a unique `skill-draft-<draft-id>.json`, bounded to 40 KiB. The normal session file editor can modify it before approval.
+The builder output is validated as strict JSON. A creation contains exactly `name`, `description`, and `instructions`; an edit patch contains at least one of those fields. Extra fields and non-string values are rejected. MatoLoop writes the complete formatted editable draft to `root=files` at a unique `skill-draft-<draft-id>.json`, bounded to 40 KiB. The normal file editor can modify it before approval.
 
 Under the `ask` policy, the persistent approval contains controlled `skillPreview` and `draftFile` details, including the initial SHA-256 revision. Approval must submit the exact current file revision. The backend reads the file again, compares its SHA-256 hash with that approved revision, parses and validates the current JSON, and imports exactly that revision. Concurrent draft changes fail with `file.changed`; invalid JSON fails with `skill.draftInvalid`. Editing also compares the persisted target with the run snapshot under the settings lock and fails with `skill.changed` instead of overwriting a concurrent settings or agent edit.
 
 `skills.write=auto` skips the approval card and imports the original generated revision. `allow_once` authorizes only the current import. Creation grants remain scoped to the user's skill collection; edit grants are scoped to the exact skill ID, so existing creation grants cannot authorize edits. `skills.load` separately supports `disabled`, `ask`, and `auto` and defaults to `auto`; an `ask` decision can likewise create a session grant. Policy changes are reloaded before the effect. Host validation and the 20-skill limit always apply.
 
-Draft files are retained under `root=session` after approval, denial, import failure, and successful import. This preserves the reviewed artifact and permits manual cleanup through the file explorer.
+Draft files are retained under `root=files` after approval, denial, import failure, and successful import. This preserves the reviewed artifact and permits manual cleanup through the file explorer.
 
 ## Privacy And Budgets
 

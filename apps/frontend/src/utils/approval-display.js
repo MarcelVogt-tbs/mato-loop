@@ -39,7 +39,7 @@ export function approvalResource(approval, sessions = []) {
   }
   if (approval?.resourceType === 'execution_workspace') {
     return {
-      label: 'Arbeitsverzeichnis',
+      label: 'Aktueller Ordner',
       value: approval?.resourceDisplay || 'Ausgewählter Computer'
     }
   }

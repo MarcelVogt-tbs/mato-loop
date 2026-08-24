@@ -18,6 +18,7 @@ from mato_loop_backend.agent.runtime import (
     _safe_provider_data,
     _safe_tool_arguments,
 )
+from mato_loop_backend.attachments import AttachmentInput
 from mato_loop_backend.events import RunEventBroker, run_events
 from mato_loop_backend.models import AgentRun, ChatSession, Message, TitleGenerationStatus
 from mato_loop_backend.providers.base import (
@@ -192,6 +193,14 @@ async def test_start_schedules_title_generation_after_agent_run(monkeypatch) -> 
     title_worker = AsyncMock()
     monkeypatch.setattr(AgentRuntime, "_run", run_worker)
     monkeypatch.setattr(AgentRuntime, "_generate_title", title_worker)
+    attachment_service = Mock()
+    attachment_service.create_attachment = AsyncMock(
+        return_value=Mock(id=uuid4(), filename="urlaub.png")
+    )
+    attachment_service.discard = AsyncMock()
+    monkeypatch.setattr(
+        runtime_module, "AttachmentService", lambda **_kwargs: attachment_service
+    )
     scheduled = []
     tasks = []
 
@@ -214,22 +223,29 @@ async def test_start_schedules_title_generation_after_agent_run(monkeypatch) -> 
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [session, None, True, True]
 
-    def assign_run_id(items):
+    def assign_ids(items):
         next(item for item in items if isinstance(item, AgentRun)).id = run_id
+        next(item for item in items if isinstance(item, Message)).id = uuid4()
 
-    db.add_all.side_effect = assign_run_id
+    db.add_all.side_effect = assign_ids
 
-    await AgentRuntime.start(db, session, "Erste Nachricht")
+    await AgentRuntime.start(
+        db,
+        session,
+        "",
+        attachments=[AttachmentInput(b"image", "image/png", "urlaub.png", "image")],
+    )
 
+    message = next(item for item in db.add_all.call_args.args[0] if isinstance(item, Message))
     assert len(scheduled) == 2
-    assert session.title == "Erste Nachricht"
+    assert session.title == "urlaub.png"
     assert session.title_generation_status == TitleGenerationStatus.RUNNING.value
     run_worker.assert_called_once_with(run_id)
     title_worker.assert_called_once_with(
         run_id,
         session.id,
-        "Erste Nachricht",
-        "Erste Nachricht",
+        message.id,
+        "urlaub.png",
         after=tasks[0],
     )
     assert list(AgentRuntime._title_tasks.values()) == [session.user_id]
@@ -348,7 +364,8 @@ async def test_title_generation_rechecks_user_before_each_provider_request(
         model_config_id=model.id,
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    message = Message(id=uuid4(), session_id=session.id, role="user", content="Message")
+    db.get.side_effect = [session, message]
     ensure_active = AsyncMock(
         side_effect=[None, AgentRunError("auth.accountDisabled")]
     )
@@ -364,7 +381,7 @@ async def test_title_generation_rechecks_user_before_each_provider_request(
     monkeypatch.setattr(AgentRuntime, "_fail_title_generation", fail)
 
     await AgentRuntime._generate_title(
-        uuid4(), session.id, "Message", session.title
+        uuid4(), session.id, message.id, session.title
     )
 
     assert ensure_active.await_count == 2

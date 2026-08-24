@@ -279,14 +279,6 @@
                     :aria-label="`Version ${revisionLabel(revision)} wiederherstellen`"
                     @click.stop="restoreRevision(revision)"
                   ><q-tooltip>Wiederherstellen</q-tooltip></q-btn>
-                  <q-btn
-                    v-if="canDeleteRevision"
-                    flat round dense icon="delete_outline" color="negative"
-                    :loading="deletingRevisionId === revisionId(revision)"
-                    :disable="Boolean(revisionActionPending)"
-                    :aria-label="`Version ${revisionLabel(revision)} löschen`"
-                    @click.stop="deleteRevision(revision)"
-                  ><q-tooltip>Löschen</q-tooltip></q-btn>
                 </div>
               </q-item-section>
             </q-item>
@@ -362,7 +354,6 @@ const selectedRevisionId = ref(null)
 const revisionPreviewLoading = ref(false)
 const revisionPreview = ref(null)
 const restoringRevisionId = ref(null)
-const deletingRevisionId = ref(null)
 let renderController
 let renderVersion = 0
 let exportController
@@ -387,12 +378,6 @@ const canRestoreRevision = computed(() => Boolean(
   && workspace.scope === 'session'
   && !workspace.toolContext
   && workspace.operationAvailable('workspace.write')
-))
-const canDeleteRevision = computed(() => Boolean(
-  props.entry?.path
-  && workspace.scope === 'session'
-  && !workspace.toolContext
-  && workspace.operationAvailable('workspace.delete')
 ))
 const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('workspace.export'))
 const stlUrl = computed(() => directModel.value?.url
@@ -431,7 +416,7 @@ const fileDetails = computed(() => {
   return `${new Intl.NumberFormat('de-DE').format(size)} Byte · ${props.entry.path}`
 })
 const rootLabel = computed(() => {
-  return 'Dateien'
+  return workspace.scope === 'session' ? 'Ablage' : 'Computer'
 })
 const parentPath = computed(() => (
   props.entry?.path?.includes('/') ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) : '.'
@@ -456,7 +441,7 @@ const currentRevisionId = computed(() => (
   ?? revisionState.value.currentRevision
   ?? preview.value.revision
 ))
-const revisionActionPending = computed(() => restoringRevisionId.value || deletingRevisionId.value)
+const revisionActionPending = computed(() => restoringRevisionId.value)
 const unavailableMessage = computed(() => ({
   invalidImage: 'Die Bilddatei ist beschädigt oder ungültig.',
   unsafeSvg: 'Die SVG-Datei enthält aktive oder externe Inhalte und kann nicht sicher angezeigt werden.',
@@ -590,38 +575,6 @@ async function restoreRevision(revision) {
     $q.notify({ type: 'positive', message: 'Version wiederhergestellt.' })
   } finally {
     restoringRevisionId.value = null
-  }
-}
-
-async function deleteRevision(revision) {
-  const current = isCurrentRevision(revision)
-  const id = revisionId(revision)
-  const path = props.entry?.path
-  const name = props.entry?.name
-  const contextVersion = workspace.contextVersion
-  const viewVersion = workspace.viewVersion
-  const accepted = await confirm(
-    current
-      ? `Soll „${name}“ gelöscht werden? Die Datei und ihr gesamter Versionsverlauf werden dauerhaft entfernt. Verknüpfte Dateien in älteren Nachrichten sind danach nicht mehr verfügbar.`
-      : `Soll Version ${revisionLabel(revision)} dauerhaft gelöscht werden? Verknüpfte Dateien in älteren Nachrichten sind danach möglicherweise nicht mehr verfügbar.`,
-    current ? 'Datei mit Versionsverlauf löschen?' : 'Version löschen?',
-    { okLabel: 'Löschen', okColor: 'negative' }
-  )
-  if (
-    !accepted
-    || props.entry?.path !== path
-    || workspace.contextVersion !== contextVersion
-    || workspace.viewVersion !== viewVersion
-  ) return
-  deletingRevisionId.value = id
-  try {
-    const result = await workspace.deleteRevision(path, id)
-    if (!result) return
-    if (current) revisionsOpen.value = false
-    else if (selectedRevisionId.value === id) clearRevisionPreview()
-    $q.notify({ type: 'positive', message: current ? 'Datei gelöscht.' : 'Version gelöscht.' })
-  } finally {
-    deletingRevisionId.value = null
   }
 }
 

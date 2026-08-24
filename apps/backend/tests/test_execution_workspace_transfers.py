@@ -530,16 +530,17 @@ async def test_cross_boundary_move_is_rejected_before_side_effects(monkeypatch) 
 
 async def test_direct_move_clears_source_and_destination_grants(monkeypatch) -> None:
     agent_id = uuid4()
+    root_id = uuid4()
     source = workspace_route._FileContext(
         agent_id=agent_id,
-        agent_root_id=uuid4(),
+        agent_root_id=root_id,
         agent_root_revision="a" * 64,
         agent_operations=frozenset({"workspace.move", "workspace.stat"}),
     )
     destination = workspace_route._FileContext(
         agent_id=agent_id,
-        agent_root_id=uuid4(),
-        agent_root_revision="b" * 64,
+        agent_root_id=root_id,
+        agent_root_revision="a" * 64,
         agent_operations=frozenset({"workspace.move", "workspace.stat"}),
     )
     contexts = iter((source, destination))
@@ -591,3 +592,38 @@ async def test_direct_move_clears_source_and_destination_grants(monkeypatch) -> 
         ("old.txt",),
         ("new.txt",),
     ]
+
+
+async def test_same_agent_move_between_roots_is_rejected(monkeypatch) -> None:
+    agent_id = uuid4()
+    contexts = iter(
+        (
+            workspace_route._FileContext(agent_id=agent_id, agent_root_id=uuid4()),
+            workspace_route._FileContext(agent_id=agent_id, agent_root_id=uuid4()),
+        )
+    )
+
+    async def file_context(*_args, **_kwargs):
+        return next(contexts)
+
+    monkeypatch.setattr(workspace_route, "_file_context", file_context)
+
+    with pytest.raises(ApiError) as exc_info:
+        await workspace_route._copy_or_move_entry(
+            workspace_route.CopyMoveEntryRequest(
+                path="old.txt",
+                destination="new.txt",
+                destination_scope=workspace_route.FileScope.FILESYSTEM,
+            ),
+            _user(),
+            AsyncMock(spec=AsyncSession),
+            SimpleNamespace(),
+            move=True,
+            scope=workspace_route.FileScope.FILESYSTEM,
+            session_id=None,
+            working_directory=None,
+            execution_agent_id=agent_id,
+            root_id=uuid4(),
+        )
+
+    assert exc_info.value.code == "file.crossBoundaryMoveUnavailable"

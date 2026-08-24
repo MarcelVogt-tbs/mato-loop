@@ -227,7 +227,9 @@ async def test_invalid_image_upload_logs_safe_decoder_context(caplog) -> None:
     assert "private-image-bytes" not in caplog.text
 
 
-async def test_runtime_cleans_stored_audio_when_transaction_fails(monkeypatch) -> None:
+async def test_runtime_preserves_stored_audio_when_commit_outcome_is_uncertain(
+    monkeypatch,
+) -> None:
     from mato_loop_backend.agent import runtime as runtime_module
     from mato_loop_backend.models import MessageAttachment
     from mato_loop_backend.settings import AiSettings
@@ -256,7 +258,7 @@ async def test_runtime_cleans_stored_audio_when_transaction_fails(monkeypatch) -
         mime_type="audio/wav",
         size_bytes=100,
         sha256="a" * 64,
-        storage_path=(
+        file_path=(
             "attachments/00000000-0000-4000-8000-000000000000/audio.wav"
         ),
     )
@@ -282,7 +284,7 @@ async def test_runtime_cleans_stored_audio_when_transaction_fails(monkeypatch) -
         )
 
     service.create_attachment.assert_awaited_once()
-    service.discard.assert_awaited_once_with(attachment, session.id)
+    service.discard.assert_not_awaited()
     db.rollback.assert_awaited_once()
 
 
@@ -317,7 +319,7 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         mime_type="audio/wav",
         size_bytes=100,
         sha256="a" * 64,
-        storage_path=(
+        file_path=(
             "attachments/00000000-0000-4000-8000-000000000000/audio.wav"
         ),
     )

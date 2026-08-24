@@ -820,7 +820,7 @@ _FILESYSTEM_READ = ToolAction("filesystem.read", "Lesen", ToolExecutionPolicy.AU
 OPENSCAD_TOOL = ToolContribution(
     name="render_openscad",
     description=(
-        "Render one .scad entrypoint from an explicit session or workspace project. "
+        "Render one .scad entrypoint from an explicit files or computer project. "
         "Returns an interactive OFF preview and a labeled inspection sheet by default. "
         "Set output to stl only when the user explicitly requests an STL file."
     ),

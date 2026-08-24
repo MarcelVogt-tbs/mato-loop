@@ -31,7 +31,6 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
-    private_integration_data_release_permission,
 )
 from mato_loop_backend.agent.research import (
     _add_research_sources,
@@ -77,6 +76,7 @@ from mato_loop_backend.agent.title_generation import (
     TITLE_SYSTEM_PROMPT,
     initial_title_output_budget,
     repair_title_output_budget,
+    title_input,
 )
 from mato_loop_backend.agent.title_generation import (
     generated_session_title as _generated_session_title,
@@ -151,6 +151,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.providers.base import (
     MAX_PROVIDER_IMAGE_BYTES,
+    MAX_PROVIDER_IMAGES,
     MAX_PROVIDER_VIDEO_BYTES,
     ProviderError,
     ProviderImageInput,
@@ -640,6 +641,9 @@ class AgentRuntime:
 
     @classmethod
     def _schedule_run(cls, run: AgentRun) -> asyncio.Task[None]:
+        existing = cls._tasks.get(run.id)
+        if existing is not None and not existing.done():
+            return existing
         task = asyncio.create_task(cls._run(run.id))
         cls._tasks[run.id] = task
         task.add_done_callback(lambda _task: cls._tasks.pop(run.id, None))
@@ -810,8 +814,6 @@ class AgentRuntime:
             and chat_session.title_generation_status
             == TitleGenerationStatus.PENDING.value
         )
-        if chat_session.title == "Neue Session":
-            chat_session.title = _initial_session_title(content)
         if generate_title:
             chat_session.title_generation_status = TitleGenerationStatus.RUNNING.value
         created_attachments = []
@@ -830,6 +832,12 @@ class AgentRuntime:
                         "Could not discard attachment %s after failed transaction",
                         attachment.id,
                     )
+
+        async def rollback_after_uncertain_commit() -> None:
+            try:
+                await db.rollback()
+            except BaseException:
+                logger.exception("Could not roll back uncertain attachment transaction")
 
         try:
             await cls._ensure_user_active(db, chat_session.user_id)
@@ -854,6 +862,12 @@ class AgentRuntime:
                         category="user_upload",
                     )
                 )
+            if chat_session.title == "Neue Session":
+                initial_content = content.strip() or ", ".join(
+                    attachment.filename or "attachment"
+                    for attachment in created_attachments
+                )
+                chat_session.title = _initial_session_title(initial_content)
         except BaseException:
             await rollback_and_discard()
             raise
@@ -865,11 +879,11 @@ class AgentRuntime:
             try:
                 await commit_task
             except BaseException:
-                await rollback_and_discard()
+                await rollback_after_uncertain_commit()
                 raise
             cancelled = True
         except BaseException:
-            await rollback_and_discard()
+            await rollback_after_uncertain_commit()
             raise
         run_task = cls._schedule_run(run)
         if generate_title:
@@ -877,7 +891,7 @@ class AgentRuntime:
                 cls._generate_title(
                     run.id,
                     chat_session.id,
-                    content,
+                    message.id,
                     chat_session.title,
                     after=run_task,
                 )
@@ -1351,16 +1365,6 @@ class AgentRuntime:
                 session_quota_bytes=instance_limits.session_quota_bytes,
                 max_editable_text_bytes=instance_limits.max_editable_text_bytes,
             )
-            if (
-                model_trust_level == TrustLevel.PUBLIC
-                and chat_session.private_integration_data_used
-            ):
-                await cls._ensure_private_integration_release(
-                    db,
-                    run,
-                    chat_session,
-                    root_files,
-                )
             if memory_overview_required is None:
                 memory_overview_required = _memory_overview_requested(records)
             memory_text = None
@@ -1946,16 +1950,6 @@ class AgentRuntime:
                     providerAttemptTotal=total,
                 )
 
-            if (
-                model_trust_level == TrustLevel.PUBLIC
-                and chat_session.private_integration_data_used
-            ):
-                await cls._ensure_private_integration_release(
-                    db,
-                    run,
-                    chat_session,
-                    root_files,
-                )
             result = await ProviderService.complete(
                 db,
                 provider=provider,
@@ -3016,11 +3010,7 @@ class AgentRuntime:
                                 else TrustLevel.PUBLIC
                             )
                             verification_target = None
-                            configured_vision_release = False
-                            if model.supports_image_input and (
-                                model_trust_level == TrustLevel.PRIVATE
-                                or source_trust == TrustLevel.PUBLIC
-                            ):
+                            if model.supports_image_input:
                                 verification_target = (model, provider, model_trust_level)
                             elif (
                                 fallback_vision_model is not None
@@ -3037,7 +3027,6 @@ class AgentRuntime:
                                             fallback_vision_provider, fallback_vision_model
                                         ),
                                     )
-                                    configured_vision_release = True
                             references = []
                             reference_inputs = []
                             if contact_sheet is not None and verification_target is not None:
@@ -3050,11 +3039,7 @@ class AgentRuntime:
                                 }
                                 selected_references = select_provider_images(
                                     projection.messages,
-                                    target_trust_level=(
-                                        TrustLevel.PRIVATE.value
-                                        if configured_vision_release
-                                        else verification_target[2].value
-                                    ),
+                                    target_trust_level=verification_target[2].value,
                                     allowed_categories=frozenset(
                                         {"user_upload", "downloaded"}
                                     ),
@@ -3064,8 +3049,6 @@ class AgentRuntime:
                                     ),
                                 )
                                 for selected_reference in selected_references:
-                                    if not selected_reference.allow_raw:
-                                        continue
                                     record = attachment_records.get(
                                         str(selected_reference.attachment.get("id") or "")
                                     )
@@ -3222,15 +3205,35 @@ class AgentRuntime:
                 db.add(tool_message)
                 created_attachments = []
                 attachments_committed = False
+                attachment_commit_started = False
                 try:
                     await db.flush()
                     attachment_service = AttachmentService(settings=instance_limits)
                     for position, attachment in enumerate(tool_attachments):
-                        created_attachments.append(
-                            await attachment_service.create_attachment(
+                        if (
+                            attachment.file_root_id is not None
+                            and attachment.file_id is not None
+                            and attachment.file_revision is not None
+                            and attachment.file_path is not None
+                        ):
+                            await attachment_service.create_reference(
                                 db,
                                 tool_message,
-                                attachment.data,
+                                file_root_id=attachment.file_root_id,
+                                file_id=attachment.file_id,
+                                file_revision=attachment.file_revision,
+                                file_path=attachment.file_path,
+                                filename=attachment.filename,
+                                position=position,
+                                category=attachment.category,
+                                metadata=attachment.metadata,
+                            )
+                        else:
+                            created_attachments.append(
+                                await attachment_service.create_attachment(
+                                    db,
+                                    tool_message,
+                                    attachment.data,
                                 attachment.mime_type,
                                 kind=attachment.kind,
                                 filename=attachment.filename,
@@ -3238,10 +3241,11 @@ class AgentRuntime:
                                 metadata=attachment.metadata,
                                 category=attachment.category,
                                 purpose="artifact",
-                                source_file_root_id=attachment.file_root_id,
-                                file_id=attachment.file_id,
+                                    source_file_root_id=attachment.file_root_id,
+                                    file_id=attachment.file_id,
+                                )
                             )
-                        )
+                    attachment_commit_started = True
                     commit_task = asyncio.create_task(db.commit())
                     try:
                         await asyncio.shield(commit_task)
@@ -3277,9 +3281,12 @@ class AgentRuntime:
                 except BaseException:
                     if not attachments_committed:
                         await db.rollback()
-                        attachment_service = AttachmentService()
-                        for attachment in created_attachments:
-                            await attachment_service.discard(attachment, chat_session.id)
+                        if not attachment_commit_started:
+                            attachment_service = AttachmentService()
+                            for attachment in created_attachments:
+                                await attachment_service.discard(
+                                    attachment, chat_session.id
+                                )
                     raise
                 error_code = metadata.get("errorCode")
                 if not isinstance(error_code, str):
@@ -3712,7 +3719,7 @@ class AgentRuntime:
     async def _generate_title(
         run_id: UUID,
         session_id: UUID,
-        content: str,
+        input_message_id: UUID,
         expected_title: str,
         *,
         after: asyncio.Task[None] | None = None,
@@ -3747,13 +3754,40 @@ class AgentRuntime:
                     return
                 ai_settings = await load_effective_ai(db, chat_session.user_id)
                 runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
+                input_message = await db.get(
+                    Message,
+                    input_message_id,
+                    options=(selectinload(Message.attachments),),
+                )
+                if (
+                    input_message is None
+                    or input_message.session_id != session_id
+                    or input_message.role != "user"
+                ):
+                    raise AgentRunError("session.notFound")
+                attachment_service = AttachmentService()
+                attachment_content: list[tuple[str, str | None]] = []
+                for attachment in input_message.attachments:
+                    filename = attachment.filename or "attachment"
+                    extracted_text = None
+                    if attachment.kind in {"text", "document"}:
+                        try:
+                            extracted_text = await asyncio.to_thread(
+                                attachment_service.read_derived_text,
+                                attachment,
+                                session_id,
+                            )
+                        except AttachmentError:
+                            pass
+                    attachment_content.append((filename, extracted_text))
+                request_content = title_input(input_message.content, attachment_content)
                 explicit_model = ai_settings.title_generation_model_id is not None
                 model_ids = (
                     (ai_settings.title_generation_model_id,)
                     if explicit_model
                     else (chat_session.model_config_id, ai_settings.default_model_id)
                 )
-                model = next(
+                title_model = next(
                     (
                         candidate
                         for model_id in dict.fromkeys(model_ids)
@@ -3762,6 +3796,22 @@ class AgentRuntime:
                     ),
                     None,
                 )
+                has_images = any(
+                    attachment.kind == "image" for attachment in input_message.attachments
+                )
+                model = title_model
+                if (
+                    has_images
+                    and (model is None or not model.supports_image_input)
+                    and ai_settings.title_vision_fallback_enabled
+                ):
+                    vision_model = _model_for_id(ai_settings, ai_settings.vision_model_id)
+                    if (
+                        vision_model is not None
+                        and vision_model.supports_image_input
+                        and _provider_for_model(ai_settings, vision_model) is not None
+                    ):
+                        model = vision_model
                 if model is None:
                     logger.warning(
                         "Title generation for session %s stopped without an available model",
@@ -3788,8 +3838,34 @@ class AgentRuntime:
                         "role": "system",
                         "content": TITLE_SYSTEM_PROMPT,
                     },
-                    {"role": "user", "content": content[:2_000]},
+                    {"role": "user", "content": request_content},
                 ]
+                image_inputs = []
+                if has_images and model.supports_image_input:
+                    image_bytes = 0
+                    for attachment in input_message.attachments:
+                        if (
+                            attachment.kind != "image"
+                            or len(image_inputs) >= MAX_PROVIDER_IMAGES
+                            or image_bytes + attachment.size_bytes
+                            > MAX_PROVIDER_IMAGE_BYTES
+                        ):
+                            continue
+                        try:
+                            image = await attachment_service.read_image(
+                                attachment, session_id
+                            )
+                        except AttachmentError:
+                            continue
+                        image_bytes += len(image)
+                        image_inputs.append(
+                            ProviderImageInput(
+                                1,
+                                image,
+                                input_message.trust_level,
+                                attachment.mime_type,
+                            )
+                        )
                 title = None
                 output_budget = initial_title_output_budget(model.max_output_tokens)
                 for attempt in range(2):
@@ -3802,6 +3878,7 @@ class AgentRuntime:
                         tools=[],
                         timeout=runtime_settings.request_timeout_seconds,
                         max_output_tokens=output_budget,
+                        image_inputs=image_inputs,
                     )
                     title = _generated_session_title(result.content)
                     if title is not None:
@@ -3950,30 +4027,6 @@ class AgentRuntime:
             if current_decision == PermissionDecision.DENY
             else PermissionDecision.ALLOW
         )
-
-    @classmethod
-    async def _ensure_private_integration_release(
-        cls,
-        db: AsyncSession,
-        run: AgentRun,
-        chat_session: ChatSession,
-        root_files: RootFileService,
-    ) -> None:
-        permission = private_integration_data_release_permission(chat_session.id)
-        decision = await cls._authorize(
-            db,
-            run,
-            chat_session,
-            ToolCall(
-                id=f"integration-release-{run.id}",
-                name="integration_private_data_release",
-                arguments={},
-            ),
-            permission,
-            root_files,
-        )
-        if decision != PermissionDecision.ALLOW:
-            raise AgentRunError("privacy.privateContentBlocked")
 
     @staticmethod
     async def _is_allowed(

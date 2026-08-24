@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import AgentRuntime
@@ -22,7 +22,6 @@ from mato_loop_backend.models import (
     Automation,
     AutomationRun,
     ChatSession,
-    MessageAttachment,
     Project,
     UserAccount,
 )
@@ -427,11 +426,6 @@ async def delete_project(
 
     commit_task: asyncio.Task[None] | None = None
     try:
-        await db.execute(
-            delete(MessageAttachment).where(
-                MessageAttachment.file_root_id == project_db_id
-            )
-        )
         if automation_mode == "unlink":
             for automation in linked_automations:
                 automation.output_session_id = None

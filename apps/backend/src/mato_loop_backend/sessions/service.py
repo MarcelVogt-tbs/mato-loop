@@ -12,12 +12,14 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     and_,
-    delete,
+    case,
+    cast,
     func,
     or_,
     select,
     update,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -472,6 +474,8 @@ async def duplicate_submission_response(
     )
     if item is None or message is None:
         raise RuntimeError("Persisted agent run input is missing")
+    if run.status == "queued":
+        AgentRuntime._schedule_run(run)
     response = {
         "runId": str(run.id),
         "modelName": run.model_name,
@@ -746,12 +750,6 @@ async def create_session(
         raise SessionServiceError(409, "http.conflict") from exc
     except Exception:
         await db.rollback()
-        try:
-            await asyncio.to_thread(
-                session_storage.remove_session, item_id, item_project_id
-            )
-        except Exception:
-            logger.exception("Unpersisted session storage could not be removed")
         raise
     await db.refresh(item)
     user_message = await latest_user_message(db, item.id)
@@ -1079,14 +1077,26 @@ async def update_session(
                             select(Message.id).where(Message.session_id == item.id)
                         ),
                     )
-                    .values(file_root_id=target_project_id)
-                )
-            elif source_project_id is not None:
-                await db.execute(
-                    delete(MessageAttachment).where(
-                        MessageAttachment.file_root_id == source_project_id,
-                        MessageAttachment.message_id.in_(
-                            select(Message.id).where(Message.session_id == item.id)
+                    .values(
+                        file_root_id=target_project_id,
+                        metadata_json=case(
+                            (
+                                MessageAttachment.metadata_json[
+                                    "companionFileRootId"
+                                ].as_string()
+                                == str(item.id),
+                                MessageAttachment.metadata_json.op("||")(
+                                    cast(
+                                        {
+                                            "companionFileRootId": str(
+                                                target_project_id
+                                            )
+                                        },
+                                        JSONB,
+                                    )
+                                ),
+                            ),
+                            else_=MessageAttachment.metadata_json,
                         ),
                     )
                 )
