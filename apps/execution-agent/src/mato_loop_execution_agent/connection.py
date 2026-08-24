@@ -28,6 +28,7 @@ from .protocol import (
     Cancel,
     CopyMoveArguments,
     DeleteArguments,
+    EditArguments,
     Error,
     Event,
     ExportArguments,
@@ -58,6 +59,7 @@ from .protocol import (
     ShellInspectArguments,
     StatArguments,
     SystemInfoArguments,
+    UpsertArguments,
     Welcome,
     WriteArguments,
     parse_inbound,
@@ -259,6 +261,26 @@ class ExecutionAgent:
                 arguments.path,
                 arguments.content,
                 arguments.expected_sha256,
+            )
+        if isinstance(arguments, UpsertArguments):
+            return await _run_mutation(
+                self.workspace.upsert,
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.working_directory,
+                arguments.path,
+                arguments.content,
+            )
+        if isinstance(arguments, EditArguments):
+            return await _run_mutation(
+                self.workspace.edit,
+                arguments.root_id,
+                arguments.root_revision,
+                arguments.working_directory,
+                arguments.path,
+                arguments.old_text,
+                arguments.new_text,
+                arguments.replace_all,
             )
         if isinstance(arguments, MkdirArguments):
             return await _run_mutation(

@@ -322,6 +322,27 @@ def test_message_projection_never_restores_persisted_write_file_content() -> Non
     assert "note.txt" not in content
 
 
+def test_message_projection_never_restores_persisted_edit_file_text() -> None:
+    message = _message(uuid4(), "assistant", "Datei bearbeiten")
+    message.tool_calls = [
+        {
+            "id": "edit",
+            "name": "edit_file",
+            "arguments": {
+                "root": "session",
+                "path": "note.txt",
+                "oldText": {"characters": 11, "redacted": True},
+                "newText": {"characters": 12, "redacted": True},
+            },
+        }
+    ]
+
+    arguments = message_dict(message)["tool_calls"][0]["arguments"]
+
+    assert arguments["oldText"].startswith("[Persisted edit text omitted: 11")
+    assert arguments["newText"].startswith("[Persisted edit text omitted: 12")
+
+
 def test_message_projection_does_not_present_redacted_qr_content_as_failure() -> None:
     message = _message(uuid4(), "assistant", "QR-Code erzeugen")
     message.tool_calls = [
@@ -1192,9 +1213,10 @@ def test_system_prompt_enforces_managed_writing_contract() -> None:
     assert "one file per artifact" in prompt
     assert "Default to root=session; workspace only when explicit" in prompt
     assert "descriptive .md; never files/" in prompt
-    assert "mode=create" in prompt
-    assert "same path with mode=replace after reading its exact SHA-256" in prompt
-    assert "exact SHA-256" in prompt
+    assert "one file per artifact with write_file" in prompt
+    assert "same path with edit_file after reading it" in prompt
+    assert "mode=create" not in prompt
+    assert "exact SHA-256" not in prompt
     assert "never make version copies" in prompt
     assert "Ask if ambiguous" in prompt
     assert "never overwrite a dirty active file" in prompt

@@ -623,7 +623,7 @@ CASES = (
             "Überarbeite die vorhandene Session-Datei terminanfrage.md: Bitte frage nun "
             "nach einem Termin am Dienstag."
         ),
-        tools=("read", "write_file"),
+        tools=("read", "edit_file"),
         continuation=_exchange(
             "read",
             {"root": "session", "path": "terminanfrage.md"},
@@ -637,14 +637,12 @@ CASES = (
                 ensure_ascii=False,
             ),
         ),
-        expected_tool="write_file",
+        expected_tool="edit_file",
         expected_arguments={
             "root": "session",
             "path": "terminanfrage.md",
-            "mode": "replace",
-            "expected_sha256": "c" * 64,
         },
-        argument_contains={"content": ("Dienstag",)},
+        argument_contains={"new_text": ("Dienstag",)},
     ),
     PromptCase(
         id="console_diagnostics_use_assistant_text",
@@ -1334,7 +1332,7 @@ CASES = (
         tools=("question", "write_file"),
         expected_tool="write_file",
         expected_tool_call_count=1,
-        expected_arguments={"root": "session", "mode": "create"},
+        expected_arguments={"root": "session"},
         argument_contains={"path": (".md",), "content": ("Frau Sommer", "Termin")},
         argument_excludes={"path": ("files/",)},
         forbidden_tools=("question",),
@@ -1929,7 +1927,7 @@ CASES = (
         tools=("write_file",),
         continuation=_exchange(
             "write_file",
-            {"root": "session", "path": "note.txt", "content": "Hallo", "mode": "create"},
+            {"root": "session", "path": "note.txt", "content": "Hallo"},
             '{"root":"session","written":"note.txt"}',
         ),
         expected_no_tools=True,
@@ -4196,10 +4194,7 @@ _V2_TOOL_DESCRIPTIONS = {
     "glob": "Find up to 100 paths recursively by glob pattern under an explicit root.",
     "grep": "Find up to 100 UTF-8 content matches recursively by regex and optional include glob.",
     "provide_file": "Expose one existing regular file as a download without reading or copying it.",
-    "write_file": (
-        "Create or replace one UTF-8 file explicitly. Replace requires the expected SHA-256; "
-        "create fails if the path exists."
-    ),
+    "write_file": "Write complete UTF-8 content to one file, creating or replacing it.",
     "create_directory": "Create one directory; its parent must exist.",
     "delete_path": "Delete one path; non-empty directories require recursive=true.",
     "copy_path": "Copy a path to an exact new destination path; never overwrite.",

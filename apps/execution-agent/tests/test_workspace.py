@@ -181,6 +181,50 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(len(preserved), 1)
         self.assertEqual(preserved[0].read_text(), "second concurrent edit")
 
+    def test_upsert_creates_and_replaces_regular_file(self) -> None:
+        created = self.workspace.upsert(ROOT_ID, self.revision, ".", "app.txt", "first")
+        replaced = self.workspace.upsert(ROOT_ID, self.revision, ".", "app.txt", "second")
+
+        self.assertEqual((self.root / "app.txt").read_text(), "second")
+        self.assertEqual(created["sha256"], hashlib.sha256(b"first").hexdigest())
+        self.assertEqual(replaced["size"], 6)
+
+        (self.root / "directory").mkdir()
+        (self.root / "link").symlink_to(self.root / "app.txt")
+        for path in ("directory", "link", "missing/file.txt"):
+            with self.subTest(path=path), self.assertRaises(AgentError):
+                self.workspace.upsert(ROOT_ID, self.revision, ".", path, "content")
+
+    def test_edit_exact_replace_all_and_crlf(self) -> None:
+        (self.root / "exact.txt").write_text("before target after")
+        result = self.workspace.edit(
+            ROOT_ID, self.revision, ".", "exact.txt", "target", "changed", False
+        )
+        self.assertEqual((self.root / "exact.txt").read_text(), "before changed after")
+        self.assertEqual(result["size"], len(b"before changed after"))
+
+        (self.root / "all.txt").write_text("target target target")
+        self.workspace.edit(ROOT_ID, self.revision, ".", "all.txt", "target", "changed", True)
+        self.assertEqual((self.root / "all.txt").read_text(), "changed changed changed")
+
+        (self.root / "crlf.txt").write_bytes(b"one\r\ntwo\r\n")
+        self.workspace.edit(
+            ROOT_ID, self.revision, ".", "crlf.txt", "one\ntwo", "first\nsecond", False
+        )
+        self.assertEqual((self.root / "crlf.txt").read_bytes(), b"first\r\nsecond\r\n")
+
+    def test_edit_reports_absent_and_nonunique_text(self) -> None:
+        (self.root / "app.txt").write_text("same same")
+
+        with self.assertRaises(AgentError) as absent:
+            self.workspace.edit(ROOT_ID, self.revision, ".", "app.txt", "missing", "new", False)
+        self.assertEqual(absent.exception.code, "file.editTextNotFound")
+
+        with self.assertRaises(AgentError) as nonunique:
+            self.workspace.edit(ROOT_ID, self.revision, ".", "app.txt", "same", "new", False)
+        self.assertEqual(nonunique.exception.code, "file.editTextNotUnique")
+        self.assertEqual((self.root / "app.txt").read_text(), "same same")
+
     def test_copy_enforces_limits_again_while_streaming(self) -> None:
         source = self.root / "growing.bin"
         source.write_bytes(b"1234")

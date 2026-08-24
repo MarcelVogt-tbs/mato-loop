@@ -337,7 +337,6 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
                             "root": "session",
                             "path": "cube.scad",
                             "content": "cube(1);\n",
-                            "mode": "create",
                         },
                     )
                 ],
@@ -486,7 +485,6 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
                             "root": "session",
                             "path": "model.scad",
                             "content": "cube(1);",
-                            "mode": "create",
                         },
                     )
                 ],
@@ -664,7 +662,6 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
                         "root": "session",
                         "path": "model.scad",
                         "content": "cube(1);",
-                        "mode": "create",
                     },
                 )
             ],
@@ -1695,7 +1692,6 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
                             "root": "session",
                             "path": "report.txt",
                             "content": "report",
-                            "mode": "create",
                         },
                     )
                 ]
@@ -1752,8 +1748,6 @@ async def test_cancelled_dispatched_workspace_write_stops_without_waiting(
                             "root": "workspace",
                             "path": "a.txt",
                             "content": "x",
-                            "mode": "replace",
-                            "expectedSha256": "a" * 64,
                         },
                     )
                 ]
@@ -1766,7 +1760,7 @@ async def test_cancelled_dispatched_workspace_write_stops_without_waiting(
     run.execution_root_id = uuid4()
     run.execution_root_revision = "a" * 64
     run.working_directory_snapshot = "project"
-    run.execution_operations = ["workspace.write"]
+    run.execution_operations = ["workspace.upsert"]
     dispatched = asyncio.Event()
 
     async def request(
@@ -2095,7 +2089,6 @@ async def test_failed_mutation_blocks_an_unconfirmed_final_response(monkeypatch)
                             "root": "session",
                             "path": "note.txt",
                             "content": "Hallo",
-                            "mode": "create",
                         },
                     )
                 ],
@@ -2130,7 +2123,6 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
                             "root": "session",
                             "path": "wrong.txt",
                             "content": "Hallo",
-                            "mode": "create",
                         },
                     )
                 ],
@@ -2146,7 +2138,6 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
                             "root": "session",
                             "path": "note.txt",
                             "content": "Hallo",
-                            "mode": "create",
                         },
                     )
                 ],

@@ -888,6 +888,92 @@ class RootFileService:
                 raise
         return self._relative_path(parts)
 
+    def upsert_text_file(
+        self,
+        root: FileRoot | str,
+        relative_path: str,
+        content: str,
+    ) -> str:
+        path = self.normalize_relative_path(relative_path)
+        encoded = content.encode("utf-8")
+        if len(encoded) > self.max_editable_text_bytes:
+            raise RootFileError("file.tooLarge", "File is too large")
+        if "\0" in content:
+            raise RootFileError("file.invalidEncoding", "File is not editable UTF-8 text")
+        for _attempt in range(3):
+            try:
+                with self.open_file(root, path) as handle:
+                    current = handle.read(self.max_editable_text_bytes + 1)
+            except RootFileError as exc:
+                if exc.code not in {"file.fileNotFound", "file.pathNotFound"}:
+                    raise
+                try:
+                    return self.write_file(root, path, content)
+                except RootFileError as create_error:
+                    if create_error.code != "file.pathAlreadyExists":
+                        raise
+                    continue
+            if len(current) > self.max_editable_text_bytes:
+                raise RootFileError("file.tooLarge", "File is too large")
+            try:
+                self.replace_text_file(
+                    root,
+                    path,
+                    content,
+                    hashlib.sha256(current).hexdigest(),
+                )
+                return path
+            except RootFileError as exc:
+                if exc.code != "file.changed":
+                    raise
+        raise RootFileError("file.changed", "File changed while it was written")
+
+    def edit_text_file(
+        self,
+        root: FileRoot | str,
+        relative_path: str,
+        old_text: str,
+        new_text: str,
+        *,
+        replace_all: bool = False,
+    ) -> str:
+        path = self.normalize_relative_path(relative_path)
+        for _attempt in range(3):
+            data = self.read_bytes(root, path, limit=self.max_editable_text_bytes + 1)
+            if len(data) > self.max_editable_text_bytes:
+                raise RootFileError("file.tooLarge", "File is too large")
+            try:
+                content = data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise RootFileError(
+                    "file.invalidEncoding", "File is not editable UTF-8 text"
+                ) from exc
+            ending = "\r\n" if "\r\n" in content else "\n"
+            old = old_text.replace("\r\n", "\n").replace("\n", ending)
+            new = new_text.replace("\r\n", "\n").replace("\n", ending)
+            index = content.find(old)
+            if index < 0:
+                raise RootFileError("file.editTextNotFound", "Edit text was not found")
+            if not replace_all and content.find(old, index + 1) >= 0:
+                raise RootFileError("file.editTextNotUnique", "Edit text is not unique")
+            updated = (
+                content.replace(old, new)
+                if replace_all
+                else content[:index] + new + content[index + len(old) :]
+            )
+            try:
+                self.replace_text_file(
+                    root,
+                    path,
+                    updated,
+                    hashlib.sha256(data).hexdigest(),
+                )
+                return path
+            except RootFileError as exc:
+                if exc.code != "file.changed":
+                    raise
+        raise RootFileError("file.changed", "File changed while it was edited")
+
     def _revision_indexes(self) -> list[tuple[Path, dict]]:
         revisions = self._revisions_path()
         result = []

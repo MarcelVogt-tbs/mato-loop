@@ -150,6 +150,22 @@ class WriteArguments(PathArguments):
     )
 
 
+class UpsertArguments(PathArguments):
+    content: str
+
+
+class EditArguments(PathArguments):
+    old_text: str = Field(alias="oldText", min_length=1)
+    new_text: str = Field(alias="newText")
+    replace_all: bool = Field(default=False, alias="replaceAll")
+
+    @model_validator(mode="after")
+    def different_text(self):
+        if self.old_text == self.new_text:
+            raise ValueError("oldText and newText must differ")
+        return self
+
+
 class MkdirArguments(PathArguments):
     parents: bool = False
 
@@ -435,6 +451,8 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "workspace.glob": GlobArguments,
     "workspace.grep": GrepArguments,
     "workspace.write": WriteArguments,
+    "workspace.upsert": UpsertArguments,
+    "workspace.edit": EditArguments,
     "workspace.mkdir": MkdirArguments,
     "workspace.rename": RenameArguments,
     "workspace.delete": DeleteArguments,

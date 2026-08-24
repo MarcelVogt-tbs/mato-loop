@@ -65,6 +65,7 @@ from mato_loop_backend.agent.tool_arguments import (
     DeleteAutomationArguments,
     DeletePathArguments,
     EditAutomationArguments,
+    EditFileArguments,
     EditImageArguments,
     EditSkillArguments,
     FetchTranscriptArguments,
@@ -326,6 +327,35 @@ def _workspace_client(context: ToolContext) -> ExecutionClient:
     if context.execution_client is None:
         raise ExecutionClientError("file.workspaceNotSelected")
     return context.execution_client
+
+
+async def _active_file_is_dirty(
+    context: ToolContext, root: FileRoot | str, path: str
+) -> bool:
+    message = await context.db.scalar(
+        select(Message)
+        .join(AgentRun, AgentRun.input_message_id == Message.id)
+        .where(AgentRun.id == context.run_id)
+    )
+    runtime_data = (
+        message.provider_data.get("_matoloop")
+        if message is not None and isinstance(message.provider_data, dict)
+        else None
+    )
+    active = runtime_data.get("activeFile") if isinstance(runtime_data, dict) else None
+    if not isinstance(active, dict) or active.get("dirty") is not True:
+        return False
+    selected_root = FileRoot(root)
+    root_identity = (
+        str(_workspace_client(context).root_id)
+        if selected_root is FileRoot.WORKSPACE
+        else context.root_files.root_identity(selected_root)
+    )
+    return (
+        active.get("root") == selected_root.value
+        and active.get("rootIdentity") == root_identity
+        and active.get("path") == path
+    )
 
 
 async def _directory_allowed(
@@ -826,13 +856,18 @@ def _workspace_file_action(
 
 
 async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> ToolResult:
+    if _omitted_file_content(arguments.content):
+        return ToolResult.error("file.omittedContent", field="content")
+    path = context.root_files.normalize_relative_path(arguments.path)
+    if await _active_file_is_dirty(context, arguments.root, path):
+        return ToolResult.error("file.activeDirty", field="path")
     capability = (
         "session.files.write" if arguments.root == "session" else "filesystem.write"
     )
     request = _filesystem_permission(
         context,
         root=arguments.root,
-        path=arguments.path,
+        path=path,
         capability=capability,
         action_kind="write_file",
         action_label="Datei schreiben",
@@ -840,18 +875,12 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
     if arguments.root == "workspace":
-        path = context.root_files.normalize_relative_path(arguments.path)
         result = await _workspace_request(
             context,
-            "workspace.write",
+            "workspace.upsert",
             {
                 "path": path,
                 "content": arguments.content,
-                **(
-                    {"expectedSha256": arguments.expected_sha256}
-                    if arguments.mode == "replace"
-                    else {}
-                ),
             },
             WorkspaceWriteResult,
         )
@@ -861,32 +890,95 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
             {
                 "root": arguments.root,
                 "written": result.path,
-                "sha256": result.sha256,
                 "sizeBytes": result.size,
             },
             file_actions=_workspace_file_action(
                 context, "write", result.path, result.size
             ),
         )
-    path = context.root_files.normalize_relative_path(arguments.path)
     written = await asyncio.to_thread(
-        context.root_files.write_file,
+        context.root_files.upsert_text_file,
         arguments.root,
         path,
         arguments.content,
-        mode=arguments.mode,
-        expected_sha256=arguments.expected_sha256,
     )
     encoded = arguments.content.encode("utf-8")
     return ToolResult.json(
         {
             "root": arguments.root,
             "written": written,
-            "sha256": hashlib.sha256(encoded).hexdigest(),
             "sizeBytes": len(encoded),
         },
         file_actions=_regular_file_action(context, "write", arguments.root, written),
     )
+
+
+def _omitted_file_content(content: str) -> bool:
+    return content.startswith(
+        ("[Persisted file content omitted: ", "[Persisted edit text omitted: ")
+    )
+
+
+async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> ToolResult:
+    if _omitted_file_content(arguments.old_text):
+        return ToolResult.error("file.omittedContent", field="oldText")
+    if _omitted_file_content(arguments.new_text):
+        return ToolResult.error("file.omittedContent", field="newText")
+    path = context.root_files.normalize_relative_path(arguments.path)
+    if await _active_file_is_dirty(context, arguments.root, path):
+        return ToolResult.error("file.activeDirty", field="path")
+    request = _filesystem_permission(
+        context,
+        root=arguments.root,
+        path=path,
+        capability=(
+            "session.files.write"
+            if arguments.root == "session"
+            else "filesystem.write"
+        ),
+        action_kind="edit_file",
+        action_label="Datei bearbeiten",
+    )
+    if not await _allow(context, request):
+        return ToolResult.error("permission.denied")
+    if arguments.root == "workspace":
+        result = await _workspace_request(
+            context,
+            "workspace.edit",
+            {
+                "path": path,
+                "oldText": arguments.old_text,
+                "newText": arguments.new_text,
+                "replaceAll": arguments.replace_all,
+            },
+            WorkspaceWriteResult,
+        )
+        assert isinstance(result, WorkspaceWriteResult)
+        _require_workspace_path(result.path, path)
+        return ToolResult.json(
+            {
+                "root": arguments.root,
+                "edited": result.path,
+                "sizeBytes": result.size,
+            },
+            file_actions=_workspace_file_action(
+                context, "write", result.path, result.size
+            ),
+        )
+    edited = await asyncio.to_thread(
+        context.root_files.edit_text_file,
+        arguments.root,
+        path,
+        arguments.old_text,
+        arguments.new_text,
+        replace_all=arguments.replace_all,
+    )
+    return ToolResult.json(
+        {"root": arguments.root, "edited": edited},
+        file_actions=_regular_file_action(context, "write", arguments.root, edited),
+    )
+
+
 async def _create_directory(
     arguments: CreateDirectoryArguments, context: ToolContext
 ) -> ToolResult:
@@ -3844,14 +3936,27 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "write_file",
-            "Create or replace one UTF-8 file explicitly. Replace requires the expected SHA-256; "
-            "create fails if the path exists.",
+            "Write complete UTF-8 content to one file, creating or replacing it.",
             WriteFileArguments,
             _write_file,
             tool_type="shared",
             group="filesystem",
             label="Datei schreiben",
             icon="edit_document",
+            actions=(_SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
+            alternative_action_capabilities=frozenset(
+                {"session.files.write", "filesystem.write"}
+            ),
+        ),
+        ToolDefinition(
+            "edit_file",
+            "Replace exact text in one existing UTF-8 file. oldText must be unique unless replaceAll is true.",
+            EditFileArguments,
+            _edit_file,
+            tool_type="shared",
+            group="filesystem",
+            label="Datei bearbeiten",
+            icon="edit_note",
             actions=(_SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
             alternative_action_capabilities=frozenset(
                 {"session.files.write", "filesystem.write"}
@@ -4379,6 +4484,11 @@ def permission_for(
             if arguments.get("root") == "session"
             else "filesystem.write"
         ),
+        "edit_file": (
+            "session.files.write"
+            if arguments.get("root") == "session"
+            else "filesystem.write"
+        ),
         "create_directory": (
             "session.files.write"
             if arguments.get("root") == "session"
@@ -4397,6 +4507,7 @@ def permission_for(
             "grep": "Dateiinhalte durchsuchen",
             "provide_file": "Datei bereitstellen",
             "write_file": "Datei schreiben",
+            "edit_file": "Datei bearbeiten",
             "create_directory": "Ordner erstellen",
             "delete_path": "Pfad löschen",
         }[tool_name]

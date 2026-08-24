@@ -661,6 +661,22 @@ def test_write_file_content_is_fully_redacted_before_persistence() -> None:
     assert secret not in str(arguments)
 
 
+def test_edit_file_text_is_fully_redacted_before_persistence() -> None:
+    arguments = _safe_tool_arguments(
+        "edit_file",
+        {
+            "root": "session",
+            "path": "note.txt",
+            "oldText": "private old text",
+            "newText": "private new text",
+        },
+    )
+
+    assert arguments["oldText"] == {"characters": 16, "redacted": True}
+    assert arguments["newText"] == {"characters": 16, "redacted": True}
+    assert "private" not in str(arguments)
+
+
 def test_qr_code_content_is_fully_redacted_before_persistence() -> None:
     secret = "WIFI:T:WPA;S:Guest;P:not-for-tool-history;;"
 
@@ -698,7 +714,6 @@ def test_responses_replay_write_file_content_is_fully_redacted() -> None:
             "root": "session",
             "path": "files/note.txt",
             "content": secret,
-            "mode": "create",
         },
     )
 
@@ -711,7 +726,7 @@ def test_responses_replay_write_file_content_is_fully_redacted() -> None:
                     "name": "write_file",
                     "arguments": (
                         '{"root":"session","path":"files/note.txt",'
-                        f'"content":"{secret}","mode":"create"}}'
+                        f'"content":"{secret}"}}'
                     ),
                 }
             ]

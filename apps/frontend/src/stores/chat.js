@@ -58,6 +58,7 @@ const SESSION_PAGE_SIZE = 20
 const ACTIVE_TITLE_GENERATION_STATUSES = new Set(['pending', 'running'])
 const FILESYSTEM_MUTATION_TOOLS = new Set([
   'write_file',
+  'edit_file',
   'create_directory',
   'delete_path',
   'copy_path',
@@ -2068,10 +2069,8 @@ export const useChatStore = defineStore('chat', {
             workspace.noteFileMutation(action.path)
             return
           }
-          const created = fileAction
-            ? ['copy', 'move'].includes(action.operation) || toolCall?.arguments?.mode === 'create'
-            : attachmentAction.fileRevision === 1
-          if (!created) return
+          const shouldOpen = fileAction || attachmentAction.fileRevision === 1
+          if (!shouldOpen) return
           const controlCenter = useControlCenterStore()
           if (
             start.editorDirty

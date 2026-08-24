@@ -1307,6 +1307,11 @@ describe('chat drafts', () => {
       output: '{"root":"session","written":"live.txt"}'
     })
     source.emit('tool.completed', {
+      tool: 'edit_file',
+      metadata: {},
+      output: '{"root":"session","edited":"live.txt"}'
+    })
+    source.emit('tool.completed', {
       tool: 'write_file',
       metadata: { errorCode: 'permission.denied' },
       output: '{}'
@@ -1317,7 +1322,7 @@ describe('chat drafts', () => {
       output: '{}'
     })
 
-    expect(refresh).toHaveBeenCalledOnce()
+    expect(refresh).toHaveBeenCalledTimes(2)
   })
 
   it('opens an ordinary file action only while the file view stays unchanged', async () => {
@@ -1333,7 +1338,7 @@ describe('chat drafts', () => {
       data: {
         id: sessionId,
         messages: [
-          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { mode: 'create' } }] },
+          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'session', path: 'result.md', content: 'Fertig' } }] },
           { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
         ]
       }
@@ -1536,7 +1541,7 @@ describe('chat drafts', () => {
         id: sessionId,
         projectId: rootIdentity,
         messages: [
-          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { mode: 'create' } }] },
+          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'session', path: 'result.md', content: 'Fertig' } }] },
           { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
         ]
       }
@@ -1560,7 +1565,7 @@ describe('chat drafts', () => {
       data: {
         id: sessionId,
         messages: [
-          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { mode: 'create' } }] },
+          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'session', path: 'result.md', content: 'Fertig' } }] },
           { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
         ]
       }
@@ -1609,8 +1614,8 @@ describe('chat drafts', () => {
     chat.watchRun(sessionId, 'run-1', { status: 'running' })
     const source = EventSourceMock.instances[0]
 
-    source.emit('run.phase', { phase: 'processing_tool', tool: 'write_file', toolCallId: 'call-1' })
-    source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
+    source.emit('run.phase', { phase: 'processing_tool', tool: 'edit_file', toolCallId: 'call-1' })
+    source.emit('tool.completed', { tool: 'edit_file', toolCallId: 'call-1', metadata: {} })
 
     await vi.waitFor(() => expect(workspace.editorExternalChange).toBe(true))
     expect(workspace.editorDraft).toBe('lokal')

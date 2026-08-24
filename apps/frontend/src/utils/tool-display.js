@@ -11,6 +11,7 @@ const TOOL_DISPLAY = {
   read_file: { label: 'Datei lesen', activity: 'Datei wird gelesen', icon: 'description' },
   provide_file: { label: 'Datei bereitstellen', activity: 'Datei wird bereitgestellt', icon: 'download' },
   write_file: { label: 'Datei schreiben', activity: 'Datei wird geschrieben', icon: 'edit_document' },
+  edit_file: { label: 'Datei bearbeiten', activity: 'Datei wird bearbeitet', icon: 'edit_note' },
   create_directory: { label: 'Ordner erstellen', activity: 'Ordner wird erstellt', icon: 'create_new_folder' },
   delete_path: { label: 'Pfad löschen', activity: 'Pfad wird gelöscht', icon: 'delete_outline' },
   copy_path: { label: 'Pfad kopieren', activity: 'Pfad wird kopiert', icon: 'content_copy' },

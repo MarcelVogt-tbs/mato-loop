@@ -181,15 +181,19 @@ class WriteFileArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
     content: str = Field(max_length=1_000_000)
-    mode: Literal["create", "replace"]
-    expected_sha256: str | None = Field(
-        default=None, alias="expectedSha256", pattern=r"^[0-9a-f]{64}$"
-    )
+
+
+class EditFileArguments(ToolArguments):
+    root: Literal["session", "workspace"]
+    path: str = Field(min_length=1, max_length=1_000)
+    old_text: str = Field(min_length=1, max_length=1_000_000, alias="oldText")
+    new_text: str = Field(max_length=1_000_000, alias="newText")
+    replace_all: bool = Field(default=False, alias="replaceAll")
 
     @model_validator(mode="after")
-    def validate_mode(self) -> WriteFileArguments:
-        if (self.mode == "replace") != (self.expected_sha256 is not None):
-            raise ValueError("replace requires expected_sha256; create forbids it")
+    def require_change(self) -> EditFileArguments:
+        if self.old_text == self.new_text:
+            raise ValueError("old_text and new_text must differ")
         return self
 
 

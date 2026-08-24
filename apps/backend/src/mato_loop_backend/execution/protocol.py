@@ -34,6 +34,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "system.info",
         "workspace.copy",
         "workspace.delete",
+        "workspace.edit",
         "workspace.export",
         "workspace.glob",
         "workspace.grep",
@@ -45,6 +46,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "workspace.rename",
         "workspace.resolve",
         "workspace.stat",
+        "workspace.upsert",
         "workspace.write",
     }
 )

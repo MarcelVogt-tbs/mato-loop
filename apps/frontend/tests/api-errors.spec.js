@@ -76,6 +76,18 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'file.changed' } })).toBe(
       'Die Datei wurde seit dem Öffnen geändert. Öffne sie erneut und übernimm deine Änderungen in die aktuelle Version.'
     )
+    expect(apiErrorMessage({ error: { code: 'file.activeDirty' } })).toBe(
+      'Die Datei enthält ungespeicherte Änderungen und kann vom Agenten nicht überschrieben werden.'
+    )
+    expect(apiErrorMessage({ error: { code: 'file.editTextNotFound' } })).toBe(
+      'Der zu ersetzende Text wurde in der Datei nicht gefunden.'
+    )
+    expect(apiErrorMessage({ error: { code: 'file.editTextNotUnique' } })).toBe(
+      'Der zu ersetzende Text kommt in der Datei mehrfach vor und ist nicht eindeutig.'
+    )
+    expect(apiErrorMessage({ error: { code: 'file.omittedContent' } })).toBe(
+      'Der Dateiinhalt fehlt in der Tool-Anfrage.'
+    )
     expect(apiErrorMessage({ error: { code: 'file.sessionQuotaExceeded' } })).toBe(
       'Das Speicherlimit für Dateien dieser Session ist erreicht.'
     )

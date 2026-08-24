@@ -118,6 +118,46 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_arguments(glob)
 
+    def test_model_file_arguments_are_strict(self) -> None:
+        base = {
+            "type": "request",
+            "id": REQUEST_ID,
+            "arguments": {
+                "rootId": "4d0a316f-5fb5-4ec5-a5c4-04aed66c5e6d",
+                "rootRevision": "a" * 64,
+                "workingDirectory": ".",
+                "path": "app.txt",
+            },
+        }
+        upsert = Request.model_validate(
+            {
+                **base,
+                "operation": "workspace.upsert",
+                "arguments": {**base["arguments"], "content": "new"},
+            }
+        )
+        self.assertEqual(validate_arguments(upsert).content, "new")
+
+        edit = Request.model_validate(
+            {
+                **base,
+                "operation": "workspace.edit",
+                "arguments": {
+                    **base["arguments"],
+                    "oldText": "old",
+                    "newText": "new",
+                },
+            }
+        )
+        self.assertFalse(validate_arguments(edit).replace_all)
+        edit.arguments["unexpected"] = True
+        with self.assertRaises(ValidationError):
+            validate_arguments(edit)
+        edit.arguments.pop("unexpected")
+        edit.arguments["newText"] = "old"
+        with self.assertRaises(ValidationError):
+            validate_arguments(edit)
+
     def test_openscad_archive_is_rootless_and_workspace_requires_a_root(self) -> None:
         base = {
             "type": "request",

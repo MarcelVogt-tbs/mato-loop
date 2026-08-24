@@ -192,6 +192,8 @@ class ExecutionClientError(Exception):
 
 _REMOTE_ERROR_CODES = {
     "file.changed": "file.changed",
+    "file.editTextNotFound": "file.editTextNotFound",
+    "file.editTextNotUnique": "file.editTextNotUnique",
     "file.invalidEncoding": "file.invalidEncoding",
     "file.tooLarge": "file.tooLarge",
     "git.addFailed": "git.operationFailed",

@@ -37,11 +37,13 @@ _MUTATING_WORKSPACE_OPERATIONS = {
     "integration.git.commit",
     "workspace.copy",
     "workspace.delete",
+    "workspace.edit",
     "workspace.export",
     "workspace.import",
     "workspace.mkdir",
     "workspace.move",
     "workspace.rename",
+    "workspace.upsert",
     "workspace.write",
 }
 

@@ -168,6 +168,14 @@ def _model_tool_calls(
                         "Regenerate content before retrying.]"
                     )
                 )
+            for key in ("oldText", "newText"):
+                edit_text = projected_arguments.get(key)
+                if isinstance(edit_text, dict) and edit_text.get("redacted") is True:
+                    characters = edit_text.get("characters")
+                    count = characters if isinstance(characters, int) else "unknown"
+                    projected_arguments[key] = (
+                        f"[Persisted edit text omitted: {count} characters. Read the file again before retrying.]"
+                    )
             instructions = projected_arguments.get("instructions")
             if isinstance(instructions, dict) and isinstance(
                 instructions.get("preview"), str
@@ -370,6 +378,7 @@ def general_system_prompt(
         "grep",
         "provide_file",
         "write_file",
+        "edit_file",
         "create_directory",
         "delete_path",
         "copy_path",
@@ -515,11 +524,11 @@ def general_system_prompt(
         )
     if "write_file" in offered_tool_names:
         parts.append(
-            "Reusable email or drafts and other requested writing: one file per artifact, mode=create. "
+            "Reusable email or drafts and other requested writing: one file per artifact with write_file. "
             "Default to root=session; "
             "workspace only when explicit. Use the requested path or a descriptive .md; never files/. Revise "
-            "the same path with mode=replace after reading its exact SHA-256; never make version copies. Ask "
-            "if ambiguous; never overwrite a dirty active file. Reply only with status and path, not the body."
+            "the same path with edit_file after reading it; never make version copies. Ask if ambiguous; "
+            "never overwrite a dirty active file. Reply only with status and path, not the body."
         )
     if "provide_file" in offered_tool_names:
         parts.append(

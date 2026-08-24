@@ -379,20 +379,18 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
             "root": "workspace",
             "path": "a.txt",
             "content": "x",
-            "mode": "replace",
-            "expectedSha256": "b" * 64,
         },
     )
     client = FakeExecutionClient(
         {
-            "workspace.write": WorkspaceWriteResult(
+            "workspace.upsert": WorkspaceWriteResult(
                 path="a.txt", sha256="a" * 64, size=1
             ),
             "workspace.stat": WorkspaceStatResult(
                 path="a.txt", kind="file", size=1, modified_at=1.0
             ),
         },
-        {"workspace.write", "workspace.stat"},
+        {"workspace.upsert", "workspace.edit", "workspace.stat"},
     )
     context = _context(tmp_path, call, client)
     context.ask_handler = AsyncMock(return_value=PermissionDecision.ALLOW)
@@ -401,7 +399,6 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
     assert json.loads(written.content) == {
         "root": "workspace",
         "written": "a.txt",
-        "sha256": "a" * 64,
         "sizeBytes": 1,
     }
     action = written.file_actions[0]
@@ -412,11 +409,36 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
     assert action.working_directory == client.working_directory
     assert client.requests == [
         (
-            "workspace.write",
-            {"path": "a.txt", "content": "x", "expectedSha256": "b" * 64},
+            "workspace.upsert",
+            {"path": "a.txt", "content": "x"},
         )
     ]
     assert context.ask_handler.await_count == 2
+
+    client.responses["workspace.edit"] = WorkspaceWriteResult(
+        path="a.txt", sha256="c" * 64, size=1
+    )
+    edit = ToolCall(
+        "edit-1",
+        "edit_file",
+        {
+            "root": "workspace",
+            "path": "a.txt",
+            "oldText": "x",
+            "newText": "y",
+        },
+    )
+    context.tool_call = edit
+    edited = await _tools(client.operations).execute(edit, context)
+    assert json.loads(edited.content) == {
+        "root": "workspace",
+        "edited": "a.txt",
+        "sizeBytes": 1,
+    }
+    assert client.requests[-1] == (
+        "workspace.edit",
+        {"path": "a.txt", "oldText": "x", "newText": "y", "replaceAll": False},
+    )
 
     provide = ToolCall(
         "provide-1", "provide_file", {"root": "workspace", "path": "a.txt"}
@@ -427,6 +449,36 @@ async def test_workspace_tools_delegate_and_derive_canonical_results(tmp_path) -
     assert payload["sizeBytes"] == 1
     assert f"root_identity={client.root_id}" in payload["downloadUrl"]
     assert client.requests[-1] == ("workspace.stat", {"path": "a.txt"})
+
+
+async def test_write_file_blocks_matching_dirty_active_file(tmp_path) -> None:
+    call = ToolCall(
+        "write-1",
+        "write_file",
+        {"root": "workspace", "path": "a.txt", "content": "x"},
+    )
+    client = FakeExecutionClient({}, {"workspace.upsert"})
+    context = _context(tmp_path, call, client)
+    context.db.scalar.return_value = Mock(
+        provider_data={
+            "_matoloop": {
+                "activeFile": {
+                    "root": "workspace",
+                    "rootIdentity": str(client.root_id),
+                    "path": "a.txt",
+                    "sha256": "a" * 64,
+                    "dirty": True,
+                }
+            }
+        }
+    )
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert result.is_error
+    assert json.loads(result.content)["error"]["code"] == "file.activeDirty"
+    assert client.requests == []
+    context.ask_handler.assert_not_awaited()
 
 
 async def test_execution_workspace_grants_match_only_same_snapshot_descendants(

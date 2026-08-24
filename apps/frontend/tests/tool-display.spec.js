@@ -87,6 +87,7 @@ describe('tool display', () => {
     expect(toolIdentity('grep')).toEqual({ label: 'Dateiinhalte durchsuchen', icon: 'manage_search' })
     expect(toolIdentity('list_directory')).toEqual({ label: 'Ordner auflisten', icon: 'folder_open' })
     expect(toolIdentity('provide_file')).toEqual({ label: 'Datei bereitstellen', icon: 'download' })
+    expect(toolIdentity('edit_file')).toEqual({ label: 'Datei bearbeiten', icon: 'edit_note' })
     expect(toolSummary({ name: 'read_file', arguments: { path: 'Projekte/plan.md' } })).toBe('Projekte/plan.md')
     expect(toolSummary({ name: 'read_file', arguments: {} })).toBe('')
     expect(toolSummary({ name: 'read', arguments: { root: 'workspace', path: 'Projekte/plan.md' } }))
@@ -132,6 +133,7 @@ describe('tool display', () => {
     expect(toolIdentity('fetch_transcript')).toEqual({ label: 'Untertitel abrufen', icon: 'subtitles' })
     expect(toolActivityLabel('fetch_transcript')).toBe('Untertitel werden abgerufen')
     expect(toolActivityLabel('write_file')).toBe('Datei wird geschrieben')
+    expect(toolActivityLabel('edit_file')).toBe('Datei wird bearbeitet')
     expect(toolActivityLabel('shell_run')).toBe('Befehl wird ausgeführt')
     expect(toolActivityLabel('unknown_tool')).toBe('Tool wird ausgeführt')
     expect(toolIdentity('create_automation')).toEqual({ label: 'Automation erstellen', icon: 'add_task' })
@@ -141,6 +143,9 @@ describe('tool display', () => {
       .toBe('Quasar Expansion Item')
     expect(toolSummary({
       name: 'write_file', arguments: { root: 'workspace', path: 'docs/plan.md', content: 'secret' }
+    })).toBe('workspace:docs/plan.md')
+    expect(toolSummary({
+      name: 'edit_file', arguments: { root: 'workspace', path: 'docs/plan.md' }
     })).toBe('workspace:docs/plan.md')
     expect(toolSummary({
       name: 'copy_path',

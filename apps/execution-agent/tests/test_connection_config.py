@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import tempfile
@@ -126,6 +127,58 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                     await task
             finally:
                 release.set()
+
+    async def test_dispatches_advertised_model_file_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configuration = AgentConfig.model_validate(
+                {
+                    "backendUrl": "ws://localhost/api/execution-agents/connect",
+                    "agentId": AGENT_ID,
+                    "name": "Agent",
+                    "roots": [{"id": ROOT_ID, "label": "Root", "path": root}],
+                    "dataDir": root / "data",
+                    "allowInsecure": True,
+                }
+            )
+            agent = ExecutionAgent(configuration, "secret")
+            revision = agent.workspace.roots[ROOT_ID].revision
+            self.assertIn("workspace.upsert", agent.hello().operations)
+            self.assertIn("workspace.edit", agent.hello().operations)
+
+            arguments = {
+                "rootId": ROOT_ID,
+                "rootRevision": revision,
+                "workingDirectory": ".",
+                "path": "app.txt",
+            }
+            await agent.dispatch(
+                Request.model_validate(
+                    {
+                        "type": "request",
+                        "id": REQUEST_ID,
+                        "operation": "workspace.upsert",
+                        "arguments": {**arguments, "content": "old"},
+                    }
+                )
+            )
+            result = await agent.dispatch(
+                Request.model_validate(
+                    {
+                        "type": "request",
+                        "id": REQUEST_ID,
+                        "operation": "workspace.edit",
+                        "arguments": {
+                            **arguments,
+                            "oldText": "old",
+                            "newText": "new",
+                        },
+                    }
+                )
+            )
+
+            self.assertEqual((root / "app.txt").read_text(), "new")
+            self.assertEqual(result["sha256"], hashlib.sha256(b"new").hexdigest())
 
     async def test_connection_retry_reloads_rotated_access_key(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

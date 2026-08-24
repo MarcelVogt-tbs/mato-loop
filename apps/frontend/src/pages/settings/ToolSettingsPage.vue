@@ -397,6 +397,7 @@ const TOOL_DESCRIPTIONS = {
   glob: 'Sucht Dateien anhand eines Pfadmusters.',
   grep: 'Durchsucht Dateiinhalte nach einem Muster.',
   write_file: 'Erstellt oder ersetzt Textdateien.',
+  edit_file: 'Ersetzt einen eindeutigen Textabschnitt in einer Textdatei.',
   create_directory: 'Legt ein neues Verzeichnis an.',
   delete_path: 'Löscht Dateien oder Verzeichnisse.',
   copy_path: 'Kopiert Dateien oder Verzeichnisse zwischen erlaubten Bereichen.',

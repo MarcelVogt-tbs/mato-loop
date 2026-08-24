@@ -847,8 +847,8 @@ def _contributions(_instance: IntegrationInstance) -> IntegrationContributions:
         prompt_fragments=(
             "OpenSCAD file workflow:\n"
             "- Use render_openscad, not shell_run or process_exec, for every render. Create each new "
-            ".scad model with write_file mode=create; source in assistant text is not a file. Revise the exact "
-            "returned path with write_file mode=replace and its expected SHA-256 instead of creating versioned copies.\n"
+            ".scad model with write_file; source in assistant text is not a file. Revise the exact returned "
+            "path with edit_file instead of creating versioned copies.\n"
             "- Use the user's explicit safe path and exact .scad basename. The source entrypoint must "
             "end in .scad. Append it when no extension was given; when another output extension was "
             "given, use its stem.\n"

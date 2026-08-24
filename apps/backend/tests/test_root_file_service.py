@@ -133,6 +133,26 @@ def test_mutations_are_atomic_and_limited_to_session_files(tmp_path: Path) -> No
     assert exc_info.value.code == "file.rootMutationForbidden"
 
 
+def test_agent_upsert_and_exact_edit_preserve_line_endings(tmp_path: Path) -> None:
+    service, root = make_service(tmp_path)
+
+    service.upsert_text_file(FileRoot.SESSION, "notes.txt", "one\r\ntwo\r\n")
+    service.upsert_text_file(FileRoot.SESSION, "notes.txt", "one\r\ntwo\r\ntwo\r\n")
+    with pytest.raises(RootFileError) as exc_info:
+        service.edit_text_file(FileRoot.SESSION, "notes.txt", "two\n", "three\n")
+    assert exc_info.value.code == "file.editTextNotUnique"
+
+    service.edit_text_file(
+        FileRoot.SESSION,
+        "notes.txt",
+        "two\n",
+        "three\n",
+        replace_all=True,
+    )
+
+    assert (root / "files" / "notes.txt").read_bytes() == b"one\r\nthree\r\nthree\r\n"
+
+
 def test_file_history_survives_regular_live_file_deletion(tmp_path: Path) -> None:
     service, root = make_service(tmp_path)
     service.create_file(

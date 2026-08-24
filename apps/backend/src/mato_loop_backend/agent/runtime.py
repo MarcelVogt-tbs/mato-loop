@@ -504,6 +504,11 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
             if tool_name in {"write_file", "generate_qr_code"}
             else {"characters": len(content), "preview": content[:200]}
         )
+    if tool_name == "edit_file":
+        for key in ("oldText", "newText"):
+            text = safe.get(key)
+            if isinstance(text, str):
+                safe[key] = {"characters": len(text), "redacted": True}
     if tool_name in {"webfetch", "fetch_transcript"} and isinstance(
         safe.get("url"), str
     ):
@@ -3339,7 +3344,7 @@ class AgentRuntime:
                                 )
                                 openscad_source_review_retries = 0
                     elif (
-                        call.name == "write_file"
+                        call.name in {"write_file", "edit_file"}
                         and isinstance(call.arguments.get("path"), str)
                         and call.arguments["path"].casefold().endswith(".scad")
                     ):
@@ -3449,6 +3454,16 @@ class AgentRuntime:
                     unresolved_mutation_errors.pop(tool_name, None)
                 else:
                     unresolved_mutation_errors[tool_name] = error_code
+            file_mutation_results = {
+                name: mutation_results[name]
+                for name in {"write_file", "edit_file"}
+                if name in mutation_results
+            }
+            if file_mutation_results and all(
+                error_code is None for error_code in file_mutation_results.values()
+            ):
+                unresolved_mutation_errors.pop("write_file", None)
+                unresolved_mutation_errors.pop("edit_file", None)
             if tool_call_limit_reached:
                 raise AgentRunError("agent.toolCallLimitReached")
             if repeated_tool_call_detected:

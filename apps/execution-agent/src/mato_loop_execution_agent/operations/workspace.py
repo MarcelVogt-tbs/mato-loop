@@ -577,6 +577,114 @@ class Workspace:
             "size": len(data),
         }
 
+    def upsert(
+        self,
+        root_id: str,
+        revision: str,
+        working_directory: str,
+        path: str,
+        content: str,
+    ) -> dict:
+        data = content.encode("utf-8")
+        if len(data) > self.max_file_bytes:
+            raise AgentError("file.tooLarge", "Content exceeds the write limit")
+        if "\0" in content:
+            raise AgentError("file.invalidEncoding", "File is not editable UTF-8 text")
+        with (
+            self._lock,
+            self._parent(root_id, revision, working_directory, path) as (parent, name, parts),
+        ):
+            try:
+                metadata = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                metadata = None
+            if metadata is not None and (
+                stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode)
+            ):
+                raise AgentError("path.notFile", "Target is not a regular file")
+            temporary = f".upsert-{uuid4().hex}.tmp"
+            fd = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=parent,
+            )
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+                _fsync(parent)
+            except BaseException:
+                try:
+                    os.unlink(temporary, dir_fd=parent)
+                except FileNotFoundError:
+                    pass
+                raise
+        return {
+            "path": _path(parts[len(_parts(working_directory)) :]),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size": len(data),
+        }
+
+    def edit(
+        self,
+        root_id: str,
+        revision: str,
+        working_directory: str,
+        path: str,
+        old_text: str,
+        new_text: str,
+        replace_all: bool,
+    ) -> dict:
+        if not old_text or old_text == new_text:
+            raise AgentError("request.invalid", "Edit text must be non-empty and different")
+        with (
+            self._lock,
+            self._parent(root_id, revision, working_directory, path) as (parent, name, _),
+        ):
+            fd, metadata = self._open_regular(parent, name)
+            with os.fdopen(fd, "rb") as current:
+                if metadata.st_size > self.max_file_bytes:
+                    raise AgentError("file.tooLarge", "File exceeds the edit limit")
+                data = current.read(self.max_file_bytes + 1)
+            if len(data) > self.max_file_bytes:
+                raise AgentError("file.tooLarge", "File exceeds the edit limit")
+            try:
+                content = data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise AgentError("file.invalidEncoding", "File is not UTF-8 text") from exc
+
+            ending = "\r\n" if "\r\n" in content else "\n"
+
+            def adapt(value: str) -> str:
+                value = value.replace("\r\n", "\n")
+                return value if ending == "\n" else value.replace("\n", "\r\n")
+
+            old = adapt(old_text)
+            replacement = adapt(new_text)
+            if old == replacement:
+                raise AgentError("request.invalid", "Edit text must be different")
+            index = content.find(old)
+            if index < 0:
+                raise AgentError("file.editTextNotFound", "Edit text was not found")
+            if not replace_all and content.find(old, index + 1) >= 0:
+                raise AgentError("file.editTextNotUnique", "Edit text is not unique")
+            updated = (
+                content.replace(old, replacement)
+                if replace_all
+                else content[:index] + replacement + content[index + len(old) :]
+            )
+            return self.write(
+                root_id,
+                revision,
+                working_directory,
+                path,
+                updated,
+                hashlib.sha256(data).hexdigest(),
+            )
+
     def mkdir(
         self, root_id: str, revision: str, working_directory: str, path: str, parents: bool
     ) -> dict:

@@ -5,12 +5,21 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from mato_loop_backend.execution.client import (
+    ExecutionClient,
+    ExecutionClientError,
+    WorkspaceWriteResult,
+)
 from mato_loop_backend.execution.manager import (
     ExecutionAgentConnectionManager,
     ExecutionAgentError,
     disconnect_error_code,
 )
-from mato_loop_backend.execution.protocol import SUPPORTED_OPERATIONS, HelloMessage
+from mato_loop_backend.execution.protocol import (
+    SUPPORTED_OPERATIONS,
+    HelloMessage,
+    ResponseMessage,
+)
 
 
 class FakeWebSocket:
@@ -85,10 +94,12 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "workspace.rename",
         "workspace.resolve",
         "workspace.delete",
+        "workspace.edit",
         "workspace.copy",
         "workspace.move",
         "workspace.import",
         "workspace.export",
+        "workspace.upsert",
         "process.exec",
         "shell.run",
         "cache.ensure",
@@ -168,6 +179,8 @@ async def test_latest_connection_replaces_old_and_disconnects_are_classified() -
     assert manager.snapshot(agent_id) is not None
     assert disconnect_error_code("workspace.read", True) == "executionAgent.unavailable"
     assert disconnect_error_code("workspace.write", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("workspace.upsert", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("workspace.edit", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("workspace.rename", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("integration.git.clone", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("integration.git.add", True) == "executionAgent.outcomeUnknown"
@@ -281,3 +294,32 @@ async def test_dispatched_mutation_and_process_timeouts_have_unknown_outcomes() 
 
         assert exc_info.value.code == expected_code
         assert json.loads(websocket.sent[-1])["type"] == "cancel"
+
+
+@pytest.mark.parametrize("code", ["file.editTextNotFound", "file.editTextNotUnique"])
+async def test_execution_client_maps_model_edit_errors(monkeypatch, code) -> None:
+    client = ExecutionClient(
+        uuid4(),
+        uuid4(),
+        "a" * 64,
+        ".",
+        frozenset({"workspace.edit"}),
+    )
+
+    async def request(*_args, **_kwargs):
+        return ResponseMessage.model_validate(
+            {
+                "type": "response",
+                "id": uuid4(),
+                "ok": False,
+                "error": {"code": code},
+            }
+        )
+
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.request", request
+    )
+
+    with pytest.raises(ExecutionClientError) as exc_info:
+        await client.request("workspace.edit", {}, WorkspaceWriteResult)
+    assert exc_info.value.code == code
