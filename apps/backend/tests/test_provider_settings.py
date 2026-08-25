@@ -1004,6 +1004,59 @@ async def test_normal_provider_read_is_effective_and_hides_configuration(
     assert all(item["config"] == {} for item in result["providers"])
 
 
+async def test_personal_provider_read_includes_effective_selection_catalog(
+    monkeypatch,
+) -> None:
+    db = _db()
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    instance_provider = LlmProviderConfig(
+        name="Instance",
+        adapter_type="openai-compatible",
+        config={"base_url": "https://internal.example/v1"},
+    )
+    personal_provider = LlmProviderConfig(
+        name="Personal",
+        adapter_type="openai-compatible",
+        config={"base_url": "https://personal.example/v1"},
+    )
+    instance_model = ModelConfig(provider_id=instance_provider.id, model_id="instance")
+    personal_model = ModelConfig(provider_id=personal_provider.id, model_id="personal")
+    personal = UserAiSettings(
+        providers=[personal_provider],
+        models=[personal_model],
+        default_model_id=instance_model.id,
+    )
+    effective = AiSettings(
+        providers=[instance_provider, personal_provider],
+        models=[instance_model, personal_model],
+        default_model_id=instance_model.id,
+    )
+    monkeypatch.setattr(
+        provider_routes, "_load_scoped_ai", AsyncMock(return_value=(personal, user.id))
+    )
+    load_effective = AsyncMock(return_value=effective)
+    monkeypatch.setattr(provider_routes, "load_effective_ai", load_effective)
+    monkeypatch.setattr(
+        provider_routes, "load_effective_tools", AsyncMock(return_value=ToolSettings())
+    )
+
+    result = await list_providers(db, scope="personal", user=user)
+
+    assert [item["name"] for item in result["providers"]] == ["Personal"]
+    assert [item["modelId"] for item in result["models"]] == ["personal"]
+    assert result["defaultModelId"] == str(instance_model.id)
+    assert [item["name"] for item in result["availableProviders"]] == [
+        "Instance",
+        "Personal",
+    ]
+    assert [item["modelId"] for item in result["availableModels"]] == [
+        "instance",
+        "personal",
+    ]
+    assert all(item["config"] == {} for item in result["availableProviders"])
+    load_effective.assert_awaited_once_with(db, user.id)
+
+
 async def test_nonadmin_cannot_read_or_test_explicit_instance_provider(
     monkeypatch,
 ) -> None:

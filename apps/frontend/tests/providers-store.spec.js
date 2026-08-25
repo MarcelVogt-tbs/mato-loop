@@ -500,7 +500,15 @@ describe('provider store', () => {
         data: {
           enabled: true,
           providers: [{ id: 'personal-provider', name: 'Persönlich', enabled: true }],
-          models: [{ id: 'personal-model', providerId: 'personal-provider', enabled: true }]
+          models: [{ id: 'personal-model', providerId: 'personal-provider', enabled: true }],
+          availableProviders: [
+            { id: 'instance-provider', name: 'Instanz', enabled: true },
+            { id: 'personal-provider', name: 'Persönlich', enabled: true }
+          ],
+          availableModels: [
+            { id: 'instance-model', providerId: 'instance-provider', enabled: true },
+            { id: 'personal-model', providerId: 'personal-provider', enabled: true }
+          ]
         }
       })
     })
@@ -508,7 +516,9 @@ describe('provider store', () => {
     await store.fetchAll()
 
     expect(store.scope).toBe('personal')
-    expect(store.modelOptions.map((option) => option.value)).toEqual(['personal-model'])
+    expect(store.providers.map((provider) => provider.id)).toEqual(['personal-provider'])
+    expect(store.models.map((model) => model.id)).toEqual(['personal-model'])
+    expect(store.modelOptions.map((option) => option.value)).toEqual(['instance-model', 'personal-model'])
     expect(api.get).toHaveBeenCalledWith('/providers/personal-policy')
     expect(api.get).toHaveBeenCalledWith('/providers', { params: { scope: 'personal' } })
     expect(api.get).not.toHaveBeenCalledWith('/providers', { params: { scope: 'instance' } })

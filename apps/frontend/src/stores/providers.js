@@ -11,8 +11,8 @@ function assignProviderPayload(store, payload) {
   if (!payload || !Array.isArray(payload.providers) || !Array.isArray(payload.models)) return
   store.providers = payload.providers
   store.models = payload.models
-  store.availableProviders = payload.providers
-  store.availableModels = payload.models
+  store.availableProviders = payload.availableProviders ?? payload.providers
+  store.availableModels = payload.availableModels ?? payload.models
   store.defaultModelId = payload.defaultModelId ?? null
   store.compactionModelId = payload.compactionModelId ?? null
   store.titleGenerationModelId = payload.titleGenerationModelId ?? null

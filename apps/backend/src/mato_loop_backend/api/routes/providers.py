@@ -587,12 +587,22 @@ async def list_providers(
             include_configuration=False,
         )
     settings, owner_id = await _load_scoped_ai(db, scope or "instance", user)
-    return await _settings_response(
+    response = await _settings_response(
         db,
         settings,
         owner_id,
         include_configuration=user is None or user.is_admin or scope == "personal",
     )
+    if scope == "personal" and user is not None:
+        available = await _settings_response(
+            db,
+            await load_effective_ai(db, user.id),
+            user.id,
+            include_configuration=False,
+        )
+        response["availableProviders"] = available["providers"]
+        response["availableModels"] = available["models"]
+    return response
 
 
 @router.get("/personal-policy")
