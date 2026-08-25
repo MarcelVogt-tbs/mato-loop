@@ -103,11 +103,12 @@ async def test_projects_are_relative_to_probed_root() -> None:
 
 
 async def test_models_include_connected_providers_only() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/base/config/providers"
         return httpx.Response(
             200,
             json={
-                "all": [
+                "providers": [
                     {
                         "id": "openai",
                         "name": "OpenAI",
@@ -119,9 +120,7 @@ async def test_models_include_connected_providers_only() -> None:
                             }
                         },
                     },
-                    {"id": "offline", "name": "Offline", "models": {}},
                 ],
-                "connected": ["openai"],
                 "default": {},
             },
         )

@@ -526,23 +526,19 @@ class OpenCodeClient:
         return tuple(projects)
 
     async def list_models(self) -> tuple[OpenCodeModel, ...]:
-        payload = await self._json_request("GET", "/provider")
+        payload = await self._json_request("GET", "/config/providers")
         if not isinstance(payload, dict):
             raise _error("malformedResponse")
-        providers = payload.get("all")
-        connected = payload.get("connected")
-        if not isinstance(providers, list) or not isinstance(connected, list):
+        providers = payload.get("providers")
+        if not isinstance(providers, list):
             raise _error("malformedResponse")
-        if len(providers) > MAX_ITEMS or len(connected) > MAX_ITEMS:
+        if len(providers) > MAX_ITEMS:
             raise _error("responseTooLarge")
-        connected_ids = {_identifier(item) for item in connected}
         models: list[OpenCodeModel] = []
         for provider in providers:
             if not isinstance(provider, dict):
                 raise _error("malformedResponse")
             provider_id = _identifier(provider.get("id"))
-            if provider_id not in connected_ids:
-                continue
             provider_label = _string(provider.get("name"), limit=240)
             provider_models = provider.get("models")
             if not isinstance(provider_models, dict):
