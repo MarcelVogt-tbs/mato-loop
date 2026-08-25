@@ -29,7 +29,7 @@
       <div v-if="!showArchived" class="text-body2 app-muted q-mt-xs">Erstelle einen Auftrag mit mindestens einem Zeitplan.</div>
     </q-card>
     <div v-else class="row q-col-gutter-md">
-      <div v-for="automation in automations.items" :key="automation.id" class="col-12 col-lg-6">
+      <div v-for="automation in automations.items" :key="automation.id" class="col-12">
         <q-card flat class="app-surface full-height column">
           <q-card-section class="row items-start no-wrap q-gutter-md">
             <q-avatar :color="automation.effectiveState?.enabled ? 'primary' : 'grey-6'" text-color="white" icon="schedule" />
@@ -38,7 +38,7 @@
                 <div class="text-subtitle1 text-weight-bold">{{ automation.name }}</div>
                 <q-chip dense :color="stateColor(automation)" :text-color="statusTextColor(stateColor(automation))">{{ stateLabel(automation) }}</q-chip>
               </div>
-              <div class="text-body2 app-muted q-mt-xs text-pre-wrap">{{ automation.task }}</div>
+              <div class="text-body2 app-muted q-mt-xs text-pre-wrap ellipsis-3-lines">{{ automation.task }}</div>
             </div>
           </q-card-section>
           <q-card-section class="q-pt-none row q-col-gutter-sm">
