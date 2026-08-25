@@ -37,6 +37,7 @@ class ProjectPlan(Base):
     revision: Mapped[str] = mapped_column(String(64), nullable=False)
     working_directory: Mapped[str] = mapped_column(String(1000), nullable=False)
     analysis_model_key: Mapped[str] = mapped_column(String(600), nullable=False)
+    analysis_model_variant: Mapped[str | None] = mapped_column(String(300), nullable=True)
     external_session_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -83,6 +84,7 @@ class ProjectPlanExecution(Base):
     plan_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     working_directory: Mapped[str] = mapped_column(String(1000), nullable=False)
     model_key: Mapped[str] = mapped_column(String(600), nullable=False)
+    model_variant: Mapped[str | None] = mapped_column(String(300), nullable=True)
     external_session_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
     pending_permission: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.project_coding as project_coding_module
 from mato_loop_backend.agent.permissions import PermissionDecision
 from mato_loop_backend.agent.tool_arguments import CodingAnalyzeArguments
 from mato_loop_backend.agent.tools import _coding_analyze
@@ -75,7 +76,7 @@ async def test_resolve_rejects_foreign_and_incomplete_projects() -> None:
     db.assert_not_awaited()
 
 
-async def test_set_models_validates_live_catalog_before_locking(monkeypatch) -> None:
+async def test_set_models_validates_live_catalog_while_locked(monkeypatch) -> None:
     user_id = uuid4()
     project = _project(user_id)
     client = AsyncMock()
@@ -88,25 +89,131 @@ async def test_set_models_validates_live_catalog_before_locking(monkeypatch) -> 
         ProjectCodingService, "resolve", AsyncMock(return_value=_bound(client))
     )
     db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = project
 
     with pytest.raises(ProjectCodingError) as error:
         await ProjectCodingService.set_models(
-            db, user_id, project, "provider/analyze", "provider/missing"
+            db,
+            user_id,
+            project,
+            "provider/analyze",
+            None,
+            "provider/missing",
+            None,
         )
 
     assert error.value.code == "project.codingModelUnavailable"
     assert error.value.params == {"keys": ["provider/missing"]}
-    db.scalar.assert_not_awaited()
+    db.scalar.assert_awaited_once()
+    db.commit.assert_not_awaited()
+
+
+async def test_set_models_validates_variants_for_each_model(monkeypatch) -> None:
+    user_id = uuid4()
+    project = _project(user_id)
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+    client.list_models.return_value = (
+        OpenCodeModel(
+            "provider/analyze", "provider", "analyze", "Provider", "Analyze", ("high",)
+        ),
+        OpenCodeModel(
+            "provider/build", "provider", "build", "Provider", "Build", ("max",)
+        ),
+    )
+    monkeypatch.setattr(
+        ProjectCodingService, "resolve", AsyncMock(return_value=_bound(client))
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = project
+
+    with pytest.raises(ProjectCodingError) as error:
+        await ProjectCodingService.set_models(
+            db,
+            user_id,
+            project,
+            "provider/analyze",
+            "max",
+            "provider/build",
+            "max",
+        )
+
+    assert error.value.code == "project.codingModelVariantUnavailable"
+    assert error.value.params == {"field": "analysisModelVariant"}
+    db.commit.assert_not_awaited()
+
+
+async def test_binding_can_change_and_clear_before_a_plan_exists(monkeypatch) -> None:
+    user_id = uuid4()
+    project = _project(
+        user_id,
+        coding_analysis_model_key="provider/analyze",
+        coding_analysis_model_variant="high",
+        coding_execution_model_key="provider/build",
+        coding_execution_model_variant="max",
+        coding_queue_pause_reason="manual",
+    )
+    integration_id = uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [user_id, project, None, user_id, project, None]
+    monkeypatch.setattr(
+        ProjectCodingService,
+        "validate_binding",
+        AsyncMock(return_value=("project-2", "other-repo")),
+    )
+
+    changed = await ProjectCodingService.set_binding(
+        db, user_id, project, integration_id, "project-2", "other-repo"
+    )
+
+    assert changed.coding_integration_id == integration_id
+    assert changed.coding_project_key == "project-2"
+    assert changed.coding_workspace_key == "other-repo"
+    assert changed.coding_analysis_model_key is None
+    assert changed.coding_analysis_model_variant is None
+    assert changed.coding_execution_model_key is None
+    assert changed.coding_execution_model_variant is None
+    assert changed.coding_queue_pause_reason is None
+
+    cleared = await ProjectCodingService.clear_binding(db, user_id, project)
+
+    assert cleared.coding_integration_id is None
+    assert cleared.coding_project_key is None
+    assert cleared.coding_workspace_key is None
+    assert db.commit.await_count == 2
+
+
+async def test_binding_cannot_change_or_clear_after_a_plan_exists(monkeypatch) -> None:
+    user_id = uuid4()
+    project = _project(user_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [user_id, project, uuid4(), user_id, project, uuid4()]
+    validate = AsyncMock()
+    monkeypatch.setattr(ProjectCodingService, "validate_binding", validate)
+
+    with pytest.raises(ProjectCodingError) as change_error:
+        await ProjectCodingService.set_binding(
+            db, user_id, project, uuid4(), "project-2", "other-repo"
+        )
+    with pytest.raises(ProjectCodingError) as clear_error:
+        await ProjectCodingService.clear_binding(db, user_id, project)
+
+    assert change_error.value.code == "project.codingBindingImmutable"
+    assert clear_error.value.code == "project.codingBindingImmutable"
+    validate.assert_not_awaited()
+    db.commit.assert_not_awaited()
 
 
 async def test_create_plan_hashes_exact_markdown(monkeypatch) -> None:
     user_id = uuid4()
-    project = _project(user_id)
+    project = _project(user_id, coding_analysis_model_variant="high")
     client = AsyncMock()
     monkeypatch.setattr(
         ProjectCodingService, "resolve", AsyncMock(return_value=_bound(client))
     )
     db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = project
     markdown = "# Plan\n\nKeep trailing space. "
 
     plan = await ProjectCodingService.create_plan(
@@ -116,18 +223,69 @@ async def test_create_plan_hashes_exact_markdown(monkeypatch) -> None:
     assert plan.markdown == markdown
     assert plan.revision == __import__("hashlib").sha256(markdown.encode()).hexdigest()
     assert plan.working_directory == "/srv/repo"
+    assert plan.analysis_model_variant == "high"
+    assert db.scalar.await_args.args[0].get_execution_options()["populate_existing"] is True
     db.add.assert_called_once_with(plan)
     db.commit.assert_awaited_once()
 
 
-async def test_analysis_enables_only_discovered_read_tools(monkeypatch) -> None:
+async def test_create_plan_requires_a_model_before_contacting_opencode(monkeypatch) -> None:
+    user_id = uuid4()
+    project = _project(user_id, coding_analysis_model_key=None)
+    resolve = AsyncMock()
+    monkeypatch.setattr(ProjectCodingService, "resolve", resolve)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = project
+
+    with pytest.raises(ProjectCodingError) as error:
+        await ProjectCodingService.create_plan(
+            db, user_id, project, None, "Plan", "# Plan"
+        )
+
+    assert error.value.code == "project.codingAnalysisModelRequired"
+    resolve.assert_not_awaited()
+
+
+async def test_create_plan_resolves_the_locked_binding(monkeypatch) -> None:
     user_id = uuid4()
     project = _project(user_id)
+    locked = _project(
+        user_id,
+        id=project.id,
+        coding_integration_id=uuid4(),
+        coding_project_key="project-2",
+        coding_workspace_key="other-repo",
+    )
+    bound = _BoundCodingProject(
+        client=AsyncMock(),
+        config=SimpleNamespace(server_root="/srv"),
+        directory="/srv/other-repo",
+        project_key="project-2",
+        workspace_key="other-repo",
+    )
+    resolve = AsyncMock(return_value=bound)
+    monkeypatch.setattr(ProjectCodingService, "resolve", resolve)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = locked
+
+    plan = await ProjectCodingService.create_plan(
+        db, user_id, project, None, "Plan", "# Plan"
+    )
+
+    resolve.assert_awaited_once_with(db, user_id, locked)
+    assert plan.working_directory == "/srv/other-repo"
+
+
+async def test_analysis_enables_only_discovered_read_tools(monkeypatch) -> None:
+    user_id = uuid4()
+    project = _project(user_id, coding_analysis_model_variant="high")
     client = AsyncMock()
     client.__aenter__.return_value = client
     client.__aexit__.return_value = None
     client.list_models.return_value = (
-        OpenCodeModel("provider/analyze", "provider", "analyze", "Provider", "Analyze"),
+        OpenCodeModel(
+            "provider/analyze", "provider", "analyze", "Provider", "Analyze", ("high",)
+        ),
     )
     client.create_session.return_value = OpenCodeSession(
         "session-1", "Analysis", "/srv/repo"
@@ -142,13 +300,14 @@ async def test_analysis_enables_only_discovered_read_tools(monkeypatch) -> None:
     )
 
     assert result.text == "Findings"
-    assert client.send_message.await_args.args[-1] == {
+    assert client.send_message.await_args.kwargs["tools"] == {
         "*": False,
         "read": True,
         "grep": True,
         "glob": True,
         "list": True,
     }
+    assert client.send_message.await_args.kwargs["variant"] == "high"
 
 
 def test_permission_patterns_hide_absolute_paths() -> None:
@@ -159,7 +318,7 @@ def test_permission_patterns_hide_absolute_paths() -> None:
 
 async def test_enqueue_preserves_order_and_snapshots(monkeypatch) -> None:
     user_id = uuid4()
-    project = _project(user_id)
+    project = _project(user_id, coding_execution_model_variant="max")
     plan_ids = [uuid4(), uuid4()]
     plans = [
         ProjectPlan(
@@ -195,8 +354,51 @@ async def test_enqueue_preserves_order_and_snapshots(monkeypatch) -> None:
     ]
     assert all(item.working_directory == "/srv/repo" for item in executions)
     assert all(item.model_key == "provider/build" for item in executions)
+    assert all(item.model_variant == "max" for item in executions)
     db.commit.assert_awaited_once()
     wake.assert_called_once()
+
+
+async def test_execution_rejects_a_disappeared_snapshot_variant(monkeypatch) -> None:
+    user_id = uuid4()
+    project = _project(user_id)
+    execution = ProjectPlanExecution(
+        id=uuid4(),
+        project_id=project.id,
+        plan_id=uuid4(),
+        queue_position=1,
+        status="running",
+        plan_revision="r",
+        plan_snapshot="plan",
+        working_directory="/srv/repo",
+        model_key="provider/build",
+        model_variant="max",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [execution, project]
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=db)
+    session.__aexit__ = AsyncMock(return_value=None)
+    monkeypatch.setattr(project_coding_module, "AsyncSessionFactory", MagicMock(return_value=session))
+    client = AsyncMock()
+    client.list_models.return_value = (
+        OpenCodeModel("provider/build", "provider", "build", "Provider", "Build", ("high",)),
+    )
+    monkeypatch.setattr(
+        ProjectCodingService, "resolve", AsyncMock(return_value=_bound(client))
+    )
+    terminal = AsyncMock()
+    monkeypatch.setattr(CodingScheduler, "_terminal", terminal)
+
+    await CodingScheduler._execute(execution.id)
+
+    terminal.assert_awaited_once_with(
+        execution.id,
+        "failed",
+        error_code="project.codingModelVariantUnavailable",
+        pause_reason="model_unavailable",
+    )
+    client.create_session.assert_not_awaited()
 
 
 async def test_recover_marks_active_unknown_and_pauses_projects() -> None:

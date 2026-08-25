@@ -89,6 +89,7 @@ def test_protect_messages_adds_marker_instruction_only_when_needed() -> None:
     )
 
     assert protected[0]["content"].startswith("Systemvertrag\n\nHost privacy placeholders")
+    assert "Never create a new privacy placeholder" in protected[0]["content"]
     assert "anna@example.com" not in protected[1]["content"]
 
     untouched = RequestPseudonymizer().protect_messages(

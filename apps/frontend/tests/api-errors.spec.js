@@ -40,6 +40,12 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'project.notEmpty' } })).toBe(
       'Das Projekt enthält noch Sessions.'
     )
+    expect(apiErrorMessage({ error: { code: 'project.codingBindingImmutable' } })).toBe(
+      'Die OpenCode-Zuordnung kann nach dem ersten gespeicherten Plan nicht mehr geändert werden.'
+    )
+    expect(apiErrorMessage({ error: { code: 'project.codingModelVariantUnavailable' } })).toBe(
+      'Die ausgewählte OpenCode-Modellvariante ist nicht verfügbar.'
+    )
     expect(apiErrorMessage({ error: { code: 'webPush.unavailable' } })).toBe(
       'Push-Benachrichtigungen sind derzeit nicht verfügbar.'
     )

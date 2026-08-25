@@ -72,6 +72,7 @@ class OpenCodeModel:
     model_id: str
     provider_label: str
     label: str
+    variants: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +193,13 @@ def _string(
 def _identifier(value: Any, *, response: bool = True) -> str:
     result = _string(value, limit=MAX_IDENTIFIER_CHARS, response=response)
     if any(character.isspace() or character in "/\\?#" for character in result):
+        raise _error("malformedResponse" if response else "invalidRequest")
+    return result
+
+
+def _variant(value: Any, *, response: bool = True) -> str:
+    result = _string(value, limit=MAX_IDENTIFIER_CHARS, response=response)
+    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in result):
         raise _error("malformedResponse" if response else "invalidRequest")
     return result
 
@@ -553,6 +561,11 @@ class OpenCodeClient:
                     raise _error("malformedResponse")
                 opaque_key = f"{provider_id}/{model_id}"
                 parse_model_key(opaque_key)
+                raw_variants = model.get("variants", {})
+                if not isinstance(raw_variants, dict):
+                    raise _error("malformedResponse")
+                if len(raw_variants) > MAX_ITEMS:
+                    raise _error("responseTooLarge")
                 models.append(
                     OpenCodeModel(
                         key=opaque_key,
@@ -560,6 +573,7 @@ class OpenCodeClient:
                         model_id=model_id,
                         provider_label=provider_label,
                         label=_string(model.get("name"), limit=240),
+                        variants=tuple(_variant(value) for value in raw_variants),
                     )
                 )
         return tuple(models)
@@ -575,9 +589,16 @@ class OpenCodeClient:
         for item in _items(payload):
             if not isinstance(item, dict):
                 raise _error("malformedResponse")
-            entry_path = _relative_path(item.get("path"), response=True, allow_root=False)
-            name = _string(item.get("name"), limit=255)
             entry_type = item.get("type")
+            raw_path = item.get("path")
+            if (
+                entry_type == "directory"
+                and isinstance(raw_path, str)
+                and raw_path.endswith(("/", "\\"))
+            ):
+                raw_path = raw_path[:-1]
+            entry_path = _relative_path(raw_path, response=True, allow_root=False)
+            name = _string(item.get("name"), limit=255)
             ignored = item.get("ignored")
             if (
                 not entry_path.startswith(prefix)
@@ -698,6 +719,7 @@ class OpenCodeClient:
         model_key: str,
         text: str,
         tools: Mapping[str, bool] | None = None,
+        variant: str | None = None,
     ) -> OpenCodeMessageResult:
         directory = self._directory(directory)
         session_id = _identifier(session_id, response=False)
@@ -709,6 +731,8 @@ class OpenCodeClient:
             "model": {"providerID": provider_id, "modelID": model_id},
             "parts": [{"type": "text", "text": text}],
         }
+        if variant is not None:
+            body["variant"] = _variant(variant, response=False)
         if tools is not None:
             if not isinstance(tools, Mapping) or len(tools) > MAX_ITEMS:
                 raise _error("invalidRequest")

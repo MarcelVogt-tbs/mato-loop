@@ -26,11 +26,10 @@ export const useProjectStore = defineStore('projects', {
         if (revision === this.revision) this.loading = false
       }
     },
-    async create(name, instructions = '', codingService = null) {
+    async create(name, instructions = '') {
       const { data } = await api.post('/projects', {
         name,
-        instructions,
-        ...(codingService ? { codingService } : {})
+        instructions
       })
       this.revision += 1
       this.loading = false
@@ -67,6 +66,23 @@ export const useProjectStore = defineStore('projects', {
     async listCodingBindings(integrationId) {
       const { data } = await api.get(`/projects/coding/integrations/${integrationId}/projects`)
       return data.items
+    },
+    async setCodingBinding(id, binding) {
+      const { data } = await api.put(`/projects/${id}/coding/binding`, binding)
+      this.revision += 1
+      this.loading = false
+      this.items = this.items.map((project) => (
+        project.id === id ? { ...project, codingService: data } : project
+      ))
+      return data
+    },
+    async clearCodingBinding(id) {
+      await api.delete(`/projects/${id}/coding/binding`)
+      this.revision += 1
+      this.loading = false
+      this.items = this.items.map((project) => (
+        project.id === id ? { ...project, codingService: null } : project
+      ))
     }
   }
 })

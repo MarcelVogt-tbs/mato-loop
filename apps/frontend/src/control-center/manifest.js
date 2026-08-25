@@ -17,5 +17,5 @@ export function mailControlCenterAvailable(mail) {
 }
 
 export function codingControlCenterAvailable(project) {
-  return project?.codingService?.adapterType === 'opencode'
+  return Boolean(project)
 }

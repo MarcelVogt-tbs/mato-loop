@@ -9,9 +9,8 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import AgentRuntime
@@ -27,7 +26,6 @@ from mato_loop_backend.models import (
     ProjectPlanExecution,
     UserAccount,
 )
-from mato_loop_backend.project_coding import ProjectCodingError, ProjectCodingService
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 
@@ -52,29 +50,8 @@ class ProjectRequest(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
-class ProjectCodingRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    integration_id: UUID = Field(
-        validation_alias=AliasChoices("integrationId", "integration_id")
-    )
-    project_key: str = Field(
-        min_length=1,
-        max_length=300,
-        validation_alias=AliasChoices("projectKey", "project_key"),
-    )
-    workspace_key: str = Field(
-        min_length=1,
-        max_length=1000,
-        validation_alias=AliasChoices("workspaceKey", "workspace_key"),
-    )
-
-
 class ProjectCreateRequest(ProjectRequest):
-    coding_service: ProjectCodingRequest | None = Field(
-        default=None,
-        validation_alias=AliasChoices("codingService", "coding_service"),
-    )
+    pass
 
 
 class ProjectResponse(BaseModel):
@@ -110,7 +87,9 @@ def _payload(project: Project, session_count: int) -> ProjectResponse:
                 "projectKey": project.coding_project_key,
                 "workspaceKey": project.coding_workspace_key,
                 "analysisModelKey": project.coding_analysis_model_key,
+                "analysisModelVariant": project.coding_analysis_model_variant,
                 "executionModelKey": project.coding_execution_model_key,
+                "executionModelVariant": project.coding_execution_model_variant,
                 "queuePauseReason": project.coding_queue_pause_reason,
             }
             if project.coding_integration_id is not None
@@ -224,47 +203,13 @@ async def create_project(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ProjectResponse:
-    coding_binding: tuple[str, str] | None = None
-    if payload.coding_service is not None:
-        await db.scalar(
-            select(UserAccount.id)
-            .where(UserAccount.id == user.id)
-            .with_for_update()
-        )
-        try:
-            coding_binding = await ProjectCodingService.validate_binding(
-                db,
-                user.id,
-                payload.coding_service.integration_id,
-                payload.coding_service.project_key,
-                payload.coding_service.workspace_key,
-            )
-        except ProjectCodingError as exc:
-            raise ApiError(
-                404 if exc.code == "integration.notFound" else 409,
-                exc.code,
-                params=exc.params,
-            ) from exc
     project = Project(
         user_id=user.id,
         name=payload.name,
         instructions=payload.instructions,
-        coding_integration_id=(
-            payload.coding_service.integration_id
-            if payload.coding_service is not None
-            else None
-        ),
-        coding_project_key=coding_binding[0] if coding_binding is not None else None,
-        coding_workspace_key=coding_binding[1] if coding_binding is not None else None,
     )
     db.add(project)
-    try:
-        await db.commit()
-    except IntegrityError as exc:
-        await db.rollback()
-        if payload.coding_service is not None:
-            raise ApiError(409, "project.codingWorkspaceAlreadyBound") from exc
-        raise
+    await db.commit()
     return _payload(project, 0)
 
 

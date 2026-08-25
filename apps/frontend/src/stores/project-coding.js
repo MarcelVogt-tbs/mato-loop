@@ -4,10 +4,13 @@ import { api } from 'src/boot/axios'
 function initialState() {
   return {
     projectId: null,
+    contextVersion: 0,
     models: [],
     modelLoadVersion: 0,
     analysisModelKey: null,
+    analysisModelVariant: null,
     executionModelKey: null,
+    executionModelVariant: null,
     currentPath: '.',
     fileLoadVersion: 0,
     files: [],
@@ -16,6 +19,7 @@ function initialState() {
     plans: [],
     executions: [],
     executionLoadVersion: 0,
+    refreshVersion: 0,
     queuePauseReason: null,
     pending: 0,
     loaded: false,
@@ -31,16 +35,24 @@ export const useProjectCodingStore = defineStore('project-coding', {
   actions: {
     selectProject(projectId) {
       if (this.projectId === projectId) return
-      Object.assign(this, initialState(), { projectId })
+      this.resetProject(projectId)
+    },
+    resetProject(projectId = this.projectId) {
+      const contextVersion = this.contextVersion + 1
+      Object.assign(this, initialState(), { projectId, contextVersion })
     },
     async request(callback, { suppressErrorToast = false } = {}) {
       const projectId = this.projectId
+      const contextVersion = this.contextVersion
       if (!projectId) return null
       this.pending += 1
       try {
-        return await callback(projectId, suppressErrorToast ? { suppressErrorToast: true } : undefined)
+        const result = await callback(projectId, suppressErrorToast ? { suppressErrorToast: true } : undefined)
+        return this.projectId === projectId && this.contextVersion === contextVersion ? result : null
       } finally {
-        if (this.projectId === projectId) this.pending = Math.max(0, this.pending - 1)
+        if (this.projectId === projectId && this.contextVersion === contextVersion) {
+          this.pending = Math.max(0, this.pending - 1)
+        }
       }
     },
     async loadModels(options) {
@@ -50,20 +62,26 @@ export const useProjectCodingStore = defineStore('project-coding', {
       if (data && this.projectId === projectId && this.modelLoadVersion === loadVersion) {
         this.models = data.items
         this.analysisModelKey = data.analysisModelKey
+        this.analysisModelVariant = data.analysisModelVariant ?? null
         this.executionModelKey = data.executionModelKey
+        this.executionModelVariant = data.executionModelVariant ?? null
       }
       return data
     },
-    async saveModels(analysisModelKey, executionModelKey) {
+    async saveModels(analysisModelKey, analysisModelVariant, executionModelKey, executionModelVariant) {
       const projectId = this.projectId
       const loadVersion = ++this.modelLoadVersion
       const data = await this.request(async (id) => (await api.put(`/projects/${id}/coding/models`, {
         analysisModelKey,
-        executionModelKey
+        analysisModelVariant,
+        executionModelKey,
+        executionModelVariant
       })).data)
       if (data && this.projectId === projectId && this.modelLoadVersion === loadVersion) {
         this.analysisModelKey = data.analysisModelKey
+        this.analysisModelVariant = data.analysisModelVariant ?? null
         this.executionModelKey = data.executionModelKey
+        this.executionModelVariant = data.executionModelVariant ?? null
       }
       return data
     },
@@ -152,6 +170,8 @@ export const useProjectCodingStore = defineStore('project-coding', {
       return this.loadExecutions()
     },
     async refresh({ quiet = false } = {}) {
+      const contextVersion = this.contextVersion
+      const refreshVersion = ++this.refreshVersion
       const options = quiet
         ? { suppressErrorToast: true, preserveContent: true }
         : { preserveContent: true }
@@ -164,9 +184,13 @@ export const useProjectCodingStore = defineStore('project-coding', {
           this.loadPlans(options),
           this.loadExecutions(options)
         ])
-        this.loaded = true
+        if (this.contextVersion === contextVersion && this.refreshVersion === refreshVersion) {
+          this.loaded = true
+        }
       } catch (error) {
-        this.loadFailed = true
+        if (this.contextVersion === contextVersion && this.refreshVersion === refreshVersion) {
+          this.loadFailed = true
+        }
         throw error
       }
     }

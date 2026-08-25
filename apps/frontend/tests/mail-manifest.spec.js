@@ -21,9 +21,10 @@ describe('mail Control Center manifest', () => {
     expect(mailControlCenterAvailable({ accountsLoaded: true, accounts: [{ id: '1' }] })).toBe(true)
   })
 
-  it('offers OpenCode only for a bound project', () => {
+  it('offers OpenCode for every selected project', () => {
     expect(controlCenterIntegrationIds.has('coding')).toBe(true)
     expect(codingControlCenterAvailable(null)).toBe(false)
+    expect(codingControlCenterAvailable({ codingService: null })).toBe(true)
     expect(codingControlCenterAvailable({ codingService: { adapterType: 'opencode' } })).toBe(true)
   })
 })

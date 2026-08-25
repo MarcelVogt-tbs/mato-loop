@@ -117,6 +117,15 @@ async def test_models_include_connected_providers_only() -> None:
                                 "id": "team/gpt-5",
                                 "providerID": "openai",
                                 "name": "GPT 5",
+                                "variants": {
+                                    "low": {"reasoningEffort": "low"},
+                                    "high": {"reasoningEffort": "high"},
+                                },
+                            },
+                            "plain": {
+                                "id": "plain",
+                                "providerID": "openai",
+                                "name": "Plain",
                             }
                         },
                     },
@@ -127,8 +136,11 @@ async def test_models_include_connected_providers_only() -> None:
 
     async with _client(handler) as client:
         models = await client.list_models()
-    assert len(models) == 1
+    assert len(models) == 2
     assert models[0].key == "openai/team/gpt-5"
+    assert models[0].variants == ("low", "high")
+    assert models[1].variants == ()
+    assert not hasattr(models[0], "reasoningEffort")
     assert OpenCodeClient.parse_model_key(models[0].key) == ("openai", "team/gpt-5")
     with pytest.raises(OpenCodeError):
         OpenCodeClient.parse_model_key("missing-separator")
@@ -143,6 +155,13 @@ async def test_file_requests_are_scoped_and_paths_are_contained() -> None:
             200,
             json=[
                 {
+                    "name": ".git",
+                    "path": ".git/",
+                    "absolute": "/srv/code/.git",
+                    "type": "directory",
+                    "ignored": False,
+                },
+                {
                     "name": "main.py",
                     "path": "src/main.py",
                     "absolute": "/srv/code/src/main.py",
@@ -153,10 +172,10 @@ async def test_file_requests_are_scoped_and_paths_are_contained() -> None:
         )
 
     async with _client(handler) as client:
-        entries = await client.list_files("/srv/code", "src")
-    assert dict(requests[0].url.params) == {"directory": "/srv/code", "path": "src"}
-    assert entries[0].path == "src/main.py"
-    assert not hasattr(entries[0], "absolute")
+        entries = await client.list_files("/srv/code", ".")
+    assert dict(requests[0].url.params) == {"directory": "/srv/code", "path": "."}
+    assert [entry.path for entry in entries] == [".git", "src/main.py"]
+    assert not hasattr(entries[1], "absolute")
 
     def escape_handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -208,11 +227,10 @@ async def test_file_content_requires_bounded_strict_base64() -> None:
 
 
 async def test_session_message_payload_and_result() -> None:
-    request_seen: httpx.Request | None = None
+    requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal request_seen
-        request_seen = request
+        requests.append(request)
         return httpx.Response(
             200,
             json={
@@ -233,15 +251,20 @@ async def test_session_message_payload_and_result() -> None:
             "openai/team/gpt-5",
             "Write a plan",
             {"bash": False, "edit": False},
+            "high",
         )
-    assert request_seen is not None
-    assert dict(request_seen.url.params) == {"directory": "/srv/code"}
-    assert json.loads(request_seen.content) == {
+        await client.send_message(
+            "/srv/code", "session-2", "plan", "openai/team/gpt-5", "Default"
+        )
+    assert dict(requests[0].url.params) == {"directory": "/srv/code"}
+    assert json.loads(requests[0].content) == {
         "agent": "plan",
         "model": {"providerID": "openai", "modelID": "team/gpt-5"},
         "parts": [{"type": "text", "text": "Write a plan"}],
         "tools": {"bash": False, "edit": False},
+        "variant": "high",
     }
+    assert "variant" not in json.loads(requests[1].content)
     assert result.text == "First second"
     assert result.error is None
 

@@ -5,11 +5,12 @@ Status: implemented in August 2026. This file is retained as an implementation r
 ## Implemented Contract
 
 - Projects remain optional owner-bound session groups; standalone sessions are supported.
-- A project can receive one immutable personal OpenCode binding at creation.
+- A project can connect one personal OpenCode binding from the Control Center.
+- The binding may change or disconnect until the first plan is saved; changing it clears model selection and queue pause state.
 - The binding stores an integration ID plus opaque remote project and relative workspace identities. Remote absolute roots stay backend-only.
-- Analysis and execution use separately selected live-discovered OpenCode models without fallback.
+- Analysis and execution use separately selected live-discovered OpenCode models and optional model-advertised variants without fallback.
 - OpenCode performs read-only repository analysis. The MatoLoop agent authors the canonical persistent Markdown plan.
-- Enqueueing snapshots exact plan text, revision, model, and working directory.
+- Plan creation snapshots the configured analysis model and variant; enqueueing snapshots exact plan text, revision, execution model, variant, and working directory.
 - Persistent execution records run in per-project FIFO order with one active execution per project.
 - Existing external OpenCode activity pauses the queue. Restart and uncertain post-dispatch failures become `outcome_unknown` and are not replayed automatically.
 - Remote permission requests are shown with `once`, `always`, and `reject`; cancellation is best effort.

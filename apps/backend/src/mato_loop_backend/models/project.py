@@ -40,7 +40,9 @@ class Project(Base):
     coding_project_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
     coding_workspace_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     coding_analysis_model_key: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    coding_analysis_model_variant: Mapped[str | None] = mapped_column(String(300), nullable=True)
     coding_execution_model_key: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    coding_execution_model_variant: Mapped[str | None] = mapped_column(String(300), nullable=True)
     coding_queue_pause_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

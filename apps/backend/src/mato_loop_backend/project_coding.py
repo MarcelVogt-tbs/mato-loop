@@ -13,6 +13,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -68,6 +69,7 @@ class CodingModelOption:
     key: str
     label: str
     provider_label: str
+    variants: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +154,23 @@ def _model_key(value: str, field: str) -> str:
     return value
 
 
+def _model_variant(value: str | None, field: str) -> str | None:
+    if value is None:
+        return None
+    value = _bounded(value, field, 300, empty=False)
+    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
+        raise ProjectCodingError("validation.invalid", {"field": field})
+    return value
+
+
+def _require_variant(model: Any, variant: str | None, field: str | None = None) -> None:
+    if variant is not None and variant not in model.variants:
+        raise ProjectCodingError(
+            "project.codingModelVariantUnavailable",
+            {"field": field} if field is not None else None,
+        )
+
+
 def _directory(root: str, workspace_key: str) -> str:
     if workspace_key == ".":
         return root
@@ -165,6 +184,7 @@ def _model_options(models: Sequence[Any]) -> tuple[CodingModelOption, ...]:
             key=model.key,
             label=model.label,
             provider_label=model.provider_label,
+            variants=model.variants,
         )
         for model in models
     )
@@ -253,6 +273,105 @@ class ProjectCodingService:
             raise ProjectCodingError("project.codingBindingInvalid")
         return matches[0].project_key, matches[0].workspace_key
 
+    @staticmethod
+    async def _binding_has_plans(db: AsyncSession, project_id: UUID) -> bool:
+        return (
+            await db.scalar(
+                select(ProjectPlan.id)
+                .where(ProjectPlan.project_id == project_id)
+                .limit(1)
+            )
+            is not None
+        )
+
+    @staticmethod
+    async def _lock_project(
+        db: AsyncSession, user_id: UUID, project_id: UUID
+    ) -> Project | None:
+        return await db.scalar(
+            select(Project)
+            .where(Project.id == project_id, Project.user_id == user_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+
+    @classmethod
+    async def set_binding(
+        cls,
+        db: AsyncSession,
+        user_id: UUID,
+        project: Project,
+        integration_id: UUID,
+        project_key: str,
+        workspace_key: str,
+    ) -> Project:
+        if project.user_id != user_id:
+            raise ProjectCodingError("project.notFound")
+        await db.scalar(
+            select(UserAccount.id)
+            .where(UserAccount.id == user_id)
+            .with_for_update()
+        )
+        locked = await cls._lock_project(db, user_id, project.id)
+        if locked is None:
+            raise ProjectCodingError("project.notFound")
+        current = (
+            locked.coding_integration_id,
+            locked.coding_project_key,
+            locked.coding_workspace_key,
+        )
+        requested = (integration_id, project_key, workspace_key)
+        if current == requested:
+            return locked
+        if await cls._binding_has_plans(db, project.id):
+            raise ProjectCodingError("project.codingBindingImmutable")
+        project_key, workspace_key = await cls.validate_binding(
+            db, user_id, integration_id, project_key, workspace_key
+        )
+        locked.coding_integration_id = integration_id
+        locked.coding_project_key = project_key
+        locked.coding_workspace_key = workspace_key
+        locked.coding_analysis_model_key = None
+        locked.coding_analysis_model_variant = None
+        locked.coding_execution_model_key = None
+        locked.coding_execution_model_variant = None
+        locked.coding_queue_pause_reason = None
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            raise ProjectCodingError("project.codingWorkspaceAlreadyBound") from exc
+        return locked
+
+    @classmethod
+    async def clear_binding(
+        cls, db: AsyncSession, user_id: UUID, project: Project
+    ) -> Project:
+        if project.user_id != user_id:
+            raise ProjectCodingError("project.notFound")
+        await db.scalar(
+            select(UserAccount.id)
+            .where(UserAccount.id == user_id)
+            .with_for_update()
+        )
+        locked = await cls._lock_project(db, user_id, project.id)
+        if locked is None:
+            raise ProjectCodingError("project.notFound")
+        if locked.coding_integration_id is None:
+            return locked
+        if await cls._binding_has_plans(db, project.id):
+            raise ProjectCodingError("project.codingBindingImmutable")
+        locked.coding_integration_id = None
+        locked.coding_project_key = None
+        locked.coding_workspace_key = None
+        locked.coding_analysis_model_key = None
+        locked.coding_analysis_model_variant = None
+        locked.coding_execution_model_key = None
+        locked.coding_execution_model_variant = None
+        locked.coding_queue_pause_reason = None
+        await db.commit()
+        return locked
+
     @classmethod
     async def resolve(
         cls, db: AsyncSession, user_id: UUID, project: Project
@@ -317,14 +436,27 @@ class ProjectCodingService:
         user_id: UUID,
         project: Project,
         analysis_model_key: str,
+        analysis_model_variant: str | None,
         execution_model_key: str,
+        execution_model_variant: str | None,
     ) -> Project:
         analysis_model_key = _model_key(analysis_model_key, "analysisModelKey")
+        analysis_model_variant = _model_variant(
+            analysis_model_variant, "analysisModelVariant"
+        )
         execution_model_key = _model_key(execution_model_key, "executionModelKey")
-        bound = await cls.resolve(db, user_id, project)
+        execution_model_variant = _model_variant(
+            execution_model_variant, "executionModelVariant"
+        )
+        locked = await cls._lock_project(db, user_id, project.id)
+        if locked is None:
+            raise ProjectCodingError("project.notFound")
+        bound = await cls.resolve(db, user_id, locked)
         try:
             async with bound.client:
-                available = {model.key for model in await bound.client.list_models()}
+                available = {
+                    model.key: model for model in await bound.client.list_models()
+                }
         except OpenCodeError as exc:
             _raise_external(exc)
         missing = [
@@ -334,21 +466,18 @@ class ProjectCodingService:
         ]
         if missing:
             raise ProjectCodingError("project.codingModelUnavailable", {"keys": missing})
-        locked = await db.scalar(
-            select(Project)
-            .where(Project.id == project.id, Project.user_id == user_id)
-            .with_for_update()
+        _require_variant(
+            available[analysis_model_key], analysis_model_variant, "analysisModelVariant"
         )
-        if locked is None:
-            raise ProjectCodingError("project.notFound")
-        if (
-            locked.coding_integration_id != project.coding_integration_id
-            or locked.coding_project_key != bound.project_key
-            or locked.coding_workspace_key != bound.workspace_key
-        ):
-            raise ProjectCodingError("project.codingBindingChanged")
+        _require_variant(
+            available[execution_model_key],
+            execution_model_variant,
+            "executionModelVariant",
+        )
         locked.coding_analysis_model_key = analysis_model_key
+        locked.coding_analysis_model_variant = analysis_model_variant
         locked.coding_execution_model_key = execution_model_key
+        locked.coding_execution_model_variant = execution_model_variant
         await db.commit()
         return locked
 
@@ -439,9 +568,13 @@ class ProjectCodingService:
         )
         try:
             async with bound.client:
-                models = {model.key for model in await bound.client.list_models()}
-                if project.coding_analysis_model_key not in models:
+                models = {
+                    model.key: model for model in await bound.client.list_models()
+                }
+                model = models.get(project.coding_analysis_model_key)
+                if model is None:
                     raise ProjectCodingError("project.codingModelUnavailable")
+                _require_variant(model, project.coding_analysis_model_variant)
                 session = await bound.client.create_session(
                     bound.directory, f"[MatoLoop Analyse] {title}"
                 )
@@ -451,7 +584,8 @@ class ProjectCodingService:
                     "plan",
                     project.coding_analysis_model_key,
                     prompt,
-                    _READ_ONLY_TOOLS,
+                    tools=_READ_ONLY_TOOLS,
+                    variant=project.coding_analysis_model_variant,
                 )
         except OpenCodeError as exc:
             _raise_external(exc)
@@ -483,6 +617,11 @@ class ProjectCodingService:
             )
         if project.user_id != user_id:
             raise ProjectCodingError("project.notFound")
+        locked = await cls._lock_project(db, user_id, project.id)
+        if locked is None:
+            raise ProjectCodingError("project.notFound")
+        if not locked.coding_analysis_model_key:
+            raise ProjectCodingError("project.codingAnalysisModelRequired")
         if originating_session_id is not None:
             session_id = await db.scalar(
                 select(ChatSession.id).where(
@@ -494,9 +633,7 @@ class ProjectCodingService:
             )
             if session_id is None:
                 raise ProjectCodingError("session.notFound")
-        if not project.coding_analysis_model_key:
-            raise ProjectCodingError("project.codingAnalysisModelRequired")
-        bound = await cls.resolve(db, user_id, project)
+        bound = await cls.resolve(db, user_id, locked)
         await bound.client.aclose()
         plan = ProjectPlan(
             project_id=project.id,
@@ -505,7 +642,8 @@ class ProjectCodingService:
             markdown=markdown,
             revision=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
             working_directory=bound.directory,
-            analysis_model_key=project.coding_analysis_model_key,
+            analysis_model_key=locked.coding_analysis_model_key,
+            analysis_model_variant=locked.coding_analysis_model_variant,
             external_session_id=external_session_id,
         )
         db.add(plan)
@@ -538,25 +676,13 @@ class ProjectCodingService:
     ) -> tuple[ProjectPlanExecution, ...]:
         if not plan_ids or len(plan_ids) != len(set(plan_ids)):
             raise ProjectCodingError("validation.invalid", {"field": "planIds"})
-        if not project.coding_execution_model_key:
-            raise ProjectCodingError("project.codingExecutionModelRequired")
-        bound = await cls.resolve(db, user_id, project)
-        await bound.client.aclose()
-        locked = await db.scalar(
-            select(Project)
-            .where(Project.id == project.id, Project.user_id == user_id)
-            .with_for_update()
-        )
+        locked = await cls._lock_project(db, user_id, project.id)
         if locked is None:
             raise ProjectCodingError("project.notFound")
-        if (
-            locked.coding_integration_id != project.coding_integration_id
-            or locked.coding_project_key != bound.project_key
-            or locked.coding_workspace_key != bound.workspace_key
-        ):
-            raise ProjectCodingError("project.codingBindingChanged")
         if not locked.coding_execution_model_key:
             raise ProjectCodingError("project.codingExecutionModelRequired")
+        bound = await cls.resolve(db, user_id, locked)
+        await bound.client.aclose()
         plans = list(
             (
                 await db.scalars(
@@ -584,6 +710,7 @@ class ProjectCodingService:
                 plan_snapshot=by_id[plan_id].markdown,
                 working_directory=bound.directory,
                 model_key=locked.coding_execution_model_key,
+                model_variant=locked.coding_execution_model_variant,
             )
             for index, plan_id in enumerate(plan_ids, start=1)
         ]
@@ -608,34 +735,27 @@ class ProjectCodingService:
             ).all()
         )
 
-    @staticmethod
+    @classmethod
     async def pause(
+        cls,
         db: AsyncSession,
         user_id: UUID,
         project: Project,
         reason: str = "manual",
     ) -> Project:
         reason = _bounded(reason, "reason", 80, empty=False)
-        locked = await db.scalar(
-            select(Project)
-            .where(Project.id == project.id, Project.user_id == user_id)
-            .with_for_update()
-        )
+        locked = await cls._lock_project(db, user_id, project.id)
         if locked is None:
             raise ProjectCodingError("project.notFound")
         locked.coding_queue_pause_reason = reason
         await db.commit()
         return locked
 
-    @staticmethod
+    @classmethod
     async def resume(
-        db: AsyncSession, user_id: UUID, project: Project
+        cls, db: AsyncSession, user_id: UUID, project: Project
     ) -> Project:
-        locked = await db.scalar(
-            select(Project)
-            .where(Project.id == project.id, Project.user_id == user_id)
-            .with_for_update()
-        )
+        locked = await cls._lock_project(db, user_id, project.id)
         if locked is None:
             raise ProjectCodingError("project.notFound")
         locked.coding_queue_pause_reason = None
@@ -1018,6 +1138,7 @@ class CodingScheduler:
                 if execution is None or project is None or execution.status != "running":
                     return
                 model_key = execution.model_key
+                model_variant = execution.model_variant
                 directory = execution.working_directory
                 plan = execution.plan_snapshot
                 bound = await ProjectCodingService.resolve(db, project.user_id, project)
@@ -1029,12 +1150,23 @@ class CodingScheduler:
                     pause_reason="binding_changed",
                 )
                 return
-            models = {model.key for model in await bound.client.list_models()}
-            if model_key not in models:
+            models = {model.key: model for model in await bound.client.list_models()}
+            model = models.get(model_key)
+            if model is None:
                 await cls._terminal(
                     execution_id,
                     "failed",
                     error_code="project.codingModelUnavailable",
+                    pause_reason="model_unavailable",
+                )
+                return
+            try:
+                _require_variant(model, model_variant)
+            except ProjectCodingError:
+                await cls._terminal(
+                    execution_id,
+                    "failed",
+                    error_code="project.codingModelVariantUnavailable",
                     pause_reason="model_unavailable",
                 )
                 return
@@ -1102,7 +1234,12 @@ class CodingScheduler:
             )
             send = asyncio.create_task(
                 bound.client.send_message(
-                    directory, session_id, "build", model_key, prompt
+                    directory,
+                    session_id,
+                    "build",
+                    model_key,
+                    prompt,
+                    variant=model_variant,
                 )
             )
             done, _pending = await asyncio.wait(

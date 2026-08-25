@@ -171,7 +171,7 @@ const closedIntegrations = computed(() => controlCenterIntegrations.filter(
   (item) => !controlCenter.tabs.some((tab) => tab.appId === item.id)
 ))
 const activeProject = computed(() => projects.items.find(
-  (project) => project.id === (chat.current?.projectId || chat.sessionsProjectId)
+  (project) => project.id === (chat.current ? chat.current.projectId : chat.sessionsProjectId)
 ))
 const launcherIntegrations = computed(() => closedIntegrations.value.filter((item) => (
   (item.id !== 'mail' || mailControlCenterAvailable(mail))

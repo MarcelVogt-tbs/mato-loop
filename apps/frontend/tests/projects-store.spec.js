@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
-  api: { delete: vi.fn(), get: vi.fn(), patch: vi.fn(), post: vi.fn() }
+  api: { delete: vi.fn(), get: vi.fn(), patch: vi.fn(), post: vi.fn(), put: vi.fn() }
 }))
 
 vi.mock('src/boot/axios', () => ({ api }))
@@ -78,26 +78,47 @@ describe('projects store', () => {
     expect(store.items).toEqual([])
   })
 
-  it('creates an immutable coding binding and discovers OpenCode projects', async () => {
+  it('discovers, sets, and clears an OpenCode binding', async () => {
     const codingService = {
+      adapterType: 'opencode',
       integrationId: 'integration-1',
       projectKey: 'remote-project',
       workspaceKey: 'repo'
     }
-    api.post.mockResolvedValue({ data: { ...project, codingService } })
     api.get.mockResolvedValue({ data: { items: [{ ...codingService, label: 'Repository' }] } })
     const store = useProjectStore()
+    store.items = [project]
+    api.put.mockResolvedValue({ data: codingService })
+    api.delete.mockResolvedValue({})
 
-    await store.create(project.name, project.instructions, codingService)
     const bindings = await store.listCodingBindings('integration-1')
+    await store.setCodingBinding(project.id, codingService)
 
-    expect(api.post).toHaveBeenCalledWith('/projects', {
-      name: project.name,
-      instructions: project.instructions,
-      codingService
-    })
     expect(api.get).toHaveBeenCalledWith('/projects/coding/integrations/integration-1/projects')
+    expect(api.put).toHaveBeenCalledWith('/projects/project-1/coding/binding', codingService)
     expect(bindings[0].workspaceKey).toBe('repo')
+    expect(store.items[0].codingService).toEqual(codingService)
+
+    await store.clearCodingBinding(project.id)
+
+    expect(api.delete).toHaveBeenCalledWith('/projects/project-1/coding/binding')
+    expect(store.items[0].codingService).toBe(null)
+  })
+
+  it('does not let a pending project list overwrite a binding change', async () => {
+    let resolveLoad
+    api.get.mockReturnValue(new Promise((resolve) => { resolveLoad = resolve }))
+    const codingService = { adapterType: 'opencode', integrationId: 'integration-1', projectKey: 'remote', workspaceKey: 'repo' }
+    api.put.mockResolvedValue({ data: codingService })
+    const store = useProjectStore()
+    store.items = [project]
+    const load = store.fetchAll()
+
+    await store.setCodingBinding(project.id, codingService)
+    resolveLoad({ data: { items: [project] } })
+    await load
+
+    expect(store.items[0].codingService).toEqual(codingService)
   })
 
   it('loads deletion impact and passes automation parameters when deleting', async () => {

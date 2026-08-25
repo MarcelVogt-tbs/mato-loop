@@ -146,7 +146,9 @@ def _analyze(text: str) -> list[RecognizerResult]:
 class RequestPseudonymizer:
     _marker_instruction = (
         "Host privacy placeholders are opaque values. Copy every placeholder exactly and "
-        "unchanged in answers and tool arguments; never interpret, abbreviate, or reformat it."
+        "unchanged in answers and tool arguments; never interpret, abbreviate, or reformat it. "
+        "Never create a new privacy placeholder. Only use placeholders that already appear "
+        "in the input."
     )
 
     def __init__(self) -> None:

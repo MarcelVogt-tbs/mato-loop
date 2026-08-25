@@ -85,11 +85,27 @@ def test_project_fields_are_trimmed_and_bounded() -> None:
         ProjectRequest(name="x" * 241)
     with pytest.raises(ValidationError):
         ProjectRequest(name="Work", instructions="x" * 4001)
+    with pytest.raises(ValidationError):
+        ProjectCreateRequest(
+            name="Work",
+            codingService={
+                "integrationId": str(uuid4()),
+                "projectKey": "project-1",
+                "workspaceKey": "repo",
+            },
+        )
 
 
 async def test_project_list_is_owner_scoped_and_counts_sessions() -> None:
     user = _user()
     project = _project(user.id)
+    project.coding_integration_id = uuid4()
+    project.coding_project_key = "project-1"
+    project.coding_workspace_key = "repo"
+    project.coding_analysis_model_key = "provider/analyze"
+    project.coding_analysis_model_variant = "high"
+    project.coding_execution_model_key = "provider/build"
+    project.coding_execution_model_variant = "max"
     result = MagicMock()
     result.all.return_value = [(project, 3)]
     db = AsyncMock(spec=AsyncSession)
@@ -98,6 +114,8 @@ async def test_project_list_is_owner_scoped_and_counts_sessions() -> None:
     response = await list_projects(user, db)
 
     assert response.items[0].session_count == 3
+    assert response.items[0].coding_service["analysisModelVariant"] == "high"
+    assert response.items[0].coding_service["executionModelVariant"] == "max"
     statement = db.execute.await_args.args[0]
     assert user.id in statement.compile().params.values()
     assert "LEFT OUTER JOIN chat_sessions" in str(statement)
@@ -129,6 +147,7 @@ async def test_create_and_update_project_commit_owner_scoped_changes() -> None:
 
     assert created.name == "New"
     assert created.instructions == "Use Python."
+    assert created.coding_service is None
     assert updated.name == "Renamed"
     assert updated.instructions == "Be concise."
     assert updated.session_count == 2

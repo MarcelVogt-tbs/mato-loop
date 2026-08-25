@@ -34,7 +34,9 @@ def _project(user_id) -> Project:
         coding_project_key="remote-project",
         coding_workspace_key="repo",
         coding_analysis_model_key="provider/analyze",
+        coding_analysis_model_variant="high",
         coding_execution_model_key="provider/build",
+        coding_execution_model_variant="max",
         coding_queue_pause_reason="manual",
     )
 
@@ -63,6 +65,103 @@ def test_project_endpoint_checks_ownership_before_service(monkeypatch) -> None:
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "project.notFound"
     service.assert_not_awaited()
+
+
+def test_project_binding_can_be_set_and_cleared(monkeypatch) -> None:
+    user = _user()
+    project = _project(user.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = project
+    set_service = AsyncMock(return_value=project)
+    clear_service = AsyncMock(return_value=project)
+    monkeypatch.setattr(ProjectCodingService, "set_binding", set_service)
+    monkeypatch.setattr(ProjectCodingService, "clear_binding", clear_service)
+    client = _client(user, db)
+
+    response = client.put(
+        f"/projects/{project.id}/coding/binding",
+        json={
+            "integrationId": str(project.coding_integration_id),
+            "projectKey": project.coding_project_key,
+            "workspaceKey": project.coding_workspace_key,
+        },
+    )
+    cleared = client.delete(f"/projects/{project.id}/coding/binding")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "adapterType": "opencode",
+        "integrationId": str(project.coding_integration_id),
+        "projectKey": "remote-project",
+        "workspaceKey": "repo",
+        "analysisModelKey": "provider/analyze",
+        "analysisModelVariant": "high",
+        "executionModelKey": "provider/build",
+        "executionModelVariant": "max",
+        "queuePauseReason": "manual",
+    }
+    assert cleared.status_code == 204
+    set_service.assert_awaited_once()
+    clear_service.assert_awaited_once()
+
+
+def test_model_catalog_and_selection_include_variants(monkeypatch) -> None:
+    user = _user()
+    project = _project(user.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = project
+    list_service = AsyncMock(
+        return_value=(
+            routes.CodingModelOption(
+                "provider/analyze", "Analyze", "Provider", ("low", "high")
+            ),
+        )
+    )
+    async def set_models(
+        _db,
+        _user_id,
+        item,
+        analysis_model_key,
+        analysis_model_variant,
+        execution_model_key,
+        execution_model_variant,
+    ):
+        item.coding_analysis_model_key = analysis_model_key
+        item.coding_analysis_model_variant = analysis_model_variant
+        item.coding_execution_model_key = execution_model_key
+        item.coding_execution_model_variant = execution_model_variant
+        return item
+
+    set_service = AsyncMock(side_effect=set_models)
+    monkeypatch.setattr(ProjectCodingService, "list_models", list_service)
+    monkeypatch.setattr(ProjectCodingService, "set_models", set_service)
+    client = _client(user, db)
+
+    catalog = client.get(f"/projects/{project.id}/coding/models")
+    selection = client.put(
+        f"/projects/{project.id}/coding/models",
+        json={
+            "analysisModelKey": "provider/analyze",
+            "analysisModelVariant": "high",
+            "executionModelKey": "provider/build",
+            "executionModelVariant": None,
+        },
+    )
+
+    assert catalog.status_code == 200
+    assert catalog.json()["items"][0]["variants"] == ["low", "high"]
+    assert catalog.json()["analysisModelVariant"] == "high"
+    assert selection.status_code == 200
+    assert selection.json()["executionModelVariant"] is None
+    set_service.assert_awaited_once_with(
+        db,
+        user.id,
+        project,
+        "provider/analyze",
+        "high",
+        "provider/build",
+        None,
+    )
 
 
 @pytest.mark.parametrize(
@@ -104,6 +203,7 @@ def test_plan_and_execution_payloads_do_not_expose_internal_fields(monkeypatch) 
         revision="secret-revision",
         working_directory="/srv/private/repo",
         analysis_model_key="provider/analyze",
+        analysis_model_variant="high",
         created_at=now,
         updated_at=now,
     )
@@ -117,6 +217,7 @@ def test_plan_and_execution_payloads_do_not_expose_internal_fields(monkeypatch) 
         plan_snapshot="secret snapshot",
         working_directory="/srv/private/repo",
         model_key="provider/build",
+        model_variant="max",
         pending_permission={
             "id": "permission-1",
             "title": "Shell",
@@ -146,7 +247,9 @@ def test_plan_and_execution_payloads_do_not_expose_internal_fields(monkeypatch) 
     serialized = str((plan_payload, execution_payload))
 
     assert plan_payload["items"][0]["workspaceKey"] == "repo"
+    assert plan_payload["items"][0]["analysisModelVariant"] == "high"
     assert execution_payload["queuePauseReason"] == "manual"
+    assert execution_payload["items"][0]["modelVariant"] == "max"
     assert execution_payload["items"][0]["pendingPermission"] == {
         "id": "permission-1",
         "title": "Shell",

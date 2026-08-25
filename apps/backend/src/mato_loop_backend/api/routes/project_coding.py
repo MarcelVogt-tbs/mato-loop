@@ -81,16 +81,43 @@ class CodingProjectOptionsResponse(ApiModel):
     items: list[CodingProjectOptionResponse]
 
 
+class CodingBindingRequest(ApiModel):
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    integration_id: UUID
+    project_key: str = Field(min_length=1, max_length=300)
+    workspace_key: str = Field(min_length=1, max_length=1000)
+
+
+class CodingBindingResponse(ApiModel):
+    adapter_type: Literal["opencode"] = "opencode"
+    integration_id: UUID
+    project_key: str
+    workspace_key: str
+    analysis_model_key: str | None
+    analysis_model_variant: str | None
+    execution_model_key: str | None
+    execution_model_variant: str | None
+    queue_pause_reason: str | None
+
+
 class CodingModelOptionResponse(ApiModel):
     key: str
     label: str
     provider_label: str
+    variants: list[str]
 
 
 class CodingModelSelectionResponse(ApiModel):
     workspace_key: str
     analysis_model_key: str | None
+    analysis_model_variant: str | None
     execution_model_key: str | None
+    execution_model_variant: str | None
 
 
 class CodingModelsResponse(CodingModelSelectionResponse):
@@ -106,7 +133,9 @@ class CodingModelsRequest(ApiModel):
     )
 
     analysis_model_key: str = Field(min_length=3, max_length=600)
+    analysis_model_variant: str | None = Field(default=None, min_length=1, max_length=300)
     execution_model_key: str = Field(min_length=3, max_length=600)
+    execution_model_variant: str | None = Field(default=None, min_length=1, max_length=300)
 
 
 class CodingFileEntryResponse(ApiModel):
@@ -158,6 +187,7 @@ class CodingAnalyzeRequest(ApiModel):
 class CodingAnalysisResponse(ApiModel):
     workspace_key: str
     analysis_model_key: str
+    analysis_model_variant: str | None
     title: str
     text: str
     external_session_id: str
@@ -184,6 +214,7 @@ class CodingPlanResponse(ApiModel):
     originating_session_id: UUID | None
     external_session_id: str | None
     analysis_model_key: str
+    analysis_model_variant: str | None
     title: str
     markdown: str
     created_at: datetime | None
@@ -229,6 +260,7 @@ class CodingExecutionResponse(ApiModel):
         "outcome_unknown",
     ]
     model_key: str
+    model_variant: str | None
     external_session_id: str | None
     pending_permission: CodingPermissionResponse | None
     result_summary: str | None
@@ -336,6 +368,26 @@ def _model_option(item: CodingModelOption) -> CodingModelOptionResponse:
         key=item.key,
         label=item.label,
         provider_label=item.provider_label,
+        variants=list(item.variants),
+    )
+
+
+def _binding(project: Project) -> CodingBindingResponse:
+    if (
+        project.coding_integration_id is None
+        or project.coding_project_key is None
+        or project.coding_workspace_key is None
+    ):
+        raise ApiError(409, "project.codingNotConfigured")
+    return CodingBindingResponse(
+        integration_id=project.coding_integration_id,
+        project_key=project.coding_project_key,
+        workspace_key=_relative(project.coding_workspace_key, allow_root=True),
+        analysis_model_key=project.coding_analysis_model_key,
+        analysis_model_variant=project.coding_analysis_model_variant,
+        execution_model_key=project.coding_execution_model_key,
+        execution_model_variant=project.coding_execution_model_variant,
+        queue_pause_reason=project.coding_queue_pause_reason,
     )
 
 
@@ -397,6 +449,7 @@ def _plan(project: Project, item: ProjectPlan) -> CodingPlanResponse:
         originating_session_id=item.originating_session_id,
         external_session_id=item.external_session_id,
         analysis_model_key=item.analysis_model_key,
+        analysis_model_variant=item.analysis_model_variant,
         title=item.title,
         markdown=item.markdown,
         created_at=item.created_at,
@@ -453,6 +506,7 @@ def _execution(
         queue_position=item.queue_position,
         status=item.status,
         model_key=item.model_key,
+        model_variant=item.model_variant,
         external_session_id=item.external_session_id,
         pending_permission=_permission(item.pending_permission),
         result_summary=_safe_text(item.result_summary, 200_000),
@@ -488,6 +542,37 @@ async def list_integration_projects(
     return CodingProjectOptionsResponse(items=[_project_option(item) for item in items])
 
 
+@router.put("/{project_id}/coding/binding", response_model=CodingBindingResponse)
+async def set_binding(
+    project_id: UUID,
+    payload: CodingBindingRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> CodingBindingResponse:
+    project = await _owned_project(db, project_id, user.id)
+    project = await _call(
+        ProjectCodingService.set_binding(
+            db,
+            user.id,
+            project,
+            payload.integration_id,
+            payload.project_key,
+            payload.workspace_key,
+        )
+    )
+    return _binding(project)
+
+
+@router.delete("/{project_id}/coding/binding", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_binding(
+    project_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    project = await _owned_project(db, project_id, user.id)
+    await _call(ProjectCodingService.clear_binding(db, user.id, project))
+
+
 @router.get("/{project_id}/coding/models", response_model=CodingModelsResponse)
 async def list_models(
     project_id: UUID,
@@ -499,7 +584,9 @@ async def list_models(
     return CodingModelsResponse(
         workspace_key=_workspace(project),
         analysis_model_key=project.coding_analysis_model_key,
+        analysis_model_variant=project.coding_analysis_model_variant,
         execution_model_key=project.coding_execution_model_key,
+        execution_model_variant=project.coding_execution_model_variant,
         items=[_model_option(item) for item in items],
     )
 
@@ -520,13 +607,17 @@ async def set_models(
             user.id,
             project,
             payload.analysis_model_key,
+            payload.analysis_model_variant,
             payload.execution_model_key,
+            payload.execution_model_variant,
         )
     )
     return CodingModelSelectionResponse(
         workspace_key=_workspace(project),
         analysis_model_key=project.coding_analysis_model_key,
+        analysis_model_variant=project.coding_analysis_model_variant,
         execution_model_key=project.coding_execution_model_key,
+        execution_model_variant=project.coding_execution_model_variant,
     )
 
 
@@ -601,6 +692,7 @@ async def analyze(
     return CodingAnalysisResponse(
         workspace_key=_workspace(project),
         analysis_model_key=project.coding_analysis_model_key or "",
+        analysis_model_variant=project.coding_analysis_model_variant,
         title=payload.title.strip(),
         text=result.text,
         external_session_id=result.external_session_id,
