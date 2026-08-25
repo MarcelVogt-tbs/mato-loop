@@ -26,7 +26,6 @@ from mato_loop_backend.execution.protocol import (
     HelloMessage,
     RequestMessage,
     ResponseMessage,
-    RootSnapshot,
     WelcomeMessage,
 )
 from mato_loop_backend.execution.transfers import (
@@ -55,7 +54,6 @@ __all__ = [
     "SystemInfoResult",
     "RequestMessage",
     "ResponseMessage",
-    "RootSnapshot",
     "TransferError",
     "TransferGrant",
     "TransferTicket",

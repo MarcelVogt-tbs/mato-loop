@@ -31,20 +31,20 @@ EventHandler = Callable[[EventMessage], Awaitable[None] | None]
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 CANCEL_SEND_TIMEOUT_SECONDS = 1.0
 MAX_IGNORED_REQUESTS = 1_024
-_MUTATING_WORKSPACE_OPERATIONS = {
+_MUTATING_FILESYSTEM_OPERATIONS = {
     "integration.git.add",
     "integration.git.clone",
     "integration.git.commit",
-    "workspace.copy",
-    "workspace.delete",
-    "workspace.edit",
-    "workspace.export",
-    "workspace.import",
-    "workspace.mkdir",
-    "workspace.move",
-    "workspace.rename",
-    "workspace.upsert",
-    "workspace.write",
+    "filesystem.copy",
+    "filesystem.delete",
+    "filesystem.edit",
+    "filesystem.export",
+    "filesystem.import",
+    "filesystem.mkdir",
+    "filesystem.move",
+    "filesystem.rename",
+    "filesystem.upsert",
+    "filesystem.write",
 }
 
 
@@ -57,7 +57,7 @@ class ExecutionAgentError(Exception):
 def disconnect_error_code(operation: str, dispatched: bool) -> str:
     if not dispatched:
         return "executionAgent.unavailable"
-    if operation in _MUTATING_WORKSPACE_OPERATIONS:
+    if operation in _MUTATING_FILESYSTEM_OPERATIONS:
         return "executionAgent.outcomeUnknown"
     if operation.startswith(("process.", "shell.")):
         return "process.outcomeUnknown"
@@ -79,7 +79,6 @@ class _Connection:
     websocket: WebSocket
     generation: int
     operations: frozenset[str]
-    roots: tuple
     pending: dict[UUID, _PendingRequest] = field(default_factory=dict)
     ignored: dict[UUID, None] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -99,9 +98,9 @@ class ExecutionAgentConnectionManager:
     def is_connected(self, agent_id: UUID) -> bool:
         return agent_id in self._connections
 
-    def snapshot(self, agent_id: UUID) -> tuple[frozenset[str], tuple] | None:
+    def snapshot(self, agent_id: UUID) -> frozenset[str] | None:
         connection = self._connections.get(agent_id)
-        return (connection.operations, connection.roots) if connection else None
+        return connection.operations if connection else None
 
     def transfer_url(self, agent_id: UUID, ticket_id: UUID) -> str:
         connection = self._connections.get(agent_id)
@@ -132,7 +131,6 @@ class ExecutionAgentConnectionManager:
                 websocket=websocket,
                 generation=self._generation,
                 operations=frozenset(hello.operations) & SUPPORTED_OPERATIONS,
-                roots=tuple(hello.roots),
             )
             old = self._connections.get(hello.agent_id)
             self._connections[hello.agent_id] = connection

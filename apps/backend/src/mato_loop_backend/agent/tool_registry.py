@@ -117,14 +117,12 @@ class ToolAttachment:
 class ToolFileAction:
     operation: Literal["write", "copy", "move"]
     root: Literal["session", "workspace"]
-    root_identity: str
+    root_identity: str | None
     path: str
     filename: str
     size_bytes: int
     execution_agent_id: str | None = None
-    root_id: str | None = None
-    root_revision: str | None = None
-    working_directory: str | None = None
+    current_directory: str | None = None
 
 
 @dataclass(slots=True)

@@ -11,7 +11,7 @@ The current implementation includes:
 - OpenAI-compatible Chat Completions and Responses endpoints
 - persistent sessions, messages, and agent runs
 - one shared model and tool loop for all providers
-- owner-isolated sessions, memory, credentials, and Execution Agents
+- owner-isolated sessions, memory, credentials, and MatoLoop Agents
 - persistent permission grants and approval decisions
 - scheduled automations with durable run history, notifications, and optional session output
 - built-in web search without an API key and additional SearXNG providers
@@ -48,6 +48,7 @@ Useful commands:
 ./scripts/dev.sh status
 ./scripts/dev.sh doctor
 ./scripts/dev.sh logs backend
+./scripts/dev.sh logs matoloop-agent
 ./scripts/dev.sh stop
 ./scripts/dev.sh down
 ```
@@ -60,11 +61,13 @@ Checks and tests:
 ./scripts/dev.sh test rag
 ```
 
-Individual targets can be selected with `backend` or `frontend`:
+Individual targets can be selected with `backend`, `frontend`, or `matoloop-agent`:
 
 ```bash
 ./scripts/dev.sh check backend
 ./scripts/dev.sh test frontend
+./scripts/dev.sh check matoloop-agent
+./scripts/dev.sh test matoloop-agent
 ```
 
 `test rag` starts PostgreSQL and Infinity, waits for their health checks, and verifies real German-English hybrid retrieval, trust filtering, and the FTS fallback. The normal test run remains infrastructure-independent.
@@ -89,11 +92,11 @@ The development stack uses named volumes:
 - `frontend_node_modules`: installed frontend dependencies
 - `frontend_yarn_cache`: additional frontend cache mounted at `/opt/mato-loop/yarn-cache`
 
-Docker prefixes volume names with the Compose project name by default, for example `mato-loop_app_data`. The repository bind mount at `/workspace` exists only for HMR and live code changes.
+Docker prefixes volume names with the Compose project name by default, for example `mato-loop_app_data`. MatoLoop Agent state and its home use the separate host bind mounts `${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}` and `${MATOLOOP_AGENT_HOME:-./data/home}`. The backend and frontend repository bind mount at `/workspace` exists only for HMR and live code changes.
 
 On first startup, Infinity downloads the pinned `intfloat/multilingual-e5-small` revision. This cold start can take several minutes; the backend and lexical durable-memory and prior-session searches remain available. The cache does not require backup. `./scripts/dev.sh doctor` checks pgvector, durable-memory and episode indexing state, and the Infinity health endpoint.
 
-The following command deletes containers and all development volumes, including the database, users, secrets, backend session files, and Execution Agent state and cache. It does not delete the separately bind-mounted Execution Agent workspace:
+The following command deletes containers and all development named volumes, including the database, users, secrets, and backend session files. It does not delete the separately bind-mounted MatoLoop Agent data or home directories:
 
 ```bash
 ./scripts/dev.sh reset-storage
@@ -101,9 +104,11 @@ The following command deletes containers and all development volumes, including 
 
 ## Production Preparation
 
-`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and an Execution Agent. The prepared agent image includes OpenSCAD for CAD rendering. With no image variables set, `docker compose build` builds MatoLoop and the agent locally. `docker-compose.no-agent.yaml` is the standalone production stack without the agent; use `--remove-orphans` when switching an existing deployment to it. Set `MATO_LOOP_IMAGE` and `MATO_LOOP_EXECUTION_AGENT_IMAGE` to consume published images instead. Published images currently target `linux/amd64` only.
+`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and a MatoLoop Agent. The prepared `matoloop-agent` image includes OpenSCAD for CAD rendering. With no image variables set, `docker compose build` builds both images locally. `docker-compose.no-agent.yaml` is the production stack without a MatoLoop Agent; use `--remove-orphans` when switching an existing deployment to it. Set `MATO_LOOP_IMAGE` and `MATOLOOP_AGENT_IMAGE` to consume published images instead. Published images currently target `linux/amd64` only.
 
-The Compose Execution Agent mounts `${MATO_EXECUTION_AGENT_WORKSPACE:-./data/home}` at `/workspace`. Despite its host-side name, this is only an external directory owned by the bundled agent. The backend program does not access, migrate, or delete it; back it up and clean it up separately.
+The `matoloop-agent` service has exactly two runtime mounts: `${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}:/data` for `/data/config.json`, credentials, transfers, Git state, and cache data, and `${MATOLOOP_AGENT_HOME:-./data/home}:/workspace` for the configured home directory. The backend does not access, migrate, or delete the host home directory. The Docker container currently runs as root, so MatoLoop policies are not an operating-system sandbox: mounted scope and host policy determine what it can access.
+
+When upgrading from the former standalone MatoLoop Agent, move or copy its credential and durable state into the new `MATOLOOP_AGENT_DATA` directory before starting `matoloop-agent`. Pair the agent again if that state is not retained. Old environment-variable aliases are unsupported.
 
 The prepared production setup uses `./data:/data` and `./db:/var/lib/postgresql/data` bind mounts. Before production use, define and verify TLS, secure cookies, credentials, backups, and restoration for the target environment.
 
@@ -111,11 +116,11 @@ Forgejo CI and the manual release process are documented in [CI and releases](do
 
 ## Accounts and Ownership
 
-The first local account created during setup is an administrator. Administrators can create local users, reset passwords, activate or deactivate accounts, assign or remove the administrator role, and delete deactivated accounts. Administrator status grants account and instance-configuration management only; it does not grant access to another user's sessions, messages, files, memories, credentials, workspaces, approvals, or Execution Agents.
+The first local account created during setup is an administrator. Administrators can create local users, reset passwords, activate or deactivate accounts, assign or remove the administrator role, and delete deactivated accounts. Administrator status grants account and instance-configuration management only; it does not grant access to another user's sessions, messages, files, memories, credentials, workspaces, approvals, or MatoLoop Agents.
 
 Local authentication is the only implemented sign-in method. The backend already separates the internal `UserAccount` from authentication-provider records and external identities, but no external authentication provider or corresponding login UI is implemented. Future providers can opt into provider-specific just-in-time account creation and explicit self-linking by an authenticated user; identities are never linked merely by matching a username.
 
-Deleting an account removes its database-owned data and backend session trees. It does not remove any files, caches, durable state, or configuration owned by an Execution Agent, including the bundled Compose agent, or data in an external service. Instance-scoped resources are shared intentionally and are not deleted with a user.
+Deleting an account removes its database-owned data and backend session trees. It does not remove any files, caches, durable state, or configuration owned by a MatoLoop Agent, including the bundled Compose agent, or data in an external service. Instance-scoped resources are shared intentionally and are not deleted with a user.
 
 ## Providers
 
@@ -138,9 +143,11 @@ Webfetch follows redirects only after renewed validation, pins validated DNS tar
 
 ## Working Directories
 
-New sessions start without a working directory. Standalone session storage under `/data/sessions/<session-id>` contains `files/`, `revisions/`, and private `attachments/`. Project sessions share `/data/projects/<project-id>/files` and `/data/projects/<project-id>/revisions`, while `/data/projects/<project-id>/sessions/<session-id>/attachments` remains private to one session. Attachment derivatives stay below their source attachment. Durable byte-valued backend tool outputs become revisioned managed files with exact message references; text, JSON, status, and error results remain relational message content. There are no separate generated, downloaded, or derived trees. This storage is not a workspace, and the backend has no `/data/home` workspace.
+New sessions start without a working directory. Their first persisted message creates only owner-bound internal session storage under `/data/sessions`; this is not a workspace. Standalone session storage under `/data/sessions/<session-id>` contains `files/`, `revisions/`, and private `attachments/`. Project sessions share `/data/projects/<project-id>/files` and `/data/projects/<project-id>/revisions`, while `/data/projects/<project-id>/sessions/<session-id>/attachments` remains private to one session. Attachment derivatives stay below their source attachment. Durable byte-valued backend tool outputs become revisioned managed files with exact message references; text, JSON, status, and error results remain relational message content. There are no separate generated, downloaded, or derived trees, and the backend has no `/data/home` workspace.
 
-Every `root=workspace` operation targets a root advertised by the selected, owner-bound Execution Agent. An agent may advertise multiple roots and an optional `homeDirectory` inside one root. The home initializes new sessions; each session then retains its selected root, root-relative working directory, and canonical current directory independently. Without a selected agent and root, workspace and agent-local operations are unavailable, while chat, backend tools, and persisted session files continue to work.
+A workspace is an ordinary normalized absolute POSIX path on the selected owner-bound MatoLoop Agent. The required `homeDirectory` is its initial directory suggestion; agents advertise no roots, root IDs, or root revisions. A session stores only its selected agent and current absolute directory. Without both, computer file, process, shell, and local integration operations are unavailable, while chat, backend tools, and persisted session files continue to work.
+
+Authenticated Control Center file requests are owner-bound and may directly access any path available to the selected MatoLoop Agent's operating-system user. This intentionally bypasses model tool policies and approvals; it does not bypass operating-system permissions or the agent's descriptor-based no-follow checks.
 
 The file explorer accepts up to four generic uploads of 64 MiB each. Files are created atomically and never overwrite an existing path; its create dialog adds empty `.txt`, `.md`, or `.scad` files through the same path. Validated PNG, JPEG, WebP, GIF, and static self-contained SVG images up to 5 MiB and UTF-8 text or Markdown up to 1 MiB have previews. Editable UTF-8 files use explicit, revision-checked atomic saves so a concurrent change is never overwritten silently. Normal edits append a revision, and moves preserve file identity and history. Explicit user revision actions are destructive: a historical revision can be deleted, deleting the current revision purges the file and its history, and restoring an older revision selects it as current and removes later revisions. These manual actions may invalidate historical message references; normal edits, moves, and live agent deletion preserve references where applicable. Markdown can be edited as source or through the visual editor; documents with image references remain in source mode to prevent external requests. SVG previews reject scripts, event handlers, animation, XML entities, and external references. Binary STL files have a bounded interactive viewer; configured OpenSCAD source files render an interactive OFF preview from the source view and export STL only on request. Every regular file remains available as a forced download; arbitrary uploaded content is never rendered as active HTML or served inline with a caller-controlled media type.
 
@@ -148,9 +155,9 @@ The authenticated application uses the full viewport without a global top bar. B
 
 Successful file writes, copies, and moves use the existing file card; generated session files do not add a separate draft card. A newly generated session file opens automatically in the existing file browser only when the user has not changed its navigation during the run and no dirty editor would be displaced; an already open current file stays selected and refreshes. Text previews provide a direct copy action. A new session is created server-side only with its first message and appears in the sidebar afterward. Unsent text remains separately per session in browser-local storage.
 
-- `read-only`: only shared read operations (`read`, `glob`, `grep`, and file export) are offered for session storage and an optional computer workspace.
+- `read-only`: only shared read operations (`read`, `glob`, `grep`, and file export) are offered for session storage and an optional computer directory.
 - `read-write`: write, create, delete, copy, and move are also available in the selected file root.
-- File tools use an explicit `root` field with `session` or `workspace`. `root=session` is directly the backend-managed `files/` directory, so paths never start with `files/`; `root=workspace` always means the selected owned Execution Agent root and is unavailable without that agent and root.
+- Model-facing file tools use `root=files` for backend-managed files and `root=computer` for the selected MatoLoop Agent directory. Backend implementation maps these to the stable internal `session` and `workspace` roots. Agent protocol filesystem operations are all named `filesystem.*` and receive normalized absolute POSIX paths.
 - `Einmal erlauben`: applies only to the current action.
 - `Für Session erlauben`: creates a separate revocable permission grant.
 - `Später`: leaves the request pending and the agent run paused.

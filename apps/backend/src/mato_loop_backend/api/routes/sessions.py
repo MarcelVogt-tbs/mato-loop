@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -119,59 +120,42 @@ class ControlCenterFileView(BaseModel):
     viewed_file_path: str | None = Field(default=None, min_length=1, max_length=1_000)
     root_identity: str | None = Field(default=None, min_length=1, max_length=1_000)
     execution_agent_id: str | None = Field(default=None, min_length=36, max_length=36)
-    root_id: str | None = Field(default=None, min_length=36, max_length=36)
-    root_revision: str | None = Field(default=None, min_length=64, max_length=64)
-    working_directory: str | None = Field(default=None, min_length=1, max_length=1_000)
+    current_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
 
     @model_validator(mode="after")
     def validate_view(self) -> ControlCenterFileView:
         service = RootFileService(UUID(int=0))
-        if service.normalize_relative_path(self.selected_path) != self.selected_path:
-            raise ValueError("selected path must be normalized")
-        if self.selected_path == "." and self.selected_kind != "directory":
-            raise ValueError("the root path must be a directory")
+        if self.scope == "session":
+            if service.normalize_relative_path(self.selected_path) != self.selected_path:
+                raise ValueError("selected path must be normalized")
+            if self.selected_path == "." and self.selected_kind != "directory":
+                raise ValueError("the root path must be a directory")
+        elif not PurePosixPath(self.selected_path).is_absolute():
+            raise ValueError("filesystem paths must be absolute")
         if self.viewed_file_path is not None:
             if (
                 self.selected_kind != "file"
                 or self.viewed_file_path == "."
-                or service.normalize_relative_path(self.viewed_file_path)
-                != self.viewed_file_path
                 or self.viewed_file_path != self.selected_path
             ):
                 raise ValueError("viewed file path must match the selected file")
-        snapshot_fields = (
-            self.execution_agent_id,
-            self.root_id,
-            self.root_revision,
-            self.working_directory,
-        )
-        if self.root_identity is None:
-            if any(value is not None for value in snapshot_fields):
-                raise ValueError("snapshot fields require a root identity")
-            return self
         if self.scope == "session":
-            if any(value is not None for value in snapshot_fields):
+            if self.root_identity is None:
+                return self
+            if self.execution_agent_id is not None or self.current_directory is not None:
                 raise ValueError("session views cannot contain workspace snapshot fields")
             return self
-        if any(value is None for value in snapshot_fields):
+        if self.root_identity is not None:
+            raise ValueError("filesystem views cannot contain root identity")
+        if self.execution_agent_id is None or self.current_directory is None:
             raise ValueError("historical workspace views require snapshot fields")
         assert self.execution_agent_id is not None
-        assert self.root_id is not None
-        assert self.root_revision is not None
-        assert self.working_directory is not None
         try:
-            valid_ids = all(
-                str(UUID(value)) == value
-                for value in (self.execution_agent_id, self.root_id)
-            )
+            valid_id = str(UUID(self.execution_agent_id)) == self.execution_agent_id
         except ValueError:
-            valid_ids = False
-        if not valid_ids or self.root_identity != self.root_id:
-            raise ValueError("workspace identifiers must match canonical UUIDs")
-        if any(character not in "0123456789abcdef" for character in self.root_revision):
-            raise ValueError("root revision must be a lowercase SHA-256 digest")
-        if service.normalize_relative_path(self.working_directory) != self.working_directory:
-            raise ValueError("working directory must be normalized")
+            valid_id = False
+        if not valid_id or not PurePosixPath(self.current_directory).is_absolute():
+            raise ValueError("workspace snapshot must use canonical absolute identifiers")
         return self
 
 
@@ -206,12 +190,17 @@ class ActiveFileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     root: Literal["session", "workspace"]
-    root_identity: str = Field(
+    root_identity: str | None = Field(
+        default=None,
         min_length=36,
         max_length=36,
         validation_alias=AliasChoices("root_identity", "rootIdentity"),
     )
-    path: str = Field(min_length=1, max_length=1_000)
+    execution_agent_id: UUID | None = Field(
+        default=None,
+        validation_alias=AliasChoices("execution_agent_id", "executionAgentId"),
+    )
+    path: str = Field(min_length=1, max_length=4_096)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     dirty: bool
 
@@ -227,8 +216,7 @@ class SessionCreateRequest(BaseModel):
     memory_mode: MemoryMode = MemoryMode.FULL
     web_search_policy: WebSearchPolicy = WebSearchPolicy.AVAILABLE
     preferred_execution_agent_id: UUID | None = None
-    preferred_root_id: UUID | None = None
-    working_directory: str | None = Field(default=None, max_length=1_000)
+    current_directory: str | None = Field(default=None, max_length=4_096)
     control_center: ControlCenterState = Field(default_factory=default_control_center_state)
     active_file: ActiveFileRequest | None = Field(
         default=None, validation_alias=AliasChoices("active_file", "activeFile")
@@ -244,8 +232,7 @@ class SessionUpdateRequest(BaseModel):
     memory_mode: MemoryMode | None = None
     web_search_policy: WebSearchPolicy | None = None
     preferred_execution_agent_id: UUID | None = None
-    preferred_root_id: UUID | None = None
-    working_directory: str | None = Field(default=None, max_length=1_000)
+    current_directory: str | None = Field(default=None, max_length=4_096)
     control_center: ControlCenterState = Field(default=None)
 
 
@@ -267,12 +254,11 @@ async def _validate_execution_preferences(
     db: AsyncSession,
     user_id: UUID,
     agent_id: UUID | None,
-    root_id: UUID | None,
-    working_directory: str | None,
-) -> tuple[str | None, str | None, UUID | None, str | None]:
+    current_directory: str | None,
+) -> tuple[str | None, str | None]:
     try:
         return await session_service.validate_execution_preferences(
-            db, user_id, agent_id, root_id, working_directory
+            db, user_id, agent_id, current_directory
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
@@ -537,23 +523,17 @@ async def session_defaults(
         default_session, memory, _provider_for_session(ai, model), model
     )
     preferred_agent_id = preferences.default_execution_agent_id
-    preferred_root_id = None
-    working_directory = None
     current_directory = None
     if preferred_agent_id is not None:
         agent = await db.scalar(
-            select(ExecutionAgent)
-            .options(selectinload(ExecutionAgent.roots))
-            .where(
+            select(ExecutionAgent).where(
                 ExecutionAgent.id == preferred_agent_id,
                 ExecutionAgent.user_id == user.id,
                 ExecutionAgent.revoked_at.is_(None),
             )
         )
         if agent is not None:
-            preferred_root_id, _revision, current_directory, working_directory = (
-                await _execution_home(db, agent)
-            )
+            current_directory = await _execution_home(db, agent)
     return {
         "modelId": str(selected_model_id) if selected_model_id else None,
         "reasoningEffort": None,
@@ -573,8 +553,6 @@ async def session_defaults(
         "memoryUnavailableReason": state.unavailable_reason,
         "webSearchPolicy": WebSearchPolicy.AVAILABLE.value,
         "preferredExecutionAgentId": str(preferred_agent_id) if preferred_agent_id else None,
-        "preferredRootId": str(preferred_root_id) if preferred_root_id else None,
-        "workingDirectory": working_directory,
         "currentDirectory": current_directory,
     }
 

@@ -359,7 +359,7 @@ function gitExecutionAgentId(integration) {
 }
 
 function executionAgentName(integration) {
-  return executionAgents.byId(gitExecutionAgentId(integration))?.name
+  return executionAgents.byId(gitExecutionAgentId(integration))?.alias
     || integration.executionAgentName
     || integration.config?.executionAgentName
     || 'Nicht verfügbarer Computer'

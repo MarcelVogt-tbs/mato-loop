@@ -56,9 +56,6 @@ class AgentRun(Base):
         ForeignKey("execution_agents.id", ondelete="SET NULL"), nullable=True, index=True
     )
     execution_agent_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    execution_root_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    execution_root_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    working_directory_snapshot: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     current_directory_snapshot: Mapped[str | None] = mapped_column(String(4096), nullable=True)
     execution_operations: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")

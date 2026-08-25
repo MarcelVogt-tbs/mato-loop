@@ -38,20 +38,19 @@ def _hello(agent_id=None, *, operations=None) -> HelloMessage:
     return HelloMessage.model_validate(
         {
             "type": "hello",
-            "protocolVersion": 3,
+            "protocolVersion": 1,
             "agentId": agent_id or uuid4(),
-            "name": "Test Agent",
+            "agentVersion": "1.0.0",
+            "computerName": "test-host",
             "platform": "linux",
             "operations": operations
-            or ["workspace.list", "workspace.read", "workspace.write"],
-            "roots": [
-                {"id": uuid4(), "label": "Projects", "revision": "a" * 64}
-            ],
+            or ["filesystem.list", "filesystem.read", "filesystem.write"],
+            "homeDirectory": "/home/test",
         }
     )
 
 
-def test_protocol_is_strict_and_requires_unique_snapshots() -> None:
+def test_protocol_is_strict_and_requires_unique_operations() -> None:
     payload = _hello().model_dump(by_alias=True)
     payload["extra"] = True
     with pytest.raises(ValidationError):
@@ -63,43 +62,47 @@ def test_protocol_is_strict_and_requires_unique_snapshots() -> None:
         HelloMessage.model_validate(payload)
 
     payload = _hello().model_dump(by_alias=True)
-    payload["homeDirectory"] = "/workspace"
+    payload["protocolVersion"] = 3
     with pytest.raises(ValidationError):
         HelloMessage.model_validate(payload)
 
 
-def test_protocol_accepts_complete_home_metadata() -> None:
+def test_hello_home_directory_requires_a_normalized_absolute_posix_path() -> None:
     payload = _hello().model_dump(by_alias=True)
-    root = payload["roots"][0]
-    payload.update(
-        homeDirectory="/workspace",
-        homeRootId=root["id"],
-        homeRootRevision=root["revision"],
-        homeRelativeDirectory=".",
-    )
+    payload["homeDirectory"] = "/"
+    assert HelloMessage.model_validate(payload).home_directory == "/"
 
-    hello = HelloMessage.model_validate(payload)
+    for path in (
+        "home/test",
+        "/home\\test",
+        "/home//test",
+        "/home/./test",
+        "/home/../test",
+        "/home/\x1ftest",
+        "/home/\x80test",
+    ):
+        payload["homeDirectory"] = path
+        with pytest.raises(ValidationError):
+            HelloMessage.model_validate(payload)
 
-    assert hello.home_directory == "/workspace"
 
 def test_supported_operations_match_the_execution_agent() -> None:
     assert SUPPORTED_OPERATIONS == {
-        "workspace.stat",
-        "workspace.glob",
-        "workspace.grep",
-        "workspace.list",
-        "workspace.read",
-        "workspace.write",
-        "workspace.mkdir",
-        "workspace.rename",
-        "workspace.resolve",
-        "workspace.delete",
-        "workspace.edit",
-        "workspace.copy",
-        "workspace.move",
-        "workspace.import",
-        "workspace.export",
-        "workspace.upsert",
+        "filesystem.stat",
+        "filesystem.glob",
+        "filesystem.grep",
+        "filesystem.list",
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.mkdir",
+        "filesystem.rename",
+        "filesystem.delete",
+        "filesystem.edit",
+        "filesystem.copy",
+        "filesystem.move",
+        "filesystem.import",
+        "filesystem.export",
+        "filesystem.upsert",
         "process.exec",
         "shell.run",
         "cache.ensure",
@@ -125,15 +128,15 @@ def test_supported_operations_match_the_execution_agent() -> None:
 async def test_manager_correlates_events_and_response_and_ignores_unknown_operations() -> None:
     manager = ExecutionAgentConnectionManager()
     websocket = FakeWebSocket()
-    hello = _hello(operations=["workspace.read", "future.unknown"])
+    hello = _hello(operations=["filesystem.read", "future.unknown"])
     await manager.register(hello, websocket)  # type: ignore[arg-type]
     events = []
 
     task = asyncio.create_task(
         manager.request(
             hello.agent_id,
-            "workspace.read",
-            {"path": "README.md"},
+            "filesystem.read",
+            {"path": "/home/test/README.md"},
             on_event=events.append,
         )
     )
@@ -167,7 +170,7 @@ async def test_latest_connection_replaces_old_and_disconnects_are_classified() -
     new = FakeWebSocket()
     hello = _hello(agent_id)
     await manager.register(hello, old)  # type: ignore[arg-type]
-    task = asyncio.create_task(manager.request(agent_id, "workspace.read", {}))
+    task = asyncio.create_task(manager.request(agent_id, "filesystem.read", {}))
     await asyncio.sleep(0)
 
     await manager.register(hello, new)  # type: ignore[arg-type]
@@ -177,11 +180,11 @@ async def test_latest_connection_replaces_old_and_disconnects_are_classified() -
     assert exc_info.value.code == "executionAgent.replaced"
     assert old.closed == [(4001, "Replaced by a newer connection")]
     assert manager.snapshot(agent_id) is not None
-    assert disconnect_error_code("workspace.read", True) == "executionAgent.unavailable"
-    assert disconnect_error_code("workspace.write", True) == "executionAgent.outcomeUnknown"
-    assert disconnect_error_code("workspace.upsert", True) == "executionAgent.outcomeUnknown"
-    assert disconnect_error_code("workspace.edit", True) == "executionAgent.outcomeUnknown"
-    assert disconnect_error_code("workspace.rename", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("filesystem.read", True) == "executionAgent.unavailable"
+    assert disconnect_error_code("filesystem.write", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("filesystem.upsert", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("filesystem.edit", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("filesystem.rename", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("integration.git.clone", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("integration.git.add", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("integration.git.commit", True) == "executionAgent.outcomeUnknown"
@@ -197,7 +200,7 @@ async def test_replacement_cannot_miss_request_waiting_to_send() -> None:
     await manager.register(hello, old)  # type: ignore[arg-type]
     connection = manager._connections[agent_id]
     await connection.send_lock.acquire()
-    task = asyncio.create_task(manager.request(agent_id, "workspace.read", {}))
+    task = asyncio.create_task(manager.request(agent_id, "filesystem.read", {}))
     await asyncio.sleep(0)
 
     await manager.register(hello, new)  # type: ignore[arg-type]
@@ -214,7 +217,7 @@ async def test_caller_cancellation_sends_cancel_and_ignores_late_response() -> N
     websocket = FakeWebSocket()
     hello = _hello()
     await manager.register(hello, websocket)  # type: ignore[arg-type]
-    task = asyncio.create_task(manager.request(hello.agent_id, "workspace.read", {}))
+    task = asyncio.create_task(manager.request(hello.agent_id, "filesystem.read", {}))
     await asyncio.sleep(0)
     request_id = json.loads(websocket.sent[0])["id"]
 
@@ -236,10 +239,10 @@ async def test_caller_cancellation_sends_cancel_and_ignores_late_response() -> N
 async def test_caller_cancellation_abandons_dispatched_workspace_mutation() -> None:
     manager = ExecutionAgentConnectionManager()
     websocket = FakeWebSocket()
-    hello = _hello(operations=["workspace.write"])
+    hello = _hello(operations=["filesystem.write"])
     await manager.register(hello, websocket)  # type: ignore[arg-type]
     task = asyncio.create_task(
-        manager.request(hello.agent_id, "workspace.write", {})
+        manager.request(hello.agent_id, "filesystem.write", {})
     )
     await asyncio.sleep(0)
     request_id = json.loads(websocket.sent[0])["id"]
@@ -272,7 +275,7 @@ async def test_default_timeout_is_bounded_and_cancels_request() -> None:
     await manager.register(hello, websocket)  # type: ignore[arg-type]
 
     with pytest.raises(ExecutionAgentError) as exc_info:
-        await manager.request(hello.agent_id, "workspace.read", {})
+            await manager.request(hello.agent_id, "filesystem.read", {})
 
     assert exc_info.value.code == "executionAgent.timeout"
     assert [json.loads(item)["type"] for item in websocket.sent] == ["request", "cancel"]
@@ -281,7 +284,7 @@ async def test_default_timeout_is_bounded_and_cancels_request() -> None:
 
 async def test_dispatched_mutation_and_process_timeouts_have_unknown_outcomes() -> None:
     for operation, expected_code in (
-        ("workspace.write", "executionAgent.outcomeUnknown"),
+        ("filesystem.write", "executionAgent.outcomeUnknown"),
         ("process.exec", "process.outcomeUnknown"),
     ):
         manager = ExecutionAgentConnectionManager(default_timeout=0.01)
@@ -298,13 +301,7 @@ async def test_dispatched_mutation_and_process_timeouts_have_unknown_outcomes() 
 
 @pytest.mark.parametrize("code", ["file.editTextNotFound", "file.editTextNotUnique"])
 async def test_execution_client_maps_model_edit_errors(monkeypatch, code) -> None:
-    client = ExecutionClient(
-        uuid4(),
-        uuid4(),
-        "a" * 64,
-        ".",
-        frozenset({"workspace.edit"}),
-    )
+    client = ExecutionClient(uuid4(), frozenset({"filesystem.edit"}))
 
     async def request(*_args, **_kwargs):
         return ResponseMessage.model_validate(
@@ -321,5 +318,5 @@ async def test_execution_client_maps_model_edit_errors(monkeypatch, code) -> Non
     )
 
     with pytest.raises(ExecutionClientError) as exc_info:
-        await client.request("workspace.edit", {}, WorkspaceWriteResult)
+        await client.request("filesystem.edit", {}, WorkspaceWriteResult)
     assert exc_info.value.code == code

@@ -68,7 +68,7 @@ jobs:
         working-directory: apps/frontend
         run: yarn test
 
-  execution-agent:
+  matoloop-agent:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -78,21 +78,21 @@ jobs:
       - uses: https://github.com/actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.13"
-      - name: Install execution agent dependencies
-        working-directory: apps/execution-agent
+      - name: Install MatoLoop Agent dependencies
+        working-directory: apps/matoloop-agent
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y ripgrep
           python -m pip install uv==0.10.9
           uv sync --frozen
-      - name: Check execution agent
-        working-directory: apps/execution-agent
+      - name: Check MatoLoop Agent
+        working-directory: apps/matoloop-agent
         run: |
           uv run --no-sync python -m compileall src tests
           uv run --no-sync ruff check src tests
           uv run --no-sync ruff format --check src tests
-      - name: Test execution agent
-        working-directory: apps/execution-agent
+      - name: Test MatoLoop Agent
+        working-directory: apps/matoloop-agent
         run: uv run --no-sync python -m unittest discover -s tests -v
 
   migrations:
@@ -143,7 +143,7 @@ jobs:
           persist-credentials: false
       - name: Syntax-check CI scripts
         run: |
-          bash -n scripts/build-execution-agent-artifact.sh
+          bash -n scripts/build-matoloop-agent-artifact.sh
           bash -n scripts/ci/publish-docker-image.sh
           python3 -m py_compile scripts/check-version.py scripts/ci/create-forgejo-release.py
       - name: Test CI helpers
@@ -162,7 +162,7 @@ jobs:
           fi
   image-mato-loop:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-    needs: [backend, frontend, execution-agent, migrations, version]
+    needs: [backend, frontend, matoloop-agent, migrations, version]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -174,9 +174,9 @@ jobs:
       - name: Build production image
         run: bash scripts/ci/publish-docker-image.sh build mato-loop . apps/backend/Dockerfile
 
-  native-execution-agent:
+  native-matoloop-agent:
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    needs: [backend, frontend, execution-agent, migrations, version]
+    needs: [backend, frontend, matoloop-agent, migrations, version]
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/catthehacker/ubuntu:act-22.04@sha256:d3f239e395525feaa4eb88a0f55eb67b1d44f728f061c809caaa3a8bea346915
@@ -188,23 +188,23 @@ jobs:
       - uses: https://github.com/actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.13"
-      - name: Build native execution agent
+      - name: Build native MatoLoop Agent
         run: |
           python -m pip install uv==0.10.9
-          bash scripts/build-execution-agent-artifact.sh "develop-${GITHUB_SHA:0:12}"
-      - name: Upload native execution agent
+          bash scripts/build-matoloop-agent-artifact.sh "develop-${GITHUB_SHA:0:12}"
+      - name: Upload native MatoLoop Agent
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
         with:
-          name: mato-loop-execution-agent-linux-amd64-develop-${{ github.sha }}
+          name: matoloop-agent-linux-amd64-develop-${{ github.sha }}
           path: |
-            dist/mato-loop-execution-agent-linux-amd64-develop-*.tar.gz
-            dist/mato-loop-execution-agent-linux-amd64-develop-*.tar.gz.sha256
+            dist/matoloop-agent-linux-amd64-develop-*.tar.gz
+            dist/matoloop-agent-linux-amd64-develop-*.tar.gz.sha256
           if-no-files-found: error
           retention-days: 7
 
-  image-execution-agent:
+  image-matoloop-agent:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-    needs: [backend, frontend, execution-agent, migrations, version]
+    needs: [backend, frontend, matoloop-agent, migrations, version]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -214,11 +214,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Build production image
-        run: bash scripts/ci/publish-docker-image.sh build mato-loop-execution-agent apps/execution-agent apps/execution-agent/Dockerfile
+        run: bash scripts/ci/publish-docker-image.sh build matoloop-agent apps/matoloop-agent apps/matoloop-agent/Dockerfile
 
   publish-images:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [backend, frontend, execution-agent, migrations, version]
+    needs: [backend, frontend, matoloop-agent, migrations, version]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -242,7 +242,7 @@ jobs:
           fi
           export IMAGE_VERSION
           bash scripts/ci/publish-docker-image.sh build mato-loop . apps/backend/Dockerfile
-          bash scripts/ci/publish-docker-image.sh build mato-loop-execution-agent apps/execution-agent apps/execution-agent/Dockerfile
+          bash scripts/ci/publish-docker-image.sh build matoloop-agent apps/matoloop-agent apps/matoloop-agent/Dockerfile
       - name: Check current develop revision
         id: freshness
         if: github.ref == 'refs/heads/develop'
@@ -290,10 +290,10 @@ jobs:
             tag=
           fi
           bash scripts/ci/publish-docker-image.sh "$mode" mato-loop . apps/backend/Dockerfile "$tag"
-          bash scripts/ci/publish-docker-image.sh "$mode" mato-loop-execution-agent apps/execution-agent apps/execution-agent/Dockerfile "$tag"
+          bash scripts/ci/publish-docker-image.sh "$mode" matoloop-agent apps/matoloop-agent apps/matoloop-agent/Dockerfile "$tag"
       - name: Remove local publication images
         if: always()
-        run: docker image rm --force "mato-loop:ci-$CI_RUN_ID" "mato-loop-execution-agent:ci-$CI_RUN_ID" >/dev/null 2>&1 || true
+        run: docker image rm --force "mato-loop:ci-$CI_RUN_ID" "matoloop-agent:ci-$CI_RUN_ID" >/dev/null 2>&1 || true
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')

@@ -5,9 +5,10 @@ import hashlib
 import json
 import logging
 import os
-from dataclasses import replace
+import posixpath
 from datetime import datetime
 from io import BytesIO
+from pathlib import PurePosixPath
 from typing import Any, Literal
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
@@ -213,6 +214,7 @@ from mato_loop_backend.models import (
     AgentRun,
     Automation,
     ChatSession,
+    ExecutionAgent,
     Message,
     MessageAttachment,
 )
@@ -254,23 +256,24 @@ ALL_TOOL_EXECUTION_POLICIES = tuple(ToolExecutionPolicy)
 
 
 async def _allow(context: ToolContext, request: PermissionRequest) -> bool:
-    client = context.execution_client
-    if (
-        request.resource_type == "execution_root_path"
-        and client is not None
-        and client.current_directory is not None
-        and client.root_id is not None
-        and client.root_revision is not None
-        and not await _directory_allowed(
-            context,
-            client.current_directory,
-            client.root_id,
-            client.root_revision,
-            ask=True,
-        )
-    ):
-        return False
     return await context.ask(request) == PermissionDecision.ALLOW
+
+
+def _execution_path(context: ToolContext, path: str) -> str:
+    client = _workspace_client(context)
+    if not path or "\\" in path or any(
+        ord(character) < 32 or 127 <= ord(character) <= 159 for character in path
+    ):
+        raise ExecutionClientError("file.invalidPath")
+    if path.startswith("/"):
+        resolved = posixpath.normpath(path)
+    elif client.current_directory is not None:
+        resolved = posixpath.normpath(posixpath.join(client.current_directory, path))
+    else:
+        raise ExecutionClientError("file.workspaceNotSelected")
+    if not resolved.startswith("/"):
+        raise ExecutionClientError("file.invalidPath")
+    return resolved
 
 
 def _filesystem_permission(
@@ -286,28 +289,14 @@ def _filesystem_permission(
 ) -> PermissionRequest:
     if FileRoot(root) is FileRoot.WORKSPACE:
         client = _workspace_client(context)
-        normalized_path = context.root_files.normalize_relative_path(path)
-        scope = json.dumps(
-            {
-                "agentId": str(client.agent_id),
-                "path": normalized_path,
-                "rootId": str(client.root_id),
-                "rootRevision": client.root_revision,
-                "workingDirectory": client.working_directory,
-            },
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        return PermissionRequest(
+        absolute_path = _execution_path(context, path)
+        return execution_directory_permission(
+            client.agent_id,
+            absolute_path,
             capability=capability,
-            resource_type="execution_root_path",
-            resource_scope=scope,
             action_kind=action_kind,
-            risk_level="high" if capability == "filesystem.delete" else "medium",
             title=f"{action_label} erlauben?",
-            summary=f"Der Agent möchte workspace:{normalized_path} verwenden.",
-            resource_display=f"workspace:{normalized_path}",
+            summary=f"Der Agent möchte {absolute_path} verwenden.",
         )
     selected_files = root_files or context.root_files
     if target_session_id is not None and target_session_id != context.session.id:
@@ -352,14 +341,13 @@ async def _active_file_is_dirty(
     if not isinstance(active, dict) or active.get("dirty") is not True:
         return False
     selected_root = FileRoot(root)
-    root_identity = (
-        str(_workspace_client(context).root_id)
-        if selected_root is FileRoot.WORKSPACE
-        else context.root_files.root_identity(selected_root)
-    )
     return (
         active.get("root") == selected_root.value
-        and active.get("rootIdentity") == root_identity
+        and (
+            active.get("executionAgentId") == str(_workspace_client(context).agent_id)
+            if selected_root is FileRoot.WORKSPACE
+            else active.get("rootIdentity") == context.root_files.root_identity(selected_root)
+        )
         and active.get("path") == path
     )
 
@@ -367,8 +355,6 @@ async def _active_file_is_dirty(
 async def _directory_allowed(
     context: ToolContext,
     path: str,
-    root_id: UUID,
-    root_revision: str,
     *,
     ask: bool,
     changes_directory: bool = False,
@@ -376,8 +362,6 @@ async def _directory_allowed(
     request = execution_directory_permission(
         _workspace_client(context).agent_id,
         path,
-        root_id,
-        root_revision,
         action_kind=("change_directory" if changes_directory else "use_directory"),
     )
     return await _allow(context, request) if ask else await PermissionPolicy.evaluate(
@@ -405,40 +389,23 @@ async def _change_directory(
     client = _workspace_client(context)
     result = await client.request(
         "filesystem.resolve",
-        {
-            "path": arguments.path,
-            **(
-                {"currentDirectory": client.current_directory}
-                if client.current_directory is not None
-                else {}
-            ),
-        },
+        {"path": _execution_path(context, arguments.path)},
         DirectoryResult,
     )
     assert isinstance(result, DirectoryResult)
     if not await _directory_allowed(
         context,
         result.path,
-        result.root_id,
-        result.root_revision,
         ask=True,
         changes_directory=True,
     ):
         return ToolResult.error("permission.denied")
     context.session.current_directory = result.path
-    context.session.preferred_root_id = result.root_id
-    context.session.working_directory = result.relative_path
     run = await context.db.get(AgentRun, context.run_id)
     if run is None:
         return ToolResult.error("tool.unavailable")
     run.current_directory_snapshot = result.path
-    run.execution_root_id = result.root_id
-    run.execution_root_revision = result.root_revision
-    run.working_directory_snapshot = result.relative_path
     client.current_directory = result.path
-    client.root_id = result.root_id
-    client.root_revision = result.root_revision
-    client.working_directory = result.relative_path
     await context.db.flush()
     return ToolResult.json({"currentDirectory": result.path})
 
@@ -512,14 +479,18 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
-    normalized_path = root_files.normalize_relative_path(arguments.path)
+    normalized_path = (
+        _execution_path(context, arguments.path)
+        if arguments.root == "workspace"
+        else root_files.normalize_relative_path(arguments.path)
+    )
     kind: str
     if arguments.revision is not None:
         kind = "file"
     elif arguments.root == "workspace":
         stat_result = await _workspace_request(
             context,
-            "workspace.stat",
+            "filesystem.stat",
             {"path": normalized_path},
             WorkspaceStatResult,
         )
@@ -530,9 +501,9 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         if arguments.root == "workspace":
             result = await _workspace_request(
                 context,
-                "workspace.list",
+                "filesystem.list",
                 {
-                    "path": context.root_files.normalize_relative_path(arguments.path),
+                    "path": normalized_path,
                     "offset": arguments.offset - 1,
                     "limit": arguments.limit,
                 },
@@ -623,7 +594,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     if arguments.root == "workspace":
         result = await _workspace_request(
             context,
-            "workspace.read",
+            "filesystem.read",
             {
                 "path": normalized_path,
                 "offset": arguments.offset,
@@ -701,9 +672,9 @@ async def _glob(arguments: GlobArguments, context: ToolContext) -> ToolResult:
     if arguments.root == "workspace":
         result = await _workspace_request(
             context,
-            "workspace.glob",
+            "filesystem.glob",
             {
-                "path": context.root_files.normalize_relative_path(arguments.path),
+                "path": _execution_path(context, arguments.path),
                 "pattern": arguments.pattern,
             },
             WorkspaceGlobResult,
@@ -743,9 +714,9 @@ async def _grep(arguments: GrepArguments, context: ToolContext) -> ToolResult:
     if arguments.root == "workspace":
         result = await _workspace_request(
             context,
-            "workspace.grep",
+            "filesystem.grep",
             {
-                "path": context.root_files.normalize_relative_path(arguments.path),
+                "path": _execution_path(context, arguments.path),
                 "pattern": arguments.pattern,
                 **({"include": arguments.include} if arguments.include is not None else {}),
             },
@@ -777,7 +748,7 @@ async def _provide_file(
         client = _workspace_client(context)
         if not all(
             client.supports(operation)
-            for operation in ("workspace.stat", "workspace.export")
+            for operation in ("filesystem.stat", "filesystem.export")
         ):
             return ToolResult.error("executionAgent.operationUnavailable")
     request = _filesystem_permission(
@@ -792,7 +763,11 @@ async def _provide_file(
     )
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
-    path = root_files.normalize_relative_path(arguments.path)
+    path = (
+        _execution_path(context, arguments.path)
+        if arguments.root == "workspace"
+        else root_files.normalize_relative_path(arguments.path)
+    )
     if arguments.root == "workspace":
         client = _workspace_client(context)
         data = await client.read_bytes(path, limit=MAX_FILE_ATTACHMENT_BYTES)
@@ -864,7 +839,11 @@ def _regular_file_action(
     root: Literal["session", "workspace"],
     path: str,
 ) -> tuple[ToolFileAction, ...]:
-    path = context.root_files.normalize_relative_path(path)
+    path = (
+        _execution_path(context, path)
+        if root == "workspace"
+        else context.root_files.normalize_relative_path(path)
+    )
     try:
         with context.root_files.open_file(root, path) as handle:
             size = os.fstat(handle.fileno()).st_size
@@ -895,14 +874,12 @@ def _workspace_file_action(
         ToolFileAction(
             operation=operation,
             root="workspace",
-            root_identity=str(client.root_id),
+            root_identity=None,
             path=path,
             filename=path.rsplit("/", 1)[-1],
             size_bytes=size,
             execution_agent_id=str(client.agent_id),
-            root_id=str(client.root_id),
-            root_revision=client.root_revision,
-            working_directory=client.working_directory,
+            current_directory=client.current_directory,
         ),
     )
 
@@ -910,7 +887,11 @@ def _workspace_file_action(
 async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> ToolResult:
     if _omitted_file_content(arguments.content):
         return ToolResult.error("file.omittedContent", field="content")
-    path = context.root_files.normalize_relative_path(arguments.path)
+    path = (
+        _execution_path(context, arguments.path)
+        if arguments.root == "workspace"
+        else context.root_files.normalize_relative_path(arguments.path)
+    )
     if await _active_file_is_dirty(context, arguments.root, path):
         return ToolResult.error("file.activeDirty", field="path")
     capability = (
@@ -929,7 +910,7 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
     if arguments.root == "workspace":
         result = await _workspace_request(
             context,
-            "workspace.upsert",
+            "filesystem.upsert",
             {
                 "path": path,
                 "content": arguments.content,
@@ -976,7 +957,11 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
         return ToolResult.error("file.omittedContent", field="oldText")
     if _omitted_file_content(arguments.new_text):
         return ToolResult.error("file.omittedContent", field="newText")
-    path = context.root_files.normalize_relative_path(arguments.path)
+    path = (
+        _execution_path(context, arguments.path)
+        if arguments.root == "workspace"
+        else context.root_files.normalize_relative_path(arguments.path)
+    )
     if await _active_file_is_dirty(context, arguments.root, path):
         return ToolResult.error("file.activeDirty", field="path")
     request = _filesystem_permission(
@@ -996,7 +981,7 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
     if arguments.root == "workspace":
         result = await _workspace_request(
             context,
-            "workspace.edit",
+            "filesystem.edit",
             {
                 "path": path,
                 "oldText": arguments.old_text,
@@ -1047,10 +1032,10 @@ async def _create_directory(
     if not await _allow(context, request):
         return ToolResult.error("permission.denied")
     if arguments.root == "workspace":
-        path = context.root_files.normalize_relative_path(arguments.path)
+        path = _execution_path(context, arguments.path)
         result = await _workspace_request(
             context,
-            "workspace.mkdir",
+            "filesystem.mkdir",
             {
                 "path": path,
                 "parents": False,
@@ -1080,9 +1065,9 @@ async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> 
     if arguments.root == "workspace":
         await _workspace_request(
             context,
-            "workspace.delete",
+            "filesystem.delete",
             {
-                "path": context.root_files.normalize_relative_path(arguments.path),
+                "path": _execution_path(context, arguments.path),
                 "recursive": arguments.recursive,
             },
             WorkspaceDeleteResult,
@@ -1102,9 +1087,9 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
     if cross_root:
         client = _workspace_client(context)
         required = (
-            ("workspace.stat", "workspace.export")
+            ("filesystem.stat", "filesystem.export")
             if arguments.source_root == "workspace"
-            else ("workspace.import",)
+            else ("filesystem.import",)
         )
         if not all(client.supports(operation) for operation in required):
             return ToolResult.error("executionAgent.operationUnavailable")
@@ -1133,14 +1118,12 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
     if not source_allowed or not destination_allowed:
         return ToolResult.error("permission.denied")
     if arguments.source_root == arguments.destination_root == "workspace":
-        destination = context.root_files.normalize_relative_path(
-            arguments.destination_path
-        )
+        destination = _execution_path(context, arguments.destination_path)
         result = await _workspace_request(
             context,
-            "workspace.copy",
+            "filesystem.copy",
             {
-                "path": context.root_files.normalize_relative_path(arguments.source_path),
+                "path": _execution_path(context, arguments.source_path),
                 "destination": destination,
             },
             WorkspacePathResult,
@@ -1149,10 +1132,10 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
         _require_workspace_path(result.path, destination)
         file_actions: tuple[ToolFileAction, ...] = ()
         client = _workspace_client(context)
-        if client.supports("workspace.stat"):
+        if client.supports("filesystem.stat"):
             try:
                 stat_result = await client.request(
-                    "workspace.stat", {"path": result.path}, WorkspaceStatResult
+                    "filesystem.stat", {"path": result.path}, WorkspaceStatResult
                 )
                 if (
                     isinstance(stat_result, WorkspaceStatResult)
@@ -1170,9 +1153,15 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
             file_actions=file_actions,
         )
     if cross_root:
-        source = context.root_files.normalize_relative_path(arguments.source_path)
-        destination = context.root_files.normalize_relative_path(
-            arguments.destination_path
+        source = (
+            _execution_path(context, arguments.source_path)
+            if arguments.source_root == "workspace"
+            else context.root_files.normalize_relative_path(arguments.source_path)
+        )
+        destination = (
+            _execution_path(context, arguments.destination_path)
+            if arguments.destination_root == "workspace"
+            else context.root_files.normalize_relative_path(arguments.destination_path)
         )
         client = _workspace_client(context)
         if arguments.source_root == "workspace":
@@ -1247,14 +1236,12 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
     if not source_allowed or not destination_allowed:
         return ToolResult.error("permission.denied")
     if arguments.source_root == arguments.destination_root == "workspace":
-        destination = context.root_files.normalize_relative_path(
-            arguments.destination_path
-        )
+        destination = _execution_path(context, arguments.destination_path)
         result = await _workspace_request(
             context,
-            "workspace.move",
+            "filesystem.move",
             {
-                "path": context.root_files.normalize_relative_path(arguments.source_path),
+                "path": _execution_path(context, arguments.source_path),
                 "destination": destination,
             },
             WorkspacePathResult,
@@ -1263,10 +1250,10 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
         _require_workspace_path(result.path, destination)
         file_actions: tuple[ToolFileAction, ...] = ()
         client = _workspace_client(context)
-        if client.supports("workspace.stat"):
+        if client.supports("filesystem.stat"):
             try:
                 stat_result = await client.request(
-                    "workspace.stat", {"path": result.path}, WorkspaceStatResult
+                    "filesystem.stat", {"path": result.path}, WorkspaceStatResult
                 )
                 if (
                     isinstance(stat_result, WorkspaceStatResult)
@@ -1308,15 +1295,14 @@ def _process_permission(
     client = _workspace_client(context)
     if shell and read_only:
         return PermissionRequest(
-            capability="process.execute",
+            capability="shell.execute",
             resource_type="shell_command",
             resource_scope=json.dumps(
                 {
                     "agentId": str(client.agent_id),
                     "command": str(arguments["command"]),
-                    "rootId": str(client.root_id),
-                    "rootRevision": client.root_revision,
-                    "workingDirectory": client.working_directory,
+                    "currentDirectory": client.current_directory,
+                    "inspection": "read_only",
                 },
                 ensure_ascii=True,
                 separators=(",", ":"),
@@ -1337,21 +1323,27 @@ def _process_permission(
                     format="code",
                 ),
             ),
+            force_ask=True,
         )
-    warning = (
-        "Shell-Befehle können Dateien verändern, Programme starten und auf Netzwerkdienste "
-        "zugreifen. Je nach Agent werden sie mit Administratorrechten ausgeführt. Das "
-        "Arbeitsverzeichnis begrenzt keinen Prozess als Betriebssystem-Sandbox."
-    )
+    warning = "Der Befehl kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
     return PermissionRequest(
-        capability="process.execute",
-        resource_type="execution_workspace",
+        capability="shell.execute" if shell else "process.execute",
+        resource_type="shell_command" if shell else "execution_process",
         resource_scope=json.dumps(
             {
                 "agentId": str(client.agent_id),
-                "rootId": str(client.root_id),
-                "rootRevision": client.root_revision,
-                "workingDirectory": client.working_directory,
+                "currentDirectory": client.current_directory,
+                **(
+                    {
+                        "command": str(arguments["command"]),
+                        "inspection": "risky",
+                    }
+                    if shell
+                    else {
+                        "program": str(arguments["program"]),
+                        "args": [str(value) for value in arguments.get("args", [])],
+                    }
+                ),
             },
             ensure_ascii=True,
             separators=(",", ":"),
@@ -1383,6 +1375,7 @@ def _process_permission(
                 ),
             )
         ),
+        force_ask=shell,
         available_decisions=("allow_once", "deny"),
     )
 
@@ -1393,13 +1386,9 @@ async def _execute_process(
     client = _workspace_client(context)
     if (
         client.current_directory is None
-        or client.root_id is None
-        or client.root_revision is None
         or not await _directory_allowed(
             context,
             client.current_directory,
-            client.root_id,
-            client.root_revision,
             ask=True,
         )
     ):
@@ -1409,7 +1398,9 @@ async def _execute_process(
         _process_permission(context, arguments, shell=operation == "shell.run"),
     ):
         return ToolResult.error("permission.denied")
-    return await _run_process(context, operation, arguments)
+    return await _run_process(
+        context, operation, {**arguments, "currentDirectory": client.current_directory}
+    )
 
 
 async def _run_process(
@@ -1457,48 +1448,65 @@ async def _process_exec(
 
 async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> ToolResult:
     client = _workspace_client(context)
-    if (
-        client.current_directory is None
-        or client.root_id is None
-        or client.root_revision is None
-        or not await _directory_allowed(
-            context,
-            client.current_directory,
-            client.root_id,
-            client.root_revision,
-            ask=True,
-        )
-    ):
+    if client.current_directory is None:
         return ToolResult.error("permission.denied")
     inspection = await client.request(
-        "shell.inspect", {"command": arguments.command}, ShellInspectResult
+        "shell.inspect",
+        {"command": arguments.command, "currentDirectory": client.current_directory},
+        ShellInspectResult,
     )
     assert isinstance(inspection, ShellInspectResult)
+    paths = [client.current_directory, *(target.path for target in inspection.targets)]
+
+    async def strictest_policy() -> str | None:
+        agent = await context.db.scalar(
+            select(ExecutionAgent)
+            .where(
+                ExecutionAgent.id == client.agent_id,
+                ExecutionAgent.user_id == context.session.user_id,
+                ExecutionAgent.revoked_at.is_(None),
+            )
+            .execution_options(populate_existing=True)
+        )
+        if agent is None:
+            return None
+        home = PurePosixPath(agent.home_directory) if agent.home_directory else None
+        policies = []
+        for path in paths:
+            target = PurePosixPath(path)
+            policies.append(
+                agent.home_shell_policy
+                if home is not None and (target == home or home in target.parents)
+                else agent.external_shell_policy
+            )
+        if not inspection.analysis_complete:
+            policies.append(agent.external_shell_policy)
+        priority = {"auto": 0, "ask": 1, "deny": 2}
+        return max(policies, key=lambda value: priority[value])
+
+    strictest = await strictest_policy()
+    if strictest is None:
+        return ToolResult.error("permission.denied")
+    if strictest == "deny":
+        return ToolResult.error("permission.denied")
     process_permission = _process_permission(
         context,
         {"command": arguments.command},
         shell=True,
-        read_only=inspection.read_only,
+        read_only=inspection.analysis_complete and inspection.read_only,
     )
-    if inspection.analysis_complete:
-        for target in inspection.targets:
-            if not await _directory_allowed(
-                context,
-                target.path if target.kind == "directory" else os.path.dirname(target.path),
-                target.root_id,
-                target.root_revision,
-                ask=True,
-            ):
-                return ToolResult.error("permission.denied")
-    else:
-        process_permission = replace(process_permission, force_ask=True)
-    if not await _allow(context, process_permission):
-        return ToolResult.error("permission.denied")
+    if strictest == "ask":
+        if not await _allow(context, process_permission):
+            return ToolResult.error("permission.denied")
+        strictest = await strictest_policy()
+        if strictest in {None, "deny"}:
+            return ToolResult.error("permission.denied")
     return await _run_process(
         context,
         "shell.run",
         {
             "command": arguments.command,
+            "currentDirectory": client.current_directory,
             "expectedInspectionRevision": inspection.inspection_revision,
         },
     )
@@ -3890,14 +3898,15 @@ _PROCESS_EXECUTE = ToolAction(
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
+_SHELL_EXECUTE = ToolAction(
+    "shell.execute",
+    "Shell-Befehle ausführen",
+    ToolExecutionPolicy.ASK,
+    configurable=False,
+    mutates=True,
+)
 _SYSTEM_INFO = ToolAction(
     "system.info", "Systeminformationen", ToolExecutionPolicy.AUTO
-)
-_CHANGE_DIRECTORY = ToolAction(
-    "execution.directory",
-    "Verzeichnis wechseln",
-    ToolExecutionPolicy.AUTO,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO),
 )
 tool_registry = ToolRegistry(
     [
@@ -4422,7 +4431,6 @@ tool_registry = ToolRegistry(
             group="process",
             label="Verzeichnis wechseln",
             icon="drive_file_move",
-            actions=(_CHANGE_DIRECTORY,),
         ),
         ToolDefinition(
             "process_exec",
@@ -4449,7 +4457,7 @@ tool_registry = ToolRegistry(
             group="process",
             label="Shell-Befehl ausführen",
             icon="terminal",
-            actions=(_PROCESS_EXECUTE,),
+            actions=(_SHELL_EXECUTE,),
         ),
     ],
 )

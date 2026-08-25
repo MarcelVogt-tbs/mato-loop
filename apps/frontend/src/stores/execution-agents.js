@@ -19,27 +19,6 @@ export function absoluteWebsocketUrl(value, location = globalThis.location) {
   }
 }
 
-export function usableExecutionRoots(agent) {
-  if (!agent?.connected || !agent.operations?.includes('workspace.list')) return []
-  return (agent.roots || []).filter((root) => root?.id && root.revision)
-}
-
-export function executionHomeRoot(agent, roots = usableExecutionRoots(agent)) {
-  if (!agent?.homeDirectory || typeof agent.homeRelativeDirectory !== 'string') return null
-  return roots.find((root) => (
-    root.id === agent.homeRootId && root.revision === agent.homeRootRevision
-  )) || null
-}
-
-export function executionRootPatch(agent, root) {
-  const home = root && executionHomeRoot(agent, [root])
-  return {
-    preferred_root_id: root?.id || null,
-    working_directory: home ? agent.homeRelativeDirectory : null,
-    current_directory: home ? agent.homeDirectory : null
-  }
-}
-
 export const useExecutionAgentStore = defineStore('execution-agents', {
   state: () => ({
     items: [],
@@ -54,20 +33,11 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
     workspaceContextFor: (state) => (preferences) => {
       const executionAgentId = preferences?.preferredExecutionAgentId || null
       const agent = state.items.find((item) => item.id === executionAgentId)
-      const rootId = preferences?.preferredRootId || null
-      const root = agent?.roots?.find((item) => item.id === rootId)
-      const availableOperations = root
-        ? agent?.operations || []
-        : (agent?.operations || []).filter((operation) => (
-            operation === 'system.info' || operation === 'filesystem.resolve'
-          ))
-      const connected = Boolean(agent?.connected && (root || agent?.protocolVersion >= 2))
-      const operations = connected ? availableOperations : []
+      const connected = Boolean(agent?.connected)
       return {
         executionAgentId,
-        rootId,
         connected,
-        operations
+        operations: connected ? agent.operations || [] : []
       }
     }
   },
@@ -121,14 +91,14 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
       globalThis.clearInterval(pollTimer)
       pollTimer = null
     },
-    async create(name, pairingTokenDurationSeconds) {
-      const { data } = await api.post('/execution-agents', { name, pairingTokenDurationSeconds })
+    async create(settings, pairingTokenDurationSeconds) {
+      const { data } = await api.post('/execution-agents', { ...settings, pairingTokenDurationSeconds })
       this.items = [...this.items.filter((item) => item.id !== data.agent.id), data.agent]
       this.loaded = true
       return { ...data, websocketUrl: absoluteWebsocketUrl(data.websocketUrl) }
     },
-    async rename(id, name) {
-      const { data } = await api.patch(`/execution-agents/${id}`, { name })
+    async update(id, settings) {
+      const { data } = await api.patch(`/execution-agents/${id}`, settings)
       const updated = data.agent || data
       this.items = this.items.map((agent) => agent.id === id ? { ...agent, ...updated } : agent)
       return updated
@@ -137,11 +107,6 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
       const { data } = await api.put('/execution-agents/default', { defaultExecutionAgentId })
       this.defaultExecutionAgentId = data.defaultExecutionAgentId || null
       return this.defaultExecutionAgentId
-    },
-    async setHome(id, homeDirectory) {
-      const { data } = await api.put(`/execution-agents/${id}/home`, { homeDirectory })
-      this.items = this.items.map((agent) => agent.id === id ? { ...agent, ...data } : agent)
-      return data
     },
     async createPairingToken(id, pairingTokenDurationSeconds) {
       const { data } = await api.post(`/execution-agents/${id}/pairing-token`, { pairingTokenDurationSeconds })

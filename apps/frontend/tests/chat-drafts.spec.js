@@ -180,7 +180,7 @@ describe('chat drafts', () => {
     expect(stored.newSession.options).not.toHaveProperty('trustLevel')
   })
 
-  it('clears orphaned legacy workspace fields from persisted drafts', async () => {
+  it('clears removed workspace fields from persisted drafts', () => {
     window.localStorage.setItem('matoLoopChatDrafts', JSON.stringify({
       ownerUserId: 'user-1',
       newSession: {
@@ -197,26 +197,9 @@ describe('chat drafts', () => {
     chat.setDraftOwner(null)
     chat.setDraftOwner('user-1')
 
-    expect(chat.activeContext).toMatchObject({
-      preferredExecutionAgentId: null,
-      preferredRootId: null,
-      workingDirectory: null,
-      currentDirectory: null
-    })
-
-    Object.assign(chat.activeContext, {
-      preferredExecutionAgentId: 'agent-1',
-      preferredRootId: null,
-      workingDirectory: 'project',
-      currentDirectory: '/home/user/project'
-    })
-    await chat.updateActive({ current_directory: '/home/user/project' })
-    expect(chat.activeContext).toMatchObject({
-      preferredExecutionAgentId: 'agent-1',
-      preferredRootId: null,
-      workingDirectory: null,
-      currentDirectory: null
-    })
+    expect(chat.activeContext).toMatchObject({ preferredExecutionAgentId: null, currentDirectory: null })
+    expect(chat.activeContext).not.toHaveProperty('preferredRootId')
+    expect(chat.activeContext).not.toHaveProperty('workingDirectory')
   })
 
   it('sends the selected web-search policy when creating a session', async () => {
@@ -323,7 +306,7 @@ describe('chat drafts', () => {
     expect(chat.running).toBe(false)
   })
 
-  it('creates a session without a computer or backend-local working directory', async () => {
+  it('creates a session without computer file context', async () => {
     api.post.mockResolvedValue({
       data: { session: { id: 'session-1', messages: [] }, runId: 'run-1' }
     })
@@ -331,21 +314,18 @@ describe('chat drafts', () => {
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
     Object.assign(chat.activeContext, {
       preferredExecutionAgentId: null,
-      preferredRootId: 'legacy-root',
-      workingDirectory: 'legacy-project',
       currentDirectory: '/legacy/project'
     })
 
     await chat.startSession('Ohne Computer')
 
     expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
-      preferred_execution_agent_id: null,
-      preferred_root_id: null
+      preferred_execution_agent_id: null
     }))
-    expect(api.post.mock.calls[0][1]).not.toHaveProperty('working_directory')
+    expect(api.post.mock.calls[0][1]).not.toHaveProperty('current_directory')
   })
 
-  it('persists executor preferences and sends them when creating a session', async () => {
+  it('persists computer and absolute current directory and sends them when creating a session', async () => {
     api.post.mockResolvedValue({
       data: { session: { id: 'session-agent', messages: [] }, runId: 'run-agent' }
     })
@@ -353,35 +333,26 @@ describe('chat drafts', () => {
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
 
     await chat.updateActive({ preferred_execution_agent_id: 'agent-1' })
-    await chat.updateActive({ preferred_root_id: 'root-1' })
-    await chat.updateActive({ working_directory: 'projekt' })
     await chat.updateActive({ current_directory: '/home/user/projekt' })
     expect(JSON.parse(window.localStorage.getItem('matoLoopChatDrafts')).newSession.options)
       .toMatchObject({
         preferredExecutionAgentId: 'agent-1',
-        preferredRootId: 'root-1',
-        workingDirectory: 'projekt',
         currentDirectory: '/home/user/projekt'
       })
     await chat.startSession('Lokal ausführen')
 
     expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
       preferred_execution_agent_id: 'agent-1',
-      preferred_root_id: 'root-1',
-      working_directory: 'projekt'
+      current_directory: '/home/user/projekt'
     }))
-    expect(api.post.mock.calls[0][1]).not.toHaveProperty('currentDirectory')
-    expect(api.post.mock.calls[0][1]).not.toHaveProperty('current_directory')
     const stored = JSON.parse(window.localStorage.getItem('matoLoopChatDrafts'))
     expect(stored.newSession.options.preferredExecutionAgentId).toBeNull()
   })
 
-  it('clears root and working directory when the executor changes', async () => {
+  it('clears the current directory when the computer changes', async () => {
     const chat = useChatStore()
     Object.assign(chat.activeContext, {
       preferredExecutionAgentId: 'agent-old',
-      preferredRootId: 'root-old',
-      workingDirectory: 'projekt',
       currentDirectory: '/home/user/projekt'
     })
 
@@ -389,76 +360,44 @@ describe('chat drafts', () => {
 
     expect(chat.activeContext).toMatchObject({
       preferredExecutionAgentId: 'agent-new',
-      preferredRootId: null,
-      workingDirectory: null,
       currentDirectory: null
     })
   })
 
-  it('keeps explicitly supplied home fields when the executor changes', async () => {
+  it('keeps an explicitly supplied home when the computer changes', async () => {
     const chat = useChatStore()
 
     await chat.updateActive({
       preferred_execution_agent_id: 'agent-new',
-      preferred_root_id: 'root-new',
-      working_directory: 'home',
       current_directory: '/workspace/home'
     })
 
     expect(chat.activeContext).toMatchObject({
       preferredExecutionAgentId: 'agent-new',
-      preferredRootId: 'root-new',
-      workingDirectory: 'home',
       currentDirectory: '/workspace/home'
     })
   })
 
-  it('keeps an explicitly supplied current folder when the computer area changes', async () => {
-    const chat = useChatStore()
-    Object.assign(chat.activeContext, {
-      preferredExecutionAgentId: 'agent-1',
-      preferredRootId: 'root-old'
-    })
-
-    await chat.updateActive({
-      preferred_root_id: 'root-home',
-      working_directory: 'user',
-      current_directory: '/home/user'
-    })
-
-    expect(chat.activeContext).toMatchObject({
-      preferredRootId: 'root-home',
-      workingDirectory: 'user',
-      currentDirectory: '/home/user'
-    })
-  })
-
-  it('sends an explicitly supplied current folder with a persisted area change', async () => {
+  it('sends an explicitly supplied current folder for a persisted session', async () => {
     api.patch.mockResolvedValue({
       data: {
         id: 'session-1',
-        preferredRootId: 'root-home',
-        workingDirectory: 'user',
         currentDirectory: '/home/user'
       }
     })
     const chat = useChatStore()
     chat.current = {
       id: 'session-1',
-      preferredExecutionAgentId: 'agent-1',
-      preferredRootId: 'root-old'
+      preferredExecutionAgentId: 'agent-1'
     }
     chat.selectedSessionId = 'session-1'
 
     await chat.updateActive({
-      preferred_root_id: 'root-home',
-      working_directory: 'user',
       current_directory: '/home/user'
     })
 
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      preferred_root_id: 'root-home',
-      working_directory: 'user'
+      current_directory: '/home/user'
     })
     expect(chat.current.currentDirectory).toBe('/home/user')
   })
@@ -468,8 +407,6 @@ describe('chat drafts', () => {
       data: {
         id: 'session-1',
         preferredExecutionAgentId: 'agent-new',
-        preferredRootId: null,
-        workingDirectory: null,
         currentDirectory: '/home/new'
       }
     })
@@ -477,8 +414,6 @@ describe('chat drafts', () => {
     chat.current = {
       id: 'session-1',
       preferredExecutionAgentId: 'agent-old',
-      preferredRootId: 'root-old',
-      workingDirectory: 'projekt',
       currentDirectory: '/home/old/projekt'
     }
     chat.selectedSessionId = 'session-1'
@@ -487,13 +422,12 @@ describe('chat drafts', () => {
 
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
       preferred_execution_agent_id: 'agent-new',
-      preferred_root_id: null,
-      working_directory: null
+      current_directory: null
     })
     expect(chat.current.currentDirectory).toBe('/home/new')
   })
 
-  it('drops draft directories without an explicit computer root', async () => {
+  it('drops draft directories without an explicit computer', async () => {
     const chat = useChatStore()
 
     await chat.updateActive({ current_directory: '/home/user' })
@@ -503,21 +437,21 @@ describe('chat drafts', () => {
       .toMatchObject({ currentDirectory: null })
 
     api.patch.mockResolvedValue({ data: { id: 'session-1', currentDirectory: '/srv/project' } })
-    chat.current = { id: 'session-1', currentDirectory: '/srv' }
+    chat.current = { id: 'session-1', preferredExecutionAgentId: 'agent-1', currentDirectory: '/srv' }
     chat.selectedSessionId = 'session-1'
     await chat.updateActive({ current_directory: '/should-not-be-sent', title: 'Test' })
 
-    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', { title: 'Test' })
+    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
+      current_directory: '/should-not-be-sent', title: 'Test'
+    })
     expect(chat.current.currentDirectory).toBe('/srv/project')
   })
 
-  it('sanitizes incomplete workspace defaults', async () => {
+  it('keeps current directory defaults for a selected computer', async () => {
     api.get.mockResolvedValue({
       data: {
         modelId: 'model-1',
         preferredExecutionAgentId: 'agent-1',
-        preferredRootId: null,
-        workingDirectory: 'legacy-project',
         currentDirectory: '/legacy/project'
       }
     })
@@ -527,9 +461,7 @@ describe('chat drafts', () => {
 
     expect(chat.activeContext).toMatchObject({
       preferredExecutionAgentId: 'agent-1',
-      preferredRootId: null,
-      workingDirectory: null,
-      currentDirectory: null
+      currentDirectory: '/legacy/project'
     })
   })
 
@@ -538,8 +470,6 @@ describe('chat drafts', () => {
       data: {
         modelId: 'model-1',
         preferredExecutionAgentId: 'agent-1',
-        preferredRootId: 'root-1',
-        workingDirectory: 'user',
         currentDirectory: '/home/user'
       }
     })
@@ -556,16 +486,16 @@ describe('chat drafts', () => {
     let resolvePatch
     api.patch.mockReturnValue(new Promise((resolve) => { resolvePatch = resolve }))
     const chat = useChatStore()
-    chat.current = { id: 'session-1', messages: [], workingDirectory: null }
+    chat.current = { id: 'session-1', messages: [], currentDirectory: null }
     chat.selectedSessionId = 'session-1'
 
-    const updating = chat.updateActive({ working_directory: 'projekt' })
+    const updating = chat.updateActive({ current_directory: '/projekt' })
 
     expect(chat.sessionSettingsPending).toBe(1)
     await expect(chat.send('Nicht mit altem Kontext senden')).resolves.toBeNull()
     expect(api.post).not.toHaveBeenCalled()
 
-    resolvePatch({ data: { id: 'session-1', workingDirectory: 'projekt' } })
+    resolvePatch({ data: { id: 'session-1', currentDirectory: '/projekt' } })
     await updating
     expect(chat.sessionSettingsPending).toBe(0)
   })

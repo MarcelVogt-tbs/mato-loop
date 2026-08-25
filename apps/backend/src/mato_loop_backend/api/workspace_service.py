@@ -12,7 +12,6 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.execution import ExecutionAgentError, execution_agent_connections
@@ -42,10 +41,8 @@ class FileScope(StrEnum):
 class _FileContext:
     root_files: RootFileService | None = None
     root: FileRoot | None = None
-    working_directory: str | None = None
+    current_directory: str | None = None
     agent_id: UUID | None = None
-    agent_root_id: UUID | None = None
-    agent_root_revision: str | None = None
     agent_writable: bool = True
     agent_operations: frozenset[str] = frozenset()
     instance_limits: InstanceLimits = field(default_factory=InstanceLimits)
@@ -88,10 +85,15 @@ def _normalize_agent_path(path: str) -> str:
         raise ApiError(400, "file.invalidPath")
     if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in path):
         raise ApiError(400, "file.invalidPath")
-    if path == ".":
-        return path
     parsed = PurePosixPath(path)
-    if parsed.is_absolute() or any(part in {"", ".", ".."} for part in path.split("/")):
+    if (
+        not parsed.is_absolute()
+        or parsed.as_posix() != path
+        or (
+            path != "/"
+            and any(part in {"", ".", ".."} for part in path.split("/")[1:])
+        )
+    ):
         raise ApiError(400, "file.invalidPath")
     return parsed.as_posix()
 
@@ -100,17 +102,12 @@ async def _agent_context(
     db: AsyncSession,
     user: UserAccount,
     agent_id: UUID,
-    root_id: UUID,
-    working_directory: str | None,
-    root_identity: str | None,
     *,
+    current_directory: str | None = None,
     writable: bool = True,
-    expected_revision: str | None = None,
 ) -> _FileContext:
     owned = await db.scalar(
-        select(ExecutionAgent)
-        .options(selectinload(ExecutionAgent.roots))
-        .where(
+        select(ExecutionAgent).where(
             ExecutionAgent.id == agent_id,
             ExecutionAgent.user_id == user.id,
             ExecutionAgent.revoked_at.is_(None),
@@ -121,27 +118,12 @@ async def _agent_context(
     snapshot = execution_agent_connections.snapshot(agent_id)
     if snapshot is None:
         raise ApiError(503, "executionAgent.unavailable")
-    operations, roots = snapshot
-    stored_root = next((item for item in owned.roots if item.id == root_id), None)
-    root = next((item for item in roots if item.id == root_id), None)
-    if (
-        stored_root is None
-        or root is None
-        or root.revision != stored_root.revision
-        or expected_revision is not None and root.revision != expected_revision
-        or not _SHA256_RE.fullmatch(root.revision)
-    ):
-        raise ApiError(404, "file.workspaceNotSelected")
-    if root_identity is not None and root_identity != str(root_id):
-        raise ApiError(404, "file.fileNotFound")
     return _FileContext(
         root=FileRoot.WORKSPACE,
-        working_directory=_normalize_agent_path(working_directory or "."),
+        current_directory=current_directory,
         agent_id=agent_id,
-        agent_root_id=root_id,
-        agent_root_revision=root.revision,
         agent_writable=writable,
-        agent_operations=operations,
+        agent_operations=snapshot,
     )
 
 
@@ -151,11 +133,9 @@ async def _file_context(
     user: UserAccount,
     db: AsyncSession,
     *,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     root_identity: str | None = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
-    root_revision: str | None = None,
     for_update: bool = False,
     instance_limits: InstanceLimits | None = None,
 ) -> _FileContext:
@@ -190,56 +170,28 @@ async def _file_context(
             root=FileRoot.SESSION,
             instance_limits=instance_limits,
         )
-    if root_revision is not None:
-        if (
-            execution_agent_id is None
-            or root_id is None
-            or working_directory is None
-        ):
-            raise ApiError(400, "file.invalidRoot")
+    if root_identity is not None:
+        raise ApiError(400, "file.invalidRoot")
+    if execution_agent_id is not None:
         return replace(
             await _agent_context(
                 db,
                 user,
                 execution_agent_id,
-                root_id,
-                working_directory,
-                root_identity,
-                expected_revision=root_revision,
+                current_directory=current_directory,
             ),
             instance_limits=instance_limits,
         )
     if session is not None:
         selected_agent_id = session.preferred_execution_agent_id
-        selected_root_id = session.preferred_root_id
-        if selected_agent_id is None or selected_root_id is None:
+        if selected_agent_id is None:
             raise ApiError(400, "file.workspaceNotSelected")
-        if (
-            execution_agent_id is not None and execution_agent_id != selected_agent_id
-        ) or (root_id is not None and root_id != selected_root_id):
-            raise ApiError(404, "file.fileNotFound")
         return replace(
             await _agent_context(
                 db,
                 user,
                 selected_agent_id,
-                selected_root_id,
-                session.working_directory,
-                root_identity,
-            ),
-            instance_limits=instance_limits,
-        )
-    if execution_agent_id is not None or root_id is not None:
-        if execution_agent_id is None or root_id is None:
-            raise ApiError(400, "file.workspaceNotSelected")
-        return replace(
-            await _agent_context(
-                db,
-                user,
-                execution_agent_id,
-                root_id,
-                working_directory,
-                root_identity,
+                current_directory=current_directory or session.current_directory,
             ),
             instance_limits=instance_limits,
         )
@@ -278,7 +230,7 @@ def _context_error(exc: RootFileError) -> ApiError:
 
 
 def _join_path(parent: str, name: str) -> str:
-    return name if parent == "." else f"{parent}/{name}"
+    return name if parent == "." else f"{parent.rstrip('/')}/{name}"
 
 
 def _is_same_or_descendant(path: str, parent: str) -> bool:
@@ -302,7 +254,7 @@ async def _clear_file_grants(
             await db.scalars(
                 select(PermissionGrant)
                 .where(
-                    PermissionGrant.resource_type.in_(("execution_root_path", "root_path"))
+                    PermissionGrant.resource_type.in_(("execution_directory", "root_path"))
                 )
                 .join(ChatSession, ChatSession.id == PermissionGrant.session_id)
                 .where(ChatSession.user_id == user.id)
@@ -311,7 +263,7 @@ async def _clear_file_grants(
     )
     for grant in grants:
         remove = False
-        if grant.resource_type == "execution_root_path":
+        if grant.resource_type == "execution_directory":
             if context.agent_id is None:
                 continue
             try:
@@ -319,9 +271,6 @@ async def _clear_file_grants(
                 grant_path = scope["path"]
                 remove = (
                     scope["agentId"] == str(context.agent_id)
-                    and scope["rootId"] == str(context.agent_root_id)
-                    and scope["rootRevision"] == context.agent_root_revision
-                    and scope["workingDirectory"] == context.working_directory
                     and isinstance(grant_path, str)
                     and any(
                         _is_same_or_descendant(grant_path, path)
@@ -414,35 +363,27 @@ async def _agent_request(
 ) -> dict:
     if (
         context.agent_id is None
-        or context.agent_root_id is None
-        or context.agent_root_revision is None
     ):
         raise ApiError(500, "internal.unexpected")
     if not context.agent_writable and operation in {
-        "workspace.copy",
-        "workspace.delete",
-        "workspace.import",
-        "workspace.mkdir",
-        "workspace.move",
-        "workspace.rename",
-        "workspace.write",
+        "filesystem.copy",
+        "filesystem.delete",
+        "filesystem.import",
+        "filesystem.mkdir",
+        "filesystem.move",
+        "filesystem.rename",
+        "filesystem.write",
     }:
         raise ApiError(403, "http.forbidden")
-    payload = {
-        "rootId": str(context.agent_root_id),
-        "rootRevision": context.agent_root_revision,
-        "workingDirectory": context.working_directory or ".",
-        **arguments,
-    }
     try:
         response = await execution_agent_connections.request(
-            context.agent_id, operation, payload
+            context.agent_id, operation, arguments
         )
     except ExecutionAgentError as exc:
         raise _execution_error(exc.code, manager=True) from exc
     if not response.ok:
         error_code = response.error.code if response.error else ""
-        logger.warning("Execution agent operation %s failed: %s", operation, error_code)
+        logger.warning("MatoLoop Agent operation %s failed: %s", operation, error_code)
         raise _execution_error(error_code)
     if not isinstance(response.result, dict):
         raise ApiError(502, "executionAgent.protocolError")
@@ -480,6 +421,6 @@ def _agent_entry(value: object, *, expected_path: str | None = None) -> dict:
 async def _agent_stat(context: _FileContext, path: str) -> dict:
     normalized = _normalize_agent_path(path)
     return _agent_entry(
-        await _agent_request(context, "workspace.stat", {"path": normalized}),
+        await _agent_request(context, "filesystem.stat", {"path": normalized}),
         expected_path=normalized,
     )

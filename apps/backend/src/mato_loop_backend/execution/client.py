@@ -26,18 +26,17 @@ class ExecutionResult(BaseModel):
     )
 
 
-def _relative_path(value: str) -> str:
-    if value == ".":
-        return value
-    parts = value.split("/")
+def _absolute_path(value: str) -> str:
+    parts = value.split("/")[1:]
     if (
         not value
         or "\\" in value
-        or PurePosixPath(value).is_absolute()
-        or any(part in {"", ".", ".."} for part in parts)
+        or not PurePosixPath(value).is_absolute()
+        or PurePosixPath(value).as_posix() != value
+        or (value != "/" and any(part in {"", ".", ".."} for part in parts))
         or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
     ):
-        raise ValueError("invalid relative path")
+        raise ValueError("invalid absolute path")
     return value
 
 
@@ -48,12 +47,12 @@ class WorkspaceEntry(ExecutionResult):
     size: int | None = Field(ge=0)
     modified_at: float
 
-    _validate_path = field_validator("path")(_relative_path)
+    _validate_path = field_validator("path")(_absolute_path)
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        if _relative_path(value) == "." or "/" in value:
+        if not value or "/" in value or value in {".", ".."}:
             raise ValueError("invalid entry name")
         return value
 
@@ -78,7 +77,7 @@ class WorkspaceGlobResult(ExecutionResult):
     truncated: bool
 
     _validate_paths = field_validator("paths")(
-        lambda values: [_relative_path(value) for value in values]
+        lambda values: [_absolute_path(value) for value in values]
     )
 
 
@@ -87,7 +86,7 @@ class WorkspaceGrepMatch(ExecutionResult):
     line: int = Field(ge=1)
     text: str = Field(max_length=2_000)
 
-    _validate_path = field_validator("path")(_relative_path)
+    _validate_path = field_validator("path")(_absolute_path)
 
 
 class WorkspaceGrepResult(ExecutionResult):
@@ -98,7 +97,7 @@ class WorkspaceGrepResult(ExecutionResult):
 class WorkspacePathResult(ExecutionResult):
     path: str
 
-    _validate_path = field_validator("path")(_relative_path)
+    _validate_path = field_validator("path")(_absolute_path)
 
 
 class WorkspaceWriteResult(WorkspacePathResult):
@@ -133,23 +132,8 @@ class ProcessResult(ExecutionResult):
 
 class DirectoryResult(ExecutionResult):
     path: str
-    root_id: UUID
-    root_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    relative_path: str = Field(max_length=1_000)
 
-    @field_validator("root_id", mode="before")
-    @classmethod
-    def parse_root_id(cls, value: Any) -> Any:
-        return UUID(value) if isinstance(value, str) else value
-
-    _validate_relative_path = field_validator("relative_path")(_relative_path)
-
-    @field_validator("path")
-    @classmethod
-    def absolute_path(cls, value: str) -> str:
-        if not value.startswith("/"):
-            raise ValueError("path must be absolute")
-        return value
+    _validate_path = field_validator("path")(_absolute_path)
 
 
 class SystemInfoResult(ExecutionResult):
@@ -165,15 +149,9 @@ class SystemInfoResult(ExecutionResult):
 
 class ShellTarget(ExecutionResult):
     path: str
-    root_id: UUID
-    root_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    relative_path: str = Field(max_length=1_000)
     kind: str
 
-    @field_validator("root_id", mode="before")
-    @classmethod
-    def parse_root_id(cls, value: Any) -> Any:
-        return UUID(value) if isinstance(value, str) else value
+    _validate_path = field_validator("path")(_absolute_path)
 
 
 class ShellInspectResult(ExecutionResult):
@@ -278,9 +256,6 @@ _MANAGER_ERROR_CODES = frozenset(
 @dataclass(slots=True)
 class ExecutionClient:
     agent_id: UUID
-    root_id: UUID | None
-    root_revision: str | None
-    working_directory: str | None
     operations: frozenset[str]
     current_directory: str | None = None
 
@@ -289,7 +264,7 @@ class ExecutionClient:
 
     async def read_bytes(self, path: str, *, limit: int) -> bytes:
         stat_result = await self.request(
-            "workspace.stat", {"path": path}, WorkspaceStatResult
+            "filesystem.stat", {"path": path}, WorkspaceStatResult
         )
         assert isinstance(stat_result, WorkspaceStatResult)
         if stat_result.kind != "file":
@@ -301,7 +276,7 @@ class ExecutionClient:
         )
         try:
             result = await self.request(
-                "workspace.export",
+                "filesystem.export",
                 {
                     "path": path,
                     "transfer": {
@@ -340,7 +315,7 @@ class ExecutionClient:
         )
         try:
             result = await self.request(
-                "workspace.import",
+                "filesystem.import",
                 {
                     "path": path,
                     "transfer": {
@@ -373,44 +348,11 @@ class ExecutionClient:
     ) -> ExecutionResult:
         if not self.supports(operation):
             raise ExecutionClientError("executionAgent.operationUnavailable")
-        root_arguments: dict[str, str] = {}
-        if operation.startswith("workspace."):
-            if self.root_id is None or self.root_revision is None:
-                raise ExecutionClientError("file.workspaceNotSelected")
-            root_arguments = {
-                "rootId": str(self.root_id),
-                "rootRevision": self.root_revision,
-                "workingDirectory": self.working_directory or ".",
-            }
-        elif operation in {"process.exec", "shell.run", "shell.inspect"} or (
-            operation.startswith("integration.")
-            and operation
-            not in {"integration.openscad.discover", "integration.openscad.test"}
-            and not (
-                operation
-                in {"integration.openscad.render", "integration.openscad.render6"}
-                and arguments.get("source", {}).get("type") == "archive"
-            )
-        ):
-            if (
-                self.root_id is None
-                or self.root_revision is None
-                or self.current_directory is None
-            ):
-                raise ExecutionClientError("file.workspaceNotSelected")
-            root_arguments = {
-                "rootId": str(self.root_id),
-                "rootRevision": self.root_revision,
-                "currentDirectory": self.current_directory,
-            }
         try:
             response = await execution_agent_connections.request(
                 self.agent_id,
                 operation,
-                {
-                    **arguments,
-                    **root_arguments,
-                },
+                arguments,
                 timeout=timeout,
                 on_event=on_event,
             )

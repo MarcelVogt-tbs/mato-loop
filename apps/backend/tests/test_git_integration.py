@@ -18,7 +18,7 @@ from mato_loop_backend.api.routes.integrations import (
     update_git_integration,
 )
 from mato_loop_backend.error_contract import describe_error
-from mato_loop_backend.integrations.git import GIT_ADAPTER, GitConfig
+from mato_loop_backend.integrations.git import GIT_ADAPTER, GitCloneArguments, GitConfig
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
     integration_adapter,
@@ -101,6 +101,12 @@ def test_git_adapter_contract_and_tool_schemas() -> None:
         tools["git_add"].arguments_model.model_validate(
             {"path": ".", "paths": ["README.md"], "unknown": True}
         )
+
+
+@pytest.mark.parametrize("path", ["dir//file", "dir/./file", "dir/\nfile", "dir/\x00file"])
+def test_git_paths_match_the_agent_wire_contract(path) -> None:
+    with pytest.raises(ValidationError):
+        GitCloneArguments(source="repository", destination=path)
 
 
 def test_git_tools_are_available_when_the_agent_advertises_operations() -> None:

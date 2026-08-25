@@ -34,7 +34,7 @@ from mato_loop_backend.agent.tools import (
     tool_registry,
 )
 from mato_loop_backend.integrations import canonicalize_url
-from mato_loop_backend.models import AgentRun, ChatSession, PermissionGrant
+from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
@@ -53,7 +53,6 @@ def _session(**values) -> ChatSession:
         "title": "Test",
         "memory_mode": "disabled",
         "web_search_policy": "available",
-        "working_directory": None,
     }
     return ChatSession(**(defaults | values))
 
@@ -111,13 +110,12 @@ def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -
     )
 
 
-def test_execution_directory_grant_matches_only_same_root_subtree(tmp_path) -> None:
+def test_execution_directory_grant_matches_only_same_agent_subtree(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
     agent_id = uuid4()
-    root_id = uuid4()
     granted = execution_directory_permission(
-        agent_id, "/home/user/project", root_id, "a" * 64
+        agent_id, "/home/user/project"
     )
     grant = PermissionGrant(
         session_id=session.id,
@@ -129,20 +127,50 @@ def test_execution_directory_grant_matches_only_same_root_subtree(tmp_path) -> N
     assert PermissionPolicy.grant_matches(
         grant,
         execution_directory_permission(
-            agent_id, "/home/user/project/src", root_id, "a" * 64
+            agent_id, "/home/user/project/src"
         ),
         root_files,
     )
     assert not PermissionPolicy.grant_matches(
         grant,
         execution_directory_permission(
-            agent_id, "/home/user/project-other", root_id, "a" * 64
+            agent_id, "/home/user/project-other"
         ),
         root_files,
     )
     assert not PermissionPolicy.grant_matches(
         grant, _path_request(root_files, "docs/readme.md", root="session"), root_files
     )
+
+
+@pytest.mark.parametrize(
+    ("path", "home_policy", "external_policy", "expected"),
+    [
+        ("/home/user/project", "auto", "deny", PermissionDecision.ALLOW),
+        ("/home/user-other", "auto", "deny", PermissionDecision.DENY),
+        ("/srv/project", "auto", "ask", PermissionDecision.ASK),
+    ],
+)
+async def test_execution_filesystem_policy_uses_home_boundary(
+    tmp_path, path, home_policy, external_policy, expected
+) -> None:
+    session = _session(user_id=uuid4())
+    root_files = _root_files(tmp_path, session)
+    agent = ExecutionAgent(
+        id=uuid4(),
+        user_id=session.user_id,
+        alias="Desktop",
+        home_directory="/home/user",
+        home_filesystem_policy=home_policy,
+        external_filesystem_policy=external_policy,
+    )
+    db = _db_with_grants()
+    db.scalar.return_value = agent
+    request = execution_directory_permission(
+        agent.id, path, capability="filesystem.read"
+    )
+
+    assert await PermissionPolicy.evaluate(db, session, request, root_files) == expected
 
 
 async def test_automation_scopes_are_canonical_current_session_and_revision_exact(

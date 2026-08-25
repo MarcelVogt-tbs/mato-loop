@@ -1116,10 +1116,7 @@ async def test_attachment_from_workspace_uses_execution_client(monkeypatch) -> N
     context.root_files.normalize_relative_path.return_value = "notes/notiz.md"
     context.execution_client = SimpleNamespace(
         agent_id=uuid4(),
-        root_id=uuid4(),
-        root_revision="a" * 64,
-        working_directory="project",
-        current_directory=None,
+        current_directory="/home/user/project",
         read_bytes=AsyncMock(return_value=b"# Notiz"),
     )
     arguments = KnowledgeCreateAttachmentArguments(

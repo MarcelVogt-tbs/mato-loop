@@ -192,6 +192,20 @@ def test_openscad_adapter_requires_render_and_export_and_hides_cli_arguments() -
     ] == ["render_openscad"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/usr//bin/openscad",
+        "/usr/../bin/openscad",
+        "/usr/bin/open\nscad",
+        "/usr/bin/open\x00scad",
+    ],
+)
+def test_openscad_binary_path_matches_the_agent_wire_contract(path) -> None:
+    with pytest.raises(ValidationError):
+        OpenScadConfig(binaryPath=path)
+
+
 def test_openscad_source_read_does_not_inherit_the_integration_policy(
     tmp_path: Path,
 ) -> None:
@@ -282,6 +296,7 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
     )
     client = SimpleNamespace(
         agent_id=agent_id,
+        current_directory="/home/user/project",
         supports=operations.__contains__,
         request=AsyncMock(return_value=rendered),
     )
@@ -304,10 +319,13 @@ async def test_openscad_render_uses_exact_workspace_contract_and_validates_ident
             "executablePath": "/usr/bin/openscad",
             "sessionId": str(session_id),
             "entrypoint": "main.scad",
-            "source": {"type": "workspace", "path": "enclosure"},
-            "output": "preview",
-            "previewImages": True,
-        },
+                "source": {
+                    "type": "workspace",
+                    "path": "/home/user/project/enclosure",
+                },
+                "output": "preview",
+                "previewImages": True,
+            },
         OpenScadRenderResult,
         timeout=600.0,
     )
@@ -343,6 +361,7 @@ async def test_openscad_render_falls_back_to_legacy_views() -> None:
     operations = frozenset({"integration.openscad.render"})
     client = SimpleNamespace(
         agent_id=agent_id,
+        current_directory="/home/user/project",
         supports=operations.__contains__,
         request=AsyncMock(return_value=rendered),
     )

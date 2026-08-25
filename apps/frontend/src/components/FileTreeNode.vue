@@ -129,10 +129,10 @@ const mutableEntry = computed(() => (
   !workspace.toolContext
   && ['file', 'directory'].includes(props.entry.kind)
 ))
-const canRename = computed(() => mutableEntry.value && workspace.operationAvailable('workspace.rename'))
-const canDelete = computed(() => mutableEntry.value && workspace.operationAvailable('workspace.delete'))
+const canRename = computed(() => mutableEntry.value && workspace.operationAvailable('filesystem.rename'))
+const canDelete = computed(() => mutableEntry.value && workspace.operationAvailable('filesystem.delete'))
 const canDownload = computed(() => (
-  props.entry.kind === 'file' && workspace.operationAvailable('workspace.export')
+  props.entry.kind === 'file' && workspace.operationAvailable('filesystem.export')
 ))
 const visible = computed(() => !props.filter || cachedSubtreeMatches(props.entry) || expanded.value)
 const icon = computed(() => ({ directory: expanded.value ? 'folder_open' : 'folder', symlink: 'link', file: 'description' })[props.entry.kind])
@@ -152,7 +152,7 @@ function activate() {
     workspace.selectPath(props.entry.path, props.entry.kind)
     toggle()
   }
-  else if (props.entry.kind === 'file' && workspace.operationAvailable('workspace.read')) {
+  else if (props.entry.kind === 'file' && workspace.operationAvailable('filesystem.read')) {
     emit('open-file', { entry: props.entry })
   } else workspace.selectPath(props.entry.path, props.entry.kind)
 }
@@ -163,7 +163,7 @@ function selectOnly() {
 
 async function toggle() {
   if (props.entry.kind !== 'directory') return
-  if (!workspace.operationAvailable('workspace.list')) return
+  if (!workspace.operationAvailable('filesystem.list')) return
   expanded.value = !expanded.value
   if (expanded.value && !workspace.entries[props.entry.path]) await workspace.load(props.entry.path)
 }

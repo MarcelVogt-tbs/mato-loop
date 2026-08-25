@@ -128,7 +128,7 @@
               v-else v-model="form.sourceSessionId" outlined emit-value map-options clearable
               label="Laufzeit aus Session übernehmen (optional)" :options="sessionOptions"
               :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-              hint="Übernimmt Modell, Memory, Websuche, Computer und freigegebenen Bereich."
+              hint="Übernimmt Modell, Memory, Websuche, Computer und aktuellen Ordner."
             />
 
             <q-select
@@ -428,7 +428,6 @@ const skillOptions = computed(() => skills.items.map((skill) => ({ label: skill.
 const runtimeItems = computed(() => {
   const runtime = automations.detail?.runtime || {}
   const computer = executionAgents.byId(runtime.preferredExecutionAgentId)
-  const root = computer?.roots?.find((item) => item.id === runtime.preferredRootId)
   const labels = {
     full: 'Vollständig',
     read_only: 'Nur lesen',
@@ -440,9 +439,8 @@ const runtimeItems = computed(() => {
     ['Modell', runtime.modelId],
     ['Memory', runtime.memoryMode],
     ['Websuche', runtime.webSearchPolicy],
-    ['Computer', runtime.preferredExecutionAgentId ? computer?.name || 'Nicht verfügbar' : null],
-    ['Freigegebener Bereich', runtime.preferredRootId ? root?.label || 'Nicht verfügbar' : null],
-    ['Aktueller Ordner', runtime.currentDirectory || runtime.workingDirectory]
+    ['Computer', runtime.preferredExecutionAgentId ? computer?.alias || 'Nicht verfügbar' : null],
+    ['Aktueller Ordner', runtime.currentDirectory]
   ].map(([label, value]) => ({ label, value: labels[value] || value || 'Nicht festgelegt' }))
 })
 

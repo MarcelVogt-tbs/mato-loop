@@ -26,7 +26,7 @@
         >
           <div class="row items-center no-wrap q-gutter-xs">
             <div v-if="!technicalOnly && fileActions.length" class="tool-call__file-actions row items-center no-wrap">
-              <div v-for="action in fileActions" :key="`${action.rootIdentity}:${action.path}`" class="row no-wrap">
+              <div v-for="action in fileActions" :key="`${action.rootIdentity || action.executionAgentId}:${action.path}`" class="row no-wrap">
                 <q-btn
                   flat
                   round

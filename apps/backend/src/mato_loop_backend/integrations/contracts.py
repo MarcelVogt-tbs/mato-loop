@@ -162,7 +162,7 @@ class IntegrationAdapterDefinition:
         if self.execution_location == "backend":
             return contributions
         if instance.execution_agent_id is None:
-            raise ValueError("agent integrations require an execution agent")
+            raise ValueError("agent integrations require a MatoLoop Agent")
         if contributions.tools:
             raise ValueError("agent integration tools must use static execution tools")
         from mato_loop_backend.integrations.execution import execution_tool_handler

@@ -18,19 +18,11 @@ export function markdownPrintRequest(query) {
     if (rootIdentity) params.root_identity = rootIdentity
   } else {
     const executionAgentId = stringValue(query.execution_agent_id)
-    const rootId = stringValue(query.root_id)
-    const rootRevision = stringValue(query.root_revision)
-    if (!executionAgentId || !rootId) return null
-    if ((rootIdentity || rootRevision) && (!rootIdentity || !REVISION.test(rootRevision || ''))) return null
+    const currentDirectory = stringValue(query.current_directory)
+    if (!executionAgentId || !currentDirectory || !path.startsWith('/')) return null
     if (sessionId) params.session_id = sessionId
     params.execution_agent_id = executionAgentId
-    params.root_id = rootId
-    if (rootIdentity) {
-      params.root_identity = rootIdentity
-      params.root_revision = rootRevision
-    }
-    const workingDirectory = stringValue(query.working_directory)
-    if (workingDirectory) params.working_directory = workingDirectory
+    params.current_directory = currentDirectory
   }
   const revision = stringValue(query.revision)
   return {

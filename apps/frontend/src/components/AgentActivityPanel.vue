@@ -140,7 +140,7 @@
         <div v-if="output.fileActions.length" class="work-history__file-outputs">
           <div
             v-for="action in output.fileActions"
-            :key="`${action.rootIdentity}:${action.path}`"
+            :key="`${action.rootIdentity || action.executionAgentId}:${action.path}`"
             class="work-history__file-output app-surface"
           >
             <q-icon name="draft" color="primary" size="24px" />

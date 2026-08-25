@@ -17,9 +17,9 @@ Für jede Session können Sie festlegen:
 | Websuche | Erzwingen, verfügbar oder deaktiviert |
 | Computer | Optional verbundener Computer für lokale Funktionen |
 
-Datei-, Shell- und Prozessaktionen werden durch die Tool-Richtlinien und die verfügbaren Wurzeln beschränkt; einen getrennten Agent-Modus gibt es nicht. Als rein lesend geprüfte Shell-Befehle können exakt für denselben Befehl, Computer, Arbeitsordner und dieselbe Wurzelversion freigegeben werden. Andere Shell- und Prozessfreigaben gelten nur einmal.
+Vom Modell ausgelöste Datei- und Shell-Aktionen werden durch die vier Richtlinien des gewählten Computers beschränkt; `process.execute` bleibt eine getrennte Tool-Richtlinie. Einen getrennten Agent-Modus gibt es nicht. Als rein lesend geprüfte Shell-Befehle können exakt für denselben Befehl, Computer und absoluten Arbeitsordner freigegeben werden. Andere Shell-Freigaben gelten nur einmal.
 
-Die Computerauswahl ist eine veränderbare Session-Vorgabe. Arbeitsbereich und aktueller Ordner werden unter **Control Center > Dateien** gewählt. Beim Start eines Laufs speichert MatoLoop davon eine unveränderliche Momentaufnahme. Änderungen gelten erst für den nächsten Lauf. Ist kein Computer gewählt oder der gewählte Computer offline, bleiben Chat und Backend-Tools verfügbar; Workspace-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Computer und wiederholt keine fehlgeschlagene lokale Operation automatisch.
+Eine neue Session besitzt nur internen Session-Speicher und noch keinen Workspace. Die Computerauswahl und der absolute aktuelle Ordner unter **Control Center > Dateien** sind veränderbare Session-Vorgaben. Beim Start eines Laufs speichert MatoLoop davon eine unveränderliche Momentaufnahme. Änderungen gelten erst für den nächsten Lauf. Ist kein Computer gewählt oder der gewählte Computer offline, bleiben Chat und Backend-Tools verfügbar; Computer-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Computer und wiederholt keine fehlgeschlagene lokale Operation automatisch.
 
 ## Laufende Antworten
 

@@ -1024,8 +1024,6 @@ export const useChatStore = defineStore('chat', {
         memory_mode: 'memoryMode',
         web_search_policy: 'webSearchPolicy',
         preferred_execution_agent_id: 'preferredExecutionAgentId',
-        preferred_root_id: 'preferredRootId',
-        working_directory: 'workingDirectory',
         current_directory: 'currentDirectory'
       }
       const normalizedPatch = { ...patch }
@@ -1033,17 +1031,7 @@ export const useChatStore = defineStore('chat', {
         Object.hasOwn(patch, 'preferred_execution_agent_id')
         && patch.preferred_execution_agent_id !== options.preferredExecutionAgentId
       ) {
-        if (!Object.hasOwn(patch, 'preferred_root_id')) normalizedPatch.preferred_root_id = null
-        if (!Object.hasOwn(patch, 'working_directory')) normalizedPatch.working_directory = null
         if (!Object.hasOwn(patch, 'current_directory')) normalizedPatch.current_directory = null
-      } else if (
-        Object.hasOwn(patch, 'preferred_root_id')
-        && patch.preferred_root_id !== options.preferredRootId
-      ) {
-        if (!Object.hasOwn(patch, 'working_directory')) normalizedPatch.working_directory = null
-        if (!Object.hasOwn(patch, 'current_directory')) normalizedPatch.current_directory = null
-      } else if (Object.hasOwn(patch, 'working_directory')) {
-        normalizedPatch.current_directory = null
       }
       for (const [field, value] of Object.entries(normalizedPatch)) {
         if (fields[field]) options[fields[field]] = value
@@ -1075,19 +1063,11 @@ export const useChatStore = defineStore('chat', {
       const session = this.current
       if (!session) return
       const normalizedPatch = { ...patch }
-      delete normalizedPatch.current_directory
-      delete normalizedPatch.currentDirectory
       if (
         Object.hasOwn(patch, 'preferred_execution_agent_id')
         && patch.preferred_execution_agent_id !== session.preferredExecutionAgentId
       ) {
-        normalizedPatch.preferred_root_id = null
-        normalizedPatch.working_directory = null
-      } else if (
-        Object.hasOwn(patch, 'preferred_root_id')
-        && patch.preferred_root_id !== session.preferredRootId
-      ) {
-        if (!Object.hasOwn(patch, 'working_directory')) normalizedPatch.working_directory = null
+        if (!Object.hasOwn(patch, 'current_directory')) normalizedPatch.current_directory = null
       }
       this.sessionSettingsPending += 1
       try {
@@ -1748,9 +1728,8 @@ export const useChatStore = defineStore('chat', {
           memory_mode: options.memoryMode,
           web_search_policy: options.webSearchPolicy,
           preferred_execution_agent_id: options.preferredExecutionAgentId,
-          preferred_root_id: options.preferredRootId,
-          ...(options.preferredExecutionAgentId && options.preferredRootId
-            ? { working_directory: options.workingDirectory }
+          ...(options.preferredExecutionAgentId
+            ? { current_directory: options.currentDirectory }
             : {}),
           control_center: requestedControlCenter || controlCenterRequestState(useControlCenterStore()),
           ...(activeFile ? { active_file: activeFile } : {})
@@ -2047,21 +2026,18 @@ export const useChatStore = defineStore('chat', {
           const argumentsValue = toolCall?.arguments || {}
           const sourceRoot = argumentsValue.source_root || argumentsValue.root
           const sourcePath = argumentsValue.source_path || argumentsValue.path
-          const sourceRootIdentity = sourceRoot === 'files'
-            ? session.projectId || sessionId
-            : useExecutionAgentStore().workspaceContextFor(this.activeContext)?.rootId
           const sourceMatchesOpenFile = ['delete_path', 'move_path'].includes(payload.tool)
             && workspace.viewedEntry?.path
             && (workspace.viewedEntry.path === sourcePath
               || workspace.viewedEntry.path.startsWith(`${sourcePath}/`))
-            && workspace.rootIdentity === sourceRootIdentity
+            && (sourceRoot !== 'files' || workspace.rootIdentity === (session.projectId || sessionId))
             && !workspace.toolContext
             && ((sourceRoot === 'files' && workspace.scope === 'session')
               || (sourceRoot === 'computer' && workspace.scope === 'filesystem'))
           if (sourceMatchesOpenFile) workspace.noteFileMutation(workspace.viewedEntry.path)
           if (!action) return
           const sameOpenFile = workspace.viewedEntry?.path === action.path
-            && workspace.rootIdentity === action.rootIdentity
+            && (action.root !== 'session' || workspace.rootIdentity === action.rootIdentity)
             && !workspace.toolContext
             && ((action.root === 'session' && workspace.scope === 'session')
               || (action.root === 'workspace' && workspace.scope === 'filesystem'))
@@ -2082,13 +2058,13 @@ export const useChatStore = defineStore('chat', {
           workspace.configure({
             sessionId,
             rootIdentity: session.projectId || sessionId,
-            workingDirectory: session.workingDirectory,
+            currentDirectory: session.currentDirectory,
             workspaceContext: useExecutionAgentStore().workspaceContextFor(this.activeContext)
           })
           await workspace.openToolFile(action)
           if (
             workspace.viewedEntry?.path !== action.path
-            || workspace.rootIdentity !== action.rootIdentity
+            || (action.root === 'session' && workspace.rootIdentity !== action.rootIdentity)
             || controlCenter.open !== start.controlCenterOpen
             || controlCenter.activeContentId !== start.activeContentId
           ) return

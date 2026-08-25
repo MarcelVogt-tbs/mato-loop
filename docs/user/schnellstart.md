@@ -20,7 +20,7 @@ Beim Anlegen synchronisiert MatoLoop die verfügbaren Modelle. Eine erneute Sync
 
 ## 4. Computer optional verbinden
 
-Für reinen Chat ist kein Computer erforderlich. Für lokale Arbeitsbereiche, Prozesse oder lokale Integrationen öffnen Sie **Einstellungen > Computer** und fügen einen Computer hinzu. Der normale Compose-Stack startet den Computer ungekoppelt. Führen Sie anschließend dessen interaktiven Befehl `pair` aus und geben Sie Backend-Adresse, Computer-ID sowie das nur einmal angezeigte Kopplungstoken ein. Für automatisierte Starts müssen alle drei Verbindungswerte als Umgebungsvariablen vorliegen. Ausführliche Hinweise stehen unter [Betrieb und Datensicherung](betrieb-und-datensicherung.md#optionalen-computer-einrichten).
+Für reinen Chat ist kein Computer erforderlich. Für lokale Arbeitsbereiche, Prozesse oder lokale Integrationen öffnen Sie **Einstellungen > Computer** und fügen einen Computer hinzu. Der normale Compose-Stack startet den MatoLoop Agent ungekoppelt. Führen Sie anschließend `matoloop-agent pair` aus und geben Sie Backend-Adresse, Computer-ID sowie das nur einmal angezeigte Kopplungstoken ein. Für automatisierte Starts müssen alle drei `MATOLOOP_AGENT_*`-Verbindungswerte vorliegen. Ausführliche Hinweise stehen unter [Betrieb und Datensicherung](betrieb-und-datensicherung.md#optionalen-computer-einrichten).
 
 ## 5. Erste Session starten
 
@@ -33,7 +33,7 @@ Vor dem Senden können Sie unter anderem auswählen:
 - Websuchmodus
 - Computer
 
-Arbeitsbereich und aktueller Ordner werden bei Bedarf unter **Control Center > Dateien** gewählt. Ohne gewählten und verbundenen Computer bleibt der Chat nutzbar; lokale Arbeitsbereiche und lokale Integrationen fehlen.
+Den aktuellen absoluten Ordner wählen Sie bei Bedarf unter **Control Center > Dateien**. Ohne gewählten und verbundenen Computer bleibt der Chat nutzbar; Computer-Dateien und lokale Integrationen fehlen.
 
 ## 6. Freigaben prüfen
 

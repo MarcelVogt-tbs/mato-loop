@@ -213,8 +213,7 @@ class CopyMoveEntryRequest(BaseModel):
     destination_scope: FileScope
     destination_session_id: UUID | None = None
     destination_execution_agent_id: UUID | None = None
-    destination_root_id: UUID | None = None
-    destination_working_directory: str | None = Field(default=None, max_length=1_200)
+    destination_current_directory: str | None = Field(default=None, max_length=4_096)
 
 
 def _transfer_spec(
@@ -331,7 +330,7 @@ async def _agent_export(
     try:
         result = await _agent_request(
             context,
-            "workspace.export",
+        "filesystem.export",
             {
                 "path": normalized,
                 "transfer": _transfer_spec(
@@ -365,7 +364,7 @@ async def _agent_text_preview(
     normalized = _normalize_agent_path(path)
     result = await _agent_request(
         context,
-        "workspace.read",
+        "filesystem.read",
         {"path": normalized, "offset": 1, "limit": 1, "maxLineLength": 1},
     )
     revision = result.get("sha256")
@@ -394,29 +393,25 @@ async def list_entries(
     offset: int = Query(default=0, ge=0),
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
-    root_revision: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
 ) -> dict:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         root_identity=root_identity,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
-        root_revision=root_revision,
     )
     try:
         if context.agent_id is not None:
             normalized = _normalize_agent_path(path)
             result = await _agent_request(
                 context,
-                "workspace.list",
+                "filesystem.list",
                 {"path": normalized, "offset": offset, "limit": 1_000},
             )
             raw_entries = result.get("entries")
@@ -460,18 +455,16 @@ async def create_directory(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
 ) -> dict:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
         for_update=session_id is not None,
     )
     try:
@@ -482,7 +475,7 @@ async def create_directory(
             await _clear_file_grants(db, user, context, (path,))
             await db.commit()
             result = await _agent_request(
-                context, "workspace.mkdir", {"path": path, "parents": False}
+                context, "filesystem.mkdir", {"path": path, "parents": False}
             )
             if result.get("path") != path:
                 raise ApiError(502, "executionAgent.protocolError")
@@ -508,18 +501,16 @@ async def upload_file(
     parent: str = Query(default="."),
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
 ) -> dict:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
         for_update=session_id is not None,
     )
     max_upload_bytes = context.instance_limits.max_upload_bytes
@@ -542,7 +533,7 @@ async def upload_file(
             try:
                 result = await _agent_request(
                     context,
-                    "workspace.import",
+                    "filesystem.import",
                     {
                         "path": path,
                         "transfer": _transfer_spec(
@@ -592,22 +583,18 @@ async def preview_file(
     request: Request = None,
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
-    root_revision: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
 ) -> dict:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         root_identity=root_identity,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
-        root_revision=root_revision,
     )
     image_preview_bytes = context.instance_limits.max_image_preview_bytes
     text_preview_bytes = context.instance_limits.max_editable_text_bytes
@@ -721,18 +708,16 @@ async def update_file(
     request: Request = None,
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
 ) -> dict:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
         for_update=session_id is not None,
     )
     if len(payload.content.encode("utf-8")) > context.instance_limits.max_editable_text_bytes:
@@ -743,7 +728,7 @@ async def update_file(
         await db.commit()
         result = await _agent_request(
             context,
-            "workspace.write",
+            "filesystem.write",
             {
                 "path": path,
                 "content": payload.content,
@@ -769,7 +754,7 @@ async def update_file(
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         for_update=session_id is not None,
     )
     try:
@@ -929,22 +914,18 @@ async def preview_image(
     request: Request = None,
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
-    root_revision: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
 ) -> Response:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         root_identity=root_identity,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
-        root_revision=root_revision,
     )
     suffix = PurePosixPath(path).suffix.casefold()
     image_preview_bytes = context.instance_limits.max_image_preview_bytes
@@ -993,28 +974,20 @@ async def _openscad_client(
 ) -> tuple[ExecutionClient, OpenScadConfig]:
     if context.agent_id is not None:
         agent_id = context.agent_id
-        root_id = context.agent_root_id
-        root_revision = context.agent_root_revision
-        working_directory = context.working_directory or "."
+        current_directory = context.current_directory
     elif session is not None and session.preferred_execution_agent_id is not None:
-        if session.preferred_root_id is None:
-            raise ApiError(400, "file.workspaceNotSelected")
         agent_context = await _agent_context(
             db,
             user,
             session.preferred_execution_agent_id,
-            session.preferred_root_id,
-            session.working_directory,
-            None,
+            current_directory=session.current_directory,
             writable=False,
         )
         agent_id = agent_context.agent_id
-        root_id = agent_context.agent_root_id
-        root_revision = agent_context.agent_root_revision
-        working_directory = agent_context.working_directory or "."
+        current_directory = agent_context.current_directory
     else:
         raise ApiError(409, "openscad.notConfigured")
-    assert agent_id is not None and root_id is not None and root_revision is not None
+    assert agent_id is not None
 
     agent = await db.scalar(
         select(ExecutionAgent).where(
@@ -1025,21 +998,9 @@ async def _openscad_client(
     )
     if agent is None:
         raise ApiError(404, "executionAgent.notFound")
-    current_directory = session.current_directory if session is not None else None
-    if (
-        current_directory is None
-        and agent.home_directory is not None
-        and agent.home_root_id == root_id
-        and agent.home_relative_directory is not None
-    ):
-        try:
-            relative = PurePosixPath(working_directory).relative_to(
-                PurePosixPath(agent.home_relative_directory)
-            )
-        except ValueError:
-            pass
-        else:
-            current_directory = (PurePosixPath(agent.home_directory) / relative).as_posix()
+    current_directory = current_directory or (
+        session.current_directory if session is not None else None
+    )
     if current_directory is None or not current_directory.startswith("/"):
         raise ApiError(400, "file.workspaceNotSelected")
 
@@ -1047,7 +1008,7 @@ async def _openscad_client(
     required = {"integration.openscad.render", "cache.export"}
     if snapshot is None:
         raise ApiError(503, "executionAgent.unavailable")
-    if not required <= snapshot[0]:
+    if not required <= snapshot:
         raise ApiError(503, "executionAgent.operationUnavailable")
     settings = await load_effective_integrations(db, user.id)
     instance = next(
@@ -1070,10 +1031,7 @@ async def _openscad_client(
     return (
         ExecutionClient(
             agent_id,
-            root_id,
-            root_revision,
-            working_directory,
-            snapshot[0],
+            snapshot,
             current_directory,
         ),
         config,
@@ -1130,29 +1088,25 @@ async def render_openscad_file(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
-    root_revision: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
 ) -> Response:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         root_identity=root_identity,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
-        root_revision=root_revision,
     )
     if payload.expected_revision is not None:
         try:
             if context.agent_id is not None:
                 result = await _agent_request(
                     context,
-                    "workspace.read",
+                    "filesystem.read",
                     {
                         "path": _normalize_agent_path(payload.path),
                         "offset": 1,
@@ -1230,22 +1184,18 @@ async def download_file(
     request: Request = None,
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
-    root_revision: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
 ) -> StreamingResponse:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         root_identity=root_identity,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
-        root_revision=root_revision,
     )
     try:
         if context.agent_id is not None:
@@ -1283,18 +1233,16 @@ async def rename_entry(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
 ) -> dict:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
         for_update=session_id is not None,
     )
     try:
@@ -1312,7 +1260,7 @@ async def rename_entry(
         await db.commit()
         result = await _agent_request(
             context,
-            "workspace.rename",
+            "filesystem.rename",
             {"path": source_path, "destination": destination_path},
         )
         if result.get("path") != destination_path:
@@ -1350,18 +1298,16 @@ async def delete_entry(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
 ) -> None:
     context = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
         for_update=session_id is not None,
     )
     if context.agent_id is not None:
@@ -1370,7 +1316,7 @@ async def delete_entry(
         await db.commit()
         result = await _agent_request(
             context,
-            "workspace.delete",
+            "filesystem.delete",
             {"path": normalized, "recursive": True},
         )
         if result:
@@ -1409,7 +1355,7 @@ async def _import_agent_file(
     try:
         result = await _agent_request(
             context,
-            "workspace.import",
+            "filesystem.import",
             {
                 "path": path,
                 "transfer": _transfer_spec(
@@ -1440,24 +1386,21 @@ async def _copy_or_move_entry(
     move: bool,
     scope: FileScope,
     session_id: UUID | None,
-    working_directory: str | None,
+    current_directory: str | None,
     execution_agent_id: UUID | None,
-    root_id: UUID | None,
 ) -> dict:
     source = await _file_context(
         scope,
         session_id,
         user,
         db,
-        working_directory=working_directory,
+        current_directory=current_directory,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
         for_update=session_id is not None,
     )
     destination_session_id = (
         payload.destination_session_id
         if payload.destination_execution_agent_id is not None
-        or payload.destination_root_id is not None
         else payload.destination_session_id or session_id
     )
     destination = await _file_context(
@@ -1465,15 +1408,28 @@ async def _copy_or_move_entry(
         destination_session_id,
         user,
         db,
-        working_directory=payload.destination_working_directory,
+        current_directory=payload.destination_current_directory,
         execution_agent_id=payload.destination_execution_agent_id,
-        root_id=payload.destination_root_id,
         for_update=destination_session_id is not None,
     )
-    source_path = _normalize_agent_path(payload.path)
-    destination_path = _normalize_agent_path(payload.destination)
+    try:
+        if source.agent_id is not None:
+            source_path = _normalize_agent_path(payload.path)
+        elif source.root_files is not None:
+            source_path = source.root_files.normalize_relative_path(payload.path)
+        else:
+            raise ApiError(400, "file.invalidRoot")
+        if destination.agent_id is not None:
+            destination_path = _normalize_agent_path(payload.destination)
+        elif destination.root_files is not None:
+            destination_path = destination.root_files.normalize_relative_path(
+                payload.destination
+            )
+        else:
+            raise ApiError(400, "file.invalidRoot")
+    except RootFileError as exc:
+        raise _context_error(exc) from exc
     same_agent = source.agent_id is not None and source.agent_id == destination.agent_id
-    same_agent_root = same_agent and source.agent_root_id == destination.agent_root_id
     same_managed_root = (
         source.root_files is not None
         and destination.root_files is not None
@@ -1482,7 +1438,7 @@ async def _copy_or_move_entry(
         and source.root_files.root_identity(source.root)
         == destination.root_files.root_identity(destination.root)
     )
-    if move and not (same_agent_root or same_managed_root):
+    if move and not (same_agent or same_managed_root):
         raise ApiError(400, "file.crossBoundaryMoveUnavailable")
     if destination.agent_id is not None and not destination.agent_writable:
         raise ApiError(403, "http.forbidden")
@@ -1490,12 +1446,12 @@ async def _copy_or_move_entry(
         raise ApiError(403, "http.forbidden")
     if same_agent:
         _require_agent_operations(
-            source, "workspace.move" if move else "workspace.copy"
+            source, "filesystem.move" if move else "filesystem.copy"
         )
-        _require_agent_operations(destination, "workspace.stat")
+        _require_agent_operations(destination, "filesystem.stat")
     else:
-        _require_agent_operations(source, "workspace.stat", "workspace.export")
-        _require_agent_operations(destination, "workspace.import", "workspace.stat")
+        _require_agent_operations(source, "filesystem.stat", "filesystem.export")
+        _require_agent_operations(destination, "filesystem.import", "filesystem.stat")
 
     if move:
         await _clear_context_grants(db, user, source, (source_path,))
@@ -1503,19 +1459,15 @@ async def _copy_or_move_entry(
     await db.commit()
 
     if same_agent:
-        assert destination.agent_root_id is not None
         operation_context = source if move or source.agent_writable else replace(
             source, agent_writable=True
         )
         result = await _agent_request(
             operation_context,
-            "workspace.move" if move else "workspace.copy",
+            "filesystem.move" if move else "filesystem.copy",
             {
                 "path": source_path,
                 "destination": destination_path,
-                "destinationRootId": str(destination.agent_root_id),
-                "destinationRootRevision": destination.agent_root_revision,
-                "destinationWorkingDirectory": destination.working_directory or ".",
             },
         )
         if result.get("path") != destination_path:
@@ -1609,9 +1561,8 @@ async def copy_entry(
     request: Request,
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
 ) -> dict:
     return await _copy_or_move_entry(
         payload,
@@ -1621,9 +1572,8 @@ async def copy_entry(
         move=False,
         scope=scope,
         session_id=session_id,
-        working_directory=working_directory,
+        current_directory=current_directory,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
     )
 
 
@@ -1635,9 +1585,8 @@ async def move_entry(
     request: Request,
     scope: FileScope = FileScope.FILESYSTEM,
     session_id: UUID | None = None,
-    working_directory: str | None = None,
+    current_directory: str | None = None,
     execution_agent_id: UUID | None = None,
-    root_id: UUID | None = None,
 ) -> dict:
     return await _copy_or_move_entry(
         payload,
@@ -1647,7 +1596,6 @@ async def move_entry(
         move=True,
         scope=scope,
         session_id=session_id,
-        working_directory=working_directory,
+        current_directory=current_directory,
         execution_agent_id=execution_agent_id,
-        root_id=root_id,
     )

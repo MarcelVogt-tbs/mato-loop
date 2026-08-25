@@ -3,13 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from pathlib import PurePosixPath
 from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from mato_loop_backend.agent.tool_contracts import ToolAction
-from mato_loop_backend.execution.client import _relative_path
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     ToolContribution,
@@ -20,6 +20,20 @@ from mato_loop_backend.settings import ToolExecutionPolicy
 def _camel(value: str) -> str:
     first, *rest = value.split("_")
     return first + "".join(part.capitalize() for part in rest)
+
+
+def _relative_path(value: str) -> str:
+    parsed = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or parsed.is_absolute()
+        or parsed.as_posix() != value
+        or any(part in {"", ".", ".."} for part in value.split("/"))
+        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+    ):
+        raise ValueError("invalid relative path")
+    return value
 
 
 class _GitModel(BaseModel):

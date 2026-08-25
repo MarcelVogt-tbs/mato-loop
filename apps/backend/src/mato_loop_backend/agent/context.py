@@ -349,17 +349,25 @@ def _active_file_marker(message: Message) -> str | None:
         else None
     )
     active = runtime_data.get("activeFile") if isinstance(runtime_data, dict) else None
-    if not isinstance(active, dict) or set(active) != {
+    if not isinstance(active, dict):
+        return None
+    expected = {
         "root",
-        "rootIdentity",
         "path",
         "sha256",
         "dirty",
-    }:
+        "rootIdentity" if active.get("root") == "session" else "executionAgentId",
+    }
+    if set(active) != expected:
         return None
     if (
         active.get("root") not in {"session", "workspace"}
-        or not isinstance(active.get("rootIdentity"), str)
+        or not isinstance(
+            active.get(
+                "rootIdentity" if active.get("root") == "session" else "executionAgentId"
+            ),
+            str,
+        )
         or not isinstance(active.get("path"), str)
         or not isinstance(active.get("sha256"), str)
         or not isinstance(active.get("dirty"), bool)
@@ -730,15 +738,6 @@ def general_system_prompt(
     if file_tools_available and chat_session.current_directory:
         dynamic_parts.append(
             "Current computer directory selected; root=computer is host-bound to it."
-        )
-    elif file_tools_available and chat_session.working_directory:
-        dynamic_parts.append(
-            "Computer files are selected, but directory-dependent actions have no absolute directory. "
-            + (
-                "If required, question for its absolute path, then change_directory; do not ask speculatively."
-                if can_request_directory
-                else "Directory-dependent computer actions are unavailable."
-            )
         )
     elif file_tools_available and can_request_directory:
         dynamic_parts.append(

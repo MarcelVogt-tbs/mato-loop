@@ -4,7 +4,7 @@ import asyncio
 import json
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import (
@@ -17,25 +17,21 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import AsyncSessionFactory, get_db_session
 from mato_loop_backend.execution import (
-    DirectoryResult,
     ExecutionAgentError,
-    ExecutionClient,
-    ExecutionClientError,
     HelloMessage,
     WelcomeMessage,
     execution_agent_connections,
     transfer_tickets,
 )
 from mato_loop_backend.execution.protocol import MAX_MESSAGE_BYTES, SUPPORTED_OPERATIONS
-from mato_loop_backend.models import ExecutionAgent, ExecutionAgentRoot, UserAccount
+from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.security import hash_token, require_user
 from mato_loop_backend.settings import SettingsStore, UserPreferences
 
@@ -58,24 +54,31 @@ class ApiModel(BaseModel):
     )
 
 
-class ExecutionAgentNameRequest(ApiModel):
-    name: str = Field(min_length=1, max_length=160)
+class ExecutionAgentAliasRequest(ApiModel):
+    alias: str = Field(min_length=1, max_length=160)
 
-    @field_validator("name")
+    @field_validator("alias")
     @classmethod
-    def normalize_name(cls, value: str) -> str:
+    def normalize_alias(cls, value: str) -> str:
         value = value.strip()
         if not value:
-            raise ValueError("name cannot be blank")
+            raise ValueError("alias cannot be blank")
         return value
 
 
-class ExecutionAgentRequest(ExecutionAgentNameRequest):
+ExecutionPolicy = Literal["auto", "ask", "deny"]
+
+
+class ExecutionAgentRequest(ExecutionAgentAliasRequest):
     pairing_token_duration_seconds: int = Field(
         default=PAIRING_DURATION_DEFAULT_SECONDS,
         ge=PAIRING_DURATION_DEFAULT_SECONDS,
         le=PAIRING_DURATION_MAXIMUM_SECONDS,
     )
+    home_filesystem_policy: ExecutionPolicy = "auto"
+    external_filesystem_policy: ExecutionPolicy = "ask"
+    home_shell_policy: ExecutionPolicy = "ask"
+    external_shell_policy: ExecutionPolicy = "ask"
 
 
 class PairingTokenRequest(ApiModel):
@@ -95,18 +98,20 @@ class DefaultExecutionAgentRequest(ApiModel):
     default_execution_agent_id: UUID | None = None
 
 
-class ExecutionAgentHomeRequest(ApiModel):
-    home_directory: str | None = Field(default=None, max_length=4096)
+class ExecutionAgentUpdateRequest(ApiModel):
+    alias: str | None = Field(default=None, min_length=1, max_length=160)
+    home_filesystem_policy: ExecutionPolicy | None = None
+    external_filesystem_policy: ExecutionPolicy | None = None
+    home_shell_policy: ExecutionPolicy | None = None
+    external_shell_policy: ExecutionPolicy | None = None
 
-    @field_validator("home_directory")
-    @classmethod
-    def normalize_home_directory(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        value = value.strip()
-        if not value or not value.startswith("/"):
-            raise ValueError("home directory must be absolute")
-        return value
+    _normalize_alias = field_validator("alias")(ExecutionAgentAliasRequest.normalize_alias.__func__)
+
+    @model_validator(mode="after")
+    def require_change(self) -> ExecutionAgentUpdateRequest:
+        if not self.model_fields_set:
+            raise ValueError("at least one field is required")
+        return self
 
 
 def _valid_registration(agent: ExecutionAgent, now: datetime) -> bool:
@@ -125,19 +130,17 @@ def _agent_payload(agent: ExecutionAgent) -> dict:
     pairing_state = "pending" if pending else "paired" if agent.token_hash is not None else "unpaired"
     payload = {
         "id": str(agent.id),
-        "name": agent.name,
+        "alias": agent.alias,
+        "computerName": agent.computer_name,
+        "agentVersion": agent.agent_version,
         "platform": agent.platform,
         "revision": agent.revision,
-        "protocolVersion": agent.protocol_version,
         "operations": agent.operations,
         "homeDirectory": agent.home_directory,
-        "homeRootId": str(agent.home_root_id) if agent.home_root_id else None,
-        "homeRootRevision": agent.home_root_revision,
-        "homeRelativeDirectory": agent.home_relative_directory,
-        "roots": [
-            {"id": str(root.id), "label": root.label, "revision": root.revision}
-            for root in agent.roots
-        ],
+        "homeFilesystemPolicy": agent.home_filesystem_policy,
+        "externalFilesystemPolicy": agent.external_filesystem_policy,
+        "homeShellPolicy": agent.home_shell_policy,
+        "externalShellPolicy": agent.external_shell_policy,
         "pairingState": pairing_state,
         "connected": pairing_state == "paired"
         and agent.revoked_at is None
@@ -198,10 +201,8 @@ async def _commit_and_revoke_live_capabilities(db: AsyncSession, agent_id: UUID)
 async def _owned_agent(
     db: AsyncSession, user_id: UUID, agent_id: UUID, *, for_update: bool = False
 ) -> ExecutionAgent:
-    statement = (
-        select(ExecutionAgent)
-        .options(selectinload(ExecutionAgent.roots))
-        .where(ExecutionAgent.id == agent_id, ExecutionAgent.user_id == user_id)
+    statement = select(ExecutionAgent).where(
+        ExecutionAgent.id == agent_id, ExecutionAgent.user_id == user_id
     )
     if for_update:
         statement = statement.with_for_update()
@@ -219,7 +220,14 @@ async def create_execution_agent(
     response: Response,
 ) -> dict:
     agent = ExecutionAgent(
-        user_id=user.id, name=payload.name, token_hash=None, token_is_legacy=None
+        user_id=user.id,
+        alias=payload.alias,
+        token_hash=None,
+        token_is_legacy=None,
+        home_filesystem_policy=payload.home_filesystem_policy,
+        external_filesystem_policy=payload.external_filesystem_policy,
+        home_shell_policy=payload.home_shell_policy,
+        external_shell_policy=payload.external_shell_policy,
     )
     token = _issue_pairing_token(agent, payload.pairing_token_duration_seconds)
     db.add(agent)
@@ -295,9 +303,7 @@ async def list_execution_agents(
     agents = list(
         (
             await db.scalars(
-                select(ExecutionAgent)
-                .options(selectinload(ExecutionAgent.roots))
-                .where(
+                select(ExecutionAgent).where(
                     ExecutionAgent.user_id == user.id,
                     ExecutionAgent.revoked_at.is_(None),
                 )
@@ -341,51 +347,6 @@ async def set_default_execution_agent(
     }
 
 
-@router.put("/{agent_id}/home")
-async def set_execution_agent_home(
-    agent_id: UUID,
-    payload: ExecutionAgentHomeRequest,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict:
-    agent = await _owned_agent(db, user.id, agent_id, for_update=True)
-    if agent.revoked_at is not None:
-        raise ApiError(status.HTTP_409_CONFLICT, "executionAgent.revoked")
-    if payload.home_directory is None:
-        agent.home_directory = None
-        agent.home_root_id = None
-        agent.home_root_revision = None
-        agent.home_relative_directory = None
-    else:
-        snapshot = execution_agent_connections.snapshot(agent.id)
-        if snapshot is None:
-            raise ApiError(status.HTTP_409_CONFLICT, "executionAgent.unavailable")
-        try:
-            result = await ExecutionClient(
-                agent.id, None, None, None, snapshot[0]
-            ).request(
-                "filesystem.resolve",
-                {"path": payload.home_directory},
-                DirectoryResult,
-            )
-        except ExecutionClientError as exc:
-            raise ApiError(
-                status.HTTP_400_BAD_REQUEST,
-                "executionAgent.homeDirectoryInvalid",
-                field="homeDirectory",
-            ) from exc
-        assert isinstance(result, DirectoryResult)
-        agent.home_directory = result.path
-        agent.home_root_id = result.root_id
-        agent.home_root_revision = result.root_revision
-        agent.home_relative_directory = result.relative_path
-    agent.home_override = True
-    agent.revision += 1
-    agent.updated_at = datetime.now(UTC)
-    await db.commit()
-    return _agent_payload(agent)
-
-
 @router.get("/{agent_id}")
 async def get_execution_agent(
     agent_id: UUID,
@@ -396,17 +357,22 @@ async def get_execution_agent(
 
 
 @router.patch("/{agent_id}")
-async def rename_execution_agent(
+async def update_execution_agent(
     agent_id: UUID,
-    payload: ExecutionAgentNameRequest,
+    payload: ExecutionAgentUpdateRequest,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     agent = await _owned_agent(db, user.id, agent_id, for_update=True)
     if agent.revoked_at is not None:
         raise ApiError(status.HTTP_409_CONFLICT, "executionAgent.revoked")
-    if agent.name != payload.name:
-        agent.name = payload.name
+    changed = False
+    for field in payload.model_fields_set:
+        value = getattr(payload, field)
+        if value is not None and getattr(agent, field) != value:
+            setattr(agent, field, value)
+            changed = True
+    if changed:
         agent.revision += 1
         agent.updated_at = datetime.now(UTC)
     await db.commit()
@@ -511,14 +477,12 @@ async def _authenticate(token: str | None) -> tuple[UUID, str] | None:
 
 
 async def _register_snapshot(
-    agent_id: UUID, authenticated_token_hash: str, hello: HelloMessage, websocket: WebSocket
+    agent_id: UUID, authenticated_token_hash: str, hello: HelloMessage
 ) -> bool:
     operations = sorted(set(hello.operations) & SUPPORTED_OPERATIONS)
-    roots = sorted(hello.roots, key=lambda item: str(item.id))
     async with AsyncSessionFactory() as db:
         agent = await db.scalar(
             select(ExecutionAgent)
-            .options(selectinload(ExecutionAgent.roots))
             .where(
                 ExecutionAgent.id == agent_id,
                 ExecutionAgent.token_hash == authenticated_token_hash,
@@ -527,56 +491,22 @@ async def _register_snapshot(
         )
         if agent is None or agent.revoked_at is not None:
             return False
-        old_roots = sorted(
-            ((root.id, root.label, root.revision) for root in agent.roots),
-            key=lambda item: str(item[0]),
-        )
-        new_roots = [(root.id, root.label, root.revision) for root in roots]
-        advertised_home_changed = not agent.home_override and (
-            agent.home_directory != hello.home_directory
-            or agent.home_root_id != hello.home_root_id
-            or agent.home_root_revision != hello.home_root_revision
-            or agent.home_relative_directory != hello.home_relative_directory
-        )
         changed = (
-            agent.protocol_version != hello.protocol_version
+            agent.agent_version != hello.agent_version
+            or agent.computer_name != hello.computer_name
             or agent.platform != hello.platform
             or agent.operations != operations
-            or old_roots != new_roots
-            or advertised_home_changed
+            or agent.home_directory != hello.home_directory
         )
-        agent.protocol_version = hello.protocol_version
+        agent.agent_version = hello.agent_version
+        agent.computer_name = hello.computer_name
         agent.platform = hello.platform
         agent.operations = operations
-        if not agent.home_override:
-            agent.home_directory = hello.home_directory
-            agent.home_root_id = hello.home_root_id
-            agent.home_root_revision = hello.home_root_revision
-            agent.home_relative_directory = hello.home_relative_directory
+        agent.home_directory = hello.home_directory
         agent.last_connected_at = datetime.now(UTC)
         if changed:
             agent.revision += 1
-            roots_by_id = {root.id: root for root in agent.roots}
-            agent.roots[:] = [root for root in agent.roots if root.id in {item.id for item in roots}]
-            for root in roots:
-                stored = roots_by_id.get(root.id)
-                if stored is None:
-                    agent.roots.append(
-                        ExecutionAgentRoot(
-                            id=root.id, label=root.label, revision=root.revision
-                        )
-                    )
-                else:
-                    stored.label = root.label
-                    stored.revision = root.revision
-        await execution_agent_connections.register(hello, websocket)
-        try:
-            await db.commit()
-        except BaseException:
-            await execution_agent_connections.unregister(
-                agent_id, websocket, error_code="executionAgent.unavailable"
-            )
-            raise
+        await db.commit()
         return True
 
 
@@ -595,7 +525,7 @@ async def connect_execution_agent(websocket: WebSocket) -> None:
             raise ExecutionAgentError("executionAgent.protocolError")
         hello = HelloMessage.model_validate_json(raw)
         if hello.agent_id != authenticated_id or not await _register_snapshot(
-            authenticated_id, authenticated_token_hash, hello, websocket
+            authenticated_id, authenticated_token_hash, hello
         ):
             await websocket.close(code=4403, reason="Agent access rejected")
             return
@@ -603,6 +533,8 @@ async def connect_execution_agent(websocket: WebSocket) -> None:
         await websocket.send_text(
             WelcomeMessage(agent_id=authenticated_id).model_dump_json(by_alias=True)
         )
+        await execution_agent_connections.register(hello, websocket)
+        registered = True
         while True:
             await execution_agent_connections.receive(
                 authenticated_id, websocket, await websocket.receive_text()
@@ -617,7 +549,7 @@ async def connect_execution_agent(websocket: WebSocket) -> None:
             )
             registered = False
         try:
-            await websocket.close(code=4400, reason="Invalid execution agent protocol")
+            await websocket.close(code=4400, reason="Invalid MatoLoop Agent protocol")
         except RuntimeError:
             pass
     finally:

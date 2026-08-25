@@ -1666,18 +1666,15 @@ async def test_failed_skill_builder_request_consumes_model_budget(monkeypatch) -
 
 async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) -> None:
     execution_agent_id = str(uuid4())
-    root_id = str(uuid4())
     action = ToolFileAction(
         "write",
         "workspace",
-        root_id,
-        "report.txt",
+        None,
+        "/home/user/project/report.txt",
         "report.txt",
         7,
         execution_agent_id,
-        root_id,
-        "a" * 64,
-        "persisted/project",
+        "/home/user/project",
     )
     db, run, *_ = await _runtime_setup(
         monkeypatch,
@@ -1717,14 +1714,11 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
                 {
                     "operation": "write",
                     "root": "workspace",
-                    "rootIdentity": action.root_identity,
-                    "path": "report.txt",
+                    "path": "/home/user/project/report.txt",
                     "filename": "report.txt",
                     "sizeBytes": 7,
                     "executionAgentId": execution_agent_id,
-                    "rootId": root_id,
-                    "rootRevision": "a" * 64,
-                    "workingDirectory": "persisted/project",
+                    "currentDirectory": "/home/user/project",
                 }
             ]
         }
@@ -1756,10 +1750,8 @@ async def test_cancelled_dispatched_workspace_write_stops_without_waiting(
         search_policy=WebSearchPolicy.AVAILABLE,
     )
     run.execution_agent_id = uuid4()
-    run.execution_root_id = uuid4()
-    run.execution_root_revision = "a" * 64
-    run.working_directory_snapshot = "project"
-    run.execution_operations = ["workspace.upsert"]
+    run.current_directory_snapshot = "/home/user/project"
+    run.execution_operations = ["filesystem.upsert"]
     dispatched = asyncio.Event()
 
     async def request(

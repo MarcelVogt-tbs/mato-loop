@@ -41,9 +41,7 @@ const sessionFileView = {
   viewedFilePath: 'drafts/draft-1/plan.md',
   rootIdentity: null,
   executionAgentId: null,
-  rootId: null,
-  rootRevision: null,
-  workingDirectory: null
+  currentDirectory: null
 }
 
 describe('control center store', () => {
@@ -292,9 +290,7 @@ describe('control center store', () => {
           viewed_file_path: sessionFileView.viewedFilePath,
           root_identity: null,
           execution_agent_id: null,
-          root_id: null,
-          root_revision: null,
-          working_directory: null
+          current_directory: null
         }
       }
     })

@@ -7,6 +7,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -36,6 +37,7 @@ from mato_loop_backend.execution import (
     ExecutionClientError,
     execution_agent_connections,
 )
+from mato_loop_backend.execution.client import _absolute_path
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
@@ -139,52 +141,44 @@ def provider_for_session(ai: AiSettings, model):
 
 async def execution_home(
     db: AsyncSession, agent: ExecutionAgent
-) -> tuple[UUID | None, str | None, str | None, str | None]:
-    if (
-        agent.home_directory is None
-        or agent.home_root_id is None
-        or agent.home_root_revision is None
-    ):
-        return None, None, None, None
-    relative = agent.home_relative_directory
+) -> str | None:
+    del db
+    if agent.home_directory is None:
+        return None
     snapshot = execution_agent_connections.snapshot(agent.id)
-    if snapshot is not None and "filesystem.resolve" in snapshot[0]:
+    if snapshot is not None and "filesystem.resolve" in snapshot:
         try:
-            result = await ExecutionClient(agent.id, None, None, None, snapshot[0]).request(
+            result = await ExecutionClient(agent.id, snapshot).request(
                 "filesystem.resolve", {"path": agent.home_directory}, DirectoryResult
             )
         except ExecutionClientError:
-            pass
-        else:
-            assert isinstance(result, DirectoryResult)
-            if (
-                result.path == agent.home_directory
-                and result.root_id == agent.home_root_id
-                and result.root_revision == agent.home_root_revision
-            ):
-                relative = result.relative_path
-                agent.home_relative_directory = relative
-                await db.flush()
-    if relative is None:
-        return None, None, None, None
-    return agent.home_root_id, agent.home_root_revision, agent.home_directory, relative
+            return None
+        assert isinstance(result, DirectoryResult)
+        return result.path if result.path == agent.home_directory else None
+    return agent.home_directory
+
+
+def _path_is_within(path: str, parent: str) -> bool:
+    path_parts = PurePosixPath(path).parts
+    parent_parts = PurePosixPath(parent).parts
+    return path_parts[: len(parent_parts)] == parent_parts
+
+
+def execution_filesystem_policy(agent: ExecutionAgent, path: str) -> str:
+    at_home = agent.home_directory is not None and _path_is_within(path, agent.home_directory)
+    return agent.home_filesystem_policy if at_home else agent.external_filesystem_policy
 
 
 async def add_directory_grant(
     db: AsyncSession,
     session_id: UUID,
     agent_id: UUID | None,
-    root_id: UUID | None,
-    root_revision: str | None,
     path: str | None,
+    policy: str | None,
 ) -> None:
-    if any(value is None for value in (agent_id, root_id, root_revision, path)):
+    if agent_id is None or path is None or policy != "ask":
         return
-    assert agent_id is not None
-    assert root_id is not None
-    assert root_revision is not None
-    assert path is not None
-    scope = execution_directory_scope(agent_id, path, root_id, root_revision)
+    scope = execution_directory_scope(agent_id, path)
     existing = await db.scalar(
         select(PermissionGrant.id).where(
             PermissionGrant.session_id == session_id,
@@ -208,21 +202,18 @@ async def validate_execution_preferences(
     db: AsyncSession,
     user_id: UUID,
     agent_id: UUID | None,
-    root_id: UUID | None,
-    working_directory: str | None,
-) -> tuple[str | None, str | None, UUID | None, str | None]:
+    current_directory: str | None,
+) -> tuple[str | None, str | None]:
     if agent_id is None:
-        if root_id is not None:
-            raise SessionServiceError(400, "validation.invalid", field="preferredRootId")
-        if working_directory is not None:
+        if current_directory is not None:
             raise SessionServiceError(
-                400, "session.invalidWorkingDirectory", field="workingDirectory"
+                400, "session.invalidWorkingDirectory", field="currentDirectory"
             )
-        return None, None, None, None
+        return None, None
     agent = await db.scalar(
-        select(ExecutionAgent)
-        .options(selectinload(ExecutionAgent.roots))
-        .where(ExecutionAgent.id == agent_id, ExecutionAgent.user_id == user_id)
+        select(ExecutionAgent).where(
+            ExecutionAgent.id == agent_id, ExecutionAgent.user_id == user_id
+        )
     )
     if agent is None:
         raise SessionServiceError(
@@ -232,73 +223,38 @@ async def validate_execution_preferences(
         raise SessionServiceError(
             409, "executionAgent.revoked", field="preferredExecutionAgentId"
         )
-    home_root_id, home_revision, home_directory, home_relative = await execution_home(db, agent)
-    if root_id is None and working_directory is None:
-        return home_relative, home_directory, home_root_id, home_revision
-    if root_id is not None and not any(root.id == root_id for root in agent.roots):
-        raise SessionServiceError(400, "validation.invalid", field="preferredRootId")
-    if working_directory is None and root_id == home_root_id:
-        return home_relative, home_directory, home_root_id, home_revision
-    if working_directory is None:
-        return None, None, root_id, next(
-            (root.revision for root in agent.roots if root.id == root_id), None
-        )
-    if root_id is None:
-        raise SessionServiceError(
-            400, "session.invalidWorkingDirectory", field="workingDirectory"
-        )
-    try:
-        normalized = RootFileService(UUID(int=0)).normalize_relative_path(working_directory)
-    except RootFileError as exc:
-        raise SessionServiceError(
-            400, "session.invalidWorkingDirectory", field="workingDirectory"
-        ) from exc
-    if normalized != working_directory:
-        raise SessionServiceError(
-            400, "session.invalidWorkingDirectory", field="workingDirectory"
-        )
-    revision = next(root.revision for root in agent.roots if root.id == root_id)
-    current_directory = (
-        home_directory if root_id == home_root_id and normalized == home_relative else None
-    )
+    selected = current_directory or await execution_home(db, agent)
+    if selected is None:
+        return None, None
     snapshot = execution_agent_connections.snapshot(agent.id)
-    if current_directory is None and snapshot is not None and "workspace.resolve" in snapshot[0]:
-        try:
-            result = await ExecutionClient(
-                agent.id, root_id, revision, ".", snapshot[0]
-            ).request("workspace.resolve", {"path": normalized}, DirectoryResult)
-        except ExecutionClientError as exc:
-            raise SessionServiceError(
-                400, "session.invalidWorkingDirectory", field="workingDirectory"
-            ) from exc
-        assert isinstance(result, DirectoryResult)
-        if (
-            result.root_id != root_id
-            or result.root_revision != revision
-            or result.relative_path != normalized
-        ):
-            raise SessionServiceError(
-                502, "executionAgent.protocolError", field="workingDirectory"
-            )
-        current_directory = result.path
-    return normalized, current_directory, root_id, revision
+    if snapshot is None or "filesystem.resolve" not in snapshot:
+        raise SessionServiceError(409, "executionAgent.unavailable", field="currentDirectory")
+    try:
+        result = await ExecutionClient(agent.id, snapshot).request(
+            "filesystem.resolve", {"path": selected}, DirectoryResult
+        )
+    except ExecutionClientError as exc:
+        raise SessionServiceError(
+            400, "session.invalidWorkingDirectory", field="currentDirectory"
+        ) from exc
+    assert isinstance(result, DirectoryResult)
+    policy = execution_filesystem_policy(agent, result.path)
+    if policy == "deny":
+        raise SessionServiceError(403, "permission.denied", field="currentDirectory")
+    return result.path, policy
 
 
 async def workspace_context(db: AsyncSession, item: ChatSession) -> dict[str, Any]:
     agent_id = item.preferred_execution_agent_id
-    root_id = item.preferred_root_id
     context = {
         "executionAgentId": str(agent_id) if agent_id else None,
-        "rootId": str(root_id) if root_id else None,
         "connected": False,
         "operations": [],
     }
     if agent_id is None:
         return context
     agent = await db.scalar(
-        select(ExecutionAgent)
-        .options(selectinload(ExecutionAgent.roots))
-        .where(
+        select(ExecutionAgent).where(
             ExecutionAgent.id == agent_id,
             ExecutionAgent.user_id == item.user_id,
             ExecutionAgent.revoked_at.is_(None),
@@ -307,15 +263,7 @@ async def workspace_context(db: AsyncSession, item: ChatSession) -> dict[str, An
     snapshot = execution_agent_connections.snapshot(agent_id)
     if agent is None or snapshot is None:
         return context
-    operations = snapshot[0]
-    if root_id is not None:
-        root = next((root for root in agent.roots if root.id == root_id), None)
-        live_root = next((root for root in snapshot[1] if root.id == root_id), None)
-        if root is None or live_root is None or live_root.revision != root.revision:
-            operations = operations & {"system.info", "filesystem.resolve"}
-    else:
-        operations = operations & {"system.info", "filesystem.resolve"}
-    return {**context, "connected": True, "operations": sorted(operations)}
+    return {**context, "connected": True, "operations": sorted(snapshot)}
 
 
 async def owned_session(
@@ -675,14 +623,11 @@ async def create_session(
         raise SessionServiceError(409, "session.modelUnavailable", field="modelId")
     if not model_supports_tools(ai, model_id):
         raise SessionServiceError(409, "session.modelToolsUnavailable", field="modelId")
-    working_directory, current_directory, root_id, root_revision = (
-        await validate_execution_preferences(
-            db,
-            user.id,
-            payload.preferred_execution_agent_id,
-            payload.preferred_root_id,
-            payload.working_directory,
-        )
+    current_directory, directory_policy = await validate_execution_preferences(
+        db,
+        user.id,
+        payload.preferred_execution_agent_id,
+        payload.current_directory,
     )
     item = ChatSession(
         id=uuid4(),
@@ -695,8 +640,6 @@ async def create_session(
         memory_mode=payload.memory_mode.value,
         web_search_policy=payload.web_search_policy.value,
         preferred_execution_agent_id=payload.preferred_execution_agent_id,
-        preferred_root_id=root_id,
-        working_directory=working_directory,
         current_directory=current_directory,
         control_center=payload.control_center.model_dump(mode="json"),
     )
@@ -707,9 +650,8 @@ async def create_session(
         db,
         item.id,
         payload.preferred_execution_agent_id,
-        root_id,
-        root_revision,
         current_directory,
+        directory_policy,
     )
     await db.flush()
     session_storage = storage_factory()
@@ -766,26 +708,35 @@ async def create_session(
 def active_file_payload(active_file, session: ChatSession) -> dict[str, Any] | None:
     if active_file is None:
         return None
-    try:
-        identity = UUID(active_file.root_identity)
-        path = RootFileService(UUID(int=0)).normalize_relative_path(active_file.path)
-    except (RootFileError, ValueError) as exc:
-        raise SessionServiceError(422, "validation.invalid", field="activeFile") from exc
-    expected_identity = (
-        session.project_id or session.id
-        if active_file.root == "session"
-        else session.preferred_root_id
-    )
-    if (
-        str(identity) != active_file.root_identity
-        or identity != expected_identity
-        or path != active_file.path
-        or path == "."
-    ):
-        raise SessionServiceError(422, "validation.invalid", field="activeFile")
+    if active_file.root == "session":
+        try:
+            identity = UUID(active_file.root_identity)
+            path = RootFileService(UUID(int=0)).normalize_relative_path(active_file.path)
+        except (RootFileError, TypeError, ValueError) as exc:
+            raise SessionServiceError(422, "validation.invalid", field="activeFile") from exc
+        if (
+            str(identity) != active_file.root_identity
+            or identity != (session.project_id or session.id)
+            or path == "."
+        ):
+            raise SessionServiceError(422, "validation.invalid", field="activeFile")
+    else:
+        try:
+            path = _absolute_path(active_file.path)
+        except ValueError as exc:
+            raise SessionServiceError(422, "validation.invalid", field="activeFile") from exc
+        if (
+            active_file.root_identity is not None
+            or active_file.execution_agent_id != session.preferred_execution_agent_id
+        ):
+            raise SessionServiceError(422, "validation.invalid", field="activeFile")
     return {
         "root": active_file.root,
-        "rootIdentity": str(identity),
+        **(
+            {"rootIdentity": active_file.root_identity}
+            if active_file.root == "session"
+            else {"executionAgentId": str(active_file.execution_agent_id)}
+        ),
         "path": path,
         "sha256": active_file.sha256,
         "dirty": active_file.dirty,
@@ -868,8 +819,7 @@ async def update_session(
     fields = payload.model_fields_set
     execution_fields = {
         "preferred_execution_agent_id",
-        "preferred_root_id",
-        "working_directory",
+        "current_directory",
     }
     policy_fields = {
         "project_id",
@@ -878,8 +828,7 @@ async def update_session(
         "reasoning_effort",
         "web_search_policy",
         "preferred_execution_agent_id",
-        "preferred_root_id",
-        "working_directory",
+        "current_directory",
     }
     if fields & policy_fields:
         await db.scalar(
@@ -958,34 +907,25 @@ async def update_session(
             if "preferred_execution_agent_id" in fields
             else item.preferred_execution_agent_id
         )
-        root_id = (
-            payload.preferred_root_id
-            if "preferred_root_id" in fields
-            else item.preferred_root_id
-        )
-        working_directory = (
-            payload.working_directory
-            if "working_directory" in fields
-            else item.working_directory
+        current_directory = (
+            payload.current_directory
+            if "current_directory" in fields
+            else item.current_directory
         )
         selected_new_agent = (
             "preferred_execution_agent_id" in fields
             and agent_id != item.preferred_execution_agent_id
         )
         if selected_new_agent:
-            root_id = payload.preferred_root_id if "preferred_root_id" in fields else None
-            working_directory = (
-                payload.working_directory if "working_directory" in fields else None
+            current_directory = (
+                payload.current_directory if "current_directory" in fields else None
             )
-        item.working_directory, item.current_directory, root_id, root_revision = (
-            await validate_execution_preferences(
-                db, user.id, agent_id, root_id, working_directory
-            )
+        item.current_directory, directory_policy = await validate_execution_preferences(
+            db, user.id, agent_id, current_directory
         )
         item.preferred_execution_agent_id = agent_id
-        item.preferred_root_id = root_id
         await add_directory_grant(
-            db, item.id, agent_id, root_id, root_revision, item.current_directory
+            db, item.id, agent_id, item.current_directory, directory_policy
         )
     storage = storage_factory()
     move_receipt: SessionMoveReceipt | None = None

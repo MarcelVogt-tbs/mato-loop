@@ -181,8 +181,6 @@ def test_runtime_snapshot_contains_only_validated_session_binding() -> None:
         id=uuid4(),
         user_id=uuid4(),
         preferred_execution_agent_id=uuid4(),
-        preferred_root_id=uuid4(),
-        working_directory="project",
         current_directory="/advertised/project",
     )
 
@@ -191,8 +189,9 @@ def test_runtime_snapshot_contains_only_validated_session_binding() -> None:
     assert snapshot["preferredExecutionAgentId"] == str(
         session.preferred_execution_agent_id
     )
-    assert snapshot["preferredRootId"] == str(session.preferred_root_id)
-    assert snapshot["workingDirectory"] == "project"
+    assert snapshot["currentDirectory"] == "/advertised/project"
+    assert "preferredRootId" not in snapshot
+    assert "workingDirectory" not in snapshot
     assert "workspacePath" not in snapshot
 
 

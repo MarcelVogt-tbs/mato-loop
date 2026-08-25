@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+if [ -L /data/config.json ]; then
+    echo "Refusing symlinked /data/config.json" >&2
+    exit 1
+fi
+if [ ! -e /data/config.json ]; then
+    install -m 0644 /usr/share/matoloop-agent/config.json /data/config.json
+fi
+
+exec "$@"

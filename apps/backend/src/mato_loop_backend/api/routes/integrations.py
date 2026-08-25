@@ -774,7 +774,7 @@ def _connected_client(agent_id: UUID) -> ExecutionClient:
     snapshot = execution_agent_connections.snapshot(agent_id)
     if snapshot is None:
         raise ApiError(503, "executionAgent.unavailable")
-    return ExecutionClient(agent_id, None, None, None, snapshot[0])
+    return ExecutionClient(agent_id, snapshot)
 
 
 @router.get("/catalog")

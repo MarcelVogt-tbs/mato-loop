@@ -17,7 +17,7 @@ from mato_loop_backend.integrations import (
     canonicalize_youtube_video_url,
     sanitize_url_for_display,
 )
-from mato_loop_backend.models import ChatSession, PermissionGrant
+from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
@@ -274,9 +274,7 @@ def _project_session_path_scope(
         return None
 
 
-def execution_directory_scope(
-    agent_id: UUID, path: str, root_id: UUID, root_revision: str
-) -> str:
+def execution_directory_scope(agent_id: UUID, path: str) -> str:
     parsed = PurePosixPath(path)
     if (
         not parsed.is_absolute()
@@ -284,15 +282,12 @@ def execution_directory_scope(
         or "\\" in path
         or (path != "/" and any(part in {"", ".", ".."} for part in path.split("/")[1:]))
         or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in path)
-        or re.fullmatch(r"[0-9a-f]{64}", root_revision) is None
     ):
         raise ValueError("invalid execution directory")
     return json.dumps(
         {
             "agentId": str(agent_id),
             "path": path,
-            "rootId": str(root_id),
-            "rootRevision": root_revision,
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -303,17 +298,16 @@ def execution_directory_scope(
 def execution_directory_permission(
     agent_id: UUID,
     path: str,
-    root_id: UUID,
-    root_revision: str,
     *,
+    capability: str = "execution.directory",
     action_kind: str = "change_directory",
     title: str = "Verzeichnis verwenden?",
     summary: str | None = None,
 ) -> PermissionRequest:
     return PermissionRequest(
-        capability="execution.directory",
+        capability=capability,
         resource_type="execution_directory",
-        resource_scope=execution_directory_scope(agent_id, path, root_id, root_revision),
+        resource_scope=execution_directory_scope(agent_id, path),
         action_kind=action_kind,
         risk_level="medium",
         title=title,
@@ -676,79 +670,18 @@ def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath]
         return None
 
 
-def _execution_root_path_scope(
-    resource_scope: str,
-) -> tuple[UUID, UUID, str, PurePosixPath, PurePosixPath] | None:
-    try:
-        value = json.loads(resource_scope)
-        if set(value) != {
-            "agentId",
-            "path",
-            "rootId",
-            "rootRevision",
-            "workingDirectory",
-        }:
-            return None
-        agent_id = UUID(value["agentId"])
-        root_id = UUID(value["rootId"])
-        revision = value["rootRevision"]
-        working_directory = value["workingDirectory"]
-        path = value["path"]
-        if (
-            str(agent_id) != value["agentId"]
-            or str(root_id) != value["rootId"]
-            or not isinstance(revision, str)
-            or re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", revision) is None
-            or not isinstance(working_directory, str)
-            or not isinstance(path, str)
-        ):
-            return None
-
-        def relative(value: str) -> PurePosixPath | None:
-            parsed = PurePosixPath(value)
-            if value == ".":
-                return parsed
-            if (
-                not value
-                or "\\" in value
-                or parsed.is_absolute()
-                or any(part in {"", ".", ".."} for part in value.split("/"))
-                or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
-            ):
-                return None
-            return parsed
-
-        working_path = relative(working_directory)
-        resource_path = relative(path)
-        canonical = json.dumps(
-            value,
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        if working_path is None or resource_path is None or canonical != resource_scope:
-            return None
-        return agent_id, root_id, revision, working_path, resource_path
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        return None
-
-
 def _execution_directory_scope(
     resource_scope: str,
-) -> tuple[UUID, UUID, str, PurePosixPath] | None:
+) -> tuple[UUID, PurePosixPath] | None:
     try:
         value = json.loads(resource_scope)
-        if set(value) != {"agentId", "path", "rootId", "rootRevision"}:
+        if set(value) != {"agentId", "path"}:
             return None
         agent_id = UUID(value["agentId"])
-        root_id = UUID(value["rootId"])
         path = value["path"]
-        revision = value["rootRevision"]
-        canonical = execution_directory_scope(agent_id, path, root_id, revision)
+        canonical = execution_directory_scope(agent_id, path)
         return (
             agent_id,
-            root_id,
-            revision,
             PurePosixPath(path),
         ) if canonical == resource_scope else None
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -851,10 +784,31 @@ class PermissionPolicy:
             )
 
         if request.resource_type == "execution_directory":
-            if _execution_directory_scope(request.resource_scope) is None:
+            scope = _execution_directory_scope(request.resource_scope)
+            if scope is None:
+                return PermissionDecision.DENY
+            agent = await db.scalar(
+                select(ExecutionAgent).where(
+                    ExecutionAgent.id == scope[0],
+                    ExecutionAgent.user_id == chat_session.user_id,
+                    ExecutionAgent.revoked_at.is_(None),
+                )
+            )
+            if agent is None:
                 return PermissionDecision.DENY
             if policy == ToolExecutionPolicy.DISABLED:
                 return PermissionDecision.DENY
+            path = scope[1]
+            home = PurePosixPath(agent.home_directory) if agent.home_directory else None
+            selected_policy = (
+                agent.home_filesystem_policy
+                if home is not None and _path_is_within(path, home)
+                else agent.external_filesystem_policy
+            )
+            if selected_policy == "deny":
+                return PermissionDecision.DENY
+            if selected_policy == "auto":
+                return PermissionDecision.ALLOW
             grants = list(
                 (
                     await db.scalars(
@@ -872,24 +826,19 @@ class PermissionPolicy:
                 else PermissionDecision.ASK
             )
 
-        if request.resource_type in {"root_path", "execution_root_path"}:
-            scope = (
-                _root_path_scope(request.resource_scope)
-                if request.resource_type == "root_path"
-                else _execution_root_path_scope(request.resource_scope)
-            )
+        if request.resource_type == "root_path":
+            scope = _root_path_scope(request.resource_scope)
             if scope is None or root_files.session_id != chat_session.id:
                 return PermissionDecision.DENY
-            if request.resource_type == "root_path":
-                root, identity, _path = scope
-                try:
-                    current_identity = root_files.root_identity(root)
-                except RootFileError:
-                    return PermissionDecision.DENY
-                if identity != current_identity:
-                    return PermissionDecision.DENY
-                if identity != str(chat_session.project_id or chat_session.id):
-                    return PermissionDecision.DENY
+            root, identity, _path = scope
+            try:
+                current_identity = root_files.root_identity(root)
+            except RootFileError:
+                return PermissionDecision.DENY
+            if identity != current_identity:
+                return PermissionDecision.DENY
+            if identity != str(chat_session.project_id or chat_session.id):
+                return PermissionDecision.DENY
             if request.capability not in {
                 "filesystem.read",
                 "filesystem.write",
@@ -950,22 +899,14 @@ class PermissionPolicy:
                 and resource_identity == grant_identity == current_identity
                 and _path_is_within(resource_path, grant_path)
             )
-        if request.resource_type == "execution_root_path":
-            resource = _execution_root_path_scope(request.resource_scope)
-            granted = _execution_root_path_scope(grant.resource_scope)
-            if resource is None or granted is None:
-                return False
-            return resource[:4] == granted[:4] and _path_is_within(
-                resource[4], granted[4]
-            )
         if request.resource_type == "execution_directory":
             resource = _execution_directory_scope(request.resource_scope)
             granted = _execution_directory_scope(grant.resource_scope)
             return bool(
                 resource
                 and granted
-                and resource[:3] == granted[:3]
-                and _path_is_within(resource[3], granted[3])
+                and resource[0] == granted[0]
+                and _path_is_within(resource[1], granted[1])
             )
         if request.resource_type == "session":
             try:

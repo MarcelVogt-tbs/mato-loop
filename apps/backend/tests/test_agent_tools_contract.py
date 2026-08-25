@@ -174,7 +174,6 @@ def _session() -> ChatSession:
         title="Test",
         memory_mode="disabled",
         web_search_policy="available",
-        working_directory=None,
     )
 
 
@@ -1883,7 +1882,6 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
         title="Ziel",
         memory_mode="disabled",
         web_search_policy="available",
-        working_directory=None,
         private_integration_data_used=True,
     )
     messages = Mock()
@@ -2856,13 +2854,10 @@ async def test_workspace_video_uses_execution_client_bytes(tmp_path) -> None:
         arguments={"root": "computer", "path": "video.mp4"},
     )
     context = _context(tmp_path, call)
-    context.session.working_directory = "project"
+    context.session.current_directory = "/home/user/project"
     context.execution_client = SimpleNamespace(
         agent_id=uuid4(),
-        root_id=uuid4(),
-        root_revision="a" * 64,
-        working_directory="project",
-        current_directory=None,
+        current_directory="/home/user/project",
         read_bytes=AsyncMock(return_value=b"video"),
     )
     context.video_analysis_target = Mock(return_value="video-model")

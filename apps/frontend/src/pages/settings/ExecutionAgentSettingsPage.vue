@@ -4,7 +4,7 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Computer</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Lokal freigegebene Bereiche und Ausführungsfunktionen mit MatoLoop verbinden.
+          Lokale Datei- und Shell-Funktionen mit MatoLoop verbinden.
         </p>
       </div>
       <q-btn color="primary" unelevated no-caps icon="add" label="Computer hinzufügen" @click="openCreate" />
@@ -35,13 +35,13 @@
           </q-item-section>
           <q-item-section>
             <div class="row items-center q-gutter-sm">
-              <q-item-label class="text-weight-medium">{{ agent.name }}</q-item-label>
+              <q-item-label class="text-weight-medium">{{ agent.alias }}</q-item-label>
               <q-chip dense :color="statusColor(agent)" :text-color="statusTextColor(agent)">
                 {{ statusLabel(agent) }}
               </q-chip>
             </div>
             <q-item-label caption>
-              {{ agent.platform || 'Noch keine Verbindung' }}<template v-if="agent.protocolVersion !== null"> · Protokoll {{ agent.protocolVersion }}</template> · Revision {{ agent.revision }}
+              {{ agent.computerName || 'Noch keine Verbindung' }}<template v-if="agent.platform"> · {{ agent.platform }}</template><template v-if="agent.agentVersion"> · Agent {{ agent.agentVersion }}</template>
             </q-item-label>
             <q-item-label v-if="agent.pairingState === 'pending' && agent.pairingTokenExpiresAt" caption>
               Kopplungstoken gültig bis: {{ formatExpiry(agent.pairingTokenExpiresAt) }}
@@ -51,21 +51,8 @@
             </q-item-label>
 
             <div class="q-mt-sm">
-              <div class="text-caption app-muted">Aktueller Ordner</div>
-              <div class="text-body2">{{ agent.homeDirectory || 'Nicht konfiguriert' }}</div>
-              <div class="text-caption app-muted">
-                Stammt aus der lokalen Agent-Konfiguration und ist der initiale aktuelle Ordner für neue oder manuell zugewiesene Sessions.
-              </div>
-            </div>
-
-            <div class="q-mt-sm">
-              <div class="text-caption app-muted">Freigegebene Bereiche</div>
-              <div v-if="agent.roots?.length" class="row q-gutter-xs q-mt-xs">
-                <q-chip v-for="root in agent.roots" :key="root.id" dense outline icon="folder">
-                  {{ root.label }}
-                </q-chip>
-              </div>
-              <div v-else class="text-caption">Keine freigegebenen Bereiche gemeldet.</div>
+              <div class="text-caption app-muted">Home-Verzeichnis</div>
+              <div class="text-body2">{{ agent.homeDirectory || 'Noch nicht gemeldet' }}</div>
             </div>
 
             <div class="q-mt-sm">
@@ -80,7 +67,7 @@
           </q-item-section>
           <q-item-section side top class="execution-agent-item__actions">
             <div class="row items-center no-wrap q-gutter-xs">
-              <q-btn flat round dense icon="edit" :aria-label="`${agent.name} bearbeiten`" @click="openEdit(agent)">
+              <q-btn flat round dense icon="edit" :aria-label="`${agent.alias} bearbeiten`" @click="openEdit(agent)">
                 <q-tooltip>Bearbeiten</q-tooltip>
               </q-btn>
               <q-btn
@@ -90,7 +77,7 @@
                 dense
                 color="primary"
                 icon="key"
-                :aria-label="`Neuen Kopplungstoken für ${agent.name} erstellen`"
+                :aria-label="`Neuen Kopplungstoken für ${agent.alias} erstellen`"
                 @click="openPairingToken(agent)"
               >
                 <q-tooltip>Neuen Kopplungstoken erstellen</q-tooltip>
@@ -102,7 +89,7 @@
                 dense
                 color="negative"
                 icon="link_off"
-                :aria-label="`${agent.name} entkoppeln`"
+                :aria-label="`${agent.alias} entkoppeln`"
                 @click="unpair(agent)"
               >
                 <q-tooltip>Computer entkoppeln</q-tooltip>
@@ -113,7 +100,7 @@
                 dense
                 color="negative"
                 icon="delete_outline"
-                :aria-label="`${agent.name} entfernen`"
+                :aria-label="`${agent.alias} entfernen`"
                 @click="revoke(agent)"
               >
                 <q-tooltip>Computer entfernen</q-tooltip>
@@ -207,19 +194,19 @@ const operationLabels = {
   'cache.ensure': 'Datei im Cache bereitstellen',
   'cache.store': 'Datei im Cache speichern',
   'filesystem.resolve': 'Verzeichnis auflösen',
-  'workspace.copy': 'Pfade kopieren',
-  'workspace.delete': 'Pfade löschen',
-  'workspace.export': 'Dateien exportieren',
-  'workspace.import': 'Dateien importieren',
-  'workspace.list': 'Ordner auflisten',
-  'workspace.glob': 'Dateien suchen',
-  'workspace.grep': 'Dateiinhalte durchsuchen',
-  'workspace.mkdir': 'Ordner erstellen',
-  'workspace.move': 'Pfade verschieben',
-  'workspace.read': 'Dateien lesen',
-  'workspace.rename': 'Pfade umbenennen',
-  'workspace.stat': 'Dateiinformationen lesen',
-  'workspace.write': 'Dateien bearbeiten',
+  'filesystem.copy': 'Pfade kopieren',
+  'filesystem.delete': 'Pfade löschen',
+  'filesystem.export': 'Dateien exportieren',
+  'filesystem.import': 'Dateien importieren',
+  'filesystem.list': 'Ordner auflisten',
+  'filesystem.glob': 'Dateien suchen',
+  'filesystem.grep': 'Dateiinhalte durchsuchen',
+  'filesystem.mkdir': 'Ordner erstellen',
+  'filesystem.move': 'Pfade verschieben',
+  'filesystem.read': 'Dateien lesen',
+  'filesystem.rename': 'Pfade umbenennen',
+  'filesystem.stat': 'Dateiinformationen lesen',
+  'filesystem.write': 'Dateien bearbeiten',
   'process.exec': 'Prozesse ausführen',
   'shell.run': 'Shell-Befehle ausführen',
   'shell.inspect': 'Shell-Konfiguration prüfen',
@@ -290,7 +277,7 @@ async function createPairingToken() {
 
 async function unpair(agent) {
   const accepted = await confirm(
-    `„${agent.name}“ entkoppeln? Der Computer wird sofort getrennt und muss für eine neue Verbindung erneut gekoppelt werden.`,
+    `„${agent.alias}“ entkoppeln? Der Computer wird sofort getrennt und muss für eine neue Verbindung erneut gekoppelt werden.`,
     'Computer entkoppeln',
     { okLabel: 'Entkoppeln', okColor: 'negative' }
   )
@@ -301,7 +288,7 @@ async function unpair(agent) {
 
 async function revoke(agent) {
   const accepted = await confirm(
-    `„${agent.name}“ entfernen? Der Zugriff wird sofort widerrufen und der Computer aus der Liste entfernt.`,
+    `„${agent.alias}“ entfernen? Der Zugriff wird sofort widerrufen und der Computer aus der Liste entfernt.`,
     'Computer entfernen',
     { okLabel: 'Entfernen', okColor: 'negative' }
   )

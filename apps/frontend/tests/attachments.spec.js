@@ -22,8 +22,7 @@ import {
 const url = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
 const executionAgentId = '550e8400-e29b-41d4-a716-446655440003'
 const rootId = '550e8400-e29b-41d4-a716-446655440004'
-const rootRevision = 'a'.repeat(64)
-const downloadUrl = `/api/workspace/files/download?path=reports%2Flarge.zip&scope=filesystem&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=${rootId}&execution_agent_id=${executionAgentId}&root_id=${rootId}&root_revision=${rootRevision}&working_directory=original-workspace`
+const downloadUrl = `/api/workspace/files/download?path=%2Fhome%2Fuser%2Freports%2Flarge.zip&scope=filesystem&session_id=550e8400-e29b-41d4-a716-446655440000&execution_agent_id=${executionAgentId}&current_directory=%2Fhome%2Fuser`
 
 describe('persisted attachments', () => {
   it('only permits the internal hierarchical attachment route', () => {
@@ -34,11 +33,9 @@ describe('persisted attachments', () => {
 
   it('accepts only bound internal file-download URLs', () => {
     expect(safeFileDownloadUrl(downloadUrl)).toBe(downloadUrl)
-    expect(safeFileDownloadUrl(`${downloadUrl}&working_directory=other`)).toBeNull()
-    expect(safeFileDownloadUrl(downloadUrl.replace(`&root_revision=${rootRevision}`, ''))).toBeNull()
-    expect(safeFileDownloadUrl(downloadUrl.replace(rootRevision, 'A'.repeat(64)))).toBeNull()
-    expect(safeFileDownloadUrl(downloadUrl.replace('original-workspace', '../other'))).toBeNull()
-    expect(safeFileDownloadUrl(downloadUrl.replace('reports%2Flarge.zip', '..%2Fsecret'))).toBeNull()
+    expect(safeFileDownloadUrl(`${downloadUrl}&current_directory=%2Fother`)).toBeNull()
+    expect(safeFileDownloadUrl(downloadUrl.replace('&current_directory=%2Fhome%2Fuser', ''))).toBeNull()
+    expect(safeFileDownloadUrl(downloadUrl.replace('%2Fhome%2Fuser%2Freports', '..%2Fsecret'))).toBeNull()
     expect(safeFileDownloadUrl(`https://example.com${downloadUrl}`)).toBeNull()
     const sessionUrl = '/api/workspace/files/download?path=report.pdf&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440000'
     expect(safeFileDownloadUrl(sessionUrl)).toBe(sessionUrl)
@@ -52,7 +49,7 @@ describe('persisted attachments', () => {
       id: 'result-1',
       content: JSON.stringify({
         root: 'workspace',
-        path: 'reports/large.zip',
+        path: '/home/user/reports/large.zip',
         filename: 'large.zip',
         sizeBytes: 3_000_000_000,
         downloadUrl
@@ -66,8 +63,8 @@ describe('persisted attachments', () => {
       sizeBytes: 3_000_000_000,
       filename: 'large.zip',
       url: downloadUrl,
-      fileRootId: rootId,
-      filePath: 'reports/large.zip'
+      fileRootId: null,
+      filePath: '/home/user/reports/large.zip'
     })
     expect(toolFileAttachment({ id: 'call-1', name: 'read_file' }, result)).toBeNull()
     expect(toolFileAttachment({ id: 'call-1', name: 'provide_file' }, {
@@ -90,7 +87,7 @@ describe('persisted attachments', () => {
       id: 'result-1',
       content: JSON.stringify({
         root: 'workspace',
-        path: `images/${filename}`,
+        path: `/home/user/images/${filename}`,
         filename,
         sizeBytes: 1024,
         downloadUrl: imageDownloadUrl
@@ -105,8 +102,8 @@ describe('persisted attachments', () => {
       sizeBytes: 1024,
       filename,
       url: contentUrl,
-      fileRootId: rootId,
-      filePath: `images/${filename}`
+      fileRootId: null,
+      filePath: `/home/user/images/${filename}`
     })
     expect(imageAttachments([attachment])[0].safeUrl).toBe(contentUrl)
   })
@@ -140,7 +137,7 @@ describe('persisted attachments', () => {
       id: 'result-1',
       content: JSON.stringify({
         root: 'workspace',
-        path: 'images/photo.png',
+        path: '/home/user/images/photo.png',
         filename: 'photo.png',
         sizeBytes: 5 * 1024 * 1024 + 1,
         downloadUrl: imageDownloadUrl
@@ -152,8 +149,8 @@ describe('persisted attachments', () => {
       sizeBytes: 5 * 1024 * 1024 + 1,
       filename: 'photo.png',
       url: imageDownloadUrl,
-      fileRootId: rootId,
-      filePath: 'images/photo.png'
+      fileRootId: null,
+      filePath: '/home/user/images/photo.png'
     })
   })
 
@@ -161,14 +158,11 @@ describe('persisted attachments', () => {
     const action = {
       operation: 'write',
       root: 'workspace',
-      rootIdentity: rootId,
-      path: 'reports/large.zip',
+      path: '/home/user/reports/large.zip',
       filename: 'large.zip',
       sizeBytes: 3_000_000_000,
       executionAgentId,
-      rootId,
-      rootRevision,
-      workingDirectory: 'original-workspace',
+      currentDirectory: '/home/user',
       downloadUrl
     }
     const expected = {
@@ -177,8 +171,8 @@ describe('persisted attachments', () => {
     }
 
     expect(toolFileActions({ fileActions: [action] })).toEqual([expected])
-    expect(toolFileActions({ fileActions: [{ ...action, path: 'reports/other.zip' }] })).toEqual([])
-    expect(toolFileActions({ fileActions: [{ ...action, rootIdentity: 'other' }] })).toEqual([])
+    expect(toolFileActions({ fileActions: [{ ...action, path: '/home/user/reports/other.zip' }] })).toEqual([])
+    expect(toolFileActions({ fileActions: [{ ...action, currentDirectory: '/other' }] })).toEqual([])
     expect(toolFileActions({ fileActions: [{ ...action, operation: 'delete' }] })).toEqual([])
   })
 
@@ -241,9 +235,9 @@ describe('persisted attachments', () => {
     expect(deduplicateFileOutputAttachments([{
       id: 'provided',
       fileRootId: rootId,
-      filePath: 'reports/other.zip',
+      filePath: '/home/user/reports/other.zip',
       url: downloadUrl
-    }], [{ rootIdentity: rootId, path: 'reports/large.zip' }])).toEqual([])
+    }], [{ executionAgentId, path: '/home/user/reports/large.zip' }])).toEqual([])
   })
 
   it('does not expose legacy draft actions as reusable file outputs', () => {

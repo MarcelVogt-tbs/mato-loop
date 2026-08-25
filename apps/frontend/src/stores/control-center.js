@@ -72,24 +72,21 @@ function normalizeFileView(value) {
   const viewedFilePath = typeof value.viewedFilePath === 'string' && value.viewedFilePath === value.selectedPath
     ? value.viewedFilePath
     : null
-  const rootIdentity = typeof value.rootIdentity === 'string' && value.rootIdentity
+  const rootIdentity = value.scope === 'session' && typeof value.rootIdentity === 'string' && value.rootIdentity
     ? value.rootIdentity
     : null
-  const snapshot = ['executionAgentId', 'rootId', 'rootRevision', 'workingDirectory']
+  const snapshot = ['executionAgentId', 'currentDirectory']
     .map((key) => typeof value[key] === 'string' && value[key] ? value[key] : null)
-  if (!rootIdentity && snapshot.some(Boolean)) return null
   if (value.scope === 'session' && snapshot.some(Boolean)) return null
-  if (value.scope === 'filesystem' && rootIdentity && snapshot.some((item) => !item)) return null
+  if (value.scope === 'filesystem' && snapshot.some((item) => !item)) return null
   return {
     scope: value.scope,
     selectedPath: value.selectedPath,
     selectedKind: value.selectedKind,
     viewedFilePath,
-    rootIdentity,
+    ...(value.scope === 'session' ? { rootIdentity } : {}),
     executionAgentId: snapshot[0],
-    rootId: snapshot[1],
-    rootRevision: snapshot[2],
-    workingDirectory: snapshot[3]
+    currentDirectory: snapshot[1]
   }
 }
 
@@ -104,11 +101,11 @@ export function controlCenterRequestState(state) {
           selected_path: state.fileView.selectedPath,
           selected_kind: state.fileView.selectedKind,
           viewed_file_path: state.fileView.viewedFilePath,
-          root_identity: state.fileView.rootIdentity,
+          ...(state.fileView.scope === 'session'
+            ? { root_identity: state.fileView.rootIdentity }
+            : {}),
           execution_agent_id: state.fileView.executionAgentId,
-          root_id: state.fileView.rootId,
-          root_revision: state.fileView.rootRevision,
-          working_directory: state.fileView.workingDirectory
+          current_directory: state.fileView.currentDirectory
         }
       : null
   }

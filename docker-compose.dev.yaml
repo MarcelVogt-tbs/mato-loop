@@ -135,37 +135,34 @@ services:
     networks:
       - mato-loop
 
-  execution-agent:
-    image: mato-loop-execution-agent-dev
+  matoloop-agent:
+    image: matoloop-agent-dev
     build:
-      context: ./apps/execution-agent
+      context: ./apps/matoloop-agent
       dockerfile: Dockerfile.dev
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     environment:
-      UV_PROJECT_ENVIRONMENT: /opt/mato-loop/execution-agent/venv
-      UV_CACHE_DIR: /opt/mato-loop/execution-agent/uv-cache
-      MATO_EXECUTION_AGENT_BACKEND_URL: ws://backend:${MATO_LOOP_BIND_BACKEND_PORT:-6020}/api/execution-agents/connect
-      MATO_EXECUTION_AGENT_ID: ${MATO_EXECUTION_AGENT_ID:-}
-      MATO_EXECUTION_AGENT_PAIRING_TOKEN: ${MATO_EXECUTION_AGENT_PAIRING_TOKEN:-}
-      MATO_EXECUTION_AGENT_TOKEN: ${MATO_EXECUTION_AGENT_TOKEN:-}
-      MATO_EXECUTION_AGENT_NAME: ${MATO_EXECUTION_AGENT_NAME:-Docker Agent}
+      UV_PROJECT_ENVIRONMENT: /opt/matoloop-agent/venv
+      UV_CACHE_DIR: /opt/matoloop-agent/uv-cache
+      MATOLOOP_AGENT_BACKEND_URL: ws://backend:${MATO_LOOP_BIND_BACKEND_PORT:-6020}/api/execution-agents/connect
+      MATOLOOP_AGENT_ID: ${MATOLOOP_AGENT_ID:-}
+      MATOLOOP_AGENT_PAIRING_TOKEN: ${MATOLOOP_AGENT_PAIRING_TOKEN:-}
     volumes:
       - .:/source
-      - ${MATO_EXECUTION_AGENT_CONFIG:-./apps/execution-agent/config.json}:/config/config.json:ro
-      - ${MATO_EXECUTION_AGENT_WORKSPACE:-./data/home}:/workspace
-      - execution_agent_data:/data
-      - execution_agent_dependency_data:/opt/mato-loop/execution-agent
+      - ${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}:/data
+      - ${MATOLOOP_AGENT_HOME:-./data/home}:/workspace
+      - matoloop_agent_dependency_data:/opt/matoloop-agent
     depends_on:
       backend:
         condition: service_healthy
-    working_dir: /source/apps/execution-agent
+    working_dir: /source/apps/matoloop-agent
     command:
       [
         "sh",
         "-c",
-        "uv sync --frozen && exec uv run --no-sync mato-loop-execution-agent run",
+        "uv sync --frozen && exec uv run --no-sync matoloop-agent run",
       ]
     networks:
       - mato-loop
@@ -177,8 +174,7 @@ volumes:
   backend_uv_data:
   frontend_node_modules:
   frontend_yarn_cache:
-  execution_agent_data:
-  execution_agent_dependency_data:
+  matoloop_agent_dependency_data:
 
 networks:
   mato-loop:

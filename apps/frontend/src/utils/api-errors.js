@@ -23,7 +23,6 @@ const fieldLabels = {
   runAt: 'Der Ausführungszeitpunkt',
   preferredExecutionAgentId: 'Der Computer',
   homeDirectory: 'Der aktuelle Ordner',
-  preferredRootId: 'Der freigegebene Bereich',
   pinned: 'Die Berücksichtigung',
   pinKind: 'Die Kernidentitätsart',
   sourceType: 'Der Quellentyp',
@@ -51,7 +50,7 @@ const fieldLabels = {
   token_id: 'Die Token-ID',
   token_secret: 'Das Token-Secret',
   username: 'Der Benutzername',
-  workingDirectory: 'Der aktuelle Ordner',
+  currentDirectory: 'Der aktuelle Ordner',
   web_search_policy: 'Die Websuch-Richtlinie'
 }
 
@@ -145,7 +144,7 @@ const messages = {
   'file.invalidEncoding': () => 'Die Datei kann nur als UTF-8-Text gelesen werden.',
   'file.invalidName': () => 'Der Dateiname ist ungültig.',
   'file.invalidPagination': () => 'Der angeforderte Dateiausschnitt ist ungültig.',
-  'file.invalidPath': () => 'Der Pfad muss relativ zum ausgewählten Root und im POSIX-Format angegeben werden.',
+  'file.invalidPath': () => 'Der Pfad muss ein gültiger POSIX-Pfad sein.',
   'file.invalidRoot': () => 'Der ausgewählte Datei-Root ist ungültig.',
   'file.invalidWriteMode': () => 'Der angeforderte Schreibmodus ist ungültig.',
   'file.invalidWorkingDirectory': () => 'Der ausgewählte aktuelle Ordner ist ungültig.',
@@ -419,7 +418,6 @@ const messages = {
   'workspace.fileNotFound': () => 'Die Datei wurde nicht gefunden.',
   'workspace.fileTooLarge': () => 'Die Datei ist für den direkten Zugriff zu groß.',
   'workspace.homeDeleteForbidden': () => 'Das Agent-Home kann nicht gelöscht werden.',
-  'workspace.homeMutationForbidden': () => 'Das Agent-Home selbst kann nicht verändert werden.',
   'workspace.invalidEncoding': () => 'Die Datei kann nur als UTF-8-Text gelesen werden.',
   'workspace.invalidDirectoryName': () => 'Der Ordnername ist ungültig.',
   'workspace.invalidFileName': () => 'Der Dateiname ist ungültig.',

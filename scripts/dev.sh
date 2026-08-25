@@ -26,10 +26,10 @@ usage() {
         "  status              Show service status" \
         "  doctor              Check pgvector and the embedding index" \
         "  db [args]           Run Alembic" \
-        "  lock <target>       Update the backend or frontend lockfile" \
-        "  format backend      Apply safe backend lint fixes" \
-        "  check [target]      Check backend, frontend, and execution agent" \
-        "  test [target]       Test backend, frontend, execution agent, or local RAG stack" \
+        "  lock <target>       Update the backend, frontend, or MatoLoop Agent lockfile" \
+        "  format <target>     Format backend or MatoLoop Agent code" \
+        "  check [target]      Check backend, frontend, and MatoLoop Agent" \
+        "  test [target]       Test backend, frontend, MatoLoop Agent, or local RAG stack" \
         "  eval-prompts [args] Run serial live prompt evaluations"
 }
 
@@ -41,8 +41,8 @@ run_frontend() {
     compose run --rm --no-deps frontend sh -lc "$1"
 }
 
-run_execution_agent() {
-    compose run --rm --no-deps --entrypoint sh execution-agent -lc "$1"
+run_matoloop_agent() {
+    compose run --rm --no-deps --entrypoint sh matoloop-agent -lc "$1"
 }
 
 check_backend() {
@@ -53,8 +53,8 @@ check_frontend() {
     run_frontend "yarn install --immutable && yarn lint && yarn build"
 }
 
-check_execution_agent() {
-    run_execution_agent "test \"\$(id -u)\" = 0 && command -v apt-get git openscad rg xauth xvfb-run >/dev/null && uv sync --frozen && uv run --no-sync python -m compileall src tests && uv run --no-sync ruff check src tests && uv run --no-sync ruff format --check src tests"
+check_matoloop_agent() {
+    run_matoloop_agent "test \"\$(id -u)\" = 0 && command -v apt-get git openscad rg xauth xvfb-run >/dev/null && uv sync --frozen && uv run --no-sync python -m compileall src tests && uv run --no-sync ruff check src tests && uv run --no-sync ruff format --check src tests"
 }
 
 test_backend() {
@@ -65,8 +65,8 @@ test_frontend() {
     run_frontend "yarn install --immutable && yarn test"
 }
 
-test_execution_agent() {
-    run_execution_agent "uv sync --frozen && uv run --no-sync python -m unittest discover -s tests -v"
+test_matoloop_agent() {
+    run_matoloop_agent "uv sync --frozen && uv run --no-sync python -m unittest discover -s tests -v"
 }
 
 test_rag() {
@@ -78,18 +78,22 @@ format_backend() {
     run_backend "uv sync --frozen && uv run ruff check --fix src tests"
 }
 
+format_matoloop_agent() {
+    run_matoloop_agent "uv sync --frozen && uv run --no-sync ruff format src tests"
+}
+
 run_target() {
     local operation="$1"
     local target="${2:-all}"
     case "$operation:$target" in
-        check:all) check_backend; check_frontend; check_execution_agent ;;
+        check:all) check_backend; check_frontend; check_matoloop_agent ;;
         check:backend) check_backend ;;
         check:frontend) check_frontend ;;
-        check:execution-agent) check_execution_agent ;;
-        test:all) test_backend; test_frontend; test_execution_agent ;;
+        check:matoloop-agent) check_matoloop_agent ;;
+        test:all) test_backend; test_frontend; test_matoloop_agent ;;
         test:backend) test_backend ;;
         test:frontend) test_frontend ;;
-        test:execution-agent) test_execution_agent ;;
+        test:matoloop-agent) test_matoloop_agent ;;
         test:rag) test_rag ;;
         *) printf 'Unbekanntes Target: %s\n' "$target" >&2; exit 1 ;;
     esac
@@ -141,13 +145,14 @@ case "${1:-}" in
         case "${2:-}" in
             backend) compose run --rm --no-deps backend uv lock ;;
             frontend) run_frontend "yarn install --mode=update-lockfile" ;;
-            execution-agent) run_execution_agent "uv lock" ;;
+            matoloop-agent) run_matoloop_agent "uv lock" ;;
             *) printf 'Unbekanntes Lock-Target: %s\n' "${2:-}" >&2; exit 1 ;;
         esac
         ;;
     format)
         case "${2:-}" in
             backend) format_backend ;;
+            matoloop-agent) format_matoloop_agent ;;
             *) printf 'Unbekanntes Format-Target: %s\n' "${2:-}" >&2; exit 1 ;;
         esac
         ;;

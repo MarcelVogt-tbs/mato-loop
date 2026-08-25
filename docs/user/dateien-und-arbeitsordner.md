@@ -4,15 +4,15 @@
 
 | Bereich | Zweck |
 | --- | --- |
-| Arbeitsbereich | Vom gewählten Computer bereitgestellte Wurzel |
-| Arbeitsordner | Optionaler relativer Unterordner innerhalb des Arbeitsbereichs |
+| Computer-Dateien | Gewöhnliche absolute Pfade auf dem gewählten Computer |
+| Arbeitsordner | Aktueller absoluter Ordner auf dem gewählten Computer |
 | Backend-Dateien | Interner Speicher der Session oder ihres Projekts |
 
-Neue Sessions besitzen zunächst keinen Computer und keinen Arbeitsbereich. Jeder Arbeitsbereich ist eine Wurzel, die ein Computer bereitstellt und selbst besitzt; das Backend besitzt keinen eigenen Arbeitsbereich. Ohne einen gewählten Computer und eine seiner Wurzeln funktioniert der Chat weiter und die Session-Dateien bleiben verfügbar. Computer-Arbeitsbereiche und lokale Integrationen stehen dann jedoch nicht zur Verfügung.
+Neue Sessions besitzen zunächst nur ihren benutzergebundenen internen Session-Speicher. Dieser ist kein Workspace. Ein Workspace ist ein gewöhnlicher absoluter Pfad auf dem gewählten MatoLoop Agent; das Backend besitzt keinen eigenen Workspace. Ohne einen gewählten Computer und aktuellen Ordner funktioniert der Chat weiter und die Session-Dateien bleiben verfügbar. Computer-Dateien und lokale Integrationen stehen dann jedoch nicht zur Verfügung.
 
-MatoLoop unterstützt mehrere Computer. Unter **Sessioneinstellungen** wählen Sie den Computer. Dieser meldet eine oder mehrere Wurzeln und optional ein Home-Verzeichnis innerhalb einer Wurzel. Das Home ist nur die Vorgabe für neue Sessions. Danach speichert jede Session ihre gewählte Wurzel, ihren relativen Arbeitsordner und den dazugehörigen kanonischen aktuellen Ordner getrennt. Arbeitsbereich und aktueller Ordner werden unter **Control Center > Dateien** gewählt. Die Auswahl ist die Vorgabe für den nächsten Lauf; ein bereits laufender Lauf behält unveränderlich seinen bisherigen Computer und Pfad. Wird der Computer getrennt, erfolgt kein automatischer Wechsel und keine automatische Wiederholung.
+MatoLoop unterstützt mehrere Computer. Unter **Sessioneinstellungen** wählen Sie den Computer. Der MatoLoop Agent meldet genau ein erforderliches Home-Verzeichnis als Startpunkt und seine verfügbaren Operationen, aber keine Wurzeln, Wurzel-IDs oder Wurzelversionen. Den aktuellen absoluten Ordner wählen Sie unter **Control Center > Dateien**. Die Session speichert Computer und Pfad als Vorgabe für den nächsten Lauf; ein bereits laufender Lauf behält seine unveränderliche Momentaufnahme. Wird der Computer getrennt, erfolgt kein automatischer Wechsel und keine automatische Wiederholung.
 
-Computer gehören genau einem Benutzer und können nicht von anderen Konten ausgewählt werden. Diese Anwendungsgrenze ersetzt keine Trennung auf dem Betriebssystem des Computers. Dateien in dessen externem Arbeitsbereich werden beim Löschen des MatoLoop-Kontos nicht automatisch entfernt.
+Computer gehören genau einem Benutzer und können nicht von anderen Konten ausgewählt werden. Diese Anwendungsgrenze ersetzt keine Trennung auf dem Betriebssystem. MatoLoop Agent arbeitet mit den Rechten seines Betriebssystembenutzers und ist keine Sandbox. Dateien auf dem Computer werden beim Löschen des MatoLoop-Kontos nicht automatisch entfernt.
 
 ## Backend-Dateien
 
@@ -27,9 +27,9 @@ Wird eine eigenständige Session in ein Projekt verschoben, übernimmt MatoLoop 
 In der App **Dateien** können Sie:
 
 - Ordner öffnen, filtern und weitere Einträge nachladen
-- einen vom Computer gemeldeten Arbeitsbereich wählen
+- den Home- oder einen anderen absoluten Ordner des Computers öffnen
 - einen markierten Ordner als aktuellen Ordner der Session verwenden
-- den gewählten Arbeitsbereich durchsuchen
+- den gewählten Computerpfad durchsuchen
 - Dateien hochladen und herunterladen
 - leere Text- oder Markdown-Dateien anlegen
 - Ordner anlegen
@@ -41,9 +41,11 @@ Nachrichten verweisen bei Uploads und dauerhaften Binärausgaben auf die exakte 
 
 Nach erfolgreichen Schreib-, Kopier- und Verschiebeaktionen erscheint die vorhandene Dateikarte zum Ansehen oder Herunterladen; für erzeugte Session-Dateien gibt es keine zusätzliche Entwurfskarte. Eine neu erzeugte Session-Datei öffnet MatoLoop automatisch im vorhandenen Dateibrowser, solange Sie dessen Navigation während des Agentenlaufs nicht gewechselt haben und kein ungespeicherter Entwurf verdrängt würde. Ist dieselbe aktuelle Datei bereits geöffnet, bleibt sie ausgewählt und wird aktualisiert, statt eine weitere Ansicht zu öffnen. Textvorschauen lassen sich direkt kopieren. **Kopieren** erzeugt am Ziel eine eigenständige verwaltete Datei mit eigenem Versionsverlauf.
 
-`root=files` bezeichnet den verwalteten Dateibereich. `root=computer` bezeichnet den aktuellen Ordner des für den Lauf gewählten, dem Benutzer gehörenden Computers. Ohne Computer ist nur dieser Zugriff nicht verfügbar. Änderungen dort bleiben Eigentum des Execution Agents; importierte Bytes werden zu verwalteten Dateien. Zwischen beiden Bereichen wird nur kopiert, nicht verschoben; MatoLoop prüft Größe und SHA-256.
+`root=files` bezeichnet den verwalteten Dateibereich. `root=computer` bezeichnet den aktuellen absoluten Ordner des für den Lauf gewählten, dem Benutzer gehörenden MatoLoop Agent. Ohne Computer ist nur dieser Zugriff nicht verfügbar. Änderungen dort bleiben Eigentum des MatoLoop Agent; importierte Bytes werden zu verwalteten Dateien. Zwischen beiden Bereichen wird nur kopiert, nicht verschoben; MatoLoop prüft Größe und SHA-256.
 
-Benötigt eine angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel bleibt eine getrennte, widerrufbare Session-Freigabe.
+Direkte Dateiaktionen unter **Control Center > Dateien** sind an den angemeldeten Eigentümer und den gewählten Computer gebunden. Sie dürfen absichtlich auf alles zugreifen, was dessen Betriebssystembenutzer lesen oder ändern darf, und umgehen die Modell-Richtlinien und Modell-Freigaben. Betriebssystemrechte sowie Descriptor- und No-Follow-Prüfungen des MatoLoop Agent gelten weiterhin.
+
+Benötigt eine vom Modell angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel folgt der Dateizugriffsrichtlinie für das Home-Verzeichnis oder externe Pfade und kann eine widerrufbare Session-Freigabe erzeugen.
 
 Bis zu vier Dateien können im Browser gemeinsam ausgewählt und nacheinander hochgeladen werden. Die maximale Uploadgröße und die Quote der jeweiligen Session- oder Projektwurzel werden global von Administratoren unter **Einstellungen > Instanzlimits** festgelegt. Aktuelle Dateibytes und alle gespeicherten Vollversionen zählen gemeinsam gegen diese Quote. Neue Dateien überschreiben keine vorhandenen Pfade.
 

@@ -35,7 +35,6 @@ def _session() -> ChatSession:
         title="Test",
         memory_mode="disabled",
         web_search_policy="available",
-        working_directory=None,
     )
 
 

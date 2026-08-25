@@ -156,7 +156,7 @@ describe('chat message queue', () => {
     chat.current = {
       id: 'session-1',
       messages: [message],
-      workspaceContext: { connected: true, operations: ['workspace.list'] }
+      workspaceContext: { connected: true, operations: ['filesystem.list'] }
     }
     chat.selectedSessionId = 'session-1'
     api.get.mockResolvedValue({ data: [] })

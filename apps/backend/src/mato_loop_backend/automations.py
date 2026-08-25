@@ -108,8 +108,6 @@ def runtime_snapshot(session: ChatSession) -> dict[str, Any]:
             if session.preferred_execution_agent_id
             else None
         ),
-        "preferredRootId": str(session.preferred_root_id) if session.preferred_root_id else None,
-        "workingDirectory": session.working_directory,
         "currentDirectory": session.current_directory,
     }
 
@@ -121,8 +119,6 @@ def copy_runtime(source: ChatSession, target: ChatSession) -> None:
         "memory_mode",
         "web_search_policy",
         "preferred_execution_agent_id",
-        "preferred_root_id",
-        "working_directory",
         "current_directory",
     ):
         setattr(target, name, getattr(source, name))

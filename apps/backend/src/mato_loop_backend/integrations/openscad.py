@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import posixpath
 import stat
 import struct
 import zipfile
@@ -28,7 +29,7 @@ from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
     ExecutionResult,
-    _relative_path,
+    _absolute_path,
 )
 from mato_loop_backend.execution.manager import (
     ExecutionAgentError,
@@ -47,6 +48,22 @@ from mato_loop_backend.settings import (
     load_effective_integrations,
 )
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
+
+
+def _relative_path(value: str) -> str:
+    if value == ".":
+        return value
+    parsed = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or parsed.is_absolute()
+        or parsed.as_posix() != value
+        or any(part in {"", ".", ".."} for part in value.split("/"))
+        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+    ):
+        raise ValueError("invalid relative path")
+    return value
 
 _MAX_RENDER_ATTACHMENTS_BYTES = MAX_FILE_ATTACHMENT_BYTES
 _MAX_OFF_BYTES = 24 * 1024 * 1024
@@ -96,14 +113,8 @@ class _OpenScadModel(BaseModel):
     )
 
 
-def _absolute_path(value: str) -> str:
-    if not value.startswith("/") or "\0" in value or len(value) > 4_096:
-        raise ValueError("path must be absolute")
-    return value
-
-
 class OpenScadConfig(_OpenScadModel):
-    binary_path: str
+    binary_path: str = Field(min_length=1, max_length=4_096)
 
     _validate_binary_path = field_validator("binary_path")(_absolute_path)
 
@@ -475,7 +486,12 @@ async def render_project(
     source: dict[str, Any]
     ticket_id = None
     if arguments.root == "workspace":
-        source = {"type": "workspace", "path": project_path}
+        if client.current_directory is None:
+            raise ExecutionClientError("file.workspaceNotSelected")
+        source = {
+            "type": "workspace",
+            "path": posixpath.normpath(posixpath.join(client.current_directory, project_path)),
+        }
     else:
         archive, size, digest = await asyncio.to_thread(
             _zip_project, root_files, project_path

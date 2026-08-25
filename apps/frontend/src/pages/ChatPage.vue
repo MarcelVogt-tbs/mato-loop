@@ -552,7 +552,7 @@ async function openToolFile(action) {
   workspace.configure({
     sessionId,
     rootIdentity: chat.current.projectId || sessionId,
-    workingDirectory: chat.current.workingDirectory,
+    currentDirectory: chat.current.currentDirectory,
     workspaceContext: liveWorkspaceContext.value
   })
   await workspace.openToolFile(action)
@@ -576,7 +576,7 @@ async function openApprovalDraft(approval) {
   workspace.configure({
     sessionId,
     rootIdentity: chat.current.projectId || sessionId,
-    workingDirectory: chat.current.workingDirectory,
+    currentDirectory: chat.current.currentDirectory,
     workspaceContext: liveWorkspaceContext.value
   })
   await workspace.openApprovalDraft({ ...draft, sessionId })

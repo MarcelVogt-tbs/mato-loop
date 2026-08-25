@@ -688,7 +688,7 @@ class IntegrationSettingsBase(SettingsDocument):
             if instance.execution_agent_id is not None
         ]
         if len(keys) != len(set(keys)):
-            raise ValueError("only one integration instance per kind and execution agent is allowed")
+            raise ValueError("only one integration instance per kind and MatoLoop Agent is allowed")
         return self
 
 

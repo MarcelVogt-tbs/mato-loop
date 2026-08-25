@@ -1,7 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -15,8 +14,8 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import execution_agents as execution_agents_route
 from mato_loop_backend.api.routes.execution_agents import (
     DefaultExecutionAgentRequest,
-    ExecutionAgentHomeRequest,
     ExecutionAgentRequest,
+    ExecutionAgentUpdateRequest,
     PairExecutionAgentRequest,
     PairingTokenRequest,
     _agent_payload,
@@ -26,11 +25,11 @@ from mato_loop_backend.api.routes.execution_agents import (
     execution_agent_pairing_policy,
     pair_execution_agent,
     set_default_execution_agent,
-    set_execution_agent_home,
     unpair_execution_agent,
+    update_execution_agent,
 )
 from mato_loop_backend.execution import HelloMessage
-from mato_loop_backend.models import ExecutionAgent, ExecutionAgentRoot, UserAccount
+from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.security import hash_token
 from mato_loop_backend.settings import SettingsStore, UserPreferences
 
@@ -44,15 +43,20 @@ def _agent(**values) -> ExecutionAgent:
     defaults = {
         "id": uuid4(),
         "user_id": uuid4(),
-        "name": "Desktop",
+        "alias": "Desktop",
+        "computer_name": None,
+        "agent_version": None,
         "platform": None,
         "token_hash": None,
         "token_is_legacy": None,
         "registration_token_hash": None,
         "registration_expires_at": None,
-        "protocol_version": None,
         "operations": [],
-        "roots": [],
+        "home_directory": None,
+        "home_filesystem_policy": "auto",
+        "external_filesystem_policy": "ask",
+        "home_shell_policy": "ask",
+        "external_shell_policy": "ask",
         "revision": 1,
         "last_connected_at": None,
         "revoked_at": None,
@@ -62,21 +66,16 @@ def _agent(**values) -> ExecutionAgent:
     return ExecutionAgent(**(defaults | values))
 
 
-def test_payload_exposes_advertised_home() -> None:
-    root_id = uuid4()
-    agent = _agent(
-        home_directory="/home/user",
-        home_root_id=root_id,
-        home_root_revision="a" * 64,
-        home_relative_directory="user",
-    )
+def test_payload_exposes_computer_metadata_and_policies() -> None:
+    agent = _agent(home_directory="/home/user", computer_name="host", agent_version="1")
 
     payload = _agent_payload(agent)
 
     assert payload["homeDirectory"] == "/home/user"
-    assert payload["homeRootId"] == str(root_id)
-    assert payload["homeRootRevision"] == "a" * 64
-    assert payload["homeRelativeDirectory"] == "user"
+    assert payload["computerName"] == "host"
+    assert payload["agentVersion"] == "1"
+    assert payload["homeFilesystemPolicy"] == "auto"
+    assert payload["externalFilesystemPolicy"] == "ask"
 
 
 class _SessionContext:
@@ -90,19 +89,12 @@ class _SessionContext:
         return None
 
 
-def test_execution_agent_models_store_only_hashes_and_relational_roots() -> None:
+def test_execution_agent_model_has_policy_constraints() -> None:
     agent = _agent(
         platform="linux",
         token_hash=hash_token("durable access key"),
         token_is_legacy=False,
     )
-    root = ExecutionAgentRoot(
-        execution_agent_id=agent.id,
-        id=uuid4(),
-        label="Projects",
-        revision="a" * 64,
-    )
-
     assert agent.token_hash != "durable access key"
     assert ExecutionAgent.__table__.c.token_hash.nullable is True
     assert ExecutionAgent.__table__.c.registration_token_hash.unique is True
@@ -113,7 +105,16 @@ def test_execution_agent_models_store_only_hashes_and_relational_roots() -> None
         "ck_execution_agents_durable_token_classified",
         "ck_execution_agents_credential_state_exclusive",
     }
-    assert root.execution_agent_id == agent.id
+    assert "name" not in ExecutionAgent.__table__.c
+    assert "alias" in ExecutionAgent.__table__.c
+    assert "protocol_version" not in ExecutionAgent.__table__.c
+    assert "home_root_id" not in ExecutionAgent.__table__.c
+    assert {
+        "ck_execution_agents_home_filesystem_policy_valid",
+        "ck_execution_agents_external_filesystem_policy_valid",
+        "ck_execution_agents_home_shell_policy_valid",
+        "ck_execution_agents_external_shell_policy_valid",
+    } <= {constraint.name for constraint in ExecutionAgent.__table__.constraints}
     assert ExecutionAgent.__table__.c.operations.type.compile(
         dialect=postgresql.dialect()
     ) == "JSONB"
@@ -129,18 +130,17 @@ async def test_create_returns_hash_only_pending_pairing_envelope() -> None:
         agent.id = uuid4()
         agent.revision = 1
         agent.operations = []
-        agent.roots = []
         agent.created_at = datetime.now(UTC)
         agent.updated_at = datetime.now(UTC)
 
     db.flush.side_effect = assign_server_values
 
     result = await create_execution_agent(
-        ExecutionAgentRequest(name=" Desktop "), user, db, response_headers
+        ExecutionAgentRequest(alias=" Desktop "), user, db, response_headers
     )
     stored = db.add.call_args.args[0]
 
-    assert result["agent"]["name"] == "Desktop"
+    assert result["agent"]["alias"] == "Desktop"
     assert result["agent"]["pairingState"] == "pending"
     assert result["pairingToken"]
     assert "token" not in result
@@ -153,57 +153,21 @@ async def test_create_returns_hash_only_pending_pairing_envelope() -> None:
     db.commit.assert_awaited_once()
 
 
-async def test_home_override_is_resolved_by_the_connected_agent(monkeypatch) -> None:
+async def test_update_changes_alias_and_policies() -> None:
     user = _user()
-    root_id = uuid4()
     agent = _agent(user_id=user.id, token_hash="a" * 64, token_is_legacy=False)
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = agent
-    monkeypatch.setattr(
-        execution_agents_route.execution_agent_connections,
-        "snapshot",
-        lambda _agent_id: (frozenset({"filesystem.resolve"}), ()),
-    )
-    request = AsyncMock()
-    request.return_value = execution_agents_route.DirectoryResult(
-        path="/workspace/project",
-        root_id=root_id,
-        root_revision="b" * 64,
-        relative_path="project",
-    )
-    monkeypatch.setattr(execution_agents_route.ExecutionClient, "request", request)
 
-    result = await set_execution_agent_home(
+    result = await update_execution_agent(
         agent.id,
-        ExecutionAgentHomeRequest(homeDirectory="/workspace/project"),
+        ExecutionAgentUpdateRequest(alias="Laptop", externalFilesystemPolicy="deny"),
         user,
         db,
     )
 
-    assert result["homeDirectory"] == "/workspace/project"
-    assert agent.home_override is True
-    request.assert_awaited_once()
-
-
-async def test_home_override_can_be_cleared_while_offline() -> None:
-    user = _user()
-    agent = _agent(
-        user_id=user.id,
-        home_directory="/workspace",
-        home_root_id=uuid4(),
-        home_root_revision="a" * 64,
-    )
-    db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = agent
-    previous_updated_at = agent.updated_at
-
-    result = await set_execution_agent_home(
-        agent.id, ExecutionAgentHomeRequest(homeDirectory=None), user, db
-    )
-
-    assert result["homeDirectory"] is None
-    assert agent.home_override is True
-    assert agent.updated_at > previous_updated_at
+    assert result["alias"] == "Laptop"
+    assert result["externalFilesystemPolicy"] == "deny"
     db.commit.assert_awaited_once()
 
 
@@ -212,10 +176,10 @@ async def test_pairing_policy_and_duration_validation() -> None:
         "defaultDurationSeconds": 1800,
         "maximumDurationSeconds": 86400,
     }
-    assert ExecutionAgentRequest(name="Agent").pairing_token_duration_seconds == 1800
+    assert ExecutionAgentRequest(alias="Agent").pairing_token_duration_seconds == 1800
     assert PairingTokenRequest(pairingTokenDurationSeconds=86400)
     with pytest.raises(ValidationError):
-        ExecutionAgentRequest(name="Agent", pairingTokenDurationSeconds=1799)
+        ExecutionAgentRequest(alias="Agent", pairingTokenDurationSeconds=1799)
     with pytest.raises(ValidationError):
         PairingTokenRequest(pairingTokenDurationSeconds=86401)
     with pytest.raises(ValidationError):
@@ -550,28 +514,24 @@ async def test_ws_snapshot_rejects_stale_authenticated_hash(monkeypatch) -> None
     agent_id = uuid4()
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = None
-    register = AsyncMock()
     monkeypatch.setattr(
         execution_agents_route, "AsyncSessionFactory", lambda: _SessionContext(db)
     )
-    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "register", register)
     hello = HelloMessage.model_validate(
         {
             "type": "hello",
-            "protocolVersion": 3,
+            "protocolVersion": 1,
             "agentId": agent_id,
-            "name": "Desktop",
+            "agentVersion": "1.0.0",
+            "computerName": "desktop",
             "platform": "linux",
             "operations": [],
-            "roots": [],
+            "homeDirectory": "/home/user",
         }
     )
 
-    accepted = await _register_snapshot(
-        agent_id, hash_token("stale access key"), hello, SimpleNamespace()
-    )
+    accepted = await _register_snapshot(agent_id, hash_token("stale access key"), hello)
 
     assert accepted is False
     statement = db.scalar.await_args.args[0]
     assert "execution_agents.token_hash" in str(statement)
-    register.assert_not_awaited()

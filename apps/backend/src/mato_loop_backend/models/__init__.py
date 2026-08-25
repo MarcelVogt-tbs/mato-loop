@@ -3,7 +3,7 @@
 
 from mato_loop_backend.models.authentication import AuthenticationProvider, UserAuthIdentity
 from mato_loop_backend.models.automation import Automation, AutomationRun, AutomationSchedule
-from mato_loop_backend.models.execution_agent import ExecutionAgent, ExecutionAgentRoot
+from mato_loop_backend.models.execution_agent import ExecutionAgent
 from mato_loop_backend.models.project import Project
 from mato_loop_backend.models.account import Credential, LoginSession, UserAccount
 from mato_loop_backend.models.session import (
@@ -50,7 +50,6 @@ __all__ = [
     "ContextSummary",
     "Credential",
     "ExecutionAgent",
-    "ExecutionAgentRoot",
     "LoginSession",
     "MemoryAudience",
     "MemoryCategory",

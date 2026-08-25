@@ -2,6 +2,8 @@ export const MAX_WORKSPACE_UPLOADS = 4
 export const MAX_WORKSPACE_UPLOAD_BYTES = 64 * 1024 * 1024
 
 export function parentPath(path) {
+  if (path === '/') return '/'
+  if (path.startsWith('/')) return path.slice(0, path.lastIndexOf('/')) || '/'
   return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.'
 }
 
@@ -42,23 +44,25 @@ export function requireWritableContext(store) {
 }
 
 export function persistedFileView(store) {
+  const filesystem = store.scope === 'filesystem'
   return {
     scope: store.scope,
     selectedPath: store.selectedPath,
     selectedKind: store.selectedKind,
     viewedFilePath: store.viewedEntry?.path || null,
-    rootIdentity: store.rootIdentity,
-    executionAgentId: store.toolContext?.executionAgentId || null,
-    rootId: store.toolContext?.rootId || null,
-    rootRevision: store.toolContext?.rootRevision || null,
-    workingDirectory: store.toolContext?.workingDirectory || null
+    ...(store.scope === 'session' ? { rootIdentity: store.rootIdentity } : {}),
+    executionAgentId: filesystem
+      ? store.toolContext?.executionAgentId || store.workspaceContext?.executionAgentId || null
+      : null,
+    currentDirectory: filesystem
+      ? store.toolContext?.currentDirectory || store.currentDirectory || null
+      : null
   }
 }
 
 export function supportsWorkspaceOperation(context, operation) {
   if (
     !context?.executionAgentId
-    || !context.rootId
     || context.connected !== true
   ) return false
   const operations = Array.isArray(context.operations)
@@ -70,7 +74,6 @@ export function supportsWorkspaceOperation(context, operation) {
 export function workspaceContextKey(context) {
   return JSON.stringify([
     context?.executionAgentId || null,
-    context?.rootId || null,
     context?.available,
     context?.connected,
     context?.agentConnected,

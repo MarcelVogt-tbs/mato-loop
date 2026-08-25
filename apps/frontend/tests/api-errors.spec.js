@@ -73,6 +73,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'file.pathAlreadyExists' } })).toBe(
       'Der exakte Zielpfad existiert bereits. Dateien werden nicht überschrieben.'
     )
+    expect(apiErrorMessage({ error: { code: 'file.invalidPath' } })).toBe(
+      'Der Pfad muss ein gültiger POSIX-Pfad sein.'
+    )
     expect(apiErrorMessage({ error: { code: 'file.changed' } })).toBe(
       'Die Datei wurde seit dem Öffnen geändert. Öffne sie erneut und übernimm deine Änderungen in die aktuelle Version.'
     )

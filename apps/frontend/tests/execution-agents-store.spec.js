@@ -9,25 +9,23 @@ vi.mock('src/boot/axios', () => ({ api }))
 
 import {
   absoluteWebsocketUrl,
-  executionHomeRoot,
-  executionRootPatch,
-  usableExecutionRoots,
   useExecutionAgentStore
 } from '../src/stores/execution-agents'
 
 const agent = {
   id: 'agent-1',
-  name: 'Arbeitsplatz',
+  alias: 'Arbeitsplatz',
+  computerName: 'workstation',
+  agentVersion: '1.2.3',
   pairingState: 'paired',
   connected: true,
   operations: [
-    'workspace.export',
-    'workspace.import',
-    'workspace.list',
-    'workspace.read',
-    'workspace.write'
-  ],
-  roots: [{ id: 'root-1', label: 'Projekte', revision: 'root-revision' }]
+    'filesystem.export',
+    'filesystem.import',
+    'filesystem.list',
+    'filesystem.read',
+    'filesystem.write'
+  ]
 }
 
 describe('execution agent store', () => {
@@ -46,81 +44,32 @@ describe('execution agent store', () => {
 
     expect(api.get).toHaveBeenCalledWith('/execution-agents')
     expect(store.defaultExecutionAgentId).toBe('agent-1')
-    expect(store.workspaceContextFor({
-      preferredExecutionAgentId: 'agent-1',
-      preferredRootId: 'root-1'
-    })).toEqual({
+    expect(store.workspaceContextFor({ preferredExecutionAgentId: 'agent-1' })).toEqual({
       executionAgentId: 'agent-1',
-      rootId: 'root-1',
       connected: true,
       operations: [
-        'workspace.export',
-        'workspace.import',
-        'workspace.list',
-        'workspace.read',
-        'workspace.write'
+        'filesystem.export',
+        'filesystem.import',
+        'filesystem.list',
+        'filesystem.read',
+        'filesystem.write'
       ]
     })
   })
 
-  it('requires the selected root and exposes its advertised operations', () => {
+  it('requires a connected selected computer and exposes its operations', () => {
     const store = useExecutionAgentStore()
     store.items = [agent]
 
-    expect(store.workspaceContextFor({
-      preferredExecutionAgentId: 'agent-1',
-      preferredRootId: 'missing-root'
-    })).toMatchObject({ connected: false, operations: [] })
-    expect(store.workspaceContextFor({
-      preferredExecutionAgentId: 'agent-1',
-      preferredRootId: 'root-1',
-      workspaceContext: { connected: false, operations: [] }
-    })).toMatchObject({
+    expect(store.workspaceContextFor({ preferredExecutionAgentId: 'missing' }))
+      .toMatchObject({ connected: false, operations: [] })
+    expect(store.workspaceContextFor({ preferredExecutionAgentId: 'agent-1' })).toMatchObject({
       connected: true,
       operations: agent.operations
     })
-  })
-
-  it('selects only usable roots and applies a valid computer home', () => {
-    const configured = {
-      ...agent,
-      homeDirectory: '/home/user',
-      homeRootId: 'root-1',
-      homeRootRevision: 'root-revision',
-      homeRelativeDirectory: 'user'
-    }
-    const roots = usableExecutionRoots(configured)
-
-    expect(roots).toEqual(agent.roots)
-    expect(executionHomeRoot(configured, roots)).toEqual(agent.roots[0])
-    expect(executionRootPatch(configured, roots[0])).toEqual({
-      preferred_root_id: 'root-1',
-      working_directory: 'user',
-      current_directory: '/home/user'
-    })
-    expect(usableExecutionRoots({ ...configured, connected: false })).toEqual([])
-    expect(executionRootPatch(configured, { id: 'root-2', revision: 'other' })).toEqual({
-      preferred_root_id: 'root-2',
-      working_directory: null,
-      current_directory: null
-    })
-  })
-
-  it('keeps v2 system operations available without a home directory', () => {
-    const store = useExecutionAgentStore()
-    store.items = [{
-      ...agent,
-      protocolVersion: 2,
-      roots: [],
-      operations: ['system.info', 'filesystem.resolve', 'process.exec']
-    }]
-
-    expect(store.workspaceContextFor({ preferredExecutionAgentId: 'agent-1' })).toEqual({
-      executionAgentId: 'agent-1',
-      rootId: null,
-      connected: true,
-      operations: ['system.info', 'filesystem.resolve']
-    })
+    store.items = [{ ...agent, connected: false }]
+    expect(store.workspaceContextFor({ preferredExecutionAgentId: 'agent-1' }))
+      .toMatchObject({ connected: false, operations: [] })
   })
 
   it('turns relative pairing endpoints into browser-usable websocket URLs', () => {
@@ -165,7 +114,7 @@ describe('execution agent store', () => {
     store.stopPolling()
   })
 
-  it('creates and rotates pairing tokens, renames and unpairs without storing secrets', async () => {
+  it('creates and rotates pairing tokens, updates settings and unpairs without storing secrets', async () => {
     const pendingAgent = { ...agent, connected: false, pairingState: 'pending' }
     const unpairedAgent = { ...pendingAgent, pairingState: 'unpaired' }
     api.post
@@ -185,26 +134,33 @@ describe('execution agent store', () => {
           websocketUrl: '/api/execution-agents/connect'
         }
       })
-    api.patch.mockResolvedValue({ data: { ...agent, name: 'Notebook' } })
+    const settings = {
+      alias: 'Notebook',
+      homeFilesystemPolicy: 'auto',
+      externalFilesystemPolicy: 'ask',
+      homeShellPolicy: 'deny',
+      externalShellPolicy: 'ask'
+    }
+    api.patch.mockResolvedValue({ data: { ...agent, ...settings } })
     api.delete.mockResolvedValue({ data: unpairedAgent })
     const store = useExecutionAgentStore()
     store.defaultExecutionAgentId = 'agent-1'
 
-    const created = await store.create('Arbeitsplatz', 1800)
+    const created = await store.create(settings, 1800)
     const rotated = await store.createPairingToken('agent-1', 3600)
-    await store.rename('agent-1', 'Notebook')
+    await store.update('agent-1', settings)
     await store.unpair('agent-1')
 
     expect(created.pairingToken).toBe('create-once')
     expect(rotated.pairingToken).toBe('rotate-once')
     expect(api.post).toHaveBeenNthCalledWith(1, '/execution-agents', {
-      name: 'Arbeitsplatz',
+      ...settings,
       pairingTokenDurationSeconds: 1800
     })
     expect(api.post).toHaveBeenNthCalledWith(2, '/execution-agents/agent-1/pairing-token', {
       pairingTokenDurationSeconds: 3600
     })
-    expect(api.patch).toHaveBeenCalledWith('/execution-agents/agent-1', { name: 'Notebook' })
+    expect(api.patch).toHaveBeenCalledWith('/execution-agents/agent-1', settings)
     expect(api.delete).toHaveBeenCalledWith('/execution-agents/agent-1/pairing')
     expect(store.items).toEqual([unpairedAgent])
     expect(store.items[0]).not.toHaveProperty('pairingToken')
@@ -247,29 +203,4 @@ describe('execution agent store', () => {
     expect(store.defaultExecutionAgentId).toBeNull()
   })
 
-  it('sets a validated computer home directory', async () => {
-    api.put.mockResolvedValue({ data: { ...agent, homeDirectory: '/workspace' } })
-    const store = useExecutionAgentStore()
-    store.items = [agent]
-
-    await store.setHome('agent-1', '/workspace')
-
-    expect(api.put).toHaveBeenCalledWith('/execution-agents/agent-1/home', {
-      homeDirectory: '/workspace'
-    })
-    expect(store.items[0].homeDirectory).toBe('/workspace')
-  })
-
-  it('removes a computer home directory', async () => {
-    api.put.mockResolvedValue({ data: { ...agent, homeDirectory: null } })
-    const store = useExecutionAgentStore()
-    store.items = [{ ...agent, homeDirectory: '/workspace' }]
-
-    await store.setHome('agent-1', null)
-
-    expect(api.put).toHaveBeenCalledWith('/execution-agents/agent-1/home', {
-      homeDirectory: null
-    })
-    expect(store.items[0].homeDirectory).toBeNull()
-  })
 })

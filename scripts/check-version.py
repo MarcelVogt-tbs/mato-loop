@@ -77,12 +77,12 @@ def check(expected_tag: str | None = None) -> str:
         "apps/backend/src/mato_loop_backend/__init__.py": python_version,
         "apps/backend/uv.lock": lambda path: locked_version(path, "mato-loop-backend"),
         "apps/frontend/package.json": lambda path: json.loads(path.read_text())["version"],
-        "apps/execution-agent/pyproject.toml": lambda path: tomllib.loads(path.read_text())[
+        "apps/matoloop-agent/pyproject.toml": lambda path: tomllib.loads(path.read_text())[
             "project"
         ]["version"],
-        "apps/execution-agent/src/mato_loop_execution_agent/__init__.py": python_version,
-        "apps/execution-agent/uv.lock": lambda path: locked_version(
-            path, "mato-loop-execution-agent"
+        "apps/matoloop-agent/src/matoloop_agent/__init__.py": python_version,
+        "apps/matoloop-agent/uv.lock": lambda path: locked_version(
+            path, "matoloop-agent"
         ),
     }
     for relative_path, reader in readers.items():

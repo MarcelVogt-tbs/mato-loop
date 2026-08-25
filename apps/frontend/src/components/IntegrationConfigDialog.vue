@@ -282,7 +282,7 @@ const securityOptions = [
   { label: 'STARTTLS', value: 'starttls' }
 ]
 const executionAgentOptions = computed(() => {
-  const options = executionAgents.items.map((agent) => ({ label: agent.name, value: agent.id }))
+  const options = executionAgents.items.map((agent) => ({ label: agent.alias, value: agent.id }))
   if (form.executionAgentId && !executionAgents.byId(form.executionAgentId)) {
     options.unshift({ label: 'Nicht verfügbarer Computer', value: form.executionAgentId })
   }

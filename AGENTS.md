@@ -8,16 +8,17 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Sessions, messages, agent runs, approvals, and permission grants are persistent core data.
 - ChatGPT Codex and OpenAI-compatible APIs are LLM transports only.
 - MatoLoop controls tool execution, file access, memory, web search, and human-in-the-loop approvals.
-- New sessions start without a working directory. The first persisted message creates only the owner-bound internal session tree under `/data/sessions`; it is not a workspace. Every workspace is a root owned and advertised by an owner-bound Execution Agent.
+- New sessions start without a working directory. The first persisted message creates only the owner-bound internal session tree under `/data/sessions`; it is not a workspace. Every workspace is an ordinary absolute path on a selected owner-bound MatoLoop Agent.
 
 ## Repository
 
 - `apps/backend`: FastAPI, Pydantic, SQLAlchemy, Alembic, provider adapters, and agent runtime.
 - `apps/frontend`: Vue 3, Quasar, Pinia, and Vue Router.
+- `apps/matoloop-agent`: standalone MatoLoop Agent for filesystem, process, transfer, and local-integration operations.
 - `docs`: architecture and operations decisions.
-- `docker-compose.dev.yaml`: local development environment with separate frontend, backend, and Execution Agent services.
-- `docker-compose.yaml`: prepared production stack with an Execution Agent.
-- `docker-compose.no-agent.yaml`: standalone prepared production stack without an Execution Agent.
+- `docker-compose.dev.yaml`: local development environment with separate frontend, backend, and `matoloop-agent` services.
+- `docker-compose.yaml`: prepared production stack with a MatoLoop Agent.
+- `docker-compose.no-agent.yaml`: prepared production stack without a MatoLoop Agent.
 - `scripts/dev.sh`: unified entry point for development, checks, tests, and migrations.
 - `docs/ci-and-releases.md`: Forgejo runner, branch, image, and release contract.
 
@@ -38,8 +39,8 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 
 - Use only `docker-compose.dev.yaml` through `./scripts/dev.sh` for development work.
 - Start the prepared production stack only when explicitly requested.
-- The development stack consists of `db`, `embedding`, `backend`, `frontend`, and `execution-agent`.
-- Persistent development data lives in the `db_data`, `app_data`, and `execution_agent_data` named volumes.
+- The development stack consists of `db`, `embedding`, `backend`, `frontend`, and `matoloop-agent`.
+- Backend development data lives in the `db_data` and `app_data` named volumes. MatoLoop Agent state and home use the configured host bind mounts.
 - Python and frontend dependencies also live in named volumes.
 - The repository bind mount at `/workspace` exists only for HMR and live code changes.
 - `./scripts/dev.sh reset-storage` deletes persistent development data and must never be run incidentally.
@@ -62,7 +63,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Provider adapters transport messages, tool schemas, text deltas, and tool calls; they never execute tools.
 - All providers use the same MatoLoop agent and permission loop.
 - Model arguments must not bypass runtime policies or path boundaries.
-- Constrain backend file access to the current owner-bound session tree under `/data/sessions`; dispatch `root=workspace` only through the selected owner-bound Execution Agent, its advertised root, and the session's current and working directories.
+- Constrain backend file access to the current owner-bound session tree under `/data/sessions`; dispatch the internal `root=workspace` only through the selected owner-bound `ExecutionAgent` and the session's normalized absolute current directory.
 - Symlinks must not bypass path boundaries.
 - Disallowed actions create persistent approval requests with `allow_once`, `allow_session`, or `deny`.
 - Never expose unfiltered external provider responses or exception text as API errors or toasts.
@@ -125,8 +126,10 @@ Targeted checks are also available:
 ```bash
 ./scripts/dev.sh check backend
 ./scripts/dev.sh check frontend
+./scripts/dev.sh check matoloop-agent
 ./scripts/dev.sh test backend
 ./scripts/dev.sh test frontend
+./scripts/dev.sh test matoloop-agent
 ./scripts/dev.sh db current
 ```
 
@@ -135,7 +138,7 @@ For UI changes, verify at least desktop and mobile in light and dark mode. For A
 ## CI and Releases
 
 - Pull requests run complete checks and image builds without registry or release secrets and never publish artifacts.
-- Feature branch pushes run tests only. The default branch `develop` publishes mutable `develop` images and short-lived native Linux amd64 Execution Agent workflow artifacts. `main` has no mutable publication channel.
+- Feature branch pushes run tests only. The default branch `develop` publishes mutable `develop` images and short-lived native Linux amd64 MatoLoop Agent workflow artifacts. `main` has no mutable publication channel.
 - Start a release explicitly from a clean, current `develop` branch with `./scripts/release.sh X.Y.Z`; the script fast-forwards release-only `main` and pushes atomically. Do not create release tags manually.
 - Release images use `vX.Y.Z`, `X.Y.Z`, and `latest`. Published artifacts currently target `linux/amd64` only.
 - CI publishes images, short-lived development artifacts, and Forgejo releases only. It does not deploy, mutate deployment storage, or clean runner Docker storage.

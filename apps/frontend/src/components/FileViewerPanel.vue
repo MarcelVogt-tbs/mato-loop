@@ -371,15 +371,15 @@ const editable = computed(() => (
   props.entry?.path
   && !workspace.toolContext
   && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
-  && workspace.operationAvailable('workspace.write')
+  && workspace.operationAvailable('filesystem.write')
 ))
 const canRestoreRevision = computed(() => Boolean(
   props.entry?.path
   && workspace.scope === 'session'
   && !workspace.toolContext
-  && workspace.operationAvailable('workspace.write')
+  && workspace.operationAvailable('filesystem.write')
 ))
-const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('workspace.export'))
+const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('filesystem.export'))
 const stlUrl = computed(() => directModel.value?.url
   || (props.entry?.path ? workspace.fileUrl('content', props.entry.path) : ''))
 const openScadViewOptions = computed(() => [
@@ -419,15 +419,25 @@ const rootLabel = computed(() => {
   return workspace.scope === 'session' ? 'Ablage' : 'Computer'
 })
 const parentPath = computed(() => (
-  props.entry?.path?.includes('/') ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) : '.'
+  props.entry?.path?.startsWith('/')
+    ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) || '/'
+    : props.entry?.path?.includes('/') ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) : '.'
 ))
-const breadcrumbs = computed(() => [
-  { label: rootLabel.value, path: '.' },
-  ...(props.entry?.path || '').split('/').filter((part) => part && part !== '.').map((label, index, parts) => ({
-    label,
-    path: parts.slice(0, index + 1).join('/')
-  }))
-])
+const breadcrumbs = computed(() => props.entry?.path?.startsWith('/')
+  ? [
+      { label: '/', path: '/' },
+      ...props.entry.path.split('/').filter(Boolean).map((label, index, parts) => ({
+        label,
+        path: `/${parts.slice(0, index + 1).join('/')}`
+      }))
+    ]
+  : [
+      { label: rootLabel.value, path: '.' },
+      ...(props.entry?.path || '').split('/').filter((part) => part && part !== '.').map((label, index, parts) => ({
+        label,
+        path: parts.slice(0, index + 1).join('/')
+      }))
+    ])
 const loadErrorMessage = computed(() => apiErrorMessage(loadError.value, 'Die Vorschau konnte nicht geladen werden.'))
 const saveErrorMessage = computed(() => apiErrorMessage(saveError.value, 'Die Datei konnte nicht gespeichert werden.'))
 const conflictLoadErrorMessage = computed(() => apiErrorMessage(conflictLoadError.value, 'Die aktuelle Revision konnte nicht geladen werden.'))
@@ -778,7 +788,7 @@ watch(
     () => directModel.value?.url,
     () => workspace.scope,
     () => workspace.sessionId,
-    () => workspace.workingDirectory,
+    () => workspace.currentDirectory,
     () => workspace.rootIdentity,
     () => workspace.toolContext,
     () => workspace.workspaceContext,

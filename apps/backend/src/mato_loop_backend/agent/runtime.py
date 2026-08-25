@@ -201,7 +201,7 @@ from mato_loop_backend.web_push import (
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
 logger = logging.getLogger(__name__)
-_ROOT_INDEPENDENT_EXECUTION_OPERATIONS = frozenset(
+_DIRECTORY_INDEPENDENT_EXECUTION_OPERATIONS = frozenset(
     {
         "cache.export",
         "filesystem.resolve",
@@ -219,41 +219,7 @@ def _effective_execution_operations(run: AgentRun) -> frozenset[str]:
     operations = frozenset(run.execution_operations or [])
     if run.current_directory_snapshot is not None:
         return operations
-    if run.execution_root_id is None:
-        return operations & _ROOT_INDEPENDENT_EXECUTION_OPERATIONS
-    return frozenset(
-        operation
-        for operation in operations
-        if operation not in _CURRENT_DIRECTORY_EXECUTION_OPERATIONS
-        and not operation.startswith("integration.git.")
-    )
-
-
-async def _resolve_run_directory(
-    agent_id: UUID,
-    root_id: UUID,
-    root_revision: str,
-    working_directory: str,
-    operations: frozenset[str],
-) -> DirectoryResult | None:
-    try:
-        directory = await ExecutionClient(
-            agent_id, root_id, root_revision, ".", operations
-        ).request(
-            "workspace.resolve",
-            {"path": working_directory},
-            DirectoryResult,
-        )
-    except ExecutionClientError:
-        return None
-    assert isinstance(directory, DirectoryResult)
-    if (
-        directory.root_id != root_id
-        or directory.root_revision != root_revision
-        or directory.relative_path != working_directory
-    ):
-        return None
-    return directory
+    return operations & _DIRECTORY_INDEPENDENT_EXECUTION_OPERATIONS
 
 RUN_PHASES = {
     "preparing_context",
@@ -697,20 +663,11 @@ class AgentRuntime:
             and effective_model_pseudonymization(provider, model)
         )
         execution_agent = None
-        execution_root = None
-        execution_root_id = None
-        execution_root_revision = None
         current_directory = chat_session.current_directory
-        effective_working_directory = chat_session.working_directory
         execution_operations: list[str] = []
-        if chat_session.preferred_execution_agent_id is None:
-            if chat_session.preferred_root_id is not None or chat_session.working_directory is not None:
-                raise AgentRunError("executionAgent.unavailable")
-        else:
+        if chat_session.preferred_execution_agent_id is not None:
             execution_agent = await db.scalar(
-                select(ExecutionAgent)
-                .options(selectinload(ExecutionAgent.roots))
-                .where(
+                select(ExecutionAgent).where(
                     ExecutionAgent.id == chat_session.preferred_execution_agent_id,
                     ExecutionAgent.user_id == chat_session.user_id,
                     ExecutionAgent.revoked_at.is_(None),
@@ -724,7 +681,7 @@ class AgentRuntime:
             if snapshot is not None and current_directory is not None:
                 try:
                     directory = await ExecutionClient(
-                        execution_agent.id, None, None, None, snapshot[0]
+                        execution_agent.id, snapshot
                     ).request(
                         "filesystem.resolve",
                         {"path": current_directory},
@@ -735,49 +692,7 @@ class AgentRuntime:
                 else:
                     assert isinstance(directory, DirectoryResult)
                     current_directory = directory.path
-                    execution_root_id = directory.root_id
-                    execution_root_revision = directory.root_revision
-                    effective_working_directory = directory.relative_path
-            elif snapshot is not None and chat_session.preferred_root_id is not None:
-                execution_root = next(
-                    (
-                        root
-                        for root in execution_agent.roots
-                        if root.id == chat_session.preferred_root_id
-                    ),
-                    None,
-                )
-                live_root = next(
-                    (root for root in snapshot[1] if root.id == chat_session.preferred_root_id),
-                    None,
-                )
-                if (
-                    execution_root is None
-                    or live_root is None
-                    or live_root.revision != execution_root.revision
-                ):
-                    snapshot = None
-                else:
-                    execution_root_id = execution_root.id
-                    execution_root_revision = execution_root.revision
-                    if (
-                        effective_working_directory is not None
-                        and "workspace.resolve" in snapshot[0]
-                    ):
-                        directory = await _resolve_run_directory(
-                            execution_agent.id,
-                            execution_root_id,
-                            execution_root_revision,
-                            effective_working_directory,
-                            snapshot[0],
-                        )
-                        if directory is None:
-                            snapshot = None
-                        else:
-                            current_directory = directory.path
-            elif chat_session.working_directory is not None:
-                snapshot = None
-            execution_operations = sorted(snapshot[0]) if snapshot is not None else []
+            execution_operations = sorted(snapshot) if snapshot is not None else []
         message = Message(
             session_id=chat_session.id,
             role="user",
@@ -799,9 +714,6 @@ class AgentRuntime:
             pseudonymization_enabled=pseudonymization_enabled,
             execution_agent_id=(execution_agent.id if execution_agent else None),
             execution_agent_revision=(execution_agent.revision if execution_agent else None),
-            execution_root_id=execution_root_id,
-            execution_root_revision=execution_root_revision,
-            working_directory_snapshot=effective_working_directory,
             current_directory_snapshot=current_directory,
             execution_operations=execution_operations,
             required_skill=(
@@ -924,10 +836,7 @@ class AgentRuntime:
             if failed_run.execution_agent_id is not None
             else None
         )
-        root_id = None
-        root_revision = None
         current_directory = chat_session.current_directory
-        working_directory = failed_run.working_directory_snapshot
         execution_agent = (
             await db.scalar(
                 select(ExecutionAgent).where(
@@ -945,10 +854,7 @@ class AgentRuntime:
             try:
                 directory = await ExecutionClient(
                     failed_run.execution_agent_id,
-                    None,
-                    None,
-                    None,
-                    snapshot[0],
+                    snapshot,
                 ).request(
                     "filesystem.resolve",
                     {"path": current_directory},
@@ -959,40 +865,6 @@ class AgentRuntime:
             else:
                 assert isinstance(directory, DirectoryResult)
                 current_directory = directory.path
-                root_id = directory.root_id
-                root_revision = directory.root_revision
-                working_directory = directory.relative_path
-        elif (
-            snapshot is not None
-            and failed_run.execution_root_id is not None
-            and execution_agent is not None
-        ):
-            live_root = next(
-                (
-                    item
-                    for item in snapshot[1]
-                    if item.id == failed_run.execution_root_id
-                    and item.revision == failed_run.execution_root_revision
-                ),
-                None,
-            )
-            if live_root is not None:
-                root_id = failed_run.execution_root_id
-                root_revision = failed_run.execution_root_revision
-                if working_directory is not None and "workspace.resolve" in snapshot[0]:
-                    directory = await _resolve_run_directory(
-                        failed_run.execution_agent_id,
-                        root_id,
-                        root_revision,
-                        working_directory,
-                        snapshot[0],
-                    )
-                    if directory is None:
-                        snapshot = None
-                    else:
-                        current_directory = directory.path
-            else:
-                snapshot = None
         run = AgentRun(
             session_id=chat_session.id,
             status="queued",
@@ -1002,11 +874,8 @@ class AgentRuntime:
             pseudonymization_enabled=failed_run.pseudonymization_enabled,
             execution_agent_id=failed_run.execution_agent_id,
             execution_agent_revision=failed_run.execution_agent_revision,
-            execution_root_id=root_id,
-            execution_root_revision=root_revision,
-            working_directory_snapshot=working_directory,
             current_directory_snapshot=current_directory,
-            execution_operations=sorted(snapshot[0]) if snapshot is not None else [],
+            execution_operations=sorted(snapshot) if snapshot is not None else [],
         )
         db.add(run)
         commit_task: asyncio.Task[None] | None = None
@@ -1600,9 +1469,6 @@ class AgentRuntime:
             execution_client = (
                 ExecutionClient(
                     run.execution_agent_id,
-                    run.execution_root_id,
-                    run.execution_root_revision,
-                    run.working_directory_snapshot or ".",
                     frozenset(run.execution_operations or []),
                     run.current_directory_snapshot,
                 )
@@ -1743,7 +1609,7 @@ class AgentRuntime:
                 ),
                 active_skill=skill_state.active,
                 execution_agent_name=(
-                    selected_execution_agent.name if selected_execution_agent else None
+                    selected_execution_agent.alias if selected_execution_agent else None
                 ),
                 execution_agent_platform=(
                     selected_execution_agent.platform if selected_execution_agent else None
@@ -3179,16 +3045,18 @@ class AgentRuntime:
                                         {
                                             "operation": action.operation,
                                             "root": action.root,
-                                            "rootIdentity": action.root_identity,
+                                            **(
+                                                {"rootIdentity": action.root_identity}
+                                                if action.root == "session"
+                                                else {}
+                                            ),
                                             "path": action.path,
                                             "filename": action.filename,
                                             "sizeBytes": action.size_bytes,
                                             **(
                                                 {
                                                     "executionAgentId": action.execution_agent_id,
-                                                    "rootId": action.root_id,
-                                                    "rootRevision": action.root_revision,
-                                                    "workingDirectory": action.working_directory,
+                                                    "currentDirectory": action.current_directory,
                                                 }
                                                 if action.root == "workspace"
                                                 else {}

@@ -11,7 +11,7 @@
         <div class="col">
           <div class="text-h6">{{ isEditing ? 'Computer bearbeiten' : 'Computer hinzufügen' }}</div>
           <div class="text-body2 app-muted">
-            {{ isEditing ? 'Name und aktuellen Ordner konfigurieren.' : 'Computer anlegen und anschließend koppeln.' }}
+            {{ isEditing ? 'Alias und Zugriffsrichtlinien konfigurieren.' : 'Computer anlegen und anschließend koppeln.' }}
           </div>
         </div>
         <q-btn
@@ -30,34 +30,27 @@
       <q-form ref="formRef" class="col column no-wrap" @submit.prevent="save">
         <q-card-section class="col scroll q-gutter-md">
           <q-input
-            v-model="name"
+            v-model="alias"
             autofocus
             outlined
-            label="Name"
+            label="Alias"
             maxlength="120"
             lazy-rules
             :rules="[requiredRule]"
           />
 
+          <q-select
+            v-for="field in policyFields"
+            :key="field.key"
+            v-model="policies[field.key]"
+            outlined
+            emit-value
+            map-options
+            :options="policyOptions"
+            :label="field.label"
+          />
+
           <template v-if="isEditing">
-            <q-input
-              v-model="homeDirectory"
-              outlined
-              clearable
-              label="Aktueller Ordner"
-              maxlength="4096"
-              hint="Leer entfernt den aktuellen Ordner."
-              persistent-hint
-              lazy-rules
-              :rules="[absolutePathRule]"
-            />
-            <div class="text-body2 app-muted">
-              Absoluter Pfad aus Sicht des Computers oder Containers. Der Pfad muss innerhalb eines freigegebenen Bereichs liegen.
-            </div>
-            <q-banner v-if="homeRequiresConnection" rounded class="app-surface-tonal">
-              <template #avatar><q-icon name="cloud_off" color="warning" /></template>
-              Der Computer muss verbunden sein, um einen neuen Pfad zu prüfen und zu speichern. Ein vorhandener aktueller Ordner kann offline entfernt werden.
-            </q-banner>
             <q-checkbox
               v-model="useAsDefault"
               color="primary"
@@ -90,7 +83,7 @@
             :label="isEditing ? 'Änderungen speichern' : 'Computer hinzufügen'"
             type="submit"
             :loading="saving"
-            :disable="homeRequiresConnection || (!isEditing && pairingDurationSeconds === null)"
+            :disable="!isEditing && pairingDurationSeconds === null"
           />
         </q-card-actions>
       </q-form>
@@ -99,7 +92,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 
@@ -115,18 +108,29 @@ const $q = useQuasar()
 const agents = useExecutionAgentStore()
 const formRef = ref(null)
 const saving = ref(false)
-const name = ref('')
-const homeDirectory = ref('')
+const alias = ref('')
+const policies = reactive({
+  homeFilesystemPolicy: 'auto',
+  externalFilesystemPolicy: 'ask',
+  homeShellPolicy: 'ask',
+  externalShellPolicy: 'ask'
+})
 const useAsDefault = ref(false)
 const initialDefault = ref(false)
 const pairingDurationSeconds = ref(null)
 const isEditing = computed(() => Boolean(props.agent))
-const normalizedHome = computed(() => homeDirectory.value?.trim() || null)
 const isCurrentDefault = computed(() => props.agent?.id === agents.defaultExecutionAgentId)
-const homeChanged = computed(() => normalizedHome.value !== (props.agent?.homeDirectory || null))
-const homeRequiresConnection = computed(() => (
-  isEditing.value && homeChanged.value && Boolean(normalizedHome.value) && !props.agent.connected
-))
+const policyOptions = [
+  { label: 'Automatisch', value: 'auto' },
+  { label: 'Nachfragen', value: 'ask' },
+  { label: 'Verboten', value: 'deny' }
+]
+const policyFields = [
+  { key: 'homeFilesystemPolicy', label: 'Dateizugriff im Home-Verzeichnis' },
+  { key: 'externalFilesystemPolicy', label: 'Dateizugriff außerhalb des Home-Verzeichnisses' },
+  { key: 'homeShellPolicy', label: 'Shell-Zugriff im Home-Verzeichnis' },
+  { key: 'externalShellPolicy', label: 'Shell-Zugriff außerhalb des Home-Verzeichnisses' }
+]
 const pairingDurationOptions = computed(() => [
   { label: '30 Minuten', value: 1800 },
   { label: '1 Stunde', value: 3600 },
@@ -136,8 +140,7 @@ const pairingDurationOptions = computed(() => [
 ].filter((option) => option.value <= (agents.pairingPolicy?.maximumDurationSeconds || 0)))
 let initialization = 0
 
-const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Name erforderlich.'
-const absolutePathRule = (value) => !String(value || '').trim() || String(value).trim().startsWith('/') || 'Ein absoluter Pfad ist erforderlich.'
+const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Alias erforderlich.'
 
 async function save() {
   if (
@@ -146,21 +149,19 @@ async function save() {
     || !await formRef.value?.validate()
   ) return
   const agent = props.agent
-  const normalizedName = name.value.trim()
-  const submittedHome = normalizedHome.value
+  const settings = { alias: alias.value.trim(), ...policies }
   const submittedDefault = useAsDefault.value
   saving.value = true
   try {
     if (!agent) {
-      const result = await agents.create(normalizedName, pairingDurationSeconds.value)
+      const result = await agents.create(settings, pairingDurationSeconds.value)
       emit('update:modelValue', false)
       emit('created', result)
       return
     }
-    if (submittedHome !== (agent.homeDirectory || null)) {
-      await agents.setHome(agent.id, submittedHome)
+    if (policyFields.some(({ key }) => settings[key] !== agent[key]) || settings.alias !== agent.alias) {
+      await agents.update(agent.id, settings)
     }
-    if (normalizedName !== agent.name) await agents.rename(agent.id, normalizedName)
     if (submittedDefault !== initialDefault.value) {
       await agents.setDefault(submittedDefault ? agent.id : null)
     }
@@ -179,8 +180,10 @@ function close() {
 watch(() => props.modelValue, async (open) => {
   const currentInitialization = ++initialization
   if (!open) return
-  name.value = props.agent?.name || ''
-  homeDirectory.value = props.agent?.homeDirectory || ''
+  alias.value = props.agent?.alias || ''
+  for (const { key } of policyFields) {
+    policies[key] = props.agent?.[key] ?? (key === 'homeFilesystemPolicy' ? 'auto' : 'ask')
+  }
   initialDefault.value = isCurrentDefault.value
   useAsDefault.value = initialDefault.value
   if (!props.agent) {

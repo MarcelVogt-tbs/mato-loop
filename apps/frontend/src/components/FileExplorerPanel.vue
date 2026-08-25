@@ -15,7 +15,7 @@
       title="Dateien"
       integration-id="files"
       refreshable
-      :refreshing="workspace.loading['.']"
+      :refreshing="workspace.loading[workspace.directoryPath]"
       :refresh-disabled="!explorerAvailable"
       :custom-menu="hasOverflowActions"
       :can-move-left="integrationIndex > 0"
@@ -28,7 +28,7 @@
       <template #menu>
         <template v-if="hasOverflowActions">
             <q-item
-              v-if="!workspace.toolContext && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('workspace.list')"
+              v-if="!workspace.toolContext && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('filesystem.list')"
               clickable
               v-ripple
               v-close-popup
@@ -39,15 +39,14 @@
               <q-item-section>Als aktuellen Ordner verwenden</q-item-section>
             </q-item>
             <q-item
-              v-if="workspace.scope === 'filesystem' && chat.activeContext?.workingDirectory && chat.activeContext.workingDirectory !== '.'"
+              v-if="!workspace.toolContext && workspace.scope === 'filesystem' && explorerAvailable"
               clickable
               v-ripple
               v-close-popup
-              :disable="chat.running"
-              @click="setWorkspaceRoot"
+              @click="openAbsolutePath"
             >
-              <q-item-section avatar><q-icon name="vertical_align_top" /></q-item-section>
-              <q-item-section>Zum freigegebenen Bereich wechseln</q-item-section>
+              <q-item-section avatar><q-icon name="drive_file_move" /></q-item-section>
+              <q-item-section>Absoluten Pfad öffnen</q-item-section>
             </q-item>
             <q-item v-if="chat.current" clickable v-ripple v-close-popup @click="openPermissionsDialog">
               <q-item-section avatar><q-icon name="verified_user" /></q-item-section>
@@ -72,22 +71,6 @@
         aria-label="Dateiquelle"
         @update:model-value="selectSource"
       />
-      <q-select
-        v-if="showRootSelector"
-        :model-value="chat.activeContext?.preferredRootId"
-        :options="rootOptions"
-        outlined
-        dense
-        emit-value
-        map-options
-        options-dense
-        label="Freigegebener Bereich"
-        :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-        :disable="chat.running || chat.sessionSettingsPending > 0"
-        @update:model-value="selectRoot"
-      >
-        <template #prepend><q-icon name="folder_shared" /></template>
-      </q-select>
       <div class="row items-center no-wrap q-gutter-sm">
         <div class="col text-caption app-muted ellipsis">{{ scopeDescription }}</div>
         <q-btn
@@ -109,8 +92,8 @@
           dense
           icon="arrow_upward"
           aria-label="Zum übergeordneten Ordner"
-          :disable="!explorerAvailable || workspace.selectedPath === '.'"
-          @click="navigateSelection(selectedParentPath)"
+          :disable="!explorerAvailable || workspace.directoryPath === browserRootPath"
+          @click="navigateDirectory(selectedParentPath)"
         >
           <q-tooltip>Zum übergeordneten Ordner</q-tooltip>
         </q-btn>
@@ -119,8 +102,8 @@
             v-for="crumb in selectedBreadcrumbs"
             :key="crumb.path"
             :label="crumb.label"
-            :class="{ 'cursor-pointer': explorerAvailable && crumb.path !== workspace.selectedPath }"
-            @click="explorerAvailable && crumb.path !== workspace.selectedPath && navigateSelection(crumb.path)"
+            :class="{ 'cursor-pointer': explorerAvailable && crumb.path !== workspace.directoryPath }"
+            @click="explorerAvailable && crumb.path !== workspace.directoryPath && navigateDirectory(crumb.path)"
           />
         </q-breadcrumbs>
       </div>
@@ -159,7 +142,7 @@
     </div>
     <q-separator />
     <q-linear-progress
-      v-if="workspace.loading['.']"
+      v-if="workspace.loading[workspace.directoryPath]"
       indeterminate
       color="primary"
       aria-label="Dateien werden geladen"
@@ -182,28 +165,28 @@
         @keydown="handleTreeKeydown"
       >
         <div
-          :class="['file-tree-row row items-center no-wrap', { 'file-tree-row--selected': workspace.selectedPath === '.' }]"
+          :class="['file-tree-row row items-center no-wrap', { 'file-tree-row--selected': workspace.selectedPath === workspace.directoryPath }]"
           role="treeitem"
-          :tabindex="treeFocusPath === '.' ? 0 : -1"
-          data-file-path="."
+          :tabindex="treeFocusPath === workspace.directoryPath ? 0 : -1"
+          :data-file-path="workspace.directoryPath"
           data-file-kind="directory"
           aria-level="1"
           aria-expanded="true"
-          :aria-selected="workspace.selectedPath === '.'"
-          :aria-current="workspace.selectedPath === '.' ? 'true' : undefined"
-          @click="workspace.selectPath('.')"
-          @focus="treeFocusPath = '.'"
+          :aria-selected="workspace.selectedPath === workspace.directoryPath"
+          :aria-current="workspace.selectedPath === workspace.directoryPath ? 'true' : undefined"
+          @click="workspace.selectPath(workspace.directoryPath)"
+          @focus="treeFocusPath = workspace.directoryPath"
         >
           <span class="file-tree-spacer" />
           <q-icon name="folder_special" size="20px" />
-          <span class="q-ml-sm">{{ rootLabel }}</span>
+          <span class="q-ml-sm">{{ workspace.directoryPath }}</span>
         </div>
-        <div v-if="workspace.loadErrors['.']" class="file-load-state q-ma-sm q-pa-md text-center" role="alert">
+        <div v-if="workspace.loadErrors[workspace.directoryPath]" class="file-load-state q-ma-sm q-pa-md text-center" role="alert">
           <q-icon name="cloud_off" size="32px" class="app-muted" />
           <div class="q-mt-sm">{{ rootLoadError }}</div>
-          <q-btn class="q-mt-sm" flat no-caps color="primary" label="Erneut versuchen" @click="workspace.load('.')" />
+          <q-btn class="q-mt-sm" flat no-caps color="primary" label="Erneut versuchen" @click="workspace.load(workspace.directoryPath)" />
         </div>
-        <div v-if="workspace.loading['.'] && !workspace.entries['.']" class="q-pa-lg text-center">
+        <div v-if="workspace.loading[workspace.directoryPath] && !workspace.entries[workspace.directoryPath]" class="q-pa-lg text-center">
           <q-spinner color="primary" size="32px" />
           <div class="app-muted q-mt-sm">Dateien werden geladen ...</div>
         </div>
@@ -212,14 +195,14 @@
           <div class="q-mt-sm">Keine Dateien oder Ordner entsprechen dem Filter.</div>
         </div>
         <div
-          v-else-if="workspace.entries['.'] && !workspace.entries['.'].length && !workspace.loadErrors['.']"
+          v-else-if="workspace.entries[workspace.directoryPath] && !workspace.entries[workspace.directoryPath].length && !workspace.loadErrors[workspace.directoryPath]"
           class="file-load-state app-muted q-ma-sm q-pa-md text-center"
         >
           <q-icon name="folder_open" size="32px" />
           <div class="q-mt-sm">Hier sind noch keine Dateien oder Ordner.</div>
         </div>
         <FileTreeNode
-          v-for="entry in workspace.entries['.'] || []"
+          v-for="entry in workspace.entries[workspace.directoryPath] || []"
           :key="`${workspace.contextVersion}:${entry.path}`"
           :entry="entry"
           :filter="workspace.filter || ''"
@@ -231,15 +214,15 @@
           @delete-entry="removeEntry"
         />
         <q-btn
-          v-if="workspace.hasMore['.']"
+          v-if="workspace.hasMore[workspace.directoryPath]"
           flat
           dense
           no-caps
           color="primary"
           label="Weitere laden"
           class="q-ml-xl"
-          :disable="workspace.loading['.']"
-          @click="workspace.load('.', true)"
+          :disable="workspace.loading[workspace.directoryPath]"
+          @click="workspace.load(workspace.directoryPath, true)"
         />
       </div>
     </q-scroll-area>
@@ -401,15 +384,11 @@ import { apiErrorMessage } from 'src/utils/api-errors'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
-import {
-  executionHomeRoot,
-  executionRootPatch,
-  usableExecutionRoots,
-  useExecutionAgentStore
-} from 'stores/execution-agents'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 import {
   MAX_WORKSPACE_UPLOADS,
+  parentPath,
   workspaceContextKey,
   withFileSuffix,
   useWorkspaceStore
@@ -457,14 +436,11 @@ const selectedIsDirectory = computed(() => workspace.selectedKind === 'directory
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
 ))
-const selectedExecutionRoots = computed(() => usableExecutionRoots(selectedExecutionAgent.value))
-const selectedHomeRoot = computed(() => executionHomeRoot(selectedExecutionAgent.value, selectedExecutionRoots.value))
-const selectedRoot = computed(() => selectedExecutionRoots.value.find((root) => (
-  root.id === chat.activeContext?.preferredRootId
-)) || null)
-const automaticRootAttempt = ref(null)
 const sourceSwitchAvailable = computed(() => (
-  !workspace.toolContext && Boolean(workspace.sessionId) && selectedExecutionRoots.value.length > 0
+  !workspace.toolContext
+  && Boolean(workspace.sessionId)
+  && selectedExecutionAgent.value?.connected
+  && selectedExecutionAgent.value.operations?.includes('filesystem.list')
 ))
 const managedSourceLabel = computed(() => 'Ablage')
 const computerSourceLabel = computed(() => 'Computer')
@@ -472,40 +448,26 @@ const sourceOptions = computed(() => [
   { label: managedSourceLabel.value, value: 'session', icon: 'inventory_2', attrs: { 'aria-label': managedSourceLabel.value } },
   { label: computerSourceLabel.value, value: 'filesystem', icon: 'computer', attrs: { 'aria-label': computerSourceLabel.value } }
 ])
-const rootOptions = computed(() => selectedExecutionRoots.value.map((root) => ({
-  label: root.label,
-  value: root.id
-})))
-const showRootSelector = computed(() => sourceSwitchAvailable.value
-  && workspace.scope === 'filesystem'
-  && (selectedExecutionRoots.value.length > 1 || !selectedHomeRoot.value || automaticRootAttempt.value))
 const hasOverflowActions = computed(() => Boolean(
-  (workspace.scope === 'filesystem' && explorerAvailable.value && selectedIsDirectory.value)
-  || (workspace.scope === 'filesystem' && explorerAvailable.value && chat.activeContext?.workingDirectory)
+  (workspace.scope === 'filesystem' && explorerAvailable.value)
   || chat.current
 ))
 const targetDirectory = computed(() => {
   if (selectedIsDirectory.value) return workspace.selectedPath
-  const path = workspace.selectedPath
-  return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.'
+  return parentPath(workspace.selectedPath)
 })
 const mutationDirectory = computed(() => targetDirectory.value)
 const writableLocation = computed(() => !workspace.toolContext)
-const canCreateFile = computed(() => writableLocation.value && workspace.operationAvailable('workspace.import'))
-const canCreateDirectory = computed(() => writableLocation.value && workspace.operationAvailable('workspace.mkdir'))
-const canUpload = computed(() => writableLocation.value && workspace.operationAvailable('workspace.import'))
+const canCreateFile = computed(() => writableLocation.value && workspace.operationAvailable('filesystem.import'))
+const canCreateDirectory = computed(() => writableLocation.value && workspace.operationAvailable('filesystem.mkdir'))
+const canUpload = computed(() => writableLocation.value && workspace.operationAvailable('filesystem.import'))
 const canRename = computed(() => Boolean(
   !renaming.value
   && renameName.value.trim()
   && renameTarget.value
   && renameName.value.trim() !== renameTarget.value.name
 ))
-const rootLabel = computed(() => {
-  return workspace.scope === 'session'
-    ? managedSourceLabel.value
-    : selectedRoot.value?.label || 'Computer'
-})
-const explorerAvailable = computed(() => workspace.operationAvailable('workspace.list'))
+const explorerAvailable = computed(() => workspace.operationAvailable('filesystem.list'))
 const explorerUnavailableMessage = computed(() => {
   if (explorerAvailable.value) return ''
   if (workspace.scope === 'session') {
@@ -522,16 +484,7 @@ const explorerUnavailableMessage = computed(() => {
   if (!selectedExecutionAgent.value.connected) {
     return 'Der ausgewählte Computer ist offline.'
   }
-  if (!selectedExecutionAgent.value.roots?.length) {
-    return 'Auf dem ausgewählten Computer sind keine freigegebenen Bereiche verfügbar.'
-  }
-  if (!chat.activeContext?.preferredRootId) {
-    return 'Wähle einen freigegebenen Bereich aus.'
-  }
-  if (!selectedRoot.value) {
-    return 'Der ausgewählte freigegebene Bereich ist nicht mehr verfügbar.'
-  }
-  return 'Der ausgewählte freigegebene Bereich bietet keinen Dateizugriff an.'
+  return 'Der ausgewählte Computer bietet keinen Dateizugriff an.'
 })
 const explorerUnavailableIcon = computed(() => (
   selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'folder_off'
@@ -539,26 +492,29 @@ const explorerUnavailableIcon = computed(() => (
 const scopeDescription = computed(() => {
   if (workspace.toolContext) return 'Gespeicherter Dateistand · nur Lesen'
   if (workspace.scope === 'session') return managedSourceLabel.value
-  if (!workspace.operationAvailable('workspace.list')) return 'Der ausgewählte freigegebene Bereich ist nicht verfügbar.'
-  return `Aktueller Ordner · ${chat.activeContext?.currentDirectory || workspace.workingDirectory || selectedRoot.value?.label}`
+  if (!workspace.operationAvailable('filesystem.list')) return 'Der ausgewählte Computer ist nicht verfügbar.'
+  return `Aktueller Ordner · ${chat.activeContext?.currentDirectory || selectedExecutionAgent.value?.homeDirectory || '/'}`
 })
-const selectedParentPath = computed(() => parentPath(workspace.selectedPath))
-const selectedBreadcrumbs = computed(() => [
-  { label: rootLabel.value, path: '.' },
-  ...workspace.selectedPath.split('/').filter((part) => part && part !== '.').map((label, index, parts) => ({
-    label,
-    path: parts.slice(0, index + 1).join('/')
-  }))
-])
+const browserRootPath = computed(() => workspace.scope === 'filesystem' ? '/' : '.')
+const selectedParentPath = computed(() => parentPath(workspace.directoryPath))
+const selectedBreadcrumbs = computed(() => workspace.scope === 'filesystem'
+  ? [
+      { label: '/', path: '/' },
+      ...workspace.directoryPath.split('/').filter(Boolean).map((label, index, parts) => ({
+        label,
+        path: `/${parts.slice(0, index + 1).join('/')}`
+      }))
+    ]
+  : [{ label: managedSourceLabel.value, path: '.' }])
 const filterEmpty = computed(() => Boolean(
   workspace.filter
-  && workspace.entries['.']
+  && workspace.entries[workspace.directoryPath]
   && !Object.values(workspace.entries).flat().some((entry) => (
     entry.name?.toLocaleLowerCase().includes(workspace.filter.toLocaleLowerCase())
   ))
 ))
 const rootLoadError = computed(() => apiErrorMessage(
-  workspace.loadErrors['.'],
+  workspace.loadErrors[workspace.directoryPath],
   'Die Dateien konnten nicht geladen werden.'
 ))
 const permissionErrorMessage = computed(() => apiErrorMessage(
@@ -568,10 +524,6 @@ const permissionErrorMessage = computed(() => apiErrorMessage(
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Name erforderlich.'
 const activeWorkspaceContext = computed(() => executionAgents.workspaceContextFor(chat.activeContext))
 
-function parentPath(path) {
-  return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.'
-}
-
 function grantDisplay(grant) {
   return permissionGrantDisplay(grant, chat.cachedSessions)
 }
@@ -579,12 +531,6 @@ function grantDisplay(grant) {
 async function selectSource(scope) {
   if (scope === workspace.scope || !await confirmDiscard()) return
   await workspace.setScope(scope)
-}
-
-async function selectRoot(rootId) {
-  const root = selectedExecutionRoots.value.find((item) => item.id === rootId)
-  if (!root || root.id === chat.activeContext?.preferredRootId || !await confirmDiscard()) return
-  await chat.updateActive(executionRootPatch(selectedExecutionAgent.value, root))
 }
 
 async function loadPermissions() {
@@ -692,7 +638,9 @@ function handleTreeKeydown(event) {
   else if (event.key === 'End') target = items.at(-1)
   else if (event.key === 'ArrowRight' && current.dataset.fileKind === 'directory') {
     if (current.getAttribute('aria-expanded') === 'false') current.click()
-    else target = items.slice(index + 1).find((item) => item.dataset.filePath.startsWith(`${current.dataset.filePath === '.' ? '' : `${current.dataset.filePath}/`}`))
+    else target = items.slice(index + 1).find((item) => item.dataset.filePath.startsWith(
+      current.dataset.filePath === '.' ? '' : current.dataset.filePath === '/' ? '/' : `${current.dataset.filePath}/`
+    ))
   } else if (event.key === 'ArrowLeft') {
     if (current.getAttribute('aria-expanded') === 'true' && current.dataset.filePath !== '.') current.click()
     else target = items.find((item) => item.dataset.filePath === parentPath(current.dataset.filePath))
@@ -710,8 +658,8 @@ function handleTreeKeydown(event) {
   focusTreeItem(target)
 }
 
-function navigateSelection(path) {
-  workspace.selectPath(path)
+function navigateDirectory(path) {
+  workspace.openDirectory(path)
   treeFocusPath.value = path
   focusPath(path)
 }
@@ -720,7 +668,7 @@ async function navigateFromViewer(path) {
   if (!await confirmDiscard()) return
   viewerFullscreen.value = false
   workspace.closeViewer()
-  navigateSelection(path)
+  navigateDirectory(path)
 }
 
 async function backToFiles() {
@@ -731,16 +679,16 @@ async function backToFiles() {
   await nextTick()
   const rows = [...(explorerRoot.value?.querySelectorAll('[data-file-path]') || [])]
   const row = rows.find((item) => item.dataset.filePath === path)
-    || rows.find((item) => item.dataset.filePath === '.')
+    || rows.find((item) => item.dataset.filePath === workspace.directoryPath)
   row?.focus()
 }
 
-async function focusPath(path, fallback = '.') {
+async function focusPath(path, fallback = workspace.directoryPath) {
   await nextTick()
   const rows = [...(explorerRoot.value?.querySelectorAll('[data-file-path]') || [])]
   const row = rows.find((item) => item.dataset.filePath === path)
     || rows.find((item) => item.dataset.filePath === fallback)
-    || rows.find((item) => item.dataset.filePath === '.')
+    || rows.find((item) => item.dataset.filePath === workspace.directoryPath)
   row?.focus()
 }
 
@@ -762,17 +710,22 @@ async function confirmDiscard() {
 }
 
 async function setWorkdir() {
-  const selected = workspace.selectedPath
-  const current = workspace.workingDirectory
-  const path = current && current !== '.' && selected !== '.'
-    ? `${current}/${selected}`
-    : selected === '.' ? current || '.' : selected
-  await chat.updateActive({ working_directory: path })
+  await chat.updateActive({ current_directory: workspace.selectedPath })
   $q.notify({ type: 'positive', message: 'Aktueller Ordner wurde geändert.' })
 }
 
-async function setWorkspaceRoot() {
-  await chat.updateActive({ working_directory: '.' })
+function openAbsolutePath() {
+  $q.dialog({
+    title: 'Absoluten Pfad öffnen',
+    prompt: {
+      model: workspace.directoryPath,
+      type: 'text',
+      label: 'Absoluter Pfad',
+      isValid: (value) => String(value || '').trim().startsWith('/')
+    },
+    cancel: { label: 'Abbrechen', flat: true, noCaps: true },
+    ok: { label: 'Öffnen', unelevated: true, noCaps: true, color: 'primary' }
+  }).onOk((path) => workspace.openDirectory(path.trim()))
 }
 
 function openRenameDialog(entry) {
@@ -807,9 +760,7 @@ async function removeEntry(entry) {
     { okLabel: 'Löschen', okColor: 'negative' }
   )
   if (!accepted) return
-  const parent = entry.path.includes('/')
-    ? entry.path.slice(0, entry.path.lastIndexOf('/'))
-    : '.'
+  const parent = parentPath(entry.path)
   await workspace.deleteEntry(entry.path)
   workspace.selectPath(parent)
   if (permissionsDialogOpen.value) await loadPermissions()
@@ -838,21 +789,21 @@ watch(
     () => chat.selectedSessionId || null,
     () => chat.current?.id || null,
     () => chat.current?.projectId || null,
-    () => chat.current?.workingDirectory || null,
-    () => chat.activeContext?.workingDirectory || null,
+    () => chat.current?.currentDirectory || null,
+    () => chat.activeContext?.currentDirectory || null,
     () => workspaceContextKey(activeWorkspaceContext.value),
     () => controlCenter.requestGeneration,
     () => controlCenter.ready
   ],
-  ([selectedSessionId, currentSessionId, currentProjectId, currentWorkingDirectory, draftWorkingDirectory]) => {
+  ([selectedSessionId, currentSessionId, currentProjectId, currentDirectory, draftCurrentDirectory]) => {
     const sessionId = selectedSessionId || currentSessionId
-    const workingDirectory = currentSessionId === sessionId
-      ? currentWorkingDirectory
-      : sessionId ? null : draftWorkingDirectory
+    const selectedDirectory = currentSessionId === sessionId
+      ? currentDirectory
+      : sessionId ? null : draftCurrentDirectory
     workspace.configure({
       sessionId,
       rootIdentity: sessionId ? currentProjectId || sessionId : null,
-      workingDirectory,
+      currentDirectory: selectedDirectory || selectedExecutionAgent.value?.homeDirectory || '/',
       workspaceContext: activeWorkspaceContext.value
     })
     if (
@@ -861,61 +812,20 @@ watch(
       && controlCenter.sessionId === sessionId
       && controlCenter.ready
     ) workspace.restoreView(controlCenter.fileView)
-    workspace.load('.')
+    workspace.load(workspace.directoryPath)
     if (permissionsDialogOpen.value) loadPermissions()
   },
   { immediate: true }
 )
 
-watch(() => workspace.contextVersion, () => { treeFocusPath.value = '.' })
-watch(
-  [
-    () => selectedExecutionAgent.value?.id,
-    () => selectedExecutionRoots.value.map((root) => `${root.id}:${root.revision}`).join(','),
-    () => selectedHomeRoot.value?.id,
-    () => chat.activeContext?.preferredRootId,
-    () => workspace.editorDirty,
-    () => chat.running,
-    () => chat.sessionSettingsPending,
-    () => chat.loading,
-    () => chat.selectedSessionId,
-    () => chat.current?.id
-  ],
-  async () => {
-    if (!sourceSwitchAvailable.value) {
-      automaticRootAttempt.value = null
-      return
-    }
-    if (selectedRoot.value) {
-      automaticRootAttempt.value = null
-      return
-    }
-    if (
-      workspace.editorDirty
-      || chat.running
-      || chat.sessionSettingsPending > 0
-      || chat.loading
-      || (chat.selectedSessionId && chat.current?.id !== chat.selectedSessionId)
-    ) return
-    const root = selectedHomeRoot.value || (selectedExecutionRoots.value.length === 1 ? selectedExecutionRoots.value[0] : null)
-    const attempt = root && `${chat.current?.id || 'draft'}:${selectedExecutionAgent.value.id}:${root.id}:${root.revision}`
-    if (!attempt || automaticRootAttempt.value === attempt) return
-    automaticRootAttempt.value = attempt
-    try {
-      await chat.updateActive(executionRootPatch(selectedExecutionAgent.value, root))
-    } catch {
-      // The central API interceptor reports the failed automatic selection.
-    }
-  },
-  { immediate: true }
-)
+watch(() => workspace.contextVersion, () => { treeFocusPath.value = workspace.directoryPath })
 watch(() => workspace.viewedEntry, (entry) => {
   if (!entry) viewerFullscreen.value = false
 })
 watch(() => workspace.filter, async () => {
   await nextTick()
   if (!visibleTreeItems().some((item) => item.dataset.filePath === treeFocusPath.value)) {
-    treeFocusPath.value = '.'
+    treeFocusPath.value = workspace.directoryPath
   }
 })
 </script>

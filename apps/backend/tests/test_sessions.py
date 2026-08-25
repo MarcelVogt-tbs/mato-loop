@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
+    ActiveFileRequest,
     SendMessageRequest,
     SessionCreateRequest,
     SessionReadRequest,
@@ -49,6 +50,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.sessions.service import SessionServiceError, active_file_payload
 from mato_loop_backend.settings import (
     AiSettings,
     InstanceLimits,
@@ -67,6 +69,38 @@ from mato_loop_backend.workspace import FileRoot, RootFileService
 
 def _user() -> UserAccount:
     return UserAccount(id=uuid4(), username="test", password_hash="hash")
+
+
+def test_workspace_active_file_requires_a_normalized_absolute_posix_path() -> None:
+    agent_id = uuid4()
+    session = ChatSession(
+        id=uuid4(),
+        user_id=uuid4(),
+        preferred_execution_agent_id=agent_id,
+    )
+    payload = {
+        "root": "workspace",
+        "executionAgentId": agent_id,
+        "path": "/",
+        "sha256": "a" * 64,
+        "dirty": True,
+    }
+    active_file = active_file_payload(ActiveFileRequest.model_validate(payload), session)
+    assert active_file is not None
+    assert active_file["path"] == "/"
+
+    for path in (
+        "home/test",
+        "/home\\test",
+        "/home//test",
+        "/home/./test",
+        "/home/../test",
+        "/home/\x1ftest",
+        "/home/\x80test",
+    ):
+        payload["path"] = path
+        with pytest.raises(SessionServiceError):
+            active_file_payload(ActiveFileRequest.model_validate(payload), session)
 
 
 def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
@@ -524,7 +558,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert session.user_id == user.id
     assert session.memory_mode == "full"
     assert session.web_search_policy == "available"
-    assert session.working_directory is None
+    assert session.current_directory is None
     assert session.control_center == {
         "tabs": [
             {"app_id": "files", "pinned": False},
@@ -1003,18 +1037,14 @@ def test_message_payload_exposes_only_validated_automation_source() -> None:
 def test_message_payload_validates_file_actions_and_derives_download_url() -> None:
     session_id = uuid4()
     execution_agent_id = str(uuid4())
-    root_id = str(uuid4())
     stored_action = {
         "operation": "copy",
         "root": "workspace",
-        "rootIdentity": root_id,
-        "path": "reports/result.txt",
+        "path": "/home/user/project/reports/result.txt",
         "filename": "result.txt",
         "sizeBytes": 7,
         "executionAgentId": execution_agent_id,
-        "rootId": root_id,
-        "rootRevision": "a" * 64,
-        "workingDirectory": "original/project",
+        "currentDirectory": "/home/user/project",
     }
     message = Message(
         id=uuid4(),
@@ -1030,14 +1060,11 @@ def test_message_payload_validates_file_actions_and_derives_download_url() -> No
     query = parse_qs(urlparse(action.pop("downloadUrl")).query)
     assert action == stored_action
     assert query == {
-        "path": ["reports/result.txt"],
+        "path": ["/home/user/project/reports/result.txt"],
         "scope": ["filesystem"],
         "session_id": [str(session_id)],
-        "root_identity": [root_id],
         "execution_agent_id": [execution_agent_id],
-        "root_id": [root_id],
-        "root_revision": ["a" * 64],
-        "working_directory": ["original/project"],
+        "current_directory": ["/home/user/project"],
     }
     assert "downloadUrl" not in str(message.provider_data)
 
@@ -1082,9 +1109,7 @@ def test_message_payload_rejects_workspace_snapshot_fields_on_session_actions() 
         "filename": "result.txt",
         "sizeBytes": 7,
         "executionAgentId": str(uuid4()),
-        "rootId": str(uuid4()),
-        "rootRevision": "a" * 64,
-        "workingDirectory": ".",
+        "currentDirectory": "/home/user",
     }
     message = Message(
         id=uuid4(),
@@ -1785,9 +1810,7 @@ async def test_control_center_state_can_be_replaced() -> None:
             "viewed_file_path": "drafts/draft-id/plan.md",
             "root_identity": None,
             "execution_agent_id": None,
-            "root_id": None,
-            "root_revision": None,
-            "working_directory": None,
+            "current_directory": None,
         },
     }
 
@@ -1810,9 +1833,7 @@ async def test_control_center_state_can_be_replaced() -> None:
             "viewedFilePath": "drafts/draft-id/plan.md",
             "rootIdentity": None,
             "executionAgentId": None,
-            "rootId": None,
-            "rootRevision": None,
-            "workingDirectory": None,
+            "currentDirectory": None,
         },
     }
     db.commit.assert_awaited_once()
@@ -1958,7 +1979,6 @@ async def test_runtime_policy_cannot_change_during_active_run() -> None:
         title="Test",
         memory_mode="disabled",
         web_search_policy="available",
-        working_directory=None,
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session

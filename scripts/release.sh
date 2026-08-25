@@ -40,7 +40,7 @@ check_allowed_changes() {
     local path
     while IFS= read -r path; do
         case "$path" in
-            VERSION|apps/backend/pyproject.toml|apps/backend/src/mato_loop_backend/__init__.py|apps/backend/uv.lock|apps/frontend/package.json|apps/frontend/yarn.lock|apps/execution-agent/pyproject.toml|apps/execution-agent/src/mato_loop_execution_agent/__init__.py|apps/execution-agent/uv.lock) ;;
+            VERSION|apps/backend/pyproject.toml|apps/backend/src/mato_loop_backend/__init__.py|apps/backend/uv.lock|apps/frontend/package.json|apps/frontend/yarn.lock|apps/matoloop-agent/pyproject.toml|apps/matoloop-agent/src/matoloop_agent/__init__.py|apps/matoloop-agent/uv.lock) ;;
             *) die "Release command changed unexpected file: $path" ;;
         esac
     done < <(git diff --name-only)
@@ -71,9 +71,9 @@ Path("VERSION").write_text(f"{version}\n")
 replace("apps/backend/pyproject.toml", r'(?m)^(version = ")[^"]+("$)')
 replace("apps/backend/src/mato_loop_backend/__init__.py", r'(?m)^(__version__ = ")[^"]+("$)')
 replace("apps/frontend/package.json", r'(?m)^(  "version": ")[^"]+(",$)')
-replace("apps/execution-agent/pyproject.toml", r'(?m)^(version = ")[^"]+("$)')
+replace("apps/matoloop-agent/pyproject.toml", r'(?m)^(version = ")[^"]+("$)')
 replace(
-    "apps/execution-agent/src/mato_loop_execution_agent/__init__.py",
+    "apps/matoloop-agent/src/matoloop_agent/__init__.py",
     r'(?m)^(__version__ = ")[^"]+("$)',
 )
 PY
@@ -140,7 +140,7 @@ printf 'Updating versions to %s...\n' "$VERSION"
 update_versions
 ./scripts/dev.sh lock backend
 ./scripts/dev.sh lock frontend
-./scripts/dev.sh lock execution-agent
+./scripts/dev.sh lock matoloop-agent
 python3 scripts/check-version.py "$TAG"
 
 printf 'Running full checks and tests...\n'
@@ -157,9 +157,9 @@ git add -- \
     apps/backend/uv.lock \
     apps/frontend/package.json \
     apps/frontend/yarn.lock \
-    apps/execution-agent/pyproject.toml \
-    apps/execution-agent/src/mato_loop_execution_agent/__init__.py \
-    apps/execution-agent/uv.lock
+    apps/matoloop-agent/pyproject.toml \
+    apps/matoloop-agent/src/matoloop_agent/__init__.py \
+    apps/matoloop-agent/uv.lock
 git diff --cached --quiet && die "The release produced no version changes."
 git diff --quiet || die "Unstaged release changes remain."
 [[ -z "$(git ls-files --others --exclude-standard)" ]] || die "Untracked files remain."

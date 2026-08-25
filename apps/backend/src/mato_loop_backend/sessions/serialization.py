@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlencode
 from uuid import UUID
@@ -33,62 +34,54 @@ class _StoredFileAction(BaseModel):
 
     operation: str = Field(pattern=r"^(write|copy|move)$")
     root: str = Field(pattern=r"^(session|workspace)$")
-    root_identity: str = Field(alias="rootIdentity", min_length=1, max_length=1_000)
-    path: str = Field(min_length=1, max_length=1_000)
+    root_identity: str | None = Field(
+        default=None, alias="rootIdentity", min_length=1, max_length=1_000
+    )
+    path: str = Field(min_length=1, max_length=4_096)
     filename: str = Field(min_length=1, max_length=1_000)
     size_bytes: int = Field(alias="sizeBytes", ge=0)
     execution_agent_id: str | None = Field(
         default=None, alias="executionAgentId", min_length=1, max_length=36
     )
-    root_id: str | None = Field(default=None, alias="rootId", min_length=1, max_length=36)
-    root_revision: str | None = Field(
-        default=None, alias="rootRevision", min_length=64, max_length=64
-    )
-    working_directory: str | None = Field(
-        default=None, alias="workingDirectory", min_length=1, max_length=1_000
+    current_directory: str | None = Field(
+        default=None, alias="currentDirectory", min_length=1, max_length=4_096
     )
 
     @model_validator(mode="after")
     def validate_paths(self) -> _StoredFileAction:
         service = RootFileService(UUID(int=0))
-        if service.normalize_relative_path(self.path) != self.path or self.path == ".":
+        if self.root == "session" and (
+            service.normalize_relative_path(self.path) != self.path or self.path == "."
+        ):
             raise ValueError("path must be a normalized file path")
+        if self.root == "workspace" and not PurePosixPath(self.path).is_absolute():
+            raise ValueError("workspace path must be absolute")
         if self.filename != self.path.rsplit("/", 1)[-1]:
             raise ValueError("filename must match path")
-        snapshot_fields = {
-            "execution_agent_id",
-            "root_id",
-            "root_revision",
-            "working_directory",
-        }
+        snapshot_fields = {"execution_agent_id", "current_directory"}
         if self.root == "session":
             if self.model_fields_set & snapshot_fields:
                 raise ValueError("session actions cannot contain workspace snapshot fields")
             try:
+                if self.root_identity is None:
+                    raise ValueError
                 if str(UUID(self.root_identity)) != self.root_identity:
                     raise ValueError("session identity must be a canonical UUID")
             except ValueError as exc:
                 raise ValueError("session identity must be a canonical UUID") from exc
             return self
-        if any(getattr(self, field) is None for field in snapshot_fields):
+        if self.root_identity is not None or any(
+            getattr(self, field) is None for field in snapshot_fields
+        ):
             raise ValueError("workspace snapshot fields are required")
         assert self.execution_agent_id is not None
-        assert self.root_id is not None
-        assert self.root_revision is not None
-        assert self.working_directory is not None
+        assert self.current_directory is not None
         try:
-            valid_ids = all(
-                str(UUID(value)) == value
-                for value in (self.execution_agent_id, self.root_id)
-            )
+            valid_id = str(UUID(self.execution_agent_id)) == self.execution_agent_id
         except ValueError:
-            valid_ids = False
-        if not valid_ids or self.root_identity != self.root_id:
-            raise ValueError("workspace identifiers must match canonical UUIDs")
-        if any(character not in "0123456789abcdef" for character in self.root_revision):
-            raise ValueError("root revision must be a lowercase SHA-256 digest")
-        if service.normalize_relative_path(self.working_directory) != self.working_directory:
-            raise ValueError("working directory must be normalized")
+            valid_id = False
+        if not valid_id or not PurePosixPath(self.current_directory).is_absolute():
+            raise ValueError("workspace identifiers must be canonical and absolute")
         return self
 
 
@@ -140,14 +133,16 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
             "path": action.path,
             "scope": scope,
             "session_id": str(item.session_id),
-            "root_identity": action.root_identity,
+            **(
+                {"root_identity": action.root_identity}
+                if action.root == "session"
+                else {"execution_agent_id": action.execution_agent_id}
+            ),
         }
         if action.root == "workspace":
             query.update(
                 execution_agent_id=action.execution_agent_id,
-                root_id=action.root_id,
-                root_revision=action.root_revision,
-                working_directory=action.working_directory,
+                current_directory=action.current_directory,
             )
         actions.append(
             {
@@ -248,9 +243,7 @@ def session_payload(
                     "viewedFilePath": file_view.get("viewed_file_path"),
                     "rootIdentity": file_view.get("root_identity"),
                     "executionAgentId": file_view.get("execution_agent_id"),
-                    "rootId": file_view.get("root_id"),
-                    "rootRevision": file_view.get("root_revision"),
-                    "workingDirectory": file_view.get("working_directory"),
+                    "currentDirectory": file_view.get("current_directory"),
                 }
                 if isinstance(file_view, dict)
                 else None
@@ -265,8 +258,6 @@ def session_payload(
             if item.preferred_execution_agent_id
             else None
         ),
-        "preferredRootId": str(item.preferred_root_id) if item.preferred_root_id else None,
-        "workingDirectory": item.working_directory,
         "currentDirectory": item.current_directory,
         "workspaceContext": workspace_context
         or {
@@ -275,7 +266,6 @@ def session_payload(
                 if item.preferred_execution_agent_id
                 else None
             ),
-            "rootId": str(item.preferred_root_id) if item.preferred_root_id else None,
             "connected": False,
             "operations": [],
         },

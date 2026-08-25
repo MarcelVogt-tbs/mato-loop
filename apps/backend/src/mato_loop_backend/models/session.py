@@ -116,8 +116,6 @@ class ChatSession(Base):
     preferred_execution_agent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("execution_agents.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    preferred_root_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    working_directory: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     current_directory: Mapped[str | None] = mapped_column(String(4096), nullable=True)
     private_integration_data_used: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")

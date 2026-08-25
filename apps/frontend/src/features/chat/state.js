@@ -10,8 +10,6 @@ export function defaultSessionOptions() {
     memoryUnavailableReason: null,
     webSearchPolicy: 'available',
     preferredExecutionAgentId: null,
-    preferredRootId: null,
-    workingDirectory: null,
     currentDirectory: null,
     workspaceContext: null
   }
@@ -19,14 +17,7 @@ export function defaultSessionOptions() {
 
 export function sanitizedSessionOptions(options) {
   const sanitized = { ...options, workspaceContext: null }
-  if (!sanitized.preferredExecutionAgentId) {
-    sanitized.preferredRootId = null
-    sanitized.workingDirectory = null
-    sanitized.currentDirectory = null
-  } else if (!sanitized.preferredRootId) {
-    sanitized.workingDirectory = null
-    sanitized.currentDirectory = null
-  }
+  if (!sanitized.preferredExecutionAgentId) sanitized.currentDirectory = null
   return sanitized
 }
 
@@ -40,8 +31,6 @@ export function optionsFromSession(session) {
     memoryUnavailableReason: session.memoryUnavailableReason,
     webSearchPolicy: session.webSearchPolicy,
     preferredExecutionAgentId: session.preferredExecutionAgentId,
-    preferredRootId: session.preferredRootId,
-    workingDirectory: session.workingDirectory,
     currentDirectory: session.currentDirectory,
     workspaceContext: session.workspaceContext || null
   })
@@ -118,8 +107,6 @@ export function normalizedNewSessionDraft(value) {
       preferredExecutionAgentId: typeof options.preferredExecutionAgentId === 'string'
         ? options.preferredExecutionAgentId
         : null,
-      preferredRootId: typeof options.preferredRootId === 'string' ? options.preferredRootId : null,
-      workingDirectory: typeof options.workingDirectory === 'string' ? options.workingDirectory : null,
       currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
       workspaceContext: null
     })

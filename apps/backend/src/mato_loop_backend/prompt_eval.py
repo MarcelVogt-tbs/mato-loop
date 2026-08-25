@@ -5104,7 +5104,7 @@ def _general_case(
             else "disabled"
         ),
         web_search_policy="required" if case.web_search_required else "available",
-        working_directory=case.working_directory,
+        current_directory=case.working_directory,
     )
     offered = _general_offered_tools(tool_case)
     effective = offered.only(*tool_case.tools)

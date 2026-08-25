@@ -121,10 +121,10 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "updateAgentIdentity": {"policy": "ask"},
     }
     assert result["policies"] == {
-            "filesystem.read": "auto",
-            "session.files.write": "auto",
-            "filesystem.write": "ask",
-            "filesystem.delete": "ask",
+        "filesystem.read": "auto",
+        "session.files.write": "auto",
+        "filesystem.write": "ask",
+        "filesystem.delete": "ask",
         "network.search": "auto",
         "media.generate.image": "disabled",
         "media.edit.image": "ask",
@@ -140,7 +140,6 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "skills.write": "ask",
         "settings.agent_identity.update": "ask",
         "system.info": "auto",
-        "execution.directory": "auto",
         "process.execute": "ask",
         "automation.read": "ask",
         "automation.create": "ask",

@@ -16,7 +16,6 @@ const PROVIDED_IMAGE_MIME_TYPES = new Map([
   ['.webp', 'image/webp']
 ])
 const UUID_PATTERN = new RegExp(`^${UUID}$`, 'i')
-const ROOT_REVISION_PATTERN = /^[0-9a-f]{64}$/u
 
 export function validRelativePath(value, allowRoot = false) {
   if (value === '.') return allowRoot
@@ -51,11 +50,8 @@ function safeFileUrl(value, expectedPath) {
         'path',
         'scope',
         'session_id',
-        'root_identity',
         'execution_agent_id',
-        'root_id',
-        'root_revision',
-        'working_directory'
+        'current_directory'
       ])
       : null
   if (
@@ -70,17 +66,13 @@ function safeFileUrl(value, expectedPath) {
   const path = parsed.searchParams.get('path')
   const sessionId = parsed.searchParams.get('session_id')
   const rootIdentity = parsed.searchParams.get('root_identity')
-  if (!validRelativePath(path) || !UUID_PATTERN.test(sessionId || '')) return null
-  if (scope === 'session') return UUID_PATTERN.test(rootIdentity || '') ? value : null
+  if (!UUID_PATTERN.test(sessionId || '')) return null
+  if (scope === 'session') return validRelativePath(path) && UUID_PATTERN.test(rootIdentity || '') ? value : null
   const executionAgentId = parsed.searchParams.get('execution_agent_id')
-  const rootId = parsed.searchParams.get('root_id')
-  const rootRevision = parsed.searchParams.get('root_revision')
-  const workingDirectory = parsed.searchParams.get('working_directory')
+  const currentDirectory = parsed.searchParams.get('current_directory')
   return UUID_PATTERN.test(executionAgentId || '')
-    && UUID_PATTERN.test(rootId || '')
-    && rootIdentity === rootId
-    && ROOT_REVISION_PATTERN.test(rootRevision || '')
-    && validRelativePath(workingDirectory, true)
+    && path?.startsWith('/')
+    && currentDirectory?.startsWith('/')
     ? value
     : null
 }
@@ -145,7 +137,10 @@ function attachmentFileTarget(attachment) {
   const safeUrl = safeFileDownloadUrl(attachment?.url) || safeFileContentUrl(attachment?.url)
   if (safeUrl) {
     const params = new URL(safeUrl, 'https://mato-loop.invalid').searchParams
-    return { rootIdentity: params.get('root_identity'), path: params.get('path') }
+    return {
+      rootIdentity: params.get('root_identity') || params.get('execution_agent_id'),
+      path: params.get('path')
+    }
   }
   const rootIdentity = typeof attachment?.fileRootId === 'string' ? attachment.fileRootId : ''
   const path = typeof attachment?.filePath === 'string' ? attachment.filePath : ''
@@ -180,7 +175,7 @@ export function managedSessionFileTarget(attachment, sessionId) {
 }
 
 export function deduplicateFileOutputAttachments(attachments, fileActions) {
-  const actionKeys = new Set(fileActions.map((action) => `${action.rootIdentity}:${action.path}`))
+  const actionKeys = new Set(fileActions.map((action) => `${action.rootIdentity || action.executionAgentId}:${action.path}`))
   return attachments.filter((attachment) => {
     const target = attachmentFileTarget(attachment)
     return !target || !actionKeys.has(`${target.rootIdentity}:${target.path}`)
@@ -199,9 +194,7 @@ export function toolFileActions(result) {
     const rootIdentity = typeof action.rootIdentity === 'string' ? action.rootIdentity : ''
     const scope = action.root === 'session' ? 'session' : action.root === 'workspace' ? 'filesystem' : null
     const executionAgentId = typeof action.executionAgentId === 'string' ? action.executionAgentId : ''
-    const rootId = typeof action.rootId === 'string' ? action.rootId : ''
-    const rootRevision = typeof action.rootRevision === 'string' ? action.rootRevision : ''
-    const workingDirectory = typeof action.workingDirectory === 'string' ? action.workingDirectory : ''
+    const currentDirectory = typeof action.currentDirectory === 'string' ? action.currentDirectory : ''
     if (
       !safeUrl
       || !scope
@@ -216,28 +209,27 @@ export function toolFileActions(result) {
     if (
       params.get('scope') !== scope
       || params.get('path') !== path
-      || params.get('root_identity') !== rootIdentity
+      || (scope === 'session' && params.get('root_identity') !== rootIdentity)
       || !sessionId
       || (scope === 'filesystem' && (
         params.get('execution_agent_id') !== executionAgentId
-        || params.get('root_id') !== rootId
-        || params.get('root_revision') !== rootRevision
-        || params.get('working_directory') !== workingDirectory
+        || params.get('current_directory') !== currentDirectory
+        || rootIdentity
       ))
       || (scope === 'session' && [
-        'executionAgentId', 'rootId', 'rootRevision', 'workingDirectory'
+        'executionAgentId', 'currentDirectory'
       ].some((key) => Object.hasOwn(action, key)))
     ) return []
     return [{
       operation: action.operation,
       root: action.root,
-      rootIdentity,
+      ...(rootIdentity ? { rootIdentity } : {}),
       path,
       filename,
       sizeBytes: size,
       sessionId,
       ...(scope === 'filesystem'
-        ? { executionAgentId, rootId, rootRevision, workingDirectory }
+        ? { executionAgentId, currentDirectory }
         : {}),
       downloadUrl: safeUrl
     }]
