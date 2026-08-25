@@ -223,6 +223,7 @@ import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
+import { resolveSettingsScope } from 'src/features/settings/scope'
 import {
   applicableResourceActions,
   calendarResources,
@@ -252,9 +253,7 @@ const savedPayload = ref('')
 let loadToken = 0
 
 const integrationId = computed(() => String(route.params.integrationId || ''))
-const scope = computed(() => (
-  route.query.scope === 'personal' ? 'personal' : (auth.isAdmin ? 'instance' : 'personal')
-))
+const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
 const integration = computed(() => [
   ...integrations.search.providers,
   ...integrations.calendar.accounts,

@@ -239,6 +239,7 @@ import { useRoute } from 'vue-router'
 import IntegrationConfigDialog from 'components/IntegrationConfigDialog.vue'
 import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
+import { resolveSettingsScope } from 'src/features/settings/scope'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useAuthStore } from 'stores/auth'
@@ -452,10 +453,7 @@ async function setAdapterAvailability(adapterType, availability) {
 }
 
 onMounted(() => {
-  const scope = route.query.scope === 'personal'
-    ? 'personal'
-    : (auth.isAdmin ? 'instance' : 'personal')
-  integrations.selectScope(scope)
+  integrations.selectScope(resolveSettingsScope(route.query.scope, auth.isAdmin))
   if (!showAccessPage.value) void reload()
 })
 </script>

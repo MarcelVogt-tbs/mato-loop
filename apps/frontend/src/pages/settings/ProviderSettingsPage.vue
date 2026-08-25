@@ -547,5 +547,5 @@ async function removeProvider(provider) {
   $q.notify({ type: 'positive', message: 'Provider gelöscht' })
 }
 
-onMounted(() => changeScope(auth.isAdmin ? 'instance' : 'personal'))
+onMounted(() => changeScope('personal'))
 </script>

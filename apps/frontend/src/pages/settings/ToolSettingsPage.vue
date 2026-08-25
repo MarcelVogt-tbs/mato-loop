@@ -691,5 +691,5 @@ async function resetPersonalSettings() {
   $q.notify({ type: 'positive', message: 'Tool-Einstellungen zurückgesetzt' })
 }
 
-onMounted(() => changeScope(auth.isAdmin ? 'instance' : 'personal'))
+onMounted(() => changeScope('personal'))
 </script>

@@ -433,5 +433,5 @@ async function save() {
   }
 }
 
-onMounted(() => changeScope(auth.isAdmin ? 'instance' : 'personal'))
+onMounted(() => changeScope('personal'))
 </script>
