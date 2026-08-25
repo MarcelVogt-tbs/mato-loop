@@ -265,6 +265,7 @@ const knowledgeBases = computed(() => integrations.knowledge.bases)
 const recipeAccounts = computed(() => integrations.recipes.accounts)
 const gitInstances = computed(() => integrations.git.instances)
 const openScadInstances = computed(() => integrations.openscad.instances)
+const codingInstances = computed(() => integrations.coding.instances)
 const configuredIntegrations = computed(
   () => [
     ...searchProviders.value,
@@ -273,7 +274,8 @@ const configuredIntegrations = computed(
     ...knowledgeBases.value,
     ...recipeAccounts.value,
     ...gitInstances.value,
-    ...openScadInstances.value
+    ...openScadInstances.value,
+    ...codingInstances.value
   ]
 )
 const backendAvailabilityOptions = [
@@ -291,7 +293,9 @@ const canCreateIntegration = computed(() => (
 ))
 
 function availabilityOptions(adapter) {
-  return adapter.executionLocation === 'agent' ? agentAvailabilityOptions : backendAvailabilityOptions
+  return adapter.executionLocation === 'agent' || adapter.personalOnly
+    ? agentAvailabilityOptions
+    : backendAvailabilityOptions
 }
 
 function canEditIntegration(integration) {
@@ -320,7 +324,7 @@ function openEditDialog(integration) {
 
 function providerLabel(providerType) {
   return {
-    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', bookstack: 'BookStack', mealie: 'Mealie', git: 'Git', openscad: 'OpenSCAD'
+    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', bookstack: 'BookStack', mealie: 'Mealie', git: 'Git', openscad: 'OpenSCAD', opencode: 'OpenCode'
   }[providerType] || providerType
 }
 
@@ -332,13 +336,14 @@ function typeLabel(integrationType) {
     knowledge: 'Wissensdatenbank',
     recipes: 'Rezepte & Essensplanung',
     git: 'Versionsverwaltung',
-    openscad: '3D-Modellierung'
+    openscad: '3D-Modellierung',
+    coding: 'Programmierung'
   }[integrationType] || integrationType || 'Unbekannter Integrationstyp'
 }
 
 function typeIcon(integrationType) {
   return {
-    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', knowledge: 'menu_book', recipes: 'restaurant_menu', git: 'account_tree', openscad: 'view_in_ar'
+    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', knowledge: 'menu_book', recipes: 'restaurant_menu', git: 'account_tree', openscad: 'view_in_ar', coding: 'code'
   }[integrationType] || 'extension'
 }
 
@@ -378,6 +383,7 @@ async function testIntegration(integration) {
     else if (integration.integrationType === 'knowledge') result = await integrations.testKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') result = await integrations.testRecipes(integration.id)
     else if (integration.integrationType === 'openscad') result = await integrations.testOpenScad(integration.id)
+    else if (integration.integrationType === 'coding') result = await integrations.testOpenCode(integration.id)
     else result = await integrations.testSearch(integration.id)
     if (integration.integrationType === 'openscad' && result?.headlessPreview === false) {
       $q.notify({
@@ -409,6 +415,7 @@ async function removeIntegration(integration) {
     else if (integration.integrationType === 'recipes') await integrations.removeRecipes(integration.id)
     else if (integration.integrationType === 'git') await integrations.removeGit(integration.id)
     else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)
+    else if (integration.integrationType === 'coding') await integrations.removeOpenCode(integration.id)
     else await integrations.removeSearch(integration.id)
     $q.notify({ type: 'positive', message: 'Integration gelöscht' })
   } finally {

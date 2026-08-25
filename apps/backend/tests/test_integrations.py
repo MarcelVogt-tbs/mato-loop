@@ -166,6 +166,9 @@ def test_integration_catalog_read_and_admin_update(monkeypatch) -> None:
         "executionLocation": "backend",
         "availability": "instance_only",
     }
+    assert next(item for item in adapters if item["adapterType"] == "opencode")[
+        "personalOnly"
+    ] is True
     assert forbidden.status_code == 403
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "validation.invalidChoice"
@@ -295,7 +298,7 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
 
     assert result == {
         "enabled": True,
-        "allowedAdapterTypes": ["caldav", "git", "imap_smtp"],
+        "allowedAdapterTypes": ["caldav", "git", "imap_smtp", "opencode"],
     }
 
 

@@ -91,6 +91,33 @@ def _path_request(
     )
 
 
+async def test_coding_permission_is_scoped_to_current_project(tmp_path) -> None:
+    project_id = uuid4()
+    session = _session(user_id=uuid4(), project_id=project_id)
+    root_files = _root_files(tmp_path, session)
+    db = _db_with_grants()
+    request = PermissionRequest(
+        capability="coding.analyze",
+        resource_type="project",
+        resource_scope=str(project_id),
+        action_kind="coding.analyze",
+        risk_level="medium",
+        title="Analyze?",
+        summary="Analyze project.",
+    )
+
+    assert await PermissionPolicy.evaluate(
+        db, session, request, root_files, ToolExecutionPolicy.AUTO
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        replace(request, resource_scope=str(uuid4())),
+        root_files,
+        ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.DENY
+
+
 def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)

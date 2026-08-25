@@ -762,6 +762,17 @@ class PermissionPolicy:
                     else PermissionDecision.ALLOW
                 )
 
+        if request.resource_type == "project":
+            try:
+                project_id = UUID(request.resource_scope)
+            except ValueError:
+                return PermissionDecision.DENY
+            if (
+                project_id != chat_session.project_id
+                or not request.capability.startswith("coding.")
+            ):
+                return PermissionDecision.DENY
+
         if request.resource_type == "project_session_path":
             scope = _project_session_path_scope(request.resource_scope)
             if scope is None or request.capability != "filesystem.read":
@@ -920,6 +931,11 @@ class PermissionPolicy:
                 return False
         if request.resource_type == "session_collection":
             return request.resource_scope == grant.resource_scope == "all"
+        if request.resource_type == "project":
+            try:
+                return UUID(request.resource_scope) == UUID(grant.resource_scope)
+            except ValueError:
+                return False
         if request.resource_type == "project_session_path":
             return False
         if request.resource_type == "url":

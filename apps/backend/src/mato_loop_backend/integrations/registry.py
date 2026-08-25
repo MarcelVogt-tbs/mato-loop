@@ -16,6 +16,7 @@ from mato_loop_backend.integrations.contracts import (
 from mato_loop_backend.integrations.git import GIT_ADAPTER
 from mato_loop_backend.integrations.mail import MAIL_ADAPTER
 from mato_loop_backend.integrations.mealie import MEALIE_ADAPTER
+from mato_loop_backend.integrations.opencode import OPENCODE_ADAPTER
 from mato_loop_backend.integrations.openscad import OPENSCAD_ADAPTER
 from mato_loop_backend.settings.models import (
     IntegrationAdapterAvailability,
@@ -59,6 +60,7 @@ _ADAPTERS = {
     ("recipes", "mealie"): MEALIE_ADAPTER,
     ("git", "git"): GIT_ADAPTER,
     ("openscad", "openscad"): OPENSCAD_ADAPTER,
+    ("coding", "opencode"): OPENCODE_ADAPTER,
 }
 
 

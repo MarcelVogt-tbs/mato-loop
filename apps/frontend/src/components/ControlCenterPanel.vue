@@ -142,6 +142,8 @@ import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
 import { useMailStore } from 'stores/mail'
+import { useChatStore } from 'stores/chat'
+import { useProjectStore } from 'stores/projects'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import {
@@ -149,7 +151,7 @@ import {
   controlCenterGlobalSections,
   controlCenterIntegrations
 } from 'src/control-center/apps'
-import { mailControlCenterAvailable } from 'src/control-center/manifest'
+import { codingControlCenterAvailable, mailControlCenterAvailable } from 'src/control-center/manifest'
 
 defineOptions({ name: 'ControlCenterPanel' })
 
@@ -161,14 +163,20 @@ const approvals = useApprovalStore()
 const questions = useQuestionStore()
 const notifications = useInAppNotificationStore()
 const mail = useMailStore()
+const chat = useChatStore()
+const projects = useProjectStore()
 const draggedIntegrationId = ref(null)
 const dropTarget = ref(null)
 const closedIntegrations = computed(() => controlCenterIntegrations.filter(
   (item) => !controlCenter.tabs.some((tab) => tab.appId === item.id)
 ))
-const launcherIntegrations = computed(() => closedIntegrations.value.filter(
-  (item) => item.id !== 'mail' || mailControlCenterAvailable(mail)
+const activeProject = computed(() => projects.items.find(
+  (project) => project.id === (chat.current?.projectId || chat.sessionsProjectId)
 ))
+const launcherIntegrations = computed(() => closedIntegrations.value.filter((item) => (
+  (item.id !== 'mail' || mailControlCenterAvailable(mail))
+  && (item.id !== 'coding' || codingControlCenterAvailable(activeProject.value))
+)))
 
 function content(contentId) {
   return controlCenterContentsById.get(contentId)

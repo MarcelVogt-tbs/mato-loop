@@ -32,6 +32,9 @@ from mato_loop_backend.integrations import (
     MealieConfig,
     MealieError,
     MealieIntegrationService,
+    OpenCodeError,
+    OpenCodeIntegrationService,
+    OpenCodeSettingsError,
     OpenScadIntegrationService,
     SearchIntegrationError,
     SearchIntegrationService,
@@ -97,6 +100,12 @@ async def _load_scoped_integrations(
     if scope == "instance":
         if user is not None and not getattr(user, "is_admin", False):
             raise ApiError(403, "auth.adminRequired")
+        adapter = next(
+            (item for item in integration_adapters() if item.adapter_type == adapter_type),
+            None,
+        )
+        if adapter is not None and adapter.personal_only:
+            raise ApiError(409, "integration.personalOnly")
         settings = await SettingsStore.load(
             db, IntegrationSettings, for_update=for_update
         )
@@ -309,6 +318,32 @@ class OpenScadDiscoverRequest(BaseModel):
     )
 
 
+class OpenCodeIntegrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str = Field(default="OpenCode", min_length=1, max_length=160)
+    base_url: HttpUrl = Field(validation_alias=AliasChoices("baseUrl", "base_url"))
+    username: str = Field(default="opencode", min_length=1, max_length=255)
+    password: str | None = Field(default=None, max_length=4096)
+    remove_password: bool = Field(
+        default=False, validation_alias=AliasChoices("removePassword", "remove_password")
+    )
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_endpoint(self) -> OpenCodeIntegrationRequest:
+        if (
+            self.base_url.username is not None
+            or self.base_url.password is not None
+            or self.base_url.query is not None
+            or self.base_url.fragment is not None
+            or self.password == ""
+            or (self.password is not None and self.remove_password)
+        ):
+            raise ValueError("Invalid OpenCode connection settings")
+        return self
+
+
 class IntegrationAccessRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -340,6 +375,7 @@ def _catalog_item(adapter, settings: IntegrationSettings) -> dict:
         "adapterType": adapter.adapter_type,
         "executionLocation": adapter.execution_location,
         "availability": settings.availability_for(adapter.adapter_type).value,
+        **({"personalOnly": True} if adapter.personal_only else {}),
     }
 
 
@@ -693,6 +729,24 @@ def recipe_settings_payload(settings: IntegrationSettingsDocument) -> dict:
     }
 
 
+def coding_settings_payload(settings: UserIntegrationSettings) -> dict:
+    instances = [
+        instance
+        for instance in settings.instances
+        if instance.integration_type == "coding" and instance.adapter_type == "opencode"
+    ]
+    return {
+        "configured": bool(instances),
+        "instances": [
+            {
+                **_provider_payload(instance),
+                "serverVersion": instance.config.get("server_version"),
+            }
+            for instance in instances
+        ],
+    }
+
+
 def git_settings_payload(settings: IntegrationSettings) -> dict:
     integrations = [
         instance
@@ -803,7 +857,7 @@ async def update_integration_catalog(
         item for item in integration_adapters() if item.adapter_type == adapter_type
     )
     if (
-        adapter.execution_location == "agent"
+        (adapter.execution_location == "agent" or adapter.personal_only)
         and payload.availability == IntegrationAdapterAvailability.INSTANCE_ONLY
     ):
         raise ApiError(422, "validation.invalidChoice", field="availability")
@@ -1861,3 +1915,102 @@ async def test_search_integration(
         logger.warning("Search integration test failed: %s", exc.code)
         raise ApiError(502, exc.code) from exc
     return {"status": "ok"}
+
+
+def _raise_opencode_error(exc: OpenCodeSettingsError | OpenCodeError) -> None:
+    code = exc.code
+    if code == "integration.notFound":
+        raise ApiError(404, code) from exc
+    if code in {
+        "integration.changed",
+        "opencode.alreadyConfigured",
+        "opencode.integrationReferenced",
+    }:
+        raise ApiError(409, code) from exc
+    if code in {"opencode.invalidUrl", "opencode.invalidRequest", "validation.invalidChoice"}:
+        raise ApiError(422, code) from exc
+    raise ApiError(502, code) from exc
+
+
+@router.get("/coding")
+async def get_coding_integrations(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings, _owner_id = await _load_scoped_integrations(
+        db, "personal", user, adapter_type="opencode"
+    )
+    return coding_settings_payload(settings)
+
+
+@router.post("/coding/opencode", status_code=status.HTTP_201_CREATED)
+async def create_opencode_integration(
+    payload: OpenCodeIntegrationRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    if payload.remove_password:
+        raise ApiError(422, "validation.invalidChoice", field="removePassword")
+    await _load_scoped_integrations(db, "personal", user, adapter_type="opencode")
+    try:
+        settings = await OpenCodeIntegrationService.create(
+            db,
+            user_id=user.id,
+            name=payload.name,
+            base_url=str(payload.base_url),
+            username=payload.username,
+            password=payload.password,
+            enabled=payload.enabled,
+        )
+    except (OpenCodeSettingsError, OpenCodeError) as exc:
+        _raise_opencode_error(exc)
+    return coding_settings_payload(settings)
+
+
+@router.put("/coding/opencode/{integration_id}")
+async def update_opencode_integration(
+    integration_id: UUID,
+    payload: OpenCodeIntegrationRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    await _load_scoped_integrations(db, "personal", user, adapter_type="opencode")
+    try:
+        settings = await OpenCodeIntegrationService.update(
+            db,
+            integration_id,
+            user_id=user.id,
+            name=payload.name,
+            base_url=str(payload.base_url),
+            username=payload.username,
+            password=payload.password,
+            remove_password=payload.remove_password,
+            enabled=payload.enabled,
+        )
+    except (OpenCodeSettingsError, OpenCodeError) as exc:
+        _raise_opencode_error(exc)
+    return coding_settings_payload(settings)
+
+
+@router.delete("/coding/opencode/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_opencode_integration(
+    integration_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    try:
+        await OpenCodeIntegrationService.delete(db, integration_id, user_id=user.id)
+    except (OpenCodeSettingsError, OpenCodeError) as exc:
+        _raise_opencode_error(exc)
+
+
+@router.post("/coding/opencode/{integration_id}/test")
+async def test_opencode_integration(
+    integration_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, str]:
+    try:
+        return await OpenCodeIntegrationService.test(db, integration_id, user_id=user.id)
+    except (OpenCodeSettingsError, OpenCodeError) as exc:
+        _raise_opencode_error(exc)

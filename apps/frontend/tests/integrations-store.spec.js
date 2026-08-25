@@ -104,6 +104,20 @@ const openScadResponse = {
   }]
 }
 
+const codingResponse = {
+  configured: true,
+  instances: [{
+    id: 'opencode-id',
+    name: 'OpenCode',
+    integrationType: 'coding',
+    providerType: 'opencode',
+    enabled: true,
+    hasCredential: true,
+    config: { baseUrl: 'http://localhost:4096', username: 'opencode' },
+    serverVersion: '1.0.0'
+  }]
+}
+
 const catalogResponse = {
   adapters: [
     {
@@ -155,6 +169,56 @@ describe('integration store', () => {
     expect(store.adapterAvailable('git', 'personal')).toBe(true)
     expect(store.adapterAvailable('git', 'instance')).toBe(false)
     expect(store.catalogLoading).toBe(false)
+  })
+
+  it('keeps personal-only adapters out of instance scope', () => {
+    const store = useIntegrationStore()
+    store.catalog = [{
+      integrationType: 'coding',
+      adapterType: 'opencode',
+      executionLocation: 'backend',
+      availability: 'full',
+      personalOnly: true
+    }]
+
+    expect(store.adapterAvailable('opencode', 'instance')).toBe(false)
+    expect(store.adapterAvailable('opencode', 'personal')).toBe(true)
+  })
+
+  it('manages personal OpenCode integrations without exposing blank passwords', async () => {
+    api.get.mockResolvedValue({ data: codingResponse })
+    api.post.mockResolvedValue({ data: codingResponse })
+    api.put.mockResolvedValue({ data: codingResponse })
+    api.delete.mockResolvedValue({})
+    const store = useIntegrationStore()
+    store.selectScope('personal')
+
+    await store.fetchCoding()
+    await store.createOpenCode({ name: 'OpenCode', baseUrl: 'http://localhost:4096', username: 'opencode', password: '' })
+    await store.updateOpenCode('opencode-id', { name: 'OpenCode', password: '', removePassword: false })
+    await store.removeOpenCode('opencode-id')
+
+    expect(api.post).toHaveBeenCalledWith('/integrations/coding/opencode', {
+      name: 'OpenCode', baseUrl: 'http://localhost:4096', username: 'opencode'
+    })
+    expect(api.put).toHaveBeenCalledWith('/integrations/coding/opencode/opencode-id', {
+      name: 'OpenCode', removePassword: false
+    })
+    expect(api.delete).toHaveBeenCalledWith('/integrations/coding/opencode/opencode-id')
+    expect(store.coding).toEqual(codingResponse)
+  })
+
+  it('discovers personal OpenCode integrations independently of the settings scope', async () => {
+    api.get.mockResolvedValue({ data: codingResponse })
+    const store = useIntegrationStore()
+
+    const result = await store.fetchCoding({ personal: true })
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/coding', {
+      suppressErrorToast: true,
+      params: { scope: 'personal' }
+    })
+    expect(result).toEqual(codingResponse)
   })
 
   it('loads only configured external integrations', async () => {

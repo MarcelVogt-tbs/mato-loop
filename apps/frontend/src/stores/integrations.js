@@ -39,6 +39,16 @@ const emptyOpenScad = () => ({
   instances: []
 })
 
+const emptyCoding = () => ({
+  configured: false,
+  instances: []
+})
+const unavailableCodingCodes = new Set([
+  'integration.adapterDisabled',
+  'integration.personalAdapterDisabled',
+  'integration.unavailable'
+])
+
 function scopeConfig(scope, config = {}) {
   return { ...config, params: { ...(config.params || {}), scope } }
 }
@@ -59,6 +69,7 @@ function clearIntegrations(store) {
   store.recipes = emptyRecipes()
   store.git = emptyGit()
   store.openscad = emptyOpenScad()
+  store.coding = emptyCoding()
 }
 
 export const useIntegrationStore = defineStore('integrations', {
@@ -70,6 +81,7 @@ export const useIntegrationStore = defineStore('integrations', {
     recipes: emptyRecipes(),
     git: emptyGit(),
     openscad: emptyOpenScad(),
+    coding: emptyCoding(),
     scope: 'instance',
     catalog: [],
     catalogLoading: false,
@@ -89,7 +101,7 @@ export const useIntegrationStore = defineStore('integrations', {
       const adapter = state.catalog.find((item) => item.adapterType === adapterType)
       if (!adapter || state.catalogLoadFailed) return false
       if (scope === 'personal') return adapter.availability === 'full'
-      return adapter.executionLocation === 'backend'
+      return !adapter.personalOnly && adapter.executionLocation === 'backend'
         && ['full', 'instance_only'].includes(adapter.availability)
     }
   },
@@ -144,14 +156,15 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchKnowledge(),
           this.fetchRecipes(),
           this.fetchGit(),
-          this.fetchOpenScad()
+          this.fetchOpenScad(),
+          ...(context.scope === 'personal' ? [this.fetchCoding()] : [])
         ])
       } catch (error) {
         if (contextIsCurrent(this, context)) this.loadFailed = true
         throw error
       }
     },
-    async fetchResource(field, path) {
+    async fetchResource(field, path, config) {
       const context = scopeContext(this)
       const loadVersion = (this.loadVersions[field] || 0) + 1
       this.loadVersions[field] = loadVersion
@@ -159,7 +172,7 @@ export const useIntegrationStore = defineStore('integrations', {
       this.loading = true
       this.loadFailed = false
       try {
-        const data = (await api.get(path, scopeConfig(context.scope))).data
+        const data = (await api.get(path, scopeConfig(context.scope, config))).data
         if (!contextIsCurrent(this, context) || this.loadVersions[field] !== loadVersion) return
         this[field] = data
         this.loaded = true
@@ -356,6 +369,66 @@ export const useIntegrationStore = defineStore('integrations', {
     async testOpenScad(id) {
       const scope = this.scope
       return (await api.post(`/integrations/openscad/${id}/test`, null, scopeConfig(scope))).data
+    },
+    async fetchCoding({ personal = false } = {}) {
+      if (personal && this.scope !== 'personal') {
+        try {
+          return (await api.get('/integrations/coding', scopeConfig('personal', {
+            suppressErrorToast: true
+          }))).data
+        } catch (error) {
+          if (!unavailableCodingCodes.has(error?.response?.data?.error?.code)) throw error
+          return emptyCoding()
+        }
+      }
+      const context = scopeContext(this)
+      if (context.scope !== 'personal') return emptyCoding()
+      if (this.catalogLoaded && !this.adapterAvailable('opencode', 'personal')) {
+        this.coding = emptyCoding()
+        return this.coding
+      }
+      try {
+        return await this.fetchResource(
+          'coding',
+          '/integrations/coding',
+          { suppressErrorToast: true }
+        )
+      } catch (error) {
+        if (!unavailableCodingCodes.has(error?.response?.data?.error?.code)) throw error
+        if (contextIsCurrent(this, context)) {
+          this.coding = emptyCoding()
+          this.loadFailed = false
+          this.loaded = true
+        }
+        return this.coding
+      }
+    },
+    async createOpenCode(payload) {
+      const context = scopeContext(this)
+      this.loadVersions.coding = (this.loadVersions.coding || 0) + 1
+      const request = { ...payload }
+      if (!request.password) delete request.password
+      const { data } = await api.post('/integrations/coding/opencode', request)
+      if (contextIsCurrent(this, context)) this.coding = data
+      return data
+    },
+    async updateOpenCode(id, payload) {
+      const context = scopeContext(this)
+      this.loadVersions.coding = (this.loadVersions.coding || 0) + 1
+      const request = { ...payload }
+      if (!request.password) delete request.password
+      const { data } = await api.put(`/integrations/coding/opencode/${id}`, request)
+      if (contextIsCurrent(this, context)) this.coding = data
+      return data
+    },
+    async removeOpenCode(id) {
+      const context = scopeContext(this)
+      this.loadVersions.coding = (this.loadVersions.coding || 0) + 1
+      await api.delete(`/integrations/coding/opencode/${id}`)
+      if (contextIsCurrent(this, context)) await this.fetchCoding()
+    },
+    async testOpenCode(id) {
+      return (await api.post(`/integrations/coding/opencode/${id}/test`)).data
     },
     async fetchAccess(id) {
       const context = scopeContext(this)

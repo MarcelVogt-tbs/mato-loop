@@ -108,6 +108,7 @@ class IntegrationAdapterDefinition:
     execution_location: Literal["backend", "agent"] = "backend"
     execution_kind: str | None = None
     execution_tools: tuple[ToolContribution, ...] = ()
+    personal_only: bool = False
 
     def __post_init__(self) -> None:
         if self.execution_location == "backend":

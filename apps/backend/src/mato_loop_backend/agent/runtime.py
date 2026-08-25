@@ -85,6 +85,7 @@ from mato_loop_backend.agent.title_generation import (
     initial_session_title as _initial_session_title,
 )
 from mato_loop_backend.agent.tools import (
+    PROJECT_CODING_TOOL_NAMES,
     QuestionArguments,
     ToolContext,
     ToolPermission,
@@ -1466,6 +1467,8 @@ class AgentRuntime:
                     ai_settings, active_model_id=model.id
                 ),
             )
+            if project is not None and project.coding_integration_id is not None:
+                tool_capabilities.add("project.coding")
             execution_client = (
                 ExecutionClient(
                     run.execution_agent_id,
@@ -1508,6 +1511,11 @@ class AgentRuntime:
             )
             if hide_skill_catalog_tools and effective_toolset is not None:
                 effective_toolset = effective_toolset.without("load_skill", "edit_skill")
+            if (
+                (project is None or project.coding_integration_id is None)
+                and effective_toolset is not None
+            ):
+                effective_toolset = effective_toolset.without(*PROJECT_CODING_TOOL_NAMES)
             search_pending = required_search and not required_search_completed
             if required_skill_pending and effective_toolset is not None:
                 effective_toolset = effective_toolset.only("load_skill")

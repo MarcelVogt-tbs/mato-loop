@@ -217,6 +217,7 @@ TOOL_GROUPS = (
     {"id": "automations", "label": "Automationen", "icon": "schedule"},
     {"id": "memory", "label": "Memory", "icon": "psychology"},
     {"id": "agent", "label": "Agent", "icon": "smart_toy"},
+    {"id": "coding", "label": "Coding", "icon": "code"},
     {"id": "integrations", "label": "Integrationen", "icon": "extension"},
 )
 
@@ -554,6 +555,8 @@ class ToolRegistry:
                 definition.required_capability is not None
                 and definition.required_capability not in tool_capabilities
             ):
+                if definition.required_capability == "project.coding":
+                    continue
                 reason = (
                     "media"
                     if definition.required_capability.startswith("media.")
@@ -972,7 +975,10 @@ class ToolRegistry:
             return ToolResult.error("tool.unavailable")
         if definition.requires_memory_write and not context.memory_write_enabled:
             return ToolResult.error("tool.unavailable")
-        if definition.required_capability is not None:
+        if definition.required_capability == "project.coding":
+            if context.session.project_id is None:
+                return ToolResult.error("tool.unavailable")
+        elif definition.required_capability is not None:
             context.tool_settings = await load_effective_tools(
                 context.db, context.session.user_id
             )

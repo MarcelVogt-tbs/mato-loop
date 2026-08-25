@@ -23,6 +23,14 @@ from mato_loop_backend.integrations.mealie import (
     mealie_error_code,
 )
 from mato_loop_backend.integrations.mealie_client import MealieClient, MealieError
+from mato_loop_backend.integrations.opencode import (
+    OPENCODE_CREDENTIAL_KIND,
+    OpenCodeConfig,
+    OpenCodeIntegrationService,
+    OpenCodeSettingsError,
+    open_code_client,
+)
+from mato_loop_backend.integrations.opencode_client import OpenCodeError
 from mato_loop_backend.integrations.registry import effective_execution_integration_settings
 from mato_loop_backend.integrations.search import (
     SearchIntegrationError,
@@ -83,6 +91,11 @@ __all__ = [
     "MailConfig",
     "MailIntegrationService",
     "OpenScadIntegrationService",
+    "OPENCODE_CREDENTIAL_KIND",
+    "OpenCodeConfig",
+    "OpenCodeError",
+    "OpenCodeIntegrationService",
+    "OpenCodeSettingsError",
     "IntegrationSettingsError",
     "PdfVisionHandler",
     "SearchIntegrationService",
@@ -114,5 +127,6 @@ __all__ = [
     "load_caldav_resources",
     "private_origin_is_allowed",
     "request_web_bytes",
+    "open_code_client",
     "sanitize_url_for_display",
 ]

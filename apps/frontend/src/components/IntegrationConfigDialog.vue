@@ -83,14 +83,14 @@
               />
             </template>
             <q-banner
-              v-if="form.integration_type === 'recipes' && form.base_url.trim().toLowerCase().startsWith('http://')"
+              v-if="['recipes', 'coding'].includes(form.integration_type) && form.base_url.trim().toLowerCase().startsWith('http://')"
               dense
               rounded
               class="app-surface-tonal"
               role="alert"
             >
               <template #avatar><q-icon name="warning_amber" color="warning" /></template>
-              HTTP überträgt den Mealie-Token unverschlüsselt. Verwende es nur in einem vertrauenswürdigen lokalen Netz.
+              HTTP überträgt Zugangsdaten unverschlüsselt. Verwende es nur in einem vertrauenswürdigen lokalen Netz.
             </q-banner>
             <div v-if="['git', 'openscad'].includes(form.integration_type)" class="row items-start q-col-gutter-sm">
               <q-select
@@ -174,6 +174,30 @@
               lazy-rules
               :rules="isEditing ? [] : [requiredRule]"
             />
+            <template v-if="form.integration_type === 'coding'">
+              <q-input
+                v-model="form.username"
+                outlined
+                label="Benutzername"
+                lazy-rules
+                :rules="[requiredRule]"
+              />
+              <q-input
+                v-model="form.password"
+                outlined
+                type="password"
+                :label="integration?.hasCredential ? 'Neues Passwort (optional)' : 'Passwort (optional)'"
+                :hint="integration?.hasCredential ? 'Leer lassen, um das gespeicherte Passwort beizubehalten.' : ''"
+                :disable="form.removePassword"
+              />
+              <q-toggle
+                v-if="isEditing && integration?.hasCredential"
+                v-model="form.removePassword"
+                color="negative"
+                label="Gespeichertes Passwort entfernen"
+                @update:model-value="form.password = ''"
+              />
+            </template>
             <q-input
               v-if="form.integration_type === 'knowledge'"
               v-model="form.token_id"
@@ -250,7 +274,8 @@ const allIntegrationTypes = [
   { label: 'Wissensdatenbank', value: 'knowledge' },
   { label: 'Rezepte & Essensplanung', value: 'recipes' },
   { label: 'Versionsverwaltung', value: 'git' },
-  { label: '3D-Modellierung', value: 'openscad' }
+  { label: '3D-Modellierung', value: 'openscad' },
+  { label: 'Programmierung', value: 'coding' }
 ]
 const PROVIDER_DEFAULTS = {
   search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
@@ -259,7 +284,8 @@ const PROVIDER_DEFAULTS = {
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
   recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
   git: { provider: 'git', label: 'Git', placeholder: '' },
-  openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' }
+  openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' },
+  coding: { provider: 'opencode', label: 'OpenCode', placeholder: 'http://localhost:4096' }
 }
 const integrationTypes = computed(() => allIntegrationTypes.filter((type) => {
   const adapterType = PROVIDER_DEFAULTS[type.value].provider
@@ -275,8 +301,8 @@ const baseUrlLabel = computed(
 const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
 )
-const requiresHttps = computed(() => !['search', 'recipes'].includes(form.integration_type))
-const dialogIcon = computed(() => ({ mail: 'mail', openscad: 'view_in_ar' })[form.integration_type] || 'extension')
+const requiresHttps = computed(() => !['search', 'recipes', 'coding'].includes(form.integration_type))
+const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', openscad: 'view_in_ar' })[form.integration_type] || 'extension')
 const securityOptions = [
   { label: 'TLS', value: 'tls' },
   { label: 'STARTTLS', value: 'starttls' }
@@ -307,6 +333,7 @@ function defaultForm() {
     base_url: '',
     username: '',
     password: '',
+    removePassword: false,
     imap_host: '',
     imap_port: 993,
     imap_security: 'tls',
@@ -328,6 +355,7 @@ function selectIntegrationType(type) {
   const preset = PROVIDER_DEFAULTS[type] || PROVIDER_DEFAULTS.search
   form.provider_type = preset.provider
   form.name = preset.label
+  if (type === 'coding' && !form.username) form.username = 'opencode'
   invalidateDiscovery()
   if (['git', 'openscad'].includes(type)) void fetchComputers()
 }
@@ -466,6 +494,21 @@ async function save() {
       close()
       return
     }
+    if (form.integration_type === 'coding') {
+      const payload = {
+        name: form.name.trim(),
+        baseUrl: form.base_url.trim(),
+        username: form.username.trim(),
+        password: form.password,
+        removePassword: form.removePassword,
+        enabled: form.enabled
+      }
+      if (props.integration) await integrations.updateOpenCode(props.integration.id, payload)
+      else await integrations.createOpenCode(payload)
+      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
+      close()
+      return
+    }
     const payload = {
       integration_type: form.integration_type,
       provider_type: form.provider_type,
@@ -518,6 +561,7 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     smtp_security: props.integration.config?.smtpSecurity || 'tls',
     from_address: props.integration.config?.fromAddress || '',
     password: '',
+    removePassword: false,
     token_id: '',
     token_secret: '',
     token: '',

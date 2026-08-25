@@ -26,8 +26,12 @@ export const useProjectStore = defineStore('projects', {
         if (revision === this.revision) this.loading = false
       }
     },
-    async create(name, instructions = '') {
-      const { data } = await api.post('/projects', { name, instructions })
+    async create(name, instructions = '', codingService = null) {
+      const { data } = await api.post('/projects', {
+        name,
+        instructions,
+        ...(codingService ? { codingService } : {})
+      })
       this.revision += 1
       this.loading = false
       this.items = [...this.items, data]
@@ -59,6 +63,10 @@ export const useProjectStore = defineStore('projects', {
         suppressErrorToast ? { suppressErrorToast: true } : undefined
       )
       return data
+    },
+    async listCodingBindings(integrationId) {
+      const { data } = await api.get(`/projects/coding/integrations/${integrationId}/projects`)
+      return data.items
     }
   }
 })

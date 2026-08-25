@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes.projects import (
+    ProjectCreateRequest,
     ProjectRequest,
     create_project,
     delete_project,
@@ -114,7 +115,7 @@ async def test_create_and_update_project_commit_owner_scoped_changes() -> None:
 
     db.add.side_effect = persist
     created = await create_project(
-        ProjectRequest(name=" New ", instructions=" Use Python. "), user, db
+        ProjectCreateRequest(name=" New ", instructions=" Use Python. "), user, db
     )
 
     project = _project(user.id)
@@ -168,7 +169,7 @@ async def test_project_delete_impact_counts_sessions_and_linked_automations() ->
     ]
     session_ids = [uuid4(), uuid4(), uuid4(), uuid4()]
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = project
+    db.scalar.side_effect = [project, None]
     db.scalars.side_effect = [_rows(*reversed(session_ids)), _rows(*automations)]
 
     result = await project_delete_impact(project.id, user, db)
@@ -205,7 +206,7 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
     shared_file.write_text("shared", encoding="utf-8")
     monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, project]
+    db.scalar.side_effect = [project, project, None]
     db.scalars.side_effect = [
         _rows(session.id),
         _rows(),
@@ -310,7 +311,7 @@ async def test_delete_project_revalidates_locked_session_membership() -> None:
         id=uuid4(), user_id=user.id, project_id=project.id, title="Late"
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, project]
+    db.scalar.side_effect = [project, project, None]
     db.scalars.side_effect = [
         _rows(original_session.id),
         _rows(),
@@ -423,7 +424,7 @@ async def test_delete_project_restores_storage_when_commit_fails(
     execution_file.write_text("history", encoding="utf-8")
     monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, project]
+    db.scalar.side_effect = [project, project, None]
     db.scalars.side_effect = [
         _rows(session.id),
         _rows(automation),

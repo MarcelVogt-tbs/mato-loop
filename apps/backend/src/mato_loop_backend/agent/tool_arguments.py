@@ -715,3 +715,22 @@ class RunAutomationArguments(ToolArguments):
 
 class DeleteAutomationArguments(RunAutomationArguments):
     pass
+
+
+class CodingAnalyzeArguments(ToolArguments):
+    title: str = Field(min_length=1, max_length=240)
+    brief: str = Field(min_length=1, max_length=50_000)
+
+
+class CodingCreatePlanArguments(ToolArguments):
+    title: str = Field(min_length=1, max_length=240)
+    markdown: str = Field(min_length=1, max_length=500_000)
+    external_session_id: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class CodingListPlansArguments(ToolArguments):
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class CodingEnqueueArguments(ToolArguments):
+    plan_ids: list[UUID] = Field(min_length=1, max_length=100)

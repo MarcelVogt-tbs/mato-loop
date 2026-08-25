@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   controlCenterIntegrationIds,
   controlCenterIntegrationManifest,
+  codingControlCenterAvailable,
   mailControlCenterAvailable
 } from '../src/control-center/manifest'
 
@@ -18,5 +19,11 @@ describe('mail Control Center manifest', () => {
     expect(mailControlCenterAvailable({ accountsLoaded: false, accounts: [{ id: '1' }] })).toBe(false)
     expect(mailControlCenterAvailable({ accountsLoaded: true, accounts: [] })).toBe(false)
     expect(mailControlCenterAvailable({ accountsLoaded: true, accounts: [{ id: '1' }] })).toBe(true)
+  })
+
+  it('offers OpenCode only for a bound project', () => {
+    expect(controlCenterIntegrationIds.has('coding')).toBe(true)
+    expect(codingControlCenterAvailable(null)).toBe(false)
+    expect(codingControlCenterAvailable({ codingService: { adapterType: 'opencode' } })).toBe(true)
   })
 })

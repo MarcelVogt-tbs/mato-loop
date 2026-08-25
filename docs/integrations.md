@@ -112,6 +112,12 @@ Recipe and meal-plan data is private untrusted integration content. Search and d
 
 MatoLoop composes Mealie with CalDAV through the normal agent tool loop rather than a direct service bridge. For a weekly shopping request, the agent reads the plan and recipes, combines only compatible ingredient quantities, and calls `tasks_create_many` on the configured CalDAV shopping task list. No cross-integration table or durable synchronization marker is stored.
 
+## OpenCode
+
+OpenCode is a personal-only backend coding integration. One instance stores a canonical HTTP or HTTPS base URL, username, discovered server root and version, and an optional encrypted Basic Auth password. The client ignores proxy environment variables, rejects redirects and cross-origin targets, bounds responses and SSE events, and maps upstream failures to controlled errors. Every use probes the server and rejects a changed root. Browser and model contracts expose only relative project, workspace, and file identities.
+
+A MatoLoop project may bind one OpenCode project and workspace at creation. Separate live-discovered models drive read-only analysis and plan execution. OpenCode analysis returns repository findings; the MatoLoop agent authors and persists the canonical Markdown plan. Enqueueing snapshots the exact plan and executes project records serially in FIFO order. Existing remote activity pauses execution, remote permission requests require an explicit response, cancellation is best effort, and uncertain post-dispatch outcomes are persisted without automatic retry. The Control Center provides model selection, read-only files and status, plans, queue state, cancellation, and permission decisions; it has no editor, terminal, Git, download, reorder, or retry surface.
+
 ## Git
 
 Git is an agent-bound computer integration. One instance selects one owned MatoLoop Agent and may permit network cloning; the agent's local `allowNetwork` policy remains the upper bound. The model can clone, inspect status, diff, and log, stage explicit paths, and commit the current index through fixed typed operations. It cannot provide executable names, environment variables, arbitrary Git arguments, remotes for fetch or push, credentials, hooks, signing options, or submodule recursion.

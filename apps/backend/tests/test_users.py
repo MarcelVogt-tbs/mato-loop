@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import users as user_routes
-from mato_loop_backend.models import UserAccount
+from mato_loop_backend.models import Project, UserAccount
 
 
 def _user(*, admin: bool = False, active: bool = True, password_hash: str | None = "hash"):
@@ -102,6 +102,9 @@ async def test_quiesce_cancels_agent_and_dream_runs(monkeypatch) -> None:
     result = MagicMock()
     result.all.return_value = [run_id]
     db.scalars.return_value = result
+    coding_result = MagicMock()
+    coding_result.all.return_value = []
+    db.execute.side_effect = [MagicMock(), coding_result, MagicMock()]
     cancel = AsyncMock(return_value=True)
     cancel_titles = AsyncMock(return_value=True)
     wait = AsyncMock()
@@ -118,9 +121,38 @@ async def test_quiesce_cancels_agent_and_dream_runs(monkeypatch) -> None:
     cancel.assert_awaited_once_with(run_id)
     cancel_titles.assert_awaited_once_with(user_id)
     wait.assert_awaited_once_with(user_id)
-    assert db.execute.await_count == 2
+    assert db.execute.await_count == 3
     assert "memory_dream_runs" in str(db.execute.await_args_list[0].args[0])
-    assert "agent_runs" in str(db.execute.await_args_list[1].args[0])
+    assert "project_plan_executions" in str(db.execute.await_args_list[1].args[0])
+    assert "agent_runs" in str(db.execute.await_args_list[2].args[0])
+
+
+async def test_quiesce_continues_after_terminal_coding_race(monkeypatch) -> None:
+    user_id = uuid4()
+    projects = [
+        Project(id=uuid4(), user_id=user_id, name="Project 1"),
+        Project(id=uuid4(), user_id=user_id, name="Project 2"),
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    runs = MagicMock()
+    runs.all.return_value = []
+    db.scalars.return_value = runs
+    coding = MagicMock()
+    coding.all.return_value = [(uuid4(), projects[0]), (uuid4(), projects[1])]
+    db.execute.side_effect = [MagicMock(), coding, MagicMock()]
+    cancel = AsyncMock(
+        side_effect=[
+            user_routes.ProjectCodingError("project.executionNotCancellable"),
+            None,
+        ]
+    )
+    monkeypatch.setattr(user_routes.ProjectCodingService, "cancel", cancel)
+    monkeypatch.setattr(user_routes.AgentRuntime, "cancel_and_wait_user_title_tasks", AsyncMock())
+    monkeypatch.setattr(user_routes.DreamingService, "wait_for_user", AsyncMock())
+
+    await user_routes._quiesce_user_jobs(db, user_id)
+
+    assert cancel.await_count == 2
 
 
 async def test_change_password_verifies_current_and_revokes_sessions(monkeypatch) -> None:

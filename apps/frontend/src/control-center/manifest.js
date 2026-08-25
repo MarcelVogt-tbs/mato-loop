@@ -1,6 +1,7 @@
 export const controlCenterIntegrationManifest = Object.freeze([
   { id: 'files', label: 'Dateien', icon: 'folder_open' },
-  { id: 'mail', label: 'E-Mail', icon: 'mail' }
+  { id: 'mail', label: 'E-Mail', icon: 'mail' },
+  { id: 'coding', label: 'OpenCode', icon: 'code' }
 ])
 
 export const controlCenterGlobalSectionManifest = Object.freeze([
@@ -13,4 +14,8 @@ export const controlCenterGlobalSectionIds = new Set(controlCenterGlobalSectionM
 
 export function mailControlCenterAvailable(mail) {
   return mail.accountsLoaded && mail.accounts.length > 0
+}
+
+export function codingControlCenterAvailable(project) {
+  return project?.codingService?.adapterType === 'opencode'
 }

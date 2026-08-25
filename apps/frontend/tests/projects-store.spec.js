@@ -78,6 +78,28 @@ describe('projects store', () => {
     expect(store.items).toEqual([])
   })
 
+  it('creates an immutable coding binding and discovers OpenCode projects', async () => {
+    const codingService = {
+      integrationId: 'integration-1',
+      projectKey: 'remote-project',
+      workspaceKey: 'repo'
+    }
+    api.post.mockResolvedValue({ data: { ...project, codingService } })
+    api.get.mockResolvedValue({ data: { items: [{ ...codingService, label: 'Repository' }] } })
+    const store = useProjectStore()
+
+    await store.create(project.name, project.instructions, codingService)
+    const bindings = await store.listCodingBindings('integration-1')
+
+    expect(api.post).toHaveBeenCalledWith('/projects', {
+      name: project.name,
+      instructions: project.instructions,
+      codingService
+    })
+    expect(api.get).toHaveBeenCalledWith('/projects/coding/integrations/integration-1/projects')
+    expect(bindings[0].workspaceKey).toBe('repo')
+  })
+
   it('loads deletion impact and passes automation parameters when deleting', async () => {
     const impact = {
       sessionCount: 2,

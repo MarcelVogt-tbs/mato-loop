@@ -406,13 +406,13 @@
       </q-card>
     </q-dialog>
 
-    <q-dialog v-model="projectDialogOpen">
-      <q-card class="session-rename-dialog app-surface">
-        <q-form @submit.prevent="saveProject">
+    <q-dialog v-model="projectDialogOpen" :maximized="$q.screen.lt.sm" :persistent="projectSaving">
+      <q-card class="integration-dialog app-surface column">
+        <q-form class="col column no-wrap" @submit.prevent="saveProject">
           <q-card-section>
             <div class="text-h6">{{ projectDialogMode === 'create' ? 'Projekt erstellen' : 'Projekt bearbeiten' }}</div>
           </q-card-section>
-          <q-card-section class="q-pt-none">
+          <q-card-section class="col scroll q-pt-none">
             <q-input
               v-model="projectName"
               outlined
@@ -432,6 +432,64 @@
               maxlength="4000"
               counter
             />
+            <q-banner
+              v-if="projectDialogMode === 'edit' && projectDialogTarget?.codingService"
+              dense
+              rounded
+              class="app-surface-tonal q-mt-md"
+            >
+              <template #avatar><q-icon name="code" color="primary" /></template>
+              OpenCode · {{ projectDialogTarget.codingService.workspaceKey }}
+              <div class="text-caption app-muted">Die Zuordnung kann nach dem Erstellen nicht geändert werden.</div>
+            </q-banner>
+            <template v-if="projectDialogMode === 'create'">
+              <q-toggle
+                v-model="projectCodingEnabled"
+                class="q-mt-md"
+                color="primary"
+                label="OpenCode verwenden"
+                @update:model-value="toggleProjectCoding"
+              />
+              <template v-if="projectCodingEnabled">
+                <q-select
+                  v-model="projectCodingIntegrationId"
+                  outlined
+                  emit-value
+                  map-options
+                  label="OpenCode-Server"
+                  :options="projectCodingIntegrationOptions"
+                  :loading="projectCodingLoading"
+                  :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                  lazy-rules
+                  :rules="[requiredRule]"
+                  @update:model-value="loadProjectCodingBindings"
+                >
+                  <template #no-option>
+                    <q-item><q-item-section class="app-muted">Keine aktive OpenCode-Integration verfügbar</q-item-section></q-item>
+                  </template>
+                </q-select>
+                <q-select
+                  v-model="projectCodingBindingIndex"
+                  outlined
+                  emit-value
+                  map-options
+                  label="OpenCode-Projekt und Arbeitsverzeichnis"
+                  :options="projectCodingBindingOptions"
+                  :loading="projectCodingBindingsLoading"
+                  :disable="!projectCodingIntegrationId"
+                  :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                  lazy-rules
+                  :rules="[requiredRule]"
+                >
+                  <template #no-option>
+                    <q-item><q-item-section class="app-muted">Keine Projekte gefunden</q-item-section></q-item>
+                  </template>
+                </q-select>
+                <div class="text-caption app-muted q-mt-sm">
+                  Die OpenCode-Zuordnung wird beim Erstellen festgelegt und kann später nicht geändert werden.
+                </div>
+              </template>
+            </template>
           </q-card-section>
           <q-card-actions align="right" class="q-pa-md q-pt-none">
             <q-btn flat no-caps label="Abbrechen" :disable="projectSaving" v-close-popup />
@@ -526,6 +584,7 @@ import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
+import { useIntegrationStore } from 'stores/integrations'
 import { useQuestionStore } from 'stores/questions'
 import { useSearchStore } from 'stores/search'
 import { useProjectStore } from 'stores/projects'
@@ -553,6 +612,7 @@ const { confirm } = useConfirm()
 const approvals = useApprovalStore()
 const automations = useAutomationStore()
 const notifications = useInAppNotificationStore()
+const integrations = useIntegrationStore()
 const questions = useQuestionStore()
 const search = useSearchStore()
 const projects = useProjectStore()
@@ -613,6 +673,22 @@ const projectDialogTarget = ref(null)
 const projectName = ref('')
 const projectInstructions = ref('')
 const projectSaving = ref(false)
+const projectCodingEnabled = ref(false)
+const projectCodingLoading = ref(false)
+const projectCodingBindingsLoading = ref(false)
+const projectCodingIntegrationId = ref(null)
+const projectCodingBindingIndex = ref(null)
+const projectCodingIntegrations = ref([])
+const projectCodingBindings = ref([])
+let projectCodingBindingsLoadVersion = 0
+const projectCodingIntegrationOptions = computed(() => projectCodingIntegrations.value.map((item) => ({
+  label: item.name,
+  value: item.id
+})))
+const projectCodingBindingOptions = computed(() => projectCodingBindings.value.map((item, index) => ({
+  label: `${item.label} · ${item.workspaceKey}`,
+  value: String(index)
+})))
 const moveDialogOpen = ref(false)
 const moveSessionId = ref(null)
 const moveSourceProjectId = ref(null)
@@ -712,7 +788,58 @@ function openProjectDialog(mode, project = null) {
   projectDialogTarget.value = project
   projectName.value = mode === 'edit' ? project?.name || '' : ''
   projectInstructions.value = mode === 'edit' ? project?.instructions || '' : ''
+  projectCodingEnabled.value = false
+  projectCodingIntegrationId.value = null
+  projectCodingBindingIndex.value = null
+  projectCodingBindings.value = []
   projectDialogOpen.value = true
+  if (mode === 'create') void loadProjectCodingIntegrations()
+}
+
+async function loadProjectCodingIntegrations() {
+  projectCodingLoading.value = true
+  try {
+    const result = await integrations.fetchCoding({ personal: true })
+    projectCodingIntegrations.value = result.instances.filter((item) => item.enabled)
+  } catch {
+    projectCodingIntegrations.value = []
+  } finally {
+    projectCodingLoading.value = false
+  }
+}
+
+function toggleProjectCoding(enabled) {
+  if (!enabled) {
+    projectCodingIntegrationId.value = null
+    projectCodingBindingIndex.value = null
+    projectCodingBindings.value = []
+  } else if (!projectCodingIntegrations.value.length && !projectCodingLoading.value) {
+    void loadProjectCodingIntegrations()
+  }
+}
+
+async function loadProjectCodingBindings(integrationId) {
+  const loadVersion = ++projectCodingBindingsLoadVersion
+  projectCodingBindingIndex.value = null
+  projectCodingBindings.value = []
+  if (!integrationId) {
+    projectCodingBindingsLoading.value = false
+    return
+  }
+  projectCodingBindingsLoading.value = true
+  try {
+    const bindings = await projects.listCodingBindings(integrationId)
+    if (
+      loadVersion === projectCodingBindingsLoadVersion
+      && integrationId === projectCodingIntegrationId.value
+    ) projectCodingBindings.value = bindings
+  } catch {
+    // The central API interceptor displays the error; the selector remains empty.
+  } finally {
+    if (loadVersion === projectCodingBindingsLoadVersion) {
+      projectCodingBindingsLoading.value = false
+    }
+  }
 }
 
 async function saveProject() {
@@ -722,7 +849,13 @@ async function saveProject() {
   projectSaving.value = true
   try {
     if (projectDialogMode.value === 'create') {
-      const project = await projects.create(name, instructions)
+      const binding = projectCodingBindings.value[projectCodingBindingIndex.value]
+      if (projectCodingEnabled.value && !binding) return
+      const project = await projects.create(name, instructions, binding ? {
+        integrationId: projectCodingIntegrationId.value,
+        projectKey: binding.projectKey,
+        workspaceKey: binding.workspaceKey
+      } : null)
       projectDialogOpen.value = false
       $q.notify({ type: 'positive', message: 'Projekt erstellt.' })
       expandedProjects[project.id] = true

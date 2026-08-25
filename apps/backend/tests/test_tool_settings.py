@@ -146,6 +146,10 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "automation.update": "ask",
         "automation.run": "ask",
         "automation.delete": "disabled",
+        "coding.analyze": "ask",
+        "coding.plan.create": "ask",
+        "coding.plan.read": "auto",
+        "coding.execute.enqueue": "ask",
     }
     assert [group["id"] for group in result["groups"]] == [
         "filesystem",
@@ -156,6 +160,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "automations",
         "memory",
         "agent",
+        "coding",
     ]
     session_tools = next(group for group in result["groups"] if group["id"] == "sessions")
     discovery = {

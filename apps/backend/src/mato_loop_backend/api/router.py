@@ -12,6 +12,7 @@ from mato_loop_backend.api.routes.mail import router as mail_router
 from mato_loop_backend.api.routes.media import router as media_router
 from mato_loop_backend.api.routes.memories import router as memories_router
 from mato_loop_backend.api.routes.notifications import router as notifications_router
+from mato_loop_backend.api.routes.project_coding import router as project_coding_router
 from mato_loop_backend.api.routes.projects import router as projects_router
 from mato_loop_backend.api.routes.providers import router as providers_router
 from mato_loop_backend.api.routes.questions import router as questions_router
@@ -32,6 +33,7 @@ api_router.include_router(instance_limits_router, tags=["instance-limits"])
 api_router.include_router(agent_identity_router, tags=["agent-identity"])
 api_router.include_router(providers_router, tags=["providers"])
 api_router.include_router(projects_router, tags=["projects"])
+api_router.include_router(project_coding_router, tags=["project-coding"])
 api_router.include_router(integrations_router, tags=["integrations"])
 api_router.include_router(mail_router, tags=["mail"])
 api_router.include_router(memories_router, tags=["memories"])

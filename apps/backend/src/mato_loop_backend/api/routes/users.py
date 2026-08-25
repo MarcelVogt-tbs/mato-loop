@@ -22,8 +22,10 @@ from mato_loop_backend.models import (
     ChatSession,
     MemoryDreamRun,
     Project,
+    ProjectPlanExecution,
     UserAccount,
 )
+from mato_loop_backend.project_coding import ProjectCodingError, ProjectCodingService
 from mato_loop_backend.security import (
     hash_password,
     require_admin,
@@ -139,6 +141,38 @@ async def _quiesce_user_jobs(db: AsyncSession, user_id: UUID) -> None:
         )
     )
     await db.commit()
+    coding_executions = list(
+        (
+            await db.execute(
+                select(ProjectPlanExecution.id, Project)
+                .join(Project, Project.id == ProjectPlanExecution.project_id)
+                .where(
+                    Project.user_id == user_id,
+                    ProjectPlanExecution.status.in_(
+                        ("queued", "running", "waiting_permission")
+                    ),
+                )
+                .order_by(ProjectPlanExecution.queue_position)
+            )
+        ).all()
+    )
+    coding_error: ProjectCodingError | None = None
+    for execution_id, project in coding_executions:
+        try:
+            await ProjectCodingService.cancel(
+                db, user_id, project, execution_id
+            )
+        except ProjectCodingError as exc:
+            if exc.code not in {
+                "project.executionNotCancellable",
+                "project.executionNotFound",
+            } and coding_error is None:
+                coding_error = exc
+    if coding_error is not None:
+        status_code = 503 if coding_error.code.startswith("opencode.") else 409
+        raise ApiError(
+            status_code, coding_error.code, params=coding_error.params
+        ) from coding_error
     for run_id in run_ids:
         await AgentRuntime.cancel_and_wait(run_id)
     await AgentRuntime.cancel_and_wait_user_title_tasks(user_id)

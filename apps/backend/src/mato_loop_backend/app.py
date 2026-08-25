@@ -34,6 +34,7 @@ from mato_loop_backend.models import (
     QuestionRequest,
     TitleGenerationStatus,
 )
+from mato_loop_backend.project_coding import CodingScheduler
 from mato_loop_backend.session_storage import SessionStorage
 
 runtime_config = get_runtime_config()
@@ -141,6 +142,7 @@ async def lifespan(_app: FastAPI):
     AutomationScheduler.start()
     MemoryIndexScheduler.start()
     EpisodeIndexScheduler.start()
+    CodingScheduler.start()
     try:
         yield
     finally:
@@ -148,6 +150,7 @@ async def lifespan(_app: FastAPI):
         await AutomationScheduler.stop()
         await MemoryIndexScheduler.stop()
         await EpisodeIndexScheduler.stop()
+        await CodingScheduler.stop()
         await AgentRuntime.shutdown()
         await embedding_client.close()
         await engine.dispose()

@@ -9,8 +9,9 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import AgentRuntime
@@ -23,8 +24,10 @@ from mato_loop_backend.models import (
     AutomationRun,
     ChatSession,
     Project,
+    ProjectPlanExecution,
     UserAccount,
 )
+from mato_loop_backend.project_coding import ProjectCodingError, ProjectCodingService
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 
@@ -49,6 +52,31 @@ class ProjectRequest(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class ProjectCodingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    integration_id: UUID = Field(
+        validation_alias=AliasChoices("integrationId", "integration_id")
+    )
+    project_key: str = Field(
+        min_length=1,
+        max_length=300,
+        validation_alias=AliasChoices("projectKey", "project_key"),
+    )
+    workspace_key: str = Field(
+        min_length=1,
+        max_length=1000,
+        validation_alias=AliasChoices("workspaceKey", "workspace_key"),
+    )
+
+
+class ProjectCreateRequest(ProjectRequest):
+    coding_service: ProjectCodingRequest | None = Field(
+        default=None,
+        validation_alias=AliasChoices("codingService", "coding_service"),
+    )
+
+
 class ProjectResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -58,6 +86,7 @@ class ProjectResponse(BaseModel):
     session_count: int = Field(alias="sessionCount")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
+    coding_service: dict | None = Field(alias="codingService")
 
 
 class ProjectListResponse(BaseModel):
@@ -74,6 +103,19 @@ def _payload(project: Project, session_count: int) -> ProjectResponse:
         sessionCount=session_count,
         createdAt=project.created_at,
         updatedAt=project.updated_at,
+        codingService=(
+            {
+                "adapterType": "opencode",
+                "integrationId": str(project.coding_integration_id),
+                "projectKey": project.coding_project_key,
+                "workspaceKey": project.coding_workspace_key,
+                "analysisModelKey": project.coding_analysis_model_key,
+                "executionModelKey": project.coding_execution_model_key,
+                "queuePauseReason": project.coding_queue_pause_reason,
+            }
+            if project.coding_integration_id is not None
+            else None
+        ),
     )
 
 
@@ -178,17 +220,51 @@ async def list_projects(
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
-    payload: ProjectRequest,
+    payload: ProjectCreateRequest,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ProjectResponse:
+    coding_binding: tuple[str, str] | None = None
+    if payload.coding_service is not None:
+        await db.scalar(
+            select(UserAccount.id)
+            .where(UserAccount.id == user.id)
+            .with_for_update()
+        )
+        try:
+            coding_binding = await ProjectCodingService.validate_binding(
+                db,
+                user.id,
+                payload.coding_service.integration_id,
+                payload.coding_service.project_key,
+                payload.coding_service.workspace_key,
+            )
+        except ProjectCodingError as exc:
+            raise ApiError(
+                404 if exc.code == "integration.notFound" else 409,
+                exc.code,
+                params=exc.params,
+            ) from exc
     project = Project(
         user_id=user.id,
         name=payload.name,
         instructions=payload.instructions,
+        coding_integration_id=(
+            payload.coding_service.integration_id
+            if payload.coding_service is not None
+            else None
+        ),
+        coding_project_key=coding_binding[0] if coding_binding is not None else None,
+        coding_workspace_key=coding_binding[1] if coding_binding is not None else None,
     )
     db.add(project)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if payload.coding_service is not None:
+            raise ApiError(409, "project.codingWorkspaceAlreadyBound") from exc
+        raise
     return _payload(project, 0)
 
 
@@ -218,6 +294,15 @@ async def project_delete_impact(
     project = await _owned_project(db, project_id, user.id)
     project_db_id = project.id
     owner_id = project.user_id
+    if await db.scalar(
+        select(ProjectPlanExecution.id)
+        .where(
+            ProjectPlanExecution.project_id == project_db_id,
+            ProjectPlanExecution.status.in_(("queued", "running", "waiting_permission")),
+        )
+        .limit(1)
+    ) is not None:
+        raise ApiError(409, "project.codingExecutionsActive")
     session_ids = list(
         (await db.scalars(_project_session_ids(project_db_id, owner_id))).all()
     )
@@ -332,6 +417,18 @@ async def delete_project(
         _validate_automation_policy(linked_automations, automation_mode)
         automation_ids = [item.id for item in linked_automations]
         late_run_ids = await active_run_ids(session_ids, automation_ids)
+        coding_execution_id = await db.scalar(
+            select(ProjectPlanExecution.id)
+            .where(
+                ProjectPlanExecution.project_id == project_db_id,
+                ProjectPlanExecution.status.in_(
+                    ("queued", "running", "waiting_permission")
+                ),
+            )
+            .limit(1)
+        )
+        if coding_execution_id is not None:
+            raise ApiError(409, "project.codingExecutionsActive")
         if not late_run_ids:
             break
         await db.rollback()
