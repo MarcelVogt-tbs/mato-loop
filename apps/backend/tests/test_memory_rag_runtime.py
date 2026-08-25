@@ -114,6 +114,13 @@ def test_session_bootstrap_and_explicit_history_intent_are_separate() -> None:
     assert not _session_bootstrap_requested([first, follow_up])
     assert _prior_session_history_requested([first, follow_up])
 
+    opt_out = Message(
+        session_id=session_id,
+        role="user",
+        content="Do not use the previous session for this answer.",
+    )
+    assert not _session_bootstrap_requested([opt_out])
+
 
 def test_attachment_only_turn_does_not_reuse_the_previous_memory_query() -> None:
     session_id = uuid4()
@@ -127,7 +134,7 @@ def test_attachment_only_turn_does_not_reuse_the_previous_memory_query() -> None
     assert _episode_reference_request_text(records) == ""
 
 
-def test_episode_budget_includes_bounded_context_without_tool_pointer() -> None:
+def test_episode_budget_includes_bounded_context_and_read_arguments() -> None:
     now = datetime.now(UTC)
     references = [
         EpisodeReference(
@@ -153,7 +160,10 @@ def test_episode_budget_includes_bounded_context_without_tool_pointer() -> None:
     assert payload[1]["anchorMessage"]["preview"] == "b" * 10
     assert payload[0]["messages"][0]["content"] == "a" * 30
     assert payload[1]["messages"][0]["content"] == "b" * 30
-    assert "sessionReadArguments" not in payload[0]
+    assert payload[0]["sessionReadArguments"] == {
+        "session_id": str(references[0].session_id),
+        "around_message_id": str(references[0].anchor_message_id),
+    }
 
 
 async def _runtime_setup(
@@ -336,7 +346,7 @@ async def test_ordinary_turn_does_not_automatically_inject_unpinned_memories(
     EpisodeRetrievalService.recent.assert_awaited_once()
 
 
-async def test_ordinary_first_turn_includes_the_latest_session_tail(monkeypatch) -> None:
+async def test_ordinary_first_turn_includes_two_latest_session_tails(monkeypatch) -> None:
     session_id = uuid4()
     now = datetime(2026, 8, 19, 10, tzinfo=UTC)
     latest_user = EpisodeExcerptMessage(
@@ -354,6 +364,15 @@ async def test_ordinary_first_turn_includes_the_latest_session_tail(monkeypatch)
         anchor_content=latest_assistant.content,
         excerpt=(latest_user, latest_assistant),
     )
+    second_reference = EpisodeReference(
+        session_id=uuid4(),
+        session_title="Docker-Struktur",
+        anchor_message_id=uuid4(),
+        anchor_created_at=now,
+        anchor_role="assistant",
+        anchor_content="Stacks liegen unter /srv/<stackname>/.",
+        excerpt=(),
+    )
     user = Message(
         id=uuid4(), session_id=session_id, role="user", content="Machen wir weiter."
     )
@@ -363,16 +382,39 @@ async def test_ordinary_first_turn_includes_the_latest_session_tail(monkeypatch)
         records=[user],
     )
     EpisodeRetrievalService.recent.return_value = EpisodeRetrieval(
-        references=[reference], strategy=MemoryRetrievalStrategy.BROWSE
+        references=[reference, second_reference], strategy=MemoryRetrievalStrategy.BROWSE
     )
     await AgentRuntime._execute_loop(db, run)
 
     EpisodeRetrievalService.recent.assert_awaited_once()
+    assert EpisodeRetrievalService.recent.await_args.kwargs["limit"] == 2
     EpisodeRetrievalService.retrieve.assert_not_awaited()
     prompt = projections[0]["system_prompt"]
     assert '"title": "Klimaanlage"' in prompt
+    assert '"title": "Docker-Struktur"' in prompt
     assert latest_user.content in prompt
     assert latest_assistant.content in prompt
+    assert '"sessionReadArguments"' in prompt
+
+
+async def test_ordinary_first_turn_opt_out_skips_session_bootstrap(monkeypatch) -> None:
+    session_id = uuid4()
+    user = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="user",
+        content="Do not use the previous session for this answer.",
+    )
+    db, run, _requests, _projections, _retrieve, _execute = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="Verstanden.", finish_reason="stop")],
+        records=[user],
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    EpisodeRetrievalService.recent.assert_not_awaited()
+    EpisodeRetrievalService.retrieve.assert_not_awaited()
 
 
 async def test_explicit_latest_session_request_includes_a_bounded_excerpt(monkeypatch) -> None:
@@ -408,7 +450,7 @@ async def test_explicit_latest_session_request_includes_a_bounded_excerpt(monkey
     prompt = projections[0]["system_prompt"]
     assert '"title": "Vorheriger Chat"' in prompt
     assert f'"sessionId": "{reference.session_id}"' in prompt
-    assert '"sessionReadArguments"' not in prompt
+    assert '"sessionReadArguments"' in prompt
 
 
 async def test_explicit_earlier_work_request_uses_lexical_episode_search(

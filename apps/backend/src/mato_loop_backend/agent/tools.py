@@ -2805,6 +2805,22 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
     target_id = arguments.session_id or context.session.id
     if not await _allow(context, session_permission(target_id)):
         return ToolResult.error("permission.denied")
+    if (
+        arguments.after_message_id is not None
+        and target_id in context.session_read_cursors
+        and arguments.after_message_id != context.session_read_cursors[target_id]
+    ):
+        retry_arguments = arguments.model_dump(mode="json", exclude_none=True)
+        expected = context.session_read_cursors[target_id]
+        if expected is None:
+            retry_arguments.pop("after_message_id")
+        else:
+            retry_arguments["after_message_id"] = str(expected)
+        return ToolResult.error(
+            "tool.cursorInvalid",
+            field="after_message_id",
+            params={"retryArguments": retry_arguments},
+        )
     target = await context.db.scalar(
         select(ChatSession).where(
             ChatSession.id == target_id,
@@ -2879,6 +2895,8 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             break
     last_emitted_index = start + len(messages) - 1
     has_more = last_emitted_index + 1 < len(records)
+    next_after_message_id = records[last_emitted_index].id if messages and has_more else None
+    context.session_read_cursors[target_id] = next_after_message_id
     return ToolResult.json(
         {
             "session": {
@@ -2888,7 +2906,7 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             "messages": messages,
             "hasEarlier": start > 0,
             "nextAfterMessageId": (
-                str(records[last_emitted_index].id) if messages and has_more else None
+                str(next_after_message_id) if next_after_message_id is not None else None
             ),
             "contentIsUntrusted": True,
         },

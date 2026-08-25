@@ -1091,6 +1091,7 @@ class AgentRuntime:
             if chat_session.project_id is not None
             else None
         )
+        project_name = project.name if project is not None else None
         project_instructions = project.instructions if project is not None else ""
         await cls._ensure_user_active(db, chat_session.user_id)
         ai_settings = await load_effective_ai(db, chat_session.user_id)
@@ -1175,6 +1176,7 @@ class AgentRuntime:
         tool_calls_used = 0
         failed_tool_call_signatures: set[str] = set()
         unresolved_mutation_errors: dict[str, str] = {}
+        session_read_cursors: dict[UUID, UUID | None] = {}
         automatic_episodes: list[EpisodeReference] | None = None
         memory_scope = None
         memory_overview_required: bool | None = None
@@ -1412,7 +1414,7 @@ class AgentRuntime:
                                     current_session_id=chat_session.id,
                                     project_id=chat_session.project_id,
                                     readable_by=model_trust_level,
-                                    limit=1,
+                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
                                     excerpt_messages=4,
                                     max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
                                 )
@@ -1571,6 +1573,7 @@ class AgentRuntime:
                 general_system_prompt,
                 chat_session,
                 agent_identity=agent_identity,
+                project_name=project_name,
                 project_instructions=project_instructions,
                 memory_read_enabled=memory_state.read_enabled,
                 memory_read_scope=model_trust_level,
@@ -2835,6 +2838,7 @@ class AgentRuntime:
                         skill_draft_handler=generate_skill_draft,
                         approval_resolution=approval_resolution,
                         execution_client=execution_client,
+                        session_read_cursors=session_read_cursors,
                     )
                     assert effective_toolset is not None
                     tool_result = await effective_toolset.execute(call, tool_context)

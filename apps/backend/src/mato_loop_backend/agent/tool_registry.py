@@ -196,6 +196,7 @@ class ToolContext:
     skill_draft_handler: SkillDraftHandler | None = None
     approval_resolution: dict[str, str] = field(default_factory=dict)
     execution_client: ExecutionClient | None = None
+    session_read_cursors: dict[UUID, UUID | None] = field(default_factory=dict)
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
         return await self.ask_handler(request)

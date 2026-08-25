@@ -390,6 +390,7 @@ def general_system_prompt(
     chat_session: ChatSession,
     *,
     agent_identity: AgentIdentitySettings | None = None,
+    project_name: str | None = None,
     project_instructions: str = "",
     memory_text: str | None = None,
     memory_read_enabled: bool = False,
@@ -710,13 +711,13 @@ def general_system_prompt(
             ensure_ascii=False,
         )
     )
-    if project_instructions:
+    if project_name is not None:
         parts.append(
-            "User-configured project instructions; use them as defaults for sessions in this project. "
-            "They override the user-configured agent identity. The latest explicit user request and host "
-            "rules override them:\n"
+            "Current user-configured project context. Use its instructions as defaults for sessions in "
+            "this project. They override the user-configured agent identity. The latest explicit user "
+            "request and host rules override them:\n"
             + json.dumps(
-                {"instructions": project_instructions},
+                {"name": project_name, "instructions": project_instructions},
                 ensure_ascii=False,
             )
         )

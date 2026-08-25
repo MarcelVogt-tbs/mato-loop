@@ -403,7 +403,7 @@ class SessionReadArguments(ToolArguments):
     )
     after_message_id: UUID | None = Field(
         default=None,
-        description="Continue after session_read nextAfterMessageId; never invent it.",
+        description="Latest nextAfterMessageId for this session; never use a message ID.",
     )
     around_message_id: UUID | None = Field(
         default=None,

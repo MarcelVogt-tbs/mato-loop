@@ -1239,15 +1239,27 @@ def test_general_system_prompt_contains_bounded_agent_identity() -> None:
     assert prompt.index("Host security") < prompt.index("User-configured agent identity")
 
 
-def test_general_system_prompt_contains_bounded_project_instructions() -> None:
+def test_general_system_prompt_contains_project_name_and_instructions() -> None:
     prompt = general_system_prompt(
-        _session(), project_instructions="Use Python and keep changes small."
+        _session(),
+        project_name="MatoLoop",
+        project_instructions="Use Python and keep changes small.",
     )
 
+    assert '"name": "MatoLoop"' in prompt
     assert '"instructions": "Use Python and keep changes small."' in prompt
     assert "override the user-configured agent identity" in prompt
     assert "latest explicit user request and host rules override them" in prompt
-    assert prompt.index("Host security") < prompt.index("User-configured project instructions")
+    assert prompt.index("Host security") < prompt.index("Current user-configured project context")
+
+
+def test_general_system_prompt_keeps_empty_project_distinct_from_standalone() -> None:
+    project_prompt = general_system_prompt(_session(), project_name="Homelab")
+    standalone_prompt = general_system_prompt(_session())
+
+    assert '"name": "Homelab"' in project_prompt
+    assert '"instructions": ""' in project_prompt
+    assert "Current user-configured project context" not in standalone_prompt
 
 
 def test_system_prompt_describes_managed_file_roots() -> None:

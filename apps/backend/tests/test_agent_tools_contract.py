@@ -2022,6 +2022,47 @@ async def test_session_read_cursor_uses_last_emitted_message(tmp_path) -> None:
 
     assert len(payload["messages"]) == 5
     assert payload["nextAfterMessageId"] == str(messages[4].id)
+    assert context.session_read_cursors[session_id] == messages[4].id
+
+
+async def test_session_read_rejects_cursor_other_than_latest_continuation(tmp_path) -> None:
+    session_id = uuid4()
+    expected = uuid4()
+    supplied = uuid4()
+    call = ToolCall(
+        id="read",
+        name="session_read",
+        arguments={
+            "session_id": str(session_id),
+            "after_message_id": str(supplied),
+            "limit": 5,
+        },
+    )
+    context = _context(tmp_path, call)
+    context.session_read_cursors[session_id] = expected
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.is_error is True
+    assert json.loads(result.content) == {
+        "error": {
+            "code": "tool.cursorInvalid",
+            "message": (
+                "The session cursor is unavailable. Retry session_read with "
+                "error.params.retryArguments exactly."
+            ),
+            "field": "after_message_id",
+            "params": {
+                "retryArguments": {
+                    "session_id": str(session_id),
+                    "after_message_id": str(expected),
+                    "limit": 5,
+                }
+            },
+        }
+    }
+    context.db.scalar.assert_not_awaited()
+    context.db.scalars.assert_not_awaited()
 
 
 @pytest.mark.parametrize("cursor_field", ["around_message_id", "after_message_id"])

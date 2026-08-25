@@ -116,9 +116,9 @@ def _prior_session_history_requested(records: list[Message]) -> bool:
 
 
 def _session_bootstrap_requested(records: list[Message]) -> bool:
-    return sum(item.role == "user" for item in records) == 1 and not any(
-        item.role == "assistant" for item in records
-    )
+    return bool(_episode_reference_request_text(records)) and sum(
+        item.role == "user" for item in records
+    ) == 1 and not any(item.role == "assistant" for item in records)
 
 
 def _memory_overview_requested(records: list[Message]) -> bool:
@@ -263,6 +263,10 @@ def _bounded_episode_payload(
             {
                 "sessionId": str(reference.session_id),
                 "title": reference.session_title,
+                "sessionReadArguments": {
+                    "session_id": str(reference.session_id),
+                    "around_message_id": str(reference.anchor_message_id),
+                },
                 "anchorMessage": {
                     "id": str(reference.anchor_message_id),
                     "role": reference.anchor_role,

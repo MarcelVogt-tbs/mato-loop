@@ -6,7 +6,7 @@ MatoLoop has three distinct context layers:
 2. Episodic context: bounded excerpts retrieved automatically from prior sessions.
 3. Durable memory: explicit records created manually, by `memory_write`, or by optional dreaming.
 
-Episodic retrieval provides immediate session-crossing context without first converting a conversation into durable memory. The first user turn of a new session includes one bounded tail from the latest eligible prior session. Later turns retrieve an episode only for an explicit recency or earlier-work reference. Dreaming is not required for either episodic or durable retrieval.
+Episodic retrieval provides immediate session-crossing context without first converting a conversation into durable memory. The first user turn of a new session includes bounded tails from up to two latest eligible prior sessions in the same project scope. Project sessions remain inside their project; standalone sessions use prior standalone sessions. Later turns retrieve an episode only for an explicit recency or earlier-work reference. Dreaming is not required for either episodic or durable retrieval.
 
 ## Access and Trust
 
@@ -27,7 +27,7 @@ Durable memories and prior-session references are explicitly untrusted data, nev
 3. Retrieved durable memory
 4. A retrieved prior-session excerpt or transcript
 
-An automatic episode contains session metadata, one bounded anchor preview, and a bounded excerpt. The model uses the excerpt directly when sufficient and calls `session_read` only for omitted details or attachments. The current session is host-allowed; another session requires the normal exact `session.read` grant or approval.
+An automatic episode contains session metadata, one bounded anchor preview, a bounded excerpt, and exact `session_read` arguments for its anchor. The model uses the excerpt directly when sufficient and calls `session_read` only for omitted details or attachments. The current session is host-allowed; another session requires the normal exact `session.read` grant or approval.
 
 ## Automatic Context
 
@@ -40,12 +40,12 @@ The current user message is always the primary retrieval query. For a short turn
 Automatic retrieval is bounded as follows:
 
 - No speculative unpinned durable results; `memory_retrieve` loads them when needed.
-- One prior-session reference at session start, or at most two for an explicit recent-session overview.
+- At most two prior-session references at session start or for an explicit recent-session overview.
 - A shared automatic-context character budget derived from `min(1,536 tokens, 10% of usable model input)` using the selected model's characters-per-token estimate. Usable input is the context window minus maximum output and the safety reserve.
 
-Pinned memories are injected in stable creation order whenever read access and trust allow it. They are not displaced by the automatic retrieval budget and are limited only by the selected model's final context projection. One bounded episode excerpt may use the shared automatic-context budget. The final context manager still guarantees that the complete request fits the selected model and can drop the episode before failing.
+Pinned memories are injected in stable creation order whenever read access and trust allow it. They are not displaced by the automatic retrieval budget and are limited only by the selected model's final context projection. Bounded episode excerpts share the automatic-context budget. The final context manager still guarantees that the complete request fits the selected model and can drop the episodes before failing.
 
-The first user turn includes the most recent eligible prior session once. Explicit intent about the latest sessions uses recency retrieval, while explicit references to earlier work use one hybrid topic result. Generic follow-ups inject neither again. Explicit durable-memory overview intent uses a bounded memory browse prefetch and continuation state while still including every visible pinned memory in full. `memory_retrieve`, `session_browse`, `session_search`, and `session_read` remain available for deliberate retrieval beyond the automatic references, subject to their own policies and permissions.
+The first user turn includes up to two most recent eligible prior sessions once unless the request suppresses prior-session context. Explicit intent about the latest sessions uses recency retrieval, while explicit references to earlier work use one hybrid topic result. Generic follow-ups inject neither again. Explicit durable-memory overview intent uses a bounded memory browse prefetch and continuation state while still including every visible pinned memory in full. `memory_retrieve`, `session_browse`, `session_search`, and `session_read` remain available for deliberate retrieval beyond the automatic references, subject to their own policies and permissions.
 
 The model-facing prompt reports visible durable-memory totals and the counts injected into the request. Assistant provider metadata records `durableMemoryReferences` and `priorSessionEpisodes` under `_matoloop.performance`, alongside context preparation and provider timing; it does not duplicate retrieved content.
 
