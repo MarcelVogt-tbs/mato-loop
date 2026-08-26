@@ -599,12 +599,13 @@ class AgentRuntime:
 
     @classmethod
     def _schedule_run(cls, run: AgentRun) -> asyncio.Task[None]:
-        existing = cls._tasks.get(run.id)
+        run_id = run.id
+        existing = cls._tasks.get(run_id)
         if existing is not None and not existing.done():
             return existing
-        task = asyncio.create_task(cls._run(run.id))
-        cls._tasks[run.id] = task
-        task.add_done_callback(lambda _task: cls._tasks.pop(run.id, None))
+        task = asyncio.create_task(cls._run(run_id))
+        cls._tasks[run_id] = task
+        task.add_done_callback(lambda _task: cls._tasks.pop(run_id, None))
         return task
 
     @classmethod

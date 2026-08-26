@@ -13,7 +13,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Load, selectinload
+from sqlalchemy.orm import Load, load_only, selectinload
 
 from mato_loop_backend.memory.indexing import MemoryIndexService
 from mato_loop_backend.models import (
@@ -189,7 +189,10 @@ def memory_reference_options(owner_id: UUID) -> tuple[Load, Load, Load]:
         ),
         selectinload(
             MemoryRecord.source_message.and_(Message.id.in_(owned_message_ids))
-        ).load_only(Message.created_at),
+        ).options(
+            load_only(Message.created_at),
+            selectinload(Message.attachments),
+        ),
         selectinload(
             MemoryRecord.source_messages.and_(
                 MemorySourceMessage.message_id.in_(owned_message_ids)

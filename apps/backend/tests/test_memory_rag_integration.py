@@ -1,10 +1,13 @@
+import asyncio
 import os
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
+from mato_loop_backend.agent.context import message_dict
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.memory.embeddings import (
     ACTIVE_EMBEDDING_PROFILE,
@@ -637,4 +640,55 @@ async def test_tool_update_merges_exact_duplicate_and_removes_stale_embedding() 
             .where(MemoryEmbedding.memory_id == stale.id)
         )
         assert stale_embedding_count == 0
+        await db.rollback()
+
+
+async def test_memory_refresh_keeps_source_message_attachment_collection_loaded() -> None:
+    async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"attachment-{uuid4().hex}", password_hash="test")
+        db.add(user)
+        await db.flush()
+        session = ChatSession(user_id=user.id)
+        db.add(session)
+        await db.flush()
+        message = Message(
+            session_id=session.id,
+            role="user",
+            content="Remember this image.",
+            trust_level=TrustLevel.PRIVATE.value,
+        )
+        db.add(message)
+        await db.flush()
+        _, content_hash = normalize_content("Pinned source")
+        memory = MemoryRecord(
+            user_id=user.id,
+            source_session_id=session.id,
+            source_message_id=message.id,
+            source_type="manual",
+            pinned=True,
+            audience="private_only",
+            category="fact",
+            content="Pinned source",
+            normalized_content_hash=content_hash,
+        )
+        db.add(memory)
+        await db.flush()
+        db.sync_session.expunge_all()
+
+        loaded_message = await db.scalar(
+            select(Message)
+            .options(selectinload(Message.attachments))
+            .where(Message.id == message.id)
+        )
+        assert loaded_message is not None
+        assert loaded_message.attachments == []
+
+        await MemoryService.pinned_context(
+            db,
+            owner_id=user.id,
+            input_trust_level=TrustLevel.PRIVATE,
+        )
+        projected = await asyncio.to_thread(message_dict, loaded_message)
+
+        assert projected["attachments"] == []
         await db.rollback()
