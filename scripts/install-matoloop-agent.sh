@@ -485,11 +485,10 @@ systemd_quote() {
 }
 
 write_service() {
-    local temporary executable config working_directory
+    local temporary executable config
     mkdir -p "$SERVICE_DIR"
     executable="$(systemd_quote "$VENV/bin/matoloop-agent")"
     config="$(systemd_quote "$DATA_DIR/config.json")"
-    working_directory="$(systemd_quote "$AGENT_PROJECT")"
     temporary="$(mktemp "$SERVICE_DIR/.matoloop-agent.service.XXXXXX")"
     cat > "$temporary" <<EOF
 [Unit]
@@ -498,7 +497,6 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-WorkingDirectory=$working_directory
 ExecStart=$executable --config $config run
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Restart=on-failure
@@ -720,9 +718,10 @@ self_test() (
     [[ "$(installation_state)" == partial ]]
     mkdir -p "$DATA_DIR" "$(dirname "$SERVICE_FILE")" "$PROJECT_ROOT/apps/matoloop-agent/.venv/bin"
     : > "$DATA_DIR/config.json"
-    : > "$SERVICE_FILE"
     : > "$PROJECT_ROOT/apps/matoloop-agent/.venv/bin/matoloop-agent"
     chmod 700 "$PROJECT_ROOT/apps/matoloop-agent/.venv/bin/matoloop-agent"
+    write_service
+    [[ "$(< "$SERVICE_FILE")" != *"WorkingDirectory="* ]]
     [[ "$(installation_state)" == installed ]]
 
     rm -rf -- "$PROJECT_ROOT" "$STATE_DIR" "$SERVICE_DIR"
