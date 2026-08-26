@@ -144,10 +144,12 @@ jobs:
       - name: Syntax-check CI scripts
         run: |
           bash -n scripts/build-matoloop-agent-artifact.sh
+          bash -n scripts/install-matoloop-agent.sh
           bash -n scripts/ci/publish-docker-image.sh
           python3 -m py_compile scripts/check-version.py scripts/ci/create-forgejo-release.py
       - name: Test CI helpers
         run: |
+          bash scripts/install-matoloop-agent.sh --self-test
           bash scripts/ci/publish-docker-image.sh --self-test
           python3 scripts/ci/create-forgejo-release.py --self-test
           python3 scripts/check-version.py --self-test

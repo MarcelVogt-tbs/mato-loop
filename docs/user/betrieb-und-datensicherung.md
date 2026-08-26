@@ -68,6 +68,10 @@ docker compose -f docker-compose.dev.yaml exec matoloop-agent \
 
 Der Dialog fragt die Backend-WebSocket-Adresse, die Computer-ID und das verdeckt eingegebene Kopplungstoken ab. Bereits gesetzte Werte werden als Vorgabe angeboten. Für eine automatische Kopplung müssen `MATOLOOP_AGENT_BACKEND_URL`, `MATOLOOP_AGENT_ID` und `MATOLOOP_AGENT_PAIRING_TOKEN` vollständig im Container gesetzt sein. Compose stellt seine interne Backend-Adresse bereits bereit; Betreiber setzen deshalb noch ID und Token. Unvollständige Verbindungsvariablen starten keine automatische Kopplung. Entfernen Sie das Token nach erfolgreicher Kopplung aus der Umgebung. Alte Variablen-Aliase für Konfiguration, Name, Token oder Workspace werden nicht unterstützt. Verwenden Sie `docker compose -f docker-compose.no-agent.yaml up -d --remove-orphans` für den Produktionsstack ohne Computer. Linux und Docker sind derzeit die getesteten Umgebungen.
 
+### Nativen Agent unter Ubuntu testen
+
+Ein vorhandener MatoLoop-Checkout enthält für Ubuntu- und Debian-Systeme mit systemd einen interaktiven Entwicklungshelfer. Starten Sie ihn als normaler Benutzer mit `./scripts/install-matoloop-agent.sh`. Er verwendet den aktuellen Checkout, fragt Datenverzeichnis, Workspace und WebSocket-Adresse ab, richtet einen systemd-Benutzerdienst ein und führt anschließend die sichere Kopplungsabfrage des Agents aus. Ein erneuter parameterloser Aufruf erkennt vollständige und unterbrochene Installationen und bietet Reparatur, Status oder Deinstallation an. Der Helfer ist kein stabiles natives Release und aktualisiert den Checkout nicht automatisch.
+
 !!! warning "Prozess- und Shell-Zugriff"
     Der Compose-Computer aktiviert mit der Beispielkonfiguration Prozess- und Shell-Funktionen und läuft derzeit als `root`. MatoLoop Agent verwendet Betriebssystemrechte sowie Descriptor- und No-Follow-Prüfungen, ist aber keine Betriebssystem-Sandbox. Ein gestarteter Prozess kann grundsätzlich auf beide eingebundenen Bereiche und erreichbare Netzwerke zugreifen. Begrenzen Sie deshalb Mounts, Netzwerk und Host-Richtlinien passend zum Einsatzzweck.
 
