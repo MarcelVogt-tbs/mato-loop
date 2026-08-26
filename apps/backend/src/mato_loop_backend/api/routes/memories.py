@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -65,6 +65,7 @@ class MemoryRequest(ApiRequest):
 
 
 class MemoryUpdateRequest(MemoryRequest):
+    expected_revision: int = Field(ge=1)
     pinned: bool
 
     @model_validator(mode="after")
@@ -83,8 +84,12 @@ class MemorySettingsRequest(ApiRequest):
     dreaming_max_batch_messages: int | None = Field(default=None, ge=2, le=500)
     dreaming_max_candidates: int | None = Field(default=None, ge=1, le=100)
     dreaming_update_policy: ToolExecutionPolicy | None = None
-    dreaming_merge_policy: ToolExecutionPolicy | None = None
-    dreaming_pin_policy: ToolExecutionPolicy | None = None
+    dreaming_remove_policy: ToolExecutionPolicy | None = None
+    dreaming_max_pinned_memories: int | None = Field(default=None, ge=1, le=100)
+    automatic_memory_snippet_limit: int | None = Field(default=None, ge=0, le=5)
+    automatic_session_snippet_limit: int | None = Field(default=None, ge=0, le=5)
+    recent_session_snippet_limit: int | None = Field(default=None, ge=0, le=5)
+    automatic_context_max_tokens: int | None = Field(default=None, ge=128, le=2_048)
 
     @model_validator(mode="after")
     def require_value(self) -> MemorySettingsRequest:
@@ -155,6 +160,7 @@ def dream_run_payload(item: MemoryDreamRun) -> dict[str, Any]:
         "candidates": item.candidate_count,
         "createdMemories": item.created_memory_count,
         "updatedMemories": item.updated_memory_count,
+        "removedMemories": item.removed_memory_count,
         "createdAt": item.created_at.isoformat() if item.created_at else None,
         "startedAt": item.started_at.isoformat() if item.started_at else None,
         "completedAt": item.completed_at.isoformat() if item.completed_at else None,
@@ -172,6 +178,15 @@ async def settings_payload(
     manual_enabled, manual_reason = dreaming_availability(
         settings, ai, automatic=False
     )
+    pinned_count = int(
+        await db.scalar(
+            select(func.count(MemoryRecord.id)).where(
+                MemoryRecord.user_id == user_id,
+                MemoryRecord.pinned.is_(True),
+            )
+        )
+        or 0
+    )
     return {
         "enabled": settings.enabled,
         "automaticDreamingEnabled": settings.automatic_dreaming_enabled,
@@ -181,8 +196,13 @@ async def settings_payload(
         "dreamingMaxBatchMessages": settings.dreaming_max_batch_messages,
         "dreamingMaxCandidates": settings.dreaming_max_candidates,
         "dreamingUpdatePolicy": settings.dreaming_update_policy,
-        "dreamingMergePolicy": settings.dreaming_merge_policy,
-        "dreamingPinPolicy": settings.dreaming_pin_policy,
+        "dreamingRemovePolicy": settings.dreaming_remove_policy,
+        "dreamingMaxPinnedMemories": settings.dreaming_max_pinned_memories,
+        "automaticMemorySnippetLimit": settings.automatic_memory_snippet_limit,
+        "automaticSessionSnippetLimit": settings.automatic_session_snippet_limit,
+        "recentSessionSnippetLimit": settings.recent_session_snippet_limit,
+        "automaticContextMaxTokens": settings.automatic_context_max_tokens,
+        "pinnedMemoryCount": pinned_count,
         "effectiveAutomaticDreamingEnabled": automatic_enabled,
         "automaticDreamingUnavailableReason": automatic_reason,
         "manualDreamingAvailable": manual_enabled,
@@ -400,6 +420,10 @@ async def update_memory(
     )
     if item is None:
         raise ApiError(404, "memory.notFound")
+    if item.revision != payload.expected_revision:
+        raise ApiError(
+            409, "memory.changed", params={"currentRevision": item.revision}
+        )
     content = payload.content.strip()
     if not content:
         raise ApiError(422, "validation.required", field="content")
@@ -431,9 +455,16 @@ async def delete_memory(
     memory_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
 ) -> None:
-    item = await MemoryService.get(db, owner_id=user.id, memory_id=memory_id)
+    item = await MemoryService.get(
+        db, owner_id=user.id, memory_id=memory_id, for_update=True
+    )
     if item is None:
         raise ApiError(404, "memory.notFound")
+    if item.revision != expected_revision:
+        raise ApiError(
+            409, "memory.changed", params={"currentRevision": item.revision}
+        )
     await MemoryService.delete(db, item, owner_id=user.id)
     await db.commit()

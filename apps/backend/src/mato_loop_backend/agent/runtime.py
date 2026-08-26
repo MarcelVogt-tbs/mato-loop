@@ -43,34 +43,20 @@ from mato_loop_backend.agent.research import (
     _without_inline_dollar_math as _without_inline_dollar_math,
 )
 from mato_loop_backend.agent.runtime_memory import (
-    AUTOMATIC_CONTEXT_BUDGET_RATIO as AUTOMATIC_CONTEXT_BUDGET_RATIO,
+    MEMORY_OVERVIEW_MAX_CHARACTERS as MEMORY_OVERVIEW_MAX_CHARACTERS,
 )
 from mato_loop_backend.agent.runtime_memory import (
-    AUTOMATIC_CONTEXT_MAX_TOKENS as AUTOMATIC_CONTEXT_MAX_TOKENS,
-)
-from mato_loop_backend.agent.runtime_memory import (
-    AUTOMATIC_EPISODE_MAX_ITEMS,
     _automatic_context_character_budget,
-    _bounded_episode_payload,
+    _automatic_context_suppressed,
+    _bounded_automatic_payload,
     _bounded_memory_overview,
     _cross_session_context_text,
     _durable_memory_payload,
     _memory_overview_continuation,
     _memory_overview_requested,
-    _memory_rag_queries,
-    _merge_contextual_results,
-    _prior_session_history_requested,
+    _memory_rag_query,
     _recent_episode_overview_requested,
     _session_bootstrap_requested,
-)
-from mato_loop_backend.agent.runtime_memory import (
-    AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS as AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS,
-)
-from mato_loop_backend.agent.runtime_memory import (
-    MEMORY_OVERVIEW_MAX_CHARACTERS as MEMORY_OVERVIEW_MAX_CHARACTERS,
-)
-from mato_loop_backend.agent.runtime_memory import (
-    _episode_reference_request_text as _episode_reference_request_text,
 )
 from mato_loop_backend.agent.title_generation import (
     TITLE_SYSTEM_PROMPT,
@@ -143,6 +129,7 @@ from mato_loop_backend.models import (
     ChatSession,
     ExecutionAgent,
     MemoryRecord,
+    MemorySourceType,
     Message,
     Project,
     QuestionRequest,
@@ -1177,7 +1164,10 @@ class AgentRuntime:
         failed_tool_call_signatures: set[str] = set()
         unresolved_mutation_errors: dict[str, str] = {}
         session_read_cursors: dict[UUID, UUID | None] = {}
-        automatic_episodes: list[EpisodeReference] | None = None
+        automatic_memories: list[MemoryRecord] | None = None
+        automatic_relevant_episodes: list[EpisodeReference] | None = None
+        automatic_recent_episodes: list[EpisodeReference] | None = None
+        pinned_memories: list[MemoryRecord] | None = None
         memory_scope = None
         memory_overview_required: bool | None = None
         memory_overview_prefetched = False
@@ -1244,6 +1234,10 @@ class AgentRuntime:
             injected_episode_count = 0
             selected_memory_references: list[tuple[str, MemoryRecord]] = []
             memory_prompt_candidates: list[tuple[str | None, int, int]] = []
+            # Rebuild overviews so later model steps honor current visibility.
+            memory_overview_prefetched = False
+            memory_overview_has_more = False
+            memory_overview_runtime_state = None
             if memory_state.read_enabled:
                 if memory_scope is None:
                     memory_scope = await MemoryService.scope(
@@ -1342,37 +1336,57 @@ class AgentRuntime:
                         (memory_text, injected_memory_count, 0)
                     )
                 else:
-                    rag_query, _contextual_rag_query = _memory_rag_queries(records)
-                    if automatic_episodes is None:
-                        recent_episodes_requested = _recent_episode_overview_requested(
+                    rag_query = _memory_rag_query(records)
+                    if automatic_memories is None:
+                        automatic_memories = []
+                        automatic_relevant_episodes = []
+                        automatic_recent_episodes = []
+                        automatic_context_suppressed = _automatic_context_suppressed(
                             records
                         )
-                        prior_session_requested = _prior_session_history_requested(
-                            records
-                        )
-                        bootstrap_requested = _session_bootstrap_requested(records)
-                        if recent_episodes_requested:
-                            automatic_episodes = (
-                                await EpisodeRetrievalService.recent(
+                        episode_query_enabled = bool(rag_query) and not automatic_context_suppressed
+                        semantic_enabled = get_runtime_config().embedding_enabled
+                        query_embedding = None
+                        if rag_query and not automatic_context_suppressed and semantic_enabled and (
+                            memory_settings.automatic_memory_snippet_limit > 0
+                            or (
+                                episode_query_enabled
+                                and memory_settings.automatic_session_snippet_limit > 0
+                            )
+                        ):
+                            try:
+                                query_embedding = await embedding_client.embed_query(rag_query)
+                            except EmbeddingError:
+                                semantic_enabled = False
+                        if (
+                            rag_query
+                            and not automatic_context_suppressed
+                            and memory_settings.automatic_memory_snippet_limit > 0
+                        ):
+                            automatic_memories = (
+                                await MemoryRetrievalService.retrieve(
                                     db,
                                     owner_id=chat_session.user_id,
-                                    current_session_id=chat_session.id,
-                                    project_id=chat_session.project_id,
+                                    mode=MemoryRetrieveMode.SEARCH,
+                                    query=rag_query,
                                     readable_by=model_trust_level,
-                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
-                                    excerpt_messages=4,
-                                    max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
+                                    pinned=False,
+                                    limit=memory_settings.automatic_memory_snippet_limit,
+                                    query_embedding=query_embedding,
+                                    semantic_enabled=semantic_enabled,
+                                    max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
+                                    source_types=(
+                                        MemorySourceType.MANUAL.value,
+                                        MemorySourceType.TOOL_CALL.value,
+                                    ),
                                 )
-                            ).references
-                        elif prior_session_requested and rag_query:
-                            query_embedding = None
-                            semantic_enabled = get_runtime_config().embedding_enabled
-                            if semantic_enabled:
-                                try:
-                                    query_embedding = await embedding_client.embed_query(rag_query)
-                                except EmbeddingError:
-                                    semantic_enabled = False
-                            automatic_episodes = (
+                            ).items
+                        if (
+                            rag_query
+                            and episode_query_enabled
+                            and memory_settings.automatic_session_snippet_limit > 0
+                        ):
+                            automatic_relevant_episodes = (
                                 await EpisodeRetrievalService.retrieve(
                                     db,
                                     owner_id=chat_session.user_id,
@@ -1380,61 +1394,97 @@ class AgentRuntime:
                                     project_id=chat_session.project_id,
                                     readable_by=model_trust_level,
                                     query=rag_query,
-                                    limit=1,
+                                    limit=(
+                                        memory_settings.automatic_session_snippet_limit
+                                        if chat_session.project_id is not None
+                                        else min(
+                                            1,
+                                            memory_settings.automatic_session_snippet_limit,
+                                        )
+                                    ),
                                     query_embedding=query_embedding,
                                     semantic_enabled=semantic_enabled,
                                     max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
-                                    excerpt_messages=1,
-                                    latest_messages=2,
-                                    max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
+                                    anchor_only=True,
+                                    full_sessions_only=True,
                                 )
                             ).references
-                            if bootstrap_requested:
-                                latest_episode = await EpisodeRetrievalService.recent(
-                                    db,
-                                    owner_id=chat_session.user_id,
-                                    current_session_id=chat_session.id,
-                                    project_id=chat_session.project_id,
-                                    readable_by=model_trust_level,
-                                    limit=1,
-                                    excerpt_messages=4,
-                                    max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
-                                )
-                                automatic_episodes = _merge_contextual_results(
-                                    latest_episode.references,
-                                    automatic_episodes,
-                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
-                                    identity=lambda item: item.session_id,
-                                )
-                        elif bootstrap_requested:
-                            automatic_episodes = (
+                        if (
+                            episode_query_enabled
+                            and memory_settings.recent_session_snippet_limit > 0
+                            and (
+                                _session_bootstrap_requested(records)
+                                or _recent_episode_overview_requested(records)
+                            )
+                        ):
+                            automatic_recent_episodes = (
                                 await EpisodeRetrievalService.recent(
                                     db,
                                     owner_id=chat_session.user_id,
                                     current_session_id=chat_session.id,
                                     project_id=chat_session.project_id,
                                     readable_by=model_trust_level,
-                                    limit=AUTOMATIC_EPISODE_MAX_ITEMS,
+                                    limit=memory_settings.recent_session_snippet_limit,
                                     excerpt_messages=4,
                                     max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
+                                    full_sessions_only=True,
                                 )
                             ).references
-                        else:
-                            automatic_episodes = []
+                    else:
+                        automatic_memories = (
+                            await MemoryService.automatic_context_by_ids(
+                                db,
+                                owner_id=chat_session.user_id,
+                                memory_ids=[item.id for item in automatic_memories],
+                                readable_by=model_trust_level,
+                            )
+                        )[: memory_settings.automatic_memory_snippet_limit]
+                        automatic_relevant_episodes = (
+                            await EpisodeRetrievalService.revalidate(
+                                db,
+                                automatic_relevant_episodes or [],
+                                owner_id=chat_session.user_id,
+                                current_session_id=chat_session.id,
+                                project_id=chat_session.project_id,
+                                full_sessions_only=True,
+                            )
+                        )[: memory_settings.automatic_session_snippet_limit]
+                        automatic_recent_episodes = (
+                            await EpisodeRetrievalService.revalidate(
+                                db,
+                                automatic_recent_episodes or [],
+                                owner_id=chat_session.user_id,
+                                current_session_id=chat_session.id,
+                                project_id=chat_session.project_id,
+                                full_sessions_only=True,
+                            )
+                        )[: memory_settings.recent_session_snippet_limit]
                     automatic_budget = _automatic_context_character_budget(
-                        model, runtime_settings
+                        model, runtime_settings, memory_settings
                     )
-                    selected_memory_references = [
-                        ("pinned", item) for item in pinned_memories
-                    ]
-                    episode_payload = _bounded_episode_payload(
-                        automatic_episodes,
-                        max_characters=automatic_budget,
+                    pinned_ids = {item.id for item in pinned_memories}
+                    automatic_memory_payload, episode_payload = (
+                        _bounded_automatic_payload(
+                            [
+                                item
+                                for item in automatic_memories
+                                if item.id not in pinned_ids
+                            ],
+                            automatic_relevant_episodes or [],
+                            automatic_recent_episodes or [],
+                            max_characters=automatic_budget,
+                            project_session=chat_session.project_id is not None,
+                        )
                     )
-                    injected_memory_count = len(selected_memory_references)
+                    selected_memory_references = [("pinned", item) for item in pinned_memories]
+                    injected_memory_count = len(selected_memory_references) + len(
+                        automatic_memory_payload
+                    )
                     injected_episode_count = len(episode_payload)
                     memory_text = _cross_session_context_text(
-                        selected_memory_references, episode_payload
+                        selected_memory_references,
+                        episode_payload,
+                        automatic_memory_payload,
                     )
                     memory_prompt_candidates.append(
                         (
@@ -1443,18 +1493,14 @@ class AgentRuntime:
                             injected_episode_count,
                         )
                     )
-                    pinned_references = [
-                        reference
-                        for reference in selected_memory_references
-                        if reference[0] == "pinned"
-                    ]
-                    if episode_payload:
+                    if automatic_memory_payload or episode_payload:
                         memory_prompt_candidates.append(
                             (
                                 _cross_session_context_text(
-                                    selected_memory_references, []
+                                    selected_memory_references,
+                                    [],
                                 ),
-                                injected_memory_count,
+                                len(selected_memory_references),
                                 0,
                             )
                         )
@@ -3353,6 +3399,12 @@ class AgentRuntime:
                 memory_write_pending = False
                 memory_write_retries = 0
                 memory_write_outcome = resolved_memory_outcome
+                if resolved_memory_outcome in {"stored", "forgotten"}:
+                    pinned_memories = None
+                    automatic_memories = None
+                    automatic_relevant_episodes = None
+                    automatic_recent_episodes = None
+                    memory_scope = None
             elif memory_write_pending or memory_workflow_started:
                 consume_retry = memory_write_pending or memory_write_attempted
                 memory_write_pending = True

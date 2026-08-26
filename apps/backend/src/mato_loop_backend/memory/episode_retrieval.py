@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -48,6 +48,7 @@ class EpisodeReference:
     anchor_role: str
     anchor_content: str
     excerpt: tuple[EpisodeExcerptMessage, ...]
+    newer_anchor: EpisodeExcerptMessage | None = None
     project_id: UUID | None = None
     content_is_untrusted: bool = True
 
@@ -84,6 +85,7 @@ def _candidate_filters(
     project_id: UUID | None,
     readable_by: TrustLevel,
     all_projects: bool = False,
+    full_sessions_only: bool = False,
 ) -> list[object]:
     filters = [
         ChatSession.user_id == owner_id,
@@ -94,11 +96,13 @@ def _candidate_filters(
         filters.append(ChatSession.id != current_session_id)
     if not all_projects:
         filters.append(ChatSession.project_id == project_id)
+    if full_sessions_only:
+        filters.append(ChatSession.memory_mode == "full")
     return filters
 
 
-def _rank_candidates(
-    lexical: list[_Candidate], semantic: list[_Candidate], limit: int
+def _ranked_candidates(
+    lexical: list[_Candidate], semantic: list[_Candidate]
 ) -> list[_Candidate]:
     records: dict[UUID, _Candidate] = {}
     scores: dict[UUID, float] = {}
@@ -108,7 +112,7 @@ def _rank_candidates(
             scores[candidate.chunk.id] = scores.get(candidate.chunk.id, 0.0) + 1.0 / (
                 RRF_K + rank
             )
-    ranked = sorted(
+    return sorted(
         records.values(),
         key=lambda candidate: (
             scores[candidate.chunk.id],
@@ -117,9 +121,14 @@ def _rank_candidates(
         ),
         reverse=True,
     )
+
+
+def _rank_candidates(
+    lexical: list[_Candidate], semantic: list[_Candidate], limit: int
+) -> list[_Candidate]:
     result: list[_Candidate] = []
     seen_sessions: set[UUID] = set()
-    for candidate in ranked:
+    for candidate in _ranked_candidates(lexical, semantic):
         if candidate.session.id in seen_sessions:
             continue
         seen_sessions.add(candidate.session.id)
@@ -129,7 +138,85 @@ def _rank_candidates(
     return result
 
 
+def _newer_anchors(
+    lexical: list[_Candidate],
+    semantic: list[_Candidate],
+    anchors: list[_Candidate],
+) -> dict[UUID, _Candidate]:
+    ranked = _ranked_candidates(lexical, semantic)
+    result: dict[UUID, _Candidate] = {}
+    for anchor in anchors:
+        anchor_order = (anchor.message.created_at, anchor.message.id)
+        newer = next(
+            (
+                candidate
+                for candidate in ranked
+                if candidate.session.id == anchor.session.id
+                and (candidate.message.created_at, candidate.message.id) > anchor_order
+            ),
+            None,
+        )
+        if newer is not None:
+            result[anchor.session.id] = newer
+    return result
+
+
 class EpisodeRetrievalService:
+    @staticmethod
+    async def revalidate(
+        db: AsyncSession,
+        references: list[EpisodeReference],
+        *,
+        owner_id: UUID,
+        current_session_id: UUID,
+        project_id: UUID | None,
+        full_sessions_only: bool = False,
+    ) -> list[EpisodeReference]:
+        if not references:
+            return []
+        message_ids_by_session = {
+            item.session_id: {
+                item.anchor_message_id,
+                *(message.id for message in item.excerpt),
+                *([item.newer_anchor.id] if item.newer_anchor is not None else []),
+            }
+            for item in references
+        }
+        filters = [
+            Message.id.in_(
+                {
+                    message_id
+                    for message_ids in message_ids_by_session.values()
+                    for message_id in message_ids
+                }
+            ),
+            ChatSession.user_id == owner_id,
+            ChatSession.id != current_session_id,
+            ChatSession.session_type == "chat",
+            ChatSession.project_id == project_id,
+            *_eligible_filters(),
+        ]
+        if full_sessions_only:
+            filters.append(ChatSession.memory_mode == "full")
+        rows = (
+            await db.execute(
+                select(Message.id, Message.session_id, ChatSession.title)
+                .join(ChatSession, ChatSession.id == Message.session_id)
+                .where(*filters)
+            )
+        ).all()
+        visible_ids_by_session: dict[UUID, set[UUID]] = {}
+        titles: dict[UUID, str | None] = {}
+        for message_id, session_id, title in rows:
+            visible_ids_by_session.setdefault(session_id, set()).add(message_id)
+            titles[session_id] = title
+        return [
+            replace(item, session_title=titles[item.session_id])
+            for item in references
+            if message_ids_by_session[item.session_id]
+            <= visible_ids_by_session.get(item.session_id, set())
+        ]
+
     @staticmethod
     async def recent(
         db: AsyncSession,
@@ -141,6 +228,7 @@ class EpisodeRetrievalService:
         limit: int = 2,
         excerpt_messages: int = 6,
         max_excerpt_characters: int = 6_000,
+        full_sessions_only: bool = False,
     ) -> EpisodeRetrieval:
         if limit <= 0:
             raise ValueError("episode retrieval limit must be positive")
@@ -162,6 +250,7 @@ class EpisodeRetrievalService:
                     current_session_id=current_session_id,
                     project_id=project_id,
                     readable_by=readable_by,
+                    full_sessions_only=full_sessions_only,
                 )
             )
             .subquery()
@@ -215,6 +304,7 @@ class EpisodeRetrievalService:
         max_excerpt_characters: int = 6_000,
         all_projects: bool = False,
         anchor_only: bool = False,
+        full_sessions_only: bool = False,
     ) -> EpisodeRetrieval:
         cleaned_query = query.strip()
         if not cleaned_query:
@@ -233,6 +323,7 @@ class EpisodeRetrievalService:
             project_id=project_id,
             readable_by=readable_by,
             all_projects=all_projects,
+            full_sessions_only=full_sessions_only,
         )
         title_trust = _title_trust().label("title_trust")
         tsquery = func.plainto_tsquery(
@@ -268,7 +359,7 @@ class EpisodeRetrievalService:
                 )
                 .join(Message, Message.id == MessageSearchChunk.message_id)
                 .join(ChatSession, ChatSession.id == Message.session_id)
-                .where(lexical_candidates.c.session_position == 1)
+                .where(lexical_candidates.c.session_position <= 2)
                 .order_by(
                     lexical_candidates.c.score.desc(),
                     Message.created_at.desc(),
@@ -328,7 +419,7 @@ class EpisodeRetrievalService:
                             )
                             .join(Message, Message.id == MessageSearchChunk.message_id)
                             .join(ChatSession, ChatSession.id == Message.session_id)
-                            .where(semantic_candidates.c.session_position == 1)
+                            .where(semantic_candidates.c.session_position <= 2)
                             .order_by(
                                 semantic_candidates.c.distance,
                                 Message.created_at.desc(),
@@ -346,6 +437,7 @@ class EpisodeRetrievalService:
                 semantic = []
 
         anchors = _rank_candidates(lexical, semantic, limit)
+        newer_anchors = _newer_anchors(lexical, semantic, anchors)
         references = (
             [
                 EpisodeReference(
@@ -356,6 +448,16 @@ class EpisodeRetrievalService:
                     anchor_role=candidate.message.role,
                     anchor_content=candidate.chunk.content,
                     excerpt=(),
+                    newer_anchor=(
+                        EpisodeExcerptMessage(
+                            id=newer.message.id,
+                            role=newer.message.role,
+                            content=newer.chunk.content,
+                            created_at=newer.message.created_at,
+                        )
+                        if (newer := newer_anchors.get(candidate.session.id)) is not None
+                        else None
+                    ),
                     project_id=candidate.session.project_id,
                 )
                 for candidate in anchors
@@ -369,6 +471,16 @@ class EpisodeRetrievalService:
                     excerpt_messages=excerpt_messages,
                     latest_messages=latest_messages,
                     max_excerpt_characters=max_excerpt_characters,
+                    newer_anchor=(
+                        EpisodeExcerptMessage(
+                            id=newer.message.id,
+                            role=newer.message.role,
+                            content=newer.chunk.content,
+                            created_at=newer.message.created_at,
+                        )
+                        if (newer := newer_anchors.get(candidate.session.id)) is not None
+                        else None
+                    ),
                 )
                 for candidate in anchors
             ]
@@ -391,6 +503,7 @@ class EpisodeRetrievalService:
         excerpt_messages: int,
         latest_messages: int,
         max_excerpt_characters: int,
+        newer_anchor: EpisodeExcerptMessage | None = None,
     ) -> EpisodeReference:
         return await EpisodeRetrievalService._reference_for(
             db,
@@ -402,6 +515,7 @@ class EpisodeRetrievalService:
             excerpt_messages=excerpt_messages,
             latest_messages=latest_messages,
             max_excerpt_characters=max_excerpt_characters,
+            newer_anchor=newer_anchor,
         )
 
     @staticmethod
@@ -416,6 +530,7 @@ class EpisodeRetrievalService:
         excerpt_messages: int,
         max_excerpt_characters: int,
         latest_messages: int = 0,
+        newer_anchor: EpisodeExcerptMessage | None = None,
     ) -> EpisodeReference:
         anchor = message
         visible = [
@@ -501,5 +616,6 @@ class EpisodeRetrievalService:
             anchor_role=anchor.role,
             anchor_content=anchor_content,
             excerpt=excerpt,
+            newer_anchor=newer_anchor,
             project_id=session.project_id,
         )

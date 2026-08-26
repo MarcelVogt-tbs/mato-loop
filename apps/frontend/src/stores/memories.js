@@ -43,16 +43,16 @@ export const useMemoryStore = defineStore('memories', {
     async createMemory({ content, category, audience, pinKind }) {
       return (await api.post('/memories', { content, category, audience, pinKind })).data
     },
-    async updateMemory(id, { content, category, audience, pinned, pinKind }) {
+    async updateMemory(id, { content, category, audience, pinned, pinKind, expectedRevision }) {
       const { data } = await api.patch(`/memories/${id}`, {
-        content, category, audience, pinned, pinKind
+        content, category, audience, pinned, pinKind, expectedRevision
       })
       const index = this.items.findIndex((item) => item.id === id)
       if (index >= 0) this.items[index] = data
       return data
     },
-    async deleteMemory(id) {
-      await api.delete(`/memories/${id}`)
+    async deleteMemory(id, expectedRevision) {
+      await api.delete(`/memories/${id}`, { params: { expectedRevision } })
       this.items = this.items.filter((item) => item.id !== id)
       this.total = Math.max(0, this.total - 1)
     },

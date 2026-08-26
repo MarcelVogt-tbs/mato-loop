@@ -428,7 +428,7 @@
               type="textarea"
               rows="6"
               label="Projektanweisungen"
-              hint="Gelten für alle Sessions im Projekt und werden an das ausgewählte Modell übertragen."
+              hint="Optionale feste Regeln und Entscheidungen für alle Sessions. Die Projekthistorie wird zusätzlich über relevante Session-Auszüge berücksichtigt."
               maxlength="4000"
               counter
             />

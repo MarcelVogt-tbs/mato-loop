@@ -17,6 +17,54 @@ function detailName(details, keys) {
   return null
 }
 
+export function memoryApprovalDisplay(approval) {
+  const payload = approval?.payload && typeof approval.payload === 'object' ? approval.payload : {}
+  const targets = Array.isArray(payload.targetMemories)
+    ? payload.targetMemories.filter((item) => item && typeof item === 'object')
+    : []
+  const action = {
+    memory_update: {
+      title: 'Erinnerung ändern',
+      summary: 'Dreaming möchte eine bestehende Erinnerung aktualisieren.',
+      targetLabel: 'Bisherige Erinnerung',
+      icon: 'psychology'
+    },
+    memory_merge: {
+      title: 'Erinnerungen zusammenführen',
+      summary: 'Dreaming möchte mehrere Erinnerungen zu einer Erinnerung zusammenführen.',
+      targetLabel: 'Bisherige Erinnerungen',
+      icon: 'psychology'
+    },
+    memory_remove: {
+      title: 'Erinnerung dauerhaft entfernen',
+      summary: 'Dreaming möchte diese Erinnerung unwiderruflich löschen.',
+      targetLabel: 'Zu entfernende Erinnerung',
+      icon: 'delete_forever',
+      destructive: true
+    },
+    memory_pin: {
+      title: payload.requestedPin ? 'Erinnerung immer berücksichtigen' : 'Erinnerung bei Bedarf berücksichtigen',
+      summary: 'Dreaming möchte die Berücksichtigung einer Erinnerung ändern.',
+      targetLabel: 'Bisherige Erinnerung',
+      icon: 'push_pin'
+    }
+  }[approval?.actionKind] || {
+    title: 'Memory-Änderung prüfen',
+    summary: 'Dreaming möchte eine Erinnerung ändern.',
+    targetLabel: 'Bisherige Erinnerung',
+    icon: 'psychology'
+  }
+  const afterRequired = !['memory_remove', 'memory_pin'].includes(approval?.actionKind)
+  return {
+    ...action,
+    payload,
+    targets,
+    invalid: !targets.length
+      || !Array.isArray(approval?.availableDecisions)
+      || (afterRequired && (!payload.after || typeof payload.after !== 'object'))
+  }
+}
+
 export function approvalResource(approval, sessions = []) {
   const scope = String(approval?.resourceScope || '')
   if (['path', 'root_path', 'execution_root_path'].includes(approval?.resourceType)) {

@@ -9,6 +9,9 @@ from mato_loop_backend.memory.episode_indexing import (
     chunk_message_content,
 )
 from mato_loop_backend.memory.episode_retrieval import (
+    EpisodeExcerptMessage,
+    EpisodeReference,
+    EpisodeRetrievalService,
     _Candidate,
     _candidate_filters,
     _rank_candidates,
@@ -108,6 +111,108 @@ async def test_pinned_context_prefers_audience_specific_identity() -> None:
     assert records == [private, fact]
 
 
+async def test_cached_context_revalidation_preserves_rank_and_current_scope() -> None:
+    owner_id = uuid4()
+    first = MemoryRecord(
+        id=uuid4(),
+        user_id=owner_id,
+        content="First",
+        source_type="manual",
+        category="fact",
+        audience="both",
+        pinned=False,
+        normalized_content_hash="first",
+    )
+    second = MemoryRecord(
+        id=uuid4(),
+        user_id=owner_id,
+        content="Second",
+        source_type="tool_call",
+        category="fact",
+        audience="both",
+        pinned=False,
+        normalized_content_hash="second",
+    )
+    rows = Mock()
+    rows.all.return_value = [second, first]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = rows
+
+    records = await MemoryService.automatic_context_by_ids(
+        db,
+        owner_id=owner_id,
+        memory_ids=[first.id, second.id],
+        readable_by=TrustLevel.PUBLIC,
+    )
+
+    assert records == [first, second]
+    statement = str(db.scalars.await_args.args[0])
+    assert "memories.user_id" in statement
+    assert "memories.pinned IS false" in statement
+    assert "memories.source_type IN" in statement
+    assert "memories.audience" in statement
+
+    session_id = uuid4()
+    project_id = uuid4()
+    stale_session_id = uuid4()
+    reference = EpisodeReference(
+        session_id=session_id,
+        session_title="Project",
+        anchor_message_id=uuid4(),
+        anchor_created_at=datetime.now(UTC),
+        anchor_role="user",
+        anchor_content="Decision",
+        excerpt=(),
+    )
+    stale_reference = EpisodeReference(
+        session_id=stale_session_id,
+        session_title="Stale",
+        anchor_message_id=uuid4(),
+        anchor_created_at=datetime.now(UTC),
+        anchor_role="user",
+        anchor_content="Old decision",
+        excerpt=(
+            EpisodeExcerptMessage(
+                id=uuid4(),
+                role="assistant",
+                content="Deleted",
+                created_at=datetime.now(UTC),
+            ),
+        ),
+    )
+    episode_rows = Mock()
+    episode_rows.all.return_value = [
+        (reference.anchor_message_id, session_id, "Renamed project"),
+        (stale_reference.anchor_message_id, stale_session_id, "Stale"),
+    ]
+    db.execute.return_value = episode_rows
+    references = await EpisodeRetrievalService.revalidate(
+        db,
+        [reference, stale_reference],
+        owner_id=owner_id,
+        current_session_id=uuid4(),
+        project_id=project_id,
+        full_sessions_only=True,
+    )
+
+    assert references == [
+        EpisodeReference(
+            session_id=session_id,
+            session_title="Renamed project",
+            anchor_message_id=reference.anchor_message_id,
+            anchor_created_at=reference.anchor_created_at,
+            anchor_role="user",
+            anchor_content="Decision",
+            excerpt=(),
+        )
+    ]
+    statement = str(db.execute.await_args.args[0])
+    assert "chat_sessions.user_id" in statement
+    assert "chat_sessions.project_id" in statement
+    assert "chat_sessions.memory_mode" in statement
+    assert "messages.generation_status" in statement
+
+
 def _candidate(session_id, message_id, chunk_id, created_at) -> _Candidate:
     session = ChatSession(id=session_id, user_id=uuid4(), title="Session")
     message = Message(
@@ -180,3 +285,16 @@ def test_episode_ranking_deduplicates_sessions_without_destination_trust_filter(
     assert "chat_sessions.user_id" in global_sql
     assert "chat_sessions.id !=" not in global_sql
     assert "chat_sessions.project_id" not in global_sql
+    assert "chat_sessions.memory_mode" not in global_sql
+
+    automatic_sql = " ".join(
+        str(item)
+        for item in _candidate_filters(
+            owner_id=uuid4(),
+            current_session_id=uuid4(),
+            project_id=None,
+            readable_by=TrustLevel.PRIVATE,
+            full_sessions_only=True,
+        )
+    )
+    assert "chat_sessions.memory_mode" in automatic_sql

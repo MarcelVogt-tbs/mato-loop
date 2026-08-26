@@ -231,6 +231,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({
       error: { code: 'validation.invalid', field: 'validUntil' }
     })).toBe('Das Gültigkeitsende ist ungültig.')
+    expect(apiErrorMessage({
+      error: { code: 'validation.invalid', field: 'expectedRevision' }
+    })).toBe('Die Version der Erinnerung ist ungültig.')
   })
 
   it('translates execution, process and transfer errors without unsafe retry advice', () => {

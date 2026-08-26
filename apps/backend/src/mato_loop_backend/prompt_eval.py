@@ -5349,10 +5349,12 @@ def _dreaming_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[st
             "memory": "Ich heiße Lara.",
             "category": "identity",
             "evidence": [str(DREAM_USER_MESSAGE_ID)],
+            "remove": False,
+            "pin": True,
         }
         instruction = (
             "Call record_memory_candidates even when candidates is empty. Each candidate "
-            "requires exact fields memory, category, and evidence."
+            "requires exact fields memory, category, evidence, remove, and pin."
         )
         if case.dreaming_repair == "missing_tool":
             result = ProviderResult(content="Lara should be remembered.")
@@ -5387,7 +5389,7 @@ def _dreaming_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[st
             result = ProviderResult(tool_calls=calls)
             instruction = (
                 "Evidence must use only supplied message UUIDs and include at least one USER "
-                "message UUID per candidate."
+                "message UUID per candidate. Removal candidates must use only USER message UUIDs."
             )
         _append_contract_retry(
             messages,

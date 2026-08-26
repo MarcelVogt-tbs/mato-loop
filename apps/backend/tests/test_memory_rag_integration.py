@@ -264,6 +264,54 @@ async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
         await db.rollback()
 
 
+async def test_automatic_memory_source_filter_excludes_legacy_dreaming() -> None:
+    marker = f"Sourcefilter-{uuid4().hex}"
+    async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"sources-{uuid4().hex}", password_hash="test")
+        db.add(user)
+        await db.flush()
+        memories = []
+        for source_type in ("dreaming", "manual", "tool_call"):
+            content = f"{marker} {source_type}"
+            _, content_hash = normalize_content(content)
+            memory = MemoryRecord(
+                user_id=user.id,
+                source_type=source_type,
+                pinned=False,
+                audience="both",
+                category="fact",
+                content=content,
+                normalized_content_hash=content_hash,
+            )
+            memories.append(memory)
+            db.add(memory)
+        await db.flush()
+
+        automatic = await MemoryRetrievalService.retrieve(
+            db,
+            owner_id=user.id,
+            mode=MemoryRetrieveMode.SEARCH,
+            query=marker,
+            readable_by=TrustLevel.PUBLIC,
+            semantic_enabled=False,
+            limit=5,
+            source_types=("manual", "tool_call"),
+        )
+        explicit = await MemoryRetrievalService.retrieve(
+            db,
+            owner_id=user.id,
+            mode=MemoryRetrieveMode.SEARCH,
+            query=marker,
+            readable_by=TrustLevel.PUBLIC,
+            semantic_enabled=False,
+            limit=5,
+        )
+
+        assert {item.source_type for item in automatic.items} == {"manual", "tool_call"}
+        assert {item.id for item in explicit.items} == {item.id for item in memories}
+        await db.rollback()
+
+
 async def test_automatic_rag_distance_excludes_unrelated_memory() -> None:
     relevant_content = "Das Kind des Testnutzers ist genau neun Monate alt."
     unrelated_content = "Eine Anleitung beschreibt das Backen von Sauerteigbrot."

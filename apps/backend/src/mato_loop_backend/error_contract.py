@@ -154,6 +154,7 @@ _MESSAGES = {
     "http.unauthorized": "Authentication is required.",
     "http.unprocessable": "The request data could not be processed.",
     "internal.unexpected": "An unexpected error occurred.",
+    "memory.changed": "The memory changed before the operation completed.",
     "notification.notFound": "The notification was not found.",
     "notification.targetNotFound": "The notification target was not found.",
     "webPush.disabled": "Web Push is not configured.",

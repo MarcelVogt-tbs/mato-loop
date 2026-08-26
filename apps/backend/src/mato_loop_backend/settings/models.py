@@ -785,8 +785,12 @@ class MemorySettings(SettingsDocument):
     dreaming_max_batch_messages: int = Field(default=50, ge=2, le=500)
     dreaming_max_candidates: int = Field(default=10, ge=1, le=100)
     dreaming_update_policy: ToolExecutionPolicy = ToolExecutionPolicy.AUTO
-    dreaming_merge_policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
-    dreaming_pin_policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
+    dreaming_remove_policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
+    dreaming_max_pinned_memories: int = Field(default=10, ge=1, le=100)
+    automatic_memory_snippet_limit: int = Field(default=2, ge=0, le=5)
+    automatic_session_snippet_limit: int = Field(default=3, ge=0, le=5)
+    recent_session_snippet_limit: int = Field(default=2, ge=0, le=5)
+    automatic_context_max_tokens: int = Field(default=1_024, ge=128, le=2_048)
 
 
 class AgentIdentitySettings(SettingsDocument):

@@ -65,7 +65,8 @@ describe('memory store', () => {
       category: 'identity',
       audience: 'private_only',
       pinned: true,
-      pinKind: 'primary_language'
+      pinKind: 'primary_language',
+      revision: 4
     }
     api.post.mockResolvedValue({ data: memory })
     api.patch.mockResolvedValue({ data: memory })
@@ -80,7 +81,8 @@ describe('memory store', () => {
     const suppliedPayload = {
       ...contentPayload,
       sourceType: 'manual',
-      pinned: memory.pinned
+      pinned: memory.pinned,
+      expectedRevision: memory.revision
     }
 
     await store.createMemory(suppliedPayload)
@@ -89,7 +91,8 @@ describe('memory store', () => {
     expect(api.post).toHaveBeenCalledWith('/memories', contentPayload)
     expect(api.patch).toHaveBeenCalledWith('/memories/memory-1', {
       ...contentPayload,
-      pinned: true
+      pinned: true,
+      expectedRevision: 4
     })
     expect(store.items[0]).toEqual(memory)
   })
@@ -112,7 +115,39 @@ describe('memory store', () => {
     expect(store.items[1].seenAt).toBeNull()
   })
 
-  it('loads and saves dreaming settings with camelCase fields', async () => {
+  it('deletes a memory with its expected revision', async () => {
+    api.delete.mockResolvedValue({})
+    const store = useMemoryStore()
+    store.items = [{ id: 'memory-1', revision: 3 }]
+    store.total = 1
+
+    await store.deleteMemory('memory-1', 3)
+
+    expect(api.delete).toHaveBeenCalledWith('/memories/memory-1', {
+      params: { expectedRevision: 3 }
+    })
+    expect(store.items).toEqual([])
+    expect(store.total).toBe(0)
+  })
+
+  it('preserves local memory state when a revision-protected update fails', async () => {
+    api.patch.mockRejectedValue(new Error('request failed'))
+    const store = useMemoryStore()
+    store.items = [{ id: 'memory-1', content: 'Aktuell', revision: 5 }]
+
+    await expect(store.updateMemory('memory-1', {
+      content: 'Veraltet',
+      category: 'fact',
+      audience: 'both',
+      pinned: false,
+      pinKind: null,
+      expectedRevision: 4
+    })).rejects.toThrow('request failed')
+
+    expect(store.items).toEqual([{ id: 'memory-1', content: 'Aktuell', revision: 5 }])
+  })
+
+  it('loads and saves memory and dreaming settings with camelCase fields', async () => {
     const settings = {
       enabled: true,
       automaticDreamingEnabled: true,
@@ -122,8 +157,13 @@ describe('memory store', () => {
       dreamingMaxBatchMessages: 50,
       dreamingMaxCandidates: 8,
       dreamingUpdatePolicy: 'auto',
-      dreamingMergePolicy: 'ask',
-      dreamingPinPolicy: 'ask',
+      dreamingRemovePolicy: 'ask',
+      dreamingMaxPinnedMemories: 10,
+      automaticMemorySnippetLimit: 2,
+      automaticSessionSnippetLimit: 1,
+      recentSessionSnippetLimit: 2,
+      automaticContextMaxTokens: 1024,
+      pinnedMemoryCount: 4,
       effectiveAutomaticDreamingEnabled: true,
       automaticDreamingUnavailableReason: null,
       manualDreamingAvailable: true,
@@ -139,8 +179,12 @@ describe('memory store', () => {
       dreamingMaxBatchMessages: settings.dreamingMaxBatchMessages,
       dreamingMaxCandidates: settings.dreamingMaxCandidates,
       dreamingUpdatePolicy: settings.dreamingUpdatePolicy,
-      dreamingMergePolicy: settings.dreamingMergePolicy,
-      dreamingPinPolicy: settings.dreamingPinPolicy
+      dreamingRemovePolicy: settings.dreamingRemovePolicy,
+      dreamingMaxPinnedMemories: settings.dreamingMaxPinnedMemories,
+      automaticMemorySnippetLimit: settings.automaticMemorySnippetLimit,
+      automaticSessionSnippetLimit: settings.automaticSessionSnippetLimit,
+      recentSessionSnippetLimit: settings.recentSessionSnippetLimit,
+      automaticContextMaxTokens: settings.automaticContextMaxTokens
     }
 
     await store.fetchSettings()
@@ -153,13 +197,17 @@ describe('memory store', () => {
 
   it('starts a scoped dream run and refreshes the run list', async () => {
     api.post.mockResolvedValue({ data: { id: 'run-1', status: 'queued' } })
-    api.get.mockResolvedValue({ data: { items: [{ id: 'run-1', status: 'queued' }] } })
+    api.get.mockResolvedValue({
+      data: { items: [{ id: 'run-1', status: 'completed', createdMemories: 0, removedMemories: 2 }] }
+    })
     const store = useMemoryStore()
 
     await store.startDreamRun('session-1')
 
     expect(api.post).toHaveBeenCalledWith('/memories/dream-runs', { sessionId: 'session-1' })
     expect(api.get).toHaveBeenCalledWith('/memories/dream-runs')
-    expect(store.dreamRuns).toEqual([{ id: 'run-1', status: 'queued' }])
+    expect(store.dreamRuns).toEqual([
+      { id: 'run-1', status: 'completed', createdMemories: 0, removedMemories: 2 }
+    ])
   })
 })

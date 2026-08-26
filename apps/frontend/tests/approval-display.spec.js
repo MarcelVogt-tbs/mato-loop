@@ -3,11 +3,49 @@ import { describe, expect, it } from 'vitest'
 import {
   approvalResource,
   formatTechnicalDetails,
+  memoryApprovalDisplay,
   permissionGrantDisplay,
   technicalDetailsDisplay
 } from '../src/utils/approval-display'
 
 describe('approval display', () => {
+  it('accepts and marks a removal approval without an after state as destructive', () => {
+    const display = memoryApprovalDisplay({
+      requestType: 'memory_change',
+      actionKind: 'memory_remove',
+      availableDecisions: ['approve', 'deny'],
+      payload: {
+        targetMemories: [{ id: 'memory-1', content: 'Veraltete Erinnerung' }]
+      }
+    })
+
+    expect(display.invalid).toBe(false)
+    expect(display.title).toBe('Erinnerung dauerhaft entfernen')
+    expect(display.summary).toBe('Dreaming möchte diese Erinnerung unwiderruflich löschen.')
+    expect(display.targetLabel).toBe('Zu entfernende Erinnerung')
+    expect(display.icon).toBe('delete_forever')
+    expect(display.destructive).toBe(true)
+  })
+
+  it('still requires an after state for update approvals', () => {
+    expect(memoryApprovalDisplay({
+      actionKind: 'memory_update',
+      availableDecisions: ['approve', 'deny'],
+      payload: { targetMemories: [{ id: 'memory-1' }] }
+    }).invalid).toBe(true)
+  })
+
+  it('keeps legacy pin approvals displayable without an after state', () => {
+    const display = memoryApprovalDisplay({
+      actionKind: 'memory_pin',
+      availableDecisions: ['approve', 'deny'],
+      payload: { requestedPin: true, targetMemories: [{ id: 'memory-1' }] }
+    })
+
+    expect(display.invalid).toBe(false)
+    expect(display.icon).toBe('push_pin')
+  })
+
   it('keeps file scopes prominent and unchanged', () => {
     expect(approvalResource({ resourceType: 'path', resourceScope: 'Projekte/demo.txt' })).toEqual({
       label: 'Datei oder Ordner',

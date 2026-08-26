@@ -5,7 +5,7 @@
       <div class="col">
         <div class="row items-center q-gutter-sm">
           <div class="text-subtitle1 text-weight-bold">{{ cardTitle }}</div>
-          <q-chip v-if="!isMemoryApproval" dense square :color="riskColor" text-color="white">{{ riskLabel }}</q-chip>
+          <q-chip v-if="!isMemoryApproval || isMemoryRemove" dense square :color="riskColor" text-color="white">{{ riskLabel }}</q-chip>
         </div>
         <div class="text-body2 app-muted q-mt-xs">{{ cardSummary }}</div>
       </div>
@@ -36,6 +36,10 @@
             </q-chip>
           </div>
         </div>
+        <q-banner v-if="isMemoryRemove" rounded class="bg-negative text-white q-mt-md" role="alert">
+          <template #avatar><q-icon name="delete_forever" color="white" /></template>
+          Diese Erinnerung wird dauerhaft gelöscht. Dieser Vorgang kann nicht rückgängig gemacht werden.
+        </q-banner>
         <div v-if="approval.actionKind !== 'memory_pin' && memoryPayload.after" class="q-mt-md">
           <div class="text-caption app-muted q-mb-xs">Vorgeschlagenes Ergebnis</div>
           <div class="approval-resource">
@@ -168,8 +172,8 @@
         v-if="hasDecision('approve')"
         unelevated
         no-caps
-        color="primary"
-        label="Genehmigen"
+        :color="isMemoryRemove ? 'negative' : 'primary'"
+        :label="isMemoryRemove ? 'Entfernen genehmigen' : 'Genehmigen'"
         :loading="loadingDecision === 'approve'"
         :disable="Boolean(loadingDecision) || invalidMemoryApproval"
         @click="decide('approve')"
@@ -211,7 +215,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
-import { approvalResource, technicalDetailsDisplay } from 'src/utils/approval-display'
+import { approvalResource, memoryApprovalDisplay, technicalDetailsDisplay } from 'src/utils/approval-display'
 import { toolArgumentsDisplay, toolPresentation } from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
@@ -231,51 +235,20 @@ const loadingDecision = ref(null)
 const showFullDetails = ref(false)
 const rememberForSession = ref(false)
 const isMemoryApproval = computed(() => props.approval.requestType === 'memory_change')
-const memoryPayload = computed(() => (
-  props.approval.payload && typeof props.approval.payload === 'object'
-    ? props.approval.payload
-    : {}
-))
-const memoryTargets = computed(() => (
-  Array.isArray(memoryPayload.value.targetMemories)
-    ? memoryPayload.value.targetMemories.filter((item) => item && typeof item === 'object')
-    : []
-))
-const invalidMemoryApproval = computed(() => (
-  isMemoryApproval.value
-  && (
-    !memoryTargets.value.length
-    || !Array.isArray(props.approval.availableDecisions)
-    || (props.approval.actionKind !== 'memory_pin'
-      && (!memoryPayload.value.after || typeof memoryPayload.value.after !== 'object'))
-  )
-))
-const memoryAction = computed(() => ({
-  memory_update: {
-    title: 'Erinnerung ändern',
-    summary: 'Dreaming möchte eine bestehende Erinnerung aktualisieren.'
-  },
-  memory_merge: {
-    title: 'Erinnerungen zusammenführen',
-    summary: 'Dreaming möchte mehrere Erinnerungen zu einer Erinnerung zusammenführen.'
-  },
-  memory_pin: {
-    title: memoryPayload.value.requestedPin ? 'Erinnerung immer berücksichtigen' : 'Erinnerung bei Bedarf berücksichtigen',
-    summary: 'Dreaming möchte die Berücksichtigung einer Erinnerung ändern.'
-  }
-})[props.approval.actionKind] || {
-  title: 'Memory-Änderung prüfen',
-  summary: 'Dreaming möchte eine Erinnerung ändern.'
-})
-const cardTitle = computed(() => isMemoryApproval.value ? memoryAction.value.title : props.approval.title)
-const cardSummary = computed(() => isMemoryApproval.value ? memoryAction.value.summary : props.approval.summary)
-const memoryTargetLabel = computed(() => props.approval.actionKind === 'memory_merge'
-  ? 'Bisherige Erinnerungen'
-  : 'Bisherige Erinnerung')
-const riskColor = computed(() => props.approval.riskLevel === 'high' ? 'negative' : 'warning')
-const riskLabel = computed(() => ({ high: 'Hoch', medium: 'Mittel', low: 'Niedrig' })[props.approval.riskLevel] || props.approval.riskLevel)
+const memoryDisplay = computed(() => memoryApprovalDisplay(props.approval))
+const memoryPayload = computed(() => memoryDisplay.value.payload)
+const memoryTargets = computed(() => memoryDisplay.value.targets)
+const invalidMemoryApproval = computed(() => isMemoryApproval.value && memoryDisplay.value.invalid)
+const isMemoryRemove = computed(() => isMemoryApproval.value && memoryDisplay.value.destructive)
+const cardTitle = computed(() => isMemoryApproval.value ? memoryDisplay.value.title : props.approval.title)
+const cardSummary = computed(() => isMemoryApproval.value ? memoryDisplay.value.summary : props.approval.summary)
+const memoryTargetLabel = computed(() => memoryDisplay.value.targetLabel)
+const riskColor = computed(() => isMemoryRemove.value || props.approval.riskLevel === 'high' ? 'negative' : 'warning')
+const riskLabel = computed(() => isMemoryRemove.value
+  ? 'Hoch'
+  : ({ high: 'Hoch', medium: 'Mittel', low: 'Niedrig' })[props.approval.riskLevel] || props.approval.riskLevel)
 const actionIcon = computed(() => {
-  if (isMemoryApproval.value) return props.approval.actionKind === 'memory_pin' ? 'push_pin' : 'psychology'
+  if (isMemoryApproval.value) return memoryDisplay.value.icon
   if (props.approval.capability?.startsWith('filesystem')) return 'folder_managed'
   if (props.approval.capability === 'execution.directory') return 'drive_file_move'
   if (props.approval.capability === 'system.info') return 'computer'

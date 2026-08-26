@@ -2,59 +2,74 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
 from typing import Any
 
 from mato_loop_backend.memory.episode_retrieval import EpisodeReference
 from mato_loop_backend.memory.service import memory_reference_timestamps
 from mato_loop_backend.models import MemoryRecord, Message
-from mato_loop_backend.settings import AgentRuntimeSettings
+from mato_loop_backend.settings import AgentRuntimeSettings, MemorySettings
 from mato_loop_backend.settings.models import ModelConfig
 
-AUTOMATIC_EPISODE_MAX_ITEMS = 2
 AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS = 320
-AUTOMATIC_CONTEXT_MAX_TOKENS = 1_536
+AUTOMATIC_MEMORY_MAX_CHARACTERS = 500
+AUTOMATIC_RECENT_MESSAGE_MAX_CHARACTERS = 240
 AUTOMATIC_CONTEXT_BUDGET_RATIO = 0.1
 MEMORY_OVERVIEW_MAX_CHARACTERS = 12_000
 
 
-def _memory_rag_queries(records: list[Message]) -> tuple[str | None, str | None]:
+def _memory_rag_query(records: list[Message]) -> str | None:
     user_messages = [item.content.strip() for item in records if item.role == "user"]
     if not user_messages or not user_messages[-1]:
-        return None, None
+        return None
     user_messages = [item for item in user_messages if item]
     current = user_messages[-1][:2_000]
-    contextual = (
-        (user_messages[-2][:1_000] + "\nFollow-up: " + current)[:2_000]
+    return (
+        (user_messages[-2][:1_000] + "\n" + current)[:2_000]
         if len(current) <= 120 and len(user_messages) > 1
-        else None
+        else current
     )
-    return current, contextual
 
 
-def _merge_contextual_results[T](
-    primary: list[T],
-    contextual: list[T],
-    *,
-    limit: int,
-    identity: Callable[[T], object],
-) -> list[T]:
-    if not contextual or limit <= 1:
-        return primary[:limit]
-    primary_limit = min(len(primary), limit - 1)
-    selected = primary[:primary_limit]
-    seen = {identity(item) for item in selected}
-    supplement = contextual[0] if identity(contextual[0]) not in seen else None
-    if supplement is not None:
-        selected.append(supplement)
-        seen.add(identity(supplement))
-    for item in (*primary[primary_limit:], *contextual):
-        if len(selected) == limit:
-            break
-        if identity(item) not in seen:
-            selected.append(item)
-            seen.add(identity(item))
-    return selected
+def _automatic_context_suppressed(records: list[Message]) -> bool:
+    current = next(
+        (item.content.casefold() for item in reversed(records) if item.role == "user"),
+        "",
+    )
+    normalized = re.sub(r"\s+", " ", current).strip()
+    return bool(
+        re.search(
+            r"\b(?:translate|übersetze|uebersetze|rewrite|umschreiben|"
+            r"explain the phrase)\b|\bwhat does .{0,40}\bmean\b|"
+            r"\b(?:summari[sz]e|proofread|edit|rephrase) (?:this|the following) "
+            r"(?:text|content|passage|message|document)\b|"
+            r"\b(?:fasse|korrigiere|bearbeite|formuliere) "
+            r"(?:diesen|diese|das folgende|den folgenden) "
+            r"(?:text|inhalt|abschnitt|nachricht|dokument)\b",
+            normalized,
+        )
+        or re.search(
+            r"\b(?:do not|don't|dont|ignore|avoid|without|"
+            r"nicht|ohne)\b.{0,80}\b"
+            r"(?:memory|memories|context|previous|prior|earlier|"
+            r"erinnerung(?:en)?|gedächtnis|gedaechtnis|kontext|"
+            r"vorherigen|früheren|frueheren)\b",
+            normalized,
+        )
+        or re.search(
+            r"\b(?:use|using|nutze|verwende)\b.{0,30}\b(?:no|keine?)\b.{0,30}\b"
+            r"(?:memory|memories|context|previous|prior|earlier|"
+            r"erinnerung(?:en)?|gedächtnis|gedaechtnis|kontext|"
+            r"vorherigen|früheren|frueheren)\b",
+            normalized,
+        )
+        or re.search(
+            r"\b(?:memory|memories|context|previous|prior|earlier|"
+            r"erinnerung(?:en)?|gedächtnis|gedaechtnis|kontext|"
+            r"vorherige|frühere|fruehere)\b.{0,80}\b"
+            r"(?:irrelevant|do not|don't|dont|ignore|nicht verwenden|nicht nutzen)\b",
+            normalized,
+        )
+    )
 
 
 def _episode_reference_request_text(records: list[Message]) -> str:
@@ -67,20 +82,7 @@ def _episode_reference_request_text(records: list[Message]) -> str:
         "",
     )
     normalized = re.sub(r"\s+", " ", current).strip()
-    if re.search(
-        r"\b(?:translate|übersetze|uebersetze|rewrite|umschreiben|"
-        r"explain the phrase)\b|\bwhat does .{0,40}\bmean\b",
-        normalized,
-    ) or re.search(
-        r"\b(?:do not|don't|dont|ignore|avoid|without|no information from|"
-        r"nicht|keine? informationen? aus)\b.{0,80}\b"
-        r"(?:previous|prior|earlier|vorherigen|früheren|frueheren)\b",
-        normalized,
-    ) or re.search(
-        r"\b(?:previous|prior|earlier|vorherige|frühere|fruehere)\b.{0,80}\b"
-        r"(?:irrelevant|do not|don't|dont|ignore|nicht verwenden|nicht nutzen)\b",
-        normalized,
-    ):
+    if _automatic_context_suppressed(records):
         return ""
     return normalized
 
@@ -93,23 +95,6 @@ def _recent_episode_overview_requested(records: list[Message]) -> bool:
             r"|\b(?:letzte|vorherige) session\b"
             r"|\bwhat did we (?:last|previously) discuss\b"
             r"|\b(?:last|previous) (?:session|chat|conversation)\b",
-            normalized,
-        )
-    )
-
-
-def _prior_session_history_requested(records: list[Message]) -> bool:
-    if _recent_episode_overview_requested(records):
-        return True
-    normalized = _episode_reference_request_text(records)
-    return bool(
-        re.search(
-            r"\b(?:im|in dem) (?:vorherigen|früheren|frueheren) (?:chat|session)\b"
-            r"|\bwie wir (?:damals|zuvor|früher|frueher) (?:besprochen|entschieden|vereinbart)\b"
-            r"|\b(?:mach|mache|machen wir) dort weiter,? wo wir aufgehört haben\b"
-            r"|\b(?:in|from) (?:(?:an?|the) )?(?:previous|prior|earlier) (?:chat|session|conversation)\b"
-            r"|\bas we (?:discussed|decided|agreed) (?:earlier|before|previously)\b"
-            r"|\b(?:continue|pick up) (?:from )?where we left off\b",
             normalized,
         )
     )
@@ -208,87 +193,243 @@ def _memory_overview_continuation(records: list[Message]) -> dict[str, Any] | No
 
 
 def _automatic_context_character_budget(
-    model: ModelConfig, settings: AgentRuntimeSettings
+    model: ModelConfig,
+    runtime_settings: AgentRuntimeSettings,
+    memory_settings: MemorySettings,
 ) -> int:
     input_budget = max(
         0,
         model.context_window_tokens
         - model.max_output_tokens
-        - settings.safety_reserve_tokens,
+        - runtime_settings.safety_reserve_tokens,
     )
     token_budget = min(
-        AUTOMATIC_CONTEXT_MAX_TOKENS,
+        memory_settings.automatic_context_max_tokens,
         int(input_budget * AUTOMATIC_CONTEXT_BUDGET_RATIO),
     )
     return max(0, int(token_budget * model.characters_per_token))
 
 
-def _bounded_episode_payload(
-    references: list[EpisodeReference], *, max_characters: int
-) -> list[dict[str, Any]]:
-    if max_characters <= 0:
-        return []
-    payload: list[dict[str, Any]] = []
-    selected = references[:AUTOMATIC_EPISODE_MAX_ITEMS]
-    remaining_budget = max_characters
-    for index, reference in enumerate(selected):
-        share = remaining_budget // (len(selected) - index)
-        if share <= 0:
-            break
-        matched_text = reference.anchor_content[
-            : min(share, AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS)
-        ]
-        local_used = len(matched_text)
-        messages = []
-        for message in reference.excerpt:
-            if message.id == reference.anchor_message_id:
-                continue
-            remaining = share - local_used
-            if remaining <= 0:
-                break
-            content = message.content[:remaining]
-            if not content:
-                continue
-            messages.append(
-                {
-                    "role": message.role,
-                    "content": content,
-                    "at": message.created_at.isoformat(),
-                }
-            )
-            local_used += len(content)
-        if not matched_text:
-            continue
-        payload.append(
-            {
-                "sessionId": str(reference.session_id),
-                "title": reference.session_title,
-                "sessionReadArguments": {
-                    "session_id": str(reference.session_id),
-                    "around_message_id": str(reference.anchor_message_id),
-                },
-                "anchorMessage": {
-                    "id": str(reference.anchor_message_id),
-                    "role": reference.anchor_role,
-                    "createdAt": reference.anchor_created_at.isoformat(),
-                    "preview": matched_text,
-                },
-                "messages": messages,
-            }
+def _serialized_automatic_size(payload: dict[str, list[dict[str, Any]]]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False))
+
+
+def _append_bounded(
+    payload: dict[str, list[dict[str, Any]]],
+    key: str,
+    item: dict[str, Any],
+    text_fields: list[tuple[dict[str, Any], str]],
+    *,
+    max_characters: int,
+) -> bool:
+    payload[key].append(item)
+    while (overflow := _serialized_automatic_size(payload) - max_characters) > 0:
+        field = next(
+            ((container, name) for container, name in reversed(text_fields) if container[name]),
+            None,
         )
-        remaining_budget -= local_used
-    return payload
+        if field is None:
+            payload[key].pop()
+            return False
+        container, name = field
+        container[name] = container[name][: max(0, len(container[name]) - overflow)]
+        item["truncated"] = True
+    if not any(container[name] for container, name in text_fields):
+        payload[key].pop()
+        return False
+    return True
+
+
+def _automatic_memory_item(item: MemoryRecord) -> tuple[dict[str, Any], list[tuple[dict[str, Any], str]]]:
+    content = item.content[:AUTOMATIC_MEMORY_MAX_CHARACTERS]
+    payload = {
+        "source": "retrieved",
+        "id": str(item.id),
+        "revision": item.revision,
+        "category": item.category,
+        "content": content,
+        "truncated": len(content) < len(item.content),
+        **memory_reference_timestamps(item),
+    }
+    return payload, [(payload, "content")]
+
+
+def _relevant_episode_item(
+    reference: EpisodeReference,
+) -> tuple[dict[str, Any], list[tuple[dict[str, Any], str]]]:
+    preview = reference.anchor_content[:AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS]
+    anchor = {
+        "id": str(reference.anchor_message_id),
+        "role": reference.anchor_role,
+        "createdAt": reference.anchor_created_at.isoformat(),
+        "preview": preview,
+    }
+    payload = {
+        "source": "relevant",
+        "sessionId": str(reference.session_id),
+        "title": reference.session_title,
+        "sessionReadArguments": {
+            "session_id": str(reference.session_id),
+            "around_message_id": str(reference.anchor_message_id),
+        },
+        "anchorMessage": anchor,
+        "truncated": len(preview) < len(reference.anchor_content),
+    }
+    text_fields = [(anchor, "preview")]
+    if reference.newer_anchor is not None:
+        newer_preview = reference.newer_anchor.content[
+            :AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS
+        ]
+        payload["newerAnchorMessage"] = {
+            "id": str(reference.newer_anchor.id),
+            "role": reference.newer_anchor.role,
+            "createdAt": reference.newer_anchor.created_at.isoformat(),
+            "preview": newer_preview,
+        }
+        payload["newerSessionReadArguments"] = {
+            "session_id": str(reference.session_id),
+            "around_message_id": str(reference.newer_anchor.id),
+        }
+        payload["truncated"] = payload["truncated"] or len(newer_preview) < len(
+            reference.newer_anchor.content
+        )
+        text_fields.append((payload["newerAnchorMessage"], "preview"))
+    return payload, text_fields
+
+
+def _recent_episode_item(
+    reference: EpisodeReference,
+) -> tuple[dict[str, Any], list[tuple[dict[str, Any], str]]]:
+    excerpt = list(reference.excerpt[-2:])
+    messages = [
+        {
+            "id": str(message.id),
+            "role": message.role,
+            "createdAt": message.created_at.isoformat(),
+            "content": message.content[:AUTOMATIC_RECENT_MESSAGE_MAX_CHARACTERS],
+        }
+        for message in excerpt
+    ]
+    if not messages and reference.anchor_content:
+        messages = [
+            {
+                "id": str(reference.anchor_message_id),
+                "role": reference.anchor_role,
+                "createdAt": reference.anchor_created_at.isoformat(),
+                "content": reference.anchor_content[:AUTOMATIC_RECENT_MESSAGE_MAX_CHARACTERS],
+            }
+        ]
+    payload = {
+        "source": "recent",
+        "sessionId": str(reference.session_id),
+        "title": reference.session_title,
+        "sessionReadArguments": {
+            "session_id": str(reference.session_id),
+            "around_message_id": str(reference.anchor_message_id),
+        },
+        "messages": messages,
+        "truncated": any(
+            len(message["content"]) < len(source.content)
+            for message, source in zip(messages, excerpt, strict=False)
+        )
+        or (not excerpt and len(reference.anchor_content) > AUTOMATIC_RECENT_MESSAGE_MAX_CHARACTERS),
+    }
+    return payload, [(message, "content") for message in messages]
+
+
+def _bounded_automatic_payload(
+    memories: list[MemoryRecord],
+    relevant_episodes: list[EpisodeReference],
+    recent_episodes: list[EpisodeReference],
+    *,
+    max_characters: int,
+    project_session: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    payload: dict[str, list[dict[str, Any]]] = {
+        "durableMemories": [],
+        "priorSessionEpisodes": [],
+    }
+    if max_characters < _serialized_automatic_size(payload):
+        return [], []
+
+    seen_memory_ids: set[object] = set()
+    unique_memories = []
+    for item in memories:
+        if item.id not in seen_memory_ids:
+            seen_memory_ids.add(item.id)
+            unique_memories.append(item)
+
+    preferred_episodes = relevant_episodes if project_session else recent_episodes
+    secondary_episodes = recent_episodes if project_session else relevant_episodes
+    seen_session_ids = {item.session_id for item in preferred_episodes}
+    unique_secondary = []
+    for item in secondary_episodes:
+        if item.session_id not in seen_session_ids:
+            seen_session_ids.add(item.session_id)
+            unique_secondary.append(item)
+    unique_preferred = list(
+        {item.session_id: item for item in preferred_episodes}.values()
+    )
+
+    if project_session:
+        groups = [
+            ("priorSessionEpisodes", unique_preferred, _relevant_episode_item),
+            ("priorSessionEpisodes", unique_secondary, _recent_episode_item),
+            ("durableMemories", unique_memories, _automatic_memory_item),
+        ]
+        for key, items, build in groups:
+            for source in items:
+                item, text_fields = build(source)
+                _append_bounded(
+                    payload,
+                    key,
+                    item,
+                    text_fields,
+                    max_characters=max_characters,
+                )
+        return payload["durableMemories"], payload["priorSessionEpisodes"]
+
+    seen_session_ids = {item.session_id for item in recent_episodes}
+    unique_relevant = []
+    for item in relevant_episodes:
+        if item.session_id not in seen_session_ids:
+            seen_session_ids.add(item.session_id)
+            unique_relevant.append(item)
+    unique_recent = list({item.session_id: item for item in recent_episodes}.values())
+
+    groups = [
+        ("durableMemories", unique_memories, _automatic_memory_item),
+        ("priorSessionEpisodes", unique_recent, _recent_episode_item),
+        ("priorSessionEpisodes", unique_relevant, _relevant_episode_item),
+    ]
+    for index in range(max((len(items) for _, items, _ in groups), default=0)):
+        for key, items, build in groups:
+            if index >= len(items):
+                continue
+            item, text_fields = build(items[index])
+            _append_bounded(
+                payload,
+                key,
+                item,
+                text_fields,
+                max_characters=max_characters,
+            )
+    return payload["durableMemories"], payload["priorSessionEpisodes"]
 
 
 def _cross_session_context_text(
     memory_references: list[tuple[str, MemoryRecord]],
     episode_payload: list[dict[str, Any]],
+    automatic_memory_payload: list[dict[str, Any]] | None = None,
 ) -> str | None:
-    if not memory_references and not episode_payload:
+    if not memory_references and not automatic_memory_payload and not episode_payload:
         return None
     return json.dumps(
         {
-            "durableMemories": _durable_memory_payload(memory_references),
+            "durableMemories": [
+                *_durable_memory_payload(memory_references),
+                *(automatic_memory_payload or []),
+            ],
             "priorSessionEpisodes": episode_payload,
         },
         ensure_ascii=False,

@@ -66,12 +66,15 @@ def _filters(
     readable_by: TrustLevel,
     category: MemoryCategory | None,
     pinned: bool | None,
+    source_types: tuple[str, ...] | None = None,
 ) -> list[object]:
     filters: list[object] = [MemoryRecord.user_id == owner_id]
     if category is not None:
         filters.append(MemoryRecord.category == category.value)
     if pinned is not None:
         filters.append(MemoryRecord.pinned.is_(pinned))
+    if source_types is not None:
+        filters.append(MemoryRecord.source_type.in_(source_types))
     filters.append(memory_visibility_filter(readable_by))
     return filters
 
@@ -94,6 +97,7 @@ class MemoryRetrievalService:
         max_semantic_distance: float | None = None,
         cursor_updated_at: datetime | None = None,
         cursor_id: UUID | None = None,
+        source_types: tuple[str, ...] | None = None,
     ) -> MemoryRetrieval:
         if (cursor_updated_at is None) != (cursor_id is None):
             raise ValueError("both cursor fields are required together")
@@ -140,6 +144,7 @@ class MemoryRetrievalService:
             readable_by=readable_by,
             category=category,
             pinned=pinned,
+            source_types=source_types,
         )
         tsquery = func.plainto_tsquery(
             "simple", " ".join(memory_lexical_terms(cleaned_query))
