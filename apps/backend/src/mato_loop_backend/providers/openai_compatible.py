@@ -406,6 +406,10 @@ def _responses_body(
     instructions, input_items = _responses_input(
         request.messages, request.continuation_scope, request.media
     )
+    input_items = [
+        {key: value for key, value in item.items() if key != "id"}
+        for item in input_items
+    ]
     body: dict[str, Any] = {
         "model": request.model,
         "input": input_items,
@@ -427,6 +431,10 @@ def _responses_body(
         reasoning["summary"] = "auto"
     if request.reasoning_effort is not None:
         reasoning["effort"] = request.reasoning_effort.value
+    if "gpt-5.6" in request.model.casefold() and any(
+        item.get("type") == "reasoning" for item in input_items
+    ):
+        reasoning["context"] = "all_turns"
     if reasoning:
         body["reasoning"] = reasoning
     if request.prompt_cache_key:

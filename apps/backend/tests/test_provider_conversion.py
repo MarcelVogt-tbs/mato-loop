@@ -247,6 +247,39 @@ def test_responses_input_reconstructs_persisted_tool_round() -> None:
     ]
 
 
+def test_gpt_5_6_responses_replay_omits_item_ids_and_sets_context() -> None:
+    scope = {"adapterType": "openai-codex", "providerId": "provider-1"}
+    request = ProviderRequest(
+        model="gpt-5.6-sol",
+        messages=[
+            {
+                "role": "assistant",
+                "content": "Ergebnis",
+                "provider_data": {
+                    "continuation_scope": scope,
+                    "responses_output_items": [
+                        {
+                            "id": "rs-reasoning",
+                            "type": "reasoning",
+                            "encrypted_content": "encrypted",
+                        },
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "Ergebnis"}],
+                        },
+                    ],
+                },
+            }
+        ],
+        continuation_scope=scope,
+    )
+
+    body = _responses_body(request)
+
+    assert all("id" not in item for item in body["input"])
+    assert body["reasoning"] == {"context": "all_turns"}
+
+
 def test_payloads_convert_model_options_for_each_protocol() -> None:
     request = ProviderRequest(
         model="local-model",
