@@ -159,6 +159,9 @@ def test_responses_result_exposes_summary_but_not_encrypted_state() -> None:
     assert result.reasoning.text == "Kurz begründet."
     assert "opaque-secret-state" not in result.reasoning.text
     assert result.provider_data["reasoning_encrypted_content"] == "opaque-secret-state"
+    assert result.provider_data["responses_output_items"][0]["summary"] == [
+        {"type": "summary_text", "text": "Kurz begründet."}
+    ]
 
 
 def test_tagged_responses_reasoning_keeps_content_kind() -> None:

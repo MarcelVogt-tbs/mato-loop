@@ -314,6 +314,18 @@ def _responses_input(
                 "continuation_scope"
             ) == continuation_scope
             replay_items = provider_data.get("responses_output_items") if scope_matches else None
+            if isinstance(replay_items, list):
+                replay_items = [
+                    {
+                        **item,
+                        "summary": (
+                            item["summary"] if isinstance(item.get("summary"), list) else []
+                        ),
+                    }
+                    if isinstance(item, dict) and item.get("type") == "reasoning"
+                    else item
+                    for item in replay_items
+                ]
             if (
                 role == "assistant"
                 and not has_tool_calls
@@ -335,7 +347,13 @@ def _responses_input(
                     else None
                 )
                 if role == "assistant" and encrypted_reasoning:
-                    items.append({"type": "reasoning", "encrypted_content": encrypted_reasoning})
+                    items.append(
+                        {
+                            "type": "reasoning",
+                            "summary": [],
+                            "encrypted_content": encrypted_reasoning,
+                        }
+                    )
                 content_type = "output_text" if role == "assistant" else "input_text"
                 if content:
                     items.append(
@@ -375,6 +393,7 @@ def _responses_replay_items(raw_output: Any) -> list[dict[str, Any]]:
         if item_type == "reasoning" and item.get("encrypted_content"):
             value: dict[str, Any] = {
                 "type": "reasoning",
+                "summary": item["summary"] if isinstance(item.get("summary"), list) else [],
                 "encrypted_content": item["encrypted_content"],
             }
             if item.get("id"):
@@ -406,10 +425,6 @@ def _responses_body(
     instructions, input_items = _responses_input(
         request.messages, request.continuation_scope, request.media
     )
-    input_items = [
-        {key: value for key, value in item.items() if key != "id"}
-        for item in input_items
-    ]
     body: dict[str, Any] = {
         "model": request.model,
         "input": input_items,
@@ -431,10 +446,6 @@ def _responses_body(
         reasoning["summary"] = "auto"
     if request.reasoning_effort is not None:
         reasoning["effort"] = request.reasoning_effort.value
-    if "gpt-5.6" in request.model.casefold() and any(
-        item.get("type") == "reasoning" for item in input_items
-    ):
-        reasoning["context"] = "all_turns"
     if reasoning:
         body["reasoning"] = reasoning
     if request.prompt_cache_key:
@@ -506,7 +517,23 @@ async def _ensure_success(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
     await response.aread()
-    logger.warning("Provider request failed with HTTP status %s", response.status_code)
+    error: Any = None
+    try:
+        payload = response.json()
+        if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+            error = payload["error"]
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        pass
+    error_type = error.get("type") if isinstance(error, dict) else None
+    error_code = error.get("code") if isinstance(error, dict) else None
+    error_param = error.get("param") if isinstance(error, dict) else None
+    logger.warning(
+        "Provider request failed with HTTP status %s (type=%r, code=%r, param=%r)",
+        response.status_code,
+        error_type[:80] if isinstance(error_type, str) else None,
+        error_code[:80] if isinstance(error_code, str) else None,
+        error_param[:80] if isinstance(error_param, str) else None,
+    )
     raise ProviderError(
         f"Provider request failed with HTTP {response.status_code}",
         status_code=response.status_code,

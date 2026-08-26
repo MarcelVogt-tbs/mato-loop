@@ -1,4 +1,5 @@
 import json
+import logging
 
 import httpx
 import pytest
@@ -7,6 +8,7 @@ from mato_loop_backend.providers.base import ProviderError, ProviderMedia, Provi
 from mato_loop_backend.providers.openai_compatible import (
     _chat_body,
     _chat_messages,
+    _ensure_success,
     _normalize_finish_reason,
     _responses_body,
     _responses_finish_reason,
@@ -188,9 +190,9 @@ def test_responses_input_replays_reasoning_before_assistant_output() -> None:
         scope,
     )
 
-    assert [item.get("type") for item in items] == [
-        "reasoning",
-        None,
+    assert items == [
+        {"type": "reasoning", "summary": [], "encrypted_content": "encrypted"},
+        {"role": "assistant", "content": [{"type": "output_text", "text": "Ergebnis"}]},
     ]
 
 
@@ -212,7 +214,11 @@ def test_responses_input_reconstructs_persisted_tool_round() -> None:
                     "continuation_scope": scope,
                     "reasoning_encrypted_content": "legacy-encrypted",
                     "responses_output_items": [
-                        {"type": "reasoning", "encrypted_content": "encrypted"},
+                        {
+                            "id": "rs-reasoning",
+                            "type": "reasoning",
+                            "encrypted_content": "encrypted",
+                        },
                         {
                             "type": "function_call",
                             "call_id": "call-1",
@@ -232,7 +238,12 @@ def test_responses_input_reconstructs_persisted_tool_round() -> None:
     )
 
     assert items == [
-        {"type": "reasoning", "encrypted_content": "encrypted"},
+        {
+            "id": "rs-reasoning",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "encrypted",
+        },
         {
             "type": "function_call",
             "call_id": "call-1",
@@ -247,7 +258,7 @@ def test_responses_input_reconstructs_persisted_tool_round() -> None:
     ]
 
 
-def test_gpt_5_6_responses_replay_omits_item_ids_and_sets_context() -> None:
+def test_gpt_5_6_responses_replay_normalizes_summary_and_omits_context() -> None:
     scope = {"adapterType": "openai-codex", "providerId": "provider-1"}
     request = ProviderRequest(
         model="gpt-5.6-sol",
@@ -264,6 +275,7 @@ def test_gpt_5_6_responses_replay_omits_item_ids_and_sets_context() -> None:
                             "encrypted_content": "encrypted",
                         },
                         {
+                            "id": "msg-assistant",
                             "role": "assistant",
                             "content": [{"type": "output_text", "text": "Ergebnis"}],
                         },
@@ -276,8 +288,46 @@ def test_gpt_5_6_responses_replay_omits_item_ids_and_sets_context() -> None:
 
     body = _responses_body(request)
 
-    assert all("id" not in item for item in body["input"])
-    assert body["reasoning"] == {"context": "all_turns"}
+    assert body["input"] == [
+        {
+            "id": "rs-reasoning",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "encrypted",
+        },
+        {
+            "id": "msg-assistant",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Ergebnis"}],
+        }
+    ]
+    assert "reasoning" not in body
+
+
+@pytest.mark.asyncio
+async def test_provider_http_error_logs_only_safe_metadata(caplog) -> None:
+    response = httpx.Response(
+        400,
+        json={
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_value",
+                "param": "input[3]",
+                "message": "secret provider detail",
+            }
+        },
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="mato_loop_backend.providers.openai_compatible"
+    ):
+        with pytest.raises(ProviderError):
+            await _ensure_success(response)
+
+    assert "type='invalid_request_error'" in caplog.text
+    assert "code='invalid_value'" in caplog.text
+    assert "param='input[3]'" in caplog.text
+    assert "secret provider detail" not in caplog.text
 
 
 def test_payloads_convert_model_options_for_each_protocol() -> None:
