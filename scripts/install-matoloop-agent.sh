@@ -20,6 +20,7 @@ AGENT_PROJECT="$PROJECT_ROOT/apps/matoloop-agent"
 VENV="$AGENT_PROJECT/.venv"
 DEFAULT_DATA_DIR="$HOME/mato-loop-agent/data"
 DEFAULT_WORKSPACE_DIR="$HOME/mato-loop-agent/workspace"
+DEFAULT_INSTANCE_URL="http://127.0.0.1:10020"
 DEFAULT_BACKEND_URL="ws://127.0.0.1:10020/api/execution-agents/connect"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/matoloop-agent-installer"
 STATE_FILE="$STATE_DIR/state"
@@ -31,7 +32,9 @@ SOURCE_URL="https://git.devmato.net/devmato/MatoLoop.git"
 
 DATA_DIR="$DEFAULT_DATA_DIR"
 WORKSPACE_DIR="$DEFAULT_WORKSPACE_DIR"
+INSTANCE_URL="$DEFAULT_INSTANCE_URL"
 BACKEND_URL="$DEFAULT_BACKEND_URL"
+BACKEND_DERIVED=true
 SOURCE_ROOT="$PROJECT_ROOT"
 VENV_CREATED=false
 WORKSPACE_CREATED=false
@@ -79,7 +82,7 @@ confirm() {
     local answer
     local suffix="[Y/n]"
     [[ "$default" == yes ]] || suffix="[y/N]"
-    read -r -p "$prompt $suffix " answer
+    read -e -r -p "$prompt $suffix " answer
     answer="${answer:-$default}"
     [[ "$answer" =~ ^([yY]|[yY][eE][sS]|[jJ]|[jJ][aA])$ ]]
 }
@@ -89,7 +92,7 @@ prompt_value() {
     local prompt="$2"
     local default="$3"
     local response
-    read -r -p "$prompt [$default]: " response
+    read -e -r -i "$default" -p "$prompt: " response
     printf -v "$variable" '%s' "${response:-$default}"
 }
 
@@ -120,7 +123,7 @@ safe_managed_path() {
     return 0
 }
 
-validate_backend_url() {
+validate_instance_url() {
     python3 - "$1" <<'PY'
 import sys
 from urllib.parse import urlsplit
@@ -128,14 +131,16 @@ from urllib.parse import urlsplit
 try:
     value = urlsplit(sys.argv[1])
     valid = (
-        value.scheme in {"ws", "wss"}
-        and sys.argv[1].startswith(("ws://", "wss://"))
+        value.scheme in {"http", "https"}
+        and sys.argv[1].startswith(("http://", "https://"))
         and value.hostname is not None
         and value.username is None
         and value.password is None
         and value.query == ""
         and value.fragment == ""
-        and value.path.endswith("/execution-agents/connect")
+        and "?" not in sys.argv[1]
+        and "#" not in sys.argv[1]
+        and not any(character.isspace() for character in sys.argv[1])
     )
     if value.port is not None and not 1 <= value.port <= 65535:
         valid = False
@@ -145,10 +150,38 @@ raise SystemExit(0 if valid else 1)
 PY
 }
 
+instance_to_backend_url() {
+    local value="$1"
+    while [[ "$value" == */ ]]; do
+        value="${value%/}"
+    done
+    case "$value" in
+        http://*) printf 'ws://%s/api/execution-agents/connect' "${value#http://}" ;;
+        https://*) printf 'wss://%s/api/execution-agents/connect' "${value#https://}" ;;
+        *) return 1 ;;
+    esac
+}
+
+backend_to_instance_url() {
+    local value="$1"
+    case "$value" in
+        ws://*) value="http://${value#ws://}" ;;
+        wss://*) value="https://${value#wss://}" ;;
+        *) return 1 ;;
+    esac
+    case "$value" in
+        */api/execution-agents/connect) printf '%s' "${value%/api/execution-agents/connect}" ;;
+        */execution-agents/connect) printf '%s' "${value%/execution-agents/connect}" ;;
+        *) return 1 ;;
+    esac
+}
+
 reset_state() {
     DATA_DIR="$DEFAULT_DATA_DIR"
     WORKSPACE_DIR="$DEFAULT_WORKSPACE_DIR"
+    INSTANCE_URL="$DEFAULT_INSTANCE_URL"
     BACKEND_URL="$DEFAULT_BACKEND_URL"
+    BACKEND_DERIVED=true
     SOURCE_ROOT="$PROJECT_ROOT"
     VENV_CREATED=false
     WORKSPACE_CREATED=false
@@ -157,6 +190,8 @@ reset_state() {
 }
 
 load_state() {
+    local has_instance_url=false
+    local has_backend_derived=false
     local line key value
     reset_state
     [[ -e "$STATE_FILE" ]] || return 0
@@ -167,7 +202,9 @@ load_state() {
         case "$key" in
             dataDir) DATA_DIR="$value" ;;
             workspaceDir) WORKSPACE_DIR="$value" ;;
+            instanceUrl) INSTANCE_URL="$value"; has_instance_url=true ;;
             backendUrl) BACKEND_URL="$value" ;;
+            backendDerived) BACKEND_DERIVED="$value"; has_backend_derived=true ;;
             sourceRoot) SOURCE_ROOT="$value" ;;
             venvCreated) VENV_CREATED="$value" ;;
             workspaceCreated) WORKSPACE_CREATED="$value" ;;
@@ -179,11 +216,16 @@ load_state() {
     [[ "$WORKSPACE_CREATED" =~ ^(true|false)$ ]] || die "Invalid installer state."
     [[ "$LINGER_CREATED" =~ ^(true|false)$ ]] || die "Invalid installer state."
     [[ "$SOURCE_CREATED" =~ ^(true|false)$ ]] || die "Invalid installer state."
+    if [[ "$has_instance_url" == false ]]; then
+        INSTANCE_URL="$(backend_to_instance_url "$BACKEND_URL")" || die "Invalid backend URL in installer state."
+        BACKEND_DERIVED=false
+    fi
+    [[ "$has_backend_derived" == false || "$BACKEND_DERIVED" =~ ^(true|false)$ ]] || die "Invalid installer state."
 }
 
 save_state() {
     local value temporary
-    for value in "$DATA_DIR" "$WORKSPACE_DIR" "$BACKEND_URL" "$SOURCE_ROOT"; do
+    for value in "$DATA_DIR" "$WORKSPACE_DIR" "$INSTANCE_URL" "$BACKEND_URL" "$SOURCE_ROOT"; do
         [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "Paths and URLs must not contain line breaks."
     done
     mkdir -p "$STATE_DIR"
@@ -192,7 +234,9 @@ save_state() {
     printf '%s\n' \
         "dataDir=$DATA_DIR" \
         "workspaceDir=$WORKSPACE_DIR" \
+        "instanceUrl=$INSTANCE_URL" \
         "backendUrl=$BACKEND_URL" \
+        "backendDerived=$BACKEND_DERIVED" \
         "sourceRoot=$SOURCE_ROOT" \
         "venvCreated=$VENV_CREATED" \
         "workspaceCreated=$WORKSPACE_CREATED" \
@@ -290,7 +334,7 @@ install_uv() {
 }
 
 prompt_settings() {
-    local answer existing_state=false
+    local answer existing_state=false original_instance_url
     load_state
     [[ -e "$STATE_FILE" ]] && existing_state=true
     if [[ "$existing_state" == true && "$SOURCE_ROOT" != "$PROJECT_ROOT" ]]; then
@@ -311,13 +355,21 @@ prompt_settings() {
     safe_managed_path "$DATA_DIR" || die "Unsafe data directory: $DATA_DIR"
 
     if [[ ! -e "$DATA_DIR/agent-state/credential.json" ]]; then
+        original_instance_url="$INSTANCE_URL"
         while true; do
-            prompt_value BACKEND_URL "Backend WebSocket URL" "$BACKEND_URL"
-            validate_backend_url "$BACKEND_URL" && break
-            printf 'Enter a ws:// or wss:// URL ending in /execution-agents/connect.\n' >&2
+            prompt_value INSTANCE_URL "MatoLoop instance URL" "$INSTANCE_URL"
+            validate_instance_url "$INSTANCE_URL" && break
+            printf 'Enter the normal http:// or https:// URL of the MatoLoop instance.\n' >&2
         done
+        while [[ "$INSTANCE_URL" == */ ]]; do
+            INSTANCE_URL="${INSTANCE_URL%/}"
+        done
+        if [[ "$BACKEND_DERIVED" == true || "$INSTANCE_URL" != "$original_instance_url" ]]; then
+            BACKEND_URL="$(instance_to_backend_url "$INSTANCE_URL")"
+            BACKEND_DERIVED=true
+        fi
     else
-        printf 'Keeping the paired backend URL: %s\n' "$BACKEND_URL"
+        printf 'Keeping the paired MatoLoop instance URL: %s\n' "$INSTANCE_URL"
     fi
     SOURCE_ROOT="$PROJECT_ROOT"
 }
@@ -607,6 +659,8 @@ self_test() (
     DEFAULT_DATA_DIR="$HOME/mato-loop-agent/data"
     DEFAULT_WORKSPACE_DIR="$HOME/mato-loop-agent/workspace"
     DEFAULT_SOURCE_DIR="$HOME/mato-loop-agent/source"
+    DEFAULT_INSTANCE_URL="http://127.0.0.1:10020"
+    DEFAULT_BACKEND_URL="ws://127.0.0.1:10020/api/execution-agents/connect"
     STATE_DIR="$HOME/state"
     STATE_FILE="$STATE_DIR/state"
     SERVICE_DIR="$HOME/systemd"
@@ -624,17 +678,40 @@ self_test() (
     [[ "$prompted" == default ]]
     prompt_value prompted "Test value" "default" <<< "custom"
     [[ "$prompted" == custom ]]
-    validate_backend_url "ws://127.0.0.1:10020/api/execution-agents/connect"
-    validate_backend_url "wss://mato.example/api/execution-agents/connect"
-    ! validate_backend_url "http://mato.example/api/execution-agents/connect"
-    ! validate_backend_url "WS://mato.example/api/execution-agents/connect"
-    ! validate_backend_url "ws://mato.example/api/execution-agents/connect?token=x"
+    validate_instance_url "http://127.0.0.1:10020"
+    validate_instance_url "https://mato.example/base/"
+    ! validate_instance_url "ws://mato.example"
+    ! validate_instance_url "HTTP://mato.example"
+    ! validate_instance_url "https://mato.example?token=x"
+    ! validate_instance_url "https://mato.example?"
+    ! validate_instance_url "https://mato.example#"
+    [[ "$(instance_to_backend_url 'http://127.0.0.1:10020/')" == "ws://127.0.0.1:10020/api/execution-agents/connect" ]]
+    [[ "$(instance_to_backend_url 'https://mato.example/base')" == "wss://mato.example/base/api/execution-agents/connect" ]]
+    [[ "$(backend_to_instance_url 'wss://mato.example/base/api/execution-agents/connect')" == "https://mato.example/base" ]]
+    [[ "$(backend_to_instance_url 'wss://mato.example/socket/execution-agents/connect')" == "https://mato.example/socket" ]]
     safe_managed_path "$HOME/mato-loop-agent/data"
     ! safe_managed_path "$HOME"
     is_same_or_parent "$HOME/mato-loop-agent" "$HOME/mato-loop-agent/data"
     ! is_same_or_parent "$HOME/mato-loop-agent/data" "$HOME/mato-loop-agent"
     [[ "$(systemd_quote '/home/test agent/100%')" == '"/home/test agent/100%%"' ]]
     [[ "$(installation_state)" == absent ]]
+
+    mkdir -p "$STATE_DIR"
+    printf '%s\n' \
+        "dataDir=$DEFAULT_DATA_DIR" \
+        "workspaceDir=$DEFAULT_WORKSPACE_DIR" \
+        "backendUrl=wss://mato.example/socket/execution-agents/connect" \
+        "sourceRoot=$PROJECT_ROOT" \
+        "venvCreated=false" \
+        "workspaceCreated=false" \
+        "lingerCreated=false" \
+        "sourceCreated=false" > "$STATE_FILE"
+    load_state
+    [[ "$INSTANCE_URL" == "https://mato.example/socket" ]]
+    [[ "$BACKEND_URL" == "wss://mato.example/socket/execution-agents/connect" ]]
+    [[ "$BACKEND_DERIVED" == false ]]
+    rm -f "$STATE_FILE"
+    reset_state
 
     DATA_DIR="$DEFAULT_DATA_DIR"
     WORKSPACE_DIR="$DEFAULT_WORKSPACE_DIR"

@@ -38,11 +38,12 @@ From a MatoLoop checkout, run the interactive installer as a normal user:
 When run from a MatoLoop checkout, the installer uses that checkout so local Agent changes can be
 tested. A standalone copy of the script instead clones
 `https://git.devmato.net/devmato/MatoLoop.git` into `~/mato-loop-agent/source`. It asks for the Agent
-data directory, home/workspace directory, and backend WebSocket URL, then reuses the Agent's secure
-pairing prompt for the computer ID and one-time token. Defaults place runtime data under
-`~/mato-loop-agent` and connect to the local frontend at
-`ws://127.0.0.1:10020/api/execution-agents/connect`. `ws://` automatically enables insecure
-transport; use `wss://` outside a trusted local network.
+data directory, home/workspace directory, and normal MatoLoop instance URL, then derives the
+WebSocket endpoint and reuses the Agent's secure pairing prompt for the computer ID and one-time
+token. Defaults place runtime data under `~/mato-loop-agent` and connect to
+`http://127.0.0.1:10020`. An `http://` instance enables insecure transport; use `https://` outside a
+trusted local network. Path and URL prompts use Readline, so their prefilled values can be edited
+with the cursor, Home, and End keys.
 
 The user systemd service runs with the installing user's permissions. The installer can also
 repair an interrupted installation, show its status, or remove its managed state:

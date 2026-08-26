@@ -63,10 +63,11 @@ def _pairing_inputs(
     pairing_token = select_pairing_token(arguments.pairing_token)
 
     if sys.stdin.isatty():
-        entered = input(
-            f"Backend WebSocket URL{f' [{backend_url}]' if backend_url else ''}: "
-        ).strip()
-        backend_url = entered or backend_url
+        if not arguments.backend_url:
+            entered = input(
+                f"Backend WebSocket URL{f' [{backend_url}]' if backend_url else ''}: "
+            ).strip()
+            backend_url = entered or backend_url
         entered = input(f"Agent ID{f' [{agent_id}]' if agent_id else ''}: ").strip()
         agent_id = entered or agent_id
         entered = getpass.getpass(

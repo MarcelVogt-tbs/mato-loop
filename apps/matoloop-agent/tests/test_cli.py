@@ -112,6 +112,68 @@ class CliMainTests(unittest.TestCase):
             "pairing-token",
         )
 
+    def test_pair_does_not_prompt_for_explicit_backend_url(self) -> None:
+        config = CliTests().config()
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["matoloop-agent", "pair", "--backend-url", BACKEND_URL],
+            ),
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(sys.stdin, "isatty", return_value=True),
+            patch("builtins.input", return_value=AGENT_ID) as prompt,
+            patch(
+                "matoloop_agent.__main__.getpass.getpass",
+                return_value="pairing-token",
+            ),
+            patch(
+                "matoloop_agent.__main__.AgentConfig.load",
+                return_value=config,
+            ),
+            patch("matoloop_agent.__main__._execute", new=AsyncMock()) as execute,
+        ):
+            main()
+
+        prompt.assert_called_once()
+        execute.assert_awaited_once_with(
+            "pair",
+            config,
+            ConnectionConfig(backendUrl=BACKEND_URL, agentId=AGENT_ID),
+            "pairing-token",
+        )
+
+    def test_pair_prompts_for_explicit_empty_backend_url(self) -> None:
+        config = CliTests().config()
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["matoloop-agent", "pair", "--backend-url", ""],
+            ),
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(sys.stdin, "isatty", return_value=True),
+            patch("builtins.input", side_effect=[BACKEND_URL, AGENT_ID]) as prompt,
+            patch(
+                "matoloop_agent.__main__.getpass.getpass",
+                return_value="pairing-token",
+            ),
+            patch(
+                "matoloop_agent.__main__.AgentConfig.load",
+                return_value=config,
+            ),
+            patch("matoloop_agent.__main__._execute", new=AsyncMock()) as execute,
+        ):
+            main()
+
+        self.assertEqual(prompt.call_count, 2)
+        execute.assert_awaited_once_with(
+            "pair",
+            config,
+            ConnectionConfig(backendUrl=BACKEND_URL, agentId=AGENT_ID),
+            "pairing-token",
+        )
+
     def test_run_pairs_automatically_only_with_complete_environment(self) -> None:
         config = CliTests().config()
         environment = {
