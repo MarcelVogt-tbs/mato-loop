@@ -24,6 +24,7 @@ from mato_loop_backend.agent.context import (
     compaction_messages,
     estimate_tokens,
     general_system_prompt,
+    memory_context_prompt,
 )
 from mato_loop_backend.agent.coordinator import approval_coordinator, question_coordinator
 from mato_loop_backend.agent.media_prompt_profiles import with_media_prompt_profiles
@@ -1661,18 +1662,8 @@ class AgentRuntime:
                 user_profile=user_profile_payload,
                 project_name=project_name,
                 project_instructions=project_instructions,
-                memory_read_enabled=memory_state.read_enabled,
-                memory_read_scope=model_trust_level,
-                memory_scope=(
-                    {
-                        "total": memory_scope.total,
-                        "pinned": memory_scope.pinned,
-                    }
-                    if memory_scope is not None
-                    else None
-                ),
+                memory_context_enabled=memory_state.read_enabled,
                 memory_overview_prefetched=memory_overview_prefetched,
-                memory_overview_has_more=memory_overview_has_more,
                 web_search_required=required_search,
                 web_search_completed=required_search_completed,
                 web_search_retry=required_search_retries,
@@ -1766,15 +1757,29 @@ class AgentRuntime:
                 )
 
             projection = None
+            system_prompt = render_system_prompt()
+            memory_scope_payload = (
+                {"total": memory_scope.total, "pinned": memory_scope.pinned}
+                if memory_scope is not None
+                else None
+            )
             for candidate_index, (
                 candidate_text,
                 candidate_memory_count,
                 candidate_episode_count,
             ) in enumerate(memory_prompt_candidates):
-                system_prompt = render_system_prompt(
+                memory_context = memory_context_prompt(
                     memory_text=candidate_text,
+                    memory_read_enabled=memory_state.read_enabled,
+                    memory_read_scope=model_trust_level,
+                    memory_scope=memory_scope_payload,
                     injected_memory_count=candidate_memory_count,
                     injected_episode_count=candidate_episode_count,
+                    memory_overview_prefetched=memory_overview_prefetched,
+                    memory_overview_has_more=memory_overview_has_more,
+                    offered_tool_names=frozenset(
+                        effective_toolset.tools if effective_toolset else ()
+                    ),
                 )
                 try:
                     projection = await ContextManager.build(
@@ -1782,6 +1787,7 @@ class AgentRuntime:
                         chat_session=chat_session,
                         records=records,
                         system_prompt=system_prompt,
+                        memory_context=memory_context,
                         tool_schemas=schemas,
                         model=model,
                         target_trust_level=model_trust_level,

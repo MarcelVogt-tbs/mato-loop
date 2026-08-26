@@ -1,6 +1,10 @@
 from datetime import UTC, datetime
 
-from mato_loop_backend.agent.context import estimate_tokens, general_system_prompt
+from mato_loop_backend.agent.context import (
+    estimate_tokens,
+    general_system_prompt,
+    memory_context_prompt,
+)
 from mato_loop_backend.agent.media_prompt_profiles import Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS
 from mato_loop_backend.agent.tools import tool_registry
 from mato_loop_backend.integrations.caldav import CalDavConfig
@@ -70,8 +74,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
             memory_mode="full",
             web_search_policy="available",
         ),
-        memory_read_enabled=True,
-        memory_scope={"total": 3, "pinned": 0},
+        memory_context_enabled=True,
         current_datetime=datetime(2026, 8, 7, 17, 49, tzinfo=UTC),
         research_tool_call_limit=8,
         offered_tool_names=frozenset(effective.tools),
@@ -94,8 +97,13 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
             instructions="i" * 8_000,
         ),
     )
+    memory_prompt = memory_context_prompt(
+        memory_read_enabled=True,
+        memory_scope={"total": 3, "pinned": 0},
+        offered_tool_names=frozenset(effective.tools),
+    )
     schemas = effective.schemas()
-    prompt_tokens = estimate_tokens(prompt, 4.0)
+    prompt_tokens = estimate_tokens(prompt, 4.0) + estimate_tokens(memory_prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
     assert len(schemas) == 49
@@ -106,4 +114,4 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     assert set(build_skill["parameters"]["properties"]) == {"brief", "name_hint"}
     assert prompt_tokens <= 7_200, prompt_tokens
     assert schema_tokens <= 8_500, schema_tokens
-    assert prompt_tokens + schema_tokens <= 15_500
+    assert prompt_tokens + schema_tokens <= 15_600

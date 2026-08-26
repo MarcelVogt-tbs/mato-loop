@@ -353,11 +353,12 @@ async def _runtime_setup(
 
     async def build_context(*_args, **kwargs):
         projections.append(kwargs)
+        messages = [{"role": "system", "content": kwargs["system_prompt"]}]
+        if kwargs.get("memory_context") is not None:
+            messages.append({"role": "assistant", "content": kwargs["memory_context"]})
+        messages.append({"role": "user", "content": records[-1].content})
         return ContextProjection(
-            messages=[
-                {"role": "system", "content": kwargs["system_prompt"]},
-                {"role": "user", "content": records[-1].content},
-            ],
+            messages=messages,
             estimated_input_tokens=100,
             input_budget_tokens=1_000,
         )
@@ -538,9 +539,14 @@ async def test_ordinary_turn_automatically_injects_unpinned_memories(
         MemoryService.pinned_context.await_args.kwargs["owner_id"]
         == db.get.return_value.user_id
     )
-    assert '"source": "retrieved"' in projections[0]["system_prompt"]
-    assert relevant.content in projections[0]["system_prompt"]
-    assert "15 total, 2 pinned" in projections[0]["system_prompt"]
+    assert '"source": "retrieved"' in projections[0]["memory_context"]
+    assert relevant.content in projections[0]["memory_context"]
+    assert "15 total, 2 pinned" in projections[0]["memory_context"]
+    assert relevant.content not in projections[0]["system_prompt"]
+    assert [message["role"] for message in requests[0]["messages"][:2]] == [
+        "system",
+        "assistant",
+    ]
     assert requests[0]["tool_choice"] == "auto"
     embedding_client.embed_query.assert_awaited_once_with(user.content)
     embedding_client.embed_queries.assert_not_awaited()
@@ -598,8 +604,8 @@ async def test_cached_automatic_context_is_revalidated_without_reembedding(
     retrieve.assert_awaited_once()
     embedding_client.embed_query.assert_awaited_once()
     MemoryService.automatic_context_by_ids.assert_awaited_once()
-    assert relevant.content in projections[0]["system_prompt"]
-    assert relevant.content not in projections[1]["system_prompt"]
+    assert relevant.content in projections[0]["memory_context"]
+    assert relevant.content not in projections[1]["memory_context"]
 
 
 async def test_project_session_uses_configured_relevant_session_limit(monkeypatch) -> None:
@@ -635,7 +641,7 @@ async def test_project_session_uses_configured_relevant_session_limit(monkeypatc
         current_session_id=session_id,
         project_id=db.get.return_value.project_id,
     )
-    prompt = projections[0]["system_prompt"]
+    prompt = projections[0]["memory_context"]
     assert '"title": "Mealie deployment"' in prompt
     assert f'"session_id": "{historical_session_id}"' in prompt
     assert f'"around_message_id": "{latest_message_id}"' in prompt
@@ -686,7 +692,7 @@ async def test_ordinary_first_turn_includes_two_latest_session_tails(monkeypatch
     assert EpisodeRetrievalService.recent.await_args.kwargs["limit"] == 2
     assert EpisodeRetrievalService.recent.await_args.kwargs["full_sessions_only"] is True
     EpisodeRetrievalService.retrieve.assert_awaited_once()
-    prompt = projections[0]["system_prompt"]
+    prompt = projections[0]["memory_context"]
     assert '"title": "Klimaanlage"' in prompt
     assert '"title": "Docker-Struktur"' in prompt
     assert latest_user.content in prompt
@@ -753,7 +759,7 @@ async def test_explicit_latest_session_request_includes_a_bounded_excerpt(monkey
 
     EpisodeRetrievalService.recent.assert_awaited_once()
     EpisodeRetrievalService.retrieve.assert_awaited_once()
-    prompt = projections[0]["system_prompt"]
+    prompt = projections[0]["memory_context"]
     assert '"title": "Vorheriger Chat"' in prompt
     assert f'"sessionId": "{reference.session_id}"' in prompt
     assert '"sessionReadArguments"' in prompt
@@ -797,7 +803,7 @@ async def test_explicit_earlier_work_request_uses_lexical_episode_search(
     assert kwargs["max_semantic_distance"] == 0.25
     assert kwargs["anchor_only"] is True
     assert kwargs["full_sessions_only"] is True
-    assert '"title": "Datenbankwahl"' in projections[0]["system_prompt"]
+    assert '"title": "Datenbankwahl"' in projections[0]["memory_context"]
 
 
 async def test_ordinary_follow_up_reuses_one_query_for_durable_and_episode_context(
@@ -878,8 +884,12 @@ async def test_context_overflow_drops_session_bootstrap_before_failing(
     await AgentRuntime._execute_loop(db, run)
 
     assert build.await_count == 2
-    assert reference.anchor_content in build.await_args_list[0].kwargs["system_prompt"]
-    assert reference.anchor_content not in build.await_args_list[1].kwargs["system_prompt"]
+    assert reference.anchor_content in build.await_args_list[0].kwargs["memory_context"]
+    assert reference.anchor_content not in build.await_args_list[1].kwargs["memory_context"]
+    assert (
+        build.await_args_list[0].kwargs["system_prompt"]
+        == build.await_args_list[1].kwargs["system_prompt"]
+    )
 
 
 async def test_memory_write_workflow_discards_drafts_until_write_resolves(
@@ -998,7 +1008,7 @@ async def test_memory_write_workflow_discards_drafts_until_write_resolves(
     assert "Required memory mutation" in projections[1]["system_prompt"]
     assert "Host-confirmed memory outcome" in projections[-1]["system_prompt"]
     assert "memory_write succeeded" in projections[-1]["system_prompt"]
-    assert refreshed_pin.content in projections[-1]["system_prompt"]
+    assert refreshed_pin.content in projections[-1]["memory_context"]
     assert "already stored" not in projections[-1]["system_prompt"]
     persisted_assistant_texts = [
         call.args[0].content
@@ -1146,19 +1156,19 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
 
     assert [request["tool_choice"] for request in requests] == ["auto"]
     assert "host prefetched a persistent-memory overview page" in projections[0][
-        "system_prompt"
+        "memory_context"
     ]
-    assert memory.content in projections[0]["system_prompt"]
-    assert pinned.content in projections[0]["system_prompt"]
-    assert projections[0]["system_prompt"].count(shared_identity.content) == 1
+    assert memory.content in projections[0]["memory_context"]
+    assert pinned.content in projections[0]["memory_context"]
+    assert projections[0]["memory_context"].count(shared_identity.content) == 1
     assert f'"sourceMessageAt": "{source_at.isoformat()}"' in projections[0][
-        "system_prompt"
+        "memory_context"
     ]
     assert f'"memoryCreatedAt": "{created_at.isoformat()}"' in projections[0][
-        "system_prompt"
+        "memory_context"
     ]
     assert f'"memoryUpdatedAt": "{updated_at.isoformat()}"' in projections[0][
-        "system_prompt"
+        "memory_context"
     ]
     assert retrieve.await_args.kwargs["mode"] == MemoryRetrieveMode.BROWSE
     assert retrieve.await_args.kwargs["limit"] == 10
@@ -1238,10 +1248,10 @@ async def test_memory_overview_revalidates_between_model_steps(monkeypatch) -> N
 
     await AgentRuntime._execute_loop(db, run)
 
-    assert pinned.content in projections[0]["system_prompt"]
-    assert memory.content in projections[0]["system_prompt"]
-    assert pinned.content not in projections[1]["system_prompt"]
-    assert memory.content not in projections[1]["system_prompt"]
+    assert pinned.content in projections[0]["memory_context"]
+    assert memory.content in projections[0]["memory_context"]
+    assert pinned.content not in projections[1]["memory_context"]
+    assert memory.content not in projections[1]["memory_context"]
     assert retrieve.await_count == 2
 
 
@@ -1296,7 +1306,7 @@ async def test_memory_overview_follow_up_uses_persisted_cursor(monkeypatch) -> N
     assert [request["tool_choice"] for request in requests] == ["auto"]
     assert retrieve.await_args.kwargs["cursor_updated_at"] == cursor_time
     assert retrieve.await_args.kwargs["cursor_id"] == cursor_id
-    assert "exhausts the currently visible" in projections[0]["system_prompt"]
+    assert "exhausts the currently visible" in projections[0]["memory_context"]
     execute_tool.assert_not_awaited()
 
 

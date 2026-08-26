@@ -60,6 +60,25 @@ def test_responses_input_keeps_function_call_and_output() -> None:
     assert items[1] == {"type": "function_call_output", "call_id": "call-1", "output": "[]"}
 
 
+def test_provider_protocols_preserve_assistant_memory_envelope_order() -> None:
+    messages = [
+        {"role": "system", "content": "Stable host prompt"},
+        {"role": "assistant", "content": "Dynamic memory context"},
+        {"role": "user", "content": "Question"},
+    ]
+
+    assert _chat_messages(messages) == messages
+    instructions, items = _responses_input(messages)
+    assert instructions == "Stable host prompt"
+    assert items == [
+        {
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Dynamic memory context"}],
+        },
+        {"role": "user", "content": [{"type": "input_text", "text": "Question"}]}
+    ]
+
+
 def test_media_follows_complete_parallel_tool_result_block_for_both_protocols() -> None:
     messages = [
         {
