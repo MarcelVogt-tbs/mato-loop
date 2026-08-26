@@ -3,7 +3,19 @@ set -Eeuo pipefail
 export LC_ALL=C
 umask 077
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+detect_project_root() {
+    local candidate="$1"
+    local home="$2"
+    if [[ -f "$candidate/apps/matoloop-agent/pyproject.toml" ]]; then
+        printf '%s' "$candidate"
+    else
+        printf '%s' "$home/mato-loop-agent/source"
+    fi
+}
+
+CHECKOUT_CANDIDATE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEFAULT_SOURCE_DIR="$HOME/mato-loop-agent/source"
+PROJECT_ROOT="$(detect_project_root "$CHECKOUT_CANDIDATE" "$HOME")"
 AGENT_PROJECT="$PROJECT_ROOT/apps/matoloop-agent"
 VENV="$AGENT_PROJECT/.venv"
 DEFAULT_DATA_DIR="$HOME/mato-loop-agent/data"
@@ -15,6 +27,7 @@ SERVICE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SERVICE_FILE="$SERVICE_DIR/matoloop-agent.service"
 UV_VERSION="0.10.9"
 INSTALL_USER="$(id -un)"
+SOURCE_URL="https://git.devmato.net/devmato/MatoLoop.git"
 
 DATA_DIR="$DEFAULT_DATA_DIR"
 WORKSPACE_DIR="$DEFAULT_WORKSPACE_DIR"
@@ -23,14 +36,26 @@ SOURCE_ROOT="$PROJECT_ROOT"
 VENV_CREATED=false
 WORKSPACE_CREATED=false
 LINGER_CREATED=false
+SOURCE_CREATED=false
 SELECTED_ACTION=""
+ACTIVE_SOURCE_STAGE=""
+
+cleanup_active_source_stage() {
+    if [[ -n "$ACTIVE_SOURCE_STAGE" && -f "$ACTIVE_SOURCE_STAGE/.managed-by-matoloop-installer" ]]; then
+        rm -rf -- "$ACTIVE_SOURCE_STAGE"
+    fi
+}
+
+trap cleanup_active_source_stage EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 usage() {
     printf '%s\n' \
         "Usage: ./scripts/install-matoloop-agent.sh [command]" \
         "" \
         "Commands:" \
-        "  install             Install from the current checkout" \
+        "  install             Install from a checkout or managed clone" \
         "  repair              Repair or reconfigure the installation" \
         "  status              Show the user service status" \
         "  uninstall [--yes]   Remove the managed installation" \
@@ -128,6 +153,7 @@ reset_state() {
     VENV_CREATED=false
     WORKSPACE_CREATED=false
     LINGER_CREATED=false
+    SOURCE_CREATED=false
 }
 
 load_state() {
@@ -146,11 +172,13 @@ load_state() {
             venvCreated) VENV_CREATED="$value" ;;
             workspaceCreated) WORKSPACE_CREATED="$value" ;;
             lingerCreated) LINGER_CREATED="$value" ;;
+            sourceCreated) SOURCE_CREATED="$value" ;;
         esac
     done < "$STATE_FILE"
     [[ "$VENV_CREATED" =~ ^(true|false)$ ]] || die "Invalid installer state."
     [[ "$WORKSPACE_CREATED" =~ ^(true|false)$ ]] || die "Invalid installer state."
     [[ "$LINGER_CREATED" =~ ^(true|false)$ ]] || die "Invalid installer state."
+    [[ "$SOURCE_CREATED" =~ ^(true|false)$ ]] || die "Invalid installer state."
 }
 
 save_state() {
@@ -168,7 +196,8 @@ save_state() {
         "sourceRoot=$SOURCE_ROOT" \
         "venvCreated=$VENV_CREATED" \
         "workspaceCreated=$WORKSPACE_CREATED" \
-        "lingerCreated=$LINGER_CREATED" > "$temporary"
+        "lingerCreated=$LINGER_CREATED" \
+        "sourceCreated=$SOURCE_CREATED" > "$temporary"
     chmod 600 "$temporary"
     mv "$temporary" "$STATE_FILE"
 }
@@ -313,6 +342,38 @@ prepare_managed_directories() {
     : > "$DATA_DIR/.managed-by-matoloop-installer"
 }
 
+prepare_source() {
+    local parent stage
+    if [[ -f "$AGENT_PROJECT/pyproject.toml" ]]; then
+        if [[ -f "$PROJECT_ROOT/.git/matoloop-installer-managed" && "$SOURCE_CREATED" != true ]]; then
+            SOURCE_CREATED=true
+            save_state
+        fi
+        return
+    fi
+    [[ ! -e "$PROJECT_ROOT" ]] || die "The Agent source directory is incomplete: $PROJECT_ROOT"
+    parent="$(dirname "$PROJECT_ROOT")"
+    mkdir -p "$parent"
+    shopt -s nullglob
+    for stage in "$parent"/.source-clone.*; do
+        if [[ -f "$stage/.managed-by-matoloop-installer" ]]; then
+            rm -rf -- "$stage"
+        fi
+    done
+    shopt -u nullglob
+    ACTIVE_SOURCE_STAGE="$(mktemp -d "$parent/.source-clone.XXXXXX")"
+    : > "$ACTIVE_SOURCE_STAGE/.managed-by-matoloop-installer"
+    if ! git clone "$SOURCE_URL" "$ACTIVE_SOURCE_STAGE/repository"; then
+        die "Could not clone the MatoLoop source."
+    fi
+    : > "$ACTIVE_SOURCE_STAGE/repository/.git/matoloop-installer-managed"
+    mv -T -- "$ACTIVE_SOURCE_STAGE/repository" "$PROJECT_ROOT" || die "Could not publish the MatoLoop source."
+    rm -rf -- "$ACTIVE_SOURCE_STAGE"
+    ACTIVE_SOURCE_STAGE=""
+    SOURCE_CREATED=true
+    save_state
+}
+
 write_agent_config() {
     local git_executable shell_executable python_executable openscad_executable
     git_executable="$(command -v git || true)"
@@ -418,6 +479,7 @@ install_or_repair() {
     install_uv
     prompt_settings
     prepare_managed_directories
+    prepare_source
 
     if [[ ! -d "$VENV" ]]; then
         VENV_CREATED=true
@@ -468,7 +530,8 @@ remove_empty_parents() {
 uninstall_agent() {
     local force="${1:-false}"
     local remove_workspace=false
-    local executable_venv
+    local executable_venv source_parent stage
+    local source_removed=false
     load_state
     [[ "$force" == true ]] || require_interactive
     if [[ "$force" != true ]]; then
@@ -508,6 +571,18 @@ uninstall_agent() {
     if [[ "$remove_workspace" == true ]]; then
         rm -rf -- "$WORKSPACE_DIR"
     fi
+    if [[ "$SOURCE_ROOT" == "$DEFAULT_SOURCE_DIR" && -f "$SOURCE_ROOT/.git/matoloop-installer-managed" ]]; then
+        rm -rf -- "$SOURCE_ROOT"
+        source_removed=true
+    fi
+    source_parent="$(dirname "$DEFAULT_SOURCE_DIR")"
+    shopt -s nullglob
+    for stage in "$source_parent"/.source-clone.*; do
+        if [[ -f "$stage/.managed-by-matoloop-installer" ]]; then
+            rm -rf -- "$stage"
+        fi
+    done
+    shopt -u nullglob
     if [[ "$LINGER_CREATED" == true ]]; then
         sudo loginctl disable-linger "$INSTALL_USER"
     fi
@@ -515,22 +590,33 @@ uninstall_agent() {
     remove_empty_parents
     printf 'The native MatoLoop Agent installation was removed.\n'
     [[ "$remove_workspace" == true || ! -d "$WORKSPACE_DIR" ]] || printf 'Workspace preserved: %s\n' "$WORKSPACE_DIR"
-    printf 'The checkout, uv, and shared system packages were preserved.\n'
+    if [[ "$source_removed" == true ]]; then
+        printf 'The installer-created source clone was removed.\n'
+    else
+        printf 'The existing checkout was preserved.\n'
+    fi
+    printf 'uv and shared system packages were preserved.\n'
 }
 
 self_test() (
-    local prompted temporary
+    local fixture prompted temporary
     temporary="$(mktemp -d)"
     trap 'rm -rf -- "$temporary"' EXIT
     HOME="$temporary/home"
     mkdir -p "$HOME"
     DEFAULT_DATA_DIR="$HOME/mato-loop-agent/data"
     DEFAULT_WORKSPACE_DIR="$HOME/mato-loop-agent/workspace"
+    DEFAULT_SOURCE_DIR="$HOME/mato-loop-agent/source"
     STATE_DIR="$HOME/state"
     STATE_FILE="$STATE_DIR/state"
     SERVICE_DIR="$HOME/systemd"
     SERVICE_FILE="$SERVICE_DIR/matoloop-agent.service"
-    PROJECT_ROOT="$HOME/source"
+    CHECKOUT_CANDIDATE="$HOME/checkout"
+    [[ "$(detect_project_root "$CHECKOUT_CANDIDATE" "$HOME")" == "$DEFAULT_SOURCE_DIR" ]]
+    mkdir -p "$CHECKOUT_CANDIDATE/apps/matoloop-agent"
+    : > "$CHECKOUT_CANDIDATE/apps/matoloop-agent/pyproject.toml"
+    [[ "$(detect_project_root "$CHECKOUT_CANDIDATE" "$HOME")" == "$CHECKOUT_CANDIDATE" ]]
+    PROJECT_ROOT="$DEFAULT_SOURCE_DIR"
     mkdir -p "$PROJECT_ROOT/apps/matoloop-agent"
     reset_state
 
@@ -561,6 +647,23 @@ self_test() (
     : > "$PROJECT_ROOT/apps/matoloop-agent/.venv/bin/matoloop-agent"
     chmod 700 "$PROJECT_ROOT/apps/matoloop-agent/.venv/bin/matoloop-agent"
     [[ "$(installation_state)" == installed ]]
+
+    rm -rf -- "$PROJECT_ROOT" "$STATE_DIR" "$SERVICE_DIR"
+    fixture="$HOME/fixture"
+    mkdir -p "$fixture/apps/matoloop-agent"
+    : > "$fixture/apps/matoloop-agent/pyproject.toml"
+    git init -q "$fixture"
+    git -C "$fixture" add apps/matoloop-agent/pyproject.toml
+    git -C "$fixture" -c user.name=MatoLoop -c user.email=installer@example.invalid commit -qm fixture
+    PROJECT_ROOT="$DEFAULT_SOURCE_DIR"
+    AGENT_PROJECT="$PROJECT_ROOT/apps/matoloop-agent"
+    VENV="$AGENT_PROJECT/.venv"
+    SOURCE_URL="$fixture"
+    reset_state
+    prepare_source
+    [[ "$SOURCE_CREATED" == true ]]
+    [[ -f "$PROJECT_ROOT/apps/matoloop-agent/pyproject.toml" ]]
+    [[ -f "$PROJECT_ROOT/.git/matoloop-installer-managed" ]]
     printf 'Installer self-test passed.\n'
 )
 

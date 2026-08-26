@@ -35,9 +35,11 @@ From a MatoLoop checkout, run the interactive installer as a normal user:
 ./scripts/install-matoloop-agent.sh
 ```
 
-The installer uses the current checkout so local Agent changes can be tested. It asks for the
-Agent data directory, home/workspace directory, and backend WebSocket URL, then reuses the Agent's
-secure pairing prompt for the computer ID and one-time token. Defaults place runtime data under
+When run from a MatoLoop checkout, the installer uses that checkout so local Agent changes can be
+tested. A standalone copy of the script instead clones
+`https://git.devmato.net/devmato/MatoLoop.git` into `~/mato-loop-agent/source`. It asks for the Agent
+data directory, home/workspace directory, and backend WebSocket URL, then reuses the Agent's secure
+pairing prompt for the computer ID and one-time token. Defaults place runtime data under
 `~/mato-loop-agent` and connect to the local frontend at
 `ws://127.0.0.1:10020/api/execution-agents/connect`. `ws://` automatically enables insecure
 transport; use `wss://` outside a trusted local network.
@@ -51,10 +53,10 @@ repair an interrupted installation, show its status, or remove its managed state
 ./scripts/install-matoloop-agent.sh uninstall
 ```
 
-Uninstalling never removes the checkout, `uv`, shared system packages, or a pre-existing
-workspace. The interactive uninstall can separately remove a workspace created by the installer.
-This helper currently targets Ubuntu or Debian hosts with systemd and `apt-get`; the native Agent
-itself remains unsandboxed and should not run as root.
+Uninstalling never removes an existing checkout, `uv`, shared system packages, or a pre-existing
+workspace. It removes a clone created by the installer; the interactive uninstall can separately
+remove an installer-created workspace. This helper currently targets Ubuntu or Debian hosts with
+systemd and `apt-get`; the native Agent itself remains unsandboxed and should not run as root.
 
 Run tests:
 
