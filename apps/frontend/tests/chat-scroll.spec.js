@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest'
 import {
   chatBottomDistance,
   chatBottomOffset,
+  chatReadingAnchor,
+  chatShouldFollowBottom,
+  restoreChatReadingAnchor,
   scrollChatElementToTop,
   scrollChatToBottom
 } from '../src/utils/chat-scroll'
@@ -28,6 +31,12 @@ describe('chat scroll geometry', () => {
     expect(target.scrollTop).toBe(1280)
   })
 
+  it('does not resume following after a programmatic scroll clamp', () => {
+    expect(chatShouldFollowBottom(true, false, false)).toBe(false)
+    expect(chatShouldFollowBottom(true, false, true)).toBe(true)
+    expect(chatShouldFollowBottom(true, true, false)).toBe(true)
+  })
+
   it('aligns expanded chat content at the top and respects reduced motion', () => {
     const calls = []
     const element = { scrollIntoView: (options) => calls.push(options) }
@@ -39,5 +48,33 @@ describe('chat scroll geometry', () => {
       { behavior: 'smooth', block: 'start' },
       { behavior: 'auto', block: 'start' }
     ])
+  })
+
+  it('captures the first visible message with its viewport offset', () => {
+    const target = { getBoundingClientRect: () => ({ top: 100, bottom: 700 }) }
+    const elements = [
+      {
+        dataset: { messageId: 'above' },
+        getBoundingClientRect: () => ({ top: 0, bottom: 80 })
+      },
+      {
+        dataset: { messageId: 'visible' },
+        getBoundingClientRect: () => ({ top: 60, bottom: 180 })
+      }
+    ]
+
+    expect(chatReadingAnchor(target, elements)).toEqual({ id: 'visible', offsetTop: -40 })
+  })
+
+  it('restores the captured message offset after layout changes', () => {
+    const target = {
+      scrollTop: 900,
+      getBoundingClientRect: () => ({ top: 100 })
+    }
+    const element = { getBoundingClientRect: () => ({ top: 240 }) }
+
+    restoreChatReadingAnchor(target, element, { id: 'visible', offsetTop: -40 })
+
+    expect(target.scrollTop).toBe(1080)
   })
 })

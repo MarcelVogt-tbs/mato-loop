@@ -13,6 +13,28 @@ export function scrollChatToBottom(target) {
   target.scrollTop = chatBottomOffset(target)
 }
 
+export function chatShouldFollowBottom(atBottom, following, userScrolling) {
+  return atBottom && (following || userScrolling)
+}
+
 export function scrollChatElementToTop(element, smooth = true) {
   element?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' })
+}
+
+export function chatReadingAnchor(target, elements = []) {
+  const viewport = target?.getBoundingClientRect?.()
+  if (!viewport) return null
+  for (const element of elements) {
+    const bounds = element.getBoundingClientRect()
+    if (bounds.bottom <= viewport.top || bounds.top >= viewport.bottom) continue
+    const id = element.dataset?.messageId
+    if (id) return { id, offsetTop: bounds.top - viewport.top }
+  }
+  return null
+}
+
+export function restoreChatReadingAnchor(target, element, anchor) {
+  if (!target || !element || !anchor) return
+  const viewportTop = target.getBoundingClientRect().top
+  target.scrollTop += element.getBoundingClientRect().top - viewportTop - anchor.offsetTop
 }

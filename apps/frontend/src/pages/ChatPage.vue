@@ -426,6 +426,9 @@ import { useConfirm } from 'src/composables/confirm'
 import { agentRunPresentation } from 'src/utils/agent-activity'
 import {
   chatBottomDistance,
+  chatReadingAnchor,
+  chatShouldFollowBottom,
+  restoreChatReadingAnchor,
   scrollChatElementToTop,
   scrollChatToBottom
 } from 'src/utils/chat-scroll'
@@ -493,7 +496,9 @@ let activityPanelScrollFrame = null
 let virtualScrollRefreshFrame = null
 let virtualScrollRefreshTimer = null
 let searchHighlightTimer = null
-let visibleMessageId = null
+let readingAnchor = null
+let virtualScrollRefreshInProgress = false
+let virtualScrollRefreshVersion = 0
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
 const sessionQuestions = computed(() => chat.current ? questions.forSession(chat.current.id) : [])
 const activeQuestion = computed(() => sessionQuestions.value[0] || null)
@@ -774,9 +779,9 @@ async function revealRouteMessage() {
   await nextTick()
   virtualScroll.value?.scrollTo(index, 'center-force')
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
-  const target = [...document.querySelectorAll('[data-message-id]')]
-    .find((element) => element.dataset.messageId === messageId)
+  const target = findMessageElement(messageId)
   target?.focus({ preventScroll: true })
+  rememberReadingAnchor()
   clearTimeout(searchHighlightTimer)
   searchHighlightTimer = window.setTimeout(() => {
     if (highlightedMessageId.value === messageId) highlightedMessageId.value = null
@@ -785,35 +790,19 @@ async function revealRouteMessage() {
 
 async function loadOlderHistory() {
   if (!chat.current?.nextMessageCursor || chat.olderMessagesLoading) return
-  const anchorId = visibleMessageId
-  const anchorElement = anchorId
-    ? [...document.querySelectorAll('[data-message-id]')]
-      .find((element) => element.dataset.messageId === anchorId)
-    : null
-  const anchorTop = anchorElement?.getBoundingClientRect().top
-  const previousHeight = scrollTarget?.scrollHeight
-  const previousScrollTop = scrollTarget?.scrollTop
-  let added
   try {
-    added = await chat.loadOlderMessages()
+    await chat.loadOlderMessages()
   } catch {
-    return
+    // The store exposes the retry state above the transcript.
   }
-  if (!added.length || !scrollTarget) return
-  await nextTick()
-  virtualScroll.value?.refresh(-1)
-  if (Number.isFinite(previousHeight) && Number.isFinite(previousScrollTop)) {
-    scrollTarget.scrollTop = previousScrollTop + scrollTarget.scrollHeight - previousHeight
-  }
-  await new Promise((resolve) => window.requestAnimationFrame(resolve))
-  if (!anchorId || !Number.isFinite(anchorTop)) return
-  const restoredAnchor = [...document.querySelectorAll('[data-message-id]')]
-    .find((element) => element.dataset.messageId === anchorId)
-  if (restoredAnchor) scrollTarget.scrollTop += restoredAnchor.getBoundingClientRect().top - anchorTop
 }
 
-function handleVirtualScroll({ index, from, direction }) {
-  visibleMessageId = transcript.value.messages[index]?.id || null
+function handleVirtualScroll({ from, direction }) {
+  if (!virtualScrollRefreshInProgress && direction === 'decrease' && followingBottom.value) {
+    followingBottom.value = false
+    cancelFollowScroll()
+  }
+  if (!virtualScrollRefreshInProgress && !followingBottom.value) rememberReadingAnchor()
   if (
     direction === 'decrease'
     && from <= 3
@@ -876,23 +865,79 @@ function addAttachmentFiles(files, done) {
   done?.(result)
 }
 
-function scheduleVirtualScrollRefresh(delay = 0) {
+function scheduleVirtualScrollRefresh(delay = 0, preservePosition = true) {
   if (delay) {
     clearTimeout(virtualScrollRefreshTimer)
-    virtualScrollRefreshTimer = window.setTimeout(scheduleVirtualScrollRefresh, delay)
+    virtualScrollRefreshTimer = window.setTimeout(
+      () => scheduleVirtualScrollRefresh(0, preservePosition),
+      delay
+    )
     return
   }
   if (virtualScrollRefreshFrame !== null) return
-  virtualScrollRefreshFrame = window.requestAnimationFrame(() => {
+  const anchor = preservePosition && !followingBottom.value
+    ? readingAnchor || captureReadingAnchor()
+    : null
+  const refreshVersion = ++virtualScrollRefreshVersion
+  virtualScrollRefreshInProgress = true
+  virtualScrollRefreshFrame = window.requestAnimationFrame(async () => {
     virtualScrollRefreshFrame = null
     virtualScroll.value?.refresh(-1)
+    await nextTick()
+    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+    if (
+      anchor
+      && !followingBottom.value
+      && refreshVersion === virtualScrollRefreshVersion
+    ) {
+      let element = findMessageElement(anchor.id)
+      if (!element) {
+        const index = transcript.value.messages.findIndex((message) => message.id === anchor.id)
+        if (index >= 0) {
+          virtualScroll.value?.scrollTo(index, 'start-force')
+          await nextTick()
+          await new Promise((resolve) => window.requestAnimationFrame(resolve))
+          element = findMessageElement(anchor.id)
+        }
+      }
+      restoreChatReadingAnchor(scrollTarget, element, anchor)
+      readingAnchor = anchor
+    }
+    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+    if (refreshVersion === virtualScrollRefreshVersion) {
+      virtualScrollRefreshInProgress = false
+    }
   })
+}
+
+function renderedMessageElements() {
+  return [...(scrollContent.value?.querySelectorAll('[data-message-id]') || [])]
+}
+
+function findMessageElement(messageId) {
+  return renderedMessageElements().find((element) => element.dataset.messageId === messageId)
+}
+
+function captureReadingAnchor() {
+  return chatReadingAnchor(scrollTarget, renderedMessageElements())
+}
+
+function rememberReadingAnchor() {
+  if (followingBottom.value || virtualScrollRefreshInProgress) return
+  readingAnchor = captureReadingAnchor() || readingAnchor
+}
+
+function clearReadingAnchor() {
+  readingAnchor = null
+  virtualScrollRefreshVersion += 1
+  virtualScrollRefreshInProgress = false
 }
 
 function revealActivityPanel(element) {
   followingBottom.value = false
+  clearReadingAnchor()
   cancelFollowScroll()
-  scheduleVirtualScrollRefresh()
+  scheduleVirtualScrollRefresh(0, false)
   if (activityPanelScrollFrame !== null) window.cancelAnimationFrame(activityPanelScrollFrame)
   activityPanelScrollFrame = window.requestAnimationFrame(() => {
     activityPanelScrollFrame = null
@@ -901,13 +946,17 @@ function revealActivityPanel(element) {
 }
 
 function updateFollowState() {
-  if (!scrollTarget) return
+  if (!scrollTarget || virtualScrollRefreshInProgress) return
   const atBottom = chatBottomDistance(scrollTarget) <= bottomThreshold
-  if (atBottom) followingBottom.value = true
+  if (chatShouldFollowBottom(atBottom, followingBottom.value, userScrollActive)) {
+    followingBottom.value = true
+    readingAnchor = null
+  }
   else if (userScrollActive) {
     followingBottom.value = false
     cancelFollowScroll()
   }
+  if (!followingBottom.value) rememberReadingAnchor()
   if (userScrollActive && !touchActive) scheduleUserScrollEnd()
 }
 
@@ -918,6 +967,7 @@ function cancelFollowScroll() {
 }
 
 function beginUserScroll() {
+  if (virtualScrollRefreshInProgress) clearReadingAnchor()
   userScrollActive = true
   clearTimeout(userScrollTimer)
   userScrollTimer = null
@@ -954,6 +1004,7 @@ function scrollToBottom() {
   clearTimeout(userScrollTimer)
   userScrollTimer = null
   followingBottom.value = true
+  clearReadingAnchor()
   cancelFollowScroll()
   scheduleFollowScroll()
 }
@@ -999,6 +1050,13 @@ watch(routeSessionId, () => void loadRouteSession(), { immediate: true })
 watch(routeProjectId, () => void reconcileRouteProject())
 watch(routeMessageId, () => void revealRouteMessage())
 watch(
+  () => transcript.value.messages,
+  () => {
+    if (!followingBottom.value) scheduleVirtualScrollRefresh()
+  },
+  { flush: 'pre' }
+)
+watch(
   () => runPresentation.value.announcement,
   (value) => {
     clearTimeout(runAnnouncementTimer)
@@ -1016,6 +1074,7 @@ watch(
   () => chat.current?.id,
   async (sessionId, previousSessionId) => {
     if (!sessionId || sessionId === previousSessionId) return
+    clearReadingAnchor()
     if (routeMessageId.value) {
       followingBottom.value = false
       return
