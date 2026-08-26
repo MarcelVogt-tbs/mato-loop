@@ -5,7 +5,10 @@
       class="chat-workspace-splitter col"
       :limits="splitLimits"
       :disable="!desktopControlCenterOpen"
-      :separator-style="desktopControlCenterOpen ? undefined : { display: 'none' }"
+      separator-class="bg-transparent"
+      :separator-style="desktopControlCenterOpen
+        ? { width: '12px', margin: '0 6px' }
+        : { display: 'none' }"
     >
       <template #before>
         <div class="chat-page__pane column no-wrap full-height">

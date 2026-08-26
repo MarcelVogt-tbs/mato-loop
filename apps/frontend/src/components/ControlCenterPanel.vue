@@ -1,5 +1,30 @@
 <template>
   <section id="control-center-panel" class="control-center column full-height no-wrap" aria-label="Control Center">
+    <div class="row items-center justify-end no-wrap">
+      <q-btn
+        v-for="item in controlCenterGlobalSections"
+        :key="item.id"
+        flat
+        round
+        dense
+        :icon="item.icon"
+        :color="controlCenter.activeGlobalSectionId === item.id ? 'primary' : undefined"
+        :loading="!controlCenter.ready && controlCenter.requestedAppId === item.id"
+        :aria-label="`${item.label} öffnen`"
+        @click="openContent(item.id)"
+      >
+        <q-badge
+          v-if="badge(item.id)"
+          floating
+          rounded
+          color="negative"
+          text-color="white"
+          :label="badge(item.id)"
+        />
+        <q-tooltip>{{ item.label }}</q-tooltip>
+      </q-btn>
+    </div>
+
     <div class="control-center__tabs row items-center no-wrap q-pl-sm">
       <q-tabs
         :model-value="controlCenter.activeGlobalSectionId ? null : controlCenter.activeAppId"
@@ -60,28 +85,6 @@
             </q-item>
           </q-list>
         </q-menu>
-      </q-btn>
-      <q-btn
-        v-for="item in controlCenterGlobalSections"
-        :key="item.id"
-        flat
-        round
-        dense
-        :icon="item.icon"
-        :color="controlCenter.activeGlobalSectionId === item.id ? 'primary' : undefined"
-        :loading="!controlCenter.ready && controlCenter.requestedAppId === item.id"
-        :aria-label="`${item.label} öffnen`"
-        @click="openContent(item.id)"
-      >
-        <q-badge
-          v-if="badge(item.id)"
-          floating
-          rounded
-          color="negative"
-          text-color="white"
-          :label="badge(item.id)"
-        />
-        <q-tooltip>{{ item.label }}</q-tooltip>
       </q-btn>
     </div>
     <q-separator />
