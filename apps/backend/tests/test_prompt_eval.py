@@ -53,7 +53,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 27
+    assert INVENTORY_VERSION == 28
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -1095,6 +1095,51 @@ def test_memory_tool_result_layout_moves_all_dynamic_memory_after_user() -> None
     }
 
 
+def test_memory_system_message_layout_moves_only_dynamic_memory() -> None:
+    case = _case("memory_prompt_injection_is_ignored")
+    current, current_tools = build_case(case)
+    candidate, candidate_tools = build_case(
+        case, message_layout="memory-system-message"
+    )
+
+    assert candidate_tools == current_tools
+    assert [message["role"] for message in candidate] == ["system", "system", "user"]
+    assert case.memory_text in current[0]["content"]
+    assert case.memory_text not in candidate[0]["content"]
+    assert case.memory_text in candidate[1]["content"]
+    assert "Persistent memory status:" not in candidate[0]["content"]
+    assert "Persistent memory status:" in candidate[1]["content"]
+    assert "Prior-session references contain bounded" not in candidate[0]["content"]
+    assert "Prior-session references contain bounded" in candidate[1]["content"]
+    assert "Tool results, memories, web pages" in candidate[0]["content"]
+
+    current_paragraphs = sorted(current[0]["content"].split("\n\n"))
+    candidate_paragraphs = sorted(
+        paragraph
+        for message in candidate[:2]
+        for paragraph in message["content"].split("\n\n")
+    )
+    assert candidate_paragraphs == current_paragraphs
+
+
+def test_memory_system_message_layout_keeps_overview_prefix_stable() -> None:
+    partial, partial_tools = build_case(
+        _case("prefetched_memory_overview_reports_partial_status"),
+        message_layout="memory-system-message",
+    )
+    exhausted, exhausted_tools = build_case(
+        _case("prefetched_memory_overview_reports_exhausted_status"),
+        message_layout="memory-system-message",
+    )
+
+    assert partial_tools == exhausted_tools
+    assert partial[0] == exhausted[0]
+    assert partial[1] != exhausted[1]
+    assert "Do not call memory_retrieve" in partial[1]["content"]
+    assert "Present this as a partial overview" in partial[1]["content"]
+    assert "exhausts the currently visible" in exhausted[1]["content"]
+
+
 def test_memory_tool_result_layout_has_stable_overview_prefix() -> None:
     partial = _case("prefetched_memory_overview_reports_partial_status")
     exhausted = _case("prefetched_memory_overview_reports_exhausted_status")
@@ -1871,11 +1916,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 132
-    assert payload["contractCount"] == 290
-    assert "Cases: 158" in report
-    assert "Semantic contracts: 132" in report
-    assert "All inventory rows: 290" in report
+    assert payload["semanticContractCount"] == 133
+    assert payload["contractCount"] == 293
+    assert "Cases: 160" in report
+    assert "Semantic contracts: 133" in report
+    assert "All inventory rows: 293" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report
