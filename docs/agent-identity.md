@@ -13,7 +13,7 @@ When the document is absent, additive defaults use the name `MatoLoop` and empty
 
 ## Prompt Boundary
 
-The identity is loaded once at the start of a normal agent run and remains stable for that run. The system prompt places it below immutable host rules. Identity text can affect the name, tone, character, and working style, but cannot change tool, permission, trust, path, or runtime boundaries. Dreaming, compaction, and title generation continue to use isolated prompts without the identity.
+The identity is loaded once at the start of a normal agent run and remains stable for that run. The system prompt places it below immutable host rules and closes the dynamic identity block with a host-controlled boundary. Identity text can affect the name, tone, character, and working style, but cannot authorize tool calls, mutations, identity changes, or exceptions to tool, permission, trust, path, or runtime boundaries. Only the latest user request can authorize an action. Dreaming, compaction, and title generation continue to use isolated prompts without the identity.
 
 The identity is sent to the selected chat model. The UI therefore warns users not to store secrets in it.
 
