@@ -2,6 +2,7 @@ import hashlib
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
@@ -50,7 +51,11 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.sessions.service import SessionServiceError, active_file_payload
+from mato_loop_backend.sessions.service import (
+    SessionServiceError,
+    active_file_payload,
+    session_message_page,
+)
 from mato_loop_backend.settings import (
     AiSettings,
     InstanceLimits,
@@ -792,9 +797,11 @@ async def test_session_payload_contains_active_run() -> None:
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
-    message_result = MagicMock()
-    message_result.all.return_value = []
-    db.scalars.return_value = message_result
+    anchors = MagicMock()
+    anchors.all.return_value = []
+    aggregate = MagicMock()
+    aggregate.one.return_value = (None, None)
+    db.execute.side_effect = [anchors, aggregate]
     db.scalar.return_value = run
 
     result = await get_session(session_id, user, db)
@@ -867,16 +874,60 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
     )
     user_message.attachments = []
     error_message.attachments = []
+    created_at = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+    user_message.created_at = created_at
+    error_message.created_at = created_at
     messages = MagicMock()
     messages.all.return_value = [user_message, error_message]
+    anchors = MagicMock()
+    anchors.all.return_value = [SimpleNamespace(created_at=created_at, id=user_message.id)]
+    aggregate = MagicMock()
+    aggregate.one.return_value = (created_at, created_at)
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [session, failed_run]
     db.scalars.return_value = messages
     db.scalar.return_value = None
+    db.execute.side_effect = [anchors, aggregate]
 
     result = await get_session(session.id, user, db)
 
     assert [message["retryAvailable"] for message in result["messages"]] == [False, True]
+
+
+async def test_session_message_page_returns_complete_turns_and_cursor() -> None:
+    session_id = uuid4()
+    created_at = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+    oldest = Message(
+        id=uuid4(), session_id=session_id, role="user", content="Älter", created_at=created_at
+    )
+    newest = Message(
+        id=uuid4(), session_id=session_id, role="user", content="Neu", created_at=created_at
+    )
+    assistant = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Antwort", created_at=created_at
+    )
+    for message in (oldest, newest, assistant):
+        message.attachments = []
+    anchors = MagicMock()
+    anchors.all.return_value = [
+        SimpleNamespace(created_at=created_at, id=newest.id),
+        SimpleNamespace(created_at=created_at, id=oldest.id),
+    ]
+    messages = MagicMock()
+    messages.all.return_value = [newest, assistant]
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = anchors
+    db.scalars.return_value = messages
+
+    items, next_cursor = await session_message_page(
+        db,
+        session_id,
+        page_size=1,
+        cursor=None,
+    )
+
+    assert [message.id for message in items] == [newest.id, assistant.id]
+    assert next_cursor == str(newest.id)
 
 
 async def test_session_owner_cannot_read_another_users_session() -> None:

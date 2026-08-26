@@ -18,6 +18,7 @@ from sqlalchemy import (
     func,
     or_,
     select,
+    tuple_,
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -306,20 +307,17 @@ async def session_detail_payload(
     session_serializer: PayloadSerializer,
     message_serializer: MessageSerializer,
 ) -> dict[str, Any]:
-    messages = list(
-        (
-            await db.scalars(
-                select(Message)
-                .where(Message.session_id == item.id)
-                .options(selectinload(Message.attachments))
-                .order_by(Message.created_at, Message.id)
-            )
-        ).all()
+    messages, next_message_cursor = await session_message_page(
+        db,
+        item.id,
+        page_size=20,
+        cursor=None,
     )
     active_run = await db.scalar(
         select(AgentRun)
         .where(AgentRun.session_id == item.id, AgentRun.status.in_(ACTIVE_RUN_STATUSES))
-        .order_by(AgentRun.created_at.desc())
+        .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+        .limit(1)
     )
     retry_message_id = None
     if active_run is None and messages:
@@ -331,22 +329,16 @@ async def session_detail_payload(
         )
         if retry_source is not None:
             retry_message_id = messages[-1].id
-    last_message_at = max(
-        (
-            message.created_at
-            for message in messages
-            if message.role in VISIBLE_MESSAGE_ROLES and message.created_at
-        ),
-        default=None,
-    )
-    last_assistant_message_at = max(
-        (
-            message.created_at
-            for message in messages
-            if message.role == "assistant" and message.created_at
-        ),
-        default=None,
-    )
+    last_message_at, last_assistant_message_at = (
+        await db.execute(
+            select(
+                func.max(Message.created_at).filter(
+                    Message.role.in_(VISIBLE_MESSAGE_ROLES)
+                ),
+                func.max(Message.created_at).filter(Message.role == "assistant"),
+            ).where(Message.session_id == item.id)
+        )
+    ).one()
     return {
         **(
             await session_serializer(
@@ -360,6 +352,7 @@ async def session_detail_payload(
             message_serializer(message, retry_available=message.id == retry_message_id)
             for message in messages
         ],
+        "nextMessageCursor": next_message_cursor,
         "activeRun": (
             {
                 "id": str(active_run.id),
@@ -371,6 +364,69 @@ async def session_detail_payload(
             else None
         ),
     }
+
+
+async def session_message_page(
+    db: AsyncSession,
+    session_id: UUID,
+    *,
+    page_size: int,
+    cursor: UUID | None,
+) -> tuple[list[Message], str | None]:
+    upper_bound: tuple[datetime, UUID] | None = None
+    if cursor is not None:
+        cursor_row = (
+            await db.execute(
+                select(Message.created_at, Message.id).where(
+                    Message.id == cursor,
+                    Message.session_id == session_id,
+                    Message.role == "user",
+                )
+            )
+        ).one_or_none()
+        if cursor_row is None:
+            raise SessionServiceError(400, "validation.invalid", field="cursor")
+        upper_bound = (cursor_row.created_at, cursor_row.id)
+
+    anchors_statement = select(Message.created_at, Message.id).where(
+        Message.session_id == session_id,
+        Message.role == "user",
+    )
+    if upper_bound is not None:
+        anchors_statement = anchors_statement.where(
+            tuple_(Message.created_at, Message.id) < upper_bound
+        )
+    anchors = (
+        await db.execute(
+            anchors_statement.order_by(Message.created_at.desc(), Message.id.desc()).limit(
+                page_size + 1
+            )
+        )
+    ).all()
+    page_anchors = anchors[:page_size]
+    if not page_anchors:
+        return [], None
+
+    lower_bound = (page_anchors[-1].created_at, page_anchors[-1].id)
+    messages_statement = select(Message).where(
+        Message.session_id == session_id,
+        tuple_(Message.created_at, Message.id) >= lower_bound,
+    )
+    if upper_bound is not None:
+        messages_statement = messages_statement.where(
+            tuple_(Message.created_at, Message.id) < upper_bound
+        )
+    messages = list(
+        (
+            await db.scalars(
+                messages_statement.options(selectinload(Message.attachments)).order_by(
+                    Message.created_at, Message.id
+                )
+            )
+        ).all()
+    )
+    next_cursor = str(lower_bound[1]) if len(anchors) > page_size else None
+    return messages, next_cursor
 
 
 async def latest_user_message(db: AsyncSession, session_id: UUID) -> Message:

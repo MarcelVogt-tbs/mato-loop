@@ -66,6 +66,7 @@
       </template>
 
     <div
+      v-if="historyExpanded"
       class="work-history__timeline"
       role="region"
       aria-label="Aktivitäten der Antworterstellung"

@@ -310,6 +310,8 @@ Unsent chat text is a browser-local draft and never reaches the backend. Drafts 
 
 Session switching updates navigation immediately, closes the mobile drawer, and replaces stale transcript and composer content with skeletons. Session loading is independent of provider, integration, approval, and tool bootstrap, which continue in parallel. Stale requests are cancelled and cannot overwrite a later session's transcript or active run.
 
+Session detail loads the latest 20 complete user-anchored conversation turns. Approaching the top of the virtual transcript automatically prepends older cursor pages while preserving the visible scroll anchor. Refreshes merge the latest page into already loaded history, and message deep links continue loading older pages until their target is available. Canonical database history remains complete; pagination limits only browser transfer and reactive state.
+
 The UI must remain usable on desktop and mobile in both light and dark mode.
 
 ## Runtime Data

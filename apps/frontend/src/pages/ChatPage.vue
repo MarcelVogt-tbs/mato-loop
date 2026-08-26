@@ -67,7 +67,25 @@
           :items="transcript.messages"
           scroll-target="#chat-scroll-area > .scroll"
           :virtual-scroll-item-size="96"
+          @virtual-scroll="handleVirtualScroll"
         >
+          <template #before>
+            <div v-if="chat.olderMessagesLoading" class="row justify-center q-py-sm" role="status">
+              <q-spinner color="primary" size="24px" />
+              <span class="app-sr-only">Ältere Nachrichten werden geladen</span>
+            </div>
+            <q-banner
+              v-else-if="chat.olderMessagesLoadFailed"
+              dense
+              rounded
+              class="app-surface-tonal q-mb-md"
+            >
+              Ältere Nachrichten konnten nicht geladen werden.
+              <template #action>
+                <q-btn flat dense no-caps color="primary" label="Erneut versuchen" @click="loadOlderHistory" />
+              </template>
+            </q-banner>
+          </template>
           <template #default="{ item: message }">
             <div
               :key="message.id"
@@ -475,6 +493,7 @@ let activityPanelScrollFrame = null
 let virtualScrollRefreshFrame = null
 let virtualScrollRefreshTimer = null
 let searchHighlightTimer = null
+let visibleMessageId = null
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
 const sessionQuestions = computed(() => chat.current ? questions.forSession(chat.current.id) : [])
 const activeQuestion = computed(() => sessionQuestions.value[0] || null)
@@ -738,7 +757,16 @@ async function reconcileRouteProject() {
 async function revealRouteMessage() {
   const messageId = routeMessageId.value
   if (!messageId || chat.current?.id !== routeSessionId.value) return
-  const index = transcript.value.messages.findIndex((message) => message.id === messageId)
+  let index = transcript.value.messages.findIndex((message) => message.id === messageId)
+  if (index < 0 && chat.current.nextMessageCursor) {
+    try {
+      await chat.loadThroughMessage(messageId)
+    } catch {
+      return
+    }
+    await nextTick()
+    index = transcript.value.messages.findIndex((message) => message.id === messageId)
+  }
   if (index < 0) return
   followingBottom.value = false
   cancelFollowScroll()
@@ -753,6 +781,45 @@ async function revealRouteMessage() {
   searchHighlightTimer = window.setTimeout(() => {
     if (highlightedMessageId.value === messageId) highlightedMessageId.value = null
   }, 2500)
+}
+
+async function loadOlderHistory() {
+  if (!chat.current?.nextMessageCursor || chat.olderMessagesLoading) return
+  const anchorId = visibleMessageId
+  const anchorElement = anchorId
+    ? [...document.querySelectorAll('[data-message-id]')]
+      .find((element) => element.dataset.messageId === anchorId)
+    : null
+  const anchorTop = anchorElement?.getBoundingClientRect().top
+  const previousHeight = scrollTarget?.scrollHeight
+  const previousScrollTop = scrollTarget?.scrollTop
+  let added
+  try {
+    added = await chat.loadOlderMessages()
+  } catch {
+    return
+  }
+  if (!added.length || !scrollTarget) return
+  await nextTick()
+  virtualScroll.value?.refresh(-1)
+  if (Number.isFinite(previousHeight) && Number.isFinite(previousScrollTop)) {
+    scrollTarget.scrollTop = previousScrollTop + scrollTarget.scrollHeight - previousHeight
+  }
+  await new Promise((resolve) => window.requestAnimationFrame(resolve))
+  if (!anchorId || !Number.isFinite(anchorTop)) return
+  const restoredAnchor = [...document.querySelectorAll('[data-message-id]')]
+    .find((element) => element.dataset.messageId === anchorId)
+  if (restoredAnchor) scrollTarget.scrollTop += restoredAnchor.getBoundingClientRect().top - anchorTop
+}
+
+function handleVirtualScroll({ index, from, direction }) {
+  visibleMessageId = transcript.value.messages[index]?.id || null
+  if (
+    direction === 'decrease'
+    && from <= 3
+    && !followingBottom.value
+    && chat.current?.nextMessageCursor
+  ) void loadOlderHistory()
 }
 
 async function loadBackgroundData() {

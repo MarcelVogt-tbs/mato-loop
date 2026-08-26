@@ -998,6 +998,80 @@ describe('chat drafts', () => {
     expect(chat.sessions[0].hasUnreadMessages).toBe(false)
   })
 
+  it('prepends older message pages without duplicates', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        items: [
+          { id: 'user-1', role: 'user' },
+          { id: 'assistant-1', role: 'assistant' },
+          { id: 'user-2', role: 'user' }
+        ],
+        nextCursor: null
+      }
+    })
+    const chat = useChatStore()
+    chat.current = {
+      id: 'session-1',
+      nextMessageCursor: 'user-2',
+      messages: [{ id: 'user-2', role: 'user' }, { id: 'assistant-2', role: 'assistant' }]
+    }
+
+    const added = await chat.loadOlderMessages()
+
+    expect(api.get).toHaveBeenCalledWith('/sessions/session-1/messages', {
+      params: { cursor: 'user-2', pageSize: 20 }
+    })
+    expect(added.map((message) => message.id)).toEqual(['user-1', 'assistant-1'])
+    expect(chat.current.messages.map((message) => message.id)).toEqual([
+      'user-1', 'assistant-1', 'user-2', 'assistant-2'
+    ])
+    expect(chat.current.nextMessageCursor).toBeNull()
+  })
+
+  it('shares an in-flight older-message request', async () => {
+    let resolvePage
+    api.get.mockReturnValue(new Promise((resolve) => { resolvePage = resolve }))
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', nextMessageCursor: 'cursor-1', messages: [] }
+
+    const first = chat.loadOlderMessages()
+    const second = chat.loadOlderMessages()
+    resolvePage({ data: { items: [{ id: 'user-1' }], nextCursor: null } })
+    await Promise.all([first, second])
+
+    expect(api.get).toHaveBeenCalledOnce()
+    expect(chat.current.messages).toEqual([{ id: 'user-1' }])
+  })
+
+  it('merges a latest-page refresh into already loaded history', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        id: 'session-1',
+        messages: [
+          { id: 'user-2', content: 'Aktualisiert' },
+          { id: 'assistant-2', content: 'Neu' }
+        ],
+        nextMessageCursor: 'server-cursor'
+      }
+    })
+    const chat = useChatStore()
+    chat.selectedSessionId = 'session-1'
+    chat.current = {
+      id: 'session-1',
+      messages: [{ id: 'user-1' }, { id: 'user-2', content: 'Alt' }],
+      nextMessageCursor: 'older-cursor'
+    }
+
+    await chat.refreshSession('session-1')
+
+    expect(chat.current.messages).toEqual([
+      { id: 'user-1' },
+      { id: 'user-2', content: 'Aktualisiert' },
+      { id: 'assistant-2', content: 'Neu' }
+    ])
+    expect(chat.current.nextMessageCursor).toBe('older-cursor')
+  })
+
   it('keeps a session unread when acknowledging it fails', async () => {
     api.get.mockResolvedValue({
       data: {
@@ -2328,13 +2402,17 @@ describe('chat drafts', () => {
 
   it('recovers an undo whose response was lost after the server commit', async () => {
     api.post.mockRejectedValue(new Error('connection lost'))
-    api.get.mockResolvedValue({
-      data: {
-        id: 'session-1',
-        messages: [{ id: 'user-1', role: 'user', content: 'Bleibt' }],
-        activeRun: null
-      }
-    })
+    const missing = new Error('not found')
+    missing.response = { status: 404 }
+    api.get
+      .mockRejectedValueOnce(missing)
+      .mockResolvedValueOnce({
+        data: {
+          id: 'session-1',
+          messages: [{ id: 'user-1', role: 'user', content: 'Bleibt' }],
+          activeRun: null
+        }
+      })
     const chat = useChatStore()
     const message = { id: 'user-2', role: 'user', content: 'Wiederherstellen', attachments: [] }
     chat.current = {

@@ -68,7 +68,7 @@
         </q-item-section>
       </template>
 
-      <div class="tool-call__body">
+      <div v-if="expanded" class="tool-call__body">
         <ToolPresentation
           v-if="!approval && presentation.items.length"
           :items="presentation.items"

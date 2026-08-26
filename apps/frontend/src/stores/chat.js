@@ -66,6 +66,14 @@ const FILESYSTEM_MUTATION_TOOLS = new Set([
 ])
 const OUTBOX_RETRY_MS = 4000
 
+function mergeMessages(existing = [], incoming = []) {
+  const replacements = new Map(incoming.map((message) => [message.id, message]))
+  const merged = existing.map((message) => replacements.get(message.id) || message)
+  const existingIds = new Set(existing.map((message) => message.id))
+  merged.push(...incoming.filter((message) => !existingIds.has(message.id)))
+  return merged
+}
+
 function newSubmissionId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
   const bytes = globalThis.crypto?.getRandomValues?.(new Uint8Array(16))
@@ -78,16 +86,20 @@ function newSubmissionId() {
 
 async function sessionStateAfterMutation(sessionId, messageId) {
   try {
-    const { data } = await api.get(`/sessions/${sessionId}`, { suppressErrorToast: true })
+    await api.get(`/sessions/${sessionId}/messages/${messageId}`, { suppressErrorToast: true })
     return {
       deleted: false,
-      messageRemoved: !data.messages?.some((message) => message.id === messageId),
-      session: data
+      messageRemoved: false,
+      session: null
     }
   } catch (error) {
-    if (error?.response?.status === 404) {
-      return { deleted: true, messageRemoved: true, session: null }
-    }
+    if (error?.response?.status !== 404) throw error
+  }
+  try {
+    const { data } = await api.get(`/sessions/${sessionId}`, { suppressErrorToast: true })
+    return { deleted: false, messageRemoved: true, session: data }
+  } catch (error) {
+    if (error?.response?.status === 404) return { deleted: true, messageRemoved: true, session: null }
     throw error
   }
 }
@@ -119,6 +131,9 @@ export const useChatStore = defineStore('chat', {
     sessionSettingsPending: 0,
     sessionRequestController: null,
     sessionRefreshPromise: null,
+    olderMessagesLoading: false,
+    olderMessagesLoadFailed: false,
+    olderMessagesPromise: null,
     loadError: null,
     sessionDefaults: defaultSessionOptions(),
     draftOwnerUserId: null,
@@ -928,6 +943,9 @@ export const useChatStore = defineStore('chat', {
       const controller = id ? markRaw(new AbortController()) : null
       this.sessionRequestController = controller
       this.current = null
+      this.olderMessagesLoading = false
+      this.olderMessagesLoadFailed = false
+      this.olderMessagesPromise = null
       this.loadError = null
       const controlCenter = useControlCenterStore()
       if (id) {
@@ -989,6 +1007,10 @@ export const useChatStore = defineStore('chat', {
         try {
           const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
           if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
+            if (this.current?.id === id) {
+              session.messages = mergeMessages(this.current.messages, session.messages)
+              session.nextMessageCursor = this.current.nextMessageCursor
+            }
             this.current = session
             void this.markSessionRead(session).catch(() => {})
             this.loadError = null
@@ -1011,6 +1033,45 @@ export const useChatStore = defineStore('chat', {
       } finally {
         if (this.sessionRefreshPromise === refresh) this.sessionRefreshPromise = null
       }
+    },
+    async loadOlderMessages(id = this.current?.id) {
+      const session = this.current
+      const cursor = session?.id === id ? session.nextMessageCursor : null
+      if (this.olderMessagesPromise) return await this.olderMessagesPromise
+      if (!id || !cursor) return []
+      this.olderMessagesLoading = true
+      this.olderMessagesLoadFailed = false
+      const request = (async () => {
+        const { data } = await api.get(`/sessions/${id}/messages`, {
+          params: { cursor, pageSize: SESSION_PAGE_SIZE }
+        })
+        if (this.current?.id !== id || this.current.nextMessageCursor !== cursor) return []
+        const existingIds = new Set((this.current.messages || []).map((message) => message.id))
+        const added = (data.items || []).filter((message) => !existingIds.has(message.id))
+        this.current.messages = [...added, ...(this.current.messages || [])]
+        this.current.nextMessageCursor = data.nextCursor || null
+        return added
+      })()
+      this.olderMessagesPromise = markRaw(request)
+      try {
+        return await request
+      } catch (error) {
+        if (this.current?.id === id) this.olderMessagesLoadFailed = true
+        throw error
+      } finally {
+        if (this.current?.id === id) this.olderMessagesLoading = false
+        if (this.olderMessagesPromise === request) this.olderMessagesPromise = null
+      }
+    },
+    async loadThroughMessage(messageId) {
+      while (
+        this.current
+        && !this.current.messages?.some((message) => message.id === messageId)
+        && this.current.nextMessageCursor
+      ) {
+        await this.loadOlderMessages(this.current.id)
+      }
+      return Boolean(this.current?.messages?.some((message) => message.id === messageId))
     },
     async updateActive(patch) {
       if (this.current) {
@@ -1243,7 +1304,7 @@ export const useChatStore = defineStore('chat', {
           notifyError(error, 'Die Anhänge konnten nicht wiederhergestellt werden.')
           throw error
         }
-        const deletesSession = session.messages?.[0]?.id === message.id
+        const deletesSession = !session.nextMessageCursor && session.messages?.[0]?.id === message.id
         const replacementError = this.attachmentReplacementError(
           files,
           deletesSession ? null : session.id,

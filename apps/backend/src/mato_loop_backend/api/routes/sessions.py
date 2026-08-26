@@ -574,6 +574,50 @@ async def get_session(
     )
 
 
+@router.get("/{session_id}/messages")
+async def get_session_messages(
+    session_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+    cursor: Annotated[UUID | None, Query()] = None,
+) -> dict[str, Any]:
+    if await _owned_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
+    try:
+        messages, next_cursor = await session_service.session_message_page(
+            db,
+            session_id,
+            page_size=page_size,
+            cursor=cursor,
+        )
+    except session_service.SessionServiceError as exc:
+        _raise_api_error(exc)
+    return {
+        "items": [message_payload(message) for message in messages],
+        "nextCursor": next_cursor,
+    }
+
+
+@router.get("/{session_id}/messages/{message_id}")
+async def get_session_message(
+    session_id: UUID,
+    message_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, Any]:
+    if await _owned_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
+    message = await db.scalar(
+        select(Message)
+        .where(Message.id == message_id, Message.session_id == session_id)
+        .options(selectinload(Message.attachments))
+    )
+    if message is None:
+        raise ApiError(404, "session.messageNotFound")
+    return message_payload(message)
+
+
 @router.post("/{session_id}/read")
 async def mark_session_read(
     session_id: UUID,
