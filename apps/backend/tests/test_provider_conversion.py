@@ -232,6 +232,7 @@ def test_responses_input_reconstructs_persisted_tool_round() -> None:
     )
 
     assert items == [
+        {"type": "reasoning", "encrypted_content": "encrypted"},
         {
             "type": "function_call",
             "call_id": "call-1",

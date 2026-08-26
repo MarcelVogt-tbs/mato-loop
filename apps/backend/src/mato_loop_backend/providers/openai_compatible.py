@@ -322,9 +322,16 @@ def _responses_input(
             ):
                 items.extend(item for item in replay_items if isinstance(item, dict))
             else:
+                replayed_reasoning = [
+                    item
+                    for item in replay_items or []
+                    if isinstance(item, dict) and item.get("type") == "reasoning"
+                ]
+                if role == "assistant" and has_tool_calls:
+                    items.extend(replayed_reasoning)
                 encrypted_reasoning = (
                     provider_data.get("reasoning_encrypted_content")
-                    if scope_matches and not has_tool_calls
+                    if scope_matches and not replayed_reasoning
                     else None
                 )
                 if role == "assistant" and encrypted_reasoning:
