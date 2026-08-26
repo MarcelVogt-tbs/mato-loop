@@ -4,8 +4,8 @@ Status: implemented in August 2026. This file is retained as an implementation r
 
 ## Implemented Contract
 
-- Every visible pin is injected in full. Automatic unpinned-memory snippets use only explicit `manual` and `tool_call` sources; legacy unpinned Dreaming records remain manageable and explicitly retrievable.
-- Automatic project context prioritizes relevant snippets from distinct `full` sessions in the same project. A reference contains the strongest topical anchor and at most one newer ranked anchor from that session. Project instructions remain an optional authoritative layer for deliberately maintained rules.
+- Every visible pin is injected in full. Automatic unpinned-memory snippets treat `manual`, `tool_call`, and `dreaming` sources equally.
+- Automatic project context includes a compact index of up to ten recent `full` sessions and prioritizes relevant snippets from distinct `full` sessions in the same project. The index points to each session's latest eligible message; a semantic reference contains only its strongest topical anchor. Project instructions remain an optional authoritative layer for deliberately maintained rules.
 - Dreaming extraction receives only its bounded source-message batch and returns evidence-backed broad profile candidates, not ordinary project or task facts.
 - The host matches every candidate independently. Exact normalized duplicates become `unchanged`, unmatched normal candidates become `create`, and only non-removal candidates with possible related memories enter model reconciliation.
 - Removal requires direct user evidence and one normalized exact target. Unmatched or merely related removal candidates are skipped before reconciliation.

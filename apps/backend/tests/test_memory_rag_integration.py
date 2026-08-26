@@ -29,6 +29,7 @@ from mato_loop_backend.models import (
     MemorySourceMessage,
     Message,
     MessageSearchChunk,
+    Project,
     UserAccount,
 )
 from mato_loop_backend.settings import TrustLevel
@@ -264,7 +265,7 @@ async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
         await db.rollback()
 
 
-async def test_automatic_memory_source_filter_excludes_legacy_dreaming() -> None:
+async def test_automatic_memory_retrieval_includes_every_source() -> None:
     marker = f"Sourcefilter-{uuid4().hex}"
     async with AsyncSessionFactory() as db:
         user = UserAccount(username=f"sources-{uuid4().hex}", password_hash="test")
@@ -295,20 +296,115 @@ async def test_automatic_memory_source_filter_excludes_legacy_dreaming() -> None
             readable_by=TrustLevel.PUBLIC,
             semantic_enabled=False,
             limit=5,
-            source_types=("manual", "tool_call"),
-        )
-        explicit = await MemoryRetrievalService.retrieve(
-            db,
-            owner_id=user.id,
-            mode=MemoryRetrieveMode.SEARCH,
-            query=marker,
-            readable_by=TrustLevel.PUBLIC,
-            semantic_enabled=False,
-            limit=5,
         )
 
-        assert {item.source_type for item in automatic.items} == {"manual", "tool_call"}
-        assert {item.id for item in explicit.items} == {item.id for item in memories}
+        assert {item.id for item in automatic.items} == {item.id for item in memories}
+        await db.rollback()
+
+
+async def test_project_session_index_uses_latest_eligible_message() -> None:
+    async with AsyncSessionFactory() as db:
+        owner = UserAccount(username=f"index-{uuid4().hex}", password_hash="test")
+        db.add(owner)
+        await db.flush()
+        project = Project(user_id=owner.id, name="Homelab")
+        other_project = Project(user_id=owner.id, name="Other")
+        db.add_all([project, other_project])
+        await db.flush()
+        current = ChatSession(user_id=owner.id, project_id=project.id, title="Current")
+        corrected = ChatSession(
+            user_id=owner.id, project_id=project.id, title="Mealie deployment"
+        )
+        older = ChatSession(user_id=owner.id, project_id=project.id, title="Older")
+        read_only = ChatSession(
+            user_id=owner.id,
+            project_id=project.id,
+            title="Read only",
+            memory_mode="read_only",
+        )
+        foreign_project = ChatSession(
+            user_id=owner.id, project_id=other_project.id, title="Other project"
+        )
+        overflow_sessions = [
+            ChatSession(
+                user_id=owner.id,
+                project_id=project.id,
+                title=f"Overflow {index}",
+            )
+            for index in range(9)
+        ]
+        db.add_all(
+            [
+                current,
+                corrected,
+                older,
+                read_only,
+                foreign_project,
+                *overflow_sessions,
+            ]
+        )
+        await db.flush()
+        old_anchor = Message(
+            session_id=corrected.id,
+            role="assistant",
+            content="Use /opt/mealie.",
+            created_at=datetime(2026, 8, 1, tzinfo=UTC),
+        )
+        corrected_anchor = Message(
+            session_id=corrected.id,
+            role="assistant",
+            content="Use /srv/stacks/mealie.",
+            created_at=datetime(2026, 8, 3, tzinfo=UTC),
+        )
+        tool_preamble = Message(
+            session_id=corrected.id,
+            role="assistant",
+            content="I will inspect it.",
+            tool_calls=[{"id": "inspect", "name": "file_read", "arguments": {}}],
+            created_at=datetime(2026, 8, 4, tzinfo=UTC),
+        )
+        db.add_all(
+            [
+                old_anchor,
+                corrected_anchor,
+                tool_preamble,
+                Message(
+                    session_id=older.id,
+                    role="user",
+                    content="Older project context",
+                    created_at=datetime(2026, 8, 2, tzinfo=UTC),
+                ),
+                Message(session_id=current.id, role="user", content="Current"),
+                Message(session_id=read_only.id, role="user", content="Read only"),
+                Message(
+                    session_id=foreign_project.id,
+                    role="user",
+                    content="Other project",
+                ),
+                *(
+                    Message(
+                        session_id=session.id,
+                        role="user",
+                        content=f"Overflow context {index}",
+                        created_at=datetime(2026, 7, index + 1, tzinfo=UTC),
+                    )
+                    for index, session in enumerate(overflow_sessions)
+                ),
+            ]
+        )
+        await db.flush()
+
+        result = await EpisodeRetrievalService.project_index(
+            db,
+            owner_id=owner.id,
+            current_session_id=current.id,
+            project_id=project.id,
+        )
+
+        assert [item.session_id for item in result.items[:2]] == [corrected.id, older.id]
+        assert len(result.items) == 10
+        assert result.items[0].latest_message_id == corrected_anchor.id
+        assert result.has_more
         await db.rollback()
 
 

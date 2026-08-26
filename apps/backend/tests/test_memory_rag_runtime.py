@@ -28,9 +28,8 @@ from mato_loop_backend.memory.episode_retrieval import (
     EpisodeReference,
     EpisodeRetrieval,
     EpisodeRetrievalService,
-    _Candidate,
-    _newer_anchors,
-    _rank_candidates,
+    ProjectSessionIndex,
+    ProjectSessionIndexItem,
 )
 from mato_loop_backend.memory.retrieval import (
     MemoryRetrieval,
@@ -44,7 +43,6 @@ from mato_loop_backend.models import (
     ChatSession,
     MemoryRecord,
     Message,
-    MessageSearchChunk,
     Project,
 )
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
@@ -176,7 +174,7 @@ def test_automatic_payload_budgets_serialized_metadata_and_deduplicates_sessions
         for index, character in enumerate(("a", "b"))
     ]
 
-    memories, episodes = _bounded_automatic_payload(
+    memories, episodes, project_index = _bounded_automatic_payload(
         [], references, [references[0]], max_characters=1200
     )
 
@@ -185,6 +183,7 @@ def test_automatic_payload_budgets_serialized_metadata_and_deduplicates_sessions
         ensure_ascii=False,
     )
     assert len(serialized) <= 1200
+    assert project_index is None
     assert len(episodes) == 2
     assert len({item["sessionId"] for item in episodes}) == 2
     recent = next(item for item in episodes if item["sessionId"] == str(references[0].session_id))
@@ -206,21 +205,15 @@ def test_automatic_payload_budgets_serialized_metadata_and_deduplicates_sessions
             ensure_ascii=False,
         )
     )
-    _, tight_episodes = _bounded_automatic_payload(
+    _, tight_episodes, _ = _bounded_automatic_payload(
         [], [references[1]], [references[0]], max_characters=tight_budget
     )
     assert [item["source"] for item in tight_episodes] == ["recent"]
 
 
-def test_project_payload_prioritizes_relevant_session_with_newer_anchor() -> None:
+def test_project_payload_prioritizes_relevant_session_and_includes_index() -> None:
     now = datetime.now(UTC)
     session_id = uuid4()
-    newer = EpisodeExcerptMessage(
-        id=uuid4(),
-        role="assistant",
-        content="Newer relevant decision",
-        created_at=now,
-    )
     relevant = EpisodeReference(
         session_id=session_id,
         session_title="Project session",
@@ -229,7 +222,12 @@ def test_project_payload_prioritizes_relevant_session_with_newer_anchor() -> Non
         anchor_role="user",
         anchor_content="Strongest topical anchor",
         excerpt=(),
-        newer_anchor=newer,
+    )
+    latest_message_id = uuid4()
+    project_session = ProjectSessionIndexItem(
+        session_id=session_id,
+        session_title="Project session",
+        latest_message_id=latest_message_id,
     )
     memory = MemoryRecord(
         id=uuid4(),
@@ -237,70 +235,53 @@ def test_project_payload_prioritizes_relevant_session_with_newer_anchor() -> Non
         category="fact",
         revision=1,
     )
-    _, relevant_only = _bounded_automatic_payload(
-        [], [relevant], [], max_characters=10_000, project_session=True
+    _, relevant_only, project_index = _bounded_automatic_payload(
+        [],
+        [relevant],
+        [],
+        max_characters=10_000,
+        project_session=True,
+        project_sessions=[project_session],
     )
     budget = len(
         json.dumps(
-            {"durableMemories": [], "priorSessionEpisodes": relevant_only},
+            {
+                "durableMemories": [],
+                "priorSessionEpisodes": relevant_only,
+                "projectSessionIndex": project_index,
+            },
             ensure_ascii=False,
         )
     )
 
-    memories, episodes = _bounded_automatic_payload(
+    memories, episodes, project_index = _bounded_automatic_payload(
         [memory],
         [relevant],
         [relevant],
         max_characters=budget,
         project_session=True,
+        project_sessions=[project_session],
     )
 
     assert memories == []
     assert [item["source"] for item in episodes] == ["relevant"]
-    assert episodes[0]["newerAnchorMessage"] == {
-        "id": str(newer.id),
-        "role": newer.role,
-        "createdAt": newer.created_at.isoformat(),
-        "preview": newer.content,
+    assert project_index == {
+        "sessions": [
+            {
+                "title": "Project session",
+                "sessionReadArguments": {
+                    "session_id": str(session_id),
+                    "around_message_id": str(latest_message_id),
+                },
+            }
+        ],
+        "hasMore": False,
     }
-    assert episodes[0]["newerSessionReadArguments"] == {
+    assert len(json.dumps(project_index, ensure_ascii=False)) <= budget // 2
+    assert episodes[0]["sessionReadArguments"] == {
         "session_id": str(session_id),
-        "around_message_id": str(newer.id),
+        "around_message_id": str(relevant.anchor_message_id),
     }
-
-
-def test_episode_ranking_returns_one_newer_candidate_from_ranked_pool() -> None:
-    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Project session")
-    other_session = ChatSession(id=uuid4(), user_id=session.user_id, title="Other")
-    old_at = datetime(2026, 8, 1, tzinfo=UTC)
-    new_at = datetime(2026, 8, 2, tzinfo=UTC)
-
-    def candidate(target: ChatSession, created_at: datetime, content: str) -> _Candidate:
-        message = Message(
-            id=uuid4(),
-            session_id=target.id,
-            role="user",
-            content=content,
-            created_at=created_at,
-        )
-        chunk = MessageSearchChunk(
-            id=uuid4(),
-            message_id=message.id,
-            chunk_index=0,
-            content=content,
-            content_hash=content,
-            profile_fingerprint="test",
-        )
-        return _Candidate(chunk, message, target, "public")
-
-    strongest = candidate(session, old_at, "strongest")
-    newer = candidate(session, new_at, "newer")
-    other = candidate(other_session, new_at, "other")
-    lexical = [strongest, newer, other]
-    anchors = _rank_candidates(lexical, [strongest], limit=2)
-
-    assert anchors == [strongest, other]
-    assert _newer_anchors(lexical, [strongest], anchors) == {session.id: newer}
 
 
 async def _runtime_setup(
@@ -450,6 +431,11 @@ async def _runtime_setup(
             )
         ),
     )
+    monkeypatch.setattr(
+        EpisodeRetrievalService,
+        "project_index",
+        AsyncMock(return_value=ProjectSessionIndex(items=[], has_more=False)),
+    )
     monkeypatch.setattr(embedding_client, "embed_query", AsyncMock(return_value=[0.0]))
     monkeypatch.setattr(
         embedding_client,
@@ -544,7 +530,7 @@ async def test_ordinary_turn_automatically_injects_unpinned_memories(
     retrieve.assert_awaited_once()
     assert retrieve.await_args.kwargs["pinned"] is False
     assert retrieve.await_args.kwargs["limit"] == 2
-    assert retrieve.await_args.kwargs["source_types"] == ("manual", "tool_call")
+    assert "source_types" not in retrieve.await_args.kwargs
     MemoryService.pinned_context.assert_awaited_once()
     assert (
         MemoryService.pinned_context.await_args.kwargs["owner_id"]
@@ -617,11 +603,23 @@ async def test_cached_automatic_context_is_revalidated_without_reembedding(
 async def test_project_session_uses_configured_relevant_session_limit(monkeypatch) -> None:
     session_id = uuid4()
     user = Message(session_id=session_id, role="user", content="What is relevant?")
-    db, run, _requests, _projections, _retrieve, _execute = await _runtime_setup(
+    db, run, _requests, projections, _retrieve, _execute = await _runtime_setup(
         monkeypatch,
         [ProviderResult(content="Answer", finish_reason="stop")],
         records=[user],
         project_session=True,
+    )
+    historical_session_id = uuid4()
+    latest_message_id = uuid4()
+    EpisodeRetrievalService.project_index.return_value = ProjectSessionIndex(
+        items=[
+            ProjectSessionIndexItem(
+                session_id=historical_session_id,
+                session_title="Mealie deployment",
+                latest_message_id=latest_message_id,
+            )
+        ],
+        has_more=True,
     )
 
     await AgentRuntime._execute_loop(db, run)
@@ -629,6 +627,17 @@ async def test_project_session_uses_configured_relevant_session_limit(monkeypatc
     assert EpisodeRetrievalService.retrieve.await_args.kwargs["limit"] == 3
     assert EpisodeRetrievalService.retrieve.await_args.kwargs["project_id"] is not None
     assert EpisodeRetrievalService.retrieve.await_args.kwargs["full_sessions_only"] is True
+    EpisodeRetrievalService.project_index.assert_awaited_once_with(
+        db,
+        owner_id=db.get.return_value.user_id,
+        current_session_id=session_id,
+        project_id=db.get.return_value.project_id,
+    )
+    prompt = projections[0]["system_prompt"]
+    assert '"title": "Mealie deployment"' in prompt
+    assert f'"session_id": "{historical_session_id}"' in prompt
+    assert f'"around_message_id": "{latest_message_id}"' in prompt
+    assert '"hasMore": true' in prompt
 
 
 async def test_ordinary_first_turn_includes_two_latest_session_tails(monkeypatch) -> None:

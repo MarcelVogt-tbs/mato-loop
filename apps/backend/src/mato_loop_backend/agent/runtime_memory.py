@@ -4,7 +4,10 @@ import json
 import re
 from typing import Any
 
-from mato_loop_backend.memory.episode_retrieval import EpisodeReference
+from mato_loop_backend.memory.episode_retrieval import (
+    EpisodeReference,
+    ProjectSessionIndexItem,
+)
 from mato_loop_backend.memory.service import memory_reference_timestamps
 from mato_loop_backend.models import MemoryRecord, Message
 from mato_loop_backend.settings import AgentRuntimeSettings, MemorySettings
@@ -15,6 +18,8 @@ AUTOMATIC_MEMORY_MAX_CHARACTERS = 500
 AUTOMATIC_RECENT_MESSAGE_MAX_CHARACTERS = 240
 AUTOMATIC_CONTEXT_BUDGET_RATIO = 0.1
 MEMORY_OVERVIEW_MAX_CHARACTERS = 12_000
+PROJECT_SESSION_INDEX_MAX_CHARACTERS = 2_000
+PROJECT_SESSION_INDEX_TITLE_MAX_CHARACTERS = 32
 
 
 def _memory_rag_query(records: list[Message]) -> str | None:
@@ -210,7 +215,7 @@ def _automatic_context_character_budget(
     return max(0, int(token_budget * model.characters_per_token))
 
 
-def _serialized_automatic_size(payload: dict[str, list[dict[str, Any]]]) -> int:
+def _serialized_automatic_size(payload: dict[str, Any]) -> int:
     return len(json.dumps(payload, ensure_ascii=False))
 
 
@@ -276,24 +281,6 @@ def _relevant_episode_item(
         "truncated": len(preview) < len(reference.anchor_content),
     }
     text_fields = [(anchor, "preview")]
-    if reference.newer_anchor is not None:
-        newer_preview = reference.newer_anchor.content[
-            :AUTOMATIC_EPISODE_REFERENCE_MAX_CHARACTERS
-        ]
-        payload["newerAnchorMessage"] = {
-            "id": str(reference.newer_anchor.id),
-            "role": reference.newer_anchor.role,
-            "createdAt": reference.newer_anchor.created_at.isoformat(),
-            "preview": newer_preview,
-        }
-        payload["newerSessionReadArguments"] = {
-            "session_id": str(reference.session_id),
-            "around_message_id": str(reference.newer_anchor.id),
-        }
-        payload["truncated"] = payload["truncated"] or len(newer_preview) < len(
-            reference.newer_anchor.content
-        )
-        text_fields.append((payload["newerAnchorMessage"], "preview"))
     return payload, text_fields
 
 
@@ -344,13 +331,50 @@ def _bounded_automatic_payload(
     *,
     max_characters: int,
     project_session: bool = False,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    payload: dict[str, list[dict[str, Any]]] = {
+    project_sessions: list[ProjectSessionIndexItem] | None = None,
+    has_more_project_sessions: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
+    payload: dict[str, Any] = {
         "durableMemories": [],
         "priorSessionEpisodes": [],
     }
+    if project_sessions is not None:
+        payload["projectSessionIndex"] = {
+            "sessions": [],
+            "hasMore": has_more_project_sessions,
+        }
     if max_characters < _serialized_automatic_size(payload):
-        return [], []
+        return [], [], None
+
+    if project_sessions is not None:
+        project_index = payload["projectSessionIndex"]
+        index_limit = min(
+            PROJECT_SESSION_INDEX_MAX_CHARACTERS,
+            max_characters // 2,
+        )
+        for session in project_sessions:
+            item = {
+                "title": session.session_title[
+                    :PROJECT_SESSION_INDEX_TITLE_MAX_CHARACTERS
+                ],
+                "sessionReadArguments": {
+                    "session_id": str(session.session_id),
+                    "around_message_id": str(session.latest_message_id),
+                },
+            }
+            project_index["sessions"].append(item)
+            if (
+                overflow := len(json.dumps(project_index, ensure_ascii=False)) - index_limit
+            ) > 0:
+                item["title"] = item["title"][: max(0, len(item["title"]) - overflow)]
+            if (
+                not item["title"]
+                or len(json.dumps(project_index, ensure_ascii=False)) > index_limit
+                or _serialized_automatic_size(payload) > max_characters
+            ):
+                project_index["sessions"].pop()
+                project_index["hasMore"] = True
+                break
 
     seen_memory_ids: set[object] = set()
     unique_memories = []
@@ -387,7 +411,11 @@ def _bounded_automatic_payload(
                     text_fields,
                     max_characters=max_characters,
                 )
-        return payload["durableMemories"], payload["priorSessionEpisodes"]
+        return (
+            payload["durableMemories"],
+            payload["priorSessionEpisodes"],
+            payload.get("projectSessionIndex"),
+        )
 
     seen_session_ids = {item.session_id for item in recent_episodes}
     unique_relevant = []
@@ -414,26 +442,36 @@ def _bounded_automatic_payload(
                 text_fields,
                 max_characters=max_characters,
             )
-    return payload["durableMemories"], payload["priorSessionEpisodes"]
+    return (
+        payload["durableMemories"],
+        payload["priorSessionEpisodes"],
+        payload.get("projectSessionIndex"),
+    )
 
 
 def _cross_session_context_text(
     memory_references: list[tuple[str, MemoryRecord]],
     episode_payload: list[dict[str, Any]],
     automatic_memory_payload: list[dict[str, Any]] | None = None,
+    project_session_index: dict[str, Any] | None = None,
 ) -> str | None:
-    if not memory_references and not automatic_memory_payload and not episode_payload:
+    if (
+        not memory_references
+        and not automatic_memory_payload
+        and not episode_payload
+        and project_session_index is None
+    ):
         return None
-    return json.dumps(
-        {
-            "durableMemories": [
-                *_durable_memory_payload(memory_references),
-                *(automatic_memory_payload or []),
-            ],
-            "priorSessionEpisodes": episode_payload,
-        },
-        ensure_ascii=False,
-    )
+    payload = {
+        "durableMemories": [
+            *_durable_memory_payload(memory_references),
+            *(automatic_memory_payload or []),
+        ],
+        "priorSessionEpisodes": episode_payload,
+    }
+    if project_session_index is not None:
+        payload["projectSessionIndex"] = project_session_index
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _durable_memory_payload(

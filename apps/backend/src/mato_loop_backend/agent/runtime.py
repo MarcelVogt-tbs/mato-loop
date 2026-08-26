@@ -129,7 +129,6 @@ from mato_loop_backend.models import (
     ChatSession,
     ExecutionAgent,
     MemoryRecord,
-    MemorySourceType,
     Message,
     Project,
     QuestionRequest,
@@ -1250,6 +1249,29 @@ class AgentRuntime:
                     owner_id=chat_session.user_id,
                     input_trust_level=model_trust_level,
                 )
+                automatic_context_suppressed = _automatic_context_suppressed(records)
+                project_sessions = None
+                has_more_project_sessions = False
+                if chat_session.project_id is not None and not automatic_context_suppressed:
+                    project_session_index = await EpisodeRetrievalService.project_index(
+                        db,
+                        owner_id=chat_session.user_id,
+                        current_session_id=chat_session.id,
+                        project_id=chat_session.project_id,
+                    )
+                    project_sessions = project_session_index.items
+                    has_more_project_sessions = project_session_index.has_more
+                automatic_budget = _automatic_context_character_budget(
+                    model, runtime_settings, memory_settings
+                )
+                _, _, bounded_project_session_index = _bounded_automatic_payload(
+                    [],
+                    [],
+                    [],
+                    max_characters=automatic_budget,
+                    project_sessions=project_sessions,
+                    has_more_project_sessions=has_more_project_sessions,
+                )
                 if memory_overview_required:
                     if not memory_overview_prefetched:
                         continuation = _memory_overview_continuation(records)
@@ -1303,15 +1325,19 @@ class AgentRuntime:
                         memory_overview_count = len(pinned_memories) + len(
                             overview_payload
                         )
+                        memory_overview_context = {
+                            "durableMemories": _durable_memory_payload(
+                                pinned_references
+                            ),
+                            "memoryOverview": overview_payload,
+                            "priorSessionEpisodes": [],
+                        }
+                        if bounded_project_session_index is not None:
+                            memory_overview_context["projectSessionIndex"] = (
+                                bounded_project_session_index
+                            )
                         memory_overview_text = json.dumps(
-                            {
-                                "durableMemories": _durable_memory_payload(
-                                    pinned_references
-                                ),
-                                "memoryOverview": overview_payload,
-                                "priorSessionEpisodes": [],
-                            },
-                            ensure_ascii=False,
+                            memory_overview_context, ensure_ascii=False
                         )
                         memory_overview_has_more = bool(
                             last_item is not None
@@ -1341,9 +1367,6 @@ class AgentRuntime:
                         automatic_memories = []
                         automatic_relevant_episodes = []
                         automatic_recent_episodes = []
-                        automatic_context_suppressed = _automatic_context_suppressed(
-                            records
-                        )
                         episode_query_enabled = bool(rag_query) and not automatic_context_suppressed
                         semantic_enabled = get_runtime_config().embedding_enabled
                         query_embedding = None
@@ -1375,10 +1398,6 @@ class AgentRuntime:
                                     query_embedding=query_embedding,
                                     semantic_enabled=semantic_enabled,
                                     max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
-                                    source_types=(
-                                        MemorySourceType.MANUAL.value,
-                                        MemorySourceType.TOOL_CALL.value,
-                                    ),
                                 )
                             ).items
                         if (
@@ -1459,22 +1478,23 @@ class AgentRuntime:
                                 full_sessions_only=True,
                             )
                         )[: memory_settings.recent_session_snippet_limit]
-                    automatic_budget = _automatic_context_character_budget(
-                        model, runtime_settings, memory_settings
-                    )
                     pinned_ids = {item.id for item in pinned_memories}
-                    automatic_memory_payload, episode_payload = (
-                        _bounded_automatic_payload(
-                            [
-                                item
-                                for item in automatic_memories
-                                if item.id not in pinned_ids
-                            ],
-                            automatic_relevant_episodes or [],
-                            automatic_recent_episodes or [],
-                            max_characters=automatic_budget,
-                            project_session=chat_session.project_id is not None,
-                        )
+                    (
+                        automatic_memory_payload,
+                        episode_payload,
+                        bounded_project_session_index,
+                    ) = _bounded_automatic_payload(
+                        [
+                            item
+                            for item in automatic_memories
+                            if item.id not in pinned_ids
+                        ],
+                        automatic_relevant_episodes or [],
+                        automatic_recent_episodes or [],
+                        max_characters=automatic_budget,
+                        project_session=chat_session.project_id is not None,
+                        project_sessions=project_sessions,
+                        has_more_project_sessions=has_more_project_sessions,
                     )
                     selected_memory_references = [("pinned", item) for item in pinned_memories]
                     injected_memory_count = len(selected_memory_references) + len(
@@ -1485,6 +1505,7 @@ class AgentRuntime:
                         selected_memory_references,
                         episode_payload,
                         automatic_memory_payload,
+                        bounded_project_session_index,
                     )
                     memory_prompt_candidates.append(
                         (
@@ -1493,7 +1514,11 @@ class AgentRuntime:
                             injected_episode_count,
                         )
                     )
-                    if automatic_memory_payload or episode_payload:
+                    if (
+                        automatic_memory_payload
+                        or episode_payload
+                        or bounded_project_session_index is not None
+                    ):
                         memory_prompt_candidates.append(
                             (
                                 _cross_session_context_text(

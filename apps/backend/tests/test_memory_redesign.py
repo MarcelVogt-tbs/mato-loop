@@ -117,7 +117,7 @@ async def test_cached_context_revalidation_preserves_rank_and_current_scope() ->
         id=uuid4(),
         user_id=owner_id,
         content="First",
-        source_type="manual",
+        source_type="dreaming",
         category="fact",
         audience="both",
         pinned=False,
@@ -149,7 +149,7 @@ async def test_cached_context_revalidation_preserves_rank_and_current_scope() ->
     statement = str(db.scalars.await_args.args[0])
     assert "memories.user_id" in statement
     assert "memories.pinned IS false" in statement
-    assert "memories.source_type IN" in statement
+    assert "memories.source_type IN" not in statement
     assert "memories.audience" in statement
 
     session_id = uuid4()

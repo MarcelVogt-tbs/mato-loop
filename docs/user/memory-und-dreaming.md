@@ -16,7 +16,7 @@ Provider- und Modelleinstellungen können den zulässigen Umgang mit öffentlich
 
 Bei jeder geeigneten Anfrage sucht MatoLoop begrenzte relevante Ausschnitte aus früheren Sessions. Projekt-Sessions verwenden ausschließlich andere Sessions desselben Projekts; normale Sessions verwenden vorherige normale Sessions. Dafür müssen Inhalte nicht zuerst als dauerhafte Erinnerung gespeichert oder durch Dreaming verarbeitet werden.
 
-In Projekten haben relevante Session-Auszüge Vorrang im automatischen Kontext. Standardmäßig können bis zu drei unterschiedliche frühere Projekt-Sessions berücksichtigt werden. Ein Auszug enthält den stärksten thematischen Treffer und, falls vorhanden, einen neueren passenden Treffer derselben Session. Zeitangaben und Referenzen erlauben dem Agenten, benötigte Details gezielt aus der vollständigen Session nachzuladen. Vollständige frühere Gespräche werden nie automatisch übertragen.
+In Projekten erhält der Agent zusätzlich einen kompakten Index der bis zu zehn neuesten geeigneten Sessions mit vollständigem Memory-Modus. Der Index enthält nur gekürzte Titel und Verweise auf die jeweils neueste geeignete Nachricht, aber keinen Nachrichteninhalt. Damit kann der Agent aktuelle Details gezielt aus der richtigen Session nachladen. Relevante Session-Auszüge haben danach Vorrang im automatischen Kontext; standardmäßig können bis zu drei unterschiedliche frühere Projekt-Sessions berücksichtigt werden. Ein Auszug enthält den stärksten thematischen Treffer. Vollständige frühere Gespräche werden nie automatisch übertragen.
 
 Beim ersten Beitrag oder bei einer ausdrücklichen Frage nach den letzten Sessions können zusätzlich kleine aktuelle Ausschnitte erscheinen. Ein ausdrücklicher Verzicht auf Memory oder vorherige Sessions und reine Textumformungen unterdrücken den automatischen Abruf.
 
@@ -28,7 +28,7 @@ Die Textabschnitte und die Volltextsuche werden gemeinsam mit der jeweiligen Nac
 
 Unter **Einstellungen > Memory** können Sie Erinnerungen suchen, filtern, anlegen, bearbeiten und löschen. Verfügbare Kategorien sind Kontext, Fakt, Ziel, Identität und Präferenz.
 
-**Vollständig berücksichtigen** ist die einzige besondere Abrufart. Solche Erinnerungen werden bei jeder zulässigen Anfrage vollständig berücksichtigt. Unangeheftete Erinnerungen aus einer manuellen Anlage oder einer ausdrücklichen Speicherung im Chat können automatisch als kurze relevante Treffer erscheinen. Ältere unangeheftete Dreaming-Erinnerungen bleiben über die Verwaltung und die gezielte Suche verfügbar, werden aber nicht automatisch eingeblendet. Quelle, Quell-Session und Zeitangaben helfen bei der Einordnung.
+**Vollständig berücksichtigen** ist die einzige besondere Abrufart. Solche Erinnerungen werden bei jeder zulässigen Anfrage vollständig berücksichtigt. Jede unangeheftete Erinnerung kann unabhängig von ihrer manuellen, Chat- oder Dreaming-Quelle automatisch als kurzer relevanter Treffer erscheinen. Quelle, Quell-Session und Zeitangaben helfen bei der Einordnung.
 
 Eine ausdrückliche Bitte im Chat, eine Information künftig immer zu berücksichtigen, kann diese Markierung bereits beim Speichern setzen. Dafür gilt dieselbe konfigurierbare Freigabe wie für andere Schreibzugriffe auf Memory. Eine gewöhnliche Bitte, etwas zu merken, setzt die Markierung nicht.
 

@@ -1,14 +1,15 @@
 # Memory and Dreaming
 
-MatoLoop projects three memory layers into a normal model request:
+MatoLoop projects four memory layers into a normal project model request:
 
 1. Canonical current-session context, compacted when necessary.
 2. Every audience-visible pinned durable memory in full.
-3. Bounded automatic snippets from relevant explicit unpinned durable memories and prior sessions.
+3. A compact index of recent project sessions.
+4. Bounded automatic snippets from relevant unpinned durable memories and prior sessions.
 
 Durable memory and prior-session retrieval are independent. A conversation does not need to be processed by Dreaming before it can be found as prior-session context.
 
-Project instructions are a separate optional authoritative layer for deliberately maintained project rules and decisions. Automatic project awareness primarily comes from bounded snippets of other sessions in that project; instructions do not replace the project history.
+Project instructions are a separate optional authoritative layer for deliberately maintained project rules and decisions. Automatic project awareness comes from the compact session index and bounded snippets of other sessions in that project; instructions do not replace the project history.
 
 ## Access, Scope, and Trust
 
@@ -20,7 +21,7 @@ Each session has a mutable `memoryMode`:
 
 The owner memory switch and effective provider and model memory policies can further restrict model-facing memory. Tool support affects memory tools and Dreaming, but not host-side automatic retrieval. The authenticated UI can still search and manage durable memories while these switches are off. Authenticated global session search and explicit permission-controlled `session_browse`, `session_search`, and `session_read` also continue to cover owned `read_only` and `disabled` sessions.
 
-Automatic prior-session retrieval uses only other `full` chat sessions in the same project scope. Project sessions remain inside their project; standalone sessions use standalone sources. The current receiving session may be `full` or `read_only`. Retrieval filters by owner and excludes the current session before ranking. Selecting the model is the release decision for already authorized session messages; durable-memory audience filtering remains independent.
+Automatic prior-session retrieval uses only other `full` chat sessions in the same project scope. Project sessions remain inside their project; standalone sessions use standalone sources. The current receiving session may be `full` or `read_only`. Retrieval filters by owner and excludes the current session before ranking. A project request additionally receives up to ten recent eligible `full` sessions from the same project, ordered by their latest eligible message. Each index item contains only its bounded title and exact `session_read` arguments for that latest message, never message content. Selecting the model is the release decision for already authorized session messages; durable-memory audience filtering remains independent.
 
 Durable memories and prior-session snippets are untrusted data, never instructions. Conflict priority is:
 
@@ -32,7 +33,7 @@ Durable memories and prior-session snippets are untrusted data, never instructio
 
 ## Automatic Context
 
-Every eligible normal turn builds one query of at most 2,000 characters from the latest user message. When that message is short, the query includes the previous user message as follow-up context. The host computes at most one query embedding and shares it across searches for unpinned durable memories and relevant prior sessions. Both searches combine PostgreSQL FTS and local cosine ranking; unavailable or invalid embeddings fall back to FTS.
+Every eligible normal turn builds one query of at most 2,000 characters from the latest user message. When that message is short, the query includes the previous user message as follow-up context. The host computes at most one query embedding and shares it across searches for unpinned durable memories and relevant prior sessions. Memory source provenance does not affect automatic eligibility. Both searches combine PostgreSQL FTS and local cosine ranking; unavailable or invalid embeddings fall back to FTS.
 
 The ranked results are cached across tool rounds in one agent run to avoid repeated embedding work. Before every later model request, the host reloads pins and revalidates cached automatic memories against current owner, audience, pin, and source state and cached episode references against current owner, project, and source-session mode.
 
@@ -42,13 +43,13 @@ The configurable fixed quotas default to:
 - three relevant prior-session snippets through `automaticSessionSnippetLimit`;
 - two recent-session snippets for first-turn bootstrap or explicit recent-session overview through `recentSessionSnippetLimit`.
 
-An explicit request not to use memory or prior context, and detected requests that only transform supplied text, suppress automatic snippets. The first turn and explicit recent-session overview may add recent snippets; relevance retrieval still uses the same turn query. Duplicate source sessions are removed. Project requests prioritize relevant snippets from distinct project sessions, then non-overlapping recent snippets, then explicit unpinned memories. Standalone requests retain the smaller single relevant-session maximum and give recent snippets precedence.
+An explicit request not to use memory or prior context, and detected requests that only transform supplied text, suppress automatic snippets. The first turn and explicit recent-session overview may add recent snippets; relevance retrieval still uses the same turn query. Duplicate source sessions are removed. Project requests prioritize relevant snippets from distinct project sessions, then non-overlapping recent snippets, then unpinned memories. Standalone requests retain the smaller single relevant-session maximum and give recent snippets precedence.
 
-The complete serialized automatic payload shares one configurable budget, `automaticContextMaxTokens`, defaulting to 1,024 tokens and capped at 10% of usable model input. Usable input is the context window minus maximum output and the safety reserve. The host converts that token limit with the model's characters-per-token estimate and truncates or omits automatic snippets to fit. Fixed quotas are maxima, not guarantees.
+The complete serialized automatic payload shares one configurable budget, `automaticContextMaxTokens`, defaulting to 1,024 tokens and capped at 10% of usable model input. Usable input is the context window minus maximum output and the safety reserve. The host converts that token limit with the model's characters-per-token estimate and truncates or omits automatic snippets to fit. The project-session index uses at most 2,000 characters and half this automatic budget. Fixed quotas are maxima, not guarantees.
 
 Visible pins are serialized in full and remain outside the automatic snippet budget. The final context projection first tries pins plus automatic snippets and can retry with pins only. It fails safely with the normal context-window error if all visible pins and required request context cannot fit; pins are never silently truncated or dropped.
 
-An automatic memory hit contains a short canonical-content preview and stable ID and revision. A relevant-session hit contains the strongest bounded topical anchor, at most one newer ranked topical anchor from the same session, and exact `session_read` arguments for each; a recent hit contains a small tail. These snippets are discovery context, not complete evidence. `memory_retrieve` loads full durable-memory details, while `session_read` loads required transcript detail or attachments under its exact permission boundary.
+An automatic memory hit contains a short canonical-content preview and stable ID and revision. A relevant-session hit contains the strongest bounded topical anchor and exact `session_read` arguments; a recent hit contains a small tail. The project-session index points separately to the latest eligible message in each listed session so the model can read current details instead of treating an older semantic anchor as the final state. These references are discovery context, not complete evidence. `memory_retrieve` loads full durable-memory details, while `session_read` loads required transcript detail or attachments under its exact permission boundary.
 
 Explicit durable-memory overview intent uses bounded chronological prefetch and continuation state while still injecting every visible pin in full. `memory_retrieve`, `session_browse`, `session_search`, and `session_read` remain available for deliberate retrieval beyond automatic quotas. Assistant provider metadata records injected durable-memory and prior-session counts without duplicating their content.
 
@@ -56,7 +57,7 @@ Explicit durable-memory overview intent uses bounded chronological prefetch and 
 
 A durable memory stores canonical content, category, audience, source provenance, revision, evidence links, seen state, `pinned`, and an optional core-identity `pinKind`. Categories are `context`, `fact`, `goal`, `identity`, and `preference`; sources are `manual`, `tool_call`, and `dreaming`. Normalized content hashes prevent case- and whitespace-equivalent duplicates.
 
-Pinned records are supplied in full on every allowed model request. Unpinned `manual` and `tool_call` records can appear automatically as relevant short snippets; full details for every source remain available through `memory_retrieve`. Legacy unpinned `dreaming` records remain valid and manageable but are not injected automatically. Core identity uses only `preferred_name`, `form_of_address`, `pronouns`, `primary_language`, and `primary_residence`; an ordinary pin has no `pinKind`. MatoLoop does not expire or delete memories because of age, non-mention, weak relevance, capacity, exposure, or usage counts.
+Pinned records are supplied in full on every allowed model request. Any unpinned record can appear automatically as a relevant short snippet regardless of whether its source is `manual`, `tool_call`, or `dreaming`; full details remain available through `memory_retrieve`. Core identity uses only `preferred_name`, `form_of_address`, `pronouns`, `primary_language`, and `primary_residence`; an ordinary pin has no `pinKind`. MatoLoop does not expire or delete memories because of age, non-mention, weak relevance, capacity, exposure, or usage counts.
 
 `memory_write` persists explicitly requested durable information and durable first-person context stated directly in the latest user message. It excludes temporary situations, hypotheticals, quotations, transformation source text, and incidental facts about third parties. An explicit request to always consider the information can pin the result; ordinary remember wording does not pin. Updates and explicit forgetting require an injected or retrieved memory ID and revision and recheck ownership, visibility, and stale-write protection.
 
@@ -70,7 +71,7 @@ The authenticated Memory UI retains full search, filtering, create, edit, pin or
 
 Chunking is deterministic and paragraph-aware. Each chunk has generated PostgreSQL FTS and a local E5 vector tied to its content and embedding profile. Persistence replaces eligible message chunks in the same transaction, making FTS available immediately; vector generation remains asynchronous. Undo and session deletion remove derived chunks through canonical-message cascades, and reconciliation repairs missing or stale index data.
 
-Hybrid ranking selects at most one primary anchor per source session and may attach one newer ranked anchor from that session. Authenticated global search deliberately differs from model-facing retrieval: it remains owner-scoped but spans the owner's permitted project scope and memory modes according to the UI search contract.
+Hybrid ranking selects at most one primary anchor per source session. Authenticated global search deliberately differs from model-facing retrieval: it remains owner-scoped but spans the owner's permitted project scope and memory modes according to the UI search contract.
 
 ## Dreaming
 

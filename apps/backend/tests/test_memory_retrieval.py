@@ -97,20 +97,15 @@ def test_retrieval_filters_bind_each_owner() -> None:
     assert first.right.value != second.right.value
 
 
-def test_retrieval_source_filter_is_optional_and_sql_level() -> None:
-    common = {
-        "owner_id": uuid4(),
-        "readable_by": TrustLevel.PRIVATE,
-        "category": None,
-        "pinned": False,
-    }
+def test_retrieval_filters_do_not_special_case_memory_sources() -> None:
+    filters = _filters(
+        owner_id=uuid4(),
+        readable_by=TrustLevel.PRIVATE,
+        category=None,
+        pinned=False,
+    )
 
-    unfiltered = _filters(**common)
-    filtered = _filters(**common, source_types=("manual", "tool_call"))
-
-    assert all("source_type" not in str(item) for item in unfiltered)
-    source_filter = next(item for item in filtered if "source_type" in str(item))
-    assert source_filter.right.value == ["manual", "tool_call"]
+    assert all("source_type" not in str(item) for item in filters)
 
 
 async def test_hybrid_retrieval_boosts_candidates_found_by_both_strategies(

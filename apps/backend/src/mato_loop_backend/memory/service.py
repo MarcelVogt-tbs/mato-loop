@@ -1920,12 +1920,6 @@ class MemoryService:
                         MemoryRecord.user_id == owner_id,
                         MemoryRecord.id.in_(memory_ids),
                         MemoryRecord.pinned.is_(False),
-                        MemoryRecord.source_type.in_(
-                            (
-                                MemorySourceType.MANUAL.value,
-                                MemorySourceType.TOOL_CALL.value,
-                            )
-                        ),
                         memory_visibility_filter(readable_by),
                     )
                     .options(*memory_reference_options(owner_id))
