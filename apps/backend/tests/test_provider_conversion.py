@@ -179,13 +179,11 @@ def test_responses_input_replays_reasoning_before_assistant_output() -> None:
             {
                 "role": "assistant",
                 "content": "Ergebnis",
-                "tool_calls": [{"id": "call-1", "name": "read_file", "arguments": {}}],
                 "provider_data": {
                     "reasoning_encrypted_content": "encrypted",
                     "continuation_scope": scope,
                 },
             },
-            {"role": "tool", "content": "Inhalt", "tool_call_id": "call-1"},
         ],
         scope,
     )
@@ -193,8 +191,58 @@ def test_responses_input_replays_reasoning_before_assistant_output() -> None:
     assert [item.get("type") for item in items] == [
         "reasoning",
         None,
-        "function_call",
-        "function_call_output",
+    ]
+
+
+def test_responses_input_reconstructs_persisted_tool_round() -> None:
+    scope = {"adapterType": "openai-codex", "providerId": "provider-1"}
+    _, items = _responses_input(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "name": "webfetch",
+                        "arguments": {"url": "https://example.com/watch?REDACTED"},
+                    }
+                ],
+                "provider_data": {
+                    "continuation_scope": scope,
+                    "reasoning_encrypted_content": "legacy-encrypted",
+                    "responses_output_items": [
+                        {"type": "reasoning", "encrypted_content": "encrypted"},
+                        {
+                            "type": "function_call",
+                            "call_id": "call-1",
+                            "name": "webfetch",
+                            "arguments": '{"url":"https://example.com/watch?REDACTED"}',
+                        },
+                    ],
+                },
+            },
+            {
+                "role": "tool",
+                "content": '{"error":{"code":"webfetch.tlsFailed"}}',
+                "tool_call_id": "call-1",
+            },
+        ],
+        scope,
+    )
+
+    assert items == [
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "webfetch",
+            "arguments": '{"url": "https://example.com/watch?REDACTED"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": '{"error":{"code":"webfetch.tlsFailed"}}',
+        },
     ]
 
 

@@ -297,6 +297,7 @@ def _responses_input(
     for index, message in enumerate(messages):
         role = message["role"]
         content = message.get("content") or ""
+        has_tool_calls = bool(message.get("tool_calls"))
         provider_data = message.get("provider_data") or {}
         if role == "system":
             instructions.append(content)
@@ -313,11 +314,18 @@ def _responses_input(
                 "continuation_scope"
             ) == continuation_scope
             replay_items = provider_data.get("responses_output_items") if scope_matches else None
-            if role == "assistant" and isinstance(replay_items, list) and replay_items:
+            if (
+                role == "assistant"
+                and not has_tool_calls
+                and isinstance(replay_items, list)
+                and replay_items
+            ):
                 items.extend(item for item in replay_items if isinstance(item, dict))
             else:
                 encrypted_reasoning = (
-                    provider_data.get("reasoning_encrypted_content") if scope_matches else None
+                    provider_data.get("reasoning_encrypted_content")
+                    if scope_matches and not has_tool_calls
+                    else None
                 )
                 if role == "assistant" and encrypted_reasoning:
                     items.append({"type": "reasoning", "encrypted_content": encrypted_reasoning})
