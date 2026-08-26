@@ -63,9 +63,9 @@ prompt_value() {
     local variable="$1"
     local prompt="$2"
     local default="$3"
-    local answer
-    read -r -p "$prompt [$default]: " answer
-    printf -v "$variable" '%s' "${answer:-$default}"
+    local response
+    read -r -p "$prompt [$default]: " response
+    printf -v "$variable" '%s' "${response:-$default}"
 }
 
 normalize_path() {
@@ -519,7 +519,7 @@ uninstall_agent() {
 }
 
 self_test() (
-    local temporary
+    local prompted temporary
     temporary="$(mktemp -d)"
     trap 'rm -rf -- "$temporary"' EXIT
     HOME="$temporary/home"
@@ -534,6 +534,10 @@ self_test() (
     mkdir -p "$PROJECT_ROOT/apps/matoloop-agent"
     reset_state
 
+    prompt_value prompted "Test value" "default" <<< ""
+    [[ "$prompted" == default ]]
+    prompt_value prompted "Test value" "default" <<< "custom"
+    [[ "$prompted" == custom ]]
     validate_backend_url "ws://127.0.0.1:10020/api/execution-agents/connect"
     validate_backend_url "wss://mato.example/api/execution-agents/connect"
     ! validate_backend_url "http://mato.example/api/execution-agents/connect"
