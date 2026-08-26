@@ -59,7 +59,7 @@
           <q-card-section class="q-pt-none">
             <q-banner rounded class="app-surface-tonal">
               <template #avatar><q-icon name="info_outline" color="primary" /></template>
-              Bei erlaubten Anfragen werden angeheftete Erinnerungen vollständig eingefügt. Nicht angeheftete Erinnerungen bleiben dauerhaft gespeichert und erscheinen automatisch nur als kurze relevante Treffer; vollständige Details werden bei Bedarf geladen. Relevante frühere Sessions mit vollem Memory-Zugriff können als begrenzte Auszüge erscheinen. Alle Erinnerungen bleiben auch bei ausgeschaltetem Memory oder Dreaming hier verwaltbar.
+              Erinnerungen mit „Immer im Kontext“ werden bei erlaubten Anfragen vollständig eingefügt. Erinnerungen mit „Bei passender Anfrage“ bleiben dauerhaft gespeichert und erscheinen automatisch nur als kurze relevante Treffer; vollständige Details werden bei Bedarf geladen. Relevante frühere Sessions mit vollem Memory-Zugriff können als begrenzte Auszüge erscheinen. Alle Erinnerungen bleiben auch bei ausgeschaltetem Memory oder Dreaming hier verwaltbar.
             </q-banner>
           </q-card-section>
           <q-inner-loading :showing="memories.settingsLoading && !settingsLoaded" />
@@ -187,9 +187,6 @@
                   >
                     {{ audienceMeta(item.audience).label }}
                   </q-chip>
-                  <q-chip v-if="item.pinKind" dense square icon="badge">
-                    Kernidentität: {{ pinKindLabel(item.pinKind) }}
-                  </q-chip>
                   <q-badge
                     outline
                     color="primary"
@@ -220,10 +217,10 @@
                   dense
                   icon="push_pin"
                   :color="item.pinned ? 'primary' : undefined"
-                  :aria-label="item.pinned ? 'Erinnerung nicht mehr vollständig berücksichtigen' : 'Erinnerung vollständig berücksichtigen'"
+                  :aria-label="item.pinned ? 'Auf „Bei passender Anfrage“ setzen' : 'Auf „Immer im Kontext“ setzen'"
                   @click="togglePinned(item)"
                 >
-                  <q-tooltip>{{ item.pinned ? 'Nicht mehr anheften' : 'Vollständig berücksichtigen' }}</q-tooltip>
+                  <q-tooltip>{{ item.pinned ? 'Auf „Bei passender Anfrage“ setzen' : 'Auf „Immer im Kontext“ setzen' }}</q-tooltip>
                 </q-btn>
                 <q-btn flat round dense icon="edit" aria-label="Erinnerung bearbeiten" @click="openEditDialog(item)">
                   <q-tooltip>Bearbeiten</q-tooltip>
@@ -310,7 +307,7 @@
                   Begrenzt die kurzen relevanten Treffer aus Erinnerungen und früheren Sessions. In Projekten haben relevante Session-Auszüge Vorrang. Diese Einstellungen gelten unabhängig von Dreaming.
                 </div>
                 <div class="settings-number-grid q-mt-md q-mb-lg">
-                  <q-input v-model.number="settingsForm.automaticMemorySnippetLimit" outlined type="number" min="0" max="5" label="Relevante Memory-Kurzhits" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
+                  <q-input v-model.number="settingsForm.automaticMemorySnippetLimit" outlined type="number" min="0" max="5" label="Memory-Treffer bei passender Anfrage" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
                   <q-input v-model.number="settingsForm.automaticSessionSnippetLimit" outlined type="number" min="0" max="5" label="Relevante Session-Auszüge" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
                   <q-input v-model.number="settingsForm.recentSessionSnippetLimit" outlined type="number" min="0" max="5" label="Auszüge aus letzten Sessions" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
                   <q-input v-model.number="settingsForm.automaticContextMaxTokens" outlined type="number" min="128" max="2048" label="Max. automatischer Kontext (Tokens)" :disable="memories.settingsLoading" :rules="[integerRangeRule(128, 2048)]" />
@@ -344,22 +341,6 @@
                 <div class="text-body2 app-muted q-mb-lg">
                   Das Zusammenführen von Erinnerungen benötigt sowohl das Ändern der bestehenden als auch das Entfernen der zusammengeführten Erinnerungen.
                 </div>
-                <div class="text-subtitle2 text-weight-medium">Angeheftete Erinnerungen</div>
-                <div class="text-body2 app-muted q-mt-xs q-mb-md">
-                  Dreaming erstellt bis zu diesem Limit neue angeheftete Erinnerungen. Manuelle Anheftungen dürfen das Limit überschreiten. Am Limit kann Dreaming weiter ändern und entfernen, erstellt aber keine neue Erinnerung.
-                </div>
-                <q-input
-                  v-model.number="settingsForm.dreamingMaxPinnedMemories"
-                  outlined
-                  type="number"
-                  min="1"
-                  max="100"
-                  label="Max. durch Dreaming angeheftet"
-                  :hint="pinnedMemoryCountHint"
-                  :disable="memories.settingsLoading"
-                  :rules="[integerRangeRule(1, 100)]"
-                  class="q-mb-lg"
-                />
                 <div class="text-subtitle2 text-weight-medium">Extraktion</div>
                 <div class="text-body2 app-muted q-mt-xs">
                   Begrenzt, wie viele Nachrichten und Erinnerungskandidaten ein Lauf verarbeitet.
@@ -486,7 +467,7 @@
             <div class="col">
               <div class="text-h6">{{ editingMemory ? 'Erinnerung bearbeiten' : 'Erinnerung hinzufügen' }}</div>
               <div class="text-body2 app-muted">
-                Inhalt, Kategorie, Modellzugriff und optional Kernidentität festlegen.
+                Inhalt, Kategorie und Modellzugriff festlegen.
               </div>
             </div>
             <q-btn flat round dense icon="close" aria-label="Dialog schließen" :disable="savingMemory" v-close-popup />
@@ -525,29 +506,16 @@
                 :options="audienceOptions"
               />
             </div>
-            <q-select
-              v-if="memoryForm.category === 'identity'"
-              :model-value="memoryForm.pinKind"
-              outlined
-              clearable
-              emit-value
-              map-options
-              label="Kernidentität (optional)"
-              hint="Wird immer berücksichtigt. Verwende jede Art nur für den passenden Identitätswert."
-              :options="pinKindOptions"
-              class="q-mt-md"
-              @update:model-value="setPinKind"
-            />
             <q-toggle
               v-if="editingMemory"
               :model-value="memoryForm.pinned"
               color="primary"
-              label="Vollständig berücksichtigen"
+              label="Immer im Kontext"
               class="q-mt-md"
               @update:model-value="setPinned"
             />
             <div v-if="editingMemory" class="text-caption app-muted">
-              Ausgeschaltet bleibt die Erinnerung gespeichert. Manuell oder im Chat gespeicherte Einträge können automatisch als Kurzhit erscheinen; ältere Dreaming-Einträge bleiben gezielt abrufbar.
+              Ausgeschaltet bleibt die Erinnerung gespeichert und erscheint automatisch nur bei einer passenden Anfrage; vollständige Details bleiben gezielt abrufbar.
             </div>
             <div v-if="editingMemory" class="memory-source app-surface-tonal q-pa-md q-mt-md rounded-borders">
               <div class="text-subtitle2">Quelle</div>
@@ -597,7 +565,7 @@ const savedSettings = ref(null)
 const dreamSessionId = ref(null)
 const advancedSettingsOpen = ref(false)
 const filters = reactive({ query: '', category: null, sourceType: null, audience: null, pinned: null })
-const memoryForm = reactive({ content: '', category: null, audience: 'both', pinned: false, pinKind: null })
+const memoryForm = reactive({ content: '', category: null, audience: 'both', pinned: false })
 const settingsForm = reactive({
   enabled: false,
   automaticDreamingEnabled: false,
@@ -609,12 +577,10 @@ const settingsForm = reactive({
   dreamingMaxCandidates: 1,
   dreamingUpdatePolicy: 'auto',
   dreamingRemovePolicy: 'ask',
-  dreamingMaxPinnedMemories: 10,
   automaticMemorySnippetLimit: 2,
   automaticSessionSnippetLimit: 3,
   recentSessionSnippetLimit: 2,
   automaticContextMaxTokens: 1024,
-  pinnedMemoryCount: null,
   automaticDreamingUnavailableReason: null,
   manualDreamingAvailable: false,
   manualDreamingUnavailableReason: null
@@ -629,16 +595,9 @@ const audienceOptions = [
   { label: 'Nur öffentliche Modelle', value: 'public_only', icon: 'public', color: 'blue-grey-7' },
   { label: 'Öffentliche und private Modelle', value: 'both', icon: 'groups', color: 'primary' }
 ]
-const pinKindOptions = [
-  { label: 'Bevorzugter Name', value: 'preferred_name' },
-  { label: 'Anrede', value: 'form_of_address' },
-  { label: 'Pronomen', value: 'pronouns' },
-  { label: 'Hauptsprache', value: 'primary_language' },
-  { label: 'Hauptwohnsitz', value: 'primary_residence' }
-]
 const pinnedOptions = [
-  { label: 'Vollständig berücksichtigt', value: true },
-  { label: 'Kurzhit und Details bei Bedarf', value: false }
+  { label: 'Immer im Kontext', value: true },
+  { label: 'Bei passender Anfrage', value: false }
 ]
 const dreamingPolicyOptions = [
   { label: 'Deaktiviert', value: 'disabled' },
@@ -682,7 +641,6 @@ const editableTechnicalSettings = computed(() => ({
   dreamingMaxCandidates: Number(settingsForm.dreamingMaxCandidates),
   dreamingUpdatePolicy: settingsForm.dreamingUpdatePolicy,
   dreamingRemovePolicy: settingsForm.dreamingRemovePolicy,
-  dreamingMaxPinnedMemories: Number(settingsForm.dreamingMaxPinnedMemories),
   automaticMemorySnippetLimit: Number(settingsForm.automaticMemorySnippetLimit),
   automaticSessionSnippetLimit: Number(settingsForm.automaticSessionSnippetLimit),
   recentSessionSnippetLimit: Number(settingsForm.recentSessionSnippetLimit),
@@ -691,9 +649,6 @@ const editableTechnicalSettings = computed(() => ({
 const settingsChanged = computed(() => (
   JSON.stringify(editableTechnicalSettings.value) !== JSON.stringify(savedSettings.value)
 ))
-const pinnedMemoryCountHint = computed(() => settingsForm.pinnedMemoryCount == null
-  ? `Limit: ${settingsForm.dreamingMaxPinnedMemories}`
-  : `${settingsForm.pinnedMemoryCount} / ${settingsForm.dreamingMaxPinnedMemories} Erinnerungen angeheftet`)
 const canStartDreaming = computed(() => Boolean(
   settingsLoaded.value
   && memories.settings?.manualDreamingAvailable
@@ -752,7 +707,7 @@ function changePageSize() {
 function openCreateDialog() {
   editingMemory.value = null
   Object.assign(memoryForm, {
-    content: '', category: null, audience: 'both', pinned: false, pinKind: null
+    content: '', category: null, audience: 'both', pinned: false
   })
   memoryDialogOpen.value = true
 }
@@ -763,8 +718,7 @@ function openEditDialog(item) {
     content: item.content,
     category: item.category,
     audience: item.audience,
-    pinned: item.pinned,
-    pinKind: item.pinKind
+    pinned: item.pinned
   })
   memoryDialogOpen.value = true
 }
@@ -789,8 +743,8 @@ async function saveMemory() {
   ) {
     const accepted = await confirm(
       'Diese Erinnerung wird bei erlaubten Anfragen vollständig in den Modellkontext eingefügt und vergrößert ihn.',
-      'Vollständig berücksichtigen',
-      { okLabel: 'Anheften', okColor: 'primary' }
+      'Immer im Kontext',
+      { okLabel: 'Bestätigen', okColor: 'primary' }
     )
     if (!accepted) return
   }
@@ -800,23 +754,19 @@ async function saveMemory() {
     const payload = {
       content: memoryForm.content.trim(),
       category: memoryForm.category,
-      audience: memoryForm.audience,
-      pinKind: memoryForm.pinKind
+      audience: memoryForm.audience
     }
     if (editingMemory.value) {
-      const wasPinned = editingMemory.value.pinned
       await memories.updateMemory(editingMemory.value.id, {
         ...payload,
         pinned: memoryForm.pinned,
         expectedRevision: editingMemory.value.revision
       })
-      if (wasPinned !== memoryForm.pinned) updatePinnedCount(memoryForm.pinned ? 1 : -1)
       page.value = 1
       await loadMemories(0)
       $q.notify({ type: 'positive', message: 'Erinnerung gespeichert' })
     } else {
-      const created = await memories.createMemory(payload)
-      if (created.pinned) updatePinnedCount(1)
+      await memories.createMemory(payload)
       await loadMemories(0)
       $q.notify({ type: 'positive', message: 'Erinnerung hinzugefügt' })
     }
@@ -837,7 +787,6 @@ async function removeMemory(item) {
   if (!accepted) return
   try {
     await memories.deleteMemory(item.id, item.revision)
-    if (item.pinned) updatePinnedCount(-1)
     const targetPage = Math.min(page.value, Math.max(1, Math.ceil(memories.total / pageSize.value)))
     page.value = targetPage
     await loadMemories((targetPage - 1) * pageSize.value)
@@ -852,8 +801,8 @@ async function togglePinned(item) {
   if (pinned) {
     const accepted = await confirm(
       'Diese Erinnerung wird bei erlaubten Anfragen vollständig in den Modellkontext eingefügt und vergrößert ihn.',
-      'Vollständig berücksichtigen',
-      { okLabel: 'Anheften', okColor: 'primary' }
+      'Immer im Kontext',
+      { okLabel: 'Bestätigen', okColor: 'primary' }
     )
     if (!accepted) return
   }
@@ -863,20 +812,12 @@ async function togglePinned(item) {
       category: item.category,
       audience: item.audience,
       pinned,
-      pinKind: pinned ? item.pinKind : null,
       expectedRevision: item.revision
     })
-    updatePinnedCount(pinned ? 1 : -1)
     await loadMemories()
-    $q.notify({ type: 'positive', message: pinned ? 'Erinnerung angeheftet' : 'Erinnerung gelöst' })
+    $q.notify({ type: 'positive', message: pinned ? 'Erinnerung ist immer im Kontext' : 'Erinnerung erscheint bei passender Anfrage' })
   } catch {
     // The central API interceptor displays stale revisions and other errors.
-  }
-}
-
-function updatePinnedCount(change) {
-  if (settingsForm.pinnedMemoryCount != null) {
-    settingsForm.pinnedMemoryCount = Math.max(0, Number(settingsForm.pinnedMemoryCount) + change)
   }
 }
 
@@ -927,9 +868,7 @@ async function refreshDreamRuns() {
   ])
   if (settingsResult.status === 'fulfilled') {
     const settings = settingsResult.value
-    if (settingsLoaded.value) {
-      settingsForm.pinnedMemoryCount = settings.pinnedMemoryCount
-    } else {
+    if (!settingsLoaded.value) {
       assignSettings(settings)
     }
   }
@@ -961,14 +900,8 @@ function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
 }
 
-function setPinKind(value) {
-  memoryForm.pinKind = value
-  if (value) memoryForm.pinned = true
-}
-
 function setPinned(value) {
   memoryForm.pinned = value
-  if (!value) memoryForm.pinKind = null
 }
 
 function audienceMeta(value) {
@@ -976,12 +909,8 @@ function audienceMeta(value) {
     || { label: value || 'Unbekannt', icon: 'help_outline', color: 'grey-7' }
 }
 
-function pinKindLabel(value) {
-  return pinKindOptions.find((item) => item.value === value)?.label || value || 'Unbekannt'
-}
-
 function pinnedLabel(pinned) {
-  return pinned ? 'Vollständig berücksichtigt' : 'Relevanter Kurzhit'
+  return pinned ? 'Immer im Kontext' : 'Bei passender Anfrage'
 }
 
 function sourceDescription(item) {
@@ -1027,10 +956,6 @@ watch(section, (value, previous) => {
     page.value = 1
     void loadMemories(0)
   }
-})
-
-watch(() => memoryForm.category, (value) => {
-  if (value !== 'identity') memoryForm.pinKind = null
 })
 
 onMounted(() => {

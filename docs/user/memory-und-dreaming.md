@@ -12,6 +12,12 @@ Memory ermöglicht MatoLoop, passende Informationen über einzelne Sessions hina
 
 Provider- und Modelleinstellungen können den zulässigen Umgang mit öffentlichen und privaten Inhalten weiter einschränken.
 
+## Über mich
+
+Unter **Einstellungen > Personalisierung > Über mich** pflegen Sie bevorzugten Namen, Anrede, Pronomen, Hauptsprache und Hauptwohnsitz. Diese Angaben sind kein Memory: Sie gelten unabhängig vom Memory-Modus, sind weder durchsuchbar noch Teil von Dreaming. Der Agent kann sie nur auf Ihre ausdrückliche Bitte über ein eigenes Tool ändern oder entfernen; die Tool-Richtlinie bestimmt, ob Sie die Änderung einzeln freigeben müssen.
+
+Für jede Angabe können Sie zwischen privaten und öffentlichen Modellen umschalten. Mit **Auch für öffentliche Modelle verwenden** übernimmt das öffentliche Feld den privaten Wert; andernfalls pflegen Sie beide Werte getrennt. Eine aktuelle direkte Aussage im Chat hat weiterhin Vorrang vor dem gepflegten Profil; das Profil hat Vorrang vor älteren Erinnerungen und Sessions.
+
 ## Sitzungsübergreifender Abruf
 
 Bei jeder geeigneten Anfrage sucht MatoLoop begrenzte relevante Ausschnitte aus früheren Sessions. Projekt-Sessions verwenden ausschließlich andere Sessions desselben Projekts; normale Sessions verwenden vorherige normale Sessions. Dafür müssen Inhalte nicht zuerst als dauerhafte Erinnerung gespeichert oder durch Dreaming verarbeitet werden.
@@ -28,7 +34,7 @@ Die Textabschnitte und die Volltextsuche werden gemeinsam mit der jeweiligen Nac
 
 Unter **Einstellungen > Memory** können Sie Erinnerungen suchen, filtern, anlegen, bearbeiten und löschen. Verfügbare Kategorien sind Kontext, Fakt, Ziel, Identität und Präferenz.
 
-**Vollständig berücksichtigen** ist die einzige besondere Abrufart. Solche Erinnerungen werden bei jeder zulässigen Anfrage vollständig berücksichtigt. Jede unangeheftete Erinnerung kann unabhängig von ihrer manuellen, Chat- oder Dreaming-Quelle automatisch als kurzer relevanter Treffer erscheinen. Quelle, Quell-Session und Zeitangaben helfen bei der Einordnung.
+**Immer im Kontext** ist die einzige besondere Abrufart. Solche Erinnerungen werden bei jeder zulässigen Anfrage vollständig berücksichtigt. Eine Erinnerung mit **Bei passender Anfrage** kann unabhängig von ihrer manuellen, Chat- oder Dreaming-Quelle automatisch als kurzer relevanter Treffer erscheinen. Quelle, Quell-Session und Zeitangaben helfen bei der Einordnung.
 
 Eine ausdrückliche Bitte im Chat, eine Information künftig immer zu berücksichtigen, kann diese Markierung bereits beim Speichern setzen. Dafür gilt dieselbe konfigurierbare Freigabe wie für andere Schreibzugriffe auf Memory. Eine gewöhnliche Bitte, etwas zu merken, setzt die Markierung nicht.
 
@@ -36,7 +42,7 @@ Beim Ändern von **privat** auf **öffentlich** warnt MatoLoop, weil diese Einst
 
 ## Dreaming
 
-Dreaming ist optional. Es verarbeitet abgeschlossene Gespräche schrittweise und leitet daraus nur breit und dauerhaft relevante Profilinformationen ab, etwa stabile Identität, Beziehungen, wiederkehrende Präferenzen, langfristige Ziele oder beständige Einschränkungen. Gewöhnliche Projekt- und Aufgabendetails gehören in die Session-Historie oder in Projektanweisungen. Die Extraktion sieht nur die Nachrichten des aktuellen Quellabschnitts und keine vorhandenen Erinnerungen oder Inhalte aus anderen Sessions.
+Dreaming ist optional. Es verarbeitet ausschließlich abgeschlossene Chat-Sessions mit vollständigem Memory-Modus; Automationen werden nie verarbeitet. Dreaming leitet nur breit und dauerhaft relevantes Wissen ab, etwa Beziehungen, wiederkehrende Präferenzen, langfristige Ziele oder beständige Einschränkungen. Die gepflegten Angaben unter **Über mich** sowie gewöhnliche Projekt- und Aufgabendetails werden nicht übernommen. Die Extraktion sieht nur die Nachrichten des aktuellen Quellabschnitts und keine vorhandenen Erinnerungen oder Inhalte aus anderen Sessions.
 
 Anschließend sucht der Host für jeden Kandidaten getrennt nach möglichen vorhandenen Erinnerungen. Exakte Duplikate werden ohne weitere Modellentscheidung als unverändert behandelt, und normale Kandidaten ohne Treffer werden neu angelegt. Nur bei möglichen inhaltlichen Überschneidungen entscheidet ein getrennter Abgleich zwischen:
 
@@ -48,7 +54,7 @@ Anschließend sucht der Host für jeden Kandidaten getrennt nach möglichen vorh
 
 Eine Entfernung benötigt eine direkte Aussage des Benutzers, dass genau diese Information vergessen werden soll, beendet, ungültig oder nicht mehr wahr ist. Nur ein normalisiert exakter Datensatz kann entfernt werden; ähnliche Treffer reichen nicht aus. Alter, Nichtnennung oder geringe Relevanz sind niemals Löschgründe.
 
-Jede neu durch Dreaming angelegte Erinnerung wird vollständig berücksichtigt. Das konfigurierbare Limit liegt standardmäßig bei zehn angehefteten Erinnerungen und zählt auch manuelle Anheftungen. Manuelle Änderungen dürfen das Limit überschreiten. Am Limit kann Dreaming weiterhin vorhandene Einträge abgleichen, ändern, zusammenführen oder entfernen, legt aber keine neue Erinnerung an. Kernidentität bleibt auf bevorzugten Namen, Anrede, primären Wohnort, Pronomen und primäre Sprache begrenzt.
+Jede neu durch Dreaming angelegte Erinnerung beginnt mit **Bei passender Anfrage**. Beim Ändern oder Zusammenführen bleibt eine vorhandene Einstellung **Immer im Kontext** erhalten; Dreaming setzt sie jedoch nie selbst.
 
 ## Änderungsrichtlinien
 

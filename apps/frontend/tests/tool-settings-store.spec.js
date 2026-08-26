@@ -33,7 +33,10 @@ describe('tool settings store', () => {
           tools: []
         }
       ],
-      policies: { 'filesystem.read': 'ask' },
+      policies: {
+        'filesystem.read': 'ask',
+        'settings.user_profile.update': 'auto'
+      },
       webSearch: {
         primaryProvider: 'searxng:integration-id',
         fallbackProvider: 'no_key',
@@ -68,7 +71,8 @@ describe('tool settings store', () => {
     expect(api.put).toHaveBeenCalledWith('/tools/settings', expect.objectContaining({
       policies: expect.objectContaining({
         'filesystem.read': 'ask',
-        'media.analyze.video': 'auto'
+        'media.analyze.video': 'auto',
+        'settings.user_profile.update': 'auto'
       }),
       webSearch: {
         primaryProvider: 'searxng:integration-id',
@@ -79,7 +83,10 @@ describe('tool settings store', () => {
     expect(store.webSearch).toEqual(response.webSearch)
     expect(store.webFetch).toEqual(response.webFetch)
     expect(store.groups).toEqual(response.groups)
-    expect(store.policies).toEqual({ 'filesystem.read': 'ask' })
+    expect(store.policies).toEqual({
+      'filesystem.read': 'ask',
+      'settings.user_profile.update': 'auto'
+    })
     expect(store.generateSpeech).toEqual({ policy: 'auto', timeoutSeconds: 120 })
     expect(store.analyzeVideo).toEqual(response.analyzeVideo)
     expect(store.loaded).toBe(true)

@@ -28,11 +28,8 @@
             <q-chip dense square :icon="memoryAudienceIcon(memory.audience)">
               {{ memoryAudienceLabel(memory.audience) }}
             </q-chip>
-            <q-chip v-if="memory.pinKind" dense square icon="badge">
-              Kernidentität: {{ memoryPinKindLabel(memory.pinKind) }}
-            </q-chip>
             <q-chip dense square :icon="memory.pinned ? 'push_pin' : 'bookmark_border'">
-              {{ memory.pinned ? 'Immer berücksichtigen' : 'Bei Bedarf berücksichtigen' }}
+              {{ memory.pinned ? 'Immer im Kontext' : 'Bei passender Anfrage' }}
             </q-chip>
           </div>
         </div>
@@ -49,22 +46,13 @@
               <q-chip dense square :icon="memoryAudienceIcon(memoryPayload.after.audience)">
                 {{ memoryAudienceLabel(memoryPayload.after.audience) }}
               </q-chip>
-              <q-chip v-if="memoryPayload.after.pinKind || memoryPayload.pinKind" dense square icon="badge">
-                Kernidentität: {{ memoryPinKindLabel(memoryPayload.after.pinKind || memoryPayload.pinKind) }}
-              </q-chip>
-              <q-chip dense square :icon="memoryPayload.after.pinned ? 'push_pin' : 'bookmark_border'">
-                {{ memoryPayload.after.pinned ? 'Immer berücksichtigen' : 'Bei Bedarf berücksichtigen' }}
-              </q-chip>
             </div>
           </div>
         </div>
         <q-banner v-else-if="approval.actionKind === 'memory_pin'" rounded class="app-surface-tonal q-mt-md">
           <template #avatar><q-icon name="push_pin" color="primary" /></template>
           Die Erinnerung soll künftig
-          {{ memoryPayload.requestedPin ? 'immer' : 'nur bei Bedarf' }} berücksichtigt werden.
-          <template v-if="memoryPayload.pinKind">
-            Sie wird als „{{ memoryPinKindLabel(memoryPayload.pinKind) }}“ Teil der Kernidentität.
-          </template>
+          auf „{{ memoryPayload.requestedPin ? 'Immer im Kontext' : 'Bei passender Anfrage' }}“ gesetzt werden.
         </q-banner>
       </template>
       <template v-else>
@@ -333,16 +321,6 @@ function memoryAudienceLabel(value) {
 
 function memoryAudienceIcon(value) {
   return ({ private_only: 'lock', public_only: 'public', both: 'groups' })[value] || 'help_outline'
-}
-
-function memoryPinKindLabel(value) {
-  return ({
-    preferred_name: 'Bevorzugter Name',
-    form_of_address: 'Anrede',
-    pronouns: 'Pronomen',
-    primary_language: 'Hauptsprache',
-    primary_residence: 'Hauptwohnsitz'
-  })[value] || value
 }
 
 async function decide(decision) {

@@ -598,6 +598,30 @@ def agent_identity_permission(
     )
 
 
+def user_profile_permission(
+    user_id: UUID, *, field_labels: list[str], model_scope: str
+) -> PermissionRequest:
+    scopes = {
+        "private_models": "private Modelle",
+        "public_models": "öffentliche Modelle",
+        "both_models": "private und öffentliche Modelle",
+    }
+    fields = ", ".join(field_labels)
+    return PermissionRequest(
+        capability="settings.user_profile.update",
+        resource_type="user_profile",
+        resource_scope=str(user_id),
+        action_kind="update_user_profile",
+        risk_level="medium",
+        title="Persönliches Profil ändern?",
+        summary=(
+            f"Der Agent möchte {fields} im persönlichen Profil für "
+            f"{scopes[model_scope]} ändern."
+        ),
+        resource_display="Eigenes persönliches Profil",
+    )
+
+
 def skill_load_permission(user_id: UUID, skill_name: str) -> PermissionRequest:
     return PermissionRequest(
         capability="skills.load",

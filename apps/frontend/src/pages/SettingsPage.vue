@@ -1,6 +1,6 @@
 <template>
   <q-page class="app-page settings-page column no-wrap">
-    <AppPageHeader title="Einstellungen" subtitle="Persona, Provider, Computer, Integrationen und Funktionen zentral verwalten." />
+    <AppPageHeader title="Einstellungen" subtitle="Personalisierung, Provider, Computer, Integrationen und Funktionen zentral verwalten." />
 
     <q-tabs
       no-caps

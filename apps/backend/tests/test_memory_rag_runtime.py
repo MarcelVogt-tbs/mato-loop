@@ -58,6 +58,7 @@ from mato_loop_backend.settings import (
     SkillsSettings,
     ToolSettings,
     TrustLevel,
+    UserProfileSettings,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
@@ -345,6 +346,7 @@ async def _runtime_setup(
             SkillsSettings: SkillsSettings(),
             IntegrationSettings: IntegrationSettings(),
             ToolSettings: ToolSettings(),
+            UserProfileSettings: UserProfileSettings(),
         }[settings_type]
 
     projections = []
@@ -1108,7 +1110,6 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         content="Der gemeinsame Name ist Alt.",
         category="identity",
         pinned=True,
-        pin_kind="preferred_name",
         audience="both",
         revision=1,
         created_at=created_at,
@@ -1119,7 +1120,6 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         content="Der private Name ist Neu.",
         category="identity",
         pinned=True,
-        pin_kind="preferred_name",
         audience="private_only",
         revision=1,
         created_at=created_at,
@@ -1130,7 +1130,7 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
         [ProviderResult(content="Übersicht", finish_reason="stop")],
         records=[user],
     )
-    MemoryService.pinned_context.return_value = [pinned]
+    MemoryService.pinned_context.return_value = [shared_identity, pinned]
     retrieve.return_value = MemoryRetrieval(
         items=[shared_identity, memory],
         mode=MemoryRetrieveMode.BROWSE,
@@ -1150,7 +1150,7 @@ async def test_memory_overview_is_prefetched_by_the_host(monkeypatch) -> None:
     ]
     assert memory.content in projections[0]["system_prompt"]
     assert pinned.content in projections[0]["system_prompt"]
-    assert shared_identity.content not in projections[0]["system_prompt"]
+    assert projections[0]["system_prompt"].count(shared_identity.content) == 1
     assert f'"sourceMessageAt": "{source_at.isoformat()}"' in projections[0][
         "system_prompt"
     ]

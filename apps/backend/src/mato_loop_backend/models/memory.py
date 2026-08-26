@@ -49,14 +49,6 @@ class MemoryAudience(StrEnum):
     BOTH = "both"
 
 
-class MemoryPinKind(StrEnum):
-    PREFERRED_NAME = "preferred_name"
-    FORM_OF_ADDRESS = "form_of_address"
-    PRONOUNS = "pronouns"
-    PRIMARY_LANGUAGE = "primary_language"
-    PRIMARY_RESIDENCE = "primary_residence"
-
-
 class MemoryMode(StrEnum):
     FULL = "full"
     READ_ONLY = "read_only"
@@ -99,16 +91,6 @@ class MemoryRecord(Base):
             "category IN ('context', 'fact', 'goal', 'identity', 'preference')",
             name="category_valid",
         ),
-        CheckConstraint(
-            "pin_kind IS NULL OR pin_kind IN "
-            "('preferred_name', 'form_of_address', 'pronouns', "
-            "'primary_language', 'primary_residence')",
-            name="pin_kind_valid",
-        ),
-        CheckConstraint(
-            "pin_kind IS NULL OR (category = 'identity' AND pinned)",
-            name="pin_kind_identity_pinned",
-        ),
         CheckConstraint("revision >= 1", name="revision_positive"),
         Index("ix_memories_search_vector", "search_vector", postgresql_using="gin"),
         Index("ix_memories_user_category", "user_id", "category"),
@@ -124,14 +106,6 @@ class MemoryRecord(Base):
             "source_tool_call_id",
             unique=True,
             postgresql_where=text("source_type = 'tool_call'"),
-        ),
-        Index(
-            "uq_memories_user_pin_kind_audience",
-            "user_id",
-            "pin_kind",
-            "audience",
-            unique=True,
-            postgresql_where=text("pin_kind IS NOT NULL"),
         ),
     )
 
@@ -161,7 +135,6 @@ class MemoryRecord(Base):
     audience: Mapped[str] = mapped_column(
         String(20), nullable=False, default=MemoryAudience.BOTH.value
     )
-    pin_kind: Mapped[str | None] = mapped_column(String(40), nullable=True)
     category: Mapped[str] = mapped_column(String(20), nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     content: Mapped[str] = mapped_column(Text, nullable=False)

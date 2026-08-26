@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 import zxingcpp
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,6 +71,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
+    UserProfileSettings,
     WebFetchPolicy,
 )
 from mato_loop_backend.skills import SkillDraft
@@ -1471,6 +1472,98 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
     context.ask_handler.assert_not_awaited()
 
 
+async def test_update_user_profile_uses_ask_policy_and_preserves_other_scope(
+    monkeypatch, tmp_path
+) -> None:
+    tool_settings = ToolSettings.model_validate(
+        {"policies": {"settings.user_profile.update": "ask"}}
+    )
+    profile = UserProfileSettings(
+        preferred_name={"both": "Ada"},
+        primary_residence={"both": "Wien"},
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return {
+            ToolSettings: tool_settings,
+            UserProfileSettings: profile,
+        }[settings_type]
+
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", save)
+    call = ToolCall(
+        id="profile",
+        name="update_user_profile",
+        arguments={"preferred_name": "Grace", "primary_residence": None},
+    )
+    context = _context(tmp_path, call)
+    context.model_trust_level = TrustLevel.PRIVATE
+
+    result = await tool_registry.execute(call, context)
+
+    assert json.loads(result.content) == {
+        "updatedFields": ["preferred_name", "primary_residence"],
+        "modelScope": "private_models",
+        "effectiveFrom": "next_run",
+    }
+    request = context.ask_handler.await_args.args[0]
+    assert request.capability == "settings.user_profile.update"
+    assert request.resource_type == "user_profile"
+    assert "private Modelle" in request.summary
+    saved = save.await_args.args[1]
+    assert saved.preferred_name.both is None
+    assert saved.preferred_name.private_only == "Grace"
+    assert saved.preferred_name.public_only == "Ada"
+    assert saved.primary_residence.private_only is None
+    assert saved.primary_residence.public_only == "Wien"
+
+
+async def test_update_user_profile_both_models_auto_skips_approval(
+    monkeypatch, tmp_path
+) -> None:
+    tool_settings = ToolSettings.model_validate(
+        {"policies": {"settings.user_profile.update": "auto"}}
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return {
+            ToolSettings: tool_settings,
+            UserProfileSettings: UserProfileSettings(
+                preferred_name={"privateOnly": "Ada", "publicOnly": "A."}
+            ),
+        }[settings_type]
+
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", save)
+    call = ToolCall(
+        id="profile-auto",
+        name="update_user_profile",
+        arguments={"model_scope": "both_models", "preferred_name": "Grace"},
+    )
+    context = _context(tmp_path, call, decision=PermissionDecision.DENY)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    context.ask_handler.assert_not_awaited()
+    saved = save.await_args.args[1]
+    assert saved.preferred_name.both == "Grace"
+    assert saved.preferred_name.private_only is None
+    assert saved.preferred_name.public_only is None
+
+
+def test_update_user_profile_requires_a_field_and_rejects_blank_values() -> None:
+    arguments_model = tool_registry._definitions["update_user_profile"].arguments_model
+
+    with pytest.raises(ValidationError):
+        arguments_model.model_validate({})
+    with pytest.raises(ValidationError):
+        arguments_model.model_validate({"preferred_name": "   "})
+    assert arguments_model.model_validate({"preferred_name": None}).preferred_name is None
+
+
 async def test_build_skill_uses_user_scoped_approval_and_persistence(
     monkeypatch, tmp_path
 ) -> None:
@@ -1812,6 +1905,29 @@ async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
         id="identity-disabled",
         name="update_agent_identity",
         arguments={"display_name": "Ada"},
+    )
+    result = await tool_registry.execute(call, _context(tmp_path, call))
+
+    assert result.is_error
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+
+
+async def test_disabled_user_profile_tool_is_not_offered_or_executed(
+    monkeypatch, tmp_path
+) -> None:
+    tool_settings = ToolSettings.model_validate(
+        {"policies": {"settings.user_profile.update": "disabled"}}
+    )
+    effective = tool_registry.effective(
+        IntegrationSettings(), tool_settings=tool_settings
+    )
+    assert "update_user_profile" not in effective.tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=tool_settings))
+    call = ToolCall(
+        id="profile-disabled",
+        name="update_user_profile",
+        arguments={"preferred_name": "Ada"},
     )
     result = await tool_registry.execute(call, _context(tmp_path, call))
 
@@ -2632,7 +2748,6 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
         content="Sichtbarer Fakt",
         category="identity",
         pinned=True,
-        pin_kind="preferred_name",
         audience="public_only",
         revision=2,
         created_at=created_time,
@@ -2669,7 +2784,7 @@ async def test_memory_retrieve_browse_reports_visible_scope(tmp_path, monkeypatc
     }
     assert payload["items"][0]["revision"] == 2
     assert payload["items"][0]["audience"] == "public_only"
-    assert payload["items"][0]["pinKind"] == "preferred_name"
+    assert "pinKind" not in payload["items"][0]
     assert {
         key: payload["items"][0][key]
         for key in ("sourceMessageAt", "memoryCreatedAt", "memoryUpdatedAt")

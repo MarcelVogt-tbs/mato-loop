@@ -161,6 +161,7 @@ from mato_loop_backend.settings import (
     SkillsSettings,
     ToolExecutionPolicy,
     ToolSettings,
+    UserProfileSettings,
     WebFetchPolicy,
     effective_model_pseudonymization,
     effective_model_trust,
@@ -178,6 +179,10 @@ from mato_loop_backend.settings.models import (
     TrustLevel,
 )
 from mato_loop_backend.skills import RunSkillState, SkillDraft, SkillEditPatch, SkillError
+from mato_loop_backend.user_profile import (
+    user_profile_content_hashes,
+    user_profile_runtime_payload,
+)
 from mato_loop_backend.video_processing import VideoAnalysisMode, VideoFrame
 from mato_loop_backend.web_push import (
     WebPushActionsTarget,
@@ -1089,6 +1094,9 @@ class AgentRuntime:
         agent_identity = await SettingsStore.load(
             db, AgentIdentitySettings, user_id=chat_session.user_id
         )
+        user_profile = await SettingsStore.load(
+            db, UserProfileSettings, user_id=chat_session.user_id
+        )
         skills_settings = await SettingsStore.load(
             db, SkillsSettings, user_id=chat_session.user_id
         )
@@ -1122,6 +1130,10 @@ class AgentRuntime:
         model_trust_level = TrustLevel(
             run.trust_level or effective_model_trust(provider, model).value
         )
+        user_profile_payload = user_profile_runtime_payload(
+            user_profile, model_trust_level
+        )
+        excluded_memory_content_hashes = user_profile_content_hashes(user_profile)
         run_pseudonymization_enabled = (
             run.pseudonymization_enabled
             if run.pseudonymization_enabled is not None
@@ -1243,11 +1255,13 @@ class AgentRuntime:
                         db,
                         owner_id=chat_session.user_id,
                         readable_by=model_trust_level,
+                        excluded_content_hashes=excluded_memory_content_hashes,
                     )
                 pinned_memories = await MemoryService.pinned_context(
                     db,
                     owner_id=chat_session.user_id,
                     input_trust_level=model_trust_level,
+                    excluded_content_hashes=excluded_memory_content_hashes,
                 )
                 automatic_context_suppressed = _automatic_context_suppressed(records)
                 project_sessions = None
@@ -1303,6 +1317,7 @@ class AgentRuntime:
                                 cursor_updated_at=cursor_updated_at,
                                 cursor_id=cursor_id,
                                 limit=MEMORY_OVERVIEW_MAX_ITEMS,
+                                excluded_content_hashes=excluded_memory_content_hashes,
                             )
                             memory_overview_items = overview_result.items
                             retrieval_has_more = overview_result.has_more
@@ -1310,14 +1325,10 @@ class AgentRuntime:
                             _bounded_memory_overview(memory_overview_items)
                         )
                         pinned_ids = {item.id for item in pinned_memories}
-                        pinned_identity_kinds = {
-                            item.pin_kind for item in pinned_memories if item.pin_kind
-                        }
                         overview_payload = [
                             item
                             for item in overview_payload
                             if UUID(item["id"]) not in pinned_ids
-                            and item["pinKind"] not in pinned_identity_kinds
                         ]
                         pinned_references = [
                             ("pinned", item) for item in pinned_memories
@@ -1398,6 +1409,7 @@ class AgentRuntime:
                                     query_embedding=query_embedding,
                                     semantic_enabled=semantic_enabled,
                                     max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
+                                    excluded_content_hashes=excluded_memory_content_hashes,
                                 )
                             ).items
                         if (
@@ -1456,6 +1468,7 @@ class AgentRuntime:
                                 owner_id=chat_session.user_id,
                                 memory_ids=[item.id for item in automatic_memories],
                                 readable_by=model_trust_level,
+                                excluded_content_hashes=excluded_memory_content_hashes,
                             )
                         )[: memory_settings.automatic_memory_snippet_limit]
                         automatic_relevant_episodes = (
@@ -1644,6 +1657,7 @@ class AgentRuntime:
                 general_system_prompt,
                 chat_session,
                 agent_identity=agent_identity,
+                user_profile=user_profile_payload,
                 project_name=project_name,
                 project_instructions=project_instructions,
                 memory_read_enabled=memory_state.read_enabled,
@@ -2903,6 +2917,7 @@ class AgentRuntime:
                         memory_write_enabled=current_memory_state.write_enabled,
                         memory_trust_level=current_memory_trust,
                         memory_write_trust_level=model_trust_level,
+                        excluded_memory_content_hashes=excluded_memory_content_hashes,
                         model_id=model.id,
                         model_trust_level=model_trust_level,
                         skill_state=skill_state,

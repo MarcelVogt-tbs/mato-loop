@@ -40,12 +40,12 @@ export const useMemoryStore = defineStore('memories', {
         if (requestId === this.listRequestId) this.loading = false
       }
     },
-    async createMemory({ content, category, audience, pinKind }) {
-      return (await api.post('/memories', { content, category, audience, pinKind })).data
+    async createMemory({ content, category, audience }) {
+      return (await api.post('/memories', { content, category, audience })).data
     },
-    async updateMemory(id, { content, category, audience, pinned, pinKind, expectedRevision }) {
+    async updateMemory(id, { content, category, audience, pinned, expectedRevision }) {
       const { data } = await api.patch(`/memories/${id}`, {
-        content, category, audience, pinned, pinKind, expectedRevision
+        content, category, audience, pinned, expectedRevision
       })
       const index = this.items.findIndex((item) => item.id === id)
       if (index >= 0) this.items[index] = data

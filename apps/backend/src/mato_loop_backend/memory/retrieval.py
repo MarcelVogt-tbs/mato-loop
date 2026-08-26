@@ -18,6 +18,7 @@ from mato_loop_backend.memory.embeddings import (
 )
 from mato_loop_backend.memory.service import (
     MemoryService,
+    memory_content_hash_exclusion,
     memory_lexical_terms,
     memory_reference_options,
     memory_visibility_filter,
@@ -66,6 +67,7 @@ def _filters(
     readable_by: TrustLevel,
     category: MemoryCategory | None,
     pinned: bool | None,
+    excluded_content_hashes: frozenset[str] | set[str] = frozenset(),
 ) -> list[object]:
     filters: list[object] = [MemoryRecord.user_id == owner_id]
     if category is not None:
@@ -73,6 +75,8 @@ def _filters(
     if pinned is not None:
         filters.append(MemoryRecord.pinned.is_(pinned))
     filters.append(memory_visibility_filter(readable_by))
+    if excluded_content_hashes:
+        filters.append(memory_content_hash_exclusion(excluded_content_hashes))
     return filters
 
 
@@ -94,6 +98,7 @@ class MemoryRetrievalService:
         max_semantic_distance: float | None = None,
         cursor_updated_at: datetime | None = None,
         cursor_id: UUID | None = None,
+        excluded_content_hashes: frozenset[str] | set[str] = frozenset(),
     ) -> MemoryRetrieval:
         if (cursor_updated_at is None) != (cursor_id is None):
             raise ValueError("both cursor fields are required together")
@@ -106,6 +111,7 @@ class MemoryRetrievalService:
                 category=category,
                 pinned=pinned,
                 readable_by=readable_by,
+                excluded_content_hashes=excluded_content_hashes,
                 cursor_updated_at=cursor_updated_at,
                 cursor_id=cursor_id,
                 offset=0 if cursor_updated_at is not None else offset,
@@ -140,6 +146,7 @@ class MemoryRetrievalService:
             readable_by=readable_by,
             category=category,
             pinned=pinned,
+            excluded_content_hashes=excluded_content_hashes,
         )
         tsquery = func.plainto_tsquery(
             "simple", " ".join(memory_lexical_terms(cleaned_query))

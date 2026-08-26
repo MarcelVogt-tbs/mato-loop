@@ -13,6 +13,7 @@ from mato_loop_backend.agent.runtime import _bounded_memory_trust
 from mato_loop_backend.agent.tools import MemoryWriteArguments, ToolContext, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.memories import (
+    DreamRunRequest,
     MemoryAcknowledgementRequest,
     MemoryRequest,
     MemorySettingsRequest,
@@ -22,6 +23,7 @@ from mato_loop_backend.api.routes.memories import (
     dream_run_payload,
     memory_payload,
     put_memory_settings,
+    start_dream_runs,
     update_memory,
 )
 from mato_loop_backend.memory.dreaming import (
@@ -32,7 +34,6 @@ from mato_loop_backend.memory.dreaming import (
     DreamingContractError,
     DreamingService,
     DreamReconciliation,
-    _apply_candidate_pin,
     _dreaming_reasoning_effort,
     _extract_candidates,
     _fit_message_batch,
@@ -62,9 +63,9 @@ from mato_loop_backend.models import (
     MemoryDreamRun,
     MemoryDreamState,
     MemoryDreamTrigger,
-    MemoryPinKind,
     MemoryRecord,
     MemorySourceMessage,
+    MemorySourceType,
     Message,
     UserAccount,
 )
@@ -80,6 +81,7 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolExecutionPolicy,
     TrustLevel,
+    UserProfileSettings,
 )
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
@@ -161,9 +163,7 @@ def test_dreaming_batch_requires_user_and_assistant_capacity() -> None:
     with pytest.raises(ValidationError):
         MemorySettingsRequest(enabled=None)
     with pytest.raises(ValidationError):
-        MemorySettingsRequest(dreamingMaxPinnedMemories=0)
-    with pytest.raises(ValidationError):
-        MemorySettingsRequest(dreamingMaxPinnedMemories=101)
+        MemorySettingsRequest(dreamingMaxPinnedMemories=10)
     with pytest.raises(ValidationError):
         MemorySettingsRequest(automaticMemorySnippetLimit=6)
     with pytest.raises(ValidationError):
@@ -265,13 +265,13 @@ def test_memory_normalization_is_whitespace_and_case_stable() -> None:
     assert first_hash == second_hash
 
 
-def test_memory_identity_metadata_contract() -> None:
+def test_memory_schema_has_no_pin_kind_contract() -> None:
     request = MemoryRequest(content="Ich heiße Lara.", category="identity")
     assert request.audience == MemoryAudience.BOTH
     with pytest.raises(ValidationError):
         MemoryRequest(
-            content="Kurze Antworten",
-            category="preference",
+            content="Ich heiße Lara.",
+            category="identity",
             pinKind="preferred_name",
         )
     with pytest.raises(ValidationError):
@@ -280,18 +280,20 @@ def test_memory_identity_metadata_contract() -> None:
             category="identity",
             audience="both",
             expectedRevision=1,
-            pinned=False,
+            pinned=True,
             pinKind="preferred_name",
         )
 
-    constraints = {item.name for item in MemoryRecord.__table__.constraints}
-    indexes = {item.name: item for item in MemoryRecord.__table__.indexes}
-    assert {
-        "ck_memories_audience_valid",
-        "ck_memories_pin_kind_valid",
-        "ck_memories_pin_kind_identity_pinned",
-    } <= constraints
-    assert indexes["uq_memories_user_pin_kind_audience"].unique is True
+    assert "pin_kind" not in MemoryRecord.__table__.columns
+    assert all(
+        "pin_kind" not in str(item.sqltext)
+        for item in MemoryRecord.__table__.constraints
+        if hasattr(item, "sqltext")
+    )
+    assert all(
+        "pin_kind" not in {column.name for column in item.columns}
+        for item in MemoryRecord.__table__.indexes
+    )
 
 
 async def test_memory_crud_and_dedupe_queries_bind_each_owner() -> None:
@@ -482,39 +484,29 @@ async def test_dreaming_create_uses_first_evidence_as_current_source(monkeypatch
         session_id=uuid4(),
         run_id=uuid4(),
         evidence_message_ids=[evidence_id],
-        pin_kind=None,
-        max_pinned_memories=10,
     )
 
     assert result.created is True
     assert create.await_args.kwargs["message_id"] == evidence_id
-    assert create.await_args.kwargs["pinned"] is True
+    assert "pinned" not in create.await_args.kwargs
 
 
-async def test_dreaming_creation_skips_when_owner_pin_limit_is_reached(
-    monkeypatch,
-) -> None:
+async def test_new_dreaming_memory_is_unpinned(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.service.MemoryIndexService.enqueue", AsyncMock()
+    )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [None, 10]
-    create = AsyncMock()
-    monkeypatch.setattr(MemoryService, "_create", create)
 
-    mutation = await MemoryService.create_dreaming(
+    item = await MemoryService._create(
         db,
         owner_id=uuid4(),
-        content="Neue Erinnerung",
+        content="Dauerhafter Fakt",
         category=MemoryCategory.FACT,
-        trust_level=TrustLevel.PUBLIC,
-        session_id=uuid4(),
-        run_id=uuid4(),
-        evidence_message_ids=[uuid4()],
-        pin_kind=None,
-        max_pinned_memories=10,
+        source_type=MemorySourceType.DREAMING,
+        audience=MemoryAudience.BOTH,
     )
 
-    assert mutation.item is None
-    create.assert_not_awaited()
-    assert "pg_advisory_xact_lock" in str(db.execute.await_args.args[0])
+    assert item.pinned is False
 
 
 async def test_dreaming_remove_requires_user_evidence_and_hard_deletes(
@@ -599,8 +591,6 @@ async def test_private_dreaming_candidate_upgrades_public_duplicate(monkeypatch)
         session_id=uuid4(),
         run_id=uuid4(),
         evidence_message_ids=[evidence_id],
-        pin_kind=None,
-        max_pinned_memories=10,
     )
 
     assert created.duplicate is True
@@ -1005,7 +995,7 @@ def test_memory_payload_contains_camel_case_provenance() -> None:
     assert payload["sourceType"] == "dreaming"
     assert payload["pinned"] is True
     assert payload["audience"] == "private_only"
-    assert payload["pinKind"] is None
+    assert "pinKind" not in payload
     assert payload["category"] == "fact"
     assert payload["seenAt"] == seen_at.isoformat()
     assert payload["sourceSession"] == {"id": str(session.id), "title": "Quelle"}
@@ -1091,7 +1081,6 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
         dreaming_max_candidates=5,
         dreaming_update_policy="ask",
         dreaming_remove_policy="auto",
-        dreaming_max_pinned_memories=25,
         automatic_memory_snippet_limit=3,
         automatic_session_snippet_limit=4,
         recent_session_snippet_limit=5,
@@ -1113,16 +1102,12 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
     assert response["manualDreamingAvailable"] is False
     assert response["dreamingUpdatePolicy"] == "ask"
     assert response["dreamingRemovePolicy"] == "auto"
-    assert response["dreamingMaxPinnedMemories"] == 25
+    assert "dreamingMaxPinnedMemories" not in response
     assert response["automaticMemorySnippetLimit"] == 3
     assert response["automaticSessionSnippetLimit"] == 4
     assert response["recentSessionSnippetLimit"] == 5
     assert response["automaticContextMaxTokens"] == 1_536
-    assert response["pinnedMemoryCount"] == 4
-    pinned_query = db.scalar.await_args.args[0]
-    assert user.id in pinned_query.compile().params.values()
-    assert "memories.pinned IS true" in str(pinned_query)
-    assert "memories.audience" not in str(pinned_query)
+    assert "pinnedMemoryCount" not in response
 
 
 def test_memory_policy_request_accepts_camel_case_contract() -> None:
@@ -1130,7 +1115,6 @@ def test_memory_policy_request_accepts_camel_case_contract() -> None:
         {
             "dreamingUpdatePolicy": "auto",
             "dreamingRemovePolicy": "ask",
-            "dreamingMaxPinnedMemories": 10,
             "automaticMemorySnippetLimit": 2,
             "automaticSessionSnippetLimit": 1,
             "recentSessionSnippetLimit": 2,
@@ -1140,7 +1124,6 @@ def test_memory_policy_request_accepts_camel_case_contract() -> None:
 
     assert payload.dreaming_update_policy == ToolExecutionPolicy.AUTO
     assert payload.dreaming_remove_policy == ToolExecutionPolicy.ASK
-    assert payload.dreaming_max_pinned_memories == 10
     assert payload.automatic_memory_snippet_limit == 2
     assert payload.automatic_session_snippet_limit == 1
     assert payload.recent_session_snippet_limit == 2
@@ -1175,7 +1158,7 @@ async def test_dreaming_source_query_excludes_runtime_error_messages() -> None:
     assert "messages.error_code IS NULL" in str(statement)
 
 
-async def test_dreaming_enqueue_only_selects_full_memory_sessions() -> None:
+async def test_dreaming_queue_queries_exclude_automation_sessions() -> None:
     rows = Mock()
     rows.all.return_value = []
     db = AsyncMock(spec=AsyncSession)
@@ -1185,7 +1168,77 @@ async def test_dreaming_enqueue_only_selects_full_memory_sessions() -> None:
         db, trigger=MemoryDreamTrigger.MANUAL, user_id=uuid4()
     ) == []
 
-    assert "chat_sessions.memory_mode" in str(db.scalars.await_args.args[0])
+    enqueue_sql = str(db.scalars.await_args.args[0])
+    assert "chat_sessions.memory_mode" in enqueue_sql
+    assert "chat_sessions.session_type" in enqueue_sql
+
+    blocked_rows = Mock()
+    blocked_rows.all.return_value = []
+    db.execute.return_value = blocked_rows
+    await DreamingService.requeue_compatible_blocked(db)
+
+    requeue_sql = str(db.execute.await_args.args[0])
+    assert "chat_sessions.session_type" in requeue_sql
+
+
+async def test_stale_automation_dreaming_run_is_cancelled_before_model_work(
+    monkeypatch,
+) -> None:
+    session = ChatSession(
+        id=uuid4(), user_id=uuid4(), session_type="automation", memory_mode="full"
+    )
+    run = MemoryDreamRun(
+        id=uuid4(),
+        session_id=session.id,
+        status="running",
+        trigger="manual",
+        next_attempt_at=datetime.now(UTC),
+    )
+    monkeypatch.setattr(
+        DreamingService, "_cancel_if_inactive", AsyncMock(return_value=False)
+    )
+    load = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", load)
+    provider = AsyncMock()
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.dreaming.load_effective_ai", provider
+    )
+    db = AsyncMock(spec=AsyncSession)
+
+    await DreamingService._process_active(db, run, session)
+
+    assert run.status == "cancelled"
+    assert run.error == "memory.invalidSource"
+    assert run.completed_at is not None
+    assert run.next_attempt_at is None
+    db.commit.assert_awaited_once()
+    load.assert_not_awaited()
+    provider.assert_not_awaited()
+
+
+async def test_manual_dreaming_api_rejects_automation_source(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
+    session = ChatSession(
+        id=uuid4(), user_id=user.id, session_type="automation", memory_mode="full"
+    )
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=MemorySettings()))
+    monkeypatch.setattr(
+        "mato_loop_backend.api.routes.memories.load_effective_ai",
+        AsyncMock(return_value=ai),
+    )
+    enqueue = AsyncMock()
+    monkeypatch.setattr(DreamingService, "enqueue", enqueue)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+
+    with pytest.raises(ApiError) as exc_info:
+        await start_dream_runs(user, db, DreamRunRequest(sessionId=session.id))
+
+    assert exc_info.value.code == "memory.invalidSource"
+    enqueue.assert_not_awaited()
 
 
 async def test_dreaming_failure_reloads_run_by_stable_id_after_rollback(
@@ -1237,22 +1290,6 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
     assert output.candidates[0].evidence_message_ids == [message_id]
     assert output.candidates[0].category == MemoryCategory.FACT
     assert output.candidates[0].remove is False
-    assert output.candidates[0].pin is True
-
-    ordinary_pin = DreamCandidates.model_validate(
-        {
-            "candidates": [
-                {
-                    "memory": "Der Nutzer isst kein Hähnchen.",
-                    "category": "preference",
-                    "evidence": [str(message_id)],
-                    "pin": True,
-                }
-            ]
-        }
-    ).candidates[0]
-    assert ordinary_pin.pin is True
-    assert ordinary_pin.pin_kind is None
     removal = DreamCandidates.model_validate(
         {
             "candidates": [
@@ -1261,14 +1298,11 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
                     "category": "identity",
                     "evidence": [str(message_id)],
                     "remove": True,
-                    "pin": False,
                 }
             ]
         }
     ).candidates[0]
     assert removal.remove is True
-    assert removal.pin is False
-    assert removal.pin_kind is None
     memory_id = uuid4()
     second_memory_id = uuid4()
     remove = DreamReconciliation.model_validate(
@@ -1278,17 +1312,12 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
                     "index": 0,
                     "action": "remove",
                     "memoryIds": [str(memory_id)],
-                    "pin": False,
                 }
             ]
         }
     ).decisions[0]
     assert remove.content is None
     assert remove.memory_ids == [memory_id]
-    hosted_remove = _apply_candidate_pin(remove, removal, 4)
-    assert hosted_remove.candidate_index == 4
-    assert hosted_remove.pin is False
-    assert hosted_remove.pin_kind is None
     with pytest.raises(ValidationError):
         DreamReconciliation.model_validate(
             {
@@ -1297,7 +1326,6 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
                         "index": 0,
                         "action": "remove",
                         "memoryIds": [str(memory_id), str(second_memory_id)],
-                        "pin": False,
                     }
                 ]
             }
@@ -1324,20 +1352,6 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
                         "category": "identity",
                         "evidence": [str(message_id)],
                         "remove": True,
-                    }
-                ]
-            }
-        )
-    with pytest.raises(ValidationError):
-        DreamCandidates.model_validate(
-            {
-                "candidates": [
-                    {
-                        "memory": "Der Nutzer lebt in Berlin.",
-                        "category": "identity",
-                        "evidence": [str(message_id)],
-                        "remove": True,
-                        "pin": False,
                         "pinKind": "primary_residence",
                     }
                 ]
@@ -1348,24 +1362,10 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
             {
                 "candidates": [
                     {
-                        "memory": "Der Nutzer bevorzugt kurze Antworten.",
-                        "category": "preference",
-                        "evidence": [str(message_id)],
-                        "pin": False,
-                    }
-                ]
-            }
-        )
-    with pytest.raises(ValueError):
-        DreamCandidates.model_validate(
-            {
-                "candidates": [
-                    {
                         "memory": "Der Nutzer isst kein Hähnchen.",
                         "category": "preference",
                         "evidence": [str(message_id)],
-                        "pin": False,
-                        "pinKind": "preferred_name",
+                        "pin": True,
                     }
                 ]
             }
@@ -1382,7 +1382,8 @@ def test_dreaming_candidate_schema_uses_small_model_friendly_fields() -> None:
         "evidence",
     }
     assert candidate["properties"]["remove"]["default"] is False
-    assert candidate["properties"]["pin"]["default"] is True
+    assert "pin" not in candidate["properties"]
+    assert "pinKind" not in candidate["properties"]
     assert DreamCandidates.model_validate(
         {
             "candidates": [
@@ -1416,10 +1417,8 @@ def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
         "category",
         "evidence",
         "remove",
-        "pin",
     }
     assert candidate["properties"]["remove"]["default"] is False
-    assert candidate["properties"]["pin"]["default"] is True
     assert "$defs" not in reconciliation_schema
     assert "$ref" not in json.dumps(reconciliation_schema)
     assert reconciliation_schema["required"] == ["decisions"]
@@ -1434,8 +1433,9 @@ def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
         "index",
         "action",
         "memoryIds",
-        "pin",
     }
+    assert "pin" not in decisions["items"]["properties"]
+    assert "pinKind" not in decisions["items"]["properties"]
     assert "anyOf" not in json.dumps(reconciliation_schema)
     assert decisions["items"]["additionalProperties"] is False
 
@@ -1500,7 +1500,7 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
     assert complete.await_count == 2
     retry_messages = complete.await_args_list[1].kwargs["messages"]
     assert retry_messages[-1]["role"] == "tool"
-    assert "memory, category, evidence, remove, and pin" in retry_messages[-1]["content"]
+    assert "memory, category, evidence, and remove" in retry_messages[-1]["content"]
     assert "usage attribution" not in retry_messages[-1]["content"]
 
 
@@ -1610,7 +1610,6 @@ async def test_dreaming_removal_requires_only_direct_user_evidence(monkeypatch) 
         "memory": "Der Nutzer lebt in Berlin.",
         "category": "identity",
         "remove": True,
-        "pin": False,
     }
     complete = AsyncMock(
         side_effect=[
@@ -1775,7 +1774,6 @@ async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> No
                                     "index": 0,
                                     "action": "unchanged",
                                     "memoryIds": [str(memory_id)],
-                                    "pin": False,
                                 }
                             ]
                         },
@@ -1822,7 +1820,6 @@ async def test_dreaming_removal_reconciliation_allows_only_exact_remove(
                                     "index": 0,
                                     "action": "create",
                                     "memoryIds": [],
-                                    "pin": False,
                                 }
                             ]
                         },
@@ -1840,7 +1837,6 @@ async def test_dreaming_removal_reconciliation_allows_only_exact_remove(
                                     "index": 0,
                                     "action": "remove",
                                     "memoryIds": [str(memory_id)],
-                                    "pin": False,
                                 }
                             ]
                         },
@@ -1884,7 +1880,6 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
                                 "index": 0,
                                 "action": "unchanged",
                                 "memoryIds": [str(memory_id)],
-                                "pin": False,
                             }
                         ]
                     },
@@ -1894,7 +1889,7 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
                     name="reconcile_memory_candidates",
                     arguments={
                         "decisions": [
-                            {"index": 1, "action": "create", "memoryIds": [], "pin": False}
+                            {"index": 1, "action": "create", "memoryIds": []}
                         ]
                     },
                 ),
@@ -1919,8 +1914,9 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
 
 
 def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
-    assert "persistent profile knowledge" in DREAMING_SYSTEM_PROMPT
-    assert "fully injected memory" in DREAMING_SYSTEM_PROMPT
+    assert "persistent user knowledge" in DREAMING_SYSTEM_PROMPT
+    assert "retrieval-only memories" in DREAMING_SYSTEM_PROMPT
+    assert "those belong to the maintained user profile" in DREAMING_SYSTEM_PROMPT
     assert "ordinary technical facts" in DREAMING_SYSTEM_PROMPT
     assert "project or task details" in DREAMING_SYSTEM_PROMPT
     assert "empty candidates array" in DREAMING_SYSTEM_PROMPT
@@ -1943,7 +1939,6 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
                     "index": 0,
                     "action": "create",
                     "memoryIds": [],
-                    "pin": False,
                 }
             ]
         }
@@ -1957,7 +1952,6 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
                     "memoryIds": [str(memory_id)],
                     "content": "Aktuelle Präferenz",
                     "category": "preference",
-                    "pin": False,
                 }
             ]
         }
@@ -1977,29 +1971,11 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
                     "memoryIds": [str(memory_id), str(second_memory_id)],
                     "memory": "Ich heiße Mara.",
                     "category": "identity",
-                    "pin": True,
-                    "pinKind": "preferred_name",
                 }
             ]
         }
     ).decisions[0]
     assert merge.memory_ids == [memory_id, second_memory_id]
-    ordinary_pin = DreamReconciliation.model_validate(
-        {
-            "decisions": [
-                {
-                    "index": 0,
-                    "action": "update",
-                    "memoryIds": [str(memory_id)],
-                    "memory": "Der Nutzer isst kein Hähnchen.",
-                    "category": "preference",
-                    "pin": True,
-                }
-            ]
-        }
-    ).decisions[0]
-    assert ordinary_pin.pin is True
-    assert ordinary_pin.pin_kind is None
     with pytest.raises(ValidationError):
         DreamReconciliation.model_validate(
             {
@@ -2008,7 +1984,6 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
                         "candidateIndex": 0,
                         "action": "update",
                         "memoryIds": [str(memory_id)],
-                        "pin": False,
                     }
                 ]
             }
@@ -2023,7 +1998,6 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
                         "memoryIds": [str(memory_id)],
                         "memory": "Zusammengeführt",
                         "category": "fact",
-                        "pin": False,
                     }
                 ]
             }
@@ -2147,9 +2121,15 @@ async def test_host_matching_routes_profile_and_remove_candidates(
         DreamingService, "_cancel_if_inactive", AsyncMock(return_value=False)
     )
     user_id = uuid4()
-    session = ChatSession(id=uuid4(), user_id=user_id, title="Test", memory_mode="full")
+    session = ChatSession(
+        id=uuid4(), user_id=user_id, title="Test", memory_mode="full", session_type="chat"
+    )
     locked_session = ChatSession(
-        id=session.id, user_id=user_id, title="Test", memory_mode=latest_mode
+        id=session.id,
+        user_id=user_id,
+        title="Test",
+        memory_mode=latest_mode,
+        session_type="chat",
     )
     user_message = Message(
         id=uuid4(),
@@ -2217,7 +2197,6 @@ async def test_host_matching_routes_profile_and_remove_candidates(
                                 "category": "preference",
                                 "evidence": [str(user_message.id)],
                                 "remove": remove_candidate,
-                                "pin": not remove_candidate,
                             }
                         ]
                     },
@@ -2232,13 +2211,12 @@ async def test_host_matching_routes_profile_and_remove_candidates(
                 enabled=latest_enabled,
                 dreaming_update_policy="ask",
                 dreaming_remove_policy="auto",
-                dreaming_max_pinned_memories=3,
             )
             if kind is MemorySettings and kwargs.get("for_update")
-            else MemorySettings(
-                dreaming_update_policy="auto", dreaming_max_pinned_memories=10
-            )
+            else MemorySettings(dreaming_update_policy="auto")
             if kind is MemorySettings
+            else UserProfileSettings()
+            if kind is UserProfileSettings
             else ai
         )
     )
@@ -2263,7 +2241,6 @@ async def test_host_matching_routes_profile_and_remove_candidates(
                         "index": 0,
                         "action": "remove" if remove_candidate else "unchanged",
                         "memoryIds": [str(existing.id)],
-                        "pin": False,
                     }
                 ]
             }
@@ -2360,13 +2337,8 @@ async def test_host_matching_routes_profile_and_remove_candidates(
     elif not remove_candidate:
         create.assert_awaited_once()
         assert create.await_args.kwargs["owner_id"] == user_id
-        assert create.await_args.kwargs["max_pinned_memories"] == 3
         keep.assert_not_awaited()
-    assert approval.await_count == (1 if exact and not remove_candidate else 0)
-    if exact and not remove_candidate:
-        assert approval.await_args.kwargs["action"] == "update"
-        assert approval.await_args.kwargs["requested_pin"] is True
-        assert approval.await_args.kwargs["pin_kind"] is None
+    approval.assert_not_awaited()
     assert any(
         call.args[1] is MemorySettings and call.kwargs.get("for_update") is True
         for call in load_settings.await_args_list
@@ -2381,7 +2353,13 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
     monkeypatch.setattr(
         DreamingService, "_cancel_if_inactive", AsyncMock(return_value=False)
     )
-    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test", memory_mode="full")
+    session = ChatSession(
+        id=uuid4(),
+        user_id=uuid4(),
+        title="Test",
+        memory_mode="full",
+        session_type="chat",
+    )
     messages = [
         Message(
             id=uuid4(),
@@ -2433,6 +2411,8 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
             if kind is MemorySettings and kwargs.get("for_update")
             else initial_settings
             if kind is MemorySettings
+            else UserProfileSettings()
+            if kind is UserProfileSettings
             else ai
         )
     )
@@ -2469,7 +2449,6 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
                     "memoryIds": [str(existing.id)],
                     "memory": "Ich heiße Mara.",
                     "category": "identity",
-                    "pin": False,
                 }
             ]
         }
@@ -2480,10 +2459,8 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
     )
     update = AsyncMock(return_value=MemoryMutation(existing, updated=True))
     approval = AsyncMock()
-    auto_pin = AsyncMock(return_value=True)
     monkeypatch.setattr(MemoryService, "update_dreaming", update)
     monkeypatch.setattr(MemoryService, "request_dreaming_approval", approval)
-    monkeypatch.setattr(MemoryService, "auto_pin", auto_pin)
     monkeypatch.setattr(
         "mato_loop_backend.memory.dreaming.get_runtime_config",
         lambda: Mock(embedding_enabled=False),
@@ -2512,7 +2489,6 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
     )
     assert update.await_count == (1 if policy == ToolExecutionPolicy.AUTO else 0)
     assert approval.await_count == (1 if policy == ToolExecutionPolicy.ASK else 0)
-    assert auto_pin.await_count == (1 if policy == ToolExecutionPolicy.AUTO else 0)
     mutation = update if policy == ToolExecutionPolicy.AUTO else approval
     if policy != ToolExecutionPolicy.DISABLED:
         assert mutation.await_args.kwargs["owner_id"] == session.user_id
@@ -2523,9 +2499,9 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
     assert run.status == "completed"
 
 
-def test_memory_approval_payload_rejects_invalid_pin_and_unbounded_targets() -> None:
+def test_memory_approval_payload_rejects_obsolete_and_pin_bearing_schemas() -> None:
     base = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "targetMemories": [
             {
                 "id": str(uuid4()),
@@ -2537,7 +2513,6 @@ def test_memory_approval_payload_rejects_invalid_pin_and_unbounded_targets() -> 
                 "evidenceHash": "0" * 64,
             }
         ],
-        "requestedPin": True,
         "sourceDreamRunId": str(uuid4()),
         "sourceSessionId": str(uuid4()),
         "evidenceMessageIds": [str(uuid4())],
@@ -2547,15 +2522,65 @@ def test_memory_approval_payload_rejects_invalid_pin_and_unbounded_targets() -> 
         "removePolicy": "ask",
     }
 
-    assert MemoryApprovalPayload.model_validate(base).pin_kind is None
     with pytest.raises(ValidationError):
-        MemoryApprovalPayload.model_validate(
-            {**base, "requestedPin": False, "pinKind": "preferred_name"}
-        )
+        MemoryApprovalPayload.model_validate({**base, "schemaVersion": 2})
+    with pytest.raises(ValidationError):
+        MemoryApprovalPayload.model_validate({**base, "requestedPin": False})
+    with pytest.raises(ValidationError):
+        MemoryApprovalPayload.model_validate({**base, "pinKind": "preferred_name"})
     with pytest.raises(ValidationError):
         MemoryApprovalPayload.model_validate(
             {**base, "targetMemories": base["targetMemories"] * 51}
         )
+
+
+async def test_automation_backed_approval_is_rejected_before_mutation() -> None:
+    user_id = uuid4()
+    session = ChatSession(
+        id=uuid4(), user_id=user_id, session_type="automation", memory_mode="full"
+    )
+    run = MemoryDreamRun(id=uuid4(), session_id=session.id)
+    approval = ApprovalRequest(
+        request_type="memory_change",
+        user_id=user_id,
+        action_kind="memory_update",
+        payload={
+            "schemaVersion": 3,
+            "targetMemories": [
+                {
+                    "id": str(uuid4()),
+                    "revision": 1,
+                    "content": "Fakt",
+                    "category": "fact",
+                    "audience": "both",
+                    "pinned": False,
+                    "evidenceHash": "0" * 64,
+                }
+            ],
+            "after": {
+                "content": "Neuer Fakt",
+                "category": "fact",
+                "audience": "both",
+            },
+            "sourceDreamRunId": str(run.id),
+            "sourceSessionId": str(session.id),
+            "evidenceMessageIds": [str(uuid4())],
+            "trustLevel": "public",
+            "readableBy": "public",
+            "updatePolicy": "ask",
+            "removePolicy": "ask",
+        },
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [session, run]
+
+    assert (
+        await MemoryService.apply_approved_change(db, approval, owner_id=user_id)
+        == "target_changed"
+    )
+    db.scalars.assert_not_awaited()
+    db.delete.assert_not_awaited()
+    db.flush.assert_not_awaited()
 
 
 async def test_merge_uses_matching_survivor_and_preserves_all_metadata(monkeypatch) -> None:
@@ -2766,7 +2791,11 @@ async def test_merge_audience_conflict_leaves_survivor_untouched(monkeypatch) ->
 async def test_approved_update_increments_run_counter(monkeypatch) -> None:
     user_id = uuid4()
     session = ChatSession(
-        id=uuid4(), user_id=user_id, title="Quelle", memory_mode="full"
+        id=uuid4(),
+        user_id=user_id,
+        title="Quelle",
+        memory_mode="full",
+        session_type="chat",
     )
     run = MemoryDreamRun(id=uuid4(), session_id=session.id)
     evidence_id = uuid4()
@@ -2774,7 +2803,7 @@ async def test_approved_update_increments_run_counter(monkeypatch) -> None:
         id=uuid4(),
         user_id=user_id,
         source_type="manual",
-        pinned=False,
+        pinned=True,
         audience="both",
         category="preference",
         content="Ich esse gelegentlich Hähnchen.",
@@ -2783,7 +2812,7 @@ async def test_approved_update_increments_run_counter(monkeypatch) -> None:
     )
     payload = MemoryApprovalPayload.model_validate(
         {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "targetMemories": [
                 {
                     "id": str(target.id),
@@ -2791,7 +2820,7 @@ async def test_approved_update_increments_run_counter(monkeypatch) -> None:
                     "content": target.content,
                     "category": "preference",
                     "audience": "both",
-                    "pinned": False,
+                    "pinned": True,
                     "evidenceHash": "0" * 64,
                 }
             ],
@@ -2799,9 +2828,7 @@ async def test_approved_update_increments_run_counter(monkeypatch) -> None:
                 "content": "Ich esse grundsätzlich kein Hähnchen.",
                 "category": "preference",
                 "audience": "both",
-                "pinned": True,
             },
-            "requestedPin": True,
             "sourceDreamRunId": str(run.id),
             "sourceSessionId": str(session.id),
             "evidenceMessageIds": [str(evidence_id)],
@@ -2861,7 +2888,9 @@ async def test_approved_remove_revalidates_snapshot_and_updates_run_counter(
     monkeypatch, snapshot_current, expected
 ) -> None:
     user_id = uuid4()
-    session = ChatSession(id=uuid4(), user_id=user_id, memory_mode="full")
+    session = ChatSession(
+        id=uuid4(), user_id=user_id, memory_mode="full", session_type="chat"
+    )
     run = MemoryDreamRun(id=uuid4(), session_id=session.id)
     target = MemoryRecord(
         id=uuid4(),
@@ -2875,7 +2904,7 @@ async def test_approved_remove_revalidates_snapshot_and_updates_run_counter(
     )
     payload = MemoryApprovalPayload.model_validate(
         {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "targetMemories": [
                 {
                     "id": str(target.id),
@@ -2887,7 +2916,6 @@ async def test_approved_remove_revalidates_snapshot_and_updates_run_counter(
                     "evidenceHash": "0" * 64,
                 }
             ],
-            "requestedPin": False,
             "sourceDreamRunId": str(run.id),
             "sourceSessionId": str(session.id),
             "evidenceMessageIds": [str(uuid4())],
@@ -2952,7 +2980,9 @@ async def test_approved_merge_revalidates_policy_and_updates_run_counters(
     monkeypatch, update_policy, remove_policy, expected
 ) -> None:
     user_id = uuid4()
-    session = ChatSession(id=uuid4(), user_id=user_id, memory_mode="full")
+    session = ChatSession(
+        id=uuid4(), user_id=user_id, memory_mode="full", session_type="chat"
+    )
     run = MemoryDreamRun(id=uuid4(), session_id=session.id)
     targets = [
         MemoryRecord(
@@ -2969,7 +2999,7 @@ async def test_approved_merge_revalidates_policy_and_updates_run_counters(
     ]
     payload = MemoryApprovalPayload.model_validate(
         {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "targetMemories": [
                 {
                     "id": str(item.id),
@@ -2986,9 +3016,7 @@ async def test_approved_merge_revalidates_policy_and_updates_run_counters(
                 "content": "A und B",
                 "category": "fact",
                 "audience": "both",
-                "pinned": False,
             },
-            "requestedPin": False,
             "sourceDreamRunId": str(run.id),
             "sourceSessionId": str(session.id),
             "evidenceMessageIds": [str(uuid4())],
@@ -3040,59 +3068,3 @@ async def test_approved_merge_revalidates_policy_and_updates_run_counters(
     assert merge.await_count == (1 if expected == "applied" else 0)
     assert (run.updated_memory_count or 0) == int(expected == "applied")
     assert (run.removed_memory_count or 0) == int(expected == "applied")
-
-
-async def test_auto_pin_stops_at_configured_limit(monkeypatch) -> None:
-    owner_id = uuid4()
-    item = MemoryRecord(
-        id=uuid4(),
-        user_id=owner_id,
-        source_type="manual",
-        pinned=False,
-        audience="both",
-        category="preference",
-        content="Ich esse kein Hähnchen.",
-        normalized_content_hash=normalize_content("Ich esse kein Hähnchen.")[1],
-        revision=1,
-    )
-    db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = 10
-    set_pinned = AsyncMock(return_value=item)
-    monkeypatch.setattr(MemoryService, "set_pinned", set_pinned)
-
-    assert not await MemoryService.auto_pin(
-        db,
-        item,
-        owner_id=owner_id,
-        pin_kind=None,
-        max_pinned_memories=10,
-    )
-    set_pinned.assert_not_awaited()
-
-
-async def test_ordinary_auto_pin_preserves_existing_core_kind(monkeypatch) -> None:
-    owner_id = uuid4()
-    item = MemoryRecord(
-        id=uuid4(),
-        user_id=owner_id,
-        source_type="manual",
-        pinned=True,
-        pin_kind=MemoryPinKind.PREFERRED_NAME.value,
-        audience="both",
-        category="identity",
-        content="Ich heiße Lara.",
-        normalized_content_hash=normalize_content("Ich heiße Lara.")[1],
-        revision=1,
-    )
-    db = AsyncMock(spec=AsyncSession)
-    set_pinned = AsyncMock(return_value=item)
-    monkeypatch.setattr(MemoryService, "set_pinned", set_pinned)
-
-    assert await MemoryService.auto_pin(
-        db,
-        item,
-        owner_id=owner_id,
-        pin_kind=None,
-        max_pinned_memories=10,
-    )
-    set_pinned.assert_not_awaited()

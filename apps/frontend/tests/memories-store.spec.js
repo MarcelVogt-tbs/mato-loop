@@ -65,7 +65,6 @@ describe('memory store', () => {
       category: 'identity',
       audience: 'private_only',
       pinned: true,
-      pinKind: 'primary_language',
       revision: 4
     }
     api.post.mockResolvedValue({ data: memory })
@@ -75,8 +74,7 @@ describe('memory store', () => {
     const contentPayload = {
       content: memory.content,
       category: memory.category,
-      audience: memory.audience,
-      pinKind: memory.pinKind
+      audience: memory.audience
     }
     const suppliedPayload = {
       ...contentPayload,
@@ -140,7 +138,6 @@ describe('memory store', () => {
       category: 'fact',
       audience: 'both',
       pinned: false,
-      pinKind: null,
       expectedRevision: 4
     })).rejects.toThrow('request failed')
 
@@ -158,12 +155,10 @@ describe('memory store', () => {
       dreamingMaxCandidates: 8,
       dreamingUpdatePolicy: 'auto',
       dreamingRemovePolicy: 'ask',
-      dreamingMaxPinnedMemories: 10,
       automaticMemorySnippetLimit: 2,
       automaticSessionSnippetLimit: 1,
       recentSessionSnippetLimit: 2,
       automaticContextMaxTokens: 1024,
-      pinnedMemoryCount: 4,
       effectiveAutomaticDreamingEnabled: true,
       automaticDreamingUnavailableReason: null,
       manualDreamingAvailable: true,
@@ -180,7 +175,6 @@ describe('memory store', () => {
       dreamingMaxCandidates: settings.dreamingMaxCandidates,
       dreamingUpdatePolicy: settings.dreamingUpdatePolicy,
       dreamingRemovePolicy: settings.dreamingRemovePolicy,
-      dreamingMaxPinnedMemories: settings.dreamingMaxPinnedMemories,
       automaticMemorySnippetLimit: settings.automaticMemorySnippetLimit,
       automaticSessionSnippetLimit: settings.automaticSessionSnippetLimit,
       recentSessionSnippetLimit: settings.recentSessionSnippetLimit,

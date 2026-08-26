@@ -51,6 +51,7 @@ from mato_loop_backend.agent.permissions import (
     skill_write_permission,
     system_info_permission,
     transcript_permission,
+    user_profile_permission,
     web_search_permission,
     webfetch_permission,
 )
@@ -103,6 +104,7 @@ from mato_loop_backend.agent.tool_arguments import (
     SystemInfoArguments,
     TranscribeAudioArguments,
     UpdateAgentIdentityArguments,
+    UpdateUserProfileArguments,
     WebFetchArguments,
     WebSearchArguments,
     WriteFileArguments,
@@ -238,6 +240,8 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
+    UserProfileFact,
+    UserProfileSettings,
     WebFetchPolicy,
     load_effective_ai,
     load_effective_integrations,
@@ -250,6 +254,7 @@ from mato_loop_backend.skills import (
     parse_skill_draft,
     serialize_skill_draft,
 )
+from mato_loop_backend.user_profile import effective_profile_fact
 from mato_loop_backend.video_processing import MAX_VIDEO_BYTES
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
@@ -2068,6 +2073,112 @@ async def _update_agent_identity(
     )
 
 
+_PROFILE_FIELD_LABELS = {
+    "preferred_name": "den bevorzugten Namen",
+    "form_of_address": "die Anrede",
+    "pronouns": "die Pronomen",
+    "primary_language": "die bevorzugte Sprache",
+    "primary_residence": "den Hauptwohnsitz",
+}
+
+
+def _resolved_profile_scope(
+    requested_scope: str, model_trust_level: TrustLevel
+) -> str:
+    if requested_scope != "current_model":
+        return requested_scope
+    return (
+        "private_models"
+        if model_trust_level == TrustLevel.PRIVATE
+        else "public_models"
+    )
+
+
+def _updated_profile_fact(
+    current: UserProfileFact, *, model_scope: str, value: str | None
+) -> UserProfileFact:
+    if model_scope == "both_models":
+        return UserProfileFact(both=value)
+    private_value = effective_profile_fact(current, TrustLevel.PRIVATE)
+    public_value = effective_profile_fact(current, TrustLevel.PUBLIC)
+    if model_scope == "private_models":
+        private_value = value
+    else:
+        public_value = value
+    return UserProfileFact(
+        private_only=private_value,
+        public_only=public_value,
+    )
+
+
+async def _update_user_profile(
+    arguments: UpdateUserProfileArguments, context: ToolContext
+) -> ToolResult:
+    capability = "settings.user_profile.update"
+    context.tool_settings = await load_effective_tools(
+        context.db, context.session.user_id
+    )
+    policy = tool_execution_policy(
+        context.tool_settings, capability, ToolExecutionPolicy.ASK
+    )
+    if policy == ToolExecutionPolicy.DISABLED:
+        return ToolResult.error("tool.unavailable")
+
+    model_scope = _resolved_profile_scope(
+        arguments.model_scope, context.model_trust_level
+    )
+    changed_fields = [
+        field for field in _PROFILE_FIELD_LABELS if field in arguments.model_fields_set
+    ]
+    approval_received = False
+    if policy == ToolExecutionPolicy.ASK:
+        allowed = await _allow(
+            context,
+            user_profile_permission(
+                context.session.user_id,
+                field_labels=[_PROFILE_FIELD_LABELS[field] for field in changed_fields],
+                model_scope=model_scope,
+            ),
+        )
+        if not allowed:
+            return ToolResult.error("permission.denied")
+        approval_received = True
+
+    context.tool_settings = await load_effective_tools(
+        context.db, context.session.user_id
+    )
+    current_policy = tool_execution_policy(
+        context.tool_settings, capability, ToolExecutionPolicy.ASK
+    )
+    if current_policy == ToolExecutionPolicy.DISABLED or (
+        current_policy == ToolExecutionPolicy.ASK and not approval_received
+    ):
+        return ToolResult.error("tool.unavailable")
+
+    current = await SettingsStore.load(
+        context.db,
+        UserProfileSettings,
+        user_id=context.session.user_id,
+        for_update=True,
+    )
+    values = current.model_dump()
+    for field in changed_fields:
+        values[field] = _updated_profile_fact(
+            getattr(current, field),
+            model_scope=model_scope,
+            value=getattr(arguments, field),
+        ).model_dump()
+    profile = UserProfileSettings.model_validate(values)
+    await SettingsStore.save(context.db, profile, user_id=context.session.user_id)
+    return ToolResult.json(
+        {
+            "updatedFields": changed_fields,
+            "modelScope": model_scope,
+            "effectiveFrom": "next_run",
+        }
+    )
+
+
 async def _save_skill_draft(
     context: ToolContext,
     brief: str,
@@ -3779,6 +3890,7 @@ async def _memory_retrieve(
         cursor_updated_at=arguments.cursor_updated_at,
         cursor_id=arguments.cursor_id,
         limit=arguments.limit,
+        excluded_content_hashes=context.excluded_memory_content_hashes,
     )
     next_cursor = (
         {
@@ -3806,7 +3918,6 @@ async def _memory_retrieve(
                     "category": item.category,
                     "pinned": item.pinned,
                     "audience": item.audience,
-                    "pinKind": item.pin_kind,
                     **memory_reference_timestamps(item),
                     "sourceSession": (
                         {"id": str(item.source_session.id)}
@@ -4101,6 +4212,12 @@ _MEMORY_WRITE = ToolAction(
 _SKILL_LOAD = ToolAction("skills.load", "Skills laden", ToolExecutionPolicy.AUTO)
 _SKILL_WRITE = ToolAction(
     "skills.write", "Skills speichern", ToolExecutionPolicy.ASK, mutates=True
+)
+_USER_PROFILE_UPDATE = ToolAction(
+    "settings.user_profile.update",
+    "Persönliches Profil ändern",
+    ToolExecutionPolicy.ASK,
+    mutates=True,
 )
 _PROCESS_EXECUTE = ToolAction(
     "process.execute",
@@ -4680,6 +4797,18 @@ tool_registry = ToolRegistry(
                     mutates=True,
                 ),
             ),
+        ),
+        ToolDefinition(
+            "update_user_profile",
+            "Persist or clear maintained user-profile fields only after an explicit latest-message request. "
+            "Use current_model unless the user explicitly names another model scope; use both_models only "
+            "when both private and public models are explicitly requested. Changes apply from the next run.",
+            UpdateUserProfileArguments,
+            _update_user_profile,
+            group="agent",
+            label="Persönliches Profil ändern",
+            icon="manage_accounts",
+            actions=(_USER_PROFILE_UPDATE,),
         ),
     ],
     operation_definitions=[

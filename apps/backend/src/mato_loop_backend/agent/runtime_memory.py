@@ -484,7 +484,6 @@ def _durable_memory_payload(
             "revision": item.revision,
             "category": item.category,
             "audience": item.audience,
-            "pinKind": item.pin_kind,
             "content": item.content,
             **memory_reference_timestamps(item),
         }
@@ -518,7 +517,6 @@ def _bounded_memory_overview(
                 "category": item.category,
                 "pinned": item.pinned,
                 "audience": item.audience,
-                "pinKind": item.pin_kind,
                 "content": content,
                 **memory_reference_timestamps(item),
                 "sourceSession": (

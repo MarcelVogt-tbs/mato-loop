@@ -557,6 +557,51 @@ class UpdateAgentIdentityArguments(ToolArguments):
         return self
 
 
+class UpdateUserProfileArguments(ToolArguments):
+    model_scope: Literal[
+        "current_model", "private_models", "public_models", "both_models"
+    ] = Field(
+        default="current_model",
+        description=(
+            "Target current_model unless the user explicitly requests private, public, or both models."
+        ),
+    )
+    preferred_name: str | None = Field(default=None, max_length=20_000)
+    form_of_address: str | None = Field(default=None, max_length=20_000)
+    pronouns: str | None = Field(default=None, max_length=20_000)
+    primary_language: str | None = Field(default=None, max_length=20_000)
+    primary_residence: str | None = Field(default=None, max_length=20_000)
+
+    @field_validator(
+        "preferred_name",
+        "form_of_address",
+        "pronouns",
+        "primary_language",
+        "primary_residence",
+    )
+    @classmethod
+    def normalize_profile_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not (cleaned := value.strip()):
+            raise ValueError("profile values must not be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def require_change(self) -> UpdateUserProfileArguments:
+        if not self.model_fields_set.intersection(
+            {
+                "preferred_name",
+                "form_of_address",
+                "pronouns",
+                "primary_language",
+                "primary_residence",
+            }
+        ):
+            raise ValueError("at least one profile field is required")
+        return self
+
+
 class BuildSkillArguments(ToolArguments):
     brief: str = Field(
         min_length=1,

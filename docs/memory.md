@@ -11,6 +11,8 @@ Durable memory and prior-session retrieval are independent. A conversation does 
 
 Project instructions are a separate optional authoritative layer for deliberately maintained project rules and decisions. Automatic project awareness comes from the compact session index and bounded snippets of other sessions in that project; instructions do not replace the project history.
 
+The maintained user profile is separate from memory. Its preferred name, form of address, pronouns, primary language, and primary residence are projected independently of `memoryMode`, are never embedded or searchable, and appear between the assistant persona and project context. Each field can define a shared, private-model-only, or public-model-only value; a trust-specific value overrides the shared value. Exact case- and whitespace-normalized profile duplicates are excluded from memory projection and retrieval.
+
 ## Access, Scope, and Trust
 
 Each session has a mutable `memoryMode`:
@@ -26,10 +28,11 @@ Automatic prior-session retrieval uses only other `full` chat sessions in the sa
 Durable memories and prior-session snippets are untrusted data, never instructions. Conflict priority is:
 
 1. Current user message
-2. User-configured project instructions
-3. Pinned durable memory
-4. Automatically retrieved or explicitly loaded durable memory
-5. Prior-session snippet or transcript
+2. Maintained user profile
+3. User-configured project instructions
+4. Pinned durable memory
+5. Automatically retrieved or explicitly loaded durable memory
+6. Prior-session snippet or transcript
 
 ## Automatic Context
 
@@ -55,13 +58,13 @@ Explicit durable-memory overview intent uses bounded chronological prefetch and 
 
 ## Durable Memory
 
-A durable memory stores canonical content, category, audience, source provenance, revision, evidence links, seen state, `pinned`, and an optional core-identity `pinKind`. Categories are `context`, `fact`, `goal`, `identity`, and `preference`; sources are `manual`, `tool_call`, and `dreaming`. Normalized content hashes prevent case- and whitespace-equivalent duplicates.
+A durable memory stores canonical content, category, audience, source provenance, revision, evidence links, seen state, and `pinned`. Categories are `context`, `fact`, `goal`, `identity`, and `preference`; sources are `manual`, `tool_call`, and `dreaming`. Normalized content hashes prevent case- and whitespace-equivalent duplicates.
 
-Pinned records are supplied in full on every allowed model request. Any unpinned record can appear automatically as a relevant short snippet regardless of whether its source is `manual`, `tool_call`, or `dreaming`; full details remain available through `memory_retrieve`. Core identity uses only `preferred_name`, `form_of_address`, `pronouns`, `primary_language`, and `primary_residence`; an ordinary pin has no `pinKind`. MatoLoop does not expire or delete memories because of age, non-mention, weak relevance, capacity, exposure, or usage counts.
+Pinned records are supplied in full on every allowed model request. Any unpinned record can appear automatically as a relevant short snippet regardless of whether its source is `manual`, `tool_call`, or `dreaming`; full details remain available through `memory_retrieve`. MatoLoop does not expire or delete memories because of age, non-mention, weak relevance, capacity, exposure, or usage counts.
 
 `memory_write` persists explicitly requested durable information and durable first-person context stated directly in the latest user message. It excludes temporary situations, hypotheticals, quotations, transformation source text, and incidental facts about third parties. An explicit request to always consider the information can pin the result; ordinary remember wording does not pin. Updates and explicit forgetting require an injected or retrieved memory ID and revision and recheck ownership, visibility, and stale-write protection.
 
-`memory_retrieve` supports hybrid `search` and chronological `browse`, with `context` or `write` purpose. Both cover all audience-visible records regardless of pinning. References include the full content, ID, revision, category, audience, pin state, optional `pinKind`, provenance, and timestamps.
+`memory_retrieve` supports hybrid `search` and chronological `browse`, with `context` or `write` purpose. Both cover all audience-visible records regardless of pinning. References include the full content, ID, revision, category, audience, pin state, provenance, and timestamps.
 
 The authenticated Memory UI retains full search, filtering, create, edit, pin or unpin, and delete access even when model-facing Memory or Dreaming is disabled. Every update and delete uses the record revision so a stale UI action cannot overwrite or delete a newer version.
 
@@ -75,11 +78,11 @@ Hybrid ranking selects at most one primary anchor per source session. Authentica
 
 ## Dreaming
 
-Dreaming is an optional extraction and reconciliation pipeline and only processes completed source sessions whose `memoryMode` is `full`. Extraction receives a bounded source-message batch and isolated instructions, with no existing memories, prior-session context, normal agent context, persona, or general tools. It extracts only broad persistent profile facts important enough for future context, such as stable identity, durable relationships, recurring preferences, enduring constraints, and long-term personal goals. Every candidate requires direct supporting evidence from the batch, including a user message.
+Dreaming is an optional extraction and reconciliation pipeline and only processes completed chat sessions whose `memoryMode` is `full`. Automation sessions are never Dreaming sources. Extraction receives a bounded source-message batch and isolated instructions, with no existing memories, prior-session context, normal agent context, persona, user profile, or general tools. It extracts only broad persistent knowledge important enough for future context, such as durable relationships, recurring preferences, enduring constraints, and long-term personal goals. Maintained profile fields are excluded. Every candidate requires direct supporting evidence from the batch, including a user message.
 
 The host matches each candidate independently against visible memories. Exact normalized duplicates deterministically become `unchanged`; unmatched normal candidates become `create`; only non-removal candidates with possible related memories enter model reconciliation. A removal candidate can target only one normalized exact record. An unmatched or merely related removal candidate is skipped and never reaches reconciliation or creates or removes a record. The action set is exactly:
 
-- `create`: create an independent pinned durable memory.
+- `create`: create an independent unpinned durable memory.
 - `unchanged`: retain the matching record and add evidence.
 - `update`: replace one record's canonical content and category.
 - `merge`: combine two to fifty records transactionally.
@@ -87,9 +90,7 @@ The host matches each candidate independently against visible memories. Exact no
 
 Removal candidates require direct user evidence that explicitly asks to forget the exact proposition or says it ended, is invalid, or is no longer true. Dreaming never removes a record because of age, non-mention, or weak relevance. A changed fact normally updates rather than removes.
 
-Every newly created Dreaming memory is pinned. `dreamingMaxPinnedMemories` is configurable from 1 through 100 and defaults to 10. Dreaming counts all pinned memories, including manual pins, before creating a record. Manual pinning may exceed the limit. At or above the limit Dreaming creates no new record, but can still classify unchanged candidates and update, merge, or remove existing records. Existing unpinned records are not migrated or automatically deleted.
-
-Public-only source evidence creates `both` memories; private or mixed evidence creates `private_only` memories. Dreaming never creates `public_only`. Core profile fields can receive their fixed `pinKind`; other broad profile facts are ordinary pins.
+Every newly created Dreaming memory is unpinned. Updating or merging records preserves existing pins but never promotes an unpinned record. Public-only source evidence creates `both` memories; private or mixed evidence creates `private_only` memories. Dreaming never creates `public_only`.
 
 Automatic Dreaming is off by default. Manual and scheduled Dreaming both require an eligible `full` source session, enabled owner memory, and a suitable tool-capable model. Failed work retains its checkpoint and follows bounded retry behavior.
 
@@ -97,12 +98,12 @@ Automatic Dreaming is off by default. Manual and scheduled Dreaming both require
 
 Dreaming has exactly two mutation policies, each with `disabled`, `ask`, or `auto`:
 
-- `dreamingUpdatePolicy`, default `auto`, governs updates and pin promotion of existing records.
+- `dreamingUpdatePolicy`, default `auto`, governs updates of existing records.
 - `dreamingRemovePolicy`, default `ask`, governs removals.
 
-A merge requires both update and removal permission. If either policy is `disabled`, the merge is skipped. If neither is disabled and either is `ask`, one merge approval is created. Only `auto` plus `auto` applies a merge without approval. Creation has no separate policy and is bounded by the pinned-memory limit. The retired merge and pin policies no longer exist.
+A merge requires both update and removal permission. If either policy is `disabled`, the merge is skipped. If neither is disabled and either is `ask`, one merge approval is created. Only `auto` plus `auto` applies a merge without approval. Creation has no separate policy.
 
-An `ask` decision creates a persistent `memory_change` approval that survives backend restart. Its payload stores exact target IDs, revisions, content, category, audience, pin state, optional `pinKind`, evidence hash, source evidence, proposed result, and both policy snapshots. Approval locks and revalidates the source session, direct evidence where removal requires it, current policies, visibility, and every complete target snapshot. Any stale invariant expires the request without partial mutation.
+An `ask` decision creates a persistent `memory_change` approval that survives backend restart. Its payload stores exact target IDs, revisions, content, category, audience, pin state, evidence hash, source evidence, proposed result, and both policy snapshots. Approval locks and revalidates the source session, direct evidence where removal requires it, current policies, visibility, and every complete target snapshot. Any stale invariant expires the request without partial mutation.
 
 Merge locks all targets in deterministic order, preserves evidence and existing pinning, computes a safe audience, and updates one deterministic survivor before deleting redundant rows in the same transaction. Dream runs report `createdMemories`, `updatedMemories`, and `removedMemories`; approved later mutations update the originating run counters in the same approval transaction.
 
@@ -112,9 +113,11 @@ The redesign migration expires pending approvals created under the retired memor
 
 The authenticated `/api/memories` API provides owner-scoped CRUD, paginated FTS and filters, acknowledgements, Memory settings, and Dreaming runs. JSON fields use camelCase and errors use the central stable error contract.
 
-Create accepts `content`, `category`, `audience`, and optional `pinKind`. Update accepts those fields plus `pinned` and required `expectedRevision`. Delete requires the `expectedRevision` query parameter. Responses include `revision`, pin state, optional `pinKind`, audience, provenance, and timestamps.
+Create accepts `content`, `category`, and `audience`. Update accepts those fields plus `pinned` and required `expectedRevision`. Delete requires the `expectedRevision` query parameter. Responses include `revision`, pin state, audience, provenance, and timestamps.
 
-Memory settings accept `enabled`, `automaticDreamingEnabled`, `dreamingInstructions`, `dreamingIntervalMinutes`, `dreamingIdleMinutes`, `dreamingMaxBatchMessages`, `dreamingMaxCandidates`, `dreamingUpdatePolicy`, `dreamingRemovePolicy`, `dreamingMaxPinnedMemories`, `automaticMemorySnippetLimit`, `automaticSessionSnippetLimit`, `recentSessionSnippetLimit`, and `automaticContextMaxTokens`. Settings responses additionally expose `pinnedMemoryCount` and effective Dreaming availability fields. Partial updates reject null and unknown fields.
+Memory settings accept `enabled`, `automaticDreamingEnabled`, `dreamingInstructions`, `dreamingIntervalMinutes`, `dreamingIdleMinutes`, `dreamingMaxBatchMessages`, `dreamingMaxCandidates`, `dreamingUpdatePolicy`, `dreamingRemovePolicy`, `automaticMemorySnippetLimit`, `automaticSessionSnippetLimit`, `recentSessionSnippetLimit`, and `automaticContextMaxTokens`. Settings responses additionally expose effective Dreaming availability fields. Partial updates reject null and unknown fields.
+
+The authenticated `/api/user-profile` API provides owner-scoped `GET` and partial `PATCH`. Changes are merged under the user-scoped settings lock; explicit null removes a value. The profile remains available to normal model requests when Memory is disabled. The host-controlled `update_user_profile` tool changes the same five fields only after an explicit latest-message request. Its separate `settings.user_profile.update` policy defaults to `ask`; the tool resolves the current model to its private or public trust scope and targets both scopes only when explicitly requested. Profile writes have no revision contract; the last completed settings-lock write wins.
 
 ## Ownership and Availability
 

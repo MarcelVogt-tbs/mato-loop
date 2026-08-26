@@ -2,7 +2,7 @@
   <section>
     <header class="settings-section-header">
       <div>
-        <h2 class="text-h6 text-weight-bold q-my-none">Persona</h2>
+        <h2 class="text-h6 text-weight-bold q-my-none">Persona des Assistenten</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
           Name, Verhalten und Charakter des gemeinsamen Assistenten festlegen.
         </p>

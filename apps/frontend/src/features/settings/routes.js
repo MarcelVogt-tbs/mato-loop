@@ -54,10 +54,15 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Automationen', settingsIcon: 'schedule' }
   },
   {
+    path: 'personalization',
+    name: 'settings-personalization',
+    component: () => import('pages/settings/PersonalizationSettingsPage.vue'),
+    meta: { settingsLabel: 'Personalisierung', settingsIcon: 'manage_accounts' }
+  },
+  {
     path: 'persona',
     name: 'settings-persona',
-    component: () => import('pages/settings/AgentIdentitySettingsPage.vue'),
-    meta: { settingsLabel: 'Persona', settingsIcon: 'face' }
+    redirect: { name: 'settings-personalization', query: { tab: 'assistant' } }
   },
   {
     path: 'memory',

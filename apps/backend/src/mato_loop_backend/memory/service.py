@@ -24,7 +24,6 @@ from mato_loop_backend.models import (
     MemoryCategory,
     MemoryDreamRun,
     MemoryMode,
-    MemoryPinKind,
     MemoryRecord,
     MemorySourceMessage,
     MemorySourceType,
@@ -39,7 +38,7 @@ from mato_loop_backend.settings import (
 
 _MAX_LEXICAL_TERMS = 20
 _MAX_LEXICAL_TERM_CHARACTERS = 256
-_MEMORY_APPROVAL_SCHEMA_VERSION = 2
+_MEMORY_APPROVAL_SCHEMA_VERSION = 3
 
 
 class MemoryApprovalTarget(BaseModel):
@@ -51,11 +50,6 @@ class MemoryApprovalTarget(BaseModel):
     category: MemoryCategory
     audience: MemoryAudience
     pinned: bool
-    pin_kind: MemoryPinKind | None = Field(
-        default=None,
-        validation_alias=AliasChoices("pinKind", "pin_kind"),
-        serialization_alias="pinKind",
-    )
     evidence_hash: str = Field(
         pattern=r"^[0-9a-f]{64}$",
         validation_alias=AliasChoices("evidenceHash", "evidence_hash"),
@@ -69,18 +63,12 @@ class MemoryApprovalAfter(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
     category: MemoryCategory
     audience: MemoryAudience
-    pinned: bool
-    pin_kind: MemoryPinKind | None = Field(
-        default=None,
-        validation_alias=AliasChoices("pinKind", "pin_kind"),
-        serialization_alias="pinKind",
-    )
 
 
 class MemoryApprovalPayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    schema_version: Literal[2] = Field(
+    schema_version: Literal[3] = Field(
         validation_alias=AliasChoices("schemaVersion", "schema_version"),
         serialization_alias="schemaVersion",
     )
@@ -91,15 +79,6 @@ class MemoryApprovalPayload(BaseModel):
         serialization_alias="targetMemories",
     )
     after: MemoryApprovalAfter | None = None
-    requested_pin: bool = Field(
-        validation_alias=AliasChoices("requestedPin", "requested_pin"),
-        serialization_alias="requestedPin",
-    )
-    pin_kind: MemoryPinKind | None = Field(
-        default=None,
-        validation_alias=AliasChoices("pinKind", "pin_kind"),
-        serialization_alias="pinKind",
-    )
     source_dream_run_id: UUID = Field(
         validation_alias=AliasChoices("sourceDreamRunId", "source_dream_run_id"),
         serialization_alias="sourceDreamRunId",
@@ -132,9 +111,7 @@ class MemoryApprovalPayload(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_pin(self) -> MemoryApprovalPayload:
-        if self.pin_kind is not None and not self.requested_pin:
-            raise ValueError("pinKind requires requestedPin true")
+    def validate_targets(self) -> MemoryApprovalPayload:
         if len(self.target_memories) != len({item.id for item in self.target_memories}):
             raise ValueError("targetMemories must be unique")
         if len(self.evidence_message_ids) != len(set(self.evidence_message_ids)):
@@ -145,6 +122,10 @@ class MemoryApprovalPayload(BaseModel):
 def normalize_content(content: str) -> tuple[str, str]:
     normalized = re.sub(r"\s+", " ", content.strip()).casefold()
     return normalized, hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def memory_content_hash_exclusion(content_hashes: frozenset[str] | set[str]) -> object:
+    return MemoryRecord.normalized_content_hash.not_in(sorted(content_hashes))
 
 
 def memory_visible_to(
@@ -258,24 +239,6 @@ class MemoryDuplicateError(Exception):
 
 class MemoryService:
     @staticmethod
-    async def _pin_kind_taken(
-        db: AsyncSession,
-        *,
-        owner_id: UUID,
-        pin_kind: MemoryPinKind,
-        audience: MemoryAudience | str,
-        exclude_ids: list[UUID] | None = None,
-    ) -> bool:
-        filters = [
-            MemoryRecord.user_id == owner_id,
-            MemoryRecord.pin_kind == pin_kind.value,
-            MemoryRecord.audience == MemoryAudience(audience).value,
-        ]
-        if exclude_ids:
-            filters.append(MemoryRecord.id.not_in(exclude_ids))
-        return await db.scalar(select(MemoryRecord.id).where(*filters)) is not None
-
-    @staticmethod
     async def create_manual(
         db: AsyncSession,
         *,
@@ -283,7 +246,6 @@ class MemoryService:
         content: str,
         category: MemoryCategory,
         audience: MemoryAudience,
-        pin_kind: MemoryPinKind | None = None,
     ) -> MemoryRecord:
         _, content_hash = normalize_content(content)
         if await MemoryService._duplicate_by_hash(db, owner_id=owner_id, content_hash=content_hash) is not None:
@@ -297,20 +259,13 @@ class MemoryService:
                     category=category,
                     source_type=MemorySourceType.MANUAL,
                     audience=audience,
-                    pin_kind=pin_kind,
                 )
                 return item
         except IntegrityError as exc:
             duplicate_content = await MemoryService._duplicate_by_hash(
                 db, owner_id=owner_id, content_hash=content_hash
             )
-            duplicate_pin = pin_kind is not None and await MemoryService._pin_kind_taken(
-                db,
-                owner_id=owner_id,
-                pin_kind=pin_kind,
-                audience=audience,
-            )
-            if duplicate_content is None and not duplicate_pin:
+            if duplicate_content is None:
                 raise
             raise MemoryDuplicateError from exc
 
@@ -490,10 +445,7 @@ class MemoryService:
         session_id: UUID,
         run_id: UUID,
         evidence_message_ids: list[UUID],
-        pin_kind: MemoryPinKind | None,
-        max_pinned_memories: int,
     ) -> MemoryMutation:
-        await db.execute(select(func.pg_advisory_xact_lock(1_836_642_671)))
         _, content_hash = normalize_content(content)
         existing = await MemoryService._duplicate_by_hash(
             db, owner_id=owner_id, content_hash=content_hash, for_update=True
@@ -507,21 +459,6 @@ class MemoryService:
                 evidence_message_ids=evidence_message_ids,
             )
             return MemoryMutation(existing, duplicate=True)
-        if pin_kind is not None and await MemoryService._pin_kind_taken(
-            db, owner_id=owner_id, pin_kind=pin_kind, audience=memory_audience_for_source(trust_level)
-        ):
-            return MemoryMutation(None)
-        pinned = int(
-            await db.scalar(
-                select(func.count(MemoryRecord.id)).where(
-                    MemoryRecord.user_id == owner_id,
-                    MemoryRecord.pinned.is_(True),
-                )
-            )
-            or 0
-        )
-        if pinned >= max_pinned_memories:
-            return MemoryMutation(None)
         try:
             async with db.begin_nested():
                 item = await MemoryService._create(
@@ -535,8 +472,6 @@ class MemoryService:
                     message_id=(evidence_message_ids[0] if evidence_message_ids else None),
                     dream_run_id=run_id,
                     evidence_message_ids=evidence_message_ids,
-                    pinned=True,
-                    pin_kind=pin_kind,
                 )
                 return MemoryMutation(item, created=True)
         except IntegrityError:
@@ -613,8 +548,6 @@ class MemoryService:
         session_id: UUID,
         dream_run_id: UUID,
         evidence_message_ids: list[UUID],
-        pin: bool = False,
-        pin_kind: MemoryPinKind | None = None,
     ) -> MemoryMutation:
         unique_ids = sorted(set(memory_ids), key=str)
         if len(unique_ids) < 2 or len(unique_ids) > 50:
@@ -693,31 +626,11 @@ class MemoryService:
         )
         if resulting_audience is None:
             return MemoryMutation(survivor, conflict=True)
-        resulting_pin_kind = (
-            None
-            if category != MemoryCategory.IDENTITY
-            else pin_kind
-            or next(
-                (MemoryPinKind(item.pin_kind) for item in items if item.pin_kind),
-                None,
-            )
-        )
-        if resulting_pin_kind is not None:
-            await db.execute(select(func.pg_advisory_xact_lock(1_836_642_671)))
-            if await MemoryService._pin_kind_taken(
-                db,
-                owner_id=owner_id,
-                pin_kind=resulting_pin_kind,
-                audience=resulting_audience,
-                exclude_ids=unique_ids,
-            ):
-                return MemoryMutation(survivor, conflict=True)
         survivor.content = cleaned
         survivor.normalized_content_hash = content_hash
         survivor.category = category.value
         survivor.audience = resulting_audience.value
-        survivor.pinned = pin or any(item.pinned for item in items)
-        survivor.pin_kind = resulting_pin_kind.value if resulting_pin_kind else None
+        survivor.pinned = any(item.pinned for item in items)
         survivor.source_type = MemorySourceType.DREAMING.value
         survivor.source_session_id = session_id
         survivor.source_message_id = evidence_message_ids[0] if evidence_message_ids else None
@@ -814,6 +727,7 @@ class MemoryService:
         owner_id: UUID,
         candidates: list[tuple[str, MemoryCategory]],
         readable_by: TrustLevel,
+        excluded_content_hashes: frozenset[str] | set[str] = frozenset(),
         max_items_per_candidate: int = 5,
         max_characters: int = 40_000,
     ) -> list[list[MemoryRecord]]:
@@ -821,6 +735,8 @@ class MemoryService:
             MemoryRecord.user_id == owner_id,
             memory_visibility_filter(readable_by),
         ]
+        if excluded_content_hashes:
+            trust_filters.append(memory_content_hash_exclusion(excluded_content_hashes))
         result: list[list[MemoryRecord]] = []
         used_characters = 0
         for content, _category in candidates:
@@ -912,7 +828,6 @@ class MemoryService:
             category=MemoryCategory(item.category),
             audience=MemoryAudience(item.audience),
             pinned=item.pinned,
-            pinKind=MemoryPinKind(item.pin_kind) if item.pin_kind else None,
             evidenceHash=await MemoryService._evidence_hash(
                 db, item, owner_id=owner_id
             ),
@@ -934,7 +849,6 @@ class MemoryService:
             and item.category == snapshot.category.value
             and item.audience == snapshot.audience.value
             and item.pinned == snapshot.pinned
-            and item.pin_kind == (snapshot.pin_kind.value if snapshot.pin_kind else None)
             and await MemoryService._evidence_hash(db, item, owner_id=owner_id)
             == snapshot.evidence_hash
         )
@@ -953,8 +867,6 @@ class MemoryService:
         trust_level: TrustLevel,
         readable_by: TrustLevel,
         evidence_message_ids: list[UUID],
-        requested_pin: bool,
-        pin_kind: MemoryPinKind | None,
         update_policy: ToolExecutionPolicy,
         remove_policy: ToolExecutionPolicy,
         created: list[ApprovalRequest] | None = None,
@@ -989,21 +901,6 @@ class MemoryService:
         )
         if resulting_audience is None:
             raise ValueError("memory audiences do not intersect")
-        resulting_pinned = requested_pin or any(item.pinned for item in ordered_targets)
-        resulting_pin_kind = (
-            None
-            if after_category is not None and after_category != MemoryCategory.IDENTITY
-            else pin_kind
-            or next(
-                (MemoryPinKind(item.pin_kind) for item in ordered_targets if item.pin_kind),
-                None,
-            )
-        )
-        if pin_kind is not None and (
-            after_category
-            or MemoryCategory(ordered_targets[0].category)
-        ) != MemoryCategory.IDENTITY:
-            raise ValueError("pinKind requires an identity result")
         payload = MemoryApprovalPayload(
             schemaVersion=_MEMORY_APPROVAL_SCHEMA_VERSION,
             targetMemories=snapshots,
@@ -1012,14 +909,10 @@ class MemoryService:
                     content=after_content,
                     category=after_category,
                     audience=resulting_audience,
-                    pinned=resulting_pinned,
-                    pinKind=resulting_pin_kind,
                 )
                 if after_content is not None and after_category is not None
                 else None
             ),
-            requestedPin=requested_pin,
-            pinKind=pin_kind,
             sourceDreamRunId=source_dream_run_id,
             sourceSessionId=source_session_id,
             evidenceMessageIds=list(dict.fromkeys(evidence_message_ids)),
@@ -1092,40 +985,6 @@ class MemoryService:
         if created is not None:
             created.append(approval)
         return approval
-
-    @staticmethod
-    async def auto_pin(
-        db: AsyncSession,
-        item: MemoryRecord,
-        *,
-        owner_id: UUID,
-        pin_kind: MemoryPinKind | None,
-        max_pinned_memories: int,
-    ) -> bool:
-        if item.user_id != owner_id:
-            raise ValueError("memory owner mismatch")
-        if item.pinned and (pin_kind is None or item.pin_kind == pin_kind.value):
-            return True
-        await db.execute(select(func.pg_advisory_xact_lock(1_836_642_671)))
-        if pin_kind is not None and await MemoryService._pin_kind_taken(
-            db, owner_id=owner_id, pin_kind=pin_kind, audience=item.audience, exclude_ids=[item.id]
-        ):
-            return False
-        pinned = int(
-            await db.scalar(
-                select(func.count(MemoryRecord.id)).where(
-                    MemoryRecord.user_id == owner_id,
-                    MemoryRecord.pinned.is_(True),
-                )
-            )
-            or 0
-        )
-        if not item.pinned and pinned >= max_pinned_memories:
-            return False
-        await MemoryService.set_pinned(
-            db, item, owner_id=owner_id, pinned=True, pin_kind=pin_kind
-        )
-        return True
 
     @staticmethod
     async def _valid_explicit_user_evidence(
@@ -1214,6 +1073,7 @@ class MemoryService:
         if (
             session is None
             or session.user_id != owner_id
+            or session.session_type != "chat"
             or dream_run is None
             or dream_run.session_id != session.id
         ):
@@ -1292,48 +1152,15 @@ class MemoryService:
             ):
                 return "target_changed"
 
-        pin_needed = payload.requested_pin and not any(
-            item.pinned
-            and (payload.pin_kind is None or item.pin_kind == payload.pin_kind.value)
-            for item in targets
-        )
-        if pin_needed:
-            await db.execute(select(func.pg_advisory_xact_lock(1_836_642_671)))
-            resulting_audience = (
-                payload.after.audience
-                if payload.after is not None
-                else MemoryAudience(targets[0].audience)
-            )
-            if payload.pin_kind is not None and await MemoryService._pin_kind_taken(
-                db, owner_id=owner_id, pin_kind=payload.pin_kind,
-                audience=resulting_audience, exclude_ids=target_ids,
-            ):
-                return "target_changed"
-            if not any(item.pinned for item in targets):
-                pinned = int(
-                    await db.scalar(
-                        select(func.count(MemoryRecord.id)).where(
-                            MemoryRecord.user_id == owner_id,
-                            MemoryRecord.pinned.is_(True),
-                        )
-                    )
-                    or 0
-                )
-                if pinned >= settings.dreaming_max_pinned_memories:
-                    return "target_changed"
-
         if action == "remove":
-            if len(targets) != 1 or payload.after is not None or payload.requested_pin:
+            if len(targets) != 1 or payload.after is not None:
                 return "target_changed"
             await db.delete(targets[0])
             await db.flush()
             dream_run.removed_memory_count = (dream_run.removed_memory_count or 0) + 1
             return "applied"
 
-        if payload.after is None or (
-            payload.pin_kind is not None
-            and payload.after.category != MemoryCategory.IDENTITY
-        ):
+        if payload.after is None:
             return "target_changed"
         expected_audience = memory_audience_intersection(
             [
@@ -1341,25 +1168,7 @@ class MemoryService:
                 memory_audience_for_source(payload.trust_level),
             ]
         )
-        expected_pin_kind = (
-            None
-            if payload.after.category != MemoryCategory.IDENTITY
-            else payload.pin_kind
-            or next(
-                (
-                    MemoryPinKind(item.pin_kind)
-                    for item in targets
-                    if item.pin_kind
-                ),
-                None,
-            )
-        )
-        if (
-            payload.after.audience != expected_audience
-            or payload.after.pinned
-            != (payload.requested_pin or any(item.pinned for item in targets))
-            or payload.after.pin_kind != expected_pin_kind
-        ):
+        if payload.after.audience != expected_audience:
             return "target_changed"
         if action == "update":
             if len(targets) != 1:
@@ -1378,14 +1187,6 @@ class MemoryService:
             )
             if mutation.item is None or mutation.conflict:
                 return "target_changed"
-            if payload.requested_pin:
-                await MemoryService.set_pinned(
-                    db,
-                    mutation.item,
-                    owner_id=owner_id,
-                    pinned=True,
-                    pin_kind=payload.after.pin_kind,
-                )
             dream_run.updated_memory_count = (dream_run.updated_memory_count or 0) + 1
             return "applied"
 
@@ -1402,8 +1203,6 @@ class MemoryService:
             session_id=session.id,
             dream_run_id=dream_run.id,
             evidence_message_ids=payload.evidence_message_ids,
-            pin=payload.requested_pin,
-            pin_kind=payload.pin_kind,
         )
         if mutation.item is None or mutation.conflict:
             return "target_changed"
@@ -1422,8 +1221,6 @@ class MemoryService:
         category: MemoryCategory,
         source_type: MemorySourceType,
         audience: MemoryAudience,
-        pinned: bool = False,
-        pin_kind: MemoryPinKind | None = None,
         session_id: UUID | None = None,
         message_id: UUID | None = None,
         run_id: UUID | None = None,
@@ -1434,8 +1231,6 @@ class MemoryService:
         cleaned = content.strip()
         if not cleaned:
             raise ValueError("memory content must not be empty")
-        if pin_kind is not None:
-            await db.execute(select(func.pg_advisory_xact_lock(1_836_642_671)))
         _, content_hash = normalize_content(cleaned)
         await MemoryService._validate_source_references(
             db,
@@ -1453,9 +1248,8 @@ class MemoryService:
             source_dream_run_id=dream_run_id,
             source_tool_call_id=tool_call_id,
             source_type=source_type.value,
-            pinned=pinned or pin_kind is not None,
+            pinned=False,
             audience=audience.value,
-            pin_kind=pin_kind.value if pin_kind else None,
             category=category.value,
             content=cleaned,
             normalized_content_hash=content_hash,
@@ -1675,12 +1469,9 @@ class MemoryService:
         source_dream_run_id: UUID | None = None,
         source_tool_call_id: str | None = None,
         pinned: bool | None = None,
-        pin_kind: MemoryPinKind | None = None,
     ) -> MemoryRecord:
         if item.user_id != owner_id:
             raise ValueError("memory owner mismatch")
-        if pin_kind is not None:
-            await db.execute(select(func.pg_advisory_xact_lock(1_836_642_671)))
         cleaned = content.strip()
         if not cleaned:
             raise ValueError("memory content must not be empty")
@@ -1696,11 +1487,8 @@ class MemoryService:
                 item.content = cleaned
                 item.category = category.value
                 item.audience = audience.value
-                if category != MemoryCategory.IDENTITY:
-                    item.pin_kind = None
                 if pinned is not None:
                     item.pinned = pinned
-                    item.pin_kind = pin_kind.value if pinned and pin_kind else None
                 item.normalized_content_hash = content_hash
                 item.revision = (item.revision or 1) + 1
                 if content_changed:
@@ -1736,14 +1524,7 @@ class MemoryService:
                 content_hash=content_hash,
                 exclude_id=item_id,
             )
-            duplicate_pin = pin_kind is not None and await MemoryService._pin_kind_taken(
-                db,
-                owner_id=owner_id,
-                pin_kind=pin_kind,
-                audience=audience,
-                exclude_ids=[item_id],
-            )
-            if duplicate_content is None and not duplicate_pin:
+            if duplicate_content is None:
                 raise
             raise MemoryDuplicateError from exc
         return item
@@ -1790,6 +1571,7 @@ class MemoryService:
         audience: MemoryAudience | None = None,
         pinned: bool | None = None,
         readable_by: TrustLevel | None = None,
+        excluded_content_hashes: frozenset[str] | set[str] = frozenset(),
         cursor_updated_at: datetime | None = None,
         cursor_id: UUID | None = None,
         offset: int = 0,
@@ -1808,6 +1590,8 @@ class MemoryService:
             filters.append(MemoryRecord.pinned.is_(pinned))
         if readable_by is not None:
             filters.append(memory_visibility_filter(readable_by))
+        if excluded_content_hashes:
+            filters.append(memory_content_hash_exclusion(excluded_content_hashes))
         cleaned_query = (query or "").strip()
         rank = None
         if cleaned_query:
@@ -1849,10 +1633,16 @@ class MemoryService:
 
     @staticmethod
     async def scope(
-        db: AsyncSession, *, owner_id: UUID, readable_by: TrustLevel
+        db: AsyncSession,
+        *,
+        owner_id: UUID,
+        readable_by: TrustLevel,
+        excluded_content_hashes: frozenset[str] | set[str] = frozenset(),
     ) -> MemoryScope:
         filters = [MemoryRecord.user_id == owner_id]
         filters.append(memory_visibility_filter(readable_by))
+        if excluded_content_hashes:
+            filters.append(memory_content_hash_exclusion(excluded_content_hashes))
         total, pinned = (
             await db.execute(
                 select(
@@ -1869,12 +1659,15 @@ class MemoryService:
         *,
         owner_id: UUID,
         input_trust_level: TrustLevel,
+        excluded_content_hashes: frozenset[str] | set[str] = frozenset(),
     ) -> list[MemoryRecord]:
         filters = [
             MemoryRecord.user_id == owner_id,
             MemoryRecord.pinned.is_(True),
         ]
         filters.append(memory_visibility_filter(input_trust_level))
+        if excluded_content_hashes:
+            filters.append(memory_content_hash_exclusion(excluded_content_hashes))
         items = list(
             (
                 await db.scalars(
@@ -1886,21 +1679,7 @@ class MemoryService:
                 )
             ).all()
         )
-        specific_audience = f"{input_trust_level.value}_only"
-        specific_kinds = {
-            item.pin_kind
-            for item in items
-            if item.pin_kind and item.audience == specific_audience
-        }
-        return [
-            item
-            for item in items
-            if not (
-                item.pin_kind
-                and item.audience == MemoryAudience.BOTH.value
-                and item.pin_kind in specific_kinds
-            )
-        ]
+        return items
 
     @staticmethod
     async def automatic_context_by_ids(
@@ -1909,19 +1688,23 @@ class MemoryService:
         owner_id: UUID,
         memory_ids: list[UUID],
         readable_by: TrustLevel,
+        excluded_content_hashes: frozenset[str] | set[str] = frozenset(),
     ) -> list[MemoryRecord]:
         if not memory_ids:
             return []
+        filters = [
+            MemoryRecord.user_id == owner_id,
+            MemoryRecord.id.in_(memory_ids),
+            MemoryRecord.pinned.is_(False),
+            memory_visibility_filter(readable_by),
+        ]
+        if excluded_content_hashes:
+            filters.append(memory_content_hash_exclusion(excluded_content_hashes))
         items = list(
             (
                 await db.scalars(
                     select(MemoryRecord)
-                    .where(
-                        MemoryRecord.user_id == owner_id,
-                        MemoryRecord.id.in_(memory_ids),
-                        MemoryRecord.pinned.is_(False),
-                        memory_visibility_filter(readable_by),
-                    )
+                    .where(*filters)
                     .options(*memory_reference_options(owner_id))
                     .execution_options(populate_existing=True)
                 )
@@ -1937,14 +1720,11 @@ class MemoryService:
         *,
         owner_id: UUID,
         pinned: bool,
-        pin_kind: MemoryPinKind | None = None,
     ) -> MemoryRecord:
         if item.user_id != owner_id:
             raise ValueError("memory owner mismatch")
-        target_pin_kind = pin_kind.value if pinned and pin_kind else None
-        if item.pinned != pinned or item.pin_kind != target_pin_kind:
+        if item.pinned != pinned:
             item.pinned = pinned
-            item.pin_kind = target_pin_kind
             item.revision = (item.revision or 1) + 1
             await db.flush()
         return item

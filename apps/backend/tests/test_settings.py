@@ -163,7 +163,6 @@ def test_user_settings_are_user_scoped() -> None:
     assert settings.automatic_dreaming_enabled is False
     assert settings.dreaming_update_policy == ToolExecutionPolicy.AUTO
     assert settings.dreaming_remove_policy == ToolExecutionPolicy.ASK
-    assert settings.dreaming_max_pinned_memories == 10
     assert settings.automatic_memory_snippet_limit == 2
     assert settings.automatic_session_snippet_limit == 3
     assert settings.recent_session_snippet_limit == 2

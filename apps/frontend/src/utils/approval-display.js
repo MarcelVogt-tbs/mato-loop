@@ -43,7 +43,7 @@ export function memoryApprovalDisplay(approval) {
       destructive: true
     },
     memory_pin: {
-      title: payload.requestedPin ? 'Erinnerung immer berücksichtigen' : 'Erinnerung bei Bedarf berücksichtigen',
+      title: payload.requestedPin ? 'Erinnerung: Immer im Kontext' : 'Erinnerung: Bei passender Anfrage',
       summary: 'Dreaming möchte die Berücksichtigung einer Erinnerung ändern.',
       targetLabel: 'Bisherige Erinnerung',
       icon: 'push_pin'
@@ -137,6 +137,9 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'memory_collection') {
     return { label: 'Memory-Sammlung', value: approval?.resourceDisplay || 'Eigene Memories' }
   }
+  if (approval?.resourceType === 'user_profile') {
+    return { label: 'Persönliches Profil', value: approval?.resourceDisplay || 'Eigenes persönliches Profil' }
+  }
   if (approval?.resourceType === 'skill') {
     return { label: 'Skill', value: approval?.resourceDisplay ? `„${approval.resourceDisplay}“` : scope }
   }
@@ -212,6 +215,7 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'session.search': { label: 'Sessions durchsuchen', icon: 'manage_search' },
     'memory.read': { label: 'Memories lesen', icon: 'psychology' },
     'memory.write': { label: 'Memory speichern', icon: 'save' },
+    'settings.user_profile.update': { label: 'Persönliches Profil ändern', icon: 'manage_accounts' },
     'skills.write': { label: 'Skills erstellen', icon: 'auto_awesome' },
     'automation.read': { label: 'Automationen anzeigen', icon: 'schedule' },
     'automation.create': { label: 'Automation erstellen', icon: 'add_task' },

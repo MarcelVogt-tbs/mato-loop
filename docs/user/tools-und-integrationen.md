@@ -27,7 +27,7 @@ MatoLoop bündelt Werkzeuge für:
 - QR-, Bild-, Sprach-, Audio- und Transkriptionsaufgaben
 - Lesen und Durchsuchen früherer Sessions
 - Memory
-- Persona
+- Persona und persönliches Profil
 - Kalender und Aufgaben
 - Rezepte und Essensplanung (Mealie)
 - Wissensdatenbank (BookStack)

@@ -68,7 +68,7 @@ async def test_pinned_context_filters_visibility_and_set_pinned_preserves_index(
     assert memory.revision == 2
 
 
-async def test_pinned_context_prefers_audience_specific_identity() -> None:
+async def test_pinned_context_keeps_all_visible_ordinary_pins() -> None:
     owner_id = uuid4()
     shared = MemoryRecord(
         id=uuid4(),
@@ -77,7 +77,6 @@ async def test_pinned_context_prefers_audience_specific_identity() -> None:
         category="identity",
         audience="both",
         pinned=True,
-        pin_kind="preferred_name",
         normalized_content_hash="shared",
     )
     private = MemoryRecord(
@@ -87,7 +86,6 @@ async def test_pinned_context_prefers_audience_specific_identity() -> None:
         category="identity",
         audience="private_only",
         pinned=True,
-        pin_kind="preferred_name",
         normalized_content_hash="private",
     )
     fact = MemoryRecord(
@@ -108,7 +106,7 @@ async def test_pinned_context_prefers_audience_specific_identity() -> None:
         db, owner_id=owner_id, input_trust_level=TrustLevel.PRIVATE
     )
 
-    assert records == [private, fact]
+    assert records == [shared, private, fact]
 
 
 async def test_cached_context_revalidation_preserves_rank_and_current_scope() -> None:

@@ -47,6 +47,7 @@ from mato_loop_backend.settings import (
     SkillDefinition,
     SkillsSettings,
     ToolSettings,
+    UserProfileSettings,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig, TrustLevel
 from mato_loop_backend.video_processing import MediaInfo, VideoFrame
@@ -227,6 +228,7 @@ async def _runtime_setup(
             IntegrationSettings: integration_settings or IntegrationSettings(),
             SkillsSettings: skills or SkillsSettings(),
             ToolSettings: ToolSettings(),
+            UserProfileSettings: UserProfileSettings(),
         }[settings_type]
 
     projections = []

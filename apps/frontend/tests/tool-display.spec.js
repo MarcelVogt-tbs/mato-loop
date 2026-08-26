@@ -242,6 +242,30 @@ describe('tool display', () => {
     })).toBe('Verhalten und Charakter aktualisieren')
   })
 
+  it('presents personal profile changes with their model scope', () => {
+    const tool = {
+      name: 'update_user_profile',
+      arguments: {
+        model_scope: 'both_models',
+        preferred_name: 'Lara',
+        primary_residence: null
+      }
+    }
+
+    expect(toolIdentity(tool.name)).toEqual({
+      label: 'Persönliches Profil ändern',
+      icon: 'manage_accounts'
+    })
+    expect(toolPresentation(tool)).toEqual({
+      summary: '2 Profilfelder',
+      items: [
+        { label: 'Gilt für', value: 'Private und öffentliche Modelle', format: 'text' },
+        { label: 'Bevorzugter Name', value: 'Lara', format: 'text' },
+        { label: 'Hauptwohnsitz', value: 'Entfernen', format: 'text' }
+      ]
+    })
+  })
+
   it('identifies webfetch exactly and hides sensitive URL parameters', () => {
     expect(toolIdentity('webfetch')).toEqual({ label: 'Webseite abrufen', icon: 'language' })
     expect(toolSummary({
@@ -367,7 +391,7 @@ describe('tool display', () => {
       nextCursor: { cursor_updated_at: '2026-07-23T12:00:00Z', cursor_id: 'memory-1' },
       items: [{
         id: 'memory-1', content: 'Sichtbarer Inhalt', category: 'identity', pinned: true,
-        audience: 'private_only', pinKind: 'preferred_name'
+        audience: 'private_only'
       }]
     }), 'memory_retrieve')
 
@@ -375,7 +399,7 @@ describe('tool display', () => {
     expect(parsed.text).toContain('private')
     expect(parsed.text).toContain('pinned')
     expect(parsed.text).toContain('private_only')
-    expect(parsed.text).toContain('preferred_name')
+    expect(parsed.text).not.toContain('pinKind')
     expect(parsed.text).toContain('cursor_updated_at')
   })
 

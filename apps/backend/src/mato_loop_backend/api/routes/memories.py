@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -26,7 +26,6 @@ from mato_loop_backend.models import (
     MemoryCategory,
     MemoryDreamRun,
     MemoryDreamTrigger,
-    MemoryPinKind,
     MemoryRecord,
     MemorySourceType,
     UserAccount,
@@ -55,24 +54,11 @@ class MemoryRequest(ApiRequest):
     content: str = Field(min_length=1, max_length=20_000)
     category: MemoryCategory
     audience: MemoryAudience = MemoryAudience.BOTH
-    pin_kind: MemoryPinKind | None = None
-
-    @model_validator(mode="after")
-    def validate_pin_kind(self) -> MemoryRequest:
-        if self.pin_kind is not None and self.category != MemoryCategory.IDENTITY:
-            raise ValueError("pinKind requires identity category")
-        return self
 
 
 class MemoryUpdateRequest(MemoryRequest):
     expected_revision: int = Field(ge=1)
     pinned: bool
-
-    @model_validator(mode="after")
-    def validate_pinned_identity(self) -> MemoryUpdateRequest:
-        if self.pin_kind is not None and not self.pinned:
-            raise ValueError("pinKind requires pinned true")
-        return self
 
 
 class MemorySettingsRequest(ApiRequest):
@@ -85,7 +71,6 @@ class MemorySettingsRequest(ApiRequest):
     dreaming_max_candidates: int | None = Field(default=None, ge=1, le=100)
     dreaming_update_policy: ToolExecutionPolicy | None = None
     dreaming_remove_policy: ToolExecutionPolicy | None = None
-    dreaming_max_pinned_memories: int | None = Field(default=None, ge=1, le=100)
     automatic_memory_snippet_limit: int | None = Field(default=None, ge=0, le=5)
     automatic_session_snippet_limit: int | None = Field(default=None, ge=0, le=5)
     recent_session_snippet_limit: int | None = Field(default=None, ge=0, le=5)
@@ -125,7 +110,6 @@ def memory_payload(item: MemoryRecord) -> dict[str, Any]:
         "sourceType": item.source_type,
         "pinned": item.pinned,
         "audience": item.audience,
-        "pinKind": item.pin_kind,
         "sourceSession": (
             {"id": str(item.source_session.id), "title": item.source_session.title}
             if item.source_session
@@ -178,15 +162,6 @@ async def settings_payload(
     manual_enabled, manual_reason = dreaming_availability(
         settings, ai, automatic=False
     )
-    pinned_count = int(
-        await db.scalar(
-            select(func.count(MemoryRecord.id)).where(
-                MemoryRecord.user_id == user_id,
-                MemoryRecord.pinned.is_(True),
-            )
-        )
-        or 0
-    )
     return {
         "enabled": settings.enabled,
         "automaticDreamingEnabled": settings.automatic_dreaming_enabled,
@@ -197,12 +172,10 @@ async def settings_payload(
         "dreamingMaxCandidates": settings.dreaming_max_candidates,
         "dreamingUpdatePolicy": settings.dreaming_update_policy,
         "dreamingRemovePolicy": settings.dreaming_remove_policy,
-        "dreamingMaxPinnedMemories": settings.dreaming_max_pinned_memories,
         "automaticMemorySnippetLimit": settings.automatic_memory_snippet_limit,
         "automaticSessionSnippetLimit": settings.automatic_session_snippet_limit,
         "recentSessionSnippetLimit": settings.recent_session_snippet_limit,
         "automaticContextMaxTokens": settings.automatic_context_max_tokens,
-        "pinnedMemoryCount": pinned_count,
         "effectiveAutomaticDreamingEnabled": automatic_enabled,
         "automaticDreamingUnavailableReason": automatic_reason,
         "manualDreamingAvailable": manual_enabled,
@@ -297,6 +270,8 @@ async def start_dream_runs(
         )
         if target is None:
             raise ApiError(404, "session.notFound")
+        if target.session_type != "chat":
+            raise ApiError(409, "memory.invalidSource")
         if target.memory_mode != "full":
             raise ApiError(409, "memory.sessionDisabled")
     runs = await DreamingService.enqueue(
@@ -372,7 +347,6 @@ async def create_memory(
             content=content,
             category=payload.category,
             audience=payload.audience,
-            pin_kind=payload.pin_kind,
         )
     except MemoryDuplicateError as exc:
         raise ApiError(409, "memory.duplicate") from exc
@@ -437,7 +411,6 @@ async def update_memory(
             audience=payload.audience,
             source_type=MemorySourceType.MANUAL,
             pinned=payload.pinned,
-            pin_kind=payload.pin_kind,
         )
     except MemoryDuplicateError as exc:
         raise ApiError(409, "memory.duplicate") from exc

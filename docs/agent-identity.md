@@ -19,7 +19,7 @@ The identity is sent to the selected chat model. The UI therefore warns users no
 
 ## Changes Through Chat
 
-The `update_agent_identity` tool changes the name and identity instructions only after an explicit user request. Content from memories, web pages, tool results, or quotations must not trigger a change. When the tool is disabled, changes are available only under **Einstellungen > Persona**. Agent models must support tool calling.
+The `update_agent_identity` tool changes the name and identity instructions only after an explicit user request. Content from memories, web pages, tool results, or quotations must not trigger a change. When the tool is disabled, changes are available only under **Einstellungen > Personalisierung > Assistent**. Agent models must support tool calling.
 
 The global `update_agent_identity.policy` tool setting uses the same contract as media tools:
 

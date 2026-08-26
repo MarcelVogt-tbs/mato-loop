@@ -308,6 +308,25 @@
               Das Tool darf nur ausdrückliche Wünsche des Nutzers übernehmen. Im Modus
               „Automatisch“ wird die persistente Persona ohne einzelne Rückfrage geändert.
             </q-banner>
+
+            <q-banner
+              v-else-if="tool.name === 'update_user_profile'"
+              rounded
+              class="tool-settings-detail app-surface-tonal"
+            >
+              <template #avatar>
+                <q-icon
+                  :name="form.policies['settings.user_profile.update'] === 'auto'
+                    ? 'warning_amber'
+                    : 'manage_accounts'"
+                  :color="form.policies['settings.user_profile.update'] === 'auto'
+                    ? 'warning'
+                    : 'primary'"
+                />
+              </template>
+              Das Tool darf nur ausdrückliche Wünsche des Nutzers übernehmen. Im Modus
+              „Automatisch“ wird das persönliche Profil ohne einzelne Rückfrage geändert.
+            </q-banner>
           </q-card-section>
           <q-separator v-if="toolIndex < group.tools.length - 1" />
         </template>
@@ -418,6 +437,7 @@ const TOOL_DESCRIPTIONS = {
   memory_retrieve: 'Liest passende persistente Memories.',
   memory_write: 'Erstellt oder aktualisiert persistente Memories.',
   update_agent_identity: 'Ändert Name oder Persona-Anweisungen des Agents.',
+  update_user_profile: 'Ändert gepflegte Angaben im persönlichen Profil.',
   calendar_list_accounts: 'Listet die konfigurierten CalDAV-Konten auf.',
   calendar_list_calendars: 'Listet Kalender eines CalDAV-Kontos auf.',
   calendar_query_events: 'Liest Termine aus einem ausgewählten Kalender.',

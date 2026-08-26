@@ -42,9 +42,9 @@ Für öffentliche Modelle kann MatoLoop erkannte Kennungen und Secrets in Text u
 
 Private Daten aus Integrationen, beispielsweise Kalendertermine, Aufgaben, Rezepte oder Essenspläne, benötigen bei öffentlichen Modellen zusätzlich eine ausdrückliche Freigabe für die aktuelle Session. Diese Datenfreigabe ist von der Aktionsrichtlinie getrennt: Eine automatisch erlaubte CalDAV- oder Mealie-Abfrage darf ohne Session-Freigabe trotzdem keine Daten an ein öffentliches Modell übertragen. Ein Widerruf verhindert weitere Übertragungen, kann bereits übermittelte Daten aber nicht zurückholen.
 
-## Memory und Persona
+## Memory und Personalisierung
 
-Memory-Schreibvorgänge und Persona-Änderungen können abhängig von der Tool-Richtlinie ebenfalls eine Freigabe erfordern. Prüfen Sie den angezeigten Inhalt, weil die Änderung über die aktuelle Antwort hinaus wirken kann.
+Memory-Schreibvorgänge sowie Änderungen an Persona oder persönlichem Profil können abhängig von ihrer jeweiligen Tool-Richtlinie eine Freigabe erfordern. Prüfen Sie den angezeigten Inhalt und den Modellbereich, weil die Änderung über die aktuelle Antwort hinaus wirken kann.
 
 !!! warning "Keine Secrets in Prompts"
     Senden Sie Passwörter, API-Schlüssel und andere Geheimnisse nicht absichtlich an Modelle. Automatische Schutzmaßnahmen können nicht jede Darstellung zuverlässig erkennen.

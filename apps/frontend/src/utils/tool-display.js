@@ -65,6 +65,7 @@ const TOOL_DISPLAY = {
   memory_retrieve: { label: 'Memory abrufen', activity: 'Memory wird abgerufen', icon: 'psychology' },
   memory_write: { label: 'Memory speichern', activity: 'Memory wird gespeichert', icon: 'save' },
   update_agent_identity: { label: 'Persona ändern', activity: 'Persona wird aktualisiert', icon: 'face' },
+  update_user_profile: { label: 'Persönliches Profil ändern', activity: 'Persönliches Profil wird aktualisiert', icon: 'manage_accounts' },
   process_exec: { label: 'Prozess ausführen', activity: 'Prozess wird ausgeführt', icon: 'terminal' },
   'process.exec': { label: 'Prozess ausführen', activity: 'Prozess wird ausgeführt', icon: 'terminal' },
   shell_run: { label: 'Shell-Befehl ausführen', activity: 'Befehl wird ausgeführt', icon: 'terminal' },
@@ -187,6 +188,40 @@ function taskDisplayItems(tool) {
   return []
 }
 
+const PROFILE_FIELD_LABELS = {
+  preferred_name: 'Bevorzugter Name',
+  form_of_address: 'Anrede',
+  pronouns: 'Pronomen',
+  primary_language: 'Bevorzugte Sprache',
+  primary_residence: 'Hauptwohnsitz'
+}
+
+const PROFILE_SCOPE_LABELS = {
+  current_model: 'Aktueller Modelltyp',
+  private_models: 'Private Modelle',
+  public_models: 'Öffentliche Modelle',
+  both_models: 'Private und öffentliche Modelle'
+}
+
+function profileDisplayItems(tool) {
+  const args = tool?.arguments || {}
+  const changes = Object.entries(PROFILE_FIELD_LABELS)
+    .filter(([field]) => Object.prototype.hasOwnProperty.call(args, field))
+    .map(([field, label]) => ({
+      label,
+      value: args[field] == null ? 'Entfernen' : String(args[field]),
+      format: 'text'
+    }))
+  return [
+    {
+      label: 'Gilt für',
+      value: PROFILE_SCOPE_LABELS[args.model_scope] || PROFILE_SCOPE_LABELS.current_model,
+      format: 'text'
+    },
+    ...changes
+  ]
+}
+
 function normalizeDisplayItems(items) {
   if (!Array.isArray(items)) return []
   return items.flatMap((item) => {
@@ -203,6 +238,10 @@ function normalizeDisplayItems(items) {
 export function toolPresentation(tool, displayItems = []) {
   const suppliedItems = normalizeDisplayItems(displayItems)
   if (suppliedItems.length) return { summary: toolSummary(tool), items: suppliedItems }
+
+  if (tool?.name === 'update_user_profile') {
+    return { summary: toolSummary(tool), items: profileDisplayItems(tool) }
+  }
 
   if (tool?.name === 'git_clone') {
     const source = tool.arguments?.source || tool.arguments?.repository_url || tool.arguments?.url
@@ -252,6 +291,11 @@ export function toolSummary(tool) {
   const argumentsValue = tool?.arguments
   const fallback = TOOL_DISPLAY[tool?.name] ? '' : tool?.name || ''
   if (!argumentsValue || typeof argumentsValue !== 'object') return fallback
+  if (tool?.name === 'update_user_profile') {
+    const count = Object.keys(PROFILE_FIELD_LABELS)
+      .filter((field) => Object.prototype.hasOwnProperty.call(argumentsValue, field)).length
+    return `${count} ${count === 1 ? 'Profilfeld' : 'Profilfelder'}`
+  }
   if (tool?.name === 'question') {
     return truncate(argumentsValue.questions?.find((item) => typeof item?.question === 'string')?.question)
   }
@@ -463,7 +507,6 @@ export function parseToolResult(content, toolName = null) {
             category: item.category,
             pinned: item.pinned,
             audience: item.audience,
-            pinKind: item.pinKind,
             memory: item.content
           }))
         }

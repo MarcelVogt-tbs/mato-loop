@@ -241,6 +241,24 @@ describe('approval display', () => {
     })
   })
 
+  it('labels personal profile approvals and grants', () => {
+    const approval = {
+      capability: 'settings.user_profile.update',
+      resourceType: 'user_profile',
+      resourceDisplay: 'Eigenes persönliches Profil'
+    }
+
+    expect(approvalResource(approval)).toEqual({
+      label: 'Persönliches Profil',
+      value: 'Eigenes persönliches Profil'
+    })
+    expect(permissionGrantDisplay(approval)).toEqual({
+      label: 'Persönliches Profil ändern',
+      value: 'Eigenes persönliches Profil',
+      icon: 'manage_accounts'
+    })
+  })
+
   it('labels automation resources and grants', () => {
     expect(approvalResource({ resourceType: 'automation_collection' })).toEqual({
       label: 'Automationen', value: 'Eigene Automationen'

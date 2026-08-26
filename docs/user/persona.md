@@ -1,6 +1,10 @@
-# Persona
+# Personalisierung
 
-Unter **Einstellungen > Persona** konfigurieren Sie die gemeinsame Identität des Agenten.
+Unter **Einstellungen > Personalisierung** konfigurieren Sie Ihr Profil und die Identität des Assistenten.
+
+Der Tab **Über mich** enthält bevorzugten Namen, Anrede, Pronomen, Hauptsprache und Hauptwohnsitz. Diese Angaben werden unabhängig von Memory verwendet und können getrennte Werte für private und öffentliche Modelle haben. Wenn das entsprechende Tool aktiviert ist, kann der Agent einzelne Angaben auf ausdrücklichen Wunsch ändern oder entfernen. Die eigene Tool-Richtlinie legt fest, ob dafür eine Freigabe erforderlich ist.
+
+Der Tab **Assistent** enthält die Persona des Agenten.
 
 ## Anzeigename
 

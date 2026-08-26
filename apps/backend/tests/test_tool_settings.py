@@ -139,6 +139,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "skills.load": "auto",
         "skills.write": "ask",
         "settings.agent_identity.update": "ask",
+        "settings.user_profile.update": "ask",
         "system.info": "auto",
         "process.execute": "ask",
         "automation.read": "ask",
