@@ -1006,6 +1006,10 @@ describe('chat drafts', () => {
           { id: 'assistant-1', role: 'assistant' },
           { id: 'user-2', role: 'user' }
         ],
+        contextSummaries: [
+          { id: 'summary-1' },
+          { id: 'summary-2' }
+        ],
         nextCursor: null
       }
     })
@@ -1013,7 +1017,8 @@ describe('chat drafts', () => {
     chat.current = {
       id: 'session-1',
       nextMessageCursor: 'user-2',
-      messages: [{ id: 'user-2', role: 'user' }, { id: 'assistant-2', role: 'assistant' }]
+      messages: [{ id: 'user-2', role: 'user' }, { id: 'assistant-2', role: 'assistant' }],
+      contextSummaries: [{ id: 'summary-2' }]
     }
 
     const added = await chat.loadOlderMessages()
@@ -1024,6 +1029,9 @@ describe('chat drafts', () => {
     expect(added.map((message) => message.id)).toEqual(['user-1', 'assistant-1'])
     expect(chat.current.messages.map((message) => message.id)).toEqual([
       'user-1', 'assistant-1', 'user-2', 'assistant-2'
+    ])
+    expect(chat.current.contextSummaries.map((summary) => summary.id)).toEqual([
+      'summary-1', 'summary-2'
     ])
     expect(chat.current.nextMessageCursor).toBeNull()
   })
@@ -1051,6 +1059,10 @@ describe('chat drafts', () => {
           { id: 'user-2', content: 'Aktualisiert' },
           { id: 'assistant-2', content: 'Neu' }
         ],
+        contextSummaries: [
+          { id: 'summary-2', content: 'Aktualisiert' },
+          { id: 'summary-3', content: 'Neu' }
+        ],
         nextMessageCursor: 'server-cursor'
       }
     })
@@ -1059,6 +1071,10 @@ describe('chat drafts', () => {
     chat.current = {
       id: 'session-1',
       messages: [{ id: 'user-1' }, { id: 'user-2', content: 'Alt' }],
+      contextSummaries: [
+        { id: 'summary-1', content: 'Alt' },
+        { id: 'summary-2', content: 'Alt' }
+      ],
       nextMessageCursor: 'older-cursor'
     }
 
@@ -1069,7 +1085,25 @@ describe('chat drafts', () => {
       { id: 'user-2', content: 'Aktualisiert' },
       { id: 'assistant-2', content: 'Neu' }
     ])
+    expect(chat.current.contextSummaries).toEqual([
+      { id: 'summary-1', content: 'Alt' },
+      { id: 'summary-2', content: 'Aktualisiert' },
+      { id: 'summary-3', content: 'Neu' }
+    ])
     expect(chat.current.nextMessageCursor).toBe('older-cursor')
+  })
+
+  it('refreshes canonical summaries after a context compaction event', async () => {
+    global.EventSource = EventSourceMock
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [], contextSummaries: [] }
+    chat.selectedSessionId = 'session-1'
+    const refresh = vi.spyOn(chat, 'refreshSession').mockResolvedValue(chat.current)
+
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    EventSourceMock.instances[0].emit('context.compacted', {})
+
+    expect(refresh).toHaveBeenCalledWith('session-1')
   })
 
   it('keeps a session unread when acknowledging it fails', async () => {

@@ -20,6 +20,7 @@ from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
+    ContextSummary,
     MemoryMode,
     Message,
     WebSearchPolicy,
@@ -343,6 +344,16 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
             }
             for attachment in item.attachments
         ],
+        "createdAt": item.created_at.isoformat() if item.created_at else None,
+    }
+
+
+def context_summary_payload(item: ContextSummary) -> dict[str, Any]:
+    return {
+        "id": str(item.id),
+        "coveredThroughMessageId": str(item.covered_through_message_id),
+        "content": item.content,
+        "isFallback": item.is_fallback,
         "createdAt": item.created_at.isoformat() if item.created_at else None,
     }
 

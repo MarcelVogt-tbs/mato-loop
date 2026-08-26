@@ -1205,8 +1205,8 @@ def test_compaction_prompt_preserves_opaque_values_verbatim() -> None:
 
     assert "Do not add facts or promote claims to confirmed facts" in prompt
     assert "Preserve attribution and relevant uncertainty" in prompt
-    assert "Copy every path, ID, filename, and other opaque value verbatim" in prompt
-    assert "including values in tool effects" in prompt
+    assert "Copy every relevant path, ID, filename, and other opaque value verbatim" in prompt
+    assert "produce a complete replacement" in prompt
 
 
 def test_general_system_prompt_requires_verified_external_images() -> None:

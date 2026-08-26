@@ -156,7 +156,17 @@ export function sessionBeforeUserMessage(session, messageId) {
   const index = session.messages?.findIndex((message) => message.id === messageId) ?? -1
   if (index < 0) return session
   const messages = session.messages.slice(0, index)
-  return { ...session, messages, activeRun: null, lastMessageAt: lastVisibleMessageAt(messages) }
+  const removedIds = new Set(session.messages.slice(index).map((message) => message.id))
+  const contextSummaries = (session.contextSummaries || []).filter((summary) => (
+    !removedIds.has(summary.coveredThroughMessageId)
+  ))
+  return {
+    ...session,
+    messages,
+    contextSummaries,
+    activeRun: null,
+    lastMessageAt: lastVisibleMessageAt(messages)
+  }
 }
 
 export function sessionBeforeFailedResponse(session, messageId, activeRun) {
@@ -165,7 +175,11 @@ export function sessionBeforeFailedResponse(session, messageId, activeRun) {
   let userIndex = errorIndex - 1
   while (userIndex >= 0 && session.messages[userIndex].role !== 'user') userIndex -= 1
   const messages = userIndex >= 0 ? session.messages.slice(0, userIndex + 1) : session.messages
-  return { ...session, messages, activeRun, lastMessageAt: lastVisibleMessageAt(messages) }
+  const removedIds = new Set(session.messages.slice(messages.length).map((message) => message.id))
+  const contextSummaries = (session.contextSummaries || []).filter((summary) => (
+    !removedIds.has(summary.coveredThroughMessageId)
+  ))
+  return { ...session, messages, contextSummaries, activeRun, lastMessageAt: lastVisibleMessageAt(messages) }
 }
 
 export function loadDrafts(ownerUserId) {

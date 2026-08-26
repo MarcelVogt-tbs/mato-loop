@@ -44,6 +44,7 @@ from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
+    ContextSummary,
     Message,
     MessageAttachment,
     TitleGenerationStatus,
@@ -879,13 +880,15 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
     error_message.created_at = created_at
     messages = MagicMock()
     messages.all.return_value = [user_message, error_message]
+    summaries = MagicMock()
+    summaries.all.return_value = []
     anchors = MagicMock()
     anchors.all.return_value = [SimpleNamespace(created_at=created_at, id=user_message.id)]
     aggregate = MagicMock()
     aggregate.one.return_value = (created_at, created_at)
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [session, failed_run]
-    db.scalars.return_value = messages
+    db.scalars.side_effect = [messages, summaries]
     db.scalar.return_value = None
     db.execute.side_effect = [anchors, aggregate]
 
@@ -916,10 +919,21 @@ async def test_session_message_page_returns_complete_turns_and_cursor() -> None:
     messages = MagicMock()
     messages.all.return_value = [newest, assistant]
     db = AsyncMock(spec=AsyncSession)
+    summary = ContextSummary(
+        id=uuid4(),
+        session_id=session_id,
+        covered_through_message_id=newest.id,
+        content="Verdichteter Verlauf",
+        estimated_tokens=20,
+        is_fallback=True,
+        created_at=created_at,
+    )
+    summaries = MagicMock()
+    summaries.all.return_value = [summary]
     db.execute.return_value = anchors
-    db.scalars.return_value = messages
+    db.scalars.side_effect = [messages, summaries]
 
-    items, next_cursor = await session_message_page(
+    items, context_summaries, next_cursor = await session_message_page(
         db,
         session_id,
         page_size=1,
@@ -929,6 +943,7 @@ async def test_session_message_page_returns_complete_turns_and_cursor() -> None:
     assert [message.id for message in items] == [newest.id, assistant.id]
     assert next_cursor == str(newest.id)
 
+    assert context_summaries == [summary]
 
 async def test_session_owner_cannot_read_another_users_session() -> None:
     owner = _user()

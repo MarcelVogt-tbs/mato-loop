@@ -25,6 +25,7 @@ from mato_loop_backend.agent.context import (
     estimate_tokens,
     general_system_prompt,
     memory_context_prompt,
+    valid_compaction_summary,
 )
 from mato_loop_backend.agent.coordinator import approval_coordinator, question_coordinator
 from mato_loop_backend.agent.media_prompt_profiles import with_media_prompt_profiles
@@ -149,6 +150,7 @@ from mato_loop_backend.providers.base import (
     select_provider_images,
 )
 from mato_loop_backend.providers.media import MediaService, available_media_capabilities
+from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
@@ -177,6 +179,7 @@ from mato_loop_backend.settings.models import (
     ModelCapability,
     ModelConfig,
     ModelInputModality,
+    ReasoningEffort,
     TrustLevel,
 )
 from mato_loop_backend.skills import RunSkillState, SkillDraft, SkillEditPatch, SkillError
@@ -3666,6 +3669,9 @@ class AgentRuntime:
             if len(prompt) > input_chars:
                 continue
             try:
+                profile = reasoning_profile(
+                    candidate.model_id, candidate.discovery_metadata
+                )
                 result = await ProviderService.complete(
                     db,
                     provider=candidate_provider,
@@ -3674,12 +3680,27 @@ class AgentRuntime:
                     tools=[],
                     timeout=runtime_settings.request_timeout_seconds,
                     max_output_tokens=effective_output_tokens,
+                    reasoning_effort=(
+                        ReasoningEffort.NONE
+                        if profile is not None
+                        and ReasoningEffort.NONE in profile.options
+                        else None
+                    ),
                 )
             except Exception:
                 logger.warning("Context compaction with model %s failed", candidate.id, exc_info=True)
                 continue
-            if result.content.strip():
-                return SummaryResult(result.content.strip(), candidate.id)
+            content = result.content.strip()
+            if valid_compaction_summary(content):
+                return SummaryResult(content, candidate.id)
+            logger.warning(
+                "Context compaction with model %s returned invalid visible output "
+                "(content=%s, reasoning=%s, finish_reason=%s)",
+                candidate.id,
+                bool(content),
+                bool(getattr(result, "reasoning", None)),
+                getattr(result, "finish_reason", None),
+            )
         source_excerpt = source
         if len(source) > 6_000:
             source_excerpt = (

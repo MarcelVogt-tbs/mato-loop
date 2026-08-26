@@ -106,7 +106,12 @@
             <div v-if="message.role === 'user' || message.showAgentLabel" class="chat-message__label">
               <span>{{ message.role === 'user' ? 'Du' : identity.displayName }}</span>
             </div>
-            <template v-if="message.kind === 'runtime_error' && message.error">
+            <AgentActivityEntry
+              v-if="message.kind === 'context_summary'"
+              :entry="message.contextSummaryEntry"
+              @expanded="scheduleVirtualScrollRefresh"
+            />
+            <template v-else-if="message.kind === 'runtime_error' && message.error">
               <q-banner rounded class="chat-runtime-error app-surface-tonal" role="alert">
                 <template #avatar>
                   <q-icon name="error_outline" color="negative" />
@@ -400,6 +405,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'components/ApprovalCard.vue'
+import AgentActivityEntry from 'components/AgentActivityEntry.vue'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
@@ -512,7 +518,8 @@ const transcript = computed(() => buildChatTranscript(
     running: chat.running,
     toolExecutionActive: chat.activity.phase === 'processing_tool',
     activeToolCallId: chat.activity.toolCallId,
-    questions: sessionQuestions.value
+    questions: sessionQuestions.value,
+    contextSummaries: chat.current?.contextSummaries
   }
 ))
 const hasCurrentAssistantTurn = computed(() => (

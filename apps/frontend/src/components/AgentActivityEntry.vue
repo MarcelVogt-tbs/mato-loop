@@ -51,7 +51,7 @@
     />
   </template>
   <q-expansion-item
-    v-else-if="entry.type === 'reasoning'"
+    v-else-if="entry.type === 'reasoning' || entry.type === 'context-summary'"
     dense
     :default-opened="autoExpand"
     class="work-history__reasoning"
@@ -59,15 +59,21 @@
     expand-icon-class="work-history__reasoning-toggle"
     :duration="expansionDuration"
     :toggle-aria-label="`${entry.presentation.title} ein- oder ausblenden`"
+    @after-show="emit('expanded')"
   >
     <template #header>
       <q-item-section>
         <q-item-label lines="1" class="work-history__activity-line">
+          <q-icon v-if="entry.warning" name="warning_amber" color="warning" size="18px" />
           <span
             class="work-history__activity-title"
-            :class="{ 'activity-shimmer': entry.live }"
+            :class="{ 'activity-shimmer': entry.live, 'text-warning': entry.warning }"
           >{{ entry.presentation.title }}</span>
-          <span v-if="entry.presentation.summary" class="work-history__activity-summary">
+          <span
+            v-if="entry.presentation.summary"
+            class="work-history__activity-summary"
+            :class="{ 'text-warning': entry.warning }"
+          >
             {{ entry.presentation.summary }}
           </span>
         </q-item-label>
@@ -76,17 +82,22 @@
         <span class="work-history__reasoning-duration">{{ entry.presentation.duration }}</span>
       </q-item-section>
     </template>
-    <div class="work-history__reasoning-detail">
-      <p
-        v-for="(block, blockIndex) in entry.blocks"
-        :key="blockIndex"
-        class="work-history__reasoning-block"
-      >
-        <template v-for="(segment, segmentIndex) in block" :key="segmentIndex">
-          <strong v-if="segment.strong">{{ segment.text }}</strong>
-          <span v-else>{{ segment.text }}</span>
-        </template>
+    <div class="work-history__reasoning-detail" :class="{ 'text-warning': entry.warning }">
+      <p v-if="entry.type === 'context-summary'" class="work-history__reasoning-block">
+        {{ entry.text }}
       </p>
+      <template v-else>
+        <p
+          v-for="(block, blockIndex) in entry.blocks"
+          :key="blockIndex"
+          class="work-history__reasoning-block"
+        >
+          <template v-for="(segment, segmentIndex) in block" :key="segmentIndex">
+            <strong v-if="segment.strong">{{ segment.text }}</strong>
+            <span v-else>{{ segment.text }}</span>
+          </template>
+        </p>
+      </template>
     </div>
   </q-expansion-item>
   <div v-else-if="entry.type === 'note'" class="work-history__note">
@@ -119,7 +130,7 @@ const props = defineProps({
   processOutputs: { type: Object, default: () => ({}) },
   autoExpand: Boolean
 })
-const emit = defineEmits(['open-file'])
+const emit = defineEmits(['open-file', 'expanded'])
 const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
 const contextActive = computed(() => props.entry.items?.some((item) => item.active))
 const contextHasAttention = computed(() => props.entry.items?.some((item) => (

@@ -281,6 +281,46 @@ describe('chat transcript', () => {
     })
   })
 
+  it('places persisted context summaries chronologically and marks host fallbacks', () => {
+    const transcript = buildChatTranscript([
+      {
+        id: '11111111-1111-4111-8111-111111111111', role: 'user', content: 'Frage',
+        createdAt: '2026-08-27T10:00:00Z'
+      },
+      {
+        id: '22222222-2222-4222-8222-222222222222', role: 'assistant', content: 'Zwischenstand',
+        createdAt: '2026-08-27T10:00:01Z'
+      },
+      {
+        id: '44444444-4444-4444-8444-444444444444', role: 'assistant', content: 'Fortsetzung',
+        createdAt: '2026-08-27T10:00:03Z'
+      }
+    ], [], {
+      contextSummaries: [{
+        id: '33333333-3333-4333-8333-333333333333',
+        coveredThroughMessageId: '22222222-2222-4222-8222-222222222222',
+        content: 'Goal\nWeiterarbeiten',
+        isFallback: true,
+        createdAt: '2026-08-27T10:00:02Z'
+      }]
+    })
+
+    expect(transcript.messages.map((message) => message.id)).toEqual([
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
+      'context-summary-33333333-3333-4333-8333-333333333333',
+      '44444444-4444-4444-8444-444444444444'
+    ])
+    expect(transcript.messages[2].contextSummaryEntry).toMatchObject({
+      warning: true,
+      text: 'Goal\nWeiterarbeiten',
+      presentation: {
+        title: 'Gesprächskontext verdichtet',
+        summary: 'Vereinfachte Ersatzfassung'
+      }
+    })
+  })
+
   it('does not mix reused tool call ids across user requests', () => {
     const messages = [
       { id: 'user-1', role: 'user', content: 'Erste Anfrage' },

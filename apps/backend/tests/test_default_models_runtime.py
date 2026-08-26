@@ -13,8 +13,32 @@ from mato_loop_backend.events import run_events
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment, TitleGenerationStatus
 from mato_loop_backend.providers.base import ProviderResult, PublicReasoning
 from mato_loop_backend.providers.service import ProviderService
-from mato_loop_backend.settings import AgentRuntimeSettings, AiSettings, SettingsStore
+from mato_loop_backend.settings import (
+    AgentRuntimeSettings,
+    AiSettings,
+    ReasoningEffort,
+    SettingsStore,
+)
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+
+_VALID_SUMMARY = """Goal
+Continue.
+
+Facts
+Known facts.
+
+Decisions
+None.
+
+Tool effects
+None.
+
+Open items
+None.
+
+Source message IDs
+None.
+"""
 
 
 class _SessionContext:
@@ -37,7 +61,7 @@ async def test_compaction_uses_global_model_before_session_model(monkeypatch) ->
         models=[active, compaction],
         compaction_model_id=compaction.id,
     )
-    complete = AsyncMock(return_value=SimpleNamespace(content="Kompakte Zusammenfassung"))
+    complete = AsyncMock(return_value=SimpleNamespace(content=_VALID_SUMMARY))
     monkeypatch.setattr(ProviderService, "complete", complete)
 
     result = await AgentRuntime._summarize(
@@ -66,7 +90,7 @@ async def test_compaction_falls_back_to_active_model_after_specialist_failure(
         compaction_model_id=compaction.id,
     )
     complete = AsyncMock(
-        side_effect=[RuntimeError("kaputt"), SimpleNamespace(content="Fallback")]
+        side_effect=[RuntimeError("kaputt"), SimpleNamespace(content=_VALID_SUMMARY)]
     )
     monkeypatch.setattr(ProviderService, "complete", complete)
 
@@ -85,6 +109,51 @@ async def test_compaction_falls_back_to_active_model_after_specialist_failure(
         compaction,
         active,
     ]
+
+
+async def test_compaction_disables_optional_reasoning(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="Qwen3.8-27B-GGUF-UD-Q4_K_XL")
+    settings = AiSettings(providers=[provider], models=[model])
+    complete = AsyncMock(return_value=ProviderResult(content=_VALID_SUMMARY))
+    monkeypatch.setattr(ProviderService, "complete", complete)
+
+    await AgentRuntime._summarize(
+        AsyncMock(spec=AsyncSession),
+        "USER: Test",
+        512,
+        ai_settings=settings,
+        active_model=model,
+        runtime_settings=AgentRuntimeSettings(),
+    )
+
+    assert complete.await_args.kwargs["reasoning_effort"] == ReasoningEffort.NONE
+
+
+async def test_compaction_marks_host_fallback_after_empty_visible_output(
+    monkeypatch,
+) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="compact")
+    settings = AiSettings(providers=[provider], models=[model])
+    monkeypatch.setattr(
+        ProviderService,
+        "complete",
+        AsyncMock(return_value=ProviderResult(reasoning=PublicReasoning("Only reasoning"))),
+    )
+
+    result = await AgentRuntime._summarize(
+        AsyncMock(spec=AsyncSession),
+        "USER: Test",
+        512,
+        ai_settings=settings,
+        active_model=model,
+        runtime_settings=AgentRuntimeSettings(),
+    )
+
+    assert result.is_fallback is True
+    assert result.model_config_id is None
+    assert "USER: Test" in result.content
 
 
 async def test_title_generation_falls_back_to_session_model(monkeypatch) -> None:

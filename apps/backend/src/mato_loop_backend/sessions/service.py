@@ -44,6 +44,7 @@ from mato_loop_backend.models import (
     Automation,
     AutomationRun,
     ChatSession,
+    ContextSummary,
     ExecutionAgent,
     Message,
     MessageAttachment,
@@ -305,9 +306,10 @@ async def session_detail_payload(
     item: ChatSession,
     *,
     session_serializer: PayloadSerializer,
+    context_summary_serializer: MessageSerializer,
     message_serializer: MessageSerializer,
 ) -> dict[str, Any]:
-    messages, next_message_cursor = await session_message_page(
+    messages, context_summaries, next_message_cursor = await session_message_page(
         db,
         item.id,
         page_size=20,
@@ -352,6 +354,9 @@ async def session_detail_payload(
             message_serializer(message, retry_available=message.id == retry_message_id)
             for message in messages
         ],
+        "contextSummaries": [
+            context_summary_serializer(summary) for summary in context_summaries
+        ],
         "nextMessageCursor": next_message_cursor,
         "activeRun": (
             {
@@ -372,7 +377,7 @@ async def session_message_page(
     *,
     page_size: int,
     cursor: UUID | None,
-) -> tuple[list[Message], str | None]:
+) -> tuple[list[Message], list[ContextSummary], str | None]:
     upper_bound: tuple[datetime, UUID] | None = None
     if cursor is not None:
         cursor_row = (
@@ -405,7 +410,7 @@ async def session_message_page(
     ).all()
     page_anchors = anchors[:page_size]
     if not page_anchors:
-        return [], None
+        return [], [], None
 
     lower_bound = (page_anchors[-1].created_at, page_anchors[-1].id)
     messages_statement = select(Message).where(
@@ -426,7 +431,24 @@ async def session_message_page(
         ).all()
     )
     next_cursor = str(lower_bound[1]) if len(anchors) > page_size else None
-    return messages, next_cursor
+    summaries_statement = select(ContextSummary).where(
+        ContextSummary.session_id == session_id,
+        tuple_(ContextSummary.created_at, ContextSummary.id) >= lower_bound,
+    )
+    if upper_bound is not None:
+        summaries_statement = summaries_statement.where(
+            tuple_(ContextSummary.created_at, ContextSummary.id) < upper_bound
+        )
+    context_summaries = list(
+        (
+            await db.scalars(
+                summaries_statement.order_by(
+                    ContextSummary.created_at, ContextSummary.id
+                )
+            )
+        ).all()
+    )
+    return messages, context_summaries, next_cursor
 
 
 async def latest_user_message(db: AsyncSession, session_id: UUID) -> Message:

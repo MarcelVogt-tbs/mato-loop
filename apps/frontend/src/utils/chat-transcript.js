@@ -53,7 +53,8 @@ export function buildChatTranscript(
     toolExecutionActive = running,
     activeToolCallId = null,
     processOutputs = {},
-    questions = []
+    questions = [],
+    contextSummaries = []
   } = {}
 ) {
   const results = new Map()
@@ -112,6 +113,43 @@ export function buildChatTranscript(
       }),
       workHistory: null
     }))
+  const summaryMessages = contextSummaries.map((summary) => ({
+    id: `context-summary-${summary.id}`,
+    role: 'context',
+    kind: 'context_summary',
+    content: '',
+    createdAt: summary.createdAt,
+    coveredThroughMessageId: summary.coveredThroughMessageId,
+    contextSummaryEntry: {
+      key: `context-summary-${summary.id}`,
+      type: 'context-summary',
+      text: summary.content,
+      warning: summary.isFallback,
+      presentation: {
+        title: 'Gesprächskontext verdichtet',
+        summary: summary.isFallback ? 'Vereinfachte Ersatzfassung' : null,
+        duration: null
+      }
+    },
+    _sourceIndex: -1,
+    _timelineId: summary.id
+  })).sort((left, right) => {
+    const leftTime = Date.parse(left.createdAt || '')
+    const rightTime = Date.parse(right.createdAt || '')
+    return leftTime - rightTime || left.id.localeCompare(right.id)
+  })
+  for (const summary of summaryMessages) {
+    const summaryTime = Date.parse(summary.createdAt || '')
+    const index = transcriptMessages.findIndex((message) => {
+      const messageTime = Date.parse(message.createdAt || '')
+      if (!Number.isFinite(summaryTime) || !Number.isFinite(messageTime)) return false
+      const messageId = String(message._timelineId || message.id)
+      return summaryTime < messageTime
+        || (summaryTime === messageTime && summary._timelineId < messageId)
+    })
+    if (index < 0) transcriptMessages.push(summary)
+    else transcriptMessages.splice(index, 0, summary)
+  }
 
   const groupedMessages = []
   let assistantSection = []
@@ -195,6 +233,7 @@ export function buildChatTranscript(
     }
     flushAssistantSection()
     delete message._sourceIndex
+    delete message._timelineId
     groupedMessages.push(message)
     if (message.role === 'user') turnStartedAt = message.createdAt || null
   }

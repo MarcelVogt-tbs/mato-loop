@@ -62,6 +62,7 @@ from mato_loop_backend.sessions.serialization import (
     LAST_MESSAGE_AT_UNSET as _LAST_MESSAGE_AT_UNSET,
 )
 from mato_loop_backend.sessions.serialization import (
+    context_summary_payload,
     message_payload,
     run_payload,
 )
@@ -571,6 +572,7 @@ async def get_session(
         item,
         session_serializer=_session_payload,
         message_serializer=message_payload,
+        context_summary_serializer=context_summary_payload,
     )
 
 
@@ -585,7 +587,7 @@ async def get_session_messages(
     if await _owned_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.notFound")
     try:
-        messages, next_cursor = await session_service.session_message_page(
+        messages, context_summaries, next_cursor = await session_service.session_message_page(
             db,
             session_id,
             page_size=page_size,
@@ -595,6 +597,9 @@ async def get_session_messages(
         _raise_api_error(exc)
     return {
         "items": [message_payload(message) for message in messages],
+        "contextSummaries": [
+            context_summary_payload(summary) for summary in context_summaries
+        ],
         "nextCursor": next_cursor,
     }
 

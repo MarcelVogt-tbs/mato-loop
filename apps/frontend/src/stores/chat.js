@@ -1009,6 +1009,10 @@ export const useChatStore = defineStore('chat', {
           if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
             if (this.current?.id === id) {
               session.messages = mergeMessages(this.current.messages, session.messages)
+              session.contextSummaries = mergeMessages(
+                this.current.contextSummaries,
+                session.contextSummaries
+              )
               session.nextMessageCursor = this.current.nextMessageCursor
             }
             this.current = session
@@ -1048,7 +1052,16 @@ export const useChatStore = defineStore('chat', {
         if (this.current?.id !== id || this.current.nextMessageCursor !== cursor) return []
         const existingIds = new Set((this.current.messages || []).map((message) => message.id))
         const added = (data.items || []).filter((message) => !existingIds.has(message.id))
+        const existingSummaryIds = new Set(
+          (this.current.contextSummaries || []).map((summary) => summary.id)
+        )
+        const addedSummaries = (data.contextSummaries || [])
+          .filter((summary) => !existingSummaryIds.has(summary.id))
         this.current.messages = [...added, ...(this.current.messages || [])]
+        this.current.contextSummaries = [
+          ...addedSummaries,
+          ...(this.current.contextSummaries || [])
+        ]
         this.current.nextMessageCursor = data.nextCursor || null
         return added
       })()
@@ -1267,6 +1280,7 @@ export const useChatStore = defineStore('chat', {
     updateSessionSummary(session) {
       const summary = { ...session }
       delete summary.messages
+      delete summary.contextSummaries
       delete summary.activeRun
       const list = this.sessionLists[sessionScopeKey(summary.projectId)]
       if (!list?.loaded) return
@@ -2012,6 +2026,10 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('reasoning.updated', (event) => {
         if (this.eventSource !== source) return
         this.streamReasoning = JSON.parse(event.data).reasoning
+      })
+      source.addEventListener('context.compacted', () => {
+        if (this.eventSource !== source) return
+        void this.refreshSession(sessionId).catch(() => {})
       })
       source.addEventListener('process.output', (event) => {
         if (this.eventSource !== source) return
