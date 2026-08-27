@@ -25,6 +25,7 @@ from mato_loop_backend.settings import (
     effective_model_trust,
     load_effective_ai,
 )
+from mato_loop_backend.settings.models import ReasoningEffort
 
 SESSION_CODES = (
     ("K314159", "K271828", "K161803"),
@@ -49,6 +50,10 @@ FOLLOW_UPS = {
 }
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 TERMINAL_TITLE_STATUSES = {"completed", "failed", "skipped"}
+DEFAULT_MODELS = {
+    "lemonade": "Qwen3.6-35B-A3B-MTP-GGUF",
+    "openai-codex": "openai-codex/gpt-5.6-sol",
+}
 
 
 def _number_stats(values: list[float | int]) -> dict[str, float] | None:
@@ -102,6 +107,13 @@ def _summary(records: list[dict[str, Any]]) -> dict[str, Any]:
             "passed": sum(bool(row["passed"]) for row in rows),
             "inputTokens": _number_stats([row["inputTokens"] for row in rows]),
             "cachedInputTokens": _number_stats([row["cachedInputTokens"] for row in rows]),
+            "cacheWriteInputTokens": _number_stats(
+                [
+                    row["cacheWriteInputTokens"]
+                    for row in rows
+                    if row["cacheWriteInputTokens"] is not None
+                ]
+            ),
             "rawCacheHitRate": _number_stats(
                 [row["rawCacheHitRate"] for row in rows if row["rawCacheHitRate"] is not None]
             ),
@@ -228,6 +240,8 @@ def _report(payload: dict[str, Any]) -> str:
         f"Provider: `{payload['model']['providerAdapter']}`",
         f"Trust: `{payload['model']['trustLevel']}`",
         f"Pseudonymization: `{str(payload['model']['pseudonymization']).lower()}`",
+        f"Reasoning effort: `{payload['model']['reasoningEffort']}`",
+        "Prompt cache key: `session_id`",
         f"Title model: `{payload['model']['titleModelId'] or payload['model']['modelId']}`",
         f"Sequence: `{' -> '.join(payload['sequence'])}`",
         f"Evaluator elapsed: {payload['elapsedSeconds']:.3f} s",
@@ -235,9 +249,13 @@ def _report(payload: dict[str, Any]) -> str:
         f"Result: {summary['passed']}/{summary['requests']} passed",
         f"Decision: `{summary['decision']}`",
         "",
+        "Prefix coverage and avoidable tokens are estimates based on the previous request's token "
+        "counts, not a comparison of the serialized provider prefix. A cache-write value of `-` "
+        "means the provider did not report that metric.",
+        "",
         "## Phase Summary",
         "",
-        "| Phase | Passed | Cached / input median | Prefix coverage median | Avoidable median | First signal median | Elapsed median |",
+        "| Phase | Passed | Read / write / input median | Prefix coverage median | Avoidable median | First signal median | Elapsed median |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for phase in ("new_session", "same_session_followup", "return_after_switch"):
@@ -245,32 +263,36 @@ def _report(payload: dict[str, Any]) -> str:
         if row is None:
             continue
         cached = row["cachedInputTokens"]["median"] if row["cachedInputTokens"] else 0
+        written = row["cacheWriteInputTokens"]["median"] if row["cacheWriteInputTokens"] else None
+        written_text = f"{written:.0f}" if written is not None else "-"
         input_tokens = row["inputTokens"]["median"] if row["inputTokens"] else 0
         coverage = row["reusablePrefixCoverage"]
         avoidable = row["avoidableReprocessedTokens"]
         first_signal = row["timeToFirstSignalMs"]
         elapsed = row["elapsedSeconds"]
         lines.append(
-            f"| {phase} | {row['passed']}/{row['requests']} | {cached:.0f} / {input_tokens:.0f} | "
+            f"| {phase} | {row['passed']}/{row['requests']} | {cached:.0f} / {written_text} / {input_tokens:.0f} | "
             f"{coverage['median']:.1%} | {avoidable['median']:.0f} | "
             f"{first_signal['median']:.0f} ms | {elapsed['median']:.3f} s |"
             if coverage and avoidable and first_signal and elapsed
-            else f"| {phase} | {row['passed']}/{row['requests']} | {cached:.0f} / {input_tokens:.0f} | - | - | - | - |"
+            else f"| {phase} | {row['passed']}/{row['requests']} | {cached:.0f} / {written_text} / {input_tokens:.0f} | - | - | - | - |"
         )
     lines.extend(
         [
             "",
             "## Per Request",
             "",
-            "| Rep | Step | Phase | Passed | Cached / input | Prefix coverage | Avoidable | First signal | Provider | Elapsed |",
+            "| Rep | Step | Phase | Passed | Read / write / input | Prefix coverage | Avoidable | First signal | Provider | Elapsed |",
             "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for row in payload["records"]:
         coverage = row["reusablePrefixCoverage"]
+        cache_write = row["cacheWriteInputTokens"]
         lines.append(
             f"| {row['replicate']} | {row['step']} | {row['phase']} | "
-            f"{'yes' if row['passed'] else 'no'} | {row['cachedInputTokens']} / {row['inputTokens']} | "
+            f"{'yes' if row['passed'] else 'no'} | {row['cachedInputTokens']} / "
+            f"{cache_write if cache_write is not None else '-'} / {row['inputTokens']} | "
             f"{f'{coverage:.1%}' if coverage is not None else '-'} | "
             f"{row['avoidableReprocessedTokens'] if row['avoidableReprocessedTokens'] is not None else '-'} | "
             f"{row['timeToFirstSignalMs'] if row['timeToFirstSignalMs'] is not None else '-'} ms | "
@@ -299,6 +321,7 @@ class SessionCacheEvaluator:
         self.token: str | None = None
         self.model_id: UUID | None = None
         self.model_metadata: dict[str, Any] = {}
+        self.reasoning_effort: str | None = None
         self.session_ids: list[UUID] = []
         self.client: httpx.AsyncClient | None = None
 
@@ -339,20 +362,21 @@ class SessionCacheEvaluator:
                 raise RuntimeError("The selected user has an active agent run; retry when it is idle.")
             ai = await load_effective_ai(db, user.id)
             providers = {provider.id: provider for provider in ai.providers if provider.enabled}
+            requested_model = self.args.model or DEFAULT_MODELS[self.args.adapter]
             candidates = [
-                model
+                (model, provider)
                 for model in ai.models
                 if model.enabled
-                and model.model_id == self.args.model
+                and model.model_id == requested_model
                 and (provider := providers.get(model.provider_id)) is not None
-                and provider.adapter_type == "lemonade"
+                and provider.adapter_type == self.args.adapter
             ]
             if len(candidates) != 1:
                 raise RuntimeError(
-                    f"Expected one enabled Lemonade model named {self.args.model!r}, found {len(candidates)}."
+                    f"Expected one enabled {self.args.adapter} model named "
+                    f"{requested_model!r}, found {len(candidates)}."
                 )
-            model = candidates[0]
-            provider = providers[model.provider_id]
+            model, provider = candidates[0]
             title_model = next(
                 (
                     item
@@ -362,12 +386,16 @@ class SessionCacheEvaluator:
                 None,
             )
             self.model_id = model.id
+            self.reasoning_effort = self.args.reasoning_effort or (
+                "none" if provider.adapter_type == "lemonade" else None
+            )
             self.model_metadata = {
                 "modelId": model.model_id,
                 "modelConfigId": str(model.id),
                 "providerAdapter": provider.adapter_type,
                 "trustLevel": effective_model_trust(provider, model).value,
                 "pseudonymization": effective_model_pseudonymization(provider, model),
+                "reasoningEffort": self.reasoning_effort or "model_default",
                 "titleModelId": title_model.model_id if title_model is not None else None,
             }
             self.token, _expires_at = await create_login_session(db, user)
@@ -432,7 +460,6 @@ class SessionCacheEvaluator:
             "content": content,
             "run_id": str(uuid4()),
             "model_id": str(self.model_id),
-            "reasoning_effort": "none",
             "memory_mode": memory_mode,
             "web_search_policy": defaults["webSearchPolicy"],
             "preferred_execution_agent_id": defaults["preferredExecutionAgentId"],
@@ -442,6 +469,8 @@ class SessionCacheEvaluator:
                 else {}
             ),
         }
+        if self.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.reasoning_effort
         response = await self._json("POST", "/sessions", payload=payload)
         session_id = UUID(response["session"]["id"])
         self.session_ids.append(session_id)
@@ -486,6 +515,8 @@ class SessionCacheEvaluator:
         input_tokens = int(usage.get("input_tokens", 0))
         output_tokens = int(usage.get("output_tokens", 0))
         cached_tokens = int(usage.get("cached_input_tokens", 0))
+        cache_write_value = usage.get("cache_write_input_tokens")
+        cache_write_tokens = int(cache_write_value) if isinstance(cache_write_value, int) else None
         cache = _cache_metrics(input_tokens, cached_tokens, previous)
         normalized_answer = message.content.strip().strip("`").strip()
         return {
@@ -506,6 +537,7 @@ class SessionCacheEvaluator:
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
             "cachedInputTokens": cached_tokens,
+            "cacheWriteInputTokens": cache_write_tokens,
             **cache,
             "modelRequest": performance.get("modelRequest"),
             "effectiveToolCount": performance.get("effectiveToolCount"),
@@ -607,6 +639,10 @@ class SessionCacheEvaluator:
                     input_tokens = int(usage.get("input_tokens", 0))
                     output_tokens = int(usage.get("output_tokens", 0))
                     cached_tokens = int(usage.get("cached_input_tokens", 0))
+                    cache_write_value = usage.get("cache_write_input_tokens")
+                    cache_write_tokens = (
+                        int(cache_write_value) if isinstance(cache_write_value, int) else None
+                    )
                     cache = _cache_metrics(input_tokens, cached_tokens, previous)
                     phase = (
                         "new_session"
@@ -636,6 +672,7 @@ class SessionCacheEvaluator:
                         "inputTokens": input_tokens,
                         "outputTokens": output_tokens,
                         "cachedInputTokens": cached_tokens,
+                        "cacheWriteInputTokens": cache_write_tokens,
                         **cache,
                         "modelRequest": performance.get("modelRequest"),
                         "effectiveToolCount": performance.get("effectiveToolCount"),
@@ -694,7 +731,9 @@ class SessionCacheEvaluator:
             records.append(record)
             print(
                 f"PASS={record['passed']} rep={replicate} step={record['step']} "
-                f"cached={record['cachedInputTokens']}/{record['inputTokens']} "
+                f"cache={record['cachedInputTokens']}/"
+                f"{record['cacheWriteInputTokens'] if record['cacheWriteInputTokens'] is not None else '-'}"
+                f"/{record['inputTokens']} "
                 f"coverage={record['reusablePrefixCoverage']} "
                 f"firstSignalMs={record['timeToFirstSignalMs']}",
                 flush=True,
@@ -751,7 +790,9 @@ class SessionCacheEvaluator:
             previous = record
             print(
                 f"PASS={record['passed']} step={record['step']} "
-                f"cached={record['cachedInputTokens']}/{record['inputTokens']} "
+                f"cache={record['cachedInputTokens']}/"
+                f"{record['cacheWriteInputTokens'] if record['cacheWriteInputTokens'] is not None else '-'}"
+                f"/{record['inputTokens']} "
                 f"coverage={record['reusablePrefixCoverage']} "
                 f"firstSignalMs={record['timeToFirstSignalMs']}",
                 flush=True,
@@ -857,9 +898,15 @@ async def run(args: argparse.Namespace) -> int:
 
 
 def parser() -> argparse.ArgumentParser:
-    value = argparse.ArgumentParser(description="Evaluate Lemonade caching across real MatoLoop sessions.")
+    value = argparse.ArgumentParser(description="Evaluate provider caching across real MatoLoop sessions.")
     value.add_argument("--api-base", default="http://backend:6020/api")
-    value.add_argument("--model", default="Qwen3.6-35B-A3B-MTP-GGUF")
+    value.add_argument(
+        "--adapter", choices=("lemonade", "openai-codex"), default="lemonade"
+    )
+    value.add_argument("--model")
+    value.add_argument(
+        "--reasoning-effort", choices=tuple(effort.value for effort in ReasoningEffort)
+    )
     value.add_argument("--user-id")
     value.add_argument("--runs", type=int, default=3, choices=range(1, 4))
     value.add_argument("--run-timeout", type=float, default=120)
