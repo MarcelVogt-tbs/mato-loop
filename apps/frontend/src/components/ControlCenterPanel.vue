@@ -1,12 +1,41 @@
 <template>
   <section id="control-center-panel" class="control-center column full-height no-wrap" aria-label="Control Center">
-    <div class="row items-center justify-end no-wrap">
+    <q-toolbar class="q-px-sm">
+      <div
+        v-if="chat.current"
+        class="control-center__resources col row items-center no-wrap overflow-hidden text-caption app-muted"
+      >
+        <div class="control-center__resource row items-center no-wrap q-mr-sm" tabindex="0" :aria-label="requestDescription">
+          <q-icon name="forum" size="18px" class="q-mr-xs" />
+          <span class="ellipsis">{{ requestLabel }}</span>
+          <q-tooltip>{{ requestDescription }}</q-tooltip>
+        </div>
+        <div
+          v-if="contextPercentage !== null"
+          class="control-center__resource row items-center no-wrap q-mr-sm"
+          tabindex="0"
+          :aria-label="contextDescription"
+        >
+          <q-icon name="token" size="18px" class="q-mr-xs" />
+          <q-linear-progress
+            :value="contextProgress"
+            size="4px"
+            rounded
+            class="control-center__resource-progress q-mr-xs"
+            aria-hidden="true"
+          />
+          <span class="ellipsis">≈ {{ contextPercentage }} %</span>
+          <q-tooltip>{{ contextDescription }}</q-tooltip>
+        </div>
+      </div>
+      <q-space v-if="!chat.current" />
       <q-btn
         v-for="item in controlCenterGlobalSections"
         :key="item.id"
         flat
         round
         dense
+        class="col-auto"
         :icon="item.icon"
         :color="controlCenter.activeGlobalSectionId === item.id ? 'primary' : undefined"
         :loading="!controlCenter.ready && controlCenter.requestedAppId === item.id"
@@ -23,7 +52,8 @@
         />
         <q-tooltip>{{ item.label }}</q-tooltip>
       </q-btn>
-    </div>
+    </q-toolbar>
+    <q-separator />
 
     <div class="control-center__tabs row items-center no-wrap q-pl-sm">
       <q-tabs
@@ -155,6 +185,10 @@ import {
   controlCenterIntegrations
 } from 'src/control-center/apps'
 import { codingControlCenterAvailable, mailControlCenterAvailable } from 'src/control-center/manifest'
+import {
+  formatMetricInteger,
+  modelContextPercentage
+} from 'src/utils/resource-metrics'
 
 defineOptions({ name: 'ControlCenterPanel' })
 
@@ -180,6 +214,20 @@ const launcherIntegrations = computed(() => closedIntegrations.value.filter((ite
   (item.id !== 'mail' || mailControlCenterAvailable(mail))
   && (item.id !== 'coding' || codingControlCenterAvailable(activeProject.value))
 )))
+const requestCount = computed(() => {
+  const count = chat.current?.userRequestCount
+  return Number.isInteger(count) && count >= 0 ? count : null
+})
+const requestLabel = computed(() => formatMetricInteger(requestCount.value) ?? '–')
+const requestDescription = computed(() => requestCount.value === null
+  ? 'Anfragezahl nicht verfügbar.'
+  : `${formatMetricInteger(requestCount.value)} Nutzeranfragen in dieser Session.`)
+const contextPercentage = computed(() => modelContextPercentage(chat.current?.latestModelContext))
+const contextProgress = computed(() => Math.min((contextPercentage.value || 0) / 100, 1))
+const contextDescription = computed(() => {
+  const context = chat.current?.latestModelContext
+  return `Letzter Modellaufruf: ≈ ${contextPercentage.value} % (${formatMetricInteger(context.estimatedInputTokens)} / ${formatMetricInteger(context.inputBudgetTokens)} Tokens).`
+})
 
 function content(contentId) {
   return controlCenterContentsById.get(contentId)

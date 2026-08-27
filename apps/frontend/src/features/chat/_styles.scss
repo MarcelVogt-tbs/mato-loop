@@ -55,6 +55,19 @@
   flex: 0 0 auto;
 }
 
+.control-center__resources {
+  min-width: 0;
+}
+
+.control-center__resource {
+  min-width: 0;
+}
+
+.control-center__resource-progress {
+  width: 48px;
+  flex: 0 0 48px;
+}
+
 .control-center__tab--dragging {
   opacity: 0.45;
 }

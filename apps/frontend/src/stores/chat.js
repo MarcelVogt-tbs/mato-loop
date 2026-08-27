@@ -1814,7 +1814,13 @@ export const useChatStore = defineStore('chat', {
           ? await api.post('/sessions/with-attachments', buildAttachmentFormData(payload, attachments), ...config)
           : await api.post('/sessions', payload, ...config)
         const userMessage = data.message || { id: `local-${Date.now()}`, role: 'user', content }
-        const session = { ...data.session, messages: [userMessage] }
+        const session = {
+          ...data.session,
+          userRequestCount: Number.isInteger(data.session.userRequestCount)
+            ? Math.max(data.session.userRequestCount, 1)
+            : 1,
+          messages: [userMessage]
+        }
         const wasStillSelected = this.sessionLoadVersion === sessionLoadVersion
           && this.selectedSessionId === selectedSessionId
           && !this.current
@@ -1908,6 +1914,9 @@ export const useChatStore = defineStore('chat', {
             session.messages[canonicalIndex] = data.message
           } else {
             session.messages.push(data.message)
+            if (data.message.role === 'user' && Number.isInteger(session.userRequestCount)) {
+              session.userRequestCount += 1
+            }
           }
           if (data.message.createdAt) {
             session.lastMessageAt = data.message.createdAt
@@ -2089,7 +2098,7 @@ export const useChatStore = defineStore('chat', {
         void refresh?.then(async (session) => {
           const start = toolViewContexts.get(payload.toolCallId)
           toolViewContexts.delete(payload.toolCallId)
-          if (!start || !session || this.current?.id !== sessionId) return
+          if (!session || this.current?.id !== sessionId) return
           const result = session.messages?.find((message) => (
             message.role === 'tool' && message.toolCallId === payload.toolCallId
           ))
@@ -2104,6 +2113,16 @@ export const useChatStore = defineStore('chat', {
             .find((item) => item.id === payload.toolCallId)
           const argumentsValue = toolCall?.arguments || {}
           const sourceRoot = argumentsValue.source_root || argumentsValue.root
+          const managedRootMutation = FILESYSTEM_MUTATION_TOOLS.has(payload.tool) && [
+            argumentsValue.root,
+            argumentsValue.source_root,
+            argumentsValue.destination_root
+          ].some((root) => ['files', 'session'].includes(root))
+          if (
+            !payload.metadata?.errorCode
+            && (managedRootMutation || attachmentAction?.root === 'session')
+          ) void workspace.refreshStorageUsage(sessionId)
+          if (!start) return
           const sourcePath = argumentsValue.source_path || argumentsValue.path
           const sourceMatchesOpenFile = ['delete_path', 'move_path'].includes(payload.tool)
             && workspace.viewedEntry?.path
@@ -2149,10 +2168,7 @@ export const useChatStore = defineStore('chat', {
           ) return
           await controlCenter.openApp('files')
         }).catch(() => {})
-        if (
-          FILESYSTEM_MUTATION_TOOLS.has(payload.tool)
-          && !payload.metadata?.errorCode
-        ) {
+        if (FILESYSTEM_MUTATION_TOOLS.has(payload.tool) && !payload.metadata?.errorCode) {
           const workspace = useWorkspaceStore()
           if (workspace.sessionId === sessionId) void workspace.refresh()
         }
@@ -2273,7 +2289,7 @@ export const useChatStore = defineStore('chat', {
           this.streamModelName = null
           this.clearActivity()
           this.setSessionRunStatus(sessionId, null)
-          this.refreshSession(sessionId)
+          void this.refreshSession(sessionId).catch(() => {})
           this.refreshSessions()
           useApprovalStore().fetchPending()
           void useQuestionStore().fetchPending().catch(() => {})

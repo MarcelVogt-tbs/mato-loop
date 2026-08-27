@@ -31,6 +31,11 @@ export const useWorkspaceStore = defineStore('workspace', {
     loadErrors: {},
     nextOffset: {},
     uploading: false,
+    storageUsage: null,
+    storageUsageSessionId: null,
+    storageUsageLoading: false,
+    storageUsageFailed: false,
+    storageUsageVersion: 0,
     selectedPath: '.',
     directoryPath: '.',
     selectedKind: 'directory',
@@ -105,6 +110,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     configure({ sessionId = null, rootIdentity = null, currentDirectory = null, workspaceContext = null } = {}) {
       const sessionChanged = this.sessionId !== sessionId
+      const managedRootChanged = Boolean(sessionId && !this.toolContext && this.rootIdentity !== rootIdentity)
+      if (sessionChanged || managedRootChanged) this.clearStorageUsage()
       if (sessionChanged) this.scope = sessionId ? 'session' : 'filesystem'
       else if (
         !this.toolContext
@@ -114,7 +121,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         && workspaceContext.connected === true
       ) this.scope = 'filesystem'
       const changed = sessionChanged
-        || (!this.toolContext && this.rootIdentity !== rootIdentity)
+        || managedRootChanged
         || this.currentDirectory !== currentDirectory
         || workspaceContextKey(this.workspaceContext) !== workspaceContextKey(workspaceContext)
       this.sessionId = sessionId
@@ -385,17 +392,65 @@ export const useWorkspaceStore = defineStore('workspace', {
       const paths = new Set([this.directoryPath, ...Object.keys(this.entries), ...Object.keys(this.loadErrors)])
       return Promise.all([...paths].map((path) => this.load(path, false, true)))
     },
+    clearStorageUsage() {
+      this.storageUsageVersion += 1
+      this.storageUsage = null
+      this.storageUsageSessionId = null
+      this.storageUsageLoading = false
+      this.storageUsageFailed = false
+    },
+    async fetchStorageUsage(sessionId = this.sessionId) {
+      if (!sessionId) {
+        this.clearStorageUsage()
+        return null
+      }
+      if (this.storageUsageSessionId !== sessionId) {
+        this.clearStorageUsage()
+        this.storageUsageSessionId = sessionId
+      }
+      const version = ++this.storageUsageVersion
+      this.storageUsageLoading = true
+      this.storageUsageFailed = false
+      try {
+        const { data } = await api.get('/workspace/usage', {
+          params: { session_id: sessionId },
+          suppressErrorToast: true
+        })
+        if (version !== this.storageUsageVersion || this.storageUsageSessionId !== sessionId) return null
+        this.storageUsage = data
+        return data
+      } catch {
+        if (version === this.storageUsageVersion && this.storageUsageSessionId === sessionId) {
+          this.storageUsageFailed = true
+        }
+        return null
+      } finally {
+        if (version === this.storageUsageVersion && this.storageUsageSessionId === sessionId) {
+          this.storageUsageLoading = false
+        }
+      }
+    },
+    refreshStorageUsage(sessionId = this.storageUsageSessionId) {
+      if (!sessionId || this.storageUsageSessionId !== sessionId) return null
+      return this.fetchStorageUsage(sessionId)
+    },
+    managedStorageSessionId() {
+      return this.scope === 'session' && !this.toolContext ? this.sessionId : null
+    },
     async createDirectory(parent, name) {
       requireWritableContext(this)
       if (!this.operationAvailable('filesystem.mkdir')) throw new Error('Filesystem operation is unavailable')
+      const storageSessionId = this.managedStorageSessionId()
       await api.post('/workspace/directories', { parent, name }, {
         params: this.requestParams()
       })
       await this.load(parent)
+      if (storageSessionId) void this.refreshStorageUsage(storageSessionId)
     },
     async deleteEntry(path) {
       requireWritableContext(this)
       if (!this.operationAvailable('filesystem.delete')) throw new Error('Filesystem operation is unavailable')
+      const storageSessionId = this.managedStorageSessionId()
       const version = this.contextVersion
       await api.delete('/workspace/entries', {
         params: this.requestParams({ path })
@@ -411,10 +466,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.selectedKind = 'directory'
       this.persistView()
       await this.load(this.selectedPath)
+      if (storageSessionId) void this.refreshStorageUsage(storageSessionId)
     },
     async renameEntry(path, name) {
       requireWritableContext(this)
       if (!this.operationAvailable('filesystem.rename')) throw new Error('Filesystem operation is unavailable')
+      const storageSessionId = this.managedStorageSessionId()
       const version = this.contextVersion
       const params = this.requestParams()
       const { data } = await api.patch(
@@ -437,11 +494,13 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
       this.persistView()
       await this.load(parentPath(path))
+      if (storageSessionId) void this.refreshStorageUsage(storageSessionId)
       return data.entry
     },
     async uploadFiles(parent, files) {
       requireWritableContext(this)
       if (!this.operationAvailable('filesystem.import')) throw new Error('Filesystem operation is unavailable')
+      const storageSessionId = this.managedStorageSessionId()
       const version = this.contextVersion
       const params = this.requestParams({ parent })
       this.uploading = true
@@ -472,12 +531,14 @@ export const useWorkspaceStore = defineStore('workspace', {
         throw error
       } finally {
         if (uploaded && version === this.contextVersion) await this.load(parent)
+        if (uploaded && storageSessionId) void this.refreshStorageUsage(storageSessionId)
         this.uploading = false
       }
     },
     async createFile(parent, name) {
       requireWritableContext(this)
       if (!this.operationAvailable('filesystem.import')) throw new Error('Filesystem operation is unavailable')
+      const storageSessionId = this.managedStorageSessionId()
       const version = this.contextVersion
       const body = new FormData()
       body.append('file', new File([''], name, { type: 'text/plain;charset=utf-8' }), name)
@@ -490,6 +551,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       delete this.entries[parent]
       this.openEntry(data.entry, true)
       await this.load(parent).catch(() => {})
+      if (storageSessionId) void this.refreshStorageUsage(storageSessionId)
       return data.entry
     },
     async preview(path) {
@@ -531,6 +593,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     async restoreRevision(path, revision) {
       requireWritableContext(this)
+      const storageSessionId = this.managedStorageSessionId()
       const contextVersion = this.contextVersion
       const viewVersion = this.viewVersion
       const sessionId = this.sessionId
@@ -558,11 +621,13 @@ export const useWorkspaceStore = defineStore('workspace', {
         || sessionId !== this.sessionId
       ) return null
       this.fileChangeVersions[path] = (this.fileChangeVersions[path] || 0) + 1
+      if (storageSessionId) void this.refreshStorageUsage(storageSessionId)
       return data
     },
     async saveFile(path, content, expectedRevision) {
       requireWritableContext(this)
       if (!this.operationAvailable('filesystem.write')) throw new Error('Filesystem operation is unavailable')
+      const storageSessionId = this.managedStorageSessionId()
       const version = this.contextVersion
       const { data } = await api.put('/workspace/files', {
         path,
@@ -593,6 +658,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
       this.editorDirty = false
       this.editorExternalChange = false
+      if (storageSessionId) void this.refreshStorageUsage(storageSessionId)
       return data
     },
     async renderOpenScad(path, expectedRevision, signal, output = 'preview') {

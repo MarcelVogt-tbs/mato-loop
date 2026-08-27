@@ -91,6 +91,58 @@ async def test_file_context_hides_foreign_sessions() -> None:
     assert exc_info.value.code == "session.notFound"
 
 
+async def test_usage_reports_project_shared_root_and_effective_quota(
+    tmp_path: Path, monkeypatch
+) -> None:
+    storage = SessionStorage(tmp_path / "sessions")
+    project_id = uuid4()
+    first_id = uuid4()
+    second_id = uuid4()
+    storage.provision(first_id, project_id)
+    storage.provision(second_id, project_id)
+    first = RootFileService(first_id, session_storage=storage, project_id=project_id)
+    second = RootFileService(
+        second_id,
+        session_storage=storage,
+        project_id=project_id,
+        session_quota_bytes=8 * 1024 * 1024,
+    )
+    first.write_file(FileRoot.SESSION, "shared.txt", "shared project data")
+    expected_usage = second.session_usage()
+    context = workspace_route._FileContext(root_files=second, root=FileRoot.SESSION)
+    monkeypatch.setattr(workspace_route, "_file_context", AsyncMock(return_value=context))
+    to_thread = AsyncMock(side_effect=lambda function, *args: function(*args))
+    monkeypatch.setattr(workspace_route.asyncio, "to_thread", to_thread)
+
+    response = await workspace_route.get_workspace_usage(
+        _user(), AsyncMock(spec=AsyncSession), second_id
+    )
+
+    assert response.model_dump(by_alias=True) == {
+        "scope": "project",
+        "usedBytes": expected_usage,
+        "quotaBytes": 8 * 1024 * 1024,
+    }
+    to_thread.assert_awaited_once_with(second.session_usage)
+
+
+async def test_usage_hides_foreign_session(monkeypatch) -> None:
+    user = _user()
+    foreign = ChatSession(id=uuid4(), user_id=uuid4(), title="Foreign")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = foreign
+    monkeypatch.setattr(
+        "mato_loop_backend.api.workspace_service.SettingsStore.load",
+        AsyncMock(return_value=InstanceLimits()),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await workspace_route.get_workspace_usage(user, db, foreign.id)
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.code == "session.notFound"
+
+
 async def test_filesystem_scope_without_agent_context_is_rejected() -> None:
     with pytest.raises(ApiError) as exc_info:
         await workspace_route._file_context(

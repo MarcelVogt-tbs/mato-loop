@@ -75,6 +75,68 @@ describe('workspace store', () => {
     })
   })
 
+  it('loads storage usage without automatic error toasts', async () => {
+    let resolveUsage
+    api.get.mockImplementationOnce(() => new Promise((resolve) => { resolveUsage = resolve }))
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a' })
+
+    const request = workspace.fetchStorageUsage('session-a')
+    expect(workspace.storageUsageLoading).toBe(true)
+    resolveUsage({ data: { scope: 'session', usedBytes: 12, quotaBytes: 500 } })
+
+    await expect(request).resolves.toEqual({ scope: 'session', usedBytes: 12, quotaBytes: 500 })
+    expect(workspace.storageUsageLoading).toBe(false)
+    expect(workspace.storageUsageFailed).toBe(false)
+    expect(api.get).toHaveBeenCalledWith('/workspace/usage', {
+      params: { session_id: 'session-a' },
+      suppressErrorToast: true
+    })
+  })
+
+  it('ignores stale usage responses and clears usage on session switches', async () => {
+    let resolveStale
+    api.get
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve }))
+      .mockResolvedValueOnce({ data: { scope: 'project', usedBytes: 20, quotaBytes: 500 } })
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a' })
+    const staleRequest = workspace.fetchStorageUsage('session-a')
+
+    workspace.configure({ sessionId: 'session-b' })
+    expect(workspace.storageUsage).toBeNull()
+    await workspace.fetchStorageUsage('session-b')
+    resolveStale({ data: { scope: 'session', usedBytes: 10, quotaBytes: 100 } })
+    await staleRequest
+
+    expect(workspace.storageUsageSessionId).toBe('session-b')
+    expect(workspace.storageUsage).toEqual({ scope: 'project', usedBytes: 20, quotaBytes: 500 })
+  })
+
+  it('clears storage usage when a session moves to another managed root', async () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a', rootIdentity: 'session-a' })
+    workspace.storageUsageSessionId = 'session-a'
+    workspace.storageUsage = { scope: 'session', usedBytes: 10, quotaBytes: 100 }
+
+    workspace.configure({ sessionId: 'session-a', rootIdentity: 'project-a' })
+
+    expect(workspace.storageUsageSessionId).toBeNull()
+    expect(workspace.storageUsage).toBeNull()
+  })
+
+  it('keeps usage failures quiet and retryable', async () => {
+    api.get.mockRejectedValueOnce(new Error('unavailable'))
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a' })
+
+    await expect(workspace.fetchStorageUsage()).resolves.toBeNull()
+
+    expect(workspace.storageUsage).toBeNull()
+    expect(workspace.storageUsageLoading).toBe(false)
+    expect(workspace.storageUsageFailed).toBe(true)
+  })
+
   it('uploads selected files to the session root and reloads it', async () => {
     api.post.mockResolvedValue({ data: {} })
     api.get.mockResolvedValue({ data: { entries: [] } })

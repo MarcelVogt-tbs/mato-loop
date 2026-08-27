@@ -193,6 +193,14 @@ class RevisionMutationResponse(BaseModel):
     current_sha256: str | None = Field(alias="currentSha256")
 
 
+class WorkspaceUsageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+    scope: Literal["session", "project"]
+    used_bytes: int = Field(alias="usedBytes", ge=0)
+    quota_bytes: int = Field(alias="quotaBytes", gt=0)
+
+
 class OpenScadFileRenderRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -232,6 +240,25 @@ def _bearer_token(authorization: str | None) -> str:
     if scheme.lower() != "bearer" or not token or " " in token:
         raise ApiError(401, "transfer.invalidTicket")
     return token
+
+
+@router.get("/usage", response_model=WorkspaceUsageResponse)
+async def get_workspace_usage(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    session_id: Annotated[UUID, Query()],
+) -> WorkspaceUsageResponse:
+    context = await _file_context(FileScope.SESSION, session_id, user, db)
+    assert context.root_files is not None
+    try:
+        used_bytes = await asyncio.to_thread(context.root_files.session_usage)
+    except RootFileError as exc:
+        raise _context_error(exc) from exc
+    return WorkspaceUsageResponse(
+        scope="project" if context.root_files.project_id is not None else "session",
+        used_bytes=used_bytes,
+        quota_bytes=context.root_files.SESSION_QUOTA_BYTES,
+    )
 
 
 async def _transfer_agent(db: AsyncSession, authorization: str | None) -> UUID:

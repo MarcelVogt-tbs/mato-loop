@@ -54,6 +54,7 @@ from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
+    _latest_model_context,
     active_file_payload,
     session_message_page,
 )
@@ -777,7 +778,7 @@ async def test_uncertain_first_commit_preserves_provisioned_session_tree(
     db.rollback.assert_awaited()
 
 
-async def test_session_payload_contains_active_run() -> None:
+async def test_session_detail_contains_active_run_and_aggregate_metrics() -> None:
     user = _user()
     session_id = uuid4()
     session = ChatSession(
@@ -801,7 +802,20 @@ async def test_session_payload_contains_active_run() -> None:
     anchors = MagicMock()
     anchors.all.return_value = []
     aggregate = MagicMock()
-    aggregate.one.return_value = (None, None)
+    aggregate.one.return_value = (
+        None,
+        None,
+        47,
+        {
+            "privateProviderValue": "must-not-leak",
+            "_matoloop": {
+                "performance": {
+                    "estimatedInputTokens": 12_345,
+                    "inputBudgetTokens": 32_000,
+                }
+            },
+        },
+    )
     db.execute.side_effect = [anchors, aggregate]
     db.scalar.return_value = run
 
@@ -820,6 +834,42 @@ async def test_session_payload_contains_active_run() -> None:
         "modelName": "Aktives Modell",
         "createdAt": created_at.isoformat(),
     }
+    assert result["userRequestCount"] == 47
+    assert result["latestModelContext"] == {
+        "estimatedInputTokens": 12_345,
+        "inputBudgetTokens": 32_000,
+    }
+    assert "must-not-leak" not in str(result)
+    assert db.execute.await_count == 2
+    aggregate_statement = db.execute.await_args_list[1].args[0]
+    aggregate_sql = str(aggregate_statement)
+    assert "count(messages.id) FILTER (WHERE messages.role" in aggregate_sql
+    aggregate_params = list(aggregate_statement.compile().params.values())
+    assert "_matoloop" in aggregate_params
+    assert "performance" in aggregate_params
+    assert "messages_1.created_at DESC, messages_1.id DESC" in aggregate_sql
+
+
+@pytest.mark.parametrize(
+    "performance",
+    [
+        {"estimatedInputTokens": True, "inputBudgetTokens": 32_000},
+        {"estimatedInputTokens": 1, "inputBudgetTokens": False},
+        {"estimatedInputTokens": -1, "inputBudgetTokens": 32_000},
+        {"estimatedInputTokens": 1, "inputBudgetTokens": 0},
+        {"estimatedInputTokens": "1", "inputBudgetTokens": 32_000},
+        {},
+    ],
+)
+def test_latest_model_context_rejects_malformed_latest_performance(
+    performance: dict,
+) -> None:
+    provider_data = {
+        "privateProviderValue": "must-not-leak",
+        "_matoloop": {"performance": performance},
+    }
+
+    assert _latest_model_context(provider_data) is None
 
 
 def test_session_payload_ignores_invalid_persisted_file_view() -> None:
@@ -885,7 +935,7 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
     anchors = MagicMock()
     anchors.all.return_value = [SimpleNamespace(created_at=created_at, id=user_message.id)]
     aggregate = MagicMock()
-    aggregate.one.return_value = (created_at, created_at)
+    aggregate.one.return_value = (created_at, created_at, 1, None)
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [session, failed_run]
     db.scalars.side_effect = [messages, summaries]
@@ -918,7 +968,6 @@ async def test_session_message_page_returns_complete_turns_and_cursor() -> None:
     ]
     messages = MagicMock()
     messages.all.return_value = [newest, assistant]
-    db = AsyncMock(spec=AsyncSession)
     summary = ContextSummary(
         id=uuid4(),
         session_id=session_id,
@@ -930,6 +979,7 @@ async def test_session_message_page_returns_complete_turns_and_cursor() -> None:
     )
     summaries = MagicMock()
     summaries.all.return_value = [summary]
+    db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = anchors
     db.scalars.side_effect = [messages, summaries]
 
@@ -941,9 +991,9 @@ async def test_session_message_page_returns_complete_turns_and_cursor() -> None:
     )
 
     assert [message.id for message in items] == [newest.id, assistant.id]
+    assert context_summaries == [summary]
     assert next_cursor == str(newest.id)
 
-    assert context_summaries == [summary]
 
 async def test_session_owner_cannot_read_another_users_session() -> None:
     owner = _user()

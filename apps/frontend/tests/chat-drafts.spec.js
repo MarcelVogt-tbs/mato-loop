@@ -218,6 +218,7 @@ describe('chat drafts', () => {
     expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
       web_search_policy: 'required'
     }))
+    expect(chat.current.userRequestCount).toBe(1)
   })
 
   it('persists and sends the session reasoning override', async () => {
@@ -1177,6 +1178,7 @@ describe('chat drafts', () => {
     chat.current = {
       id: 'session-1',
       lastMessageAt: '2026-07-20T12:00:00Z',
+      userRequestCount: 3,
       messages: []
     }
     chat.selectedSessionId = 'session-1'
@@ -1186,6 +1188,7 @@ describe('chat drafts', () => {
     expect(chat.sessions.map((session) => session.id)).toEqual(['session-1', 'session-2'])
     expect(chat.sessions[0].lastMessageAt).toBe('2026-07-24T15:00:00Z')
     expect(chat.current.lastMessageAt).toBe('2026-07-24T15:00:00Z')
+    expect(chat.current.userRequestCount).toBe(4)
   })
 
   it('does not navigate back to a late new-session response', async () => {

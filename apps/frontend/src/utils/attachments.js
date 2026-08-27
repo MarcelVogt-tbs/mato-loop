@@ -1,3 +1,5 @@
+import { formatByteSize } from './resource-metrics'
+
 const ATTACHMENT_KINDS = new Set(['image', 'audio', 'video', 'text', 'document', 'file'])
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 const INTERNAL_ATTACHMENT_URL = new RegExp(
@@ -320,11 +322,7 @@ export function attachmentIcon(attachment) {
 }
 
 export function formatAttachmentSize(value) {
-  const bytes = Number(value)
-  if (!Number.isFinite(bytes) || bytes < 0) return 'Unbekannte Größe'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toLocaleString('de', { maximumFractionDigits: 1 })} KB`
-  return `${(bytes / (1024 * 1024)).toLocaleString('de', { maximumFractionDigits: 1 })} MB`
+  return formatByteSize(value) || 'Unbekannte Größe'
 }
 
 export function formatAttachmentDuration(value) {

@@ -19,6 +19,16 @@
   flex: 0 0 auto;
 }
 
+.file-explorer__storage-footer {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.file-explorer__storage-progress {
+  width: 96px;
+  flex: 0 1 96px;
+}
+
 .file-explorer__actions {
   min-width: 0;
 }

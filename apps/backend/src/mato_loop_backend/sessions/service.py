@@ -24,7 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.agent.permissions import execution_directory_scope
@@ -89,6 +89,18 @@ class SessionServiceError(Exception):
         self.code = code
         self.field = field
         self.params = params
+
+
+def _latest_model_context(provider_data: Any) -> dict[str, int] | None:
+    runtime_data = provider_data.get("_matoloop") if isinstance(provider_data, dict) else None
+    performance = runtime_data.get("performance") if isinstance(runtime_data, dict) else None
+    if not isinstance(performance, dict):
+        return None
+    estimated = performance.get("estimatedInputTokens")
+    budget = performance.get("inputBudgetTokens")
+    if type(estimated) is not int or estimated < 0 or type(budget) is not int or budget <= 0:
+        return None
+    return {"estimatedInputTokens": estimated, "inputBudgetTokens": budget}
 
 
 def model_available(ai: AiSettings, model_id: UUID | None) -> bool:
@@ -306,8 +318,8 @@ async def session_detail_payload(
     item: ChatSession,
     *,
     session_serializer: PayloadSerializer,
-    context_summary_serializer: MessageSerializer,
     message_serializer: MessageSerializer,
+    context_summary_serializer: MessageSerializer,
 ) -> dict[str, Any]:
     messages, context_summaries, next_message_cursor = await session_message_page(
         db,
@@ -331,13 +343,32 @@ async def session_detail_payload(
         )
         if retry_source is not None:
             retry_message_id = messages[-1].id
-    last_message_at, last_assistant_message_at = (
+    performance_message = aliased(Message)
+    latest_performance_provider_data = (
+        select(performance_message.provider_data)
+        .where(
+            performance_message.session_id == item.id,
+            performance_message.role == "assistant",
+            performance_message.provider_data["_matoloop"].op("?")("performance"),
+        )
+        .order_by(performance_message.created_at.desc(), performance_message.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    (
+        last_message_at,
+        last_assistant_message_at,
+        user_request_count,
+        latest_performance_data,
+    ) = (
         await db.execute(
             select(
                 func.max(Message.created_at).filter(
                     Message.role.in_(VISIBLE_MESSAGE_ROLES)
                 ),
                 func.max(Message.created_at).filter(Message.role == "assistant"),
+                func.count(Message.id).filter(Message.role == "user"),
+                latest_performance_provider_data,
             ).where(Message.session_id == item.id)
         )
     ).one()
@@ -358,6 +389,8 @@ async def session_detail_payload(
             context_summary_serializer(summary) for summary in context_summaries
         ],
         "nextMessageCursor": next_message_cursor,
+        "userRequestCount": user_request_count,
+        "latestModelContext": _latest_model_context(latest_performance_data),
         "activeRun": (
             {
                 "id": str(active_run.id),
@@ -430,7 +463,6 @@ async def session_message_page(
             )
         ).all()
     )
-    next_cursor = str(lower_bound[1]) if len(anchors) > page_size else None
     summaries_statement = select(ContextSummary).where(
         ContextSummary.session_id == session_id,
         tuple_(ContextSummary.created_at, ContextSummary.id) >= lower_bound,
@@ -448,6 +480,7 @@ async def session_message_page(
             )
         ).all()
     )
+    next_cursor = str(lower_bound[1]) if len(anchors) > page_size else None
     return messages, context_summaries, next_cursor
 
 

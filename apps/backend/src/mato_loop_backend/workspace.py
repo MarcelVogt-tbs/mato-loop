@@ -624,7 +624,8 @@ class RootFileService:
     def session_usage(self) -> int:
         """Return usage of the mutable file and revision store."""
 
-        return self._session_usage()
+        with self._session_operation_lock(FileRoot.SESSION):
+            return self._session_usage()
 
     def _assert_session_quota(
         self, additional_bytes: int, *, replaced_bytes: int = 0

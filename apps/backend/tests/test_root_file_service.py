@@ -1,5 +1,6 @@
 import hashlib
 import json
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -346,6 +347,31 @@ def test_revision_limit_and_quota_fail_without_partial_publication(tmp_path: Pat
     assert target.read_bytes() == b"old"
     assert not (root / "files" / "new.txt").exists()
     assert not list((root / "files").glob(".*.tmp"))
+
+
+def test_session_usage_holds_session_operation_lock(tmp_path: Path, monkeypatch) -> None:
+    service, _ = make_service(tmp_path)
+    locked = False
+
+    @contextmanager
+    def operation_lock(*roots):
+        nonlocal locked
+        assert roots == (FileRoot.SESSION,)
+        locked = True
+        try:
+            yield
+        finally:
+            locked = False
+
+    def usage() -> int:
+        assert locked
+        return 17
+
+    monkeypatch.setattr(service, "_session_operation_lock", operation_lock)
+    monkeypatch.setattr(service, "_session_usage", usage)
+
+    assert service.session_usage() == 17
+    assert locked is False
 
 
 def test_missing_session_root_is_rejected(tmp_path: Path) -> None:

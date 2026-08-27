@@ -20,7 +20,7 @@
       :custom-menu="hasOverflowActions"
       :can-move-left="integrationIndex > 0"
       :can-move-right="integrationIndex >= 0 && integrationIndex < controlCenter.tabs.length - 1"
-      @refresh="workspace.refresh()"
+      @refresh="refreshFiles"
       @close="emit('close')"
       @remove="emit('remove', 'files')"
       @move="emit('move', 'files', $event)"
@@ -226,6 +226,39 @@
         />
       </div>
     </q-scroll-area>
+    <q-separator v-if="chat.current" />
+    <div
+      v-if="chat.current"
+      class="file-explorer__storage-footer row items-center no-wrap q-px-md q-py-xs text-caption app-muted"
+    >
+      <div class="col row items-center no-wrap" tabindex="0" :aria-label="storageDescription">
+        <q-spinner v-if="workspace.storageUsageLoading && !storage" size="18px" class="q-mr-xs" />
+        <q-icon v-else :name="workspace.storageUsageFailed ? 'warning_amber' : 'folder'" size="18px" class="q-mr-xs" />
+        <span class="q-mr-sm">{{ storageScopeLabel }}</span>
+        <q-linear-progress
+          v-if="storageProgress !== null"
+          :value="storageProgress"
+          size="4px"
+          rounded
+          class="file-explorer__storage-progress q-mr-sm"
+          aria-hidden="true"
+        />
+        <span class="ellipsis">{{ storageLabel || '–' }}</span>
+        <q-tooltip>{{ storageDescription }}</q-tooltip>
+      </div>
+      <q-btn
+        v-if="workspace.storageUsageFailed && !storage"
+        flat
+        round
+        dense
+        size="sm"
+        icon="refresh"
+        aria-label="Speichernutzung erneut laden"
+        @click="workspace.fetchStorageUsage(chat.current.id)"
+      >
+        <q-tooltip>Speichernutzung erneut laden</q-tooltip>
+      </q-btn>
+    </div>
     </div>
 
     <q-dialog v-model="renameDialogOpen" :persistent="renaming">
@@ -381,6 +414,11 @@ import FileViewerPanel from 'components/FileViewerPanel.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import {
+  formatByteSize,
+  formatStorageUsage,
+  storageUsageProgress
+} from 'src/utils/resource-metrics'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
@@ -513,6 +551,21 @@ const filterEmpty = computed(() => Boolean(
     entry.name?.toLocaleLowerCase().includes(workspace.filter.toLocaleLowerCase())
   ))
 ))
+const storage = computed(() => (
+  workspace.storageUsageSessionId === chat.current?.id ? workspace.storageUsage : null
+))
+const storageLabel = computed(() => formatStorageUsage(storage.value))
+const storageProgress = computed(() => storageUsageProgress(storage.value))
+const storageScopeLabel = computed(() => (
+  storage.value?.scope === 'project' || chat.current?.projectId ? 'Projekt-Speicher' : 'Session-Speicher'
+))
+const storageDescription = computed(() => {
+  if (workspace.storageUsageLoading && !storage.value) return 'Speichernutzung wird geladen.'
+  if (!storage.value) return 'Speichernutzung nicht verfügbar.'
+  const sharing = storage.value.scope === 'project' ? ', projektweit geteilt' : ''
+  const stale = workspace.storageUsageFailed ? ' Letzter Stand.' : ''
+  return `${formatByteSize(storage.value.usedBytes)} von ${formatByteSize(storage.value.quotaBytes)} belegt${sharing}.${stale}`
+})
 const rootLoadError = computed(() => apiErrorMessage(
   workspace.loadErrors[workspace.directoryPath],
   'Die Dateien konnten nicht geladen werden.'
@@ -526,6 +579,12 @@ const activeWorkspaceContext = computed(() => executionAgents.workspaceContextFo
 
 function grantDisplay(grant) {
   return permissionGrantDisplay(grant, chat.cachedSessions)
+}
+
+function refreshFiles() {
+  const requests = [workspace.refresh()]
+  if (chat.current?.id) requests.push(workspace.fetchStorageUsage(chat.current.id))
+  return Promise.all(requests)
 }
 
 async function selectSource(scope) {
@@ -814,6 +873,23 @@ watch(
     ) workspace.restoreView(controlCenter.fileView)
     workspace.load(workspace.directoryPath)
     if (permissionsDialogOpen.value) loadPermissions()
+  },
+  { immediate: true }
+)
+
+watch(
+  [
+    () => chat.current?.id || null,
+    () => chat.current?.projectId || null,
+    () => controlCenter.activeContentId
+  ],
+  ([sessionId, , activeContentId]) => {
+    if (!sessionId || activeContentId !== 'files') return
+    if (
+      workspace.storageUsageSessionId !== sessionId
+      || !workspace.storageUsage
+      || workspace.storageUsageFailed
+    ) void workspace.fetchStorageUsage(sessionId)
   },
   { immediate: true }
 )
