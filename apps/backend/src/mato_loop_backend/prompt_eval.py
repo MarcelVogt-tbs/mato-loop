@@ -23,6 +23,7 @@ from mato_loop_backend.agent.context import (
     estimate_tokens,
     general_system_prompt,
     memory_context_prompt,
+    message_dict,
 )
 from mato_loop_backend.agent.file_roots import model_file_roots
 from mato_loop_backend.agent.media_prompt_profiles import (
@@ -49,7 +50,7 @@ from mato_loop_backend.memory.dreaming import (
     _reconciliation_tool,
     _record_candidates_tool,
 )
-from mato_loop_backend.models import ChatSession
+from mato_loop_backend.models import ChatSession, Message
 from mato_loop_backend.privacy import RequestPseudonymizer
 from mato_loop_backend.providers.base import ProviderRequest, ProviderResult, ToolCall
 from mato_loop_backend.providers.openai_compatible import chat_completions
@@ -82,7 +83,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 29
+INVENTORY_VERSION = 30
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -619,6 +620,68 @@ def _unnegated_success_term(content: str, terms: tuple[str, ...]) -> str | None:
             if re.search(rf"\b{re.escape(term)}\b", clause, re.IGNORECASE):
                 return term
     return None
+
+
+SteeringVariant = Literal["current", "context", "instruction"]
+STEERING_INSTRUCTION = (
+    "[Host steering instruction: The latest user message redirects the incomplete response. "
+    "Reassess the remaining work, preserve confirmed results, and verify interrupted tool "
+    "effects before retrying them.]"
+)
+
+
+def _steering_cases(
+    case_id: str,
+    *,
+    user: str,
+    correction: str,
+    partial_content: str,
+    public_reasoning: str,
+    history: tuple[dict[str, Any], ...] = (),
+    **expectations: Any,
+) -> tuple[PromptCase, ...]:
+    interrupted = Message(
+        session_id=SESSION_ID,
+        role="assistant",
+        content=partial_content,
+        generation_status="interrupted",
+        public_reasoning={
+            "kind": "content",
+            "text": public_reasoning,
+            "status": "interrupted",
+            "reasoningTokens": None,
+            "observedDurationMs": None,
+        },
+    )
+    current_content = message_dict(interrupted)["content"]
+    reasoning_context = (
+        "[Public reasoning visible to the user]\n"
+        + json.dumps(interrupted.public_reasoning, ensure_ascii=False, separators=(",", ":"))
+        + "\n[End public reasoning]"
+    )
+    contextual_content = "\n\n".join(
+        part for part in (partial_content, reasoning_context) if part
+    )
+    variants: tuple[tuple[SteeringVariant, str, str], ...] = (
+        ("current", current_content, correction),
+        ("context", contextual_content, correction),
+        ("instruction", contextual_content, f"{STEERING_INSTRUCTION}\n\n{correction}"),
+    )
+    return tuple(
+        PromptCase(
+            id=f"{case_id}_{variant}",
+            kind="general",
+            scope="quality",
+            user=user,
+            continuation=(
+                *history,
+                {"role": "assistant", "content": assistant_content},
+                {"role": "user", "content": user_content},
+            ),
+            **expectations,
+        )
+        for variant, assistant_content, user_content in variants
+    )
 
 
 CASES = (
@@ -2920,6 +2983,133 @@ CASES = (
         expected_no_tools=True,
         content_contains=("C",),
         content_excludes=("A, B",),
+    ),
+    *_steering_cases(
+        "steering_reasoning_direction",
+        user="Erstelle einen Härtungsplan für das bestehende Docker-Compose-Deployment.",
+        correction=(
+            "Die Kubernetes-Richtung ist falsch. Bleibe bei Docker Compose. Antworte mit genau "
+            "drei kurzen Punkten zu Backup, Healthchecks und Secret-Rotation und ende mit COMPOSE-ONLY."
+        ),
+        partial_content="",
+        public_reasoning=(
+            "I should replace the Compose deployment with Kubernetes and explain a cluster migration."
+        ),
+        tools=("read", "write_file"),
+        expected_no_tools=True,
+        forbidden_tools=("read", "write_file"),
+        content_contains=("Backup", "Healthchecks", "Secret-Rotation", "COMPOSE-ONLY"),
+        content_excludes=("Kubernetes", "K8s"),
+        max_content_words=80,
+        output_limit=1_024,
+    ),
+    *_steering_cases(
+        "steering_partial_answer",
+        user="Erstelle sechs Rollout-Schritte mit den Bezeichnungen STAGE-1 bis STAGE-6.",
+        correction=(
+            "Fahre nur mit STAGE-4 bis STAGE-6 fort. Wiederhole keine früheren Schritte. "
+            "Höchstens acht Wörter pro Schritt."
+        ),
+        partial_content=(
+            "STAGE-1: Konfiguration validieren.\n"
+            "STAGE-2: Backup verifizieren.\n"
+            "STAGE-3: Staging bereitstellen."
+        ),
+        public_reasoning="The first three rollout stages are complete; stages four through six remain.",
+        expected_no_tools=True,
+        content_contains=("STAGE-4", "STAGE-5", "STAGE-6"),
+        content_excludes=("STAGE-1", "STAGE-2", "STAGE-3"),
+        max_content_words=30,
+        output_limit=1_024,
+    ),
+    *_steering_cases(
+        "steering_preserves_completed_effect",
+        user="Erstelle release-note.md mit der freigegebenen Release-Notiz.",
+        correction=(
+            "Verändere die Datei nicht weiter. Bestätige nur Pfad release-note.md und Größe 41 Bytes "
+            "in einem Satz."
+        ),
+        partial_content="Die Release-Notiz wurde gespeichert.",
+        public_reasoning=(
+            "The write succeeded. I should report the confirmed path and byte size without another tool call."
+        ),
+        history=_exchange(
+            "write_file",
+            {
+                "root": "files",
+                "path": "release-note.md",
+                "content": "Version 4.2 ist für Produktion freigegeben.",
+            },
+            '{"root":"files","written":"release-note.md","sizeBytes":41}',
+            "steering-write-completed",
+        ),
+        tools=("read", "write_file"),
+        expected_no_tools=True,
+        forbidden_tools=("read", "write_file"),
+        content_exact_values=("release-note.md", "41"),
+        max_content_words=20,
+        output_limit=1_024,
+    ),
+    *_steering_cases(
+        "steering_verifies_unknown_effect",
+        user="Erstelle note.txt mit dem Inhalt Hallo.",
+        correction=(
+            "Fahre fort, aber überschreibe nichts. Prüfe zuerst mit read, ob note.txt existiert. "
+            "Behaupte vorher weder Erfolg noch Fehlschlag."
+        ),
+        partial_content="",
+        public_reasoning=(
+            "The write result is unknown. I should not retry the mutation before checking the file state."
+        ),
+        history=_exchange(
+            "write_file",
+            {"root": "files", "path": "note.txt", "content": "Hallo"},
+            json.dumps(error_payload("tool.executionInterrupted")),
+            "steering-write-interrupted",
+        ),
+        tools=("read", "write_file"),
+        expected_tool="read",
+        expected_tool_call_count=1,
+        expected_arguments={"root": "files", "path": "note.txt"},
+        forbidden_tools=("write_file",),
+        forbidden_success_terms=("erstellt", "geschrieben"),
+        output_limit=1_024,
+    ),
+    *_steering_cases(
+        "steering_replaces_output_constraints",
+        user=(
+            "Recherchiere die aktuelle Example-Version und speichere anschließend eine Empfehlung als Datei."
+        ),
+        correction=(
+            "Die Vorgaben haben sich geändert: keine weiteren Tools und keine Datei. Antworte im Chat "
+            "mit genau zwei Punkten zu Version und Supportzeitraum ausschließlich aus dem vorhandenen Ergebnis."
+        ),
+        partial_content="",
+        public_reasoning=(
+            "The source confirms version 4.2 and support through 2028. The planned file write has not happened."
+        ),
+        history=_exchange(
+            "webfetch",
+            {"url": "https://example.test/releases"},
+            json.dumps(
+                {
+                    "sourceId": "steering-release-source",
+                    "url": "https://example.test/releases",
+                    "title": "Example Release Notes",
+                    "citationEligible": True,
+                    "content": "Current version: 4.2. Supported through 2028.",
+                }
+            ),
+            "steering-research-completed",
+        ),
+        tools=("web_search", "webfetch", "write_file"),
+        expected_no_tools=True,
+        forbidden_tools=("web_search", "webfetch", "write_file"),
+        content_exact_values=("4.2", "2028"),
+        content_excludes=("steering-release-source", "Datei erstellt", "gespeichert"),
+        maximum_links=0,
+        max_content_words=50,
+        output_limit=1_024,
     ),
     PromptCase(
         id="compacted_and_omitted_history_remain_untrusted",

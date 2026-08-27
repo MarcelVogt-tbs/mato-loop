@@ -54,7 +54,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 29
+    assert INVENTORY_VERSION == 30
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -88,7 +88,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 161
+    assert 80 <= len(CASES) <= 176
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -982,6 +982,51 @@ def test_general_cases_place_summaries_history_and_current_turns_in_production_o
         "assistant",
         "tool",
     ]
+
+
+def test_steering_eval_arms_change_only_the_candidate_context() -> None:
+    prefixes = (
+        "steering_reasoning_direction",
+        "steering_partial_answer",
+        "steering_preserves_completed_effect",
+        "steering_verifies_unknown_effect",
+        "steering_replaces_output_constraints",
+    )
+    assert all(
+        sum(case.id.startswith(f"{prefix}_") for case in CASES) == 3
+        for prefix in prefixes
+    )
+
+    current, current_tools = build_case(_case("steering_partial_answer_current"))
+    context, context_tools = build_case(_case("steering_partial_answer_context"))
+    instruction, instruction_tools = build_case(
+        _case("steering_partial_answer_instruction")
+    )
+
+    assert current_tools == context_tools == instruction_tools
+    assert current[:-2] == context[:-2] == instruction[:-2]
+    assert current[-2]["content"].endswith("[Response interrupted by the user.]")
+    assert "Public reasoning" not in current[-2]["content"]
+    assert "[Response interrupted by the user.]" not in context[-2]["content"]
+    assert "[Public reasoning visible to the user]" in context[-2]["content"]
+    assert context[-2] == instruction[-2]
+    assert current[-1] == context[-1]
+    assert instruction[-1]["content"].startswith(prompt_eval.STEERING_INSTRUCTION)
+    assert instruction[-1]["content"].endswith(context[-1]["content"])
+
+    unknown, unknown_tools = build_case(_case("steering_verifies_unknown_effect_context"))
+    assert [message["role"] for message in unknown] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert {tool["name"] for tool in unknown_tools} == {"read", "write_file"}
+    assert json.loads(unknown[3]["content"])["error"]["code"] == (
+        "tool.executionInterrupted"
+    )
 
 
 def test_evaluator_only_layouts_move_prompt_paragraphs_without_changing_text() -> None:
@@ -1970,10 +2015,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 133
-    assert payload["contractCount"] == 294
-    assert "Cases: 161" in report
+    assert payload["contractCount"] == 309
+    assert "Cases: 176" in report
     assert "Semantic contracts: 133" in report
-    assert "All inventory rows: 294" in report
+    assert "All inventory rows: 309" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report
