@@ -579,7 +579,7 @@ async def list_providers(
     scope: SettingsApiScope | None = None,
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    if scope is None and user is not None and not user.is_admin:
+    if scope is None and user is not None:
         return await _settings_response(
             db,
             await load_effective_ai(db, user.id),

@@ -964,10 +964,12 @@ async def test_personal_provider_policy_read_exposes_only_runtime_gates(
     assert result == {"enabled": False, "personalProvidersEnabled": False}
 
 
+@pytest.mark.parametrize("is_admin", [False, True])
 async def test_normal_provider_read_is_effective_and_hides_configuration(
     monkeypatch,
+    is_admin: bool,
 ) -> None:
-    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    user = SimpleNamespace(id=uuid4(), is_admin=is_admin)
     instance_provider = LlmProviderConfig(
         name="Instance",
         adapter_type="openai-compatible",
