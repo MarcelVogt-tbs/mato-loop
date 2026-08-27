@@ -66,13 +66,14 @@ const imageStates = ref({})
 const verificationTasks = new Map()
 const mermaidDialog = ref(false)
 const mermaidImage = ref(null)
-let renderFrame = null
+const STREAM_RENDER_INTERVAL_MS = 50
+let renderTimer = null
 let renderVersion = 0
 let mermaidObjectUrl = ''
 
 function renderContent() {
   if (mermaidDialog.value) mermaidDialog.value = false
-  renderFrame = null
+  renderTimer = null
   const version = ++renderVersion
   rendered.value = renderMarkdown(props.content, {
     allowImages: props.allowImages,
@@ -83,7 +84,7 @@ function renderContent() {
     trustedImageOrigins: props.trustedImageOrigins
   })
   syncImageVerifications()
-  hydrateMermaid(version)
+  if (!props.streaming) hydrateMermaid(version)
 }
 
 async function hydrateMermaid(version) {
@@ -120,11 +121,11 @@ async function hydrateMermaid(version) {
 
 function scheduleRender() {
   if (!props.streaming) {
-    if (renderFrame !== null) window.cancelAnimationFrame(renderFrame)
+    if (renderTimer !== null) window.clearTimeout(renderTimer)
     renderContent()
     return
   }
-  if (renderFrame === null) renderFrame = window.requestAnimationFrame(renderContent)
+  if (renderTimer === null) renderTimer = window.setTimeout(renderContent, STREAM_RENDER_INTERVAL_MS)
 }
 
 function setImageState(url, status) {
@@ -260,7 +261,7 @@ watch(
 
 onBeforeUnmount(() => {
   renderVersion += 1
-  if (renderFrame !== null) window.cancelAnimationFrame(renderFrame)
+  if (renderTimer !== null) window.clearTimeout(renderTimer)
   clearMermaidImage()
   for (const task of verificationTasks.values()) task.cancel()
   verificationTasks.clear()

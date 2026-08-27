@@ -17,6 +17,7 @@
       ref="scrollArea"
       class="chat-page__content col"
       :aria-busy="chat.loading ? 'true' : 'false'"
+      @mousedown="handleScrollAreaMouseDown"
     >
       <div ref="scrollContent" class="chat-page__scroll-content">
         <div v-if="chat.loading" class="chat-transcript q-pa-md" aria-label="Session wird geladen">
@@ -808,7 +809,12 @@ async function loadOlderHistory() {
 }
 
 function handleVirtualScroll({ from, direction }) {
-  if (!virtualScrollRefreshInProgress && direction === 'decrease' && followingBottom.value) {
+  if (
+    !virtualScrollRefreshInProgress
+    && userScrollActive
+    && direction === 'decrease'
+    && followingBottom.value
+  ) {
     followingBottom.value = false
     cancelFollowScroll()
   }
@@ -1008,6 +1014,17 @@ function handleWheel() {
   scheduleUserScrollEnd()
 }
 
+function handleScrollAreaMouseDown(event) {
+  if (event.button !== 0 || !scrollTarget || scrollTarget.contains(event.target)) return
+  beginUserScroll()
+  window.removeEventListener('mouseup', handleScrollAreaMouseUp)
+  window.addEventListener('mouseup', handleScrollAreaMouseUp, { once: true })
+}
+
+function handleScrollAreaMouseUp() {
+  scheduleUserScrollEnd()
+}
+
 function scrollToBottom() {
   touchActive = false
   userScrollActive = false
@@ -1043,7 +1060,7 @@ function observeChatSize() {
     scrollTarget.addEventListener('wheel', handleWheel, { passive: true })
   }
   if (typeof ResizeObserver === 'undefined') return
-  resizeObserver = new ResizeObserver(followScrollNow)
+  resizeObserver = new ResizeObserver(() => scheduleFollowScroll())
   if (scrollContent.value) resizeObserver.observe(scrollContent.value)
   if (scrollTarget) resizeObserver.observe(scrollTarget)
 }
@@ -1133,6 +1150,7 @@ onMounted(() => {
   executionAgents.startPolling()
 })
 onBeforeUnmount(() => {
+  virtualScrollRefreshVersion += 1
   resizeObserver?.disconnect()
   scrollTarget?.removeEventListener('scroll', updateFollowState)
   scrollTarget?.removeEventListener('touchstart', handleTouchStart)
@@ -1145,6 +1163,7 @@ onBeforeUnmount(() => {
   clearTimeout(userScrollTimer)
   clearTimeout(virtualScrollRefreshTimer)
   clearTimeout(searchHighlightTimer)
+  window.removeEventListener('mouseup', handleScrollAreaMouseUp)
   if (activityPanelScrollFrame !== null) window.cancelAnimationFrame(activityPanelScrollFrame)
   if (virtualScrollRefreshFrame !== null) window.cancelAnimationFrame(virtualScrollRefreshFrame)
   cancelFollowScroll()
