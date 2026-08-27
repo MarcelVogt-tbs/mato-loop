@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.api.routes.automations import ScheduleRequest
+from mato_loop_backend.api.routes.automations import AutomationRequest, ScheduleRequest
 from mato_loop_backend.api.routes.notifications import _notification_payload
 from mato_loop_backend.automations import (
     AutomationError,
@@ -68,6 +68,30 @@ def test_schedule_request_accepts_exactly_one_schedule_kind() -> None:
             '{"runAt":"2026-08-21T10:30:00+02:00",'
             '"validUntil":"2026-08-28T10:30:00+02:00"}'
         )
+
+
+def test_automation_request_accepts_browser_uuid_and_datetime_values() -> None:
+    skill_id = uuid4()
+    source_session_id = uuid4()
+    output_session_id = uuid4()
+
+    request = AutomationRequest.model_validate(
+        {
+            "name": "Bericht",
+            "task": "Erstelle einen Bericht",
+            "skillId": str(skill_id),
+            "sourceSessionId": str(source_session_id),
+            "outputSessionId": str(output_session_id),
+            "schedules": [
+                {"runAt": "2026-08-21T10:30:00+02:00", "enabled": True}
+            ],
+        }
+    )
+
+    assert request.skill_id == skill_id
+    assert request.source_session_id == source_session_id
+    assert request.output_session_id == output_session_id
+    assert request.schedules[0].run_at == datetime(2026, 8, 21, 8, 30, tzinfo=UTC)
 
 
 def test_one_time_schedule_uses_existing_next_run_at() -> None:
@@ -174,6 +198,60 @@ async def test_create_flushes_execution_session_before_automation(monkeypatch) -
         ("flush", None),
     ]
     assert automation.execution_session_id is not None
+
+
+async def test_replace_deletes_existing_schedules_before_inserting_replacements(
+    monkeypatch,
+) -> None:
+    automation = Automation(
+        id=uuid4(),
+        user_id=uuid4(),
+        execution_session_id=uuid4(),
+        name="Bericht",
+        task="Erstelle einen Bericht",
+        revision=1,
+    )
+    automation.schedules = [
+        AutomationSchedule(
+            id=uuid4(),
+            cron_expression="0 8 * * *",
+            timezone="UTC",
+            enabled=True,
+            next_run_at=datetime(2026, 8, 21, 8, tzinfo=UTC),
+        )
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = ChatSession(
+        id=automation.execution_session_id,
+        user_id=automation.user_id,
+        session_type="automation",
+    )
+    schedule_snapshots = []
+
+    async def flush() -> None:
+        schedule_snapshots.append(
+            [(item.cron_expression, item.timezone) for item in automation.schedules]
+        )
+
+    db.flush.side_effect = flush
+    monkeypatch.setattr(AutomationService, "skill", AsyncMock(return_value=None))
+
+    await AutomationService.replace(
+        db,
+        automation,
+        expected_revision=1,
+        name=automation.name,
+        task=automation.task,
+        skill_id=None,
+        enabled=True,
+        source_session_id=None,
+        output_session_id=None,
+        output_session_required=False,
+        schedules=[{"cron": "0 8 * * *", "timezone": "UTC", "enabled": True}],
+        now=datetime(2026, 8, 20, 12, tzinfo=UTC),
+    )
+
+    assert schedule_snapshots == [[], [("0 8 * * *", "UTC")]]
 
 
 def test_runtime_snapshot_contains_only_validated_session_binding() -> None:

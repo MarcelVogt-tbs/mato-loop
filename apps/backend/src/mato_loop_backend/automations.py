@@ -381,6 +381,8 @@ class AutomationService:
         automation.output_session_id = output_session_id
         automation.output_session_required = output_session_required
         automation.revision += 1
+        automation.schedules = []
+        await db.flush()
         AutomationService.set_schedules(
             automation, schedules, now=now or datetime.now(UTC)
         )

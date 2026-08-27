@@ -38,8 +38,8 @@ class ScheduleRequest(BaseModel):
 
     cron: str | None = Field(default=None, min_length=1, max_length=255)
     timezone: str | None = Field(default=None, min_length=1, max_length=100)
-    run_at: datetime | None = Field(default=None, alias="runAt")
-    valid_until: datetime | None = Field(default=None, alias="validUntil")
+    run_at: datetime | None = Field(default=None, alias="runAt", strict=False)
+    valid_until: datetime | None = Field(default=None, alias="validUntil", strict=False)
     enabled: bool = True
 
     @field_validator("cron", "timezone")
@@ -77,10 +77,10 @@ class AutomationRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=240)
     task: str = Field(min_length=1, max_length=40_000)
-    skill_id: UUID | None = Field(default=None, alias="skillId")
+    skill_id: UUID | None = Field(default=None, alias="skillId", strict=False)
     enabled: bool = True
-    source_session_id: UUID | None = Field(default=None, alias="sourceSessionId")
-    output_session_id: UUID | None = Field(default=None, alias="outputSessionId")
+    source_session_id: UUID | None = Field(default=None, alias="sourceSessionId", strict=False)
+    output_session_id: UUID | None = Field(default=None, alias="outputSessionId", strict=False)
     output_session_required: bool = Field(default=False, alias="outputSessionRequired")
     archive_after_success: bool = Field(default=False, alias="archiveAfterSuccess")
     schedules: list[ScheduleRequest] = Field(min_length=1, max_length=50)
