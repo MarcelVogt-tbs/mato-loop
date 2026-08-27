@@ -921,6 +921,7 @@ def _projection_messages(
     characters_per_token: float = 4.0,
     historical_tool_output_tokens: int = 2_000,
     current_turn_tool_output_tokens: int | None = None,
+    live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     records = [item for item in records if item.error_code is None]
     if available_records is not None:
@@ -975,6 +976,8 @@ def _projection_messages(
                 and item.id == latest_user_id
             ),
         )
+        if live_tool_calls is not None and item.id in live_tool_calls:
+            projected["tool_calls"] = _model_tool_calls(live_tool_calls[item.id])
         marker = _active_file_marker(item)
         if marker is not None:
             projected["content"] = "\n\n".join(
@@ -1688,6 +1691,7 @@ class ContextManager:
         target_trust_level: TrustLevel = TrustLevel.PUBLIC,
         required_image_ids: tuple[str, ...] = (),
         memory_context: str | None = None,
+        live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
     ) -> ContextProjection:
         records = [item for item in records if item.error_code is None]
         input_budget = (
@@ -1735,6 +1739,7 @@ class ContextManager:
                 available_records=records,
                 characters_per_token=characters_per_token,
                 historical_tool_output_tokens=settings.historical_tool_output_tokens,
+                live_tool_calls=live_tool_calls,
             )
             total = (
                 _message_text_tokens(messages, characters_per_token)

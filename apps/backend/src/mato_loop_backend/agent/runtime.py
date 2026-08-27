@@ -1180,6 +1180,7 @@ class AgentRuntime:
         tool_calls_used = 0
         failed_tool_call_signatures: set[str] = set()
         unresolved_mutation_errors: dict[str, str] = {}
+        live_tool_calls: dict[UUID, list[dict[str, Any]]] = {}
         session_read_cursors: dict[UUID, UUID | None] = {}
         automatic_memories: list[MemoryRecord] | None = None
         automatic_relevant_episodes: list[EpisodeReference] | None = None
@@ -1798,6 +1799,7 @@ class AgentRuntime:
                         settings=runtime_settings,
                         summarize=summarize,
                         required_image_ids=required_image_ids,
+                        live_tool_calls=live_tool_calls,
                     )
                     memory_text = candidate_text
                     injected_memory_count = candidate_memory_count
@@ -2133,6 +2135,15 @@ class AgentRuntime:
             )
             db.add(assistant)
             await db.flush()
+            if normalized_calls:
+                live_tool_calls[assistant.id] = [
+                    {
+                        "id": call.id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    }
+                    for call in normalized_calls
+                ]
             if not normalized_calls:
                 run.result_message_id = assistant.id
             await EpisodeIndexService.enqueue(db, assistant)

@@ -329,6 +329,40 @@ async def test_session_reasoning_effort_reaches_primary_model_request(monkeypatc
     assert requests[0]["reasoning_effort"] == "low"
 
 
+async def test_runtime_replays_exact_tool_calls_without_persisting_them(monkeypatch) -> None:
+    arguments = {
+        "root": "files",
+        "path": "note.txt",
+        "oldText": "private old text",
+        "newText": "private new text",
+    }
+    db, run, _requests, projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[ToolCall("edit", "edit_file", arguments)],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Fertig.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(projections) == 2
+    assert list(projections[1]["live_tool_calls"].values()) == [
+        [{"id": "edit", "name": "edit_file", "arguments": arguments}]
+    ]
+    persisted_arguments = _assistant_messages(db)[0].tool_calls[0]["arguments"]
+    assert persisted_arguments == {
+        "root": "files",
+        "path": "note.txt",
+        "oldText": {"characters": 16, "redacted": True},
+        "newText": {"characters": 16, "redacted": True},
+    }
+
+
 async def test_generated_openscad_source_requires_a_successful_render(monkeypatch) -> None:
     agent_id = uuid4()
     integration = IntegrationInstance(

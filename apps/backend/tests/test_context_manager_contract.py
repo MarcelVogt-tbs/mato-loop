@@ -369,6 +369,51 @@ def test_message_projection_never_restores_persisted_edit_file_text() -> None:
     assert arguments["newText"].startswith("[Persisted edit text omitted: 12")
 
 
+def test_projection_uses_live_tool_calls_without_mutating_persisted_history() -> None:
+    session_id = uuid4()
+    assistant = _message(session_id, "assistant", "")
+    assistant.tool_calls = [
+        {
+            "id": "edit",
+            "name": "edit_file",
+            "arguments": {
+                "root": "files",
+                "path": "note.txt",
+                "oldText": {"characters": 3, "redacted": True},
+                "newText": {"characters": 3, "redacted": True},
+            },
+        }
+    ]
+    tool = _message(session_id, "tool", '{"root":"files","edited":"note.txt"}')
+    tool.tool_call_id = "edit"
+    live_calls = [
+        {
+            "id": "edit",
+            "name": "edit_file",
+            "arguments": {
+                "root": "files",
+                "path": "note.txt",
+                "oldText": "old",
+                "newText": "new",
+            },
+        }
+    ]
+
+    projected = _projection_messages(
+        "System",
+        None,
+        [assistant, tool],
+        TrustLevel.PUBLIC,
+        live_tool_calls={assistant.id: live_calls},
+    )
+
+    assert projected[1]["tool_calls"] == live_calls
+    assert assistant.tool_calls[0]["arguments"]["oldText"] == {
+        "characters": 3,
+        "redacted": True,
+    }
+
+
 def test_message_projection_translates_historical_file_roots_for_models() -> None:
     session_id = uuid4()
     user = _message(session_id, "user", "Kopiere die Datei")
