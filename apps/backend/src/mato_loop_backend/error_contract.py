@@ -203,6 +203,7 @@ _MESSAGES = {
     "provider.requestFailed": "The model provider request failed.",
     "provider.unavailable": "The model provider is unavailable.",
     "privacy.privateContentBlocked": "Private image content cannot be sent to the selected public model.",
+    "permission.userDenied": "The user explicitly denied this action.",
     "process.interrupted": "The process was interrupted.",
     "process.inspectionChanged": "The shell entry points changed before execution.",
     "process.cancelled": "The process was cancelled.",
@@ -264,6 +265,9 @@ _MESSAGES = {
         "The session cursor is unavailable. Retry session_read with error.params.retryArguments exactly."
     ),
     "tool.personalSettingsDisabled": "Personal tool settings are disabled by the administrator.",
+    "tool.skippedAfterUserDenial": (
+        "The tool call was not run because the user denied another action in the same batch."
+    ),
     "tool.unavailable": "The tool is unavailable.",
     "transcript.requestFailed": "The published transcript could not be retrieved.",
     "transcript.responseInvalid": "The transcript service returned an invalid response.",

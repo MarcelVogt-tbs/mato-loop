@@ -196,11 +196,16 @@ class ToolContext:
     skill_state: RunSkillState = field(default_factory=RunSkillState)
     skill_draft_handler: SkillDraftHandler | None = None
     approval_resolution: dict[str, str] = field(default_factory=dict)
+    user_denied: bool = False
     execution_client: ExecutionClient | None = None
     session_read_cursors: dict[UUID, UUID | None] = field(default_factory=dict)
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
-        return await self.ask_handler(request)
+        if self.user_denied:
+            return PermissionDecision.USER_DENIED
+        decision = await self.ask_handler(request)
+        self.user_denied = decision == PermissionDecision.USER_DENIED
+        return decision
 
     async def ask_user(
         self, questions: QuestionArguments

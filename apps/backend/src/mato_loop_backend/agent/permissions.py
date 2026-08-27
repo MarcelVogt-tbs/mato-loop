@@ -26,6 +26,7 @@ class PermissionDecision(StrEnum):
     ALLOW = "allow"
     ASK = "ask"
     DENY = "deny"
+    USER_DENIED = "user_denied"
 
 
 @dataclass(frozen=True, slots=True)

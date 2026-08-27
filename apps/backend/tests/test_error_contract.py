@@ -88,6 +88,17 @@ def test_integration_permission_error_has_controlled_fallback() -> None:
     )
 
 
+def test_user_denial_errors_have_controlled_fallbacks() -> None:
+    assert (
+        describe_error("permission.userDenied").message
+        == "The user explicitly denied this action."
+    )
+    assert (
+        describe_error("tool.skippedAfterUserDenial").message
+        == "The tool call was not run because the user denied another action in the same batch."
+    )
+
+
 def test_video_processing_errors_have_controlled_fallbacks() -> None:
     assert (
         describe_error("video.frameExtractionFailed").message

@@ -10,10 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import mato_loop_backend.agent.runtime as runtime_module
 import mato_loop_backend.agent.video_analysis as video_analysis
 from mato_loop_backend.agent.context import ContextManager, ContextProjection, message_dict
-from mato_loop_backend.agent.permissions import PermissionDecision
+from mato_loop_backend.agent.permissions import (
+    PermissionDecision,
+    PermissionPolicy,
+    PermissionRequest,
+)
 from mato_loop_backend.agent.runtime import (
     AgentRunError,
     AgentRuntime,
+    ApprovalResolution,
     _linked_research_source_ids,
     _VisibleResponse,
 )
@@ -284,6 +289,14 @@ def _assistant_messages(db) -> list[Message]:
         call.args[0]
         for call in db.add.call_args_list
         if isinstance(call.args[0], Message) and call.args[0].role == "assistant"
+    ]
+
+
+def _tool_messages(db) -> list[Message]:
+    return [
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message) and call.args[0].role == "tool"
     ]
 
 
@@ -2101,6 +2114,116 @@ async def test_failed_mutation_blocks_an_unconfirmed_final_response(monkeypatch)
         message.content for message in _assistant_messages(db)
     }
     assert all(event["type"] != "message.delta" for event in events)
+
+
+async def test_user_denial_skips_the_remaining_tool_batch(monkeypatch) -> None:
+    db, run, _requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        "write-denied",
+                        "write_file",
+                        {"root": "session", "path": "note.txt", "content": "Hallo"},
+                    ),
+                    ToolCall(
+                        "delete-skipped",
+                        "delete_path",
+                        {"root": "session", "path": "old.txt", "recursive": False},
+                    ),
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Die Aktion wurde abgelehnt.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    monkeypatch.setattr(
+        PermissionPolicy, "evaluate", AsyncMock(return_value=PermissionDecision.ASK)
+    )
+    request_approval = AsyncMock(return_value=ApprovalResolution(decision="deny"))
+    monkeypatch.setattr(
+        AgentRuntime,
+        "_request_approval",
+        request_approval,
+    )
+
+    async def execute(_call, context, _tool):
+        request = PermissionRequest(
+            capability="filesystem.write",
+            resource_type="path",
+            resource_scope="note.txt",
+            action_kind="write_file",
+            risk_level="medium",
+            title="Datei schreiben?",
+            summary="Datei schreiben",
+        )
+        decision = await context.ask(request)
+        assert decision == PermissionDecision.USER_DENIED
+        assert await context.ask(request) == PermissionDecision.USER_DENIED
+        return ToolResult.error("permission.denied")
+
+    tool_registry._execute_definition.side_effect = execute
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert tool_registry._execute_definition.await_count == 1
+    request_approval.assert_awaited_once()
+    assert [message.tool_call_id for message in _tool_messages(db)] == [
+        "write-denied",
+        "delete-skipped",
+    ]
+    assert [json.loads(message.content)["error"]["code"] for message in _tool_messages(db)] == [
+        "permission.userDenied",
+        "tool.skippedAfterUserDenial",
+    ]
+    assert _assistant_messages(db)[-1].content == "Die Aktion wurde abgelehnt."
+
+
+async def test_user_denial_resolves_required_search(monkeypatch) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[_search_call("search-denied", "Aktuelle Frage")],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Die Suche wurde abgelehnt.", finish_reason="stop"),
+        ],
+    )
+    monkeypatch.setattr(
+        PermissionPolicy, "evaluate", AsyncMock(return_value=PermissionDecision.ASK)
+    )
+    monkeypatch.setattr(
+        AgentRuntime,
+        "_request_approval",
+        AsyncMock(return_value=ApprovalResolution(decision="deny")),
+    )
+
+    async def execute(_call, context, _tool):
+        await context.ask(
+            PermissionRequest(
+                capability="network.search",
+                resource_type="network_service",
+                resource_scope="configured_search",
+                action_kind="web_search",
+                risk_level="medium",
+                title="Websuche?",
+                summary="Web durchsuchen",
+            )
+        )
+        return ToolResult.error("permission.denied")
+
+    tool_registry._execute_definition.side_effect = execute
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["tool_choice"] for request in requests] == ["required", "auto"]
+    assert json.loads(_tool_messages(db)[0].content)["error"]["code"] == (
+        "permission.userDenied"
+    )
+    assert _assistant_messages(db)[-1].content == "Die Suche wurde abgelehnt."
 
 
 async def test_successful_mutation_correction_releases_the_final_response(monkeypatch) -> None:

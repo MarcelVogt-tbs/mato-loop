@@ -77,6 +77,7 @@ from mato_loop_backend.agent.tools import (
     QuestionArguments,
     ToolContext,
     ToolPermission,
+    ToolResult,
     effective_tool_capabilities,
     resolve_tool_execution_policy,
     tool_registry,
@@ -2192,6 +2193,7 @@ class AgentRuntime:
             tool_call_limit_reached = False
             repeated_tool_call_detected = False
             research_budget_reached = False
+            user_denied_batch = False
             invalid_question_batch = any(
                 call.name == "question" for call in normalized_calls
             ) and len(normalized_calls) != 1
@@ -2263,11 +2265,17 @@ class AgentRuntime:
                     and is_research_call
                     and within_research_budget
                     and not repeated_successful_research_call
+                    and not user_denied_batch
                 ):
                     research_tool_calls_used += 1
                 tool_trust_level = model_trust_level
                 if exclusive_error_code is not None:
                     pass
+                elif user_denied_batch:
+                    tool_result_content = json.dumps(
+                        error_payload("tool.skippedAfterUserDenial"), ensure_ascii=False
+                    )
+                    metadata = {"errorCode": "tool.skippedAfterUserDenial"}
                 elif not within_tool_call_budget:
                     tool_call_limit_reached = True
                     tool_result_content = json.dumps(
@@ -2938,6 +2946,9 @@ class AgentRuntime:
                     )
                     assert effective_toolset is not None
                     tool_result = await effective_toolset.execute(call, tool_context)
+                    if tool_context.user_denied:
+                        tool_result = ToolResult.error("permission.userDenied")
+                        user_denied_batch = True
                     tool_result_content = tool_result.content
                     metadata = tool_result.metadata
                     if metadata.get("privateIntegrationData") is True:
@@ -3343,7 +3354,12 @@ class AgentRuntime:
                         openscad_source_review_retries = 0
                         openscad_source_review_finalization_pending = True
                 if call.name in mutating_tool_names:
-                    if isinstance(error_code, str) and error_code != "permission.denied":
+                    if error_code == "tool.skippedAfterUserDenial":
+                        pass
+                    elif isinstance(error_code, str) and error_code not in {
+                        "permission.denied",
+                        "permission.userDenied",
+                    }:
                         mutation_results[call.name] = error_code
                     elif call.name not in mutation_results:
                         mutation_results[call.name] = None
@@ -3357,9 +3373,11 @@ class AgentRuntime:
                     memory_workflow_started = True
                     memory_write_attempted = True
                     outcome: str | None = None
-                    if error_code == "permission.denied":
+                    if error_code in {"permission.denied", "permission.userDenied"}:
                         memory_workflow_resolved = True
                         outcome = "denied"
+                    elif error_code == "tool.skippedAfterUserDenial":
+                        memory_workflow_resolved = True
                     elif not isinstance(error_code, str):
                         memory_workflow_resolved = True
                         reported_outcome = metadata.get("memoryWriteOutcome")
@@ -3464,7 +3482,10 @@ class AgentRuntime:
                 if memory_write_retries > REQUIRED_MEMORY_WRITE_RETRIES:
                     raise AgentRunError("agent.requiredMemoryWriteMissing")
             if search_pending:
-                if required_search_succeeded:
+                if user_denied_batch:
+                    required_search_completed = True
+                    required_search_retries = 0
+                elif required_search_succeeded:
                     required_search_completed = True
                     required_search_retries = 0
                 elif required_search_called:
@@ -4005,6 +4026,8 @@ class AgentRuntime:
         approval_decision = (
             resolution.decision if isinstance(resolution, ApprovalResolution) else resolution
         )
+        if approval_decision == "deny":
+            return PermissionDecision.USER_DENIED
         if approval_decision not in {"allow_once", "allow_session"}:
             return PermissionDecision.DENY
         if (

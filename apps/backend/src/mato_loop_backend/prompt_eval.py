@@ -423,9 +423,7 @@ _ERROR_INVALID_ARGUMENTS = json.dumps(
         }
     }
 )
-_ERROR_DENIED = json.dumps(
-    {"error": {"code": "permission.denied", "message": "Permission was denied."}}
-)
+_ERROR_DENIED = json.dumps(error_payload("permission.userDenied"))
 VIDEO_EVAL_TOOLS = (
     "read",
     "glob",

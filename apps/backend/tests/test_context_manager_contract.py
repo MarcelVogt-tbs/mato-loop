@@ -1034,8 +1034,9 @@ def test_general_system_prompt_keeps_permission_denials_host_scoped() -> None:
         _session(), offered_tool_names=frozenset({"calendar_query_events"})
     )
 
-    assert "permission.denied comes from MatoLoop" in prompt
-    assert "do not guess why" in prompt
+    assert "permission.denied is unexplained" in prompt
+    assert "permission.userDenied means refusal" in prompt
+    assert "await a new user request" in prompt
 
 
 def test_general_system_prompt_reports_selected_offline_computer() -> None:

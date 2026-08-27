@@ -1714,8 +1714,14 @@ def test_continuation_checks_repeated_calls_and_premature_success() -> None:
         ],
     )
     denied = ProviderResult(content="tmp.txt wurde erfolgreich gelöscht.")
+    denied_messages, _tools = build_case(
+        _case("denied_tool_result_does_not_claim_success")
+    )
 
     repeated_failures = evaluate(failed, repeated)
+    assert "permission.userDenied" in "\n".join(
+        str(message.get("content", "")) for message in denied_messages
+    )
     assert any("repeated failed or denied call unchanged" in item for item in repeated_failures)
     assert any("forbidden value" in item for item in repeated_failures)
     assert any(

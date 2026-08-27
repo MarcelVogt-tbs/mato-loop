@@ -70,6 +70,35 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
     assert result == {"status": "approved", "decision": "allow_session"}
 
 
+async def test_deny_is_persisted_before_resuming_without_a_grant(monkeypatch) -> None:
+    approval = _approval()
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+
+    def resolve(*_args) -> bool:
+        assert db.commit.await_count == 1
+        return True
+
+    monkeypatch.setattr(
+        AgentRuntime, "claim_approval_resolution", Mock(return_value=True)
+    )
+    resolver = Mock(side_effect=resolve)
+    monkeypatch.setattr(AgentRuntime, "resolve_approval", resolver)
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+
+    result = await decide_approval(
+        approval.id, ApprovalDecisionRequest(decision="deny"), user, db
+    )
+
+    assert approval.status == "denied"
+    assert approval.decision == "deny"
+    assert approval.resolved_at is not None
+    resolver.assert_called_once_with(approval.id, ApprovalResolution(decision="deny"))
+    db.add.assert_not_called()
+    assert result == {"status": "denied", "decision": "deny"}
+
+
 async def test_approval_without_live_waiter_expires_without_creating_grant(monkeypatch) -> None:
     approval = _approval()
     user = UserAccount(id=approval.user_id, username="test", password_hash="hash")

@@ -547,8 +547,8 @@ def general_system_prompt(
             [
                 "Call only supplied schemas when facts or actions require them.",
                 "Emit chosen tool calls now; never only announce future use.",
-                "Claim success only after success; never retry a denied or failed call unchanged.",
-                "permission.denied comes from MatoLoop; do not guess why.",
+                "No false success or unchanged retries; permission.denied is unexplained.",
+                "permission.userDenied means refusal; acknowledge it; await a new user request.",
             ]
         )
     if inactive_capability_groups:
