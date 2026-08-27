@@ -138,12 +138,12 @@ async def _execute(
                 waiting = True
             await asyncio.sleep(1)
         except PairingTemporaryError:
-            if command != "run" or pairing_token is not None:
+            if command != "run":
                 raise
             logging.getLogger(__name__).warning(
                 "MatoLoop Agent pairing is temporarily unavailable; retrying"
             )
-            await asyncio.sleep(5)
+            await asyncio.sleep(30)
 
     if command == "pair":
         print("MatoLoop Agent paired successfully")

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from matoloop_agent.__main__ import _execute, main
 from matoloop_agent.config import ConnectionConfig
-from matoloop_agent.credentials import NotPairedError, ResolvedCredential
+from matoloop_agent.credentials import NotPairedError, PairingTemporaryError, ResolvedCredential
 
 BACKEND_URL = "wss://mato.example/api/execution-agents/connect"
 AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
@@ -67,6 +67,33 @@ class CliTests(unittest.IsolatedAsyncioTestCase):
         sleep.assert_awaited_once_with(1)
         run_forever.assert_awaited_once()
         self.assertTrue(callable(run_forever.await_args.args[0]))
+
+    async def test_run_retries_temporary_automatic_pairing_after_30_seconds(self) -> None:
+        run_forever = AsyncMock()
+        with (
+            patch(
+                "matoloop_agent.__main__.resolve_credential",
+                new=AsyncMock(
+                    side_effect=[
+                        PairingTemporaryError("temporarily unavailable"),
+                        ResolvedCredential(BACKEND_URL, AGENT_ID, "access-key"),
+                    ]
+                ),
+            ) as resolve,
+            patch("matoloop_agent.__main__.asyncio.sleep", new=AsyncMock()) as sleep,
+            patch("matoloop_agent.__main__.MatoLoopAgent") as agent,
+        ):
+            agent.return_value.run_forever = run_forever
+            await _execute(
+                "run",
+                self.config(),
+                ConnectionConfig(backendUrl=BACKEND_URL, agentId=AGENT_ID),
+                "pairing-token",
+            )
+
+        self.assertEqual(resolve.await_count, 2)
+        sleep.assert_awaited_once_with(30)
+        run_forever.assert_awaited_once()
 
 
 class CliMainTests(unittest.TestCase):

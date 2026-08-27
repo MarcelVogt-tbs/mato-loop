@@ -76,7 +76,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                     )
                 )
                 config = AgentConfig.load(config_path)
-                await MatoLoopAgent(config, "agent-secret")._connect_once()
+                await MatoLoopAgent(config, "agent-secret")._connect_once(asyncio.Event())
 
             hello = received["hello"]
             self.assertEqual(received["authorization"], "Bearer agent-secret")
@@ -168,6 +168,29 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                 await agent.run_forever(loader)
             self.assertEqual(agent._access_key, "rotated-key")
             self.assertEqual(agent.transfer._access_key, "rotated-key")
+
+    async def test_connection_backoff_resets_after_successful_handshake(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            agent = MatoLoopAgent(configuration(Path(temporary)), "access-key")
+            attempts = 0
+
+            async def connect(connected: asyncio.Event) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts == 3:
+                    connected.set()
+                if attempts == 4:
+                    raise asyncio.CancelledError
+                raise RuntimeError
+
+            with (
+                patch.object(agent, "_connect_once", side_effect=connect),
+                patch("matoloop_agent.connection.asyncio.sleep", new=AsyncMock()) as sleep,
+                self.assertRaises(asyncio.CancelledError),
+            ):
+                await agent.run_forever()
+
+            self.assertEqual([call.args[0] for call in sleep.await_args_list], [1.0, 2.0, 1.0])
 
     def test_complete_response_serialization_is_bounded(self) -> None:
         response = Response(id=REQUEST_ID, ok=True, result={"content": "x" * 1024 * 1024})

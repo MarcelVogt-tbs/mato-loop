@@ -426,21 +426,24 @@ class MatoLoopAgent:
         delay = 1.0
         async with self.transfer:
             while True:
+                connected = asyncio.Event()
                 try:
                     if access_key_loader is not None:
                         self._access_key = await access_key_loader()
                         self.transfer.set_access_key(self._access_key)
-                    await self._connect_once()
+                    await self._connect_once(connected)
                     delay = 1.0
                     await asyncio.sleep(delay)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
+                    if connected.is_set():
+                        delay = 1.0
                     logger.warning("MatoLoop Agent connection failed; retrying")
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 30.0)
 
-    async def _connect_once(self) -> None:
+    async def _connect_once(self, connected: asyncio.Event) -> None:
         async with websockets.connect(
             self.config.backend_url,
             additional_headers={"Authorization": f"Bearer {self._access_key}"},
@@ -464,6 +467,7 @@ class MatoLoopAgent:
                 raise AgentError("protocol.invalid", "Backend did not send welcome")
             if first.agent_id != self.config.agent_id:
                 raise AgentError("protocol.invalid", "Backend welcomed a different agent")
+            connected.set()
 
             tasks: dict[str, asyncio.Task] = {}
             completed: set[str] = set()
