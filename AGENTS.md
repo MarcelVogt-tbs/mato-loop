@@ -139,6 +139,7 @@ For UI changes, verify at least desktop and mobile in light and dark mode. For A
 
 - Pull requests run complete checks and image builds without registry or release secrets and never publish artifacts.
 - Feature branch pushes run tests only. The default branch `develop` publishes mutable `develop` images and short-lived native Linux amd64 MatoLoop Agent workflow artifacts. `main` has no mutable publication channel.
+- Add one `Release-Note: <category>: <text>` Git trailer at the end of a non-merge commit for each noteworthy change. Supported categories are `Added`, `Changed`, `Fixed`, and `Security`; use concise English text. Multiple trailers are allowed, and commits without a trailer are omitted from release notes.
 - Start a release explicitly from a clean, current `develop` branch with `./scripts/release.sh X.Y.Z`; the script fast-forwards release-only `main` and pushes atomically. Do not create release tags manually.
 - Release images use `vX.Y.Z`, `X.Y.Z`, and `latest`. Published artifacts currently target `linux/amd64` only.
 - CI publishes images, short-lived development artifacts, and Forgejo releases only. It does not deploy, mutate deployment storage, or clean runner Docker storage.

@@ -71,13 +71,26 @@ Protect `develop`, `main`, and `v*` tags so only trusted maintainers can modify 
 
 ## Release Process
 
-`develop` is the default branch. Releases originate there and fast-forward release-only `main`. Start one explicitly from a clean, current `develop` checkout:
+`develop` is the default branch. Releases originate there and fast-forward release-only `main`.
+
+Noteworthy changes use native Git trailers at the end of the commit message. Write the text in English and repeat the trailer when one commit contains multiple noteworthy changes:
+
+```text
+Add mail integration
+
+Release-Note: Added: Add IMAP and SMTP integration.
+Release-Note: Security: Reject credentials in mail server URLs.
+```
+
+The supported categories are `Added`, `Changed`, `Fixed`, and `Security`. The trailer is optional; commits without one and merge commits are omitted. CI rejects malformed trailers.
+
+Start a release explicitly from a clean, current `develop` checkout:
 
 ```bash
 ./scripts/release.sh X.Y.Z
 ```
 
-Use the numeric version without a leading `v`. The script synchronizes package versions and locks, runs all checks and tests, commits on `develop`, fast-forwards `main`, creates `vX.Y.Z`, returns to `develop`, and atomically pushes both branches and the tag. CI accepts only annotated release tags whose commit is on `main`. Do not create release tags manually or publish from arbitrary commits.
+Use the numeric version without a leading `v`. The script generates `docs/user/changelog/vX.Y.Z.md`, adds it to the changelog index, synchronizes package versions and locks, runs all checks and tests, commits on `develop`, fast-forwards `main`, creates `vX.Y.Z`, returns to `develop`, and atomically pushes both branches and the tag. CI accepts only annotated release tags whose commit is on `main`. Do not create release tags manually or publish from arbitrary commits.
 
 After checks and both `linux/amd64` builds succeed, the release job publishes these tags on both images:
 
@@ -87,7 +100,7 @@ X.Y.Z
 latest
 ```
 
-It then creates the matching Forgejo Release. Release notes are the Forgejo commit notes since the previous release, so release commits and merged change commits must have meaningful subjects. Workflow retries preserve existing fixed tags, publication workflows are serialized, and `latest` never moves to an older version. Forgejo concurrency is best-effort, so the required task queue and branch/tag protections remain part of the integrity boundary. Registry pushes across two repositories are not transactional: if publication stops partway through, no Forgejo Release is created; repair any incomplete fixed-tag pair within one image before retrying. Artifact publication is not deployment automation; operators choose when to pull a version.
+It then creates the matching Forgejo Release from the same categorized notes stored in the versioned changelog page. Workflow retries preserve existing fixed tags, publication workflows are serialized, and `latest` never moves to an older version. Forgejo concurrency is best-effort, so the required task queue and branch/tag protections remain part of the integrity boundary. Registry pushes across two repositories are not transactional: if publication stops partway through, no Forgejo Release is created; repair any incomplete fixed-tag pair within one image before retrying. Artifact publication is not deployment automation; operators choose when to pull a version.
 
 ## Compose and Rollback
 

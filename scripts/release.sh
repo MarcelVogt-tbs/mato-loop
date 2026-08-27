@@ -40,12 +40,12 @@ check_allowed_changes() {
     local path
     while IFS= read -r path; do
         case "$path" in
-            VERSION|apps/backend/pyproject.toml|apps/backend/src/mato_loop_backend/__init__.py|apps/backend/uv.lock|apps/frontend/package.json|apps/frontend/yarn.lock|apps/matoloop-agent/pyproject.toml|apps/matoloop-agent/src/matoloop_agent/__init__.py|apps/matoloop-agent/uv.lock) ;;
+            VERSION|apps/backend/pyproject.toml|apps/backend/src/mato_loop_backend/__init__.py|apps/backend/uv.lock|apps/frontend/package.json|apps/frontend/yarn.lock|apps/matoloop-agent/pyproject.toml|apps/matoloop-agent/src/matoloop_agent/__init__.py|apps/matoloop-agent/uv.lock|docs/user/changelog.md|"docs/user/changelog/$TAG.md") ;;
             *) die "Release command changed unexpected file: $path" ;;
         esac
     done < <(git diff --name-only)
     while IFS= read -r path; do
-        die "Release command created unexpected file: $path"
+        [[ "$path" == "docs/user/changelog/$TAG.md" ]] || die "Release command created unexpected file: $path"
     done < <(git ls-files --others --exclude-standard)
 }
 
@@ -127,6 +127,11 @@ git merge-base --is-ancestor main develop || die "Local main must be an ancestor
 git show-ref --verify --quiet "refs/tags/$TAG" && die "Local tag $TAG already exists."
 REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")" || die "Cannot check remote tag $TAG."
 [[ -z "$REMOTE_TAG" ]] || die "Remote tag $TAG already exists."
+RELEASE_SOURCE="$(git rev-parse HEAD)"
+
+printf 'Release notes for %s:\n\n' "$TAG"
+python3 scripts/ci/create-forgejo-release.py "$TAG" "$RELEASE_SOURCE" --print-notes
+printf '\n'
 
 if [[ "$DRY_RUN" == true ]]; then
     printf '%s\n' \
@@ -138,6 +143,10 @@ fi
 
 printf 'Updating versions to %s...\n' "$VERSION"
 update_versions
+python3 scripts/ci/create-forgejo-release.py \
+    "$TAG" \
+    "$RELEASE_SOURCE" \
+    --write-changelog docs/user/changelog.md
 ./scripts/dev.sh lock backend
 ./scripts/dev.sh lock frontend
 ./scripts/dev.sh lock matoloop-agent
@@ -159,7 +168,9 @@ git add -- \
     apps/frontend/yarn.lock \
     apps/matoloop-agent/pyproject.toml \
     apps/matoloop-agent/src/matoloop_agent/__init__.py \
-    apps/matoloop-agent/uv.lock
+    apps/matoloop-agent/uv.lock \
+    docs/user/changelog.md \
+    "docs/user/changelog/$TAG.md"
 git diff --cached --quiet && die "The release produced no version changes."
 git diff --quiet || die "Unstaged release changes remain."
 [[ -z "$(git ls-files --others --exclude-standard)" ]] || die "Untracked files remain."

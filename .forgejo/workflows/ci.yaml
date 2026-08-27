@@ -152,6 +152,7 @@ jobs:
           bash scripts/install-matoloop-agent.sh --self-test
           bash scripts/ci/publish-docker-image.sh --self-test
           python3 scripts/ci/create-forgejo-release.py --self-test
+          python3 scripts/ci/create-forgejo-release.py --check-notes HEAD
           python3 scripts/check-version.py --self-test
       - name: Check versions and release tag
         run: |

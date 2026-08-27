@@ -9,11 +9,15 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 SEMVER_TAG = re.compile(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
+RELEASE_NOTE_CATEGORIES = ("Added", "Changed", "Fixed", "Security")
+RELEASE_LIST_MARKER = "<!-- release-list -->"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -24,23 +28,95 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 OPENER = urllib.request.build_opener(NoRedirect)
 
 
-def git(*args: str, check: bool = True) -> str:
+def git(*args: str, check: bool = True, strip: bool = True) -> str:
     result = subprocess.run(
         ("git", *args), check=check, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
     )
-    return result.stdout.strip()
+    return result.stdout.strip() if strip else result.stdout
 
 
-def previous_tag(tag: str) -> str | None:
-    return git("describe", "--tags", "--match", "v*", "--abbrev=0", f"{tag}^", check=False) or None
+def previous_tag(tag: str, revision: str) -> str | None:
+    return (
+        git(
+            "describe",
+            "--tags",
+            "--match",
+            "v[0-9]*",
+            "--exclude",
+            tag,
+            "--abbrev=0",
+            revision,
+            check=False,
+        )
+        or None
+    )
 
 
-def release_notes(tag: str) -> str:
-    previous = previous_tag(tag)
-    revision_range = f"{previous}..{tag}" if previous else tag
-    commits = git("log", "--format=- %s (%h)", revision_range)
-    heading = f"Changes since {previous}:" if previous else "Changes:"
-    return f"{heading}\n\n{commits or 'No changes.'}"
+def parse_release_note(value: str, commit: str) -> tuple[str, str]:
+    category, separator, text = value.partition(":")
+    category = category.strip()
+    text = text.strip()
+    if separator != ":" or category not in RELEASE_NOTE_CATEGORIES or not text or "\n" in text:
+        expected = "Added, Changed, Fixed, or Security followed by a colon and text"
+        raise ValueError(f"Invalid Release-Note in {commit[:12]}; expected {expected}")
+    return category, text
+
+
+def collect_release_notes(revision_range: str) -> dict[str, list[str]]:
+    notes = {category: [] for category in RELEASE_NOTE_CATEGORIES}
+    log = git(
+        "log",
+        "--reverse",
+        "--no-merges",
+        "--format=%H%x00%(trailers:key=Release-Note,valueonly,separator=%x1f)%x1e",
+        revision_range,
+        strip=False,
+    )
+    for record in log.split("\x1e"):
+        record = record.strip("\n")
+        if not record:
+            continue
+        commit, separator, values = record.partition("\x00")
+        if separator != "\x00":
+            raise ValueError("Git returned malformed release-note data")
+        for value in filter(None, values.split("\x1f")):
+            category, text = parse_release_note(value, commit)
+            notes[category].append(text)
+    return notes
+
+
+def render_release_notes(notes: dict[str, list[str]]) -> str:
+    sections = []
+    for category in RELEASE_NOTE_CATEGORIES:
+        entries = notes[category]
+        if entries:
+            sections.append(f"## {category}\n\n" + "\n".join(f"- {entry}" for entry in entries))
+    return "\n\n".join(sections) or "No notable changes."
+
+
+def release_notes(tag: str, revision: str) -> str:
+    previous = previous_tag(tag, revision)
+    revision_range = f"{previous}..{revision}" if previous else revision
+    return render_release_notes(collect_release_notes(revision_range))
+
+
+def update_changelog(index_path: Path, tag: str, body: str) -> Path:
+    index = index_path.read_text(encoding="utf-8")
+    if index.count(RELEASE_LIST_MARKER) != 1:
+        raise ValueError(f"Expected one release list marker in {index_path}")
+    link = f"- [{tag}](changelog/{tag}.md)"
+    if link in index:
+        raise ValueError(f"Changelog already contains {tag}")
+
+    release_path = index_path.parent / "changelog" / f"{tag}.md"
+    if release_path.exists():
+        raise ValueError(f"Release notes already exist: {release_path}")
+
+    updated_index = index.replace(RELEASE_LIST_MARKER, f"{RELEASE_LIST_MARKER}\n{link}")
+    release_path.parent.mkdir(exist_ok=True)
+    release_path.write_text(f"# {tag}\n\n{body}\n", encoding="utf-8")
+    index_path.write_text(updated_index, encoding="utf-8")
+    return release_path
 
 
 def release_payload(tag: str, commit: str, body: str) -> dict[str, object]:
@@ -88,7 +164,31 @@ def validate_existing(existing: dict[str, object], expected: dict[str, object]) 
 
 
 def self_test() -> None:
-    payload = release_payload("v1.2.3", "a" * 40, "Changes:\n\n- Test (abc1234)")
+    notes = {category: [] for category in RELEASE_NOTE_CATEGORIES}
+    category, text = parse_release_note("Fixed: Keep queued messages", "a" * 40)
+    notes[category].append(text)
+    notes["Added"].append("Add mail integration")
+    body = render_release_notes(notes)
+    assert body == (
+        "## Added\n\n- Add mail integration\n\n## Fixed\n\n- Keep queued messages"
+    )
+    assert render_release_notes({category: [] for category in RELEASE_NOTE_CATEGORIES}) == (
+        "No notable changes."
+    )
+    index = f"# Changelog\n\n## Versionen\n\n{RELEASE_LIST_MARKER}\n"
+    link = "- [v1.2.3](changelog/v1.2.3.md)"
+    with tempfile.TemporaryDirectory() as directory:
+        index_path = Path(directory) / "changelog.md"
+        index_path.write_text(index, encoding="utf-8")
+        release_path = update_changelog(index_path, "v1.2.3", body)
+        assert link in index_path.read_text(encoding="utf-8")
+        update_changelog(index_path, "v1.2.4", body)
+        assert index_path.read_text(encoding="utf-8").index("v1.2.4") < (
+            index_path.read_text(encoding="utf-8").index("v1.2.3")
+        )
+        assert release_path.read_text(encoding="utf-8") == f"# v1.2.3\n\n{body}\n"
+
+    payload = release_payload("v1.2.3", "a" * 40, body)
     assert payload["tag_name"] == "v1.2.3"
     assert payload["target_commitish"] == "a" * 40
     assert payload["draft"] is False and payload["prerelease"] is False
@@ -101,12 +201,22 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("tag", nargs="?")
     parser.add_argument("commit", nargs="?")
-    parser.add_argument("--dry-run", action="store_true")
+    operation = parser.add_mutually_exclusive_group()
+    operation.add_argument("--dry-run", action="store_true")
+    operation.add_argument("--print-notes", action="store_true")
+    operation.add_argument("--write-changelog", type=Path)
+    parser.add_argument("--check-notes", metavar="REVISION")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
     if args.self_test:
         self_test()
+        return 0
+    if args.check_notes:
+        if args.tag or args.commit or args.dry_run or args.print_notes or args.write_changelog:
+            parser.error("--check-notes cannot be combined with other operations")
+        collect_release_notes(args.check_notes)
+        print("Release notes are valid.")
         return 0
     if not args.tag or not args.commit:
         parser.error("tag and commit are required")
@@ -115,7 +225,16 @@ def main() -> int:
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", args.commit):
         parser.error("commit must be a full Git object ID")
 
-    payload = release_payload(args.tag, args.commit, release_notes(args.tag))
+    body = release_notes(args.tag, args.commit)
+    if args.print_notes:
+        print(body)
+        return 0
+    if args.write_changelog:
+        release_path = update_changelog(args.write_changelog, args.tag, body)
+        print(f"Created release notes in {release_path}.")
+        return 0
+
+    payload = release_payload(args.tag, args.commit, body)
     if args.dry_run:
         print(json.dumps(payload, indent=2))
         return 0

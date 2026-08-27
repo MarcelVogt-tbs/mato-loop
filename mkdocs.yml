@@ -58,6 +58,7 @@ nav:
       - Betrieb und Datensicherung: betrieb-und-datensicherung.md
   - Hilfe:
       - Häufige Fragen: haeufige-fragen.md
+      - Changelog: changelog.md
 
 plugins:
   - search:
