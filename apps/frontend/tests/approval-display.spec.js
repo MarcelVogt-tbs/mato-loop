@@ -112,6 +112,19 @@ describe('approval display', () => {
     }
   })
 
+  it('shows shell grant classification and token prefixes', () => {
+    expect(permissionGrantDisplay({
+      capability: 'shell.write',
+      resourceType: 'shell_command',
+      resourceDisplay: '/home/user/project',
+      shellPrefixes: [['git', 'status'], ['cat']]
+    })).toEqual({
+      label: 'Schreibende Shell-Befehle',
+      value: '/home/user/project · git status · cat',
+      icon: 'terminal'
+    })
+  })
+
   it('shows cleaned URL approvals and readable session grants', () => {
     const approval = {
       resourceType: 'url',

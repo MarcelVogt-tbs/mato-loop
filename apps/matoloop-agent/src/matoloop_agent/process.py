@@ -30,6 +30,106 @@ _READ_ONLY_EXECUTABLES = {
     "wc",
 }
 _READ_ONLY_PATH_OPTION_EXECUTABLES = {"realpath"}
+_READ_ONLY_OPTION_VALUES = {
+    "cmp": {"-i", "--ignore-initial", "-n", "--bytes"},
+    "head": {"-c", "--bytes", "-n", "--lines"},
+    "ls": {"-I", "--ignore", "-w", "--width"},
+    "realpath": {"--relative-base", "--relative-to"},
+    "stat": {"-c", "--format", "--printf"},
+    "tail": {
+        "-c",
+        "--bytes",
+        "-n",
+        "--lines",
+        "--max-unchanged-stats",
+        "--pid",
+        "-s",
+        "--sleep-interval",
+    },
+}
+_READ_ONLY_PATH_OPTIONS = {
+    "realpath": {"--relative-base", "--relative-to"},
+}
+_INTERPRETERS = {
+    "bash",
+    "dash",
+    "node",
+    "perl",
+    "python",
+    "python3",
+    "ruby",
+    "sh",
+}
+_PREFIX_ARITY = {
+    ("aws",): 3,
+    ("az",): 3,
+    ("bun",): 2,
+    ("bun", "run"): 3,
+    ("cargo",): 2,
+    ("docker",): 2,
+    ("docker", "compose"): 3,
+    ("docker", "container"): 3,
+    ("docker", "image"): 3,
+    ("docker", "network"): 3,
+    ("docker", "volume"): 3,
+    ("gcloud",): 3,
+    ("gh",): 3,
+    ("git",): 2,
+    ("git", "config"): 3,
+    ("git", "remote"): 3,
+    ("git", "stash"): 3,
+    ("go",): 2,
+    ("kubectl",): 2,
+    ("npm",): 2,
+    ("npm", "exec"): 3,
+    ("npm", "init"): 3,
+    ("npm", "run"): 3,
+    ("pip",): 2,
+    ("pnpm",): 2,
+    ("pnpm", "exec"): 3,
+    ("pnpm", "run"): 3,
+    ("python",): 2,
+    ("terraform",): 2,
+    ("terraform", "workspace"): 3,
+    ("yarn",): 2,
+    ("yarn", "run"): 3,
+}
+
+
+def _command_prefix(tokens: list[str]) -> list[str] | None:
+    if "/" in tokens[0]:
+        return None
+    executable = tokens[0]
+    arguments = tokens[1:]
+    if executable in {"eval", "exec"} or (
+        (executable in _INTERPRETERS or executable.startswith("python"))
+        and any(option in arguments for option in {"-c", "--command", "-e", "--eval"})
+    ):
+        return None
+    if executable == "git":
+        while arguments and arguments[0].startswith("-"):
+            option = arguments[0]
+            if option == "-C":
+                if len(arguments) < 2:
+                    return None
+                arguments = arguments[2:]
+            elif option in {"--no-pager", "--literal-pathspecs"}:
+                arguments = arguments[1:]
+            else:
+                return None
+    elif executable.startswith("python") and arguments[:1] == ["-m"]:
+        arguments = arguments[1:]
+    elif arguments and arguments[0].startswith("-") and (executable,) in _PREFIX_ARITY:
+        return [executable]
+
+    semantic = [executable, *(token for token in arguments if not token.startswith("-"))]
+    for length in range(len(semantic), 0, -1):
+        arity = _PREFIX_ARITY.get(tuple(semantic[:length]))
+        if arity is not None:
+            return semantic[:arity]
+    if executable.startswith("python"):
+        return semantic[:2]
+    return semantic[:1]
 
 
 class ProcessRunner:
@@ -73,11 +173,26 @@ class ProcessRunner:
                 raise
 
     def inspect_shell(self, command: str, current_directory: str) -> dict:
-        def incomplete(targets: list[dict] | None = None) -> dict:
+        def result(
+            *,
+            targets: list[dict] | None = None,
+            commands: list[dict] | None = None,
+            analysis_complete: bool = False,
+        ) -> dict:
+            command_units = commands or []
+            classification = (
+                "read"
+                if analysis_complete
+                and command_units
+                and all(unit["classification"] == "read" for unit in command_units)
+                else "write"
+            )
             result = {
                 "targets": targets or [],
-                "analysisComplete": False,
-                "readOnly": False,
+                "analysisComplete": analysis_complete,
+                "readOnly": classification == "read",
+                "classification": classification,
+                "commands": command_units,
             }
             result["inspectionRevision"] = self._inspection_revision(result)
             return result
@@ -87,15 +202,39 @@ class ProcessRunner:
             character in command
             for character in ("$", "`", "\n", "\r", "*", "?", "[", "{", "}", "~")
         ):
-            return incomplete()
+            return result()
         lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&")
         lexer.whitespace_split = True
         try:
             tokens = list(lexer)
         except ValueError:
-            return incomplete()
-        if not tokens or any(token in {";", "|", "||", "&", "&&", "(", ")"} for token in tokens):
-            return incomplete()
+            return result()
+        if not tokens:
+            return result()
+
+        units: list[list[str]] = [[]]
+        for token in tokens:
+            if token in {";", "|", "||", "&&"}:
+                if not units[-1]:
+                    return result()
+                units.append([])
+                continue
+            if (
+                token
+                and all(character in "();<>|&" for character in token)
+                and token
+                not in {
+                    "<",
+                    ">",
+                    ">>",
+                }
+            ):
+                return result()
+            units[-1].append(token)
+        if not units[-1]:
+            if tokens[-1] != ";":
+                return result()
+            units.pop()
 
         targets = []
 
@@ -108,143 +247,218 @@ class ProcessRunner:
             targets.append(target)
             return True
 
-        executable = tokens[0]
-        executable_name = ""
-        read_only_executable = False
-        analysis_complete = False
-        if executable in {".", "source"}:
-            if len(tokens) < 2 or not add(tokens[1], "source", must_exist=True):
-                return incomplete(targets)
-            index = 2
-        else:
-            resolved_executable = self._trusted_executable(executable, current)
-            if resolved_executable is None:
-                return incomplete()
-            if "/" in executable:
-                if not add(executable, "executable", must_exist=True):
-                    return incomplete(targets)
-            index = 1
-            executable_name = resolved_executable.name
-            read_only_executable = (
-                executable_name in _READ_ONLY_EXECUTABLES
-                and resolved_executable.parent
-                in {Path("/bin").resolve(), Path("/usr/bin").resolve()}
-            )
-            analysis_complete = read_only_executable
-            if executable_name in {
-                "bash",
-                "dash",
-                "node",
-                "perl",
-                "python",
-                "python3",
-                "ruby",
-                "sh",
-            } or executable_name.startswith("python"):
-                while index < len(tokens) and tokens[index].startswith("-"):
-                    if tokens[index] in {"-c", "--command"}:
-                        return incomplete(targets)
+        parsed: list[tuple[list[str], list[tuple[str, str, bool]]]] = []
+        for unit in units:
+            arguments: list[str] = []
+            redirections: list[tuple[str, str, bool]] = []
+            index = 0
+            while index < len(unit):
+                token = unit[index]
+                descriptor = bool(
+                    token.isdigit()
+                    and index + 1 < len(unit)
+                    and unit[index + 1] in {"<", ">", ">>"}
+                )
+                if descriptor:
                     index += 1
-                if index < len(tokens) and tokens[index] not in {"<", ">", ">>"}:
-                    if not add(tokens[index], "script", must_exist=True):
-                        return incomplete(targets)
-                    index += 1
-
-        has_redirection = False
-        while index < len(tokens):
-            token = tokens[index]
-            if (
-                token.isdigit()
-                and index + 1 < len(tokens)
-                and tokens[index + 1] in {"<", ">", ">>"}
-            ):
-                index += 1
-                token = tokens[index]
-            if token in {"<", ">", ">>"}:
-                has_redirection = True
-                if index + 1 >= len(tokens) or not add(
-                    tokens[index + 1],
-                    "input" if token == "<" else "output",
-                    must_exist=token == "<",
-                ):
-                    return incomplete(targets)
-                index += 2
-                continue
-            if token in {"<<", "<<<", "<>", ">&", "<&"}:
-                return incomplete(targets)
-            if executable_name == "git" and token == "-C":
-                if index + 1 >= len(tokens) or not add(tokens[index + 1], "path", must_exist=True):
-                    return incomplete(targets)
-                index += 2
-                continue
-            if "/" in token and not add(token, "path", must_exist=True):
-                return incomplete(targets)
-            index += 1
-
-        read_only = (
-            read_only_executable and executable not in {".", "source"} and not has_redirection
-        )
-        if read_only:
-            operands = []
-            after_options = False
-            for token in tokens[1:]:
-                if token == "--":
-                    after_options = True
-                    continue
+                    token = unit[index]
                 if token in {"<", ">", ">>"}:
-                    break
-                if not after_options and token.startswith("-"):
-                    if (
-                        (
-                            executable_name == "ls"
-                            and (
-                                (not token.startswith("--") and "L" in token[1:])
-                                or token.startswith("--dere")
-                            )
-                        )
-                        or (
-                            executable_name == "tail"
-                            and (
-                                (not token.startswith("--") and {"f", "F"} & set(token[1:]))
-                                or token.startswith(("--f", "--retry"))
-                            )
-                        )
-                        or (executable_name == "wc" and token.startswith("--f"))
-                        or (
-                            executable_name == "sha256sum"
-                            and (
-                                (not token.startswith("--") and "c" in token[1:])
-                                or token.startswith("--c")
-                            )
-                        )
-                    ):
-                        read_only = False
-                        analysis_complete = False
-                        continue
-                    if executable_name in _READ_ONLY_PATH_OPTION_EXECUTABLES and "=" in token:
-                        if not add(token.split("=", 1)[1], "path", must_exist=True):
-                            read_only = False
+                    if index + 1 >= len(unit) or unit[index + 1] in {"<", ">", ">>"}:
+                        return result()
+                    redirections.append((token, unit[index + 1], descriptor))
+                    index += 2
                     continue
-                operands.append(token)
-            if executable_name == "pwd" and operands:
-                read_only = False
-            else:
-                for operand in operands:
-                    if "/" not in operand and not add(operand, "path", must_exist=True):
-                        read_only = False
-                        analysis_complete = False
-                        break
+                arguments.append(token)
+                index += 1
+            if not arguments:
+                return result()
+            parsed.append((arguments, redirections))
 
-        if not analysis_complete:
-            return incomplete(targets)
-
-        result = {
-            "targets": targets,
-            "analysisComplete": True,
-            "readOnly": read_only,
+        reserved = {
+            "case",
+            "coproc",
+            "do",
+            "done",
+            "elif",
+            "else",
+            "esac",
+            "fi",
+            "for",
+            "function",
+            "if",
+            "in",
+            "select",
+            "then",
+            "time",
+            "until",
+            "while",
         }
-        result["inspectionRevision"] = self._inspection_revision(result)
-        return result
+        if any(
+            arguments[0] in reserved
+            or (
+                "=" in arguments[0]
+                and arguments[0].split("=", 1)[0].replace("_", "a").isalnum()
+                and not arguments[0][0].isdigit()
+            )
+            for arguments, _redirections in parsed
+        ):
+            return result()
+
+        commands = []
+        for arguments, _redirections in parsed:
+            command_unit = {"tokens": arguments, "classification": "write"}
+            prefix = _command_prefix(arguments)
+            if prefix is not None:
+                command_unit["prefix"] = prefix
+            commands.append(command_unit)
+        complete: list[bool] = []
+        for unit_index, (arguments, redirections) in enumerate(parsed):
+            executable = arguments[0]
+            executable_name = ""
+            read_only_executable = False
+            unit_complete = False
+            argument_index = 1
+            if executable in {".", "source"}:
+                if len(arguments) < 2 or not add(arguments[1], "source", must_exist=True):
+                    return result(targets=targets, commands=commands)
+                argument_index = 2
+            else:
+                resolved_executable = self._trusted_executable(executable, current)
+                if resolved_executable is not None:
+                    if "/" in executable and not add(executable, "executable", must_exist=True):
+                        return result(targets=targets, commands=commands)
+                    executable_name = resolved_executable.name
+                    read_only_executable = (
+                        executable_name in _READ_ONLY_EXECUTABLES
+                        and resolved_executable.parent
+                        in {Path("/bin").resolve(), Path("/usr/bin").resolve()}
+                    )
+                    unit_complete = read_only_executable
+                    if executable_name in _INTERPRETERS or executable_name.startswith("python"):
+                        while argument_index < len(arguments) and arguments[
+                            argument_index
+                        ].startswith("-"):
+                            argument_index += 1
+                        if argument_index < len(arguments):
+                            if not add(arguments[argument_index], "script", must_exist=True):
+                                return result(targets=targets, commands=commands)
+                            argument_index += 1
+
+            output_redirection = False
+            descriptor_redirection = False
+            for operator, target, descriptor in redirections:
+                output_redirection |= operator != "<"
+                descriptor_redirection |= descriptor
+                if not add(
+                    target,
+                    "input" if operator == "<" else "output",
+                    must_exist=operator == "<",
+                ):
+                    return result(targets=targets, commands=commands)
+
+            if executable_name == "git":
+                index = 1
+                while index < len(arguments):
+                    if arguments[index] == "-C":
+                        if index + 1 >= len(arguments) or not add(
+                            arguments[index + 1], "path", must_exist=True
+                        ):
+                            return result(targets=targets, commands=commands)
+                        index += 2
+                    else:
+                        index += 1
+
+            if not read_only_executable:
+                for token in arguments[argument_index:]:
+                    if "/" in token and not add(token, "path", must_exist=True):
+                        return result(targets=targets, commands=commands)
+
+            read_only = read_only_executable and executable not in {".", "source"}
+            if read_only:
+                operands = []
+                after_options = False
+                index = 1
+                while index < len(arguments):
+                    token = arguments[index]
+                    if token == "--":
+                        after_options = True
+                        index += 1
+                        continue
+                    if not after_options and token.startswith("-"):
+                        if (
+                            (
+                                executable_name == "ls"
+                                and (
+                                    (not token.startswith("--") and "L" in token[1:])
+                                    or token.startswith("--dere")
+                                )
+                            )
+                            or (
+                                executable_name == "tail"
+                                and (
+                                    (not token.startswith("--") and {"f", "F"} & set(token[1:]))
+                                    or token.startswith(("--f", "--retry"))
+                                )
+                            )
+                            or (executable_name == "wc" and token.startswith("--f"))
+                            or (
+                                executable_name == "sha256sum"
+                                and (
+                                    (not token.startswith("--") and "c" in token[1:])
+                                    or token.startswith("--c")
+                                )
+                            )
+                        ):
+                            read_only = False
+                            unit_complete = False
+                            index += 1
+                            continue
+                        option = token.split("=", 1)[0]
+                        if (
+                            option in _READ_ONLY_OPTION_VALUES.get(executable_name, set())
+                            and "=" not in token
+                        ):
+                            if index + 1 >= len(arguments):
+                                read_only = False
+                                unit_complete = False
+                                break
+                            value = arguments[index + 1]
+                            if option in _READ_ONLY_PATH_OPTIONS.get(
+                                executable_name, set()
+                            ) and not add(value, "path", must_exist=True):
+                                read_only = False
+                                unit_complete = False
+                                break
+                            index += 2
+                            continue
+                        if executable_name in _READ_ONLY_PATH_OPTION_EXECUTABLES and "=" in token:
+                            if not add(token.split("=", 1)[1], "path", must_exist=True):
+                                read_only = False
+                                unit_complete = False
+                                break
+                        index += 1
+                        continue
+                    operands.append(token)
+                    index += 1
+                if executable_name == "pwd" and operands:
+                    read_only = False
+                else:
+                    for operand in operands:
+                        if not add(operand, "path", must_exist=True):
+                            read_only = False
+                            unit_complete = False
+                            break
+
+            if output_redirection or descriptor_redirection:
+                read_only = False
+            commands[unit_index]["classification"] = "read" if read_only else "write"
+            complete.append(unit_complete)
+
+        return result(
+            targets=targets,
+            commands=commands,
+            analysis_complete=all(complete),
+        )
 
     @staticmethod
     def _inspection_revision(result: dict) -> str:
@@ -295,12 +509,17 @@ class ProcessRunner:
                 if actual_revision != expected_inspection_revision:
                     raise AgentError("process.inspectionChanged", "Shell inspection changed")
             if inspection is not None and inspection.get("readOnly") is True:
-                tokens = shlex.split(command)
-                current = self.filesystem.resolve_directory(current_directory)["path"]
-                executable = self._trusted_executable(tokens[0], current)
-                if executable is None:
-                    raise AgentError("process.inspectionChanged", "Shell inspection changed")
-                argv = [os.fspath(executable), *tokens[1:]]
+                commands = inspection.get("commands", [])
+                simple = not any(character in command for character in "();<>|&")
+                tokens = shlex.split(command, comments=True)
+                if simple and len(commands) == 1 and tokens == commands[0].get("tokens"):
+                    current = self.filesystem.resolve_directory(current_directory)["path"]
+                    executable = self._trusted_executable(tokens[0], current)
+                    if executable is None:
+                        raise AgentError("process.inspectionChanged", "Shell inspection changed")
+                    argv = [os.fspath(executable), *tokens[1:]]
+                else:
+                    argv = [os.fspath(self.shell), "-c", command]
             else:
                 argv = [os.fspath(self.shell), "-c", command]
         cwd, cwd_fd = self._cwd(current_directory)

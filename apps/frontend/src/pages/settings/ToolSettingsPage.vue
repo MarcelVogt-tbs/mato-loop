@@ -144,7 +144,35 @@
               Befehle werden ohne einzelne Freigabe mit den Rechten des Betriebssystembenutzers des Computers ausgeführt.
             </q-banner>
 
-            <div v-if="tool.name === 'web_search'" class="tool-settings-detail q-gutter-md">
+            <div v-if="tool.name === 'shell_run'" class="tool-settings-detail q-gutter-md">
+              <q-banner rounded class="app-surface-tonal">
+                <template #avatar><q-icon name="rule" color="primary" /></template>
+                Ein Präfix pro Zeile. Es wird tokenbasiert geprüft und gilt nur für die jeweilige
+                Klassifikation. Alle Teilbefehle müssen erlaubt sein.
+              </q-banner>
+              <q-input
+                v-model="shellPrefixText.read"
+                outlined
+                type="textarea"
+                autogrow
+                label="Erlaubte Präfixe für lesende Befehle"
+                hint="Beispiel: cat"
+                :rules="[shellPrefixRule]"
+                lazy-rules
+              />
+              <q-input
+                v-model="shellPrefixText.write"
+                outlined
+                type="textarea"
+                autogrow
+                label="Erlaubte Präfixe für schreibende Befehle"
+                hint="Beispiel: git status"
+                :rules="[shellPrefixRule]"
+                lazy-rules
+              />
+            </div>
+
+            <div v-else-if="tool.name === 'web_search'" class="tool-settings-detail q-gutter-md">
               <q-select
                 v-model="form.webSearch.primaryProvider"
                 outlined
@@ -526,6 +554,7 @@ const form = reactive({
   transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
   analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 }
 })
+const shellPrefixText = reactive({ read: '', write: '' })
 const personalBlocked = computed(() => (
   tools.scope === 'personal' && !tools.personalSettingsEnabled
 ))
@@ -544,6 +573,20 @@ function assignForm(settings) {
     form.policies[capability] ??= settings[field].policy
   }
   form.policies['settings.agent_identity.update'] ??= settings.updateAgentIdentity.policy
+  for (const classification of ['read', 'write']) {
+    shellPrefixText[classification] = settings.shellPrefixes[classification]
+      .map((prefix) => prefix.join(' '))
+      .join('\n')
+  }
+}
+
+function parseShellPrefixes(value) {
+  return [...new Map(
+    value.split('\n')
+      .map((line) => line.trim().split(/\s+/).filter(Boolean))
+      .filter((prefix) => prefix.length)
+      .map((prefix) => [JSON.stringify(prefix), prefix])
+  ).values()]
 }
 
 const primaryProviderOptions = computed(() => form.webSearch.providerOptions.map((provider) => ({
@@ -628,6 +671,14 @@ function originRule(value) {
   return result.valid || result.message
 }
 
+function shellPrefixRule(value) {
+  const prefixes = parseShellPrefixes(value)
+  return (prefixes.length <= 100 && prefixes.every((prefix) => (
+    prefix.length <= 8
+    && prefix.every((token) => token.length <= 256 && /^[\x21-\x7e]+$/.test(token))
+  ))) || 'Maximal 100 Präfixe mit je 1 bis 8 sichtbaren Tokens eingeben.'
+}
+
 async function save() {
   if (!tools.loaded || !await formRef.value?.validate()) return
   const allowedPrivateOrigins = [...new Set(
@@ -635,6 +686,10 @@ async function save() {
   )]
   const saved = await tools.saveSettings({
     policies: { ...form.policies },
+    shellPrefixes: {
+      read: parseShellPrefixes(shellPrefixText.read),
+      write: parseShellPrefixes(shellPrefixText.write)
+    },
     webSearch: {
       primaryProvider: form.webSearch.primaryProvider,
       fallbackProvider: form.webSearch.fallbackProvider

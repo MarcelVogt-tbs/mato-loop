@@ -77,8 +77,8 @@ class ExecutionAgentRequest(ExecutionAgentAliasRequest):
     )
     home_filesystem_policy: ExecutionPolicy = "auto"
     external_filesystem_policy: ExecutionPolicy = "ask"
-    home_shell_policy: ExecutionPolicy = "ask"
-    external_shell_policy: ExecutionPolicy = "ask"
+    home_shell_enabled: bool = True
+    external_shell_enabled: bool = True
 
 
 class PairingTokenRequest(ApiModel):
@@ -102,8 +102,8 @@ class ExecutionAgentUpdateRequest(ApiModel):
     alias: str | None = Field(default=None, min_length=1, max_length=160)
     home_filesystem_policy: ExecutionPolicy | None = None
     external_filesystem_policy: ExecutionPolicy | None = None
-    home_shell_policy: ExecutionPolicy | None = None
-    external_shell_policy: ExecutionPolicy | None = None
+    home_shell_enabled: bool | None = None
+    external_shell_enabled: bool | None = None
 
     _normalize_alias = field_validator("alias")(ExecutionAgentAliasRequest.normalize_alias.__func__)
 
@@ -139,8 +139,8 @@ def _agent_payload(agent: ExecutionAgent) -> dict:
         "homeDirectory": agent.home_directory,
         "homeFilesystemPolicy": agent.home_filesystem_policy,
         "externalFilesystemPolicy": agent.external_filesystem_policy,
-        "homeShellPolicy": agent.home_shell_policy,
-        "externalShellPolicy": agent.external_shell_policy,
+        "homeShellEnabled": agent.home_shell_enabled,
+        "externalShellEnabled": agent.external_shell_enabled,
         "pairingState": pairing_state,
         "connected": pairing_state == "paired"
         and agent.revoked_at is None
@@ -226,8 +226,8 @@ async def create_execution_agent(
         token_is_legacy=None,
         home_filesystem_policy=payload.home_filesystem_policy,
         external_filesystem_policy=payload.external_filesystem_policy,
-        home_shell_policy=payload.home_shell_policy,
-        external_shell_policy=payload.external_shell_policy,
+        home_shell_enabled=payload.home_shell_enabled,
+        external_shell_enabled=payload.external_shell_enabled,
     )
     token = _issue_pairing_token(agent, payload.pairing_token_duration_seconds)
     db.add(agent)

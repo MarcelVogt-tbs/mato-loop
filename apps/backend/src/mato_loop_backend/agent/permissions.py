@@ -18,7 +18,7 @@ from mato_loop_backend.integrations import (
     sanitize_url_for_display,
 )
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
-from mato_loop_backend.settings import ToolExecutionPolicy
+from mato_loop_backend.settings import ToolExecutionPolicy, ToolSettings
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 
@@ -717,6 +717,105 @@ def _path_is_within(resource: PurePosixPath, scope: PurePosixPath) -> bool:
     return resource == scope or scope == PurePosixPath(".") or scope in resource.parents
 
 
+def shell_command_scope(
+    agent_id: UUID,
+    current_directory: str,
+    classification: Literal["read", "write"],
+    prefixes: list[list[str]],
+    paths: list[str],
+    analysis_complete: bool,
+) -> str:
+    return json.dumps(
+        {
+            "agentId": str(agent_id),
+            "analysisComplete": analysis_complete,
+            "classification": classification,
+            "currentDirectory": current_directory,
+            "paths": paths,
+            "prefixes": prefixes,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(resource_scope)
+        if set(value) != {
+            "agentId",
+            "analysisComplete",
+            "classification",
+            "currentDirectory",
+            "paths",
+            "prefixes",
+        }:
+            return None
+        agent_id = UUID(value["agentId"])
+        current_directory = value["currentDirectory"]
+        classification = value["classification"]
+        prefixes = value["prefixes"]
+        paths = value["paths"]
+        analysis_complete = value["analysisComplete"]
+        if (
+            not isinstance(current_directory, str)
+            or not PurePosixPath(current_directory).is_absolute()
+            or PurePosixPath(current_directory).as_posix() != current_directory
+            or classification not in {"read", "write"}
+            or not isinstance(analysis_complete, bool)
+            or not isinstance(prefixes, list)
+            or len(prefixes) > 64
+            or any(
+                not isinstance(prefix, list)
+                or not 1 <= len(prefix) <= 8
+                or any(
+                    not isinstance(token, str)
+                    or not token
+                    or len(token) > 256
+                    or any(
+                        ord(character) < 32 or 127 <= ord(character) <= 159
+                        for character in token
+                    )
+                    for token in prefix
+                )
+                for prefix in prefixes
+            )
+            or not isinstance(paths, list)
+            or len(paths) > 256
+            or any(
+                not isinstance(path, str)
+                or not PurePosixPath(path).is_absolute()
+                or PurePosixPath(path).as_posix() != path
+                for path in paths
+            )
+        ):
+            return None
+        canonical = shell_command_scope(
+            agent_id,
+            current_directory,
+            classification,
+            prefixes,
+            paths,
+            analysis_complete,
+        )
+        return value if canonical == resource_scope else None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def shell_prefix_allowed(settings: ToolSettings, request: PermissionRequest) -> bool:
+    scope = _shell_command_scope(request.resource_scope)
+    if scope is None:
+        return False
+    prefixes = scope["prefixes"]
+    allowed = getattr(settings.shell_prefixes, scope["classification"])
+    return bool(prefixes) and all(
+        any(prefix[: len(candidate)] == candidate for candidate in allowed)
+        for prefix in prefixes
+    )
+
+
 class PermissionPolicy:
     @staticmethod
     async def evaluate(
@@ -862,6 +961,57 @@ class PermissionPolicy:
                 else PermissionDecision.ASK
             )
 
+        if request.resource_type == "shell_command":
+            scope = _shell_command_scope(request.resource_scope)
+            if scope is None or request.capability != f"shell.{scope['classification']}":
+                return PermissionDecision.DENY
+            agent = await db.scalar(
+                select(ExecutionAgent)
+                .where(
+                    ExecutionAgent.id == UUID(scope["agentId"]),
+                    ExecutionAgent.user_id == chat_session.user_id,
+                    ExecutionAgent.revoked_at.is_(None),
+                )
+                .execution_options(populate_existing=True)
+            )
+            if agent is None:
+                return PermissionDecision.DENY
+            home = PurePosixPath(agent.home_directory) if agent.home_directory else None
+            paths = [scope["currentDirectory"], *scope["paths"]]
+            zones = [
+                "home"
+                if home is not None and _path_is_within(PurePosixPath(path), home)
+                else "external"
+                for path in paths
+            ]
+            if not scope["analysisComplete"]:
+                zones.append("external")
+            if any(not getattr(agent, f"{zone}_shell_enabled") for zone in zones):
+                return PermissionDecision.DENY
+            filesystem_policies = [
+                getattr(agent, f"{zone}_filesystem_policy") for zone in zones
+            ]
+            if policy == ToolExecutionPolicy.DISABLED or "deny" in filesystem_policies:
+                return PermissionDecision.DENY
+            if policy == ToolExecutionPolicy.AUTO and "ask" not in filesystem_policies:
+                return PermissionDecision.ALLOW
+            grants = list(
+                (
+                    await db.scalars(
+                        select(PermissionGrant).where(
+                            PermissionGrant.session_id == chat_session.id,
+                            PermissionGrant.capability == request.capability,
+                            PermissionGrant.resource_type == request.resource_type,
+                        )
+                    )
+                ).all()
+            )
+            return (
+                PermissionDecision.ALLOW
+                if any(PermissionPolicy.grant_matches(item, request, root_files) for item in grants)
+                else PermissionDecision.ASK
+            )
+
         if request.resource_type == "root_path":
             scope = _root_path_scope(request.resource_scope)
             if scope is None or root_files.session_id != chat_session.id:
@@ -966,7 +1116,23 @@ class PermissionPolicy:
         if request.resource_type == "url":
             return request.resource_scope == grant.resource_scope
         if request.resource_type == "shell_command":
-            return request.resource_scope == grant.resource_scope
+            resource = _shell_command_scope(request.resource_scope)
+            granted = _shell_command_scope(grant.resource_scope)
+            return bool(
+                resource
+                and granted
+                and resource["agentId"] == granted["agentId"]
+                and resource["currentDirectory"] == granted["currentDirectory"]
+                and resource["classification"] == granted["classification"]
+                and resource["prefixes"]
+                and all(
+                    any(
+                        prefix[: len(granted_prefix)] == granted_prefix
+                        for granted_prefix in granted["prefixes"]
+                    )
+                    for prefix in resource["prefixes"]
+                )
+            )
         if request.resource_type == "integration_operation":
             return (
                 _integration_operation_scope(request.resource_scope) is not None

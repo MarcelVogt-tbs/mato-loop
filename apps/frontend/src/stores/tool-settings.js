@@ -26,11 +26,13 @@ const defaultMediaPolicy = () => ({ policy: 'disabled', timeoutSeconds: 300 })
 const defaultImageEditPolicy = () => ({ policy: 'ask', timeoutSeconds: 300 })
 const defaultVideoAnalysisPolicy = () => ({ policy: 'ask', timeoutSeconds: 1800 })
 const defaultAgentIdentityPolicy = () => ({ policy: 'ask' })
+const defaultShellPrefixes = () => ({ read: [], write: [] })
 
 function settingsPayload(state) {
   return {
     groups: state.groups,
     policies: state.policies,
+    shellPrefixes: state.shellPrefixes,
     webSearch: state.webSearch,
     webFetch: state.webFetch,
     generateImage: state.generateImage,
@@ -51,6 +53,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
   state: () => ({
     groups: [],
     policies: {},
+    shellPrefixes: defaultShellPrefixes(),
     webSearch: defaultWebSearch(),
     webFetch: defaultWebFetch(),
     generateImage: defaultMediaPolicy(),
@@ -133,6 +136,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         }
         const payload = {
           policies,
+          shellPrefixes: settings.shellPrefixes || this.shellPrefixes,
           webSearch: {
             primaryProvider: settings.webSearch
               ? settings.webSearch.primaryProvider
@@ -187,6 +191,10 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       }
       this.groups = Array.isArray(data?.groups) ? data.groups : []
       this.policies = { ...(data?.policies || {}) }
+      this.shellPrefixes = {
+        read: Array.isArray(data?.shellPrefixes?.read) ? data.shellPrefixes.read.map((item) => [...item]) : [],
+        write: Array.isArray(data?.shellPrefixes?.write) ? data.shellPrefixes.write.map((item) => [...item]) : []
+      }
       this.webSearch = { ...defaultWebSearch(), ...data?.webSearch }
       this.webFetch = { ...defaultWebFetch(), ...data?.webFetch }
       for (const field of ['generateImage', 'generateSpeech', 'generateAudio', 'transcribeAudio']) {

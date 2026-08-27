@@ -33,6 +33,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
+    shell_prefix_allowed,
 )
 from mato_loop_backend.agent.research import (
     _add_research_sources,
@@ -325,12 +326,19 @@ def _tool_policy(
                 request.policy_hard_unavailable_capabilities
             ),
         ).policy
-    return resolve_tool_execution_policy(
+    policy = resolve_tool_execution_policy(
         tool_settings,
         request.capability,
         tool_registry.action_default(request.capability, integration_settings),
         resource_key=resource_key,
     ).policy
+    if (
+        policy == ToolExecutionPolicy.ASK
+        and request.resource_type == "shell_command"
+        and shell_prefix_allowed(tool_settings, request)
+    ):
+        return ToolExecutionPolicy.AUTO
+    return policy
 
 
 @dataclass(slots=True)

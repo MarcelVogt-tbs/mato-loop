@@ -138,8 +138,8 @@ describe('execution agent store', () => {
       alias: 'Notebook',
       homeFilesystemPolicy: 'auto',
       externalFilesystemPolicy: 'ask',
-      homeShellPolicy: 'deny',
-      externalShellPolicy: 'ask'
+      homeShellEnabled: false,
+      externalShellEnabled: true
     }
     api.patch.mockResolvedValue({ data: { ...agent, ...settings } })
     api.delete.mockResolvedValue({ data: unpairedAgent })

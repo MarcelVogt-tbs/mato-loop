@@ -468,6 +468,30 @@ class PolicyToolSettings(BaseModel):
     policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
 
 
+class ShellPrefixSettings(BaseModel):
+    read: list[list[str]] = Field(default_factory=list, max_length=100)
+    write: list[list[str]] = Field(default_factory=list, max_length=100)
+
+    @field_validator("read", "write")
+    @classmethod
+    def validate_prefixes(cls, value: list[list[str]]) -> list[list[str]]:
+        normalized: list[list[str]] = []
+        for prefix in value:
+            if not 1 <= len(prefix) <= 8 or any(
+                not token
+                or len(token) > 256
+                or any(
+                    not 33 <= ord(character) <= 126
+                    for character in token
+                )
+                for token in prefix
+            ):
+                raise ValueError("invalid shell prefix")
+            if prefix not in normalized:
+                normalized.append(prefix)
+        return normalized
+
+
 class DefaultCalendarSettings(BaseModel):
     integration_id: UUID = Field(
         validation_alias=AliasChoices("integration_id", "integrationId")
@@ -503,6 +527,10 @@ class ToolSettingsBase(SettingsDocument):
     resource_labels: dict[str, dict[str, str]] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("resource_labels", "resourceLabels"),
+    )
+    shell_prefixes: ShellPrefixSettings = Field(
+        default_factory=ShellPrefixSettings,
+        validation_alias=AliasChoices("shell_prefixes", "shellPrefixes"),
     )
     default_calendar: DefaultCalendarSettings | None = Field(
         default=None,

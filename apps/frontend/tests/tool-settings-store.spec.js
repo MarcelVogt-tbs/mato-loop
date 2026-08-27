@@ -37,6 +37,7 @@ describe('tool settings store', () => {
         'filesystem.read': 'ask',
         'settings.user_profile.update': 'auto'
       },
+      shellPrefixes: { read: [['cat']], write: [['git', 'status']] },
       webSearch: {
         primaryProvider: 'searxng:integration-id',
         fallbackProvider: 'no_key',
@@ -78,7 +79,8 @@ describe('tool settings store', () => {
         primaryProvider: 'searxng:integration-id',
         fallbackProvider: 'no_key'
       },
-      webFetch: response.webFetch
+      webFetch: response.webFetch,
+      shellPrefixes: response.shellPrefixes
     }), { params: { scope: 'instance' } })
     expect(store.webSearch).toEqual(response.webSearch)
     expect(store.webFetch).toEqual(response.webFetch)
@@ -87,6 +89,7 @@ describe('tool settings store', () => {
       'filesystem.read': 'ask',
       'settings.user_profile.update': 'auto'
     })
+    expect(store.shellPrefixes).toEqual(response.shellPrefixes)
     expect(store.generateSpeech).toEqual({ policy: 'auto', timeoutSeconds: 120 })
     expect(store.analyzeVideo).toEqual(response.analyzeVideo)
     expect(store.loaded).toBe(true)
@@ -123,6 +126,7 @@ describe('tool settings store', () => {
 
     expect(api.put).toHaveBeenCalledWith('/tools/settings', {
       policies: { 'media.generate.image': 'ask' },
+      shellPrefixes: { read: [], write: [] },
       webSearch: { primaryProvider: 'no_key', fallbackProvider: null },
       webFetch: {
         ...legacyResponse.webFetch,

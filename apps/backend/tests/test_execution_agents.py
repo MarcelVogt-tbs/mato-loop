@@ -55,8 +55,8 @@ def _agent(**values) -> ExecutionAgent:
         "home_directory": None,
         "home_filesystem_policy": "auto",
         "external_filesystem_policy": "ask",
-        "home_shell_policy": "ask",
-        "external_shell_policy": "ask",
+        "home_shell_enabled": True,
+        "external_shell_enabled": True,
         "revision": 1,
         "last_connected_at": None,
         "revoked_at": None,
@@ -76,6 +76,8 @@ def test_payload_exposes_computer_metadata_and_policies() -> None:
     assert payload["agentVersion"] == "1"
     assert payload["homeFilesystemPolicy"] == "auto"
     assert payload["externalFilesystemPolicy"] == "ask"
+    assert payload["homeShellEnabled"] is True
+    assert payload["externalShellEnabled"] is True
 
 
 class _SessionContext:
@@ -112,9 +114,9 @@ def test_execution_agent_model_has_policy_constraints() -> None:
     assert {
         "ck_execution_agents_home_filesystem_policy_valid",
         "ck_execution_agents_external_filesystem_policy_valid",
-        "ck_execution_agents_home_shell_policy_valid",
-        "ck_execution_agents_external_shell_policy_valid",
     } <= {constraint.name for constraint in ExecutionAgent.__table__.constraints}
+    assert ExecutionAgent.__table__.c.home_shell_enabled.default.arg is True
+    assert ExecutionAgent.__table__.c.external_shell_enabled.default.arg is True
     assert ExecutionAgent.__table__.c.operations.type.compile(
         dialect=postgresql.dialect()
     ) == "JSONB"
@@ -147,13 +149,15 @@ async def test_create_returns_hash_only_pending_pairing_envelope() -> None:
     assert result["websocketUrl"] == "/api/execution-agents/connect"
     assert stored.token_hash is None
     assert stored.token_is_legacy is None
+    assert stored.home_shell_enabled is True
+    assert stored.external_shell_enabled is True
     assert stored.registration_token_hash == hash_token(result["pairingToken"])
     assert result["pairingTokenExpiresAt"] == stored.registration_expires_at
     assert response_headers.headers["cache-control"] == "no-store"
     db.commit.assert_awaited_once()
 
 
-async def test_update_changes_alias_and_policies() -> None:
+async def test_update_changes_alias_policies_and_shell_switches() -> None:
     user = _user()
     agent = _agent(user_id=user.id, token_hash="a" * 64, token_is_legacy=False)
     db = AsyncMock(spec=AsyncSession)
@@ -161,13 +165,18 @@ async def test_update_changes_alias_and_policies() -> None:
 
     result = await update_execution_agent(
         agent.id,
-        ExecutionAgentUpdateRequest(alias="Laptop", externalFilesystemPolicy="deny"),
+        ExecutionAgentUpdateRequest(
+            alias="Laptop",
+            externalFilesystemPolicy="deny",
+            externalShellEnabled=False,
+        ),
         user,
         db,
     )
 
     assert result["alias"] == "Laptop"
     assert result["externalFilesystemPolicy"] == "deny"
+    assert result["externalShellEnabled"] is False
     db.commit.assert_awaited_once()
 
 
@@ -177,6 +186,8 @@ async def test_pairing_policy_and_duration_validation() -> None:
         "maximumDurationSeconds": 86400,
     }
     assert ExecutionAgentRequest(alias="Agent").pairing_token_duration_seconds == 1800
+    assert ExecutionAgentRequest(alias="Agent").home_shell_enabled is True
+    assert ExecutionAgentRequest(alias="Agent").external_shell_enabled is True
     assert PairingTokenRequest(pairingTokenDurationSeconds=86400)
     with pytest.raises(ValidationError):
         ExecutionAgentRequest(alias="Agent", pairingTokenDurationSeconds=1799)
@@ -188,6 +199,8 @@ async def test_pairing_policy_and_duration_validation() -> None:
         PairExecutionAgentRequest(
             agentId=uuid4(), accessKeyHash="a" * 64, unexpected=True
         )
+    with pytest.raises(ValidationError):
+        ExecutionAgentRequest(alias="Agent", homeShellEnabled="deny")
 
 
 async def test_pair_once_and_idempotent_retry() -> None:
@@ -485,6 +498,18 @@ def test_pairing_migration_preserves_rows_on_downgrade() -> None:
     assert "SET token_is_legacy = true" in source
     assert "'00000000000000000000000000000000'" in source
     assert "replace(id::text, '-', '')" in source
+
+
+def test_shell_switch_migration_preserves_explicit_denies() -> None:
+    migrations = list(
+        (Path(__file__).parents[1] / "alembic" / "versions").glob(
+            "*_replace_shell_policies_with_hard_.py"
+        )
+    )
+    assert len(migrations) == 1
+    source = migrations[0].read_text(encoding="utf-8")
+    assert "home_shell_enabled = home_shell_policy <> 'deny'" in source
+    assert "external_shell_enabled = external_shell_policy <> 'deny'" in source
 
 
 def test_payload_maps_expired_pending_to_unpaired_and_connects_only_paired(

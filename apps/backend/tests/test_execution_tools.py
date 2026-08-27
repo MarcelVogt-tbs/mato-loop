@@ -5,11 +5,17 @@ from uuid import uuid4
 
 import pytest
 
-from mato_loop_backend.agent.permissions import PermissionDecision, PermissionPolicy
+from mato_loop_backend.agent.permissions import (
+    PermissionDecision,
+    PermissionPolicy,
+    PermissionRequest,
+    shell_command_scope,
+    shell_prefix_allowed,
+)
+from mato_loop_backend.agent.runtime import _tool_policy
 from mato_loop_backend.agent.tool_registry import ToolContext
 from mato_loop_backend.agent.tools import (
     _execution_path,
-    _process_permission,
     tool_registry,
 )
 from mato_loop_backend.execution import (
@@ -25,7 +31,7 @@ from mato_loop_backend.execution import (
 from mato_loop_backend.execution.protocol import ResponseMessage
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
-from mato_loop_backend.settings import IntegrationSettings, ToolSettings
+from mato_loop_backend.settings import IntegrationSettings, ToolExecutionPolicy, ToolSettings
 from mato_loop_backend.workspace import RootFileService, SessionStorage
 
 
@@ -231,74 +237,100 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
     )
 
 
-def test_read_only_shell_grant_does_not_match_risky_inspection(tmp_path) -> None:
+def _shell_permission(client, classification="write", prefixes=None, directory=None):
+    return PermissionRequest(
+        capability=f"shell.{classification}",
+        resource_type="shell_command",
+        resource_scope=shell_command_scope(
+            client.agent_id,
+            directory or client.current_directory,
+            classification,
+            prefixes or [],
+            [],
+            True,
+        ),
+        action_kind="shell_run",
+        risk_level="high",
+        title="Shell-Befehl ausführen?",
+        summary="Test",
+    )
+
+
+def test_shell_grant_matches_prefix_class_agent_and_directory(tmp_path) -> None:
     client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
     context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
-    command = f"cat {'x' * 1200}"
-    read_only = _process_permission(
-        context, {"command": command}, shell=True, read_only=True
+    granted = _shell_permission(client, prefixes=[["git", "status"]])
+    matching = _shell_permission(client, prefixes=[["git", "status"]])
+    wrong_class = _shell_permission(client, classification="read", prefixes=[["git", "status"]])
+    wrong_directory = _shell_permission(
+        client, prefixes=[["git", "status"]], directory="/home/user/other"
     )
-    risky = _process_permission(context, {"command": command}, shell=True)
     grant = PermissionGrant(
         session_id=context.session.id,
-        capability=read_only.capability,
-        resource_type=read_only.resource_type,
-        resource_scope=read_only.resource_scope,
+        capability=granted.capability,
+        resource_type=granted.resource_type,
+        resource_scope=granted.resource_scope,
     )
 
-    assert len(read_only.resource_scope) > 1200
-    assert PermissionPolicy.grant_matches(grant, read_only, context.root_files)
-    assert not PermissionPolicy.grant_matches(grant, risky, context.root_files)
+    assert PermissionPolicy.grant_matches(grant, matching, context.root_files)
+    assert not PermissionPolicy.grant_matches(grant, wrong_class, context.root_files)
+    assert not PermissionPolicy.grant_matches(grant, wrong_directory, context.root_files)
 
 
-async def test_shell_policy_deny_after_approval_blocks_dispatch(tmp_path) -> None:
+def test_configured_shell_prefixes_are_class_specific(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    settings = ToolSettings(shell_prefixes={"read": [["cat"]], "write": [["git"]]})
+
+    assert shell_prefix_allowed(
+        settings, _shell_permission(client, prefixes=[["git", "status"]])
+    )
+    assert not shell_prefix_allowed(
+        settings,
+        _shell_permission(client, classification="read", prefixes=[["git", "status"]]),
+    )
+    request = _shell_permission(client, prefixes=[["git", "status"]])
+    assert _tool_policy(settings, IntegrationSettings(), request) == ToolExecutionPolicy.AUTO
+    settings.policies["shell.write"] = ToolExecutionPolicy.DISABLED
+    assert _tool_policy(settings, IntegrationSettings(), request) == ToolExecutionPolicy.DISABLED
+
+
+async def test_disabled_shell_zone_is_a_hard_boundary(tmp_path) -> None:
     call = ToolCall("shell", "shell_run", {"command": "cat README.md"})
-    client = FakeExecutionClient(
-        {
-            "shell.inspect": ShellInspectResult(
-                targets=[],
-                analysis_complete=True,
-                read_only=True,
-                inspection_revision="a" * 64,
-            ),
-        },
-        {"shell.inspect", "shell.run"},
-    )
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
     context = _context(tmp_path, call, client)
-    context.db.scalar.side_effect = [
-        ExecutionAgent(
-            id=client.agent_id,
-            user_id=context.session.user_id,
-            alias="Computer",
-            home_directory="/home/user",
-            home_shell_policy="ask",
-            external_shell_policy="ask",
-        ),
-        ExecutionAgent(
-            id=client.agent_id,
-            user_id=context.session.user_id,
-            alias="Computer",
-            home_directory="/home/user",
-            home_shell_policy="deny",
-            external_shell_policy="deny",
-        ),
-    ]
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id,
+        user_id=context.session.user_id,
+        alias="Computer",
+        home_directory="/home/user",
+        home_shell_enabled=False,
+    )
 
-    result = await _tools(client.operations).execute(call, context)
+    decision = await PermissionPolicy.evaluate(
+        context.db,
+        context.session,
+        _shell_permission(client, classification="read", prefixes=[["cat"]]),
+        context.root_files,
+        policy="auto",
+    )
 
-    assert result.is_error
-    assert [operation for operation, _arguments in client.requests] == ["shell.inspect"]
-    context.ask_handler.assert_awaited_once()
+    assert decision == PermissionDecision.DENY
+    statement = context.db.scalar.await_args.args[0]
+    assert statement.get_execution_options()["populate_existing"] is True
 
 
-async def test_auto_shell_policy_dispatches_without_approval(tmp_path) -> None:
+async def test_shell_dispatches_with_inspection_classification(tmp_path) -> None:
     call = ToolCall("shell", "shell_run", {"command": "cat README.md"})
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
                 targets=[],
                 analysis_complete=True,
+                classification="read",
                 read_only=True,
+                commands=[
+                    {"tokens": ["cat", "README.md"], "prefix": ["cat"], "classification": "read"}
+                ],
                 inspection_revision="a" * 64,
             ),
             "shell.run": ProcessResult(
@@ -314,14 +346,6 @@ async def test_auto_shell_policy_dispatches_without_approval(tmp_path) -> None:
         {"shell.inspect", "shell.run"},
     )
     context = _context(tmp_path, call, client)
-    context.db.scalar.return_value = ExecutionAgent(
-        id=client.agent_id,
-        user_id=context.session.user_id,
-        alias="Computer",
-        home_directory="/home/user",
-        home_shell_policy="auto",
-        external_shell_policy="deny",
-    )
 
     result = await _tools(client.operations).execute(call, context)
 
@@ -330,4 +354,9 @@ async def test_auto_shell_policy_dispatches_without_approval(tmp_path) -> None:
         "shell.inspect",
         "shell.run",
     ]
-    context.ask_handler.assert_not_awaited()
+    request = context.ask_handler.await_args.args[0]
+    assert request.capability == "shell.read"
+    assert request.approval_details == {
+        "shellClassification": "read",
+        "shellPrefixes": [["cat"]],
+    }

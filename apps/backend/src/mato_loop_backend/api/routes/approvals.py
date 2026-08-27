@@ -215,20 +215,27 @@ async def list_permissions(
     payloads = []
     for item in grants:
         resource_display = None
+        shell_details = {}
         if item.source_approval_id is not None:
             source = await db.get(ApprovalRequest, item.source_approval_id)
             if item.resource_type == "skill_collection":
                 resource_display = "Persönliche Skills"
             elif source and isinstance(source.payload.get("resourceDisplay"), str):
                 resource_display = source.payload["resourceDisplay"]
+            if item.resource_type == "shell_command" and source is not None:
+                shell_details = {
+                    "shellClassification": source.payload.get("shellClassification"),
+                    "shellPrefixes": source.payload.get("shellPrefixes"),
+                }
         payloads.append(
             {
-            "id": str(item.id),
-            "capability": item.capability,
-            "resourceType": item.resource_type,
-            "resourceScope": item.resource_scope,
-            "resourceDisplay": resource_display,
-            "createdAt": item.created_at.isoformat(),
+                "id": str(item.id),
+                "capability": item.capability,
+                "resourceType": item.resource_type,
+                "resourceScope": item.resource_scope,
+                "resourceDisplay": resource_display,
+                **shell_details,
+                "createdAt": item.created_at.isoformat(),
             }
         )
     return payloads

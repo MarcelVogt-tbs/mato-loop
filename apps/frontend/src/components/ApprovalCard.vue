@@ -76,9 +76,23 @@
           <ToolPresentation
             v-if="presentation.items.length"
             :items="presentation.items"
+            :kind="approvalPresentationKind"
             embedded
             class="q-mt-md"
           />
+          <div v-if="shellClassification" class="q-mt-md">
+            <q-chip
+              dense
+              square
+              :color="shellClassification === 'write' ? 'warning' : 'primary'"
+              text-color="white"
+              :label="shellClassification === 'write' ? 'Schreibender Befehl' : 'Lesender Befehl'"
+            />
+            <div v-if="shellPrefixes.length" class="q-mt-sm">
+              <div class="text-caption app-muted">Session-Präfixe</div>
+              <code v-for="prefix in shellPrefixes" :key="prefix" class="q-mr-sm">{{ prefix }}</code>
+            </div>
+          </div>
         </div>
         <div v-if="skillPreview" class="approval-resource q-mt-md">
           <div class="text-caption app-muted">Skill-Vorschau</div>
@@ -204,7 +218,11 @@
 import { computed, ref } from 'vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
 import { approvalResource, memoryApprovalDisplay, technicalDetailsDisplay } from 'src/utils/approval-display'
-import { toolArgumentsDisplay, toolPresentation } from 'src/utils/tool-display'
+import {
+  approvalPresentationKind as resolveApprovalPresentationKind,
+  toolArgumentsDisplay,
+  toolPresentation
+} from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useWorkspaceStore } from 'stores/workspace'
@@ -222,6 +240,17 @@ const workspace = useWorkspaceStore()
 const loadingDecision = ref(null)
 const showFullDetails = ref(false)
 const rememberForSession = ref(false)
+const shellClassification = computed(() => {
+  const value = props.approval.payload?.shellClassification
+  return ['read', 'write'].includes(value) ? value : null
+})
+const shellPrefixes = computed(() => (
+  Array.isArray(props.approval.payload?.shellPrefixes)
+    ? props.approval.payload.shellPrefixes
+      .filter((prefix) => Array.isArray(prefix) && prefix.every((token) => typeof token === 'string'))
+      .map((prefix) => prefix.join(' '))
+    : []
+))
 const isMemoryApproval = computed(() => props.approval.requestType === 'memory_change')
 const memoryDisplay = computed(() => memoryApprovalDisplay(props.approval))
 const memoryPayload = computed(() => memoryDisplay.value.payload)
@@ -260,6 +289,7 @@ const approvalTool = computed(() => ({
   name: props.approval.details?.tool,
   arguments: props.approval.details?.arguments
 }))
+const approvalPresentationKind = computed(() => resolveApprovalPresentationKind(approvalTool.value))
 const presentation = computed(() => toolPresentation(
   approvalTool.value,
   props.approval.details?.displayItems

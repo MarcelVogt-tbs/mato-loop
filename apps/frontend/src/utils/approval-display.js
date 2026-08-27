@@ -190,6 +190,18 @@ function sanitize(value, depth, seen, key = '', truncate = true) {
 
 export function permissionGrantDisplay(grant, sessions = []) {
   const resource = approvalResource(grant, sessions)
+  if (grant?.resourceType === 'shell_command') {
+    const prefixes = Array.isArray(grant.shellPrefixes)
+      ? grant.shellPrefixes
+        .filter((prefix) => Array.isArray(prefix) && prefix.every((token) => typeof token === 'string'))
+        .map((prefix) => prefix.join(' '))
+      : []
+    return {
+      label: grant.capability === 'shell.read' ? 'Lesende Shell-Befehle' : 'Schreibende Shell-Befehle',
+      value: [resource.value, ...prefixes].join(' · '),
+      icon: 'terminal'
+    }
+  }
   if (grant?.resourceType === 'url') {
     const fingerprint = /^[0-9a-f]{64}$/i.test(String(grant.resourceScope || ''))
       ? ` · ${grant.resourceScope.slice(0, 8)}`

@@ -142,6 +142,8 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "settings.user_profile.update": "ask",
         "system.info": "auto",
         "process.execute": "ask",
+        "shell.read": "auto",
+        "shell.write": "ask",
         "automation.read": "ask",
         "automation.create": "ask",
         "automation.update": "ask",
@@ -152,6 +154,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "coding.plan.read": "auto",
         "coding.execute.enqueue": "ask",
     }
+    assert result["shellPrefixes"] == {"read": [], "write": []}
     assert [group["id"] for group in result["groups"]] == [
         "filesystem",
         "process",
@@ -243,6 +246,10 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     payload = ToolSettingsRequest.model_validate(
         {
             "policies": {"filesystem.delete": "ask"},
+            "shellPrefixes": {
+                "read": [["cat"]],
+                "write": [["git", "status"]],
+            },
             "webSearch": {
                 "primaryProvider": f"searxng:{integration.id}",
                 "fallbackProvider": "no_key",
@@ -294,6 +301,12 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     assert saved.web_fetch.user_agent == "ConfiguredBrowser/1.0"
     assert saved.web_search.primary_provider == f"searxng:{integration.id}"
     assert saved.web_search.fallback_provider == "no_key"
+    assert saved.shell_prefixes.read == [["cat"]]
+    assert saved.shell_prefixes.write == [["git", "status"]]
+    assert result["shellPrefixes"] == {
+        "read": [["cat"]],
+        "write": [["git", "status"]],
+    }
     assert saved.generate_image.policy == "ask"
     assert saved.generate_image.timeout_seconds == 600
     assert saved.edit_image.policy == "ask"

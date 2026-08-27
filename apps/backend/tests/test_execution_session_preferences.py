@@ -37,8 +37,8 @@ def _agent(user_id=None, **values):
         **{
             "home_filesystem_policy": "auto",
             "external_filesystem_policy": "ask",
-            "home_shell_policy": "ask",
-            "external_shell_policy": "ask",
+            "home_shell_enabled": True,
+            "external_shell_enabled": True,
             **values,
         },
     )

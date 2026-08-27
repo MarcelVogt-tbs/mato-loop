@@ -19,6 +19,7 @@ from mato_loop_backend.settings import (
     MediaToolSettings,
     PolicyToolSettings,
     SettingsStore,
+    ShellPrefixSettings,
     ToolExecutionPolicy,
     ToolSettings,
     UserToolSettings,
@@ -68,6 +69,9 @@ class ToolSettingsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     policies: dict[str, ToolExecutionPolicy] | None = None
+    shell_prefixes: ShellPrefixSettings | None = Field(
+        default=None, validation_alias=AliasChoices("shellPrefixes", "shell_prefixes")
+    )
     web_search: WebSearchToolSettings | None = Field(
         default=None, validation_alias=AliasChoices("webSearch", "web_search")
     )
@@ -126,6 +130,7 @@ def tool_settings_payload(
         "personalSettingsEnabled": settings.personal_settings_enabled,
         "groups": groups,
         "policies": policies,
+        "shellPrefixes": settings.shell_prefixes.model_dump(),
         "webSearch": {
             "primaryProvider": effective_settings.web_search.primary_provider,
             "fallbackProvider": effective_settings.web_search.fallback_provider,
@@ -251,6 +256,8 @@ async def update_tool_settings(
                 409, "integration.providerUnavailable", field="fallback_provider"
             )
         settings.web_search = payload.web_search
+    if payload.shell_prefixes is not None:
+        settings.shell_prefixes = payload.shell_prefixes
     if owner_id is None:
         settings.web_fetch = payload.web_fetch
     else:

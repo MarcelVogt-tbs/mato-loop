@@ -154,11 +154,39 @@ class ShellTarget(ExecutionResult):
     _validate_path = field_validator("path")(_absolute_path)
 
 
+class ShellCommand(ExecutionResult):
+    tokens: list[str] = Field(min_length=1, max_length=256)
+    prefix: list[str] | None = Field(default=None, min_length=1, max_length=8)
+    classification: Literal["read", "write"]
+
+    @field_validator("tokens", "prefix")
+    @classmethod
+    def validate_tokens(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and any(
+            not token
+            or len(token) > 1_024
+            or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in token)
+            for token in value
+        ):
+            raise ValueError("invalid shell token")
+        return value
+
+
 class ShellInspectResult(ExecutionResult):
     targets: list[ShellTarget]
     analysis_complete: bool
+    classification: Literal["read", "write"]
     read_only: bool = False
+    commands: list[ShellCommand] = Field(max_length=64)
     inspection_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("read_only")
+    @classmethod
+    def validate_read_only(cls, value: bool, info) -> bool:
+        classification = info.data.get("classification")
+        if classification is not None and value != (classification == "read"):
+            raise ValueError("inconsistent shell classification")
+        return value
 
 
 class ExecutionClientError(Exception):

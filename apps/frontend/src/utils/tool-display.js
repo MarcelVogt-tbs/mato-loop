@@ -84,6 +84,11 @@ const TOOL_DISPLAY = {
   delete_automation: { label: 'Automation löschen', activity: 'Automation wird gelöscht', icon: 'delete_forever' }
 }
 
+const APPROVAL_PRESENTATIONS = {
+  shell_run: 'shell',
+  'shell.run': 'shell'
+}
+
 function truncate(value, maxLength = 140) {
   const text = String(value || '').trim().replace(/\s+/g, ' ')
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
@@ -127,6 +132,10 @@ export function memoryWriteContent(tool) {
 export function shellCommand(tool) {
   if (!['shell_run', 'shell.run'].includes(tool?.name)) return ''
   return typeof tool?.arguments?.command === 'string' ? tool.arguments.command : ''
+}
+
+export function approvalPresentationKind(tool) {
+  return shellCommand(tool) ? APPROVAL_PRESENTATIONS[tool?.name] || null : null
 }
 
 function taskDisplayItems(tool) {

@@ -42,11 +42,19 @@
           <q-select
             v-for="field in policyFields"
             :key="field.key"
-            v-model="policies[field.key]"
+            v-model="settings[field.key]"
             outlined
             emit-value
             map-options
             :options="policyOptions"
+            :label="field.label"
+          />
+
+          <q-toggle
+            v-for="field in shellFields"
+            :key="field.key"
+            v-model="settings[field.key]"
+            color="primary"
             :label="field.label"
           />
 
@@ -109,11 +117,11 @@ const agents = useExecutionAgentStore()
 const formRef = ref(null)
 const saving = ref(false)
 const alias = ref('')
-const policies = reactive({
+const settings = reactive({
   homeFilesystemPolicy: 'auto',
   externalFilesystemPolicy: 'ask',
-  homeShellPolicy: 'ask',
-  externalShellPolicy: 'ask'
+  homeShellEnabled: true,
+  externalShellEnabled: true
 })
 const useAsDefault = ref(false)
 const initialDefault = ref(false)
@@ -127,9 +135,11 @@ const policyOptions = [
 ]
 const policyFields = [
   { key: 'homeFilesystemPolicy', label: 'Dateizugriff im Home-Verzeichnis' },
-  { key: 'externalFilesystemPolicy', label: 'Dateizugriff außerhalb des Home-Verzeichnisses' },
-  { key: 'homeShellPolicy', label: 'Shell-Zugriff im Home-Verzeichnis' },
-  { key: 'externalShellPolicy', label: 'Shell-Zugriff außerhalb des Home-Verzeichnisses' }
+  { key: 'externalFilesystemPolicy', label: 'Dateizugriff außerhalb des Home-Verzeichnisses' }
+]
+const shellFields = [
+  { key: 'homeShellEnabled', label: 'Shell im Home-Verzeichnis aktivieren' },
+  { key: 'externalShellEnabled', label: 'Shell außerhalb des Home-Verzeichnisses aktivieren' }
 ]
 const pairingDurationOptions = computed(() => [
   { label: '30 Minuten', value: 1800 },
@@ -149,18 +159,18 @@ async function save() {
     || !await formRef.value?.validate()
   ) return
   const agent = props.agent
-  const settings = { alias: alias.value.trim(), ...policies }
+  const values = { alias: alias.value.trim(), ...settings }
   const submittedDefault = useAsDefault.value
   saving.value = true
   try {
     if (!agent) {
-      const result = await agents.create(settings, pairingDurationSeconds.value)
+      const result = await agents.create(values, pairingDurationSeconds.value)
       emit('update:modelValue', false)
       emit('created', result)
       return
     }
-    if (policyFields.some(({ key }) => settings[key] !== agent[key]) || settings.alias !== agent.alias) {
-      await agents.update(agent.id, settings)
+    if ([...policyFields, ...shellFields].some(({ key }) => values[key] !== agent[key]) || values.alias !== agent.alias) {
+      await agents.update(agent.id, values)
     }
     if (submittedDefault !== initialDefault.value) {
       await agents.setDefault(submittedDefault ? agent.id : null)
@@ -181,8 +191,8 @@ watch(() => props.modelValue, async (open) => {
   const currentInitialization = ++initialization
   if (!open) return
   alias.value = props.agent?.alias || ''
-  for (const { key } of policyFields) {
-    policies[key] = props.agent?.[key] ?? (key === 'homeFilesystemPolicy' ? 'auto' : 'ask')
+  for (const { key } of [...policyFields, ...shellFields]) {
+    settings[key] = props.agent?.[key] ?? (key.endsWith('Enabled') ? true : key === 'homeFilesystemPolicy' ? 'auto' : 'ask')
   }
   initialDefault.value = isCurrentDefault.value
   useAsDefault.value = initialDefault.value

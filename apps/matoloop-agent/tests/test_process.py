@@ -125,8 +125,15 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(symlink["targets"], [])
             dynamic = runner.inspect_shell("echo $HOME", os.fspath(root))
             self.assertFalse(dynamic["analysisComplete"])
+            self.assertEqual(dynamic["classification"], "write")
+            self.assertEqual(dynamic["commands"], [])
             read_only = runner.inspect_shell("cat target", os.fspath(root))
             self.assertTrue(read_only["readOnly"])
+            self.assertEqual(read_only["classification"], "read")
+            self.assertEqual(
+                read_only["commands"],
+                [{"tokens": ["cat", "target"], "prefix": ["cat"], "classification": "read"}],
+            )
             self.assertEqual(read_only["targets"][0]["path"], os.fspath(target))
 
             source = root / "env.sh"
@@ -147,6 +154,103 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 "git": repository,
             }.items():
                 self.assertEqual(inspections[name]["targets"][0]["path"], os.fspath(expected))
+
+    async def test_inspection_classifies_flat_commands_and_executes_read_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first.txt"
+            second = root / "second.txt"
+            first.write_text("one\ntwo\n")
+            second.write_text("three\n")
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+
+            inspected = runner.inspect_shell(
+                "cat first.txt | head -n 1 && cat second.txt; pwd",
+                os.fspath(root),
+            )
+            self.assertTrue(inspected["analysisComplete"])
+            self.assertEqual(inspected["classification"], "read")
+            self.assertEqual(
+                inspected["commands"],
+                [
+                    {
+                        "tokens": ["cat", "first.txt"],
+                        "prefix": ["cat"],
+                        "classification": "read",
+                    },
+                    {
+                        "tokens": ["head", "-n", "1"],
+                        "prefix": ["head"],
+                        "classification": "read",
+                    },
+                    {
+                        "tokens": ["cat", "second.txt"],
+                        "prefix": ["cat"],
+                        "classification": "read",
+                    },
+                    {"tokens": ["pwd"], "prefix": ["pwd"], "classification": "read"},
+                ],
+            )
+
+            output = []
+
+            async def stream(channel: str, data: str) -> None:
+                output.append((channel, data))
+
+            executed = await runner.exec(
+                current_directory=os.fspath(root),
+                program=None,
+                args=[],
+                command="cat first.txt | head -n 1 && cat second.txt; pwd",
+                timeout=2,
+                stream=stream,
+                expected_inspection_revision=inspected["inspectionRevision"],
+            )
+            self.assertEqual(executed["exitCode"], 0)
+            stdout = "".join(data for channel, data in output if channel == "stdout")
+            self.assertIn("one\nthree\n", stdout)
+
+    def test_inspection_prefixes_are_token_based_and_writes_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "target").write_text("safe")
+            (root / "repository").mkdir()
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+
+            write = runner.inspect_shell(
+                "cat target > output.txt && git -C repository status",
+                os.fspath(root),
+            )
+            self.assertEqual(write["classification"], "write")
+            self.assertFalse(write["readOnly"])
+            self.assertEqual(write["commands"][0]["classification"], "write")
+            self.assertEqual(write["commands"][1]["prefix"], ["git", "status"])
+
+            read = runner.inspect_shell("cat < target", os.fspath(root))
+            self.assertEqual(read["classification"], "read")
+            self.assertEqual(read["commands"][0]["tokens"], ["cat"])
+
+            unknown = runner.inspect_shell("curl https://example.invalid", os.fspath(root))
+            self.assertEqual(unknown["classification"], "write")
+            self.assertFalse(unknown["analysisComplete"])
+            self.assertEqual(unknown["commands"][0]["prefix"], ["curl"])
+
+            interpreter = runner.inspect_shell("python -c pass", os.fspath(root))
+            self.assertEqual(interpreter["classification"], "write")
+            self.assertNotIn("prefix", interpreter["commands"][0])
+
+            for command in ("./git status", "git -c alias.check=!true check"):
+                with self.subTest(command=command):
+                    unsafe_prefix = runner.inspect_shell(command, os.fspath(root))
+                    self.assertNotIn("prefix", unsafe_prefix["commands"][0])
+
+            for command in ("cat $(touch target)", "cat 'unterminated", "cat target & pwd"):
+                with self.subTest(command=command):
+                    rejected = runner.inspect_shell(command, os.fspath(root))
+                    self.assertEqual(rejected["classification"], "write")
+                    self.assertEqual(rejected["commands"], [])
 
 
 if __name__ == "__main__":

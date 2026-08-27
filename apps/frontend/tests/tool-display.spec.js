@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  approvalPresentationKind,
   formatToolArguments,
   memoryWriteContent,
   parseToolResult,
@@ -21,10 +22,17 @@ describe('tool display', () => {
     expect(shellCommand({ name: 'shell_run', arguments: { command } })).toBe(command)
     expect(shellCommand({ name: 'shell.run', arguments: { command } })).toBe(command)
     expect(shellCommand({ name: 'process_exec', arguments: { command } })).toBe('')
+    expect(approvalPresentationKind({ name: 'shell_run', arguments: { command } })).toBe('shell')
+    expect(approvalPresentationKind({ name: 'shell.run', arguments: { command } })).toBe('shell')
     expect(toolPresentation({ name: 'shell_run', arguments: { command } })).toEqual({
       summary: 'set -e printf "%s\\n" "hello world"',
       items: [{ label: 'Shell-Befehl', value: command, format: 'code' }]
     })
+  })
+
+  it('falls back to generic approval presentation for unknown or incomplete tools', () => {
+    expect(approvalPresentationKind({ name: 'tasks_create', arguments: { title: 'Test' } })).toBeNull()
+    expect(approvalPresentationKind({ name: 'shell_run', arguments: {} })).toBeNull()
   })
 
   it('presents process arguments without rebuilding a shell command', () => {

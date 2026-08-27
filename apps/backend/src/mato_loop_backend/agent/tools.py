@@ -8,7 +8,6 @@ import os
 import posixpath
 from datetime import datetime
 from io import BytesIO
-from pathlib import PurePosixPath
 from typing import Any, Literal
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
@@ -46,6 +45,7 @@ from mato_loop_backend.agent.permissions import (
     session_browse_permission,
     session_permission,
     session_search_permission,
+    shell_command_scope,
     skill_edit_permission,
     skill_load_permission,
     skill_write_permission,
@@ -220,7 +220,6 @@ from mato_loop_backend.models import (
     AgentRun,
     Automation,
     ChatSession,
-    ExecutionAgent,
     Message,
     MessageAttachment,
     Project,
@@ -1299,94 +1298,39 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
 def _process_permission(
     context: ToolContext,
     arguments: dict[str, Any],
-    *,
-    shell: bool,
-    read_only: bool = False,
 ) -> PermissionRequest:
     client = _workspace_client(context)
-    if shell and read_only:
-        return PermissionRequest(
-            capability="shell.execute",
-            resource_type="shell_command",
-            resource_scope=json.dumps(
-                {
-                    "agentId": str(client.agent_id),
-                    "command": str(arguments["command"]),
-                    "currentDirectory": client.current_directory,
-                    "inspection": "read_only",
-                },
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
-            ),
-            action_kind="shell_run",
-            risk_level="medium",
-            title="Lesenden Shell-Befehl ausführen?",
-            summary=(
-                "Der Befehl wurde als rein lesend geprüft. Eine Session-Freigabe gilt nur für "
-                "denselben Befehl im aktuellen Arbeitsordner."
-            ),
-            resource_display=client.current_directory or "Ausgewählter Computer",
-            display_items=(
-                PermissionDisplayItem(
-                    label="Shell-Befehl",
-                    value=str(arguments["command"]),
-                    format="code",
-                ),
-            ),
-            force_ask=True,
-        )
     warning = "Der Befehl kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
     return PermissionRequest(
-        capability="shell.execute" if shell else "process.execute",
-        resource_type="shell_command" if shell else "execution_process",
+        capability="process.execute",
+        resource_type="execution_process",
         resource_scope=json.dumps(
             {
                 "agentId": str(client.agent_id),
                 "currentDirectory": client.current_directory,
-                **(
-                    {
-                        "command": str(arguments["command"]),
-                        "inspection": "risky",
-                    }
-                    if shell
-                    else {
-                        "program": str(arguments["program"]),
-                        "args": [str(value) for value in arguments.get("args", [])],
-                    }
-                ),
+                "program": str(arguments["program"]),
+                "args": [str(value) for value in arguments.get("args", [])],
             },
             ensure_ascii=True,
             separators=(",", ":"),
             sort_keys=True,
         ),
-        action_kind="shell_run" if shell else "process_exec",
+        action_kind="process_exec",
         risk_level="high",
-        title="Shell-Befehl ausführen?" if shell else "Prozess ausführen?",
+        title="Prozess ausführen?",
         summary=warning,
         resource_display=client.current_directory or "Ausgewählter Computer",
         approval_details={"warning": warning},
         display_items=(
-            (
-                PermissionDisplayItem(
-                    label="Shell-Befehl",
-                    value=str(arguments["command"]),
-                    format="code",
-                ),
-            )
-            if shell
-            else (
-                PermissionDisplayItem(
-                    label="Programm", value=str(arguments["program"]), format="code"
-                ),
-                PermissionDisplayItem(
-                    label="Parameter",
-                    value=tuple(str(value) for value in arguments.get("args", [])),
-                    format="list",
-                ),
-            )
+            PermissionDisplayItem(
+                label="Programm", value=str(arguments["program"]), format="code"
+            ),
+            PermissionDisplayItem(
+                label="Parameter",
+                value=tuple(str(value) for value in arguments.get("args", [])),
+                format="list",
+            ),
         ),
-        force_ask=shell,
         available_decisions=("allow_once", "deny"),
     )
 
@@ -1406,7 +1350,7 @@ async def _execute_process(
         return ToolResult.error("permission.denied")
     if not await _allow(
         context,
-        _process_permission(context, arguments, shell=operation == "shell.run"),
+        _process_permission(context, arguments),
     ):
         return ToolResult.error("permission.denied")
     return await _run_process(
@@ -1467,51 +1411,50 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         ShellInspectResult,
     )
     assert isinstance(inspection, ShellInspectResult)
-    paths = [client.current_directory, *(target.path for target in inspection.targets)]
-
-    async def strictest_policy() -> str | None:
-        agent = await context.db.scalar(
-            select(ExecutionAgent)
-            .where(
-                ExecutionAgent.id == client.agent_id,
-                ExecutionAgent.user_id == context.session.user_id,
-                ExecutionAgent.revoked_at.is_(None),
-            )
-            .execution_options(populate_existing=True)
-        )
-        if agent is None:
-            return None
-        home = PurePosixPath(agent.home_directory) if agent.home_directory else None
-        policies = []
-        for path in paths:
-            target = PurePosixPath(path)
-            policies.append(
-                agent.home_shell_policy
-                if home is not None and (target == home or home in target.parents)
-                else agent.external_shell_policy
-            )
-        if not inspection.analysis_complete:
-            policies.append(agent.external_shell_policy)
-        priority = {"auto": 0, "ask": 1, "deny": 2}
-        return max(policies, key=lambda value: priority[value])
-
-    strictest = await strictest_policy()
-    if strictest is None:
-        return ToolResult.error("permission.denied")
-    if strictest == "deny":
-        return ToolResult.error("permission.denied")
-    process_permission = _process_permission(
-        context,
-        {"command": arguments.command},
-        shell=True,
-        read_only=inspection.analysis_complete and inspection.read_only,
+    prefixes = (
+        [command.prefix for command in inspection.commands if command.prefix is not None]
+        if inspection.commands and all(command.prefix is not None for command in inspection.commands)
+        else []
     )
-    if strictest == "ask":
-        if not await _allow(context, process_permission):
-            return ToolResult.error("permission.denied")
-        strictest = await strictest_policy()
-        if strictest in {None, "deny"}:
-            return ToolResult.error("permission.denied")
+    permission = PermissionRequest(
+        capability=f"shell.{inspection.classification}",
+        resource_type="shell_command",
+        resource_scope=shell_command_scope(
+            client.agent_id,
+            client.current_directory,
+            inspection.classification,
+            prefixes,
+            [target.path for target in inspection.targets],
+            inspection.analysis_complete,
+        ),
+        action_kind="shell_run",
+        risk_level="low" if inspection.classification == "read" else "high",
+        title=(
+            "Lesenden Shell-Befehl ausführen?"
+            if inspection.classification == "read"
+            else "Schreibenden Shell-Befehl ausführen?"
+        ),
+        summary=(
+            "Der Befehl wurde als rein lesend klassifiziert."
+            if inspection.classification == "read"
+            else "Der Befehl kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
+        ),
+        resource_display=client.current_directory,
+        approval_details={
+            "shellClassification": inspection.classification,
+            "shellPrefixes": prefixes,
+        },
+        display_items=(
+            PermissionDisplayItem(label="Shell-Befehl", value=arguments.command, format="code"),
+        ),
+        available_decisions=(
+            ("allow_once", "allow_session", "deny")
+            if prefixes
+            else ("allow_once", "deny")
+        ),
+    )
+    if not await _allow(context, permission):
+        return ToolResult.error("permission.denied")
     return await _run_process(
         context,
         "shell.run",
@@ -4225,12 +4168,9 @@ _PROCESS_EXECUTE = ToolAction(
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
-_SHELL_EXECUTE = ToolAction(
-    "shell.execute",
-    "Shell-Befehle ausführen",
-    ToolExecutionPolicy.ASK,
-    configurable=False,
-    mutates=True,
+_SHELL_READ = ToolAction("shell.read", "Lesende Shell-Befehle", ToolExecutionPolicy.AUTO)
+_SHELL_WRITE = ToolAction(
+    "shell.write", "Schreibende Shell-Befehle", ToolExecutionPolicy.ASK, mutates=True
 )
 _SYSTEM_INFO = ToolAction(
     "system.info", "Systeminformationen", ToolExecutionPolicy.AUTO
@@ -4861,7 +4801,8 @@ tool_registry = ToolRegistry(
             group="process",
             label="Shell-Befehl ausführen",
             icon="terminal",
-            actions=(_SHELL_EXECUTE,),
+            actions=(_SHELL_READ, _SHELL_WRITE),
+            alternative_action_capabilities=frozenset({"shell.read", "shell.write"}),
         ),
     ],
 )

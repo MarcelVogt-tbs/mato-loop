@@ -33,8 +33,6 @@ class ExecutionAgent(Base):
             for name in (
                 "home_filesystem_policy",
                 "external_filesystem_policy",
-                "home_shell_policy",
-                "external_shell_policy",
             )
         ),
     )
@@ -63,11 +61,11 @@ class ExecutionAgent(Base):
     external_filesystem_policy: Mapped[str] = mapped_column(
         String(20), nullable=False, default="ask", server_default=text("'ask'")
     )
-    home_shell_policy: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="ask", server_default=text("'ask'")
+    home_shell_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
-    external_shell_policy: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="ask", server_default=text("'ask'")
+    external_shell_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
     revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")

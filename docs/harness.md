@@ -62,7 +62,7 @@ Resource policies are global installation settings. They are not approval-derive
 
 ## Typed Resource Matchers
 
-A permission consists of a capability and typed resource matcher. Security decisions never depend on free-form display strings, prefix comparisons, or tool names. Matchers have unique types and validated fields such as canonical path, session ID, or defined session-search scope.
+A permission consists of a capability and typed resource matcher. Security decisions never depend on free-form display strings, string-prefix comparisons, or tool names. Matchers have unique types and validated fields such as canonical path, session ID, defined session-search scope, or shell token sequence.
 
 - Path matchers contain explicit `session` or `workspace` root and compare relative paths component by component inside the host-bound root; string-prefix matching is forbidden.
 - Computer directory matchers use canonical `{agentId,path}` JSON and compare normalized absolute POSIX paths component by component. They bound model directory entry independently from file or process policy; string-prefix matching is forbidden.
@@ -72,7 +72,7 @@ A permission consists of a capability and typed resource matcher. Security decis
 - Persisted matchers deserialize losslessly to the same typed matcher.
 - Approval display title, summary, and risk are metadata, not matching inputs.
 - Integration-operation matchers compare the exact integration UUID, canonical binding-revision hash, optional opaque resource key, and host-generated operation key. Remote labels and URLs are never matcher inputs.
-- Read-only shell matchers compare the exact host-generated command scope, including agent and current directory. The MatoLoop Agent's read-only classification remains a hard boundary and is rechecked even when a grant matches.
+- Shell matchers use the host-generated `shell.read` or `shell.write` class and semantic token prefixes. Persistent allowlists are class-specific. Session grants compare token sequences and bind them to the same agent and absolute current directory. Disabled capabilities, hard shell-zone switches, and filesystem `deny` are evaluated before grants.
 - Image-edit matchers retain direct attachment provenance separately from a bounded host-controlled authorization lineage. Descendants inherit lineage roots; unrelated images, sessions, targets, and trust levels do not match.
 
 Selecting a model is the release decision for integration data already authorized by ownership, integration access, tool policy, and approvals. Public models do not require a second session-wide private-data release.
@@ -83,7 +83,7 @@ Standalone physical storage is `/data/sessions/<session-id>/{files,revisions}`. 
 
 Every backend-managed file state has a stored full-byte revision. Create and copy establish the initial revision, replace appends one, and rename or move preserves file identity and history. Deleting a file purges its complete history; individual revisions cannot be deleted. Restoring an older revision selects it as current and removes later revisions without creating another revision. Current bytes and retained revision bytes share the root quota. Browser/API replacements retain expected-SHA conflict protection.
 
-Each `ExecutionAgent` has home filesystem, external filesystem, home shell, and external shell policies with `auto`, `ask`, or `deny`. Defaults are `auto`, `ask`, `ask`, and `ask` respectively. Shell inspection applies the strictest policy across the current directory and every resolved target; incomplete analysis also applies the external shell policy. The `process.execute` capability remains separate. Managed-file mutations continue to use `session.files.write`. Explicit reusable-writing requests create one ordinary `root=files` file per artifact unless the user requests `root=computer`; edits read and update the same path. Messages may carry a metadata-only active-file snapshot, and matching writes are rejected while it is dirty.
+Each `ExecutionAgent` has home and external filesystem policies with `auto`, `ask`, or `deny`, defaulting to `auto` and `ask`. Hard boolean shell switches control the home and external zones, and both default to enabled. Every zone identified by shell inspection must be enabled; incomplete analysis also requires the external shell switch. The `process.execute` capability remains separate. Managed-file mutations continue to use `session.files.write`. Explicit reusable-writing requests create one ordinary `root=files` file per artifact unless the user requests `root=computer`; edits read and update the same path. Messages may carry a metadata-only active-file snapshot, and matching writes are rejected while it is dirty.
 
 For `webfetch`, effective model policy evaluates every initial URL and redirect before DNS or HTTP. `ask` requests approval for every URL, `auto_public` automatically allows public targets and asks for allowlisted private origins, and `auto_allowed` automatically allows both classes. Network classification after permission remains immutable host policy. No grant can open a private origin not on the allowlist, link-local address, or metadata address.
 
