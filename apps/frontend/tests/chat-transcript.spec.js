@@ -45,6 +45,9 @@ describe('chat transcript', () => {
     const reasoning = {
       key: 'live-reasoning', type: 'reasoning', live: true, reasoning: { text: 'Prüfen' }
     }
+    const contextSummary = {
+      key: 'context-summary', type: 'context-summary', current: true, text: 'Verdichtet'
+    }
 
     expect(splitLiveWorkHistory(
       [completed, active, pending],
@@ -54,6 +57,10 @@ describe('chat transcript', () => {
       [completed, reasoning],
       { phase: 'waiting_model' }
     )).toEqual({ current: reasoning, previous: [completed] })
+    expect(splitLiveWorkHistory(
+      [completed, contextSummary],
+      { phase: 'compacting_context' }
+    )).toEqual({ current: contextSummary, previous: [completed] })
   })
 
   it('attaches results and approvals to their tool calls', () => {
@@ -319,6 +326,9 @@ describe('chat transcript', () => {
         summary: 'Vereinfachte Ersatzfassung'
       }
     })
+    expect(transcript.messages[2].workHistory.entries).toEqual([
+      transcript.messages[2].contextSummaryEntry
+    ])
   })
 
   it('does not mix reused tool call ids across user requests', () => {

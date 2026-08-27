@@ -107,12 +107,7 @@
             <div v-if="message.role === 'user' || message.showAgentLabel" class="chat-message__label">
               <span>{{ message.role === 'user' ? 'Du' : identity.displayName }}</span>
             </div>
-            <AgentActivityEntry
-              v-if="message.kind === 'context_summary'"
-              :entry="message.contextSummaryEntry"
-              @expanded="scheduleVirtualScrollRefresh"
-            />
-            <template v-else-if="message.kind === 'runtime_error' && message.error">
+            <template v-if="message.kind === 'runtime_error' && message.error">
               <q-banner rounded class="chat-runtime-error app-surface-tonal" role="alert">
                 <template #avatar>
                   <q-icon name="error_outline" color="negative" />
@@ -406,7 +401,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'components/ApprovalCard.vue'
-import AgentActivityEntry from 'components/AgentActivityEntry.vue'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'

@@ -31,12 +31,15 @@ export function splitLiveWorkHistory(entries = [], activity = null) {
   const liveReasoning = activity?.phase === 'waiting_model'
     ? [...entries].reverse().find((entry) => entry.type === 'reasoning' && entry.live)
     : null
+  const currentContextSummary = ['compacting_context', 'waiting_model'].includes(activity?.phase)
+    ? [...entries].reverse().find((entry) => entry.type === 'context-summary' && entry.current)
+    : null
   const activeTool = activity?.phase === 'processing_tool'
     ? entries.find((entry) => entry.type === 'tool' && (
       entry.active || entry.tool?.id === activity.toolCallId
     ))
     : null
-  const current = attention || liveReasoning || activeTool || null
+  const current = attention || liveReasoning || currentContextSummary || activeTool || null
   const previous = entries.filter((entry) => (
     entry !== current
     && !entry.live
@@ -113,27 +116,37 @@ export function buildChatTranscript(
       }),
       workHistory: null
     }))
-  const summaryMessages = contextSummaries.map((summary) => ({
-    id: `context-summary-${summary.id}`,
-    role: 'context',
-    kind: 'context_summary',
-    content: '',
-    createdAt: summary.createdAt,
-    coveredThroughMessageId: summary.coveredThroughMessageId,
-    contextSummaryEntry: {
-      key: `context-summary-${summary.id}`,
-      type: 'context-summary',
-      text: summary.content,
-      warning: summary.isFallback,
-      presentation: {
-        title: 'Gesprächskontext verdichtet',
-        summary: summary.isFallback ? 'Vereinfachte Ersatzfassung' : null,
-        duration: null
-      }
-    },
-    _sourceIndex: -1,
-    _timelineId: summary.id
-  })).sort((left, right) => {
+  const latestUserTime = Date.parse(messages[lastUserIndex]?.createdAt || '')
+  const summaryMessages = contextSummaries.map((summary) => {
+    const summaryTime = Date.parse(summary.createdAt || '')
+    return {
+      id: `context-summary-${summary.id}`,
+      role: 'assistant',
+      kind: 'context_summary',
+      content: '',
+      toolCalls: [],
+      reasoning: null,
+      createdAt: summary.createdAt,
+      coveredThroughMessageId: summary.coveredThroughMessageId,
+      contextSummaryEntry: {
+        key: `context-summary-${summary.id}`,
+        type: 'context-summary',
+        text: summary.content,
+        warning: summary.isFallback,
+        current: running
+          && Number.isFinite(summaryTime)
+          && Number.isFinite(latestUserTime)
+          && summaryTime >= latestUserTime,
+        presentation: {
+          title: 'Gesprächskontext verdichtet',
+          summary: summary.isFallback ? 'Vereinfachte Ersatzfassung' : null,
+          duration: null
+        }
+      },
+      _sourceIndex: -1,
+      _timelineId: summary.id
+    }
+  }).sort((left, right) => {
     const leftTime = Date.parse(left.createdAt || '')
     const rightTime = Date.parse(right.createdAt || '')
     return leftTime - rightTime || left.id.localeCompare(right.id)
@@ -158,6 +171,7 @@ export function buildChatTranscript(
   function flushAssistantSection() {
     if (!assistantSection.length) return
     const workEntries = assistantSection.flatMap((message) => [
+      ...(message.contextSummaryEntry ? [message.contextSummaryEntry] : []),
       ...(message.reasoning
         ? [{ key: `reasoning-${message.id || message._sourceIndex}`, type: 'reasoning', reasoning: message.reasoning }]
         : []),
@@ -169,11 +183,15 @@ export function buildChatTranscript(
     const reasoningItems = workEntries
       .filter((entry) => entry.type === 'reasoning')
       .map((entry) => entry.reasoning)
-    const carrier = assistantSection.find((message) => message.toolCalls.length || message.reasoning)
+    const carrier = assistantSection.find((message) => (
+      message.toolCalls.length || message.reasoning || message.contextSummaryEntry
+    ))
       || assistantSection[0]
     const reversedSection = [...assistantSection].reverse()
     const finalCreatedAt = reversedSection.find((message) => message.createdAt)?.createdAt || null
-    const currentTurn = running && assistantSection.some((message) => message._sourceIndex > lastUserIndex)
+    const currentTurn = running && assistantSection.some((message) => (
+      message._sourceIndex > lastUserIndex || message.contextSummaryEntry?.current
+    ))
     if (workEntries.length) {
       const durations = reasoningItems.map((item) => item.observedDurationMs).filter(Number.isFinite)
       carrier.workHistory = {
@@ -221,7 +239,10 @@ export function buildChatTranscript(
       }
       groupedMessages.push(...visibleMessages)
     }
-    for (const message of assistantSection) delete message._sourceIndex
+    for (const message of assistantSection) {
+      delete message._sourceIndex
+      delete message._timelineId
+    }
     assistantSection = []
   }
 

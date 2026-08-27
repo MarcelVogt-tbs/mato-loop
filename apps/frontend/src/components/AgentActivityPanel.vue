@@ -80,6 +80,7 @@
             :process-outputs="processOutputs"
             auto-expand
             @open-file="emit('open-file', $event)"
+            @expanded="emit('expanded', panel)"
           />
           <q-expansion-item
             v-if="previousEntries.length"
@@ -105,6 +106,7 @@
                 :entry="entry"
                 :process-outputs="processOutputs"
                 @open-file="emit('open-file', $event)"
+                @expanded="emit('expanded', panel)"
               />
             </div>
           </q-expansion-item>
@@ -116,6 +118,7 @@
             :entry="entry"
             :process-outputs="processOutputs"
             @open-file="emit('open-file', $event)"
+            @expanded="emit('expanded', panel)"
           />
         </template>
       </div>
