@@ -17,10 +17,6 @@ export function chatShouldFollowBottom(atBottom, following, userScrolling) {
   return atBottom && (following || userScrolling)
 }
 
-export function scrollChatElementToTop(element, smooth = true) {
-  element?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' })
-}
-
 export function chatReadingAnchor(target, elements = []) {
   const viewport = target?.getBoundingClientRect?.()
   if (!viewport) return null

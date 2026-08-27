@@ -1,5 +1,5 @@
 <template>
-  <div ref="panel" class="work-history">
+  <div class="work-history">
     <q-expansion-item
       v-model="historyExpanded"
       dense
@@ -8,7 +8,10 @@
       expand-icon-class="work-history__toggle"
       :duration="expansionDuration"
       :toggle-aria-label="`${headerTitle} ein- oder ausblenden`"
-      @after-show="emit('expanded', panel)"
+      @before-show="emit('resize-start')"
+      @before-hide="emit('resize-start')"
+      @after-show="emit('resized')"
+      @after-hide="emit('resized')"
     >
       <template #header>
         <q-item-section class="work-history__identity" :aria-label="headerAriaLabel">
@@ -80,7 +83,8 @@
             :process-outputs="processOutputs"
             auto-expand
             @open-file="emit('open-file', $event)"
-            @expanded="emit('expanded', panel)"
+            @resize-start="emit('resize-start')"
+            @resized="emit('resized')"
           />
           <q-expansion-item
             v-if="previousEntries.length"
@@ -91,6 +95,10 @@
             expand-icon-class="work-history__context-toggle"
             :duration="expansionDuration"
             toggle-aria-label="Bisherigen Verlauf ein- oder ausblenden"
+            @before-show="emit('resize-start')"
+            @before-hide="emit('resize-start')"
+            @after-show="emit('resized')"
+            @after-hide="emit('resized')"
           >
             <template #header>
               <q-item-section>
@@ -106,7 +114,8 @@
                 :entry="entry"
                 :process-outputs="processOutputs"
                 @open-file="emit('open-file', $event)"
-                @expanded="emit('expanded', panel)"
+                @resize-start="emit('resize-start')"
+                @resized="emit('resized')"
               />
             </div>
           </q-expansion-item>
@@ -118,7 +127,8 @@
             :entry="entry"
             :process-outputs="processOutputs"
             @open-file="emit('open-file', $event)"
-            @expanded="emit('expanded', panel)"
+            @resize-start="emit('resize-start')"
+            @resized="emit('resized')"
           />
         </template>
       </div>
@@ -207,9 +217,8 @@ const props = defineProps({
   processOutputs: { type: Object, default: () => ({}) },
   running: Boolean
 })
-const emit = defineEmits(['open-file', 'open-approval-draft', 'expanded'])
+const emit = defineEmits(['open-file', 'open-approval-draft', 'resize-start', 'resized'])
 const instanceLimits = useInstanceLimitsStore()
-const panel = ref(null)
 const now = ref(Date.now())
 const historyExpanded = ref(false)
 const previousHistoryExpanded = ref(false)

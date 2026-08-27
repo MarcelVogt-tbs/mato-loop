@@ -17,6 +17,7 @@
       ref="scrollArea"
       class="chat-page__content col"
       :aria-busy="chat.loading ? 'true' : 'false'"
+      @keydown="handleScrollKey"
       @mousedown="handleScrollAreaMouseDown"
     >
       <div ref="scrollContent" class="chat-page__scroll-content">
@@ -59,7 +60,8 @@
             :presentation="runPresentation"
             running
             class="chat-welcome__activity text-left q-mx-auto"
-            @expanded="revealActivityPanel"
+            @resize-start="beginActivityResize"
+            @resized="finishActivityResize"
           />
         </div>
 
@@ -135,7 +137,8 @@
                 }"
                 @open-file="openToolFile"
                 @open-approval-draft="openApprovalDraft"
-                @expanded="revealActivityPanel"
+                @resize-start="beginActivityResize"
+                @resized="finishActivityResize"
               />
               <MessageContent
                 v-if="message.content && message.role === 'assistant'"
@@ -255,7 +258,8 @@
               :process-outputs="chat.processOutputs"
               running
               :class="{ 'q-mb-sm': chat.streamContent }"
-              @expanded="revealActivityPanel"
+              @resize-start="beginActivityResize"
+              @resized="finishActivityResize"
             />
             <MessageContent
               v-if="chat.streamContent"
@@ -433,7 +437,6 @@ import {
   chatReadingAnchor,
   chatShouldFollowBottom,
   restoreChatReadingAnchor,
-  scrollChatElementToTop,
   scrollChatToBottom
 } from 'src/utils/chat-scroll'
 import { buildChatTranscript, retryAvailableForMessage } from 'src/utils/chat-transcript'
@@ -469,7 +472,6 @@ const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
 const announcedRunStatus = ref('')
 const bottomThreshold = 64
-const reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 const liveWorkHistory = computed(() => ({
   entries: [],
   observedDurationMs: null,
@@ -491,14 +493,15 @@ const highlightedMessageId = ref(null)
 let resizeObserver = null
 let scrollFrame = null
 let scrollTarget = null
+let lastScrollTop = 0
 let userScrollActive = false
 let userScrollTimer = null
 let messageTimestampTimer = null
 let runAnnouncementTimer = null
 let touchActive = false
-let activityPanelScrollFrame = null
 let virtualScrollRefreshFrame = null
-let virtualScrollRefreshTimer = null
+let virtualScrollRefreshRequest = null
+let virtualScrollRefreshPending = null
 let searchHighlightTimer = null
 let readingAnchor = null
 let virtualScrollRefreshInProgress = false
@@ -803,18 +806,14 @@ async function loadOlderHistory() {
 }
 
 function handleVirtualScroll({ from, direction }) {
-  if (
-    !virtualScrollRefreshInProgress
-    && userScrollActive
-    && direction === 'decrease'
-    && followingBottom.value
-  ) {
-    followingBottom.value = false
-    cancelFollowScroll()
+  if (virtualScrollRefreshInProgress) {
+    void completeVirtualScrollRefresh()
+    return
   }
-  if (!virtualScrollRefreshInProgress && !followingBottom.value) rememberReadingAnchor()
+  if (!followingBottom.value) rememberReadingAnchor()
   if (
-    direction === 'decrease'
+    userScrollActive
+    && direction === 'decrease'
     && from <= 3
     && !followingBottom.value
     && chat.current?.nextMessageCursor
@@ -875,54 +874,72 @@ function addAttachmentFiles(files, done) {
   done?.(result)
 }
 
-function scheduleVirtualScrollRefresh(delay = 0, preservePosition = true) {
-  if (delay) {
-    clearTimeout(virtualScrollRefreshTimer)
-    virtualScrollRefreshTimer = window.setTimeout(
-      () => scheduleVirtualScrollRefresh(0, preservePosition),
-      delay
-    )
+function scheduleVirtualScrollRefresh(preservePosition = true) {
+  if (!virtualScroll.value || transcript.value.messages.length === 0) return
+  const request = {
+    anchor: preservePosition && !followingBottom.value
+      ? readingAnchor || captureReadingAnchor()
+      : null,
+    revealing: false,
+    version: ++virtualScrollRefreshVersion
+  }
+  if (userScrollActive || virtualScrollRefreshInProgress) {
+    virtualScrollRefreshPending = request
     return
   }
-  if (virtualScrollRefreshFrame !== null) return
-  const anchor = preservePosition && !followingBottom.value
-    ? readingAnchor || captureReadingAnchor()
-    : null
-  const refreshVersion = ++virtualScrollRefreshVersion
+  startVirtualScrollRefresh(request)
+}
+
+function startVirtualScrollRefresh(request) {
+  virtualScrollRefreshRequest = request
   virtualScrollRefreshInProgress = true
-  virtualScrollRefreshFrame = window.requestAnimationFrame(async () => {
+  virtualScrollRefreshFrame = window.requestAnimationFrame(() => {
     virtualScrollRefreshFrame = null
+    if (virtualScrollRefreshRequest !== request) return
     virtualScroll.value?.refresh(-1)
-    await nextTick()
-    await new Promise((resolve) => window.requestAnimationFrame(resolve))
-    if (
-      anchor
-      && !followingBottom.value
-      && refreshVersion === virtualScrollRefreshVersion
-    ) {
-      let element = findMessageElement(anchor.id)
-      if (!element) {
-        const index = transcript.value.messages.findIndex((message) => message.id === anchor.id)
-        if (index >= 0) {
-          virtualScroll.value?.scrollTo(index, 'start-force')
-          await nextTick()
-          await new Promise((resolve) => window.requestAnimationFrame(resolve))
-          element = findMessageElement(anchor.id)
-        }
-      }
-      restoreChatReadingAnchor(scrollTarget, element, anchor)
-      readingAnchor = anchor
-    }
-    await new Promise((resolve) => window.requestAnimationFrame(resolve))
-    if (refreshVersion === virtualScrollRefreshVersion) {
-      virtualScrollRefreshInProgress = false
-    }
   })
+}
+
+async function completeVirtualScrollRefresh() {
+  const request = virtualScrollRefreshRequest
+  if (!request) return
+  await nextTick()
+  await new Promise((resolve) => window.requestAnimationFrame(resolve))
+  if (request !== virtualScrollRefreshRequest) return
+  if (
+    request.anchor
+    && !userScrollActive
+    && !followingBottom.value
+    && request.version === virtualScrollRefreshVersion
+  ) {
+    const element = findMessageElement(request.anchor.id)
+    if (!element && !request.revealing) {
+      const index = transcript.value.messages.findIndex((message) => message.id === request.anchor.id)
+      if (index >= 0) {
+        request.revealing = true
+        virtualScroll.value?.scrollTo(index, 'start-force')
+        return
+      }
+    }
+    restoreChatReadingAnchor(scrollTarget, element, request.anchor)
+    readingAnchor = request.anchor
+  }
+  finishVirtualScrollRefresh(request)
+}
+
+function finishVirtualScrollRefresh(request) {
+  if (request !== virtualScrollRefreshRequest) return
+  virtualScrollRefreshRequest = null
+  virtualScrollRefreshInProgress = false
+  if (userScrollActive || !virtualScrollRefreshPending) return
+  const pending = virtualScrollRefreshPending
+  virtualScrollRefreshPending = null
+  startVirtualScrollRefresh(pending)
 }
 
 function handleMessageRendered() {
   if (followingBottom.value) {
-    virtualScroll.value?.refresh(-1)
+    scheduleVirtualScrollRefresh(false)
     scheduleFollowScroll()
     return
   }
@@ -949,25 +966,33 @@ function rememberReadingAnchor() {
 function clearReadingAnchor() {
   readingAnchor = null
   virtualScrollRefreshVersion += 1
-  virtualScrollRefreshInProgress = false
+  if (virtualScrollRefreshRequest) virtualScrollRefreshRequest.anchor = null
+  if (virtualScrollRefreshPending) virtualScrollRefreshPending.anchor = null
 }
 
-function revealActivityPanel(element) {
+function beginActivityResize() {
+  if (!chat.current) return
   followingBottom.value = false
   clearReadingAnchor()
   cancelFollowScroll()
-  scheduleVirtualScrollRefresh(0, false)
-  if (activityPanelScrollFrame !== null) window.cancelAnimationFrame(activityPanelScrollFrame)
-  activityPanelScrollFrame = window.requestAnimationFrame(() => {
-    activityPanelScrollFrame = null
-    scrollChatElementToTop(element, !reducedMotion)
-  })
+}
+
+function finishActivityResize() {
+  scheduleVirtualScrollRefresh(false)
 }
 
 function updateFollowState() {
-  if (!scrollTarget || virtualScrollRefreshInProgress) return
+  if (!scrollTarget) return
+  const scrollTop = scrollTarget.scrollTop
+  const movedUp = scrollTop < lastScrollTop
+  lastScrollTop = scrollTop
+  if (virtualScrollRefreshInProgress) return
   const atBottom = chatBottomDistance(scrollTarget) <= bottomThreshold
-  if (chatShouldFollowBottom(atBottom, followingBottom.value, userScrollActive)) {
+  if (userScrollActive && movedUp) {
+    followingBottom.value = false
+    cancelFollowScroll()
+  }
+  else if (chatShouldFollowBottom(atBottom, followingBottom.value, userScrollActive)) {
     followingBottom.value = true
     readingAnchor = null
   }
@@ -998,21 +1023,42 @@ function scheduleUserScrollEnd() {
   userScrollTimer = setTimeout(() => {
     userScrollTimer = null
     userScrollActive = false
+    if (!virtualScrollRefreshInProgress && virtualScrollRefreshPending) {
+      const pending = virtualScrollRefreshPending
+      virtualScrollRefreshPending = null
+      startVirtualScrollRefresh(pending)
+    }
     scheduleFollowScroll()
   }, 180)
 }
 
 function handleTouchStart() {
   touchActive = true
-  beginUserScroll()
+}
+
+function handleTouchMove() {
+  if (!userScrollActive) beginUserScroll()
 }
 
 function handleTouchEnd() {
   touchActive = false
+  if (userScrollActive) scheduleUserScrollEnd()
+}
+
+function handleWheel(event) {
+  if (!event.deltaY) return
+  beginUserScroll()
   scheduleUserScrollEnd()
 }
 
-function handleWheel() {
+function handleScrollKey(event) {
+  if (
+    event.defaultPrevented
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)
+  ) return
   beginUserScroll()
   scheduleUserScrollEnd()
 }
@@ -1056,8 +1102,10 @@ function scheduleFollowScroll() {
 function observeChatSize() {
   scrollTarget = scrollArea.value?.getScrollTarget?.() || null
   if (scrollTarget) {
+    lastScrollTop = scrollTarget.scrollTop
     scrollTarget.addEventListener('scroll', updateFollowState, { passive: true })
     scrollTarget.addEventListener('touchstart', handleTouchStart, { passive: true })
+    scrollTarget.addEventListener('touchmove', handleTouchMove, { passive: true })
     scrollTarget.addEventListener('touchend', handleTouchEnd, { passive: true })
     scrollTarget.addEventListener('touchcancel', handleTouchEnd, { passive: true })
     scrollTarget.addEventListener('wheel', handleWheel, { passive: true })
@@ -1095,8 +1143,6 @@ watch(
       followScrollNow()
       return
     }
-    const lastIndex = transcript.value.messages.length - 1
-    if (lastIndex >= 0) virtualScroll.value?.scrollTo(lastIndex, 'end-force')
     scheduleFollowScroll()
   },
   { flush: 'post' }
@@ -1172,6 +1218,7 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   scrollTarget?.removeEventListener('scroll', updateFollowState)
   scrollTarget?.removeEventListener('touchstart', handleTouchStart)
+  scrollTarget?.removeEventListener('touchmove', handleTouchMove)
   scrollTarget?.removeEventListener('touchend', handleTouchEnd)
   scrollTarget?.removeEventListener('touchcancel', handleTouchEnd)
   scrollTarget?.removeEventListener('wheel', handleWheel)
@@ -1179,10 +1226,8 @@ onBeforeUnmount(() => {
   executionAgents.stopPolling()
   clearTimeout(runAnnouncementTimer)
   clearTimeout(userScrollTimer)
-  clearTimeout(virtualScrollRefreshTimer)
   clearTimeout(searchHighlightTimer)
   window.removeEventListener('mouseup', handleScrollAreaMouseUp)
-  if (activityPanelScrollFrame !== null) window.cancelAnimationFrame(activityPanelScrollFrame)
   if (virtualScrollRefreshFrame !== null) window.cancelAnimationFrame(virtualScrollRefreshFrame)
   cancelFollowScroll()
 })

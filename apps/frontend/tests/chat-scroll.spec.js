@@ -6,7 +6,6 @@ import {
   chatReadingAnchor,
   chatShouldFollowBottom,
   restoreChatReadingAnchor,
-  scrollChatElementToTop,
   scrollChatToBottom
 } from '../src/utils/chat-scroll'
 
@@ -35,19 +34,6 @@ describe('chat scroll geometry', () => {
     expect(chatShouldFollowBottom(true, false, false)).toBe(false)
     expect(chatShouldFollowBottom(true, false, true)).toBe(true)
     expect(chatShouldFollowBottom(true, true, false)).toBe(true)
-  })
-
-  it('aligns expanded chat content at the top and respects reduced motion', () => {
-    const calls = []
-    const element = { scrollIntoView: (options) => calls.push(options) }
-
-    scrollChatElementToTop(element)
-    scrollChatElementToTop(element, false)
-
-    expect(calls).toEqual([
-      { behavior: 'smooth', block: 'start' },
-      { behavior: 'auto', block: 'start' }
-    ])
   })
 
   it('captures the first visible message with its viewport offset', () => {

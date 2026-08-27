@@ -7,6 +7,10 @@
       expand-icon-class="tool-call__toggle"
       :duration="expansionDuration"
       :toggle-aria-label="`Technische Details für ${identity.label} ein- oder ausblenden`"
+      @before-show="emit('resize-start')"
+      @before-hide="emit('resize-start')"
+      @after-show="emit('resized')"
+      @after-hide="emit('resized')"
     >
       <template #header>
         <q-item-section class="tool-call__identity">
@@ -90,7 +94,7 @@
             color="primary"
             :label="showFullArguments ? 'Weniger anzeigen' : 'Vollständig anzeigen'"
             class="q-mt-xs"
-            @click="showFullArguments = !showFullArguments"
+            @click="toggleFullArguments"
           />
         </div>
 
@@ -110,7 +114,7 @@
             color="primary"
             :label="showFullResult ? 'Weniger anzeigen' : 'Vollständig anzeigen'"
             class="q-mt-xs"
-            @click="showFullResult = !showFullResult"
+            @click="toggleFullResult"
           />
         </div>
 
@@ -143,7 +147,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
@@ -169,7 +173,7 @@ const props = defineProps({
   autoExpand: Boolean,
   technicalOnly: Boolean
 })
-const emit = defineEmits(['open-file'])
+const emit = defineEmits(['open-file', 'resize-start', 'resized'])
 const instanceLimits = useInstanceLimitsStore()
 
 const identity = computed(() => toolIdentity(props.tool.name))
@@ -205,6 +209,19 @@ const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: redu
 const expanded = ref(props.autoExpand || ['approval', 'question', 'failed', 'denied', 'interrupted'].includes(status.value.name))
 const showFullArguments = ref(false)
 const showFullResult = ref(false)
+
+function toggleFullArguments() {
+  emit('resize-start')
+  showFullArguments.value = !showFullArguments.value
+  nextTick(() => emit('resized'))
+}
+
+function toggleFullResult() {
+  emit('resize-start')
+  showFullResult.value = !showFullResult.value
+  nextTick(() => emit('resized'))
+}
+
 watch(() => status.value.name, (name) => {
   if (['approval', 'question', 'failed', 'denied', 'interrupted'].includes(name)) expanded.value = true
 })

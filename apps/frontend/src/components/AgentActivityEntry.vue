@@ -7,6 +7,10 @@
     expand-icon-class="work-history__context-toggle"
     :duration="expansionDuration"
     :toggle-aria-label="`${contextLabel} ein- oder ausblenden`"
+    @before-show="emit('resize-start')"
+    @before-hide="emit('resize-start')"
+    @after-show="emit('resized')"
+    @after-hide="emit('resized')"
   >
     <template #header>
       <q-item-section>
@@ -33,6 +37,8 @@
         :active="item.active"
         technical-only
         @open-file="emit('open-file', $event)"
+        @resize-start="emit('resize-start')"
+        @resized="emit('resized')"
       />
     </div>
   </q-expansion-item>
@@ -48,6 +54,8 @@
       :active="item.active"
       technical-only
       @open-file="emit('open-file', $event)"
+      @resize-start="emit('resize-start')"
+      @resized="emit('resized')"
     />
   </template>
   <q-expansion-item
@@ -59,7 +67,10 @@
     expand-icon-class="work-history__reasoning-toggle"
     :duration="expansionDuration"
     :toggle-aria-label="`${entry.presentation.title} ein- oder ausblenden`"
-    @after-show="emit('expanded')"
+    @before-show="emit('resize-start')"
+    @before-hide="emit('resize-start')"
+    @after-show="emit('resized')"
+    @after-hide="emit('resized')"
   >
     <template #header>
       <q-item-section>
@@ -115,6 +126,8 @@
     :auto-expand="autoExpand"
     technical-only
     @open-file="emit('open-file', $event)"
+    @resize-start="emit('resize-start')"
+    @resized="emit('resized')"
   />
 </template>
 
@@ -130,7 +143,7 @@ const props = defineProps({
   processOutputs: { type: Object, default: () => ({}) },
   autoExpand: Boolean
 })
-const emit = defineEmits(['open-file', 'expanded'])
+const emit = defineEmits(['open-file', 'resize-start', 'resized'])
 const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
 const contextActive = computed(() => props.entry.items?.some((item) => item.active))
 const contextHasAttention = computed(() => props.entry.items?.some((item) => (
