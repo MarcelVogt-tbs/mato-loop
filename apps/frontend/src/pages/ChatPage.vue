@@ -148,7 +148,7 @@
                 :content="message.content"
                 :research-sources="message.research?.linkedSources || []"
                 :trusted-image-origins="trustedImageOrigins"
-                @rendered="scheduleVirtualScrollRefresh"
+                @rendered="handleMessageRendered"
                 @trust-image-origin="trustImageOrigin"
               />
               <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
@@ -926,6 +926,15 @@ function scheduleVirtualScrollRefresh(delay = 0, preservePosition = true) {
   })
 }
 
+function handleMessageRendered() {
+  if (followingBottom.value) {
+    virtualScroll.value?.refresh(-1)
+    scheduleFollowScroll()
+    return
+  }
+  scheduleVirtualScrollRefresh()
+}
+
 function renderedMessageElements() {
   return [...(scrollContent.value?.querySelectorAll('[data-message-id]') || [])]
 }
@@ -1082,6 +1091,21 @@ watch(
     if (!followingBottom.value) scheduleVirtualScrollRefresh()
   },
   { flush: 'pre' }
+)
+watch(
+  () => Boolean(chat.streamContent),
+  (streaming) => {
+    if (!followingBottom.value || userScrollActive) return
+    cancelFollowScroll()
+    if (streaming) {
+      followScrollNow()
+      return
+    }
+    const lastIndex = transcript.value.messages.length - 1
+    if (lastIndex >= 0) virtualScroll.value?.scrollTo(lastIndex, 'end-force')
+    scheduleFollowScroll()
+  },
+  { flush: 'post' }
 )
 watch(
   () => runPresentation.value.announcement,

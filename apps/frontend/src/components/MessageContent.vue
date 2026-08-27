@@ -68,6 +68,7 @@ const mermaidDialog = ref(false)
 const mermaidImage = ref(null)
 const STREAM_RENDER_INTERVAL_MS = 50
 let renderTimer = null
+let streamRenderStarted = false
 let renderVersion = 0
 let mermaidObjectUrl = ''
 
@@ -121,7 +122,13 @@ async function hydrateMermaid(version) {
 
 function scheduleRender() {
   if (!props.streaming) {
+    streamRenderStarted = false
     if (renderTimer !== null) window.clearTimeout(renderTimer)
+    renderContent()
+    return
+  }
+  if (!streamRenderStarted) {
+    streamRenderStarted = true
     renderContent()
     return
   }
