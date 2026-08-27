@@ -70,7 +70,7 @@
           :key="chat.current.id"
           ref="virtualScroll"
           class="chat-transcript q-pa-md"
-          :items="transcript.messages"
+          :items="displayMessages"
           scroll-target="#chat-scroll-area > .scroll"
           :virtual-scroll-item-size="96"
           @virtual-scroll="handleVirtualScroll"
@@ -104,6 +104,7 @@
                 }
               ]"
               :data-message-id="message.id"
+              :data-live-message-id="message.liveMessageId || undefined"
               tabindex="-1"
             >
             <div v-if="message.role === 'user' || message.showAgentLabel" class="chat-message__label">
@@ -145,6 +146,7 @@
                 class="chat-message__content"
                 :content="message.content"
                 :research-sources="message.research?.linkedSources || []"
+                :streaming="message.streaming"
                 :trusted-image-origins="trustedImageOrigins"
                 @rendered="handleMessageRendered"
                 @trust-image-origin="trustImageOrigin"
@@ -242,39 +244,6 @@
             </div>
           </template>
           <template #after>
-            <div
-              v-if="chat.streamContent || (chat.running && !hasCurrentWorkHistory)"
-              class="chat-message chat-message--assistant"
-            >
-            <div v-if="!hasCurrentAssistantTurn" class="chat-message__label">
-              <span>{{ identity.displayName }}</span>
-            </div>
-            <AgentActivityPanel
-              v-if="chat.running && !hasCurrentWorkHistory"
-              :history="liveWorkHistory"
-              :activity="chat.activity"
-              :presentation="runPresentation"
-              :reasoning="chat.streamReasoning"
-              :process-outputs="chat.processOutputs"
-              running
-              :class="{ 'q-mb-sm': chat.streamContent }"
-              @resize-start="beginActivityResize"
-              @resized="finishActivityResize"
-            />
-            <MessageContent
-              v-if="chat.streamContent"
-              class="chat-message__content"
-              :content="chat.streamContent"
-              :trusted-image-origins="trustedImageOrigins"
-              streaming
-              @trust-image-origin="trustImageOrigin"
-            />
-            <div v-if="chat.streamContent && chat.streamModelName" class="chat-message__meta items-center">
-              <span class="chat-message__meta-model" :title="chat.streamModelName">
-                {{ chat.streamModelName }}
-              </span>
-            </div>
-            </div>
             <ApprovalCard
               v-for="approval in transcript.unmatchedApprovals"
               :key="approval.id"
@@ -439,7 +408,11 @@ import {
   restoreChatReadingAnchor,
   scrollChatToBottom
 } from 'src/utils/chat-scroll'
-import { buildChatTranscript, retryAvailableForMessage } from 'src/utils/chat-transcript'
+import {
+  buildChatTranscript,
+  retryAvailableForMessage,
+  withLiveTranscriptMessage
+} from 'src/utils/chat-transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 
@@ -526,6 +499,23 @@ const hasCurrentAssistantTurn = computed(() => (
 const hasCurrentWorkHistory = computed(() => (
   transcript.value.messages.some((message) => message.currentTurn && message.workHistory)
 ))
+const displayMessages = computed(() => {
+  const messages = transcript.value.messages
+  const liveHistory = chat.running && !hasCurrentWorkHistory.value
+    ? liveWorkHistory.value
+    : null
+  const liveMessage = {
+    id: `live-${chat.current?.id}`,
+    role: 'assistant',
+    content: chat.streamContent,
+    currentTurn: true,
+    modelName: chat.streamModelName,
+    showAgentLabel: !hasCurrentAssistantTurn.value,
+    streaming: Boolean(chat.streamContent),
+    workHistory: liveHistory
+  }
+  return withLiveTranscriptMessage(messages, liveMessage)
+})
 const runPresentation = computed(() => agentRunPresentation({
   running: chat.running,
   stopping: chat.stopping,
@@ -922,7 +912,10 @@ async function completeVirtualScrollRefresh() {
       }
     }
     restoreChatReadingAnchor(scrollTarget, element, request.anchor)
-    readingAnchor = request.anchor
+    readingAnchor = {
+      ...request.anchor,
+      id: element?.dataset.messageId || request.anchor.id
+    }
   }
   finishVirtualScrollRefresh(request)
 }
@@ -951,7 +944,9 @@ function renderedMessageElements() {
 }
 
 function findMessageElement(messageId) {
-  return renderedMessageElements().find((element) => element.dataset.messageId === messageId)
+  return renderedMessageElements().find((element) => (
+    element.dataset.messageId === messageId || element.dataset.liveMessageId === messageId
+  ))
 }
 
 function captureReadingAnchor() {

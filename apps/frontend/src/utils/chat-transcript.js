@@ -7,6 +7,26 @@ export function retryAvailableForMessage(message, messages = [], running = false
     && !running
 }
 
+export function withLiveTranscriptMessage(messages, liveMessage) {
+  if (liveMessage.content) return [...messages, liveMessage]
+  const lastUserIndex = messages.reduce((found, message, index) => (
+    message.role === 'user' ? index : found
+  ), -1)
+  const currentIndex = messages.reduce((found, message, index) => (
+    message.role === 'assistant' && index > lastUserIndex ? index : found
+  ), -1)
+  if (currentIndex >= 0) {
+    const displayed = [...messages]
+    displayed[currentIndex] = {
+      ...displayed[currentIndex],
+      ...(liveMessage.workHistory ? { workHistory: liveMessage.workHistory } : {}),
+      liveMessageId: liveMessage.id
+    }
+    return displayed
+  }
+  return liveMessage.workHistory ? [...messages, liveMessage] : messages
+}
+
 export function groupWorkHistoryEntries(entries = []) {
   const grouped = []
   for (const entry of entries) {

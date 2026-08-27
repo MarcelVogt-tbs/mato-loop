@@ -4,7 +4,8 @@ import {
   buildChatTranscript,
   groupWorkHistoryEntries,
   retryAvailableForMessage,
-  splitLiveWorkHistory
+  splitLiveWorkHistory,
+  withLiveTranscriptMessage
 } from '../src/utils/chat-transcript'
 
 describe('chat transcript', () => {
@@ -17,6 +18,32 @@ describe('chat transcript', () => {
     expect(retryAvailableForMessage(error, [error, { id: 'user-2' }])).toBe(false)
     expect(retryAvailableForMessage(error, [error], true)).toBe(false)
     expect(retryAvailableForMessage({ ...error, retryAvailable: false }, [error])).toBe(false)
+  })
+
+  it('keeps the virtual tail length stable when live content becomes canonical', () => {
+    const user = { id: 'user-1', role: 'user', content: 'Frage' }
+    const liveHistory = { id: 'live-history', entries: [] }
+    const live = {
+      id: 'live-session-1', role: 'assistant', content: 'Antwort', currentTurn: true,
+      workHistory: liveHistory
+    }
+
+    const streaming = withLiveTranscriptMessage([user], live)
+    const canonical = { id: 'assistant-1', role: 'assistant', content: 'Antwort', currentTurn: false }
+    const completed = withLiveTranscriptMessage(
+      [user, canonical],
+      { ...live, content: '' }
+    )
+
+    expect(streaming).toHaveLength(2)
+    expect(streaming[1]).toBe(live)
+    expect(completed).toHaveLength(2)
+    expect(completed[1]).toEqual({
+      ...canonical,
+      liveMessageId: live.id,
+      workHistory: liveHistory
+    })
+    expect(canonical).not.toHaveProperty('workHistory')
   })
 
   it('groups consecutive filesystem context tools without crossing other activity', () => {
