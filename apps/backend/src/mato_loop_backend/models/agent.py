@@ -106,7 +106,7 @@ class ApprovalRequest(Base):
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     capability: Mapped[str] = mapped_column(String(120), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(80), nullable=False)
-    resource_scope: Mapped[str] = mapped_column(String(1200), nullable=False)
+    resource_scope: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     available_decisions: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
@@ -153,7 +153,7 @@ class PermissionGrant(Base):
     )
     capability: Mapped[str] = mapped_column(String(120), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(80), nullable=False)
-    resource_scope: Mapped[str] = mapped_column(String(1200), nullable=False)
+    resource_scope: Mapped[str] = mapped_column(Text, nullable=False)
     source_approval_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("approval_requests.id", ondelete="SET NULL"), nullable=True
     )

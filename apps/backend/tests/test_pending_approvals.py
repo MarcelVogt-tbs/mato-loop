@@ -2,11 +2,12 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
+from sqlalchemy import Text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.runtime import approval_payload
 from mato_loop_backend.api.routes.approvals import pending_approvals
-from mato_loop_backend.models import ApprovalRequest, ChatSession, UserAccount
+from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant, UserAccount
 
 
 def _approval(user_id, session_id, created_at: datetime, *, request_type="agent_action") -> ApprovalRequest:
@@ -103,3 +104,8 @@ def test_approval_envelope_metadata_supports_owned_optional_sources() -> None:
     assert table.c.run_id.nullable is True
     assert next(iter(table.c.run_id.foreign_keys)).ondelete == "SET NULL"
     assert "ix_approval_requests_user_pending" in {index.name for index in table.indexes}
+
+
+def test_resource_scope_columns_are_unbounded() -> None:
+    assert isinstance(ApprovalRequest.__table__.c.resource_scope.type, Text)
+    assert isinstance(PermissionGrant.__table__.c.resource_scope.type, Text)

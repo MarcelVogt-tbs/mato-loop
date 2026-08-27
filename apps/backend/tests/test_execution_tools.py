@@ -234,10 +234,11 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
 def test_read_only_shell_grant_does_not_match_risky_inspection(tmp_path) -> None:
     client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
     context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
+    command = f"cat {'x' * 1200}"
     read_only = _process_permission(
-        context, {"command": "cat README.md"}, shell=True, read_only=True
+        context, {"command": command}, shell=True, read_only=True
     )
-    risky = _process_permission(context, {"command": "cat README.md"}, shell=True)
+    risky = _process_permission(context, {"command": command}, shell=True)
     grant = PermissionGrant(
         session_id=context.session.id,
         capability=read_only.capability,
@@ -245,6 +246,7 @@ def test_read_only_shell_grant_does_not_match_risky_inspection(tmp_path) -> None
         resource_scope=read_only.resource_scope,
     )
 
+    assert len(read_only.resource_scope) > 1200
     assert PermissionPolicy.grant_matches(grant, read_only, context.root_files)
     assert not PermissionPolicy.grant_matches(grant, risky, context.root_files)
 
