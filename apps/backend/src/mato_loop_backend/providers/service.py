@@ -113,6 +113,40 @@ def _temperature_option(config: dict[str, Any]) -> float | None:
     return None
 
 
+def _is_llamacpp_model(provider: LlmProviderConfig, model: ModelConfig) -> bool:
+    metadata = model.discovery_metadata
+    return (
+        provider.adapter_type == "openai-compatible"
+        and str(metadata.get("owned_by") or "").casefold() == "llamacpp"
+    ) or (
+        provider.adapter_type == "lemonade"
+        and str(metadata.get("recipe") or "").casefold() == "llamacpp"
+    )
+
+
+def _project_provider_tools(
+    provider: LlmProviderConfig,
+    model: ModelConfig,
+    tools: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not _is_llamacpp_model(provider, model):
+        return tools
+
+    # llama.cpp expands finite bounds into grammar repetitions with a hard complexity limit.
+    def project(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: project(item)
+                for key, item in value.items()
+                if key not in {"maxLength", "maxItems"}
+            }
+        if isinstance(value, list):
+            return [project(item) for item in value]
+        return value
+
+    return [project(tool) for tool in tools]
+
+
 def normalize_provider_image(data: bytes, validated: ValidatedImage) -> tuple[bytes, str]:
     if (
         validated.size_bytes <= _MODEL_IMAGE_MAX_BYTES
@@ -545,6 +579,9 @@ class ProviderService:
                 )
             except PseudonymizationError as exc:
                 raise _pseudonymization_provider_error(exc) from exc
+        llamacpp_chat = api_type == "chat_completions" and _is_llamacpp_model(
+            provider, model
+        )
         request = ProviderRequest(
             model=(
                 model.model_id.removeprefix(adapter.model_prefix)
@@ -552,10 +589,11 @@ class ProviderService:
                 else model.model_id
             ),
             messages=provider_messages,
-            tools=tools,
+            tools=_project_provider_tools(provider, model, tools),
             tool_choice=tool_choice,
             stream=model.supports_streaming,
-            include_usage=adapter.include_stream_usage and model.supports_streaming,
+            include_usage=model.supports_streaming
+            and (adapter.include_stream_usage or llamacpp_chat),
             supports_parallel_tool_calls=(
                 model.supports_tools and model.supports_parallel_tool_calls
             ),

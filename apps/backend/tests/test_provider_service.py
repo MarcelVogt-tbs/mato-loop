@@ -136,6 +136,70 @@ async def test_complete_passes_model_capabilities_and_explicit_timeout(monkeypat
     assert result.provider_data["continuation_scope"]["providerId"] == str(provider.id)
 
 
+@pytest.mark.parametrize(
+    ("adapter_type", "metadata", "projected", "include_usage"),
+    [
+        ("openai-compatible", {"owned_by": "llamacpp"}, True, True),
+        ("lemonade", {"recipe": "llamacpp"}, True, True),
+        ("openai-compatible", {"owned_by": "vendor"}, False, False),
+        ("lemonade", {"recipe": "flm"}, False, True),
+    ],
+)
+async def test_complete_relaxes_only_llamacpp_repetition_limits(
+    monkeypatch, adapter_type, metadata, projected, include_usage
+) -> None:
+    provider = LlmProviderConfig(
+        name="Local",
+        adapter_type=adapter_type,
+        pseudonymization_enabled=False,
+        config={"base_url": "http://local.test/v1"},
+    )
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="local-model",
+        discovery_metadata=metadata,
+    )
+    tools = [
+        {
+            "name": "complex_tool",
+            "parameters": {
+                "$defs": {
+                    "Item": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2_000,
+                    }
+                },
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 50,
+                "items": {"$ref": "#/$defs/Item"},
+            },
+        }
+    ]
+    transport = AsyncMock(return_value=ProviderResult(content="OK"))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+
+    await ProviderService.complete(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        messages=[{"role": "user", "content": "Test"}],
+        tools=tools,
+    )
+
+    request = transport.await_args.kwargs["request"]
+    sent = request.tools
+    assert (sent is not tools) is projected
+    assert ("maxItems" not in sent[0]["parameters"]) is projected
+    assert ("maxLength" not in sent[0]["parameters"]["$defs"]["Item"]) is projected
+    assert sent[0]["parameters"]["minItems"] == 1
+    assert sent[0]["parameters"]["items"] == {"$ref": "#/$defs/Item"}
+    assert tools[0]["parameters"]["maxItems"] == 50
+    assert tools[0]["parameters"]["$defs"]["Item"]["maxLength"] == 2_000
+    assert request.include_usage is include_usage
+
+
 async def test_complete_validates_and_transports_direct_audio_and_video(monkeypatch) -> None:
     provider = LlmProviderConfig(
         name="vLLM",
