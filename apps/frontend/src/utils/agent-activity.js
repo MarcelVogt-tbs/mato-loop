@@ -14,6 +14,28 @@ const LABELS = {
   reconnecting: 'Verbindung wird wiederhergestellt'
 }
 
+const WARNING_PRESENTATIONS = {
+  'privacy.placeholderRestorationIncomplete': {
+    title: 'Geschützter Wert nicht verfügbar',
+    summary: 'Ein Datenschutz-Platzhalter konnte nicht wiederhergestellt werden.'
+  }
+}
+
+export function runWarningEntries(warnings = [], keyPrefix = 'warning', live = false) {
+  return warnings.flatMap((warning, index) => {
+    const code = typeof warning === 'string' ? warning : warning?.code
+    const presentation = WARNING_PRESENTATIONS[code]
+    if (!presentation) return []
+    return [{
+      key: `${keyPrefix}-${warning?.modelRequest ?? index}-${code}`,
+      type: 'warning',
+      warning: true,
+      live,
+      presentation
+    }]
+  })
+}
+
 export function agentActivityLabel(activity) {
   if (activity?.phase === 'waiting_model') {
     if (

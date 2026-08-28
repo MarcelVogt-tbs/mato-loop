@@ -63,6 +63,9 @@ from mato_loop_backend.settings.models import (
 
 logger = logging.getLogger(__name__)
 
+PSEUDONYMIZATION_WARNING_CODE = "privacy.placeholderRestorationIncomplete"
+_UNKNOWN_MARKER_REPLACEMENT = "[...]"
+
 _IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 _RETRY_DELAYS = (2.0, 5.0)
 _MODEL_IMAGE_MAX_EDGE = 2048
@@ -443,6 +446,7 @@ class ProviderService:
         tool_choice: Literal["auto", "required", "none"] = "auto",
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning: ReasoningDeltaCallback | None = None,
+        on_warning: Callable[[str], Awaitable[None]] | None = None,
         on_retry: Callable[[int, int, int | None, str], Awaitable[None]] | None = None,
         timeout: float = 300,
         max_output_tokens: int | None = None,
@@ -589,8 +593,28 @@ class ProviderService:
             media=media,
         )
         stream_started = False
+        warning_pending = False
+        warning_emitted = False
+
+        def note_unknown_marker() -> None:
+            nonlocal warning_pending
+            warning_pending = True
+
+        async def publish_warning() -> None:
+            nonlocal warning_pending, warning_emitted
+            if not warning_pending or warning_emitted:
+                return
+            warning_pending = False
+            warning_emitted = True
+            if on_warning is not None:
+                await on_warning(PSEUDONYMIZATION_WARNING_CODE)
+
         delta_restorer = (
-            StreamingPseudonymRestorer(pseudonymizer)
+            StreamingPseudonymRestorer(
+                pseudonymizer,
+                unknown_marker_replacement=_UNKNOWN_MARKER_REPLACEMENT,
+                on_unknown_marker=note_unknown_marker,
+            )
             if pseudonymizer is not None and on_delta is not None
             else None
         )
@@ -604,6 +628,7 @@ class ProviderService:
                     restored = delta_restorer.feed(text) if delta_restorer else text
                 except PseudonymizationError as exc:
                     raise _pseudonymization_provider_error(exc) from exc
+                await publish_warning()
                 if restored:
                     await on_delta(restored)
 
@@ -613,12 +638,17 @@ class ProviderService:
             if on_reasoning:
                 restorer = reasoning_restorers.get(kind)
                 if pseudonymizer is not None and restorer is None:
-                    restorer = StreamingPseudonymRestorer(pseudonymizer)
+                    restorer = StreamingPseudonymRestorer(
+                        pseudonymizer,
+                        unknown_marker_replacement=_UNKNOWN_MARKER_REPLACEMENT,
+                        on_unknown_marker=note_unknown_marker,
+                    )
                     reasoning_restorers[kind] = restorer
                 try:
                     restored = restorer.feed(text) if restorer else text
                 except PseudonymizationError as exc:
                     raise _pseudonymization_provider_error(exc) from exc
+                await publish_warning()
                 if restored:
                     await on_reasoning(restored, kind)
 
@@ -630,18 +660,27 @@ class ProviderService:
                 if delta_restorer is not None and on_delta is not None:
                     if remaining := delta_restorer.flush():
                         await on_delta(remaining)
+                    await publish_warning()
                 if on_reasoning is not None:
                     for kind, restorer in reasoning_restorers.items():
                         if remaining := restorer.flush():
                             await on_reasoning(remaining, kind)
+                        await publish_warning()
                 if pseudonymizer is not None:
-                    result.content = pseudonymizer.restore_text(result.content)
+                    result.content = pseudonymizer.restore_text(
+                        result.content,
+                        unknown_marker_replacement=_UNKNOWN_MARKER_REPLACEMENT,
+                        on_unknown_marker=note_unknown_marker,
+                    )
                     for call in result.tool_calls:
                         call.arguments = pseudonymizer.restore_value(call.arguments)
                     if result.reasoning is not None:
                         result.reasoning.text = pseudonymizer.restore_text(
-                            result.reasoning.text
+                            result.reasoning.text,
+                            unknown_marker_replacement=_UNKNOWN_MARKER_REPLACEMENT,
+                            on_unknown_marker=note_unknown_marker,
                         )
+                    await publish_warning()
                     for key in (
                         "responses_output_items",
                         "reasoning_encrypted_content",

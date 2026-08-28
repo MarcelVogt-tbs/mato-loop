@@ -198,7 +198,7 @@ import {
   toolFileActions,
   toolFileAttachment
 } from 'src/utils/attachments'
-import { formatActivityDuration } from 'src/utils/agent-activity'
+import { formatActivityDuration, runWarningEntries } from 'src/utils/agent-activity'
 import { groupWorkHistoryEntries, splitLiveWorkHistory } from 'src/utils/chat-transcript'
 import {
   reasoningBlocks,
@@ -214,6 +214,7 @@ const props = defineProps({
   activity: { type: Object, default: null },
   presentation: { type: Object, default: null },
   reasoning: { type: Object, default: null },
+  warnings: { type: Array, default: () => [] },
   processOutputs: { type: Object, default: () => ({}) },
   running: Boolean
 })
@@ -228,6 +229,7 @@ let pausedDuration = 0
 const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
 const preparedEntries = computed(() => [
   ...(props.history?.entries || []),
+  ...runWarningEntries(props.warnings, 'live-warning', true),
   ...(props.reasoning
     ? [{ key: 'live-reasoning', type: 'reasoning', reasoning: props.reasoning, live: true }]
     : [])
@@ -256,7 +258,10 @@ const approvalItems = computed(() => items.value.filter((item) => item.approval)
 const errorItems = computed(() => states.value.filter(({ status }) => (
   ['failed', 'denied'].includes(status.name)
 )))
-const warningItems = computed(() => states.value.filter(({ status }) => status.name === 'interrupted'))
+const warningItems = computed(() => [
+  ...states.value.filter(({ status }) => status.name === 'interrupted'),
+  ...entries.value.filter((entry) => entry.type === 'warning')
+])
 const totalDuration = computed(() => {
   if (!props.history?.startedAt || (!props.running && !props.history?.completedAt)) return null
   const startedAt = new Date(props.history?.startedAt).getTime()

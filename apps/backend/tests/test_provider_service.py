@@ -366,6 +366,52 @@ async def test_public_complete_rejects_unknown_pseudonym_marker(monkeypatch) -> 
     assert exc_info.value.code == "privacy.pseudonymizationFailed"
 
 
+async def test_public_complete_warns_and_continues_for_unknown_visible_marker(
+    monkeypatch,
+) -> None:
+    provider = LlmProviderConfig(
+        name="Public",
+        adapter_type="openai-compatible",
+        config={"base_url": "http://public.test/v1"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="public-model")
+    streamed = []
+    reasoned = []
+    warning = AsyncMock()
+
+    async def fake_chat_completions(**kwargs):
+        protected = kwargs["request"].messages[-1]["content"]
+        marker = re.search(r"\[\[MLP_[A-F0-9]+_\d{4}\]\]", protected)
+        assert marker is not None
+        unknown = marker.group().replace("0001", "9999")
+        await kwargs["on_delta"]("Kontakt: " + unknown)
+        await kwargs["on_reasoning"]("Pruefe " + unknown, "summary")
+        return ProviderResult(
+            content="Antwort an " + unknown,
+            reasoning=PublicReasoning(text="Gedanke zu " + unknown),
+        )
+
+    monkeypatch.setattr(service_module, "chat_completions", fake_chat_completions)
+
+    result = await ProviderService.complete(
+        AsyncMock(spec=AsyncSession),
+        provider=provider,
+        model=model,
+        messages=[{"role": "user", "content": "Schreibe an anna@example.com"}],
+        tools=[],
+        on_delta=lambda text: _append_async(streamed, text),
+        on_reasoning=lambda text, kind: _append_async(reasoned, (text, kind)),
+        on_warning=warning,
+    )
+
+    assert "".join(streamed) == "Kontakt: [...]"
+    assert reasoned == [("Pruefe [...]", "summary")]
+    assert result.content == "Antwort an [...]"
+    assert result.reasoning is not None
+    assert result.reasoning.text == "Gedanke zu [...]"
+    warning.assert_awaited_once_with("privacy.placeholderRestorationIncomplete")
+
+
 async def _append_async(items: list, value) -> None:
     items.append(value)
 
@@ -1072,7 +1118,7 @@ async def test_media_selection_precedes_pseudonymization(monkeypatch) -> None:
                 for message in messages
             ]
 
-        def restore_text(self, text):
+        def restore_text(self, text, **_kwargs):
             return text
 
         def restore_value(self, value):

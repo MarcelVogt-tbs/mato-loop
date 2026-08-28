@@ -1,3 +1,5 @@
+import { runWarningEntries } from 'src/utils/agent-activity'
+
 const CONTEXT_TOOL_NAMES = new Set(['read', 'read_file', 'glob', 'grep', 'list_directory'])
 
 export function retryAvailableForMessage(message, messages = [], running = false) {
@@ -59,7 +61,8 @@ export function splitLiveWorkHistory(entries = [], activity = null) {
       entry.active || entry.tool?.id === activity.toolCallId
     ))
     : null
-  const current = attention || liveReasoning || currentContextSummary || activeTool || null
+  const liveWarning = [...entries].reverse().find((entry) => entry.type === 'warning' && entry.live)
+  const current = attention || liveWarning || liveReasoning || currentContextSummary || activeTool || null
   const previous = entries.filter((entry) => (
     entry !== current
     && !entry.live
@@ -195,6 +198,7 @@ export function buildChatTranscript(
       ...(message.reasoning
         ? [{ key: `reasoning-${message.id || message._sourceIndex}`, type: 'reasoning', reasoning: message.reasoning }]
         : []),
+      ...runWarningEntries(message.warnings, message.id || message._sourceIndex),
       ...(message.content && message.toolCalls.length
         ? [{ key: `note-${message.id || message._sourceIndex}`, type: 'note', text: message.content }]
         : []),

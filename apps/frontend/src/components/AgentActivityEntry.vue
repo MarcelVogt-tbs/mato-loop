@@ -111,6 +111,15 @@
       </template>
     </div>
   </q-expansion-item>
+  <q-item v-else-if="entry.type === 'warning'" dense class="text-warning" role="status">
+    <q-item-section avatar>
+      <q-icon name="warning_amber" size="18px" />
+    </q-item-section>
+    <q-item-section>
+      <q-item-label class="text-weight-medium">{{ entry.presentation.title }}</q-item-label>
+      <q-item-label caption class="text-warning">{{ entry.presentation.summary }}</q-item-label>
+    </q-item-section>
+  </q-item>
   <div v-else-if="entry.type === 'note'" class="work-history__note">
     {{ entry.text }}
   </div>

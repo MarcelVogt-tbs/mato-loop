@@ -1363,6 +1363,37 @@ describe('chat drafts', () => {
     expect(chat.sessions[0].activeRunStatus).toBe('running')
   })
 
+  it('promotes a live runtime warning into the completed message', () => {
+    global.EventSource = EventSourceMock
+    api.get.mockResolvedValue(sessionPage())
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    const source = EventSourceMock.instances[0]
+
+    const warning = {
+      code: 'privacy.placeholderRestorationIncomplete',
+      modelRequest: 1
+    }
+    source.emit('run.warning', warning)
+    source.emit('run.warning', warning)
+
+    expect(chat.runWarnings).toEqual([warning])
+
+    source.emit('message.completed', {
+      message: {
+        id: 'assistant-1', role: 'assistant', content: 'Antwort', toolCalls: [],
+        warnings: ['privacy.placeholderRestorationIncomplete']
+      }
+    })
+
+    expect(chat.runWarnings).toEqual([])
+    expect(chat.current.messages[0].warnings).toEqual([
+      'privacy.placeholderRestorationIncomplete'
+    ])
+  })
+
   it('replaces cumulative process output snapshots from SSE', () => {
     global.EventSource = EventSourceMock
     const chat = useChatStore()

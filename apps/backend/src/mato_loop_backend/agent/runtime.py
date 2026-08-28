@@ -345,6 +345,7 @@ def _tool_policy(
 class _VisibleResponse:
     content_parts: list[str] = field(default_factory=list)
     reasoning: dict[str, Any] | None = None
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def content(self) -> str:
@@ -353,6 +354,7 @@ class _VisibleResponse:
     def reset(self) -> None:
         self.content_parts.clear()
         self.reasoning = None
+        self.warnings.clear()
 
 
 def _hidden_tool_round_provider_data(provider_data: dict[str, Any]) -> dict[str, Any]:
@@ -1012,6 +1014,15 @@ class AgentRuntime:
                                 generation_status="interrupted",
                                 trust_level=cancelled_run.trust_level,
                                 public_reasoning=reasoning,
+                                provider_data=(
+                                    {
+                                        "_matoloop": {
+                                            "warnings": list(visible_response.warnings)
+                                        }
+                                    }
+                                    if visible_response.warnings
+                                    else None
+                                ),
                                 created_at=datetime.now(UTC),
                             )
                             db.add(interrupted_message)
@@ -1032,6 +1043,7 @@ class AgentRuntime:
                                     "generationStatus": "interrupted",
                                     "toolCalls": None,
                                     "reasoning": interrupted_message.public_reasoning,
+                                    "warnings": list(visible_response.warnings),
                                 },
                             },
                         )
@@ -1839,6 +1851,8 @@ class AgentRuntime:
             )
             visible_response.reset()
             provider_started_at = time.monotonic()
+            model_request = model_requests + 1
+            response_warnings = visible_response.warnings
             provider_timing: dict[str, int | None] = {
                 "firstReasoningMs": None,
                 "firstTextMs": None,
@@ -1903,7 +1917,23 @@ class AgentRuntime:
                 )
                 visible_response.reasoning = payload
 
-            model_request = model_requests + 1
+            async def on_warning(
+                code: str,
+                warnings: list[str] = response_warnings,
+                request_number: int = model_request,
+            ) -> None:
+                if code in warnings:
+                    return
+                warnings.append(code)
+                await run_events.publish(
+                    run.id,
+                    {
+                        "type": "run.warning",
+                        "code": code,
+                        "modelRequest": request_number,
+                    },
+                )
+
             await _publish_run_phase(
                 run.id,
                 "waiting_model",
@@ -1950,6 +1980,7 @@ class AgentRuntime:
                 ),
                 on_delta=on_delta,
                 on_reasoning=on_reasoning,
+                on_warning=on_warning,
                 on_retry=on_provider_retry,
                 timeout=runtime_settings.request_timeout_seconds,
                 target_trust_level=model_trust_level,
@@ -2068,6 +2099,7 @@ class AgentRuntime:
                 or starts_memory_workflow
                 or mutation_repair_pending
             )
+            message_warnings = list(response_warnings)
             provider_data = _safe_provider_data(result.provider_data, normalized_calls)
             if hide_tool_round:
                 provider_data = _hidden_tool_round_provider_data(provider_data)
@@ -2100,6 +2132,7 @@ class AgentRuntime:
                     "priorSessionEpisodes": injected_episode_count,
                     **provider_timing,
                 },
+                **({"warnings": message_warnings} if message_warnings else {}),
             }
             if memory_overview_runtime_state is not None:
                 provider_data["_matoloop"] = {
@@ -2193,6 +2226,7 @@ class AgentRuntime:
                         "toolCalls": serialized_calls,
                         "reasoning": public_reasoning,
                         "research": public_research,
+                        "warnings": message_warnings,
                     },
                 },
             )

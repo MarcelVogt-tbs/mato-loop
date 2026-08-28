@@ -4,7 +4,8 @@ import {
   agentActivityDisplayKey,
   agentActivityLabel,
   agentRunPresentation,
-  formatActivityDuration
+  formatActivityDuration,
+  runWarningEntries
 } from '../src/utils/agent-activity'
 
 describe('agent activity', () => {
@@ -173,5 +174,21 @@ describe('agent activity', () => {
     expect(formatActivityDuration(startedAt, Date.parse('2026-07-19T14:05:00.000Z'))).toBe('2 h 5 min')
     expect(formatActivityDuration(startedAt, Date.parse('2026-07-21T15:00:00.000Z'))).toBe('2 T 3 h')
     expect(formatActivityDuration(null)).toBe('0 s')
+  })
+
+  it('maps only known runtime warnings to German activity entries', () => {
+    expect(runWarningEntries([
+      { code: 'privacy.placeholderRestorationIncomplete', modelRequest: 2 },
+      { code: 'provider.unknown', modelRequest: 2 }
+    ], 'live', true)).toEqual([{
+      key: 'live-2-privacy.placeholderRestorationIncomplete',
+      type: 'warning',
+      warning: true,
+      live: true,
+      presentation: {
+        title: 'Geschützter Wert nicht verfügbar',
+        summary: 'Ein Datenschutz-Platzhalter konnte nicht wiederhergestellt werden.'
+      }
+    }])
   })
 })

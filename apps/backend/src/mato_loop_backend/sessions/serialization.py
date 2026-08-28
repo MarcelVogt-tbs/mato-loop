@@ -28,6 +28,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
 LAST_MESSAGE_AT_UNSET = object()
+_PUBLIC_WARNING_CODES = {"privacy.placeholderRestorationIncomplete"}
 
 
 class _StoredFileAction(BaseModel):
@@ -114,6 +115,22 @@ def _public_research_payload(item: Message) -> dict[str, Any] | None:
                 continue
             linked_sources.append({"title": title.strip()[:500], "url": safe_url})
     return {"policy": policy, "used": used, "linkedSources": linked_sources}
+
+
+def _public_warnings(item: Message) -> list[str]:
+    if item.role != "assistant" or not isinstance(item.provider_data, dict):
+        return []
+    runtime_data = item.provider_data.get("_matoloop")
+    warnings = runtime_data.get("warnings") if isinstance(runtime_data, dict) else None
+    if not isinstance(warnings, list) or len(warnings) > 10:
+        return []
+    return list(
+        dict.fromkeys(
+            code
+            for code in warnings
+            if isinstance(code, str) and code in _PUBLIC_WARNING_CODES
+        )
+    )
 
 
 def _public_file_actions(item: Message) -> list[dict[str, Any]]:
@@ -310,6 +327,7 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
         "toolCallId": item.tool_call_id,
         "toolCalls": item.tool_calls,
         "reasoning": item.public_reasoning,
+        "warnings": _public_warnings(item),
         "research": _public_research_payload(item),
         "fileActions": _public_file_actions(item),
         "sourceType": (

@@ -88,6 +88,27 @@ describe('chat transcript', () => {
       [completed, contextSummary],
       { phase: 'compacting_context' }
     )).toEqual({ current: contextSummary, previous: [completed] })
+
+    const warning = { key: 'warning', type: 'warning', live: true }
+    expect(splitLiveWorkHistory([completed, warning], { phase: 'streaming' }))
+      .toEqual({ current: warning, previous: [completed] })
+  })
+
+  it('keeps privacy warnings in persisted assistant work history', () => {
+    const transcript = buildChatTranscript([
+      { id: 'user-1', role: 'user', content: 'Frage', createdAt: '2026-08-06T12:00:00Z' },
+      {
+        id: 'assistant-1', role: 'assistant', content: 'Antwort', toolCalls: [],
+        warnings: ['privacy.placeholderRestorationIncomplete'],
+        createdAt: '2026-08-06T12:00:01Z'
+      }
+    ])
+
+    expect(transcript.messages[1].workHistory.entries).toEqual([expect.objectContaining({
+      type: 'warning',
+      warning: true,
+      presentation: expect.objectContaining({ title: 'Geschützter Wert nicht verfügbar' })
+    })])
   })
 
   it('attaches results and approvals to their tool calls', () => {

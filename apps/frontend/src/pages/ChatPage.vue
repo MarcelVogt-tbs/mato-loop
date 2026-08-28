@@ -58,6 +58,7 @@
             :history="liveWorkHistory"
             :activity="chat.activity"
             :presentation="runPresentation"
+            :warnings="chat.runWarnings"
             running
             class="chat-welcome__activity text-left q-mx-auto"
             @resize-start="beginActivityResize"
@@ -130,6 +131,7 @@
                 :presentation="message.currentTurn ? runPresentation : null"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
                 :process-outputs="message.currentTurn ? chat.processOutputs : emptyProcessOutputs"
+                :warnings="message.currentTurn ? chat.runWarnings : []"
                 :running="chat.running && message.currentTurn"
                 :class="{
                   'q-mb-sm': message.content

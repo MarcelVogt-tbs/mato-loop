@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import secrets
+from collections.abc import Callable
 from functools import lru_cache
 from threading import Lock
 from typing import Any
@@ -249,19 +250,44 @@ class RequestPseudonymizer:
             protected = protected[: result.start] + marker + protected[result.end :]
         return protected
 
-    def restore_text(self, text: str) -> str:
+    def restore_text(
+        self,
+        text: str,
+        *,
+        unknown_marker_replacement: str | None = None,
+        on_unknown_marker: Callable[[], None] | None = None,
+    ) -> str:
         restored = text
         for marker, original in self._originals.items():
             restored = restored.replace(marker, original)
-        if self.marker_prefix in restored:
-            raise PseudonymizationError("privacy.pseudonymizationFailed")
+        while self.marker_prefix in restored:
+            if unknown_marker_replacement is None:
+                raise PseudonymizationError("privacy.pseudonymizationFailed")
+            marker_start = restored.index(self.marker_prefix)
+            marker_end = restored.find("]]", marker_start + len(self.marker_prefix))
+            marker_end = len(restored) if marker_end < 0 else marker_end + 2
+            restored = (
+                restored[:marker_start]
+                + unknown_marker_replacement
+                + restored[marker_end:]
+            )
+            if on_unknown_marker is not None:
+                on_unknown_marker()
         return restored
 
 
 class StreamingPseudonymRestorer:
-    def __init__(self, pseudonymizer: RequestPseudonymizer) -> None:
+    def __init__(
+        self,
+        pseudonymizer: RequestPseudonymizer,
+        *,
+        unknown_marker_replacement: str | None = None,
+        on_unknown_marker: Callable[[], None] | None = None,
+    ) -> None:
         self._pseudonymizer = pseudonymizer
         self._prefix = pseudonymizer.marker_prefix
+        self._unknown_marker_replacement = unknown_marker_replacement
+        self._on_unknown_marker = on_unknown_marker
         self._buffer = ""
 
     def feed(self, text: str) -> str:
@@ -288,16 +314,32 @@ class StreamingPseudonymRestorer:
                     self._pseudonymizer.max_marker_length
                     and len(self._buffer) > self._pseudonymizer.max_marker_length
                 ):
-                    raise PseudonymizationError("privacy.pseudonymizationFailed")
+                    if self._unknown_marker_replacement is None:
+                        raise PseudonymizationError("privacy.pseudonymizationFailed")
+                    restored.append(self._unknown_marker_replacement)
+                    self._buffer = self._buffer[
+                        self._pseudonymizer.max_marker_length :
+                    ]
+                    if self._on_unknown_marker is not None:
+                        self._on_unknown_marker()
+                    continue
                 break
             marker_end += 2
             restored.append(
-                self._pseudonymizer.restore_text(self._buffer[:marker_end])
+                self._pseudonymizer.restore_text(
+                    self._buffer[:marker_end],
+                    unknown_marker_replacement=self._unknown_marker_replacement,
+                    on_unknown_marker=self._on_unknown_marker,
+                )
             )
             self._buffer = self._buffer[marker_end:]
         return "".join(restored)
 
     def flush(self) -> str:
-        remaining = self._pseudonymizer.restore_text(self._buffer)
+        remaining = self._pseudonymizer.restore_text(
+            self._buffer,
+            unknown_marker_replacement=self._unknown_marker_replacement,
+            on_unknown_marker=self._on_unknown_marker,
+        )
         self._buffer = ""
         return remaining

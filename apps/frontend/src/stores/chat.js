@@ -117,6 +117,7 @@ export const useChatStore = defineStore('chat', {
     cancelRequested: false,
     streamContent: '',
     streamReasoning: null,
+    runWarnings: [],
     streamModelName: null,
     processOutputs: {},
     eventSource: null,
@@ -1269,6 +1270,7 @@ export const useChatStore = defineStore('chat', {
       this.cancelRequested = false
       this.streamContent = ''
       this.streamReasoning = null
+      this.runWarnings = []
       this.streamModelName = null
       this.processOutputs = {}
       this.clearActivity()
@@ -1968,6 +1970,7 @@ export const useChatStore = defineStore('chat', {
       this.runSessionId = sessionId
       this.runId = runId
       this.running = !this.cancelRequested
+      if (!run.reconnecting) this.runWarnings = []
       if (run.status) this.setSessionRunStatus(sessionId, run.status)
       this.streamModelName = run.modelName || this.streamModelName
       source.onopen = () => {
@@ -2036,6 +2039,14 @@ export const useChatStore = defineStore('chat', {
         if (this.eventSource !== source) return
         this.streamReasoning = JSON.parse(event.data).reasoning
       })
+      source.addEventListener('run.warning', (event) => {
+        if (this.eventSource !== source) return
+        const warning = JSON.parse(event.data)
+        if (typeof warning.code !== 'string' || this.runWarnings.some((item) => (
+          item.code === warning.code && item.modelRequest === warning.modelRequest
+        ))) return
+        this.runWarnings.push({ code: warning.code, modelRequest: warning.modelRequest })
+      })
       source.addEventListener('context.compacted', () => {
         if (this.eventSource !== source) return
         void this.refreshSession(sessionId).catch(() => {})
@@ -2084,12 +2095,14 @@ export const useChatStore = defineStore('chat', {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
         promoteStreamedMessage(payload.message)
+        this.runWarnings = []
         this.setActivity(payload.message?.toolCalls?.length ? 'preparing_tools' : 'finalizing')
         this.refreshSession(sessionId)
       })
       source.addEventListener('message.interrupted', (event) => {
         if (this.eventSource !== source) return
         promoteStreamedMessage(JSON.parse(event.data).message)
+        this.runWarnings = []
       })
       source.addEventListener('tool.completed', (event) => {
         if (this.eventSource !== source) return
@@ -2238,6 +2251,7 @@ export const useChatStore = defineStore('chat', {
         this.cancelRequested = false
         this.streamContent = ''
         this.streamReasoning = null
+        this.runWarnings = []
         this.streamModelName = null
         this.clearActivity()
         this.setSessionRunStatus(sessionId, null)

@@ -1090,6 +1090,29 @@ def test_message_payload_canonicalizes_historical_assistant_markdown() -> None:
     )
 
 
+def test_message_payload_exposes_only_known_runtime_warnings() -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="assistant",
+        content="Antwort",
+        provider_data={
+            "_matoloop": {
+                "warnings": [
+                    "privacy.placeholderRestorationIncomplete",
+                    "privacy.placeholderRestorationIncomplete",
+                    "provider.secretWarning",
+                    {"code": "privacy.placeholderRestorationIncomplete"},
+                ]
+            }
+        },
+    )
+
+    assert message_payload(message)["warnings"] == [
+        "privacy.placeholderRestorationIncomplete"
+    ]
+
+
 def test_message_payload_exposes_only_validated_research_snapshot() -> None:
     message = Message(
         id=uuid4(),

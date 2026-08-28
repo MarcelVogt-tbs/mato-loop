@@ -129,3 +129,37 @@ def test_streaming_restorer_rejects_unknown_request_marker() -> None:
 
     with pytest.raises(PseudonymizationError, match="privacy.pseudonymizationFailed"):
         restorer.feed(unknown)
+
+
+def test_visible_restoration_replaces_and_reports_unknown_markers() -> None:
+    pseudonymizer = RequestPseudonymizer()
+    protected = pseudonymizer.protect_text("anna@example.com")
+    unknown = protected.replace("0001", "9999")
+    reported = []
+
+    assert pseudonymizer.restore_text(
+        f"Kontakt: {unknown}",
+        unknown_marker_replacement="[...]",
+        on_unknown_marker=lambda: reported.append(True),
+    ) == "Kontakt: [...]"
+    assert reported == [True]
+
+    with pytest.raises(PseudonymizationError, match="privacy.pseudonymizationFailed"):
+        pseudonymizer.restore_value({"address": unknown})
+
+
+def test_streaming_visible_restoration_replaces_incomplete_marker() -> None:
+    pseudonymizer = RequestPseudonymizer()
+    pseudonymizer.protect_text("anna@example.com")
+    reported = []
+    restorer = StreamingPseudonymRestorer(
+        pseudonymizer,
+        unknown_marker_replacement="[...]",
+        on_unknown_marker=lambda: reported.append(True),
+    )
+
+    restored = restorer.feed(f"Kontakt: {pseudonymizer.marker_prefix}9999")
+
+    assert restored == "Kontakt: "
+    assert restorer.flush() == "[...]"
+    assert reported == [True]
