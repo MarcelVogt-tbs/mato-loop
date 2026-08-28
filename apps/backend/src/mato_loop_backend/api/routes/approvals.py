@@ -115,12 +115,22 @@ async def decide_approval(
         }
     created_grant: PermissionGrant | None = None
     if payload.decision == "allow_session":
+        profile_id = approval.payload.get("agentProfileId")
+        trust_level = approval.payload.get("trustLevel")
+        try:
+            profile_id = UUID(profile_id) if profile_id is not None else None
+        except (TypeError, ValueError):
+            profile_id = None
+        if trust_level not in {"private", "public"}:
+            trust_level = None
         existing_grant = await db.scalar(
             select(PermissionGrant).where(
                 PermissionGrant.session_id == approval.session_id,
                 PermissionGrant.capability == approval.capability,
                 PermissionGrant.resource_type == approval.resource_type,
                 PermissionGrant.resource_scope == approval.resource_scope,
+                PermissionGrant.agent_profile_id == profile_id,
+                PermissionGrant.trust_level == trust_level,
             )
         )
         if existing_grant is None:
@@ -129,6 +139,8 @@ async def decide_approval(
                 capability=approval.capability,
                 resource_type=approval.resource_type,
                 resource_scope=approval.resource_scope,
+                agent_profile_id=profile_id,
+                trust_level=trust_level,
                 source_approval_id=approval.id,
             )
             db.add(created_grant)
@@ -234,6 +246,12 @@ async def list_permissions(
                 "resourceType": item.resource_type,
                 "resourceScope": item.resource_scope,
                 "resourceDisplay": resource_display,
+                "agentProfileId": (
+                    str(item.agent_profile_id)
+                    if item.agent_profile_id is not None
+                    else None
+                ),
+                "trustLevel": item.trust_level,
                 **shell_details,
                 "createdAt": item.created_at.isoformat(),
             }

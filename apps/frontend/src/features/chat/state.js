@@ -2,6 +2,7 @@ const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
 
 export function defaultSessionOptions() {
   return {
+    agentProfileId: null,
     modelId: null,
     reasoningEffort: null,
     memoryMode: 'full',
@@ -23,6 +24,7 @@ export function sanitizedSessionOptions(options) {
 
 export function optionsFromSession(session) {
   return sanitizedSessionOptions({
+    agentProfileId: session.agentProfileId ?? null,
     modelId: session.modelId,
     reasoningEffort: session.reasoningEffort ?? null,
     memoryMode: session.memoryMode,
@@ -87,6 +89,7 @@ export function normalizedNewSessionDraft(value) {
   return {
     message: typeof value?.message === 'string' ? value.message : '',
     options: sanitizedSessionOptions({
+      agentProfileId: typeof options.agentProfileId === 'string' ? options.agentProfileId : null,
       modelId: typeof options.modelId === 'string' ? options.modelId : null,
       reasoningEffort: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.reasoningEffort)
         ? options.reasoningEffort

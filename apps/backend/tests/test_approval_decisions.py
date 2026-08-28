@@ -43,6 +43,11 @@ def _approval() -> ApprovalRequest:
 
 async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None:
     approval = _approval()
+    profile_id = uuid4()
+    approval.payload = {
+        "agentProfileId": str(profile_id),
+        "trustLevel": "public",
+    }
     user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = approval
@@ -62,6 +67,8 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
     assert isinstance(grant, PermissionGrant)
     assert grant.session_id == approval.session_id
     assert grant.resource_scope == approval.resource_scope
+    assert grant.agent_profile_id == profile_id
+    assert grant.trust_level == "public"
     assert approval.status == "approved"
     db.commit.assert_awaited_once()
     resolve.assert_called_once_with(

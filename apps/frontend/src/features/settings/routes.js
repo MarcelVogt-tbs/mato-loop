@@ -12,6 +12,24 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Standardmodelle', settingsIcon: 'stars' }
   },
   {
+    path: 'agents',
+    name: 'settings-agents',
+    component: () => import('pages/settings/AgentProfileSettingsPage.vue'),
+    meta: { settingsLabel: 'Agents', settingsIcon: 'smart_toy' },
+    children: [
+      {
+        path: 'new',
+        name: 'settings-agent-create',
+        component: () => import('pages/settings/AgentProfileEditorPage.vue')
+      },
+      {
+        path: ':agentId',
+        name: 'settings-agent-edit',
+        component: () => import('pages/settings/AgentProfileEditorPage.vue')
+      }
+    ]
+  },
+  {
     path: 'integrations',
     name: 'settings-integrations',
     component: () => import('pages/settings/IntegrationSettingsPage.vue'),

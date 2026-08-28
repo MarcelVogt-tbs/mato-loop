@@ -23,6 +23,8 @@ from mato_loop_backend.agent.context import (
 from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
+    AgentPersonaMode,
+    AgentProfile,
     AgentRuntimeSettings,
     SkillDefinition,
     TrustLevel,
@@ -1044,7 +1046,7 @@ def test_inactive_capability_catalog_is_informational_only() -> None:
         _session(),
         offered_tool_names=frozenset({"read"}),
         inactive_capability_groups=(
-            'Optional tools [write_file]: enable them under "Einstellungen > Tools".',
+            "Optional tools [write_file]: configure under Tools or the agent profile.",
         ),
     )
 
@@ -1244,6 +1246,33 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "use at most two links per claim" in prompt
     assert "Research budget limit: 8 calls this turn" in prompt
     assert "Copy it exactly" in prompt
+
+
+def test_agent_profile_extends_or_replaces_shared_identity() -> None:
+    identity = AgentIdentitySettings(
+        display_name="MatoLoop", instructions="Shared persona marker"
+    )
+    profile = AgentProfile(
+        name="Research",
+        instructions="Agent task marker",
+        persona_mode=AgentPersonaMode.EXTEND,
+    )
+
+    extended = general_system_prompt(
+        _session(), agent_identity=identity, agent_profile=profile
+    )
+    replaced = general_system_prompt(
+        _session(),
+        agent_identity=identity,
+        agent_profile=profile.model_copy(
+            update={"persona_mode": AgentPersonaMode.REPLACE}
+        ),
+    )
+
+    assert "Shared persona marker" in extended
+    assert "Agent task marker" in extended
+    assert "Shared persona marker" not in replaced
+    assert "Agent task marker" in replaced
 
 
 def test_compaction_prompt_preserves_opaque_values_verbatim() -> None:

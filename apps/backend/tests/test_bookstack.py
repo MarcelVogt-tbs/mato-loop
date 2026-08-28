@@ -66,6 +66,7 @@ from mato_loop_backend.integrations.registry import (
 )
 from mato_loop_backend.integrations.webfetch import DownloadedFile, WebFetchError
 from mato_loop_backend.settings import (
+    AgentProfilePermissions,
     IntegrationInstance,
     IntegrationSettings,
     ToolExecutionPolicy,
@@ -1263,7 +1264,9 @@ async def test_attachment_listing_returns_reusable_tokens(monkeypatch) -> None:
 
 def _blocked_context(instance, revision, *, book_key: str = "book:9"):
     context = _context(instance, revision)
-    context.tool_settings = ToolSettings(
+    context.tool_settings = ToolSettings()
+    context.tool_settings._agent_permissions = AgentProfilePermissions(
+        policies={"knowledge.read": ToolExecutionPolicy.AUTO},
         resource_policies={
             str(instance.id): {book_key: {"knowledge.read": ToolExecutionPolicy.DISABLED}}
         }

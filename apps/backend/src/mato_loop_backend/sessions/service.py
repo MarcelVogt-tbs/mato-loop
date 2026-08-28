@@ -15,6 +15,7 @@ from sqlalchemy import (
     and_,
     case,
     cast,
+    delete,
     func,
     or_,
     select,
@@ -57,9 +58,13 @@ from mato_loop_backend.session_storage import (
     SessionStorageError,
 )
 from mato_loop_backend.settings import (
+    DEFAULT_AGENT_PROFILE_ID,
+    AgentProfileUnavailable,
     AiSettings,
     InstanceLimits,
     SettingsStore,
+    effective_model_trust,
+    load_agent_profile,
     load_effective_ai,
 )
 from mato_loop_backend.settings.models import ModelAvailability, ModelCapability
@@ -153,6 +158,21 @@ def provider_for_session(ai: AiSettings, model):
     return next((item for item in ai.providers if item.id == model.provider_id), None)
 
 
+async def validate_agent_profile(
+    db: AsyncSession, user_id: UUID, profile_id: UUID | None
+) -> None:
+    if profile_id in {None, DEFAULT_AGENT_PROFILE_ID}:
+        return
+    try:
+        await load_agent_profile(db, user_id, profile_id, for_update=True)
+    except AgentProfileUnavailable as exc:
+        raise SessionServiceError(
+            409,
+            "agentProfile.selectedUnavailable",
+            field="agentProfileId",
+        ) from exc
+
+
 async def execution_home(
     db: AsyncSession, agent: ExecutionAgent
 ) -> str | None:
@@ -189,8 +209,10 @@ async def add_directory_grant(
     agent_id: UUID | None,
     path: str | None,
     policy: str | None,
+    agent_profile_id: UUID | None,
+    trust_level: str | None,
 ) -> None:
-    if agent_id is None or path is None or policy != "ask":
+    if agent_id is None or path is None or policy != "ask" or trust_level is None:
         return
     scope = execution_directory_scope(agent_id, path)
     existing = await db.scalar(
@@ -199,6 +221,8 @@ async def add_directory_grant(
             PermissionGrant.capability == "execution.directory",
             PermissionGrant.resource_type == "execution_directory",
             PermissionGrant.resource_scope == scope,
+            PermissionGrant.agent_profile_id == agent_profile_id,
+            PermissionGrant.trust_level == trust_level,
         )
     )
     if existing is None:
@@ -208,6 +232,8 @@ async def add_directory_grant(
                 capability="execution.directory",
                 resource_type="execution_directory",
                 resource_scope=scope,
+                agent_profile_id=agent_profile_id,
+                trust_level=trust_level,
             )
         )
 
@@ -734,6 +760,7 @@ async def create_session(
         raise SessionServiceError(409, "session.modelUnavailable", field="modelId")
     if not model_supports_tools(ai, model_id):
         raise SessionServiceError(409, "session.modelToolsUnavailable", field="modelId")
+    await validate_agent_profile(db, user.id, payload.agent_profile_id)
     current_directory, directory_policy = await validate_execution_preferences(
         db,
         user.id,
@@ -747,6 +774,7 @@ async def create_session(
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
         model_config_id=model_id,
+        agent_profile_id=payload.agent_profile_id,
         reasoning_effort=payload.reasoning_effort.value if payload.reasoning_effort else None,
         memory_mode=payload.memory_mode.value,
         web_search_policy=payload.web_search_policy.value,
@@ -757,12 +785,17 @@ async def create_session(
     db.add(item)
     item_id = item.id
     item_project_id = item.project_id
+    selected_model = model_for_session(ai, model_id)
+    selected_provider = provider_for_session(ai, selected_model)
+    assert selected_model is not None and selected_provider is not None
     await add_directory_grant(
         db,
         item.id,
         payload.preferred_execution_agent_id,
         current_directory,
         directory_policy,
+        item.agent_profile_id,
+        effective_model_trust(selected_provider, selected_model).value,
     )
     await db.flush()
     session_storage = storage_factory()
@@ -936,6 +969,7 @@ async def update_session(
         "project_id",
         "memory_mode",
         "model_id",
+        "agent_profile_id",
         "reasoning_effort",
         "web_search_policy",
         "preferred_execution_agent_id",
@@ -982,6 +1016,14 @@ async def update_session(
             ).all()
         ):
             await db.delete(grant)
+    if (
+        "agent_profile_id" in fields
+        and (payload.agent_profile_id or DEFAULT_AGENT_PROFILE_ID)
+        != item.agent_profile_id
+    ) or ("model_id" in fields and payload.model_id != item.model_config_id):
+        await db.execute(
+            delete(PermissionGrant).where(PermissionGrant.session_id == session_id)
+        )
     if "title" in fields and payload.title is not None:
         item.title = payload.title
         item.title_generation_status = TitleGenerationStatus.SKIPPED.value
@@ -999,6 +1041,10 @@ async def update_session(
         if not model_supports_tools(ai, effective_model_id):
             raise SessionServiceError(409, "session.modelToolsUnavailable")
         item.model_config_id = payload.model_id
+    if "agent_profile_id" in fields:
+        agent_profile_id = payload.agent_profile_id or DEFAULT_AGENT_PROFILE_ID
+        await validate_agent_profile(db, user.id, agent_profile_id)
+        item.agent_profile_id = agent_profile_id
     if "reasoning_effort" in fields:
         item.reasoning_effort = (
             payload.reasoning_effort.value if payload.reasoning_effort else None
@@ -1013,6 +1059,9 @@ async def update_session(
                 raise SessionServiceError(409, "session.modelToolsUnavailable")
         item.web_search_policy = payload.web_search_policy.value
     if fields & execution_fields:
+        ai = await load_effective_ai(db, user.id)
+        model = model_for_session(ai, item.model_config_id or ai.default_model_id)
+        provider = provider_for_session(ai, model)
         agent_id = (
             payload.preferred_execution_agent_id
             if "preferred_execution_agent_id" in fields
@@ -1036,7 +1085,17 @@ async def update_session(
         )
         item.preferred_execution_agent_id = agent_id
         await add_directory_grant(
-            db, item.id, agent_id, item.current_directory, directory_policy
+            db,
+            item.id,
+            agent_id,
+            item.current_directory,
+            directory_policy,
+            item.agent_profile_id,
+            (
+                effective_model_trust(provider, model).value
+                if model is not None and provider is not None
+                else None
+            ),
         )
     storage = storage_factory()
     move_receipt: SessionMoveReceipt | None = None

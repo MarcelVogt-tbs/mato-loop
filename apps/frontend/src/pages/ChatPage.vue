@@ -385,6 +385,7 @@ import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import QuestionDock from 'components/QuestionDock.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
+import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import {
@@ -426,6 +427,7 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
 const identity = useAgentIdentityStore()
+const agentProfiles = useAgentProfileStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
 const executionAgents = useExecutionAgentStore()
@@ -820,8 +822,9 @@ async function loadBackgroundData() {
     approvals.fetchPending(),
     questions.fetchPending(),
     chat.fetchDefaults(),
-    toolSettings.fetchSettings('personal'),
-    instanceLimits.fetchSettings()
+    toolSettings.fetchAvailability(),
+    instanceLimits.fetchSettings(),
+    agentProfiles.fetchAgents()
   ])
   if (
     providerResult.status === 'fulfilled'

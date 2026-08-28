@@ -411,9 +411,16 @@ def _disabled_book_keys(context: Any, instance: IntegrationInstance) -> set[str]
 
 def _resource_keys(context: Any, instance: IntegrationInstance) -> set[str]:
     tool_settings = getattr(context, "tool_settings", None)
-    policies = getattr(tool_settings, "resource_policies", None) or {}
-    entries = policies.get(str(instance.id)) or {}
-    return {key for key in entries if _BOOK_KEY_RE.match(key)}
+    profile_permissions = getattr(tool_settings, "_agent_permissions", None)
+    baseline = (getattr(tool_settings, "resource_policies", None) or {}).get(
+        str(instance.id), {}
+    )
+    overrides = (
+        profile_permissions.resource_policies.get(str(instance.id), {})
+        if profile_permissions is not None
+        else {}
+    )
+    return {key for key in baseline | overrides if _BOOK_KEY_RE.match(key)}
 
 
 def _refuse_blocked_books(

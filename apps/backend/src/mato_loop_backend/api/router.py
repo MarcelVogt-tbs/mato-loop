@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from mato_loop_backend.api.routes.agent_identity import router as agent_identity_router
+from mato_loop_backend.api.routes.agent_profiles import router as agent_profiles_router
 from mato_loop_backend.api.routes.approvals import router as approvals_router
 from mato_loop_backend.api.routes.auth import router as auth_router
 from mato_loop_backend.api.routes.automations import router as automations_router
@@ -32,6 +33,7 @@ api_router.include_router(users_router, tags=["users"])
 api_router.include_router(execution_agents_router, tags=["execution-agents"])
 api_router.include_router(instance_limits_router, tags=["instance-limits"])
 api_router.include_router(agent_identity_router, tags=["agent-identity"])
+api_router.include_router(agent_profiles_router, tags=["agent-profiles"])
 api_router.include_router(providers_router, tags=["providers"])
 api_router.include_router(projects_router, tags=["projects"])
 api_router.include_router(project_coding_router, tags=["project-coding"])

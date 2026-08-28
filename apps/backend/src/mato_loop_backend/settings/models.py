@@ -42,6 +42,11 @@ DEFAULT_WEBFETCH_USER_AGENT = (
 )
 
 
+def _camel_case(value: str) -> str:
+    first, *rest = value.split("_")
+    return first + "".join(part.capitalize() for part in rest)
+
+
 class SettingsScope(StrEnum):
     GLOBAL = "global"
     USER = "user"
@@ -99,6 +104,124 @@ class ToolExecutionPolicy(StrEnum):
     DISABLED = "disabled"
     ASK = "ask"
     AUTO = "auto"
+
+
+class AgentPersonaMode(StrEnum):
+    EXTEND = "extend"
+    REPLACE = "replace"
+
+
+DEFAULT_AGENT_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000001")
+
+
+class AgentProfilePermissions(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=lambda value: _camel_case(value),
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    policies: dict[str, ToolExecutionPolicy] = Field(default_factory=dict)
+    integration_policies: dict[str, dict[str, ToolExecutionPolicy]] = Field(
+        default_factory=dict
+    )
+    resource_policies: dict[
+        str, dict[str, dict[str, ToolExecutionPolicy]]
+    ] = Field(default_factory=dict)
+
+
+class AgentProfile(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=lambda value: _camel_case(value),
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    id: UUID = Field(default_factory=uuid4)
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    instructions: str = Field(min_length=1, max_length=16_000)
+    persona_mode: AgentPersonaMode = AgentPersonaMode.EXTEND
+    private_permissions: AgentProfilePermissions = Field(
+        default_factory=AgentProfilePermissions
+    )
+    public_permissions: AgentProfilePermissions = Field(
+        default_factory=AgentProfilePermissions
+    )
+    owner_id: UUID | None = Field(default=None, exclude=True)
+
+    @field_validator("name", "description", "instructions", mode="before")
+    @classmethod
+    def normalize_text(cls, value: Any, info: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if info.field_name in {"name", "instructions"} and not cleaned:
+            raise ValueError(f"{info.field_name} must not be blank")
+        return cleaned
+
+
+def default_agent_profile() -> AgentProfile:
+    return AgentProfile(
+        id=DEFAULT_AGENT_PROFILE_ID,
+        name="Default",
+        description="Standardagent für Sessions ohne ausgewähltes Profil.",
+        instructions="Follow the user's request and the shared persona.",
+    )
+
+
+def cap_agent_profile_policy(
+    settings: ToolSettingsBase,
+    capability: str,
+    baseline: ToolExecutionPolicy,
+    *,
+    allowed_policies: tuple[ToolExecutionPolicy, ...] = tuple(ToolExecutionPolicy),
+    integration_id: UUID | None = None,
+    resource_key: str | None = None,
+    include_scoped: bool = False,
+) -> ToolExecutionPolicy:
+    permissions = settings._agent_permissions
+    if settings._agent_profile_unavailable:
+        return ToolExecutionPolicy.DISABLED
+    if permissions is None or capability in {
+        "network.fetch",
+        "session.tool_result.read",
+    }:
+        return baseline
+    profile_policy = permissions.policies.get(capability)
+    if integration_id is not None:
+        profile_policy = permissions.integration_policies.get(
+            str(integration_id), {}
+        ).get(capability, profile_policy)
+        if resource_key is not None:
+            profile_policy = (
+                permissions.resource_policies.get(str(integration_id), {})
+                .get(resource_key, {})
+                .get(capability, profile_policy)
+            )
+    elif include_scoped and profile_policy in {None, ToolExecutionPolicy.DISABLED}:
+        scoped_policies = (
+            policies.get(capability)
+            for policies in permissions.integration_policies.values()
+        )
+        resource_policies = (
+            policies.get(capability)
+            for resources in permissions.resource_policies.values()
+            for policies in resources.values()
+        )
+        profile_policy = next(
+            (
+                policy
+                for policy in (*scoped_policies, *resource_policies)
+                if policy is not None and policy != ToolExecutionPolicy.DISABLED
+            ),
+            profile_policy,
+        )
+    if profile_policy is None:
+        return baseline
+    if profile_policy not in allowed_policies:
+        return ToolExecutionPolicy.DISABLED
+    return profile_policy
 
 
 class IntegrationAdapterAvailability(StrEnum):
@@ -513,6 +636,9 @@ class DefaultTaskListSettings(BaseModel):
 
 
 class ToolSettingsBase(SettingsDocument):
+    _agent_permissions: AgentProfilePermissions | None = PrivateAttr(default=None)
+    _agent_profile_unavailable: bool = PrivateAttr(default=False)
+
     policies: dict[str, ToolExecutionPolicy] = Field(default_factory=dict)
     integration_policies: dict[str, dict[str, ToolExecutionPolicy]] = Field(
         default_factory=dict,
@@ -590,17 +716,31 @@ class UserToolSettings(ToolSettingsBase):
     settings_key = "tools"
     settings_scope = SettingsScope.USER
 
+    # Existing documents are personal Tool snapshots; Integration-only documents opt out.
+    personal_tool_defaults_enabled: bool = True
+
+
+class AgentProfilesSettings(SettingsDocument):
+    settings_key = "agent-profiles"
+
+    personal_agents_enabled: bool = True
+    profiles: list[AgentProfile] = Field(
+        default_factory=lambda: [default_agent_profile()], max_length=100
+    )
+
+
+class UserAgentProfilesSettings(SettingsDocument):
+    settings_key = "agent-profiles"
+    settings_scope = SettingsScope.USER
+
+    profiles: list[AgentProfile] = Field(default_factory=list, max_length=20)
+
 
 class GeneralSettings(SettingsDocument):
     settings_key = "general"
 
     default_locale: str = "de-DE"
     default_timezone: str = "Europe/Berlin"
-
-
-def _camel_case(value: str) -> str:
-    first, *rest = value.split("_")
-    return first + "".join(part.capitalize() for part in rest)
 
 
 class InstanceLimits(SettingsDocument):

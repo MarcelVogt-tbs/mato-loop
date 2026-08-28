@@ -146,6 +146,12 @@ class QuestionRequest(Base):
 
 class PermissionGrant(Base):
     __tablename__ = "permission_grants"
+    __table_args__ = (
+        CheckConstraint(
+            "trust_level IS NULL OR trust_level IN ('public', 'private')",
+            name="trust_level_valid",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     session_id: Mapped[UUID] = mapped_column(
@@ -154,6 +160,8 @@ class PermissionGrant(Base):
     capability: Mapped[str] = mapped_column(String(120), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(80), nullable=False)
     resource_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_profile_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    trust_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
     source_approval_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("approval_requests.id", ondelete="SET NULL"), nullable=True
     )

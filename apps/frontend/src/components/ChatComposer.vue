@@ -82,6 +82,31 @@
         </q-banner>
         <div class="chat-composer__footer row items-center q-gutter-xs">
           <q-select
+            :model-value="session?.agentProfileId ?? agentProfiles.defaultAgentProfileId"
+            :options="agentProfileOptions"
+            emit-value
+            map-options
+            dense
+            borderless
+            options-dense
+            label="Agent"
+            class="composer-agent-mode"
+            popup-content-class="app-menu-popup"
+            :disable="interactionDisabled || agentProfiles.loading"
+            @update:model-value="update({ agent_profile_id: $event })"
+          >
+            <template #prepend><q-icon :name="selectedAgentIcon" size="18px" /></template>
+            <template #option="scope">
+              <q-item v-bind="scope.itemProps">
+                <q-item-section avatar><q-icon :name="scope.opt.icon" /></q-item-section>
+                <q-item-section>
+                  <q-item-label>{{ scope.opt.label }}</q-item-label>
+                  <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
+                </q-item-section>
+              </q-item>
+            </template>
+          </q-select>
+          <q-select
             :model-value="effectiveModelId"
             :options="modelSelectionOptions"
             emit-value
@@ -337,6 +362,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'components/ComposerAttachments.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
+import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useChatStore } from 'stores/chat'
@@ -365,6 +391,7 @@ const props = defineProps({
 const emit = defineEmits(['add-attachments', 'remove-attachment', 'send', 'stop', 'update', 'update:draft'])
 const $q = useQuasar()
 const identity = useAgentIdentityStore()
+const agentProfiles = useAgentProfileStore()
 const integrations = useIntegrationStore()
 const chat = useChatStore()
 const instanceLimits = useInstanceLimitsStore()
@@ -390,6 +417,28 @@ const currentDictation = computed(() => chat.getAudioDictation(dictationKey.valu
 const transcribing = computed(() => currentDictation.value?.status === 'transcribing')
 const recordingDuration = computed(() => formatAttachmentDuration(recordingDurationMs.value) || '0:00')
 const executionAgents = useExecutionAgentStore()
+const selectedAgent = computed(() => agentProfiles.byId(props.session?.agentProfileId))
+const agentProfileOptions = computed(() => {
+  const options = agentProfiles.agents.map((agent) => ({
+    label: agent.name,
+    value: agent.id,
+    icon: 'smart_toy',
+    caption: agent.description
+  }))
+  if (props.session?.agentProfileId && !selectedAgent.value) {
+    options.unshift({
+      label: 'Nicht verfügbares Agent-Profil',
+      value: props.session.agentProfileId,
+      icon: 'warning_amber',
+      caption: 'Nicht mehr verfügbar',
+      disable: true
+    })
+  }
+  return options
+})
+const selectedAgentIcon = computed(() => (
+  !props.session?.agentProfileId || selectedAgent.value ? 'smart_toy' : 'warning_amber'
+))
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(props.session?.preferredExecutionAgentId)
 ))

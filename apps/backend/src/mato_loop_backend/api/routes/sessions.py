@@ -73,6 +73,7 @@ from mato_loop_backend.sessions.serialization import (
     session_payload as _serialize_session_payload,
 )
 from mato_loop_backend.settings import (
+    DEFAULT_AGENT_PROFILE_ID,
     InstanceLimits,
     MemorySettings,
     SettingsStore,
@@ -213,6 +214,10 @@ class SessionCreateRequest(BaseModel):
     run_id: UUID | None = None
     project_id: UUID | None = None
     model_id: UUID | None = None
+    agent_profile_id: UUID = Field(
+        default=DEFAULT_AGENT_PROFILE_ID,
+        validation_alias=AliasChoices("agentProfileId", "agent_profile_id"),
+    )
     reasoning_effort: ReasoningEffort | None = None
     memory_mode: MemoryMode = MemoryMode.FULL
     web_search_policy: WebSearchPolicy = WebSearchPolicy.AVAILABLE
@@ -229,6 +234,10 @@ class SessionUpdateRequest(BaseModel):
     pinned: bool | None = None
     project_id: UUID | None = None
     model_id: UUID | None = None
+    agent_profile_id: UUID | None = Field(
+        default=None,
+        validation_alias=AliasChoices("agentProfileId", "agent_profile_id"),
+    )
     reasoning_effort: ReasoningEffort | None = None
     memory_mode: MemoryMode | None = None
     web_search_policy: WebSearchPolicy | None = None
@@ -509,10 +518,20 @@ async def session_defaults(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     model_id: Annotated[UUID | None, Query(alias="modelId")] = None,
     memory_mode: Annotated[MemoryMode, Query(alias="memoryMode")] = MemoryMode.FULL,
+    agent_profile_id: Annotated[
+        UUID | None, Query(alias="agentProfileId")
+    ] = None,
 ) -> dict:
     ai = await load_effective_ai(db, user.id)
     memory = await SettingsStore.load(db, MemorySettings, user_id=user.id)
     preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+    try:
+        selected_agent_profile_id = agent_profile_id or DEFAULT_AGENT_PROFILE_ID
+        await session_service.validate_agent_profile(
+            db, user.id, selected_agent_profile_id
+        )
+    except session_service.SessionServiceError as exc:
+        _raise_api_error(exc)
     selected_model_id = model_id or ai.default_model_id
     model = (
         _model_for_session(ai, selected_model_id)
@@ -537,6 +556,7 @@ async def session_defaults(
             current_directory = await _execution_home(db, agent)
     return {
         "modelId": str(selected_model_id) if selected_model_id else None,
+        "agentProfileId": str(selected_agent_profile_id),
         "reasoningEffort": None,
         "modelAvailable": bool(model and model.supports_tools),
         "modelUnavailableReason": (

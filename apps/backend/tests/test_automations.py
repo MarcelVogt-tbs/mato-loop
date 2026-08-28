@@ -13,6 +13,7 @@ from mato_loop_backend.automations import (
     AutomationService,
     advance_schedule,
     automation_impact_token,
+    copy_runtime,
     next_run_at,
     runtime_snapshot,
 )
@@ -25,6 +26,7 @@ from mato_loop_backend.models import (
     Notification,
 )
 from mato_loop_backend.notifications import NotificationService
+from mato_loop_backend.settings import DEFAULT_AGENT_PROFILE_ID
 
 
 def test_cron_uses_debian_dst_semantics_and_rejects_six_fields() -> None:
@@ -163,8 +165,14 @@ def test_archive_policy_requires_one_one_time_schedule() -> None:
 
 async def test_create_flushes_execution_session_before_automation(monkeypatch) -> None:
     events = []
+    added = []
     db = AsyncMock(spec=AsyncSession)
-    db.add.side_effect = lambda item: events.append(("add", type(item)))
+
+    def add(item) -> None:
+        added.append(item)
+        events.append(("add", type(item)))
+
+    db.add.side_effect = add
 
     async def flush() -> None:
         events.append(("flush", None))
@@ -198,6 +206,7 @@ async def test_create_flushes_execution_session_before_automation(monkeypatch) -
         ("flush", None),
     ]
     assert automation.execution_session_id is not None
+    assert added[0].agent_profile_id == DEFAULT_AGENT_PROFILE_ID
 
 
 async def test_replace_deletes_existing_schedules_before_inserting_replacements(
@@ -255,11 +264,13 @@ async def test_replace_deletes_existing_schedules_before_inserting_replacements(
 
 
 def test_runtime_snapshot_contains_only_validated_session_binding() -> None:
+    agent_profile_id = uuid4()
     session = ChatSession(
         id=uuid4(),
         user_id=uuid4(),
         preferred_execution_agent_id=uuid4(),
         current_directory="/advertised/project",
+        agent_profile_id=agent_profile_id,
     )
 
     snapshot = runtime_snapshot(session)
@@ -268,9 +279,19 @@ def test_runtime_snapshot_contains_only_validated_session_binding() -> None:
         session.preferred_execution_agent_id
     )
     assert snapshot["currentDirectory"] == "/advertised/project"
+    assert snapshot["agentProfileId"] == str(agent_profile_id)
     assert "preferredRootId" not in snapshot
     assert "workingDirectory" not in snapshot
     assert "workspacePath" not in snapshot
+
+
+def test_copy_runtime_includes_agent_profile() -> None:
+    source = ChatSession(agent_profile_id=uuid4())
+    target = ChatSession(agent_profile_id=DEFAULT_AGENT_PROFILE_ID)
+
+    copy_runtime(source, target)
+
+    assert target.agent_profile_id == source.agent_profile_id
 
 
 async def test_due_schedules_are_bundled_into_one_skipped_run() -> None:

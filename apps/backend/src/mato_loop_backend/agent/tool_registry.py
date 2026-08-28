@@ -46,6 +46,7 @@ from mato_loop_backend.providers.base import ProviderError, ToolCall
 from mato_loop_backend.providers.media import available_media_capabilities
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import (
+    AgentProfileUnavailable,
     IntegrationInstance,
     IntegrationSettings,
     SkillDefinition,
@@ -53,9 +54,9 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
     WebFetchPolicy,
+    load_agent_profile_tools,
     load_effective_ai,
     load_effective_integrations,
-    load_effective_tools,
 )
 from mato_loop_backend.skills import RunSkillState, SkillDraft
 from mato_loop_backend.video_processing import VideoAnalysisMode
@@ -276,6 +277,7 @@ def _actions_enabled(
             action.capability,
             action.default_policy,
             allowed_policies=action.allowed_policies,
+            include_scoped=True,
         )
         != ToolExecutionPolicy.DISABLED
         for action in definition.actions
@@ -575,15 +577,18 @@ class ToolRegistry:
             ):
                 reason = "temporary"
             elif not self._actions_enabled(definition, tool_settings):
-                reason = "settings"
+                reason = (
+                    "integrations"
+                    if definition.group == "integrations"
+                    else "settings"
+                )
             else:
                 reason = "temporary"
             grouped[reason].append(name)
 
         templates = {
             "integrations": (
-                'Integration tools [{names}]: configure or enable them under '
-                '"Einstellungen > Integrationen".'
+                "Integration tools [{names}]: configure under Integrationen or the agent profile."
             ),
             "media": (
                 'Media tools [{names}]: enable them under "Einstellungen > Tools" and configure '
@@ -597,7 +602,7 @@ class ToolRegistry:
                 'Memory tools [{names}]: enable Memory for the session and its model.'
             ),
             "settings": (
-                'Optional tools [{names}]: enable them under "Einstellungen > Tools".'
+                "Optional tools [{names}]: configure under Tools or the agent profile."
             ),
             "temporary": (
                 "Temporarily unavailable tools [{names}]: finish the current required workflow first."
@@ -822,7 +827,14 @@ class ToolRegistry:
                     "label": definition.label or definition.name,
                     "icon": definition.icon,
                     "toolType": definition.tool_type,
-                    "source": {"type": source_type, "id": source_id},
+                    "source": {
+                        "type": source_type,
+                        "id": source_id,
+                        "ids": [
+                            integration_id
+                            for integration_id, _revision in _integration_revisions
+                        ],
+                    },
                     "actions": actions,
                 }
             )
@@ -986,9 +998,15 @@ class ToolRegistry:
             if context.session.project_id is None:
                 return ToolResult.error("tool.unavailable")
         elif definition.required_capability is not None:
-            context.tool_settings = await load_effective_tools(
-                context.db, context.session.user_id
-            )
+            try:
+                context.tool_settings, _profile = await load_agent_profile_tools(
+                    context.db,
+                    context.session.user_id,
+                    context.session.agent_profile_id,
+                    context.model_trust_level,
+                )
+            except AgentProfileUnavailable:
+                return ToolResult.error("tool.unavailable")
             ai_settings = await load_effective_ai(context.db, context.session.user_id)
             if self._capability_resolver is None:
                 raise RuntimeError("tool registry capability resolver is not configured")

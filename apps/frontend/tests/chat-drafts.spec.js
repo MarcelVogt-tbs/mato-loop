@@ -221,6 +221,46 @@ describe('chat drafts', () => {
     expect(chat.current.userRequestCount).toBe(1)
   })
 
+  it('persists and snapshots the selected agent profile for session creation', async () => {
+    api.post.mockResolvedValue({
+      data: {
+        session: { id: 'session-agent-profile', agentProfileId: 'agent-1', messages: [] },
+        runId: 'run-1'
+      }
+    })
+    const chat = useChatStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+
+    await chat.updateActive({ agent_profile_id: 'agent-1' })
+    const queued = await chat.queueMessage('Mit Profil')
+
+    expect(queued.options.agentProfileId).toBe('agent-1')
+    expect(JSON.parse(window.localStorage.getItem('matoLoopChatDrafts')).newSession.options)
+      .toMatchObject({ agentProfileId: 'agent-1' })
+
+    await chat.startSession('Mit Profil', [], { options: queued.options })
+
+    expect(api.post).toHaveBeenCalledWith('/sessions', expect.objectContaining({
+      agent_profile_id: 'agent-1'
+    }))
+    expect(chat.current.agentProfileId).toBe('agent-1')
+  })
+
+  it('lets the backend select the default profile while profiles are loading', async () => {
+    api.post.mockResolvedValue({
+      data: {
+        session: { id: 'session-default-profile', agentProfileId: 'default', messages: [] },
+        runId: 'run-1'
+      }
+    })
+    const chat = useChatStore()
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+
+    await chat.startSession('Ohne geladenes Profil')
+
+    expect(api.post.mock.calls[0][1]).not.toHaveProperty('agent_profile_id')
+  })
+
   it('persists and sends the session reasoning override', async () => {
     api.post.mockResolvedValue({
       data: {

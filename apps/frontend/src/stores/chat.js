@@ -501,6 +501,9 @@ export const useChatStore = defineStore('chat', {
         options.memoryToolsAvailable = data.memoryToolsAvailable
         options.memoryUnavailableReason = data.memoryUnavailableReason
       }
+      if (!options.agentProfileId && this.sessionDefaults.agentProfileId) {
+        options.agentProfileId = this.sessionDefaults.agentProfileId
+      }
       this.persistDrafts()
     },
     reconcileNewSession(validModelIds, searchAvailable) {
@@ -1094,6 +1097,7 @@ export const useChatStore = defineStore('chat', {
       }
       const options = this.drafts.newSession.options
       const fields = {
+        agent_profile_id: 'agentProfileId',
         model_id: 'modelId',
         reasoning_effort: 'reasoningEffort',
         memory_mode: 'memoryMode',
@@ -1800,6 +1804,7 @@ export const useChatStore = defineStore('chat', {
           content,
           ...(runId ? { run_id: runId } : {}),
           project_id: projectId,
+          ...(options.agentProfileId ? { agent_profile_id: options.agentProfileId } : {}),
           model_id: options.modelId,
           reasoning_effort: options.reasoningEffort,
           memory_mode: options.memoryMode,

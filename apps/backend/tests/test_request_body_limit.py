@@ -161,3 +161,31 @@ async def test_question_answers_have_json_body_limit(monkeypatch) -> None:
 
     assert messages[0]["status"] == 413
     assert json.loads(messages[1]["body"])["error"]["code"] == "question.answerTooLarge"
+
+
+async def test_agent_profiles_have_json_body_limit(monkeypatch) -> None:
+    monkeypatch.setattr(request_body_limit, "AGENT_PROFILE_REQUEST_LIMIT", 4)
+    messages = []
+
+    async def app(_scope, _receive, _send):
+        raise AssertionError("Oversized request reached the application")
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    async def send(message):
+        messages.append(message)
+
+    middleware = MediaRequestBodyLimitMiddleware(app)
+    await middleware(
+        scope(
+            f"/api/agent-profiles/{'a' * 36}",
+            [(b"content-length", b"5")],
+            method="PUT",
+        ),
+        receive,
+        send,
+    )
+
+    assert messages[0]["status"] == 413
+    assert json.loads(messages[1]["body"])["error"]["code"] == "validation.tooLong"

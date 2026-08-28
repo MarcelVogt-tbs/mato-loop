@@ -20,7 +20,8 @@ from mato_loop_backend.execution import (
     execution_agent_connections,
 )
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
-from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent
+from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, PermissionGrant
+from mato_loop_backend.sessions.service import add_directory_grant
 from mato_loop_backend.settings import AiSettings, SettingsStore
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
@@ -100,6 +101,39 @@ async def test_preferences_reject_denied_external_directory(monkeypatch) -> None
     with pytest.raises(ApiError) as error:
         await _validate_execution_preferences(db, user_id, agent.id, "/srv")
     assert error.value.code == "permission.denied"
+
+
+async def test_directory_grant_is_bound_to_profile_and_model_trust() -> None:
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    profile_id = uuid4()
+
+    await add_directory_grant(
+        db,
+        uuid4(),
+        uuid4(),
+        "/srv/project",
+        "ask",
+        profile_id,
+        "public",
+    )
+
+    grant = db.add.call_args.args[0]
+    assert isinstance(grant, PermissionGrant)
+    assert grant.agent_profile_id == profile_id
+    assert grant.trust_level == "public"
+
+    db.reset_mock()
+    await add_directory_grant(
+        db,
+        uuid4(),
+        uuid4(),
+        "/srv/project",
+        "ask",
+        profile_id,
+        None,
+    )
+    db.add.assert_not_called()
 
 
 def test_effective_operations_require_a_current_directory() -> None:

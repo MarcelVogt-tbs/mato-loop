@@ -12,6 +12,7 @@ describe('MatoLoop frontend scaffold', () => {
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
       'settings-providers',
       'settings-default-models',
+      'settings-agents',
       'settings-integrations',
       'settings-tools',
       'settings-approvals',
@@ -28,6 +29,10 @@ describe('MatoLoop frontend scaffold', () => {
       settingsRoute.children.find((route) => route.name === 'settings-integrations').children
         .map((route) => route.name)
     ).toEqual(['settings-integration-access'])
+    expect(
+      settingsRoute.children.find((route) => route.name === 'settings-agents').children
+        .map((route) => route.name)
+    ).toEqual(['settings-agent-create', 'settings-agent-edit'])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-instance-limits')?.meta.requiresAdmin).toBe(true)

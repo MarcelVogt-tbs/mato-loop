@@ -156,6 +156,7 @@ from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
+    AgentProfileUnavailable,
     AgentRuntimeSettings,
     AiSettings,
     InstanceLimits,
@@ -170,9 +171,10 @@ from mato_loop_backend.settings import (
     WebFetchPolicy,
     effective_model_pseudonymization,
     effective_model_trust,
+    load_agent_profile,
+    load_agent_profile_tools,
     load_effective_ai,
     load_effective_integrations,
-    load_effective_tools,
     resolve_web_fetch_policy,
 )
 from mato_loop_backend.settings.models import (
@@ -1156,6 +1158,15 @@ class AgentRuntime:
         model_trust_level = TrustLevel(
             run.trust_level or effective_model_trust(provider, model).value
         )
+        if chat_session.agent_profile_id is None:
+            prompt_agent_profile = None
+        else:
+            try:
+                prompt_agent_profile = await load_agent_profile(
+                    db, chat_session.user_id, chat_session.agent_profile_id
+                )
+            except AgentProfileUnavailable as exc:
+                raise AgentRunError("agentProfile.selectedUnavailable") from exc
         user_profile_payload = user_profile_runtime_payload(
             user_profile, model_trust_level
         )
@@ -1250,7 +1261,15 @@ class AgentRuntime:
             integration_settings = await load_effective_integrations(
                 db, chat_session.user_id
             )
-            tool_settings = await load_effective_tools(db, chat_session.user_id)
+            try:
+                tool_settings, _active_agent_profile = await load_agent_profile_tools(
+                    db,
+                    chat_session.user_id,
+                    chat_session.agent_profile_id,
+                    model_trust_level,
+                )
+            except AgentProfileUnavailable as exc:
+                raise AgentRunError("agentProfile.selectedUnavailable") from exc
             web_fetch_policy = resolve_web_fetch_policy(tool_settings, model)
             memory_state = memory_policy.effective_memory(
                 chat_session, memory_settings, provider, model
@@ -1684,6 +1703,7 @@ class AgentRuntime:
                 general_system_prompt,
                 chat_session,
                 agent_identity=agent_identity,
+                agent_profile=prompt_agent_profile,
                 user_profile=user_profile_payload,
                 project_name=project_name,
                 project_instructions=project_instructions,
@@ -4049,7 +4069,15 @@ class AgentRuntime:
         root_files: RootFileService,
         approval_resolution: dict[str, str] | None = None,
     ) -> PermissionDecision:
-        tool_settings = await load_effective_tools(db, chat_session.user_id)
+        try:
+            tool_settings, _profile = await load_agent_profile_tools(
+                db,
+                chat_session.user_id,
+                chat_session.agent_profile_id,
+                TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
+            )
+        except AgentProfileUnavailable:
+            return PermissionDecision.DENY
         integration_settings = await load_effective_integrations(
             db, chat_session.user_id
         )
@@ -4057,7 +4085,13 @@ class AgentRuntime:
         if request.force_ask and policy == ToolExecutionPolicy.AUTO:
             policy = ToolExecutionPolicy.ASK
         decision = await PermissionPolicy.evaluate(
-            db, chat_session, request, root_files, policy
+            db,
+            chat_session,
+            request,
+            root_files,
+            policy,
+            agent_profile_id=chat_session.agent_profile_id,
+            trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
         )
         if decision != PermissionDecision.ASK:
             draft_file = (request.approval_details or {}).get("draftFile")
@@ -4090,13 +4124,27 @@ class AgentRuntime:
         ):
             approval_resolution["expected_revision"] = resolution.expected_revision
         await db.refresh(chat_session)
-        tool_settings = await load_effective_tools(db, chat_session.user_id)
+        try:
+            tool_settings, _profile = await load_agent_profile_tools(
+                db,
+                chat_session.user_id,
+                chat_session.agent_profile_id,
+                TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
+            )
+        except AgentProfileUnavailable:
+            return PermissionDecision.DENY
         integration_settings = await load_effective_integrations(
             db, chat_session.user_id
         )
         current_policy = _tool_policy(tool_settings, integration_settings, request)
         current_decision = await PermissionPolicy.evaluate(
-            db, chat_session, request, root_files, current_policy
+            db,
+            chat_session,
+            request,
+            root_files,
+            current_policy,
+            agent_profile_id=chat_session.agent_profile_id,
+            trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
         )
         return (
             PermissionDecision.DENY
@@ -4162,6 +4210,12 @@ class AgentRuntime:
                     else None
                 ),
                 "policyResourceKey": permission.policy_resource_key,
+                "agentProfileId": (
+                    str(chat_session.agent_profile_id)
+                    if chat_session.agent_profile_id is not None
+                    else None
+                ),
+                "trustLevel": run.trust_level,
                 **(permission.approval_details or {}),
                 "displayItems": [
                     {

@@ -1204,12 +1204,12 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     assert "memory_retrieve" in catalog
     assert "webfetch" in catalog
     assert "calendar_create_event" not in catalog
-    assert '"Einstellungen > Integrationen"' in catalog
+    assert "configure under Integrationen or the agent profile" in catalog
     assert "question" not in catalog
     assert "parameters" not in catalog
 
 
-def test_policy_disabled_integration_tool_points_to_tool_settings(monkeypatch) -> None:
+def test_policy_disabled_integration_tool_points_to_integration_settings(monkeypatch) -> None:
     _shared_adapter(monkeypatch, AsyncMock())
     integrations = IntegrationSettings(instances=[_shared_integration("Tasks")])
     settings = ToolSettings.model_validate(
@@ -1230,14 +1230,16 @@ def test_policy_disabled_integration_tool_points_to_tool_settings(monkeypatch) -
         tool_capabilities=frozenset(),
         tool_settings=settings,
     )
-    optional = next(group for group in groups if group.startswith("Optional tools"))
+    integration_group = next(
+        group for group in groups if group.startswith("Integration tools")
+    )
 
-    assert "tasks_read" in optional
-    assert 'enable them under "Einstellungen > Tools"' in optional
+    assert "tasks_read" in integration_group
+    assert "configure under Integrationen or the agent profile" in integration_group
     assert all(
         "tasks_read" not in group
         for group in groups
-        if group.startswith("Integration tools")
+        if group.startswith("Optional tools")
     )
 
 

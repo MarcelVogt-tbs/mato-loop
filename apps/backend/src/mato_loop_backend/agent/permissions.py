@@ -18,7 +18,7 @@ from mato_loop_backend.integrations import (
     sanitize_url_for_display,
 )
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
-from mato_loop_backend.settings import ToolExecutionPolicy, ToolSettings
+from mato_loop_backend.settings import ToolExecutionPolicy, ToolSettings, TrustLevel
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 
@@ -824,7 +824,20 @@ class PermissionPolicy:
         request: PermissionRequest,
         root_files: RootFileService,
         policy: ToolExecutionPolicy | None = None,
+        *,
+        agent_profile_id: UUID | None = None,
+        trust_level: TrustLevel | None = None,
     ) -> PermissionDecision:
+        def grant_binding_conditions() -> tuple[Any, ...]:
+            if trust_level is None:
+                return ()
+            profile_condition = (
+                PermissionGrant.agent_profile_id.is_(None)
+                if agent_profile_id is None
+                else PermissionGrant.agent_profile_id == agent_profile_id
+            )
+            return (profile_condition, PermissionGrant.trust_level == trust_level.value)
+
         if request.resource_type in {"automation_collection", "automation"}:
             scope = (
                 _automation_collection_scope(request.resource_scope)
@@ -951,6 +964,7 @@ class PermissionPolicy:
                             PermissionGrant.session_id == chat_session.id,
                             PermissionGrant.capability == request.capability,
                             PermissionGrant.resource_type == request.resource_type,
+                            *grant_binding_conditions(),
                         )
                     )
                 ).all()
@@ -1002,6 +1016,7 @@ class PermissionPolicy:
                             PermissionGrant.session_id == chat_session.id,
                             PermissionGrant.capability == request.capability,
                             PermissionGrant.resource_type == request.resource_type,
+                            *grant_binding_conditions(),
                         )
                     )
                 ).all()
@@ -1052,6 +1067,7 @@ class PermissionPolicy:
                         PermissionGrant.session_id == chat_session.id,
                         PermissionGrant.capability == request.capability,
                         PermissionGrant.resource_type == request.resource_type,
+                        *grant_binding_conditions(),
                     )
                 )
             ).all()

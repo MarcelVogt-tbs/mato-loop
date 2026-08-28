@@ -232,6 +232,7 @@ from mato_loop_backend.providers.media import (
 )
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
+    AgentProfileUnavailable,
     IntegrationSettings,
     ModelCapability,
     SettingsStore,
@@ -242,6 +243,8 @@ from mato_loop_backend.settings import (
     UserProfileFact,
     UserProfileSettings,
     WebFetchPolicy,
+    cap_agent_profile_policy,
+    load_agent_profile_tools,
     load_effective_ai,
     load_effective_integrations,
     load_effective_tools,
@@ -267,6 +270,20 @@ ALL_TOOL_EXECUTION_POLICIES = tuple(ToolExecutionPolicy)
 
 async def _allow(context: ToolContext, request: PermissionRequest) -> bool:
     return await context.ask(request) == PermissionDecision.ALLOW
+
+
+async def _profile_tool_settings(context: ToolContext) -> ToolSettings:
+    try:
+        settings, _profile = await load_agent_profile_tools(
+            context.db,
+            context.session.user_id,
+            getattr(context.session, "agent_profile_id", None),
+            getattr(context, "model_trust_level", TrustLevel.PUBLIC),
+        )
+    except AgentProfileUnavailable:
+        settings = await load_effective_tools(context.db, context.session.user_id)
+        settings._agent_profile_unavailable = True
+    return settings
 
 
 def _execution_path(context: ToolContext, path: str) -> str:
@@ -1484,7 +1501,7 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
     current_integrations = await load_effective_integrations(
         context.db, context.session.user_id
     )
-    current_tools = await load_effective_tools(context.db, context.session.user_id)
+    current_tools = await _profile_tool_settings(context)
     primary_provider, fallback_provider = effective_search_providers(
         current_tools, current_integrations
     )
@@ -1495,7 +1512,7 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
     current_integrations = await load_effective_integrations(
         context.db, context.session.user_id
     )
-    current_tools = await load_effective_tools(context.db, context.session.user_id)
+    current_tools = await _profile_tool_settings(context)
     primary_provider, fallback_provider = effective_search_providers(
         current_tools, current_integrations
     )
@@ -1542,7 +1559,7 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 
 
 async def _ensure_webfetch_binding_is_current(context: ToolContext) -> None:
-    current_tools = await load_effective_tools(context.db, context.session.user_id)
+    current_tools = await _profile_tool_settings(context)
     revision = context.bound_options.get("settings_revision")
     if not current_tools.web_fetch.enabled or (
         revision is not None
@@ -1731,6 +1748,7 @@ def resolve_tool_execution_policy(
     integration_id: UUID | None = None,
     resource_key: str | None = None,
     hard_unavailable_capabilities: frozenset[str] = frozenset(),
+    include_scoped: bool = False,
 ) -> ToolPolicyResolution:
     def resolve_value(value: Any, source: str) -> ToolPolicyResolution:
         try:
@@ -1768,6 +1786,7 @@ def resolve_tool_execution_policy(
                 else "global_disabled"
             ),
         )
+    global_resolution = resolution
     if integration_id is not None:
         integration_policy = settings.integration_policies.get(
             str(integration_id), {}
@@ -1784,7 +1803,9 @@ def resolve_tool_execution_policy(
             )
             if resource_policy is not None:
                 resolution = resolve_value(resource_policy, "resource")
-    elif resource_key is not None:
+                if resolution.reason != "configured":
+                    return resolution
+    elif integration_id is None and resource_key is not None:
         return ToolPolicyResolution(
             ToolExecutionPolicy.DISABLED, "resource", "missing_integration"
         )
@@ -1794,6 +1815,27 @@ def resolve_tool_execution_policy(
             "hard_unavailable",
             "hard_unavailable",
         )
+    if global_resolution.policy == ToolExecutionPolicy.DISABLED:
+        return ToolPolicyResolution(
+            ToolExecutionPolicy.DISABLED,
+            global_resolution.source,
+            (
+                global_resolution.reason
+                if global_resolution.reason != "configured"
+                else "global_disabled"
+            ),
+        )
+    profile_policy = cap_agent_profile_policy(
+        settings,
+        capability,
+        resolution.policy,
+        allowed_policies=allowed_policies,
+        integration_id=integration_id,
+        resource_key=resource_key,
+        include_scoped=include_scoped,
+    )
+    if profile_policy != resolution.policy:
+        return ToolPolicyResolution(profile_policy, "agent_profile", "configured")
     return resolution
 
 
@@ -1808,6 +1850,7 @@ def tool_execution_policy(
     integration_id: UUID | None = None,
     resource_key: str | None = None,
     hard_unavailable_capabilities: frozenset[str] = frozenset(),
+    include_scoped: bool = False,
 ) -> ToolExecutionPolicy:
     return resolve_tool_execution_policy(
         settings,
@@ -1817,6 +1860,7 @@ def tool_execution_policy(
         integration_id=integration_id,
         resource_key=resource_key,
         hard_unavailable_capabilities=hard_unavailable_capabilities,
+        include_scoped=include_scoped,
     ).policy
 
 
@@ -1920,9 +1964,7 @@ async def _authorize_media(
         )
         if not allowed:
             return ToolResult.error("permission.denied")
-        context.tool_settings = await load_effective_tools(
-            context.db, context.session.user_id
-        )
+        context.tool_settings = await _profile_tool_settings(context)
         if (
             tool_execution_policy(
                 context.tool_settings,
@@ -1952,9 +1994,7 @@ def _media_target_matches_binding(
 async def _update_agent_identity(
     arguments: UpdateAgentIdentityArguments, context: ToolContext
 ) -> ToolResult:
-    context.tool_settings = await load_effective_tools(
-        context.db, context.session.user_id
-    )
+    context.tool_settings = await _profile_tool_settings(context)
     policy = tool_execution_policy(
         context.tool_settings,
         "settings.agent_identity.update",
@@ -1976,9 +2016,7 @@ async def _update_agent_identity(
             return ToolResult.error("permission.denied")
         approval_received = True
 
-    context.tool_settings = await load_effective_tools(
-        context.db, context.session.user_id
-    )
+    context.tool_settings = await _profile_tool_settings(context)
     current_policy = tool_execution_policy(
         context.tool_settings,
         "settings.agent_identity.update",
@@ -2058,9 +2096,7 @@ async def _update_user_profile(
     arguments: UpdateUserProfileArguments, context: ToolContext
 ) -> ToolResult:
     capability = "settings.user_profile.update"
-    context.tool_settings = await load_effective_tools(
-        context.db, context.session.user_id
-    )
+    context.tool_settings = await _profile_tool_settings(context)
     policy = tool_execution_policy(
         context.tool_settings, capability, ToolExecutionPolicy.ASK
     )
@@ -2087,9 +2123,7 @@ async def _update_user_profile(
             return ToolResult.error("permission.denied")
         approval_received = True
 
-    context.tool_settings = await load_effective_tools(
-        context.db, context.session.user_id
-    )
+    context.tool_settings = await _profile_tool_settings(context)
     current_policy = tool_execution_policy(
         context.tool_settings, capability, ToolExecutionPolicy.ASK
     )
@@ -2129,9 +2163,7 @@ async def _save_skill_draft(
     name_hint: str | None = None,
     current_skill: SkillDefinition | None = None,
 ) -> ToolResult:
-    context.tool_settings = await load_effective_tools(
-        context.db, context.session.user_id
-    )
+    context.tool_settings = await _profile_tool_settings(context)
     policy = tool_execution_policy(
         context.tool_settings, "skills.write", ToolExecutionPolicy.ASK
     )
@@ -2197,9 +2229,7 @@ async def _save_skill_draft(
             return ToolResult.error("permission.denied")
         approval_received = True
 
-    context.tool_settings = await load_effective_tools(
-        context.db, context.session.user_id
-    )
+    context.tool_settings = await _profile_tool_settings(context)
     current_policy = tool_execution_policy(
         context.tool_settings, "skills.write", ToolExecutionPolicy.ASK
     )
@@ -2292,9 +2322,7 @@ async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> To
             )
         return ToolResult.error("skill.alreadyActive")
 
-    context.tool_settings = await load_effective_tools(
-        context.db, context.session.user_id
-    )
+    context.tool_settings = await _profile_tool_settings(context)
     policy = tool_execution_policy(
         context.tool_settings, "skills.load", ToolExecutionPolicy.AUTO
     )
@@ -2308,9 +2336,7 @@ async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> To
         ):
             return ToolResult.error("permission.denied")
         approval_received = True
-    context.tool_settings = await load_effective_tools(
-        context.db, context.session.user_id
-    )
+    context.tool_settings = await _profile_tool_settings(context)
     current_policy = tool_execution_policy(
         context.tool_settings, "skills.load", ToolExecutionPolicy.AUTO
     )

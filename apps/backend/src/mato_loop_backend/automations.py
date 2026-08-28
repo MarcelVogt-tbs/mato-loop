@@ -28,6 +28,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.notifications import NotificationDraft, NotificationService
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
+    DEFAULT_AGENT_PROFILE_ID,
     SettingsStore,
     SkillDefinition,
     SkillsSettings,
@@ -100,6 +101,7 @@ def advance_schedule(schedule: AutomationSchedule, after: datetime) -> None:
 def runtime_snapshot(session: ChatSession) -> dict[str, Any]:
     return {
         "modelId": str(session.model_config_id) if session.model_config_id else None,
+        "agentProfileId": str(session.agent_profile_id),
         "reasoningEffort": session.reasoning_effort,
         "memoryMode": session.memory_mode,
         "webSearchPolicy": session.web_search_policy,
@@ -115,6 +117,7 @@ def runtime_snapshot(session: ChatSession) -> dict[str, Any]:
 def copy_runtime(source: ChatSession, target: ChatSession) -> None:
     for name in (
         "model_config_id",
+        "agent_profile_id",
         "reasoning_effort",
         "memory_mode",
         "web_search_policy",
@@ -282,6 +285,7 @@ class AutomationService:
             title_generation_status="skipped",
             memory_mode="full",
             web_search_policy="available",
+            agent_profile_id=DEFAULT_AGENT_PROFILE_ID,
         )
         if source is not None:
             copy_runtime(source, execution_session)

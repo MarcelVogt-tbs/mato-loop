@@ -22,6 +22,13 @@ _MESSAGES = {
     "agent.researchBudgetReached": "The current-turn research budget has been reached.",
     "agent.repeatedToolCall": "The model repeated a failed tool call without changing its arguments.",
     "agent.toolCallLimitReached": "The agent reached the maximum number of tool calls.",
+    "agentProfile.notFound": "The agent profile was not found.",
+    "agentProfile.duplicate": "An agent profile with this name already exists.",
+    "agentProfile.defaultProtected": "The default agent profile cannot be renamed or deleted.",
+    "agentProfile.inUse": "The agent profile is used by a session.",
+    "agentProfile.limitReached": "The agent profile limit has been reached.",
+    "agentProfile.personalDisabled": "Personal agent profiles are disabled.",
+    "agentProfile.selectedUnavailable": "The selected agent profile is no longer available.",
     "automation.alreadyRunning": "The automation already has an active run.",
     "automation.archived": "The automation is archived.",
     "automation.archiveRequiresOneTimeSchedule": "Automatic archiving requires one one-time schedule.",
@@ -264,7 +271,6 @@ _MESSAGES = {
     "tool.cursorInvalid": (
         "The session cursor is unavailable. Retry session_read with error.params.retryArguments exactly."
     ),
-    "tool.personalSettingsDisabled": "Personal tool settings are disabled by the administrator.",
     "tool.skippedAfterUserDenial": (
         "The tool call was not run because the user denied another action in the same batch."
     ),

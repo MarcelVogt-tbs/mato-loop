@@ -268,6 +268,9 @@ def session_payload(
             ),
         },
         "modelId": str(item.model_config_id) if item.model_config_id else None,
+        "agentProfileId": (
+            str(item.agent_profile_id) if item.agent_profile_id else None
+        ),
         "reasoningEffort": item.reasoning_effort,
         "memoryMode": item.memory_mode,
         "webSearchPolicy": item.web_search_policy,
