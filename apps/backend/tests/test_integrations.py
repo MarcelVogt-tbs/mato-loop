@@ -33,10 +33,7 @@ from mato_loop_backend.api.routes.integrations import (
     update_calendar_integration,
     update_integration_access,
     update_search_integration,
-)
-from mato_loop_backend.api.routes.tool_settings import (
-    ToolSettingsRequest,
-    update_tool_settings,
+    update_search_selection,
 )
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations import (
@@ -49,7 +46,6 @@ from mato_loop_backend.integrations import (
 from mato_loop_backend.integrations import service as integration_service_module
 from mato_loop_backend.integrations.caldav_client import CalDavError
 from mato_loop_backend.integrations.contracts import (
-    IntegrationAdapterDefinition,
     IntegrationContributions,
     IntegrationResource,
     ToolContribution,
@@ -66,6 +62,8 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     UserIntegrationSettings,
+    UserToolSettings,
+    WebSearchToolSettings,
 )
 
 
@@ -203,13 +201,14 @@ async def test_disabled_adapter_blocks_create_but_allows_delete(
     personal_settings = UserIntegrationSettings(instances=[integration])
 
     async def load(_db, settings_type, **_kwargs):
-        return (
-            global_settings
-            if settings_type is IntegrationSettings
-            else personal_settings
-        )
+        if settings_type is IntegrationSettings:
+            return global_settings
+        if settings_type is UserIntegrationSettings:
+            return personal_settings
+        return ToolSettings()
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
     create = AsyncMock()
     delete = AsyncMock()
     monkeypatch.setattr(SearchIntegrationService, "create", create)
@@ -488,54 +487,6 @@ async def test_revoked_personal_adapters_block_external_clients(monkeypatch) -> 
     resource_loader.assert_not_awaited()
 
 
-def _restricted_resource_adapter(monkeypatch) -> ToolAction:
-    action = ToolAction(
-        "tasks.delete",
-        "Aufgaben löschen",
-        ToolExecutionPolicy.ASK,
-        allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
-    )
-
-    async def load_resources(_instance, _credential):
-        return (IntegrationResource("project:main", "Hauptprojekt"),)
-
-    monkeypatch.setitem(
-        integration_registry._ADAPTERS,
-        ("search", "searxng"),
-        IntegrationAdapterDefinition(
-            integration_type="search",
-            adapter_type="searxng",
-            config_model=integration_registry.SearxngConfig,
-            contribution_factory=lambda _instance: IntegrationContributions(
-                tools=(
-                    ToolContribution(
-                        name="tasks_delete",
-                        description="Delete tasks from one project.",
-                        arguments_model=_ResourceArguments,
-                        handler=_resource_handler,
-                        actions=(action,),
-                        authorization_factory=lambda arguments, _context: (
-                            PermissionRequest(
-                                capability=action.capability,
-                                resource_type="network_service",
-                                resource_scope=arguments.resource_key,
-                                action_kind="tasks_delete",
-                                risk_level="medium",
-                                title="Aufgaben löschen?",
-                                summary="Der Agent möchte Aufgaben löschen.",
-                                policy_resource_key=arguments.resource_key,
-                            ),
-                        ),
-                    ),
-                )
-            ),
-            resource_actions=(action,),
-            resource_loader=load_resources,
-        ),
-    )
-    return action
-
-
 def test_no_key_provider_makes_search_available_without_configuration() -> None:
     settings = IntegrationSettings()
 
@@ -638,9 +589,7 @@ async def test_integration_access_reports_integration_policy_and_hard_limits(
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
 
-    result = await get_integration_access(
-        integration.id, AsyncMock(spec=AsyncSession)
-    )
+    result = await get_integration_access(integration.id, AsyncMock(spec=AsyncSession))
 
     action = result["actions"][0]
     assert action["allowedPolicies"] == ["disabled", "ask", "auto"]
@@ -702,32 +651,6 @@ async def test_resource_discovery_cannot_invent_adapter_capabilities(
     assert exc_info.value.code == "integration.resourceDiscoveryFailed"
 
 
-async def test_global_disabled_is_a_hard_resource_policy_limit(monkeypatch) -> None:
-    _resource_adapter(monkeypatch)
-    integration = _searxng()
-    integrations = IntegrationSettings(instances=[integration])
-    tools = ToolSettings.model_validate(
-        {
-            "policies": {"network.search": "disabled"},
-            "resourcePolicies": {
-                str(integration.id): {
-                    "calendar:private": {"network.search": "auto"}
-                }
-            },
-        }
-    )
-
-    async def load_settings(_db, settings_type, **_kwargs):
-        return integrations if settings_type is IntegrationSettings else tools
-
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
-
-    result = await get_integration_access(integration.id, AsyncMock(spec=AsyncSession))
-
-    private = next(item for item in result["resources"] if item["key"] == "calendar:private")
-    assert private["effectivePolicies"] == {"network.search": "disabled"}
-
-
 async def test_integration_access_replaces_only_its_resource_overrides(
     monkeypatch,
 ) -> None:
@@ -744,7 +667,7 @@ async def test_integration_access_replaces_only_its_resource_overrides(
                 str(other_id): {
                     "calendar:other": {"network.search": "disabled"}
                 }
-            }
+            },
         }
     )
 
@@ -760,11 +683,7 @@ async def test_integration_access_replaces_only_its_resource_overrides(
     result = await update_integration_access(
         integration.id,
         IntegrationAccessRequest.model_validate(
-            {
-                "resources": {
-                    "calendar:work": {"network.search": "auto"}
-                }
-            }
+            {"resources": {"calendar:work": {"network.search": "auto"}}}
         ),
         db,
     )
@@ -787,40 +706,6 @@ async def test_integration_access_replaces_only_its_resource_overrides(
     assert load.await_args_list[-1].kwargs == {"for_update": True}
     save.assert_awaited_once_with(db, tools, user_id=None)
     db.commit.assert_awaited_once()
-
-
-async def test_integration_access_replaces_sparse_integration_overrides(
-    monkeypatch,
-) -> None:
-    _resource_adapter(monkeypatch)
-    integration = _searxng()
-    integrations = IntegrationSettings(instances=[integration])
-    tools = ToolSettings.model_validate(
-        {
-            "integrationPolicies": {
-                str(integration.id): {"network.search": "ask"}
-            }
-        }
-    )
-
-    async def load_settings(_db, settings_type, **_kwargs):
-        return integrations if settings_type is IntegrationSettings else tools
-
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
-    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
-
-    result = await update_integration_access(
-        integration.id,
-        IntegrationAccessRequest.model_validate(
-            {"policies": {"network.search": "auto"}, "resources": {}}
-        ),
-        AsyncMock(spec=AsyncSession),
-    )
-
-    assert tools.integration_policies[str(integration.id)] == {
-        "network.search": ToolExecutionPolicy.AUTO
-    }
-    assert result["actions"][0]["effectiveIntegrationPolicy"] == "auto"
 
 
 async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
@@ -880,6 +765,12 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
                 "integrationId": str(integration.id),
                 "taskListKey": task_list_key,
             },
+            "integrationPolicies": {
+                str(integration.id): {"calendar.read": "ask"}
+            },
+            "resourcePolicies": {
+                str(integration.id): {key: {"calendar.read": "auto"}}
+            },
         }
     )
 
@@ -899,13 +790,17 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
 
     preserved = await update_integration_access(
         integration.id,
-        IntegrationAccessRequest.model_validate({"resources": {}}),
+        IntegrationAccessRequest(),
         db,
     )
     assert tools.default_calendar.calendar_key == key
     assert tools.default_task_list.task_list_key == task_list_key
     assert preserved["defaultResourceKey"] == key
     assert preserved["defaultTaskListKey"] == task_list_key
+    assert tools.integration_policies[str(integration.id)] == {
+        "calendar.read": ToolExecutionPolicy.ASK
+    }
+    assert str(integration.id) not in tools.resource_policies
 
     tools.default_task_list = DefaultTaskListSettings(
         integration_id=other_id,
@@ -914,7 +809,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
     unchanged = await update_integration_access(
         integration.id,
         IntegrationAccessRequest.model_validate(
-            {"resources": {}, "defaultTaskListKey": None}
+            {"defaultTaskListKey": None}
         ),
         db,
     )
@@ -924,7 +819,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
     selected = await update_integration_access(
         integration.id,
         IntegrationAccessRequest.model_validate(
-            {"resources": {}, "defaultTaskListKey": task_list_key}
+            {"defaultTaskListKey": task_list_key}
         ),
         db,
     )
@@ -938,16 +833,16 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
         "calendar.read",
         "calendar.write",
     ]
-    assert set(resources[key]["effectivePolicies"]) == {
-        "calendar.read",
-        "calendar.write",
-        "calendar.delete",
-    }
     assert resources[task_list_key]["applicableCapabilities"] == [
         "tasks.delete",
         "tasks.read",
         "tasks.write",
     ]
+    assert set(resources[key]["effectivePolicies"]) == {
+        "calendar.read",
+        "calendar.write",
+        "calendar.delete",
+    }
     assert set(resources[task_list_key]["effectivePolicies"]) == {
         "tasks.read",
         "tasks.write",
@@ -957,7 +852,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
     replaced = await update_integration_access(
         integration.id,
         IntegrationAccessRequest.model_validate(
-            {"resources": {}, "defaultTaskListKey": other_task_list_key}
+            {"defaultTaskListKey": other_task_list_key}
         ),
         db,
     )
@@ -968,7 +863,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
     cleared = await update_integration_access(
         integration.id,
         IntegrationAccessRequest.model_validate(
-            {"resources": {}, "defaultTaskListKey": None}
+            {"defaultTaskListKey": None}
         ),
         db,
     )
@@ -977,22 +872,11 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
     assert cleared["defaultResourceKey"] == key
     assert cleared["defaultTaskListKey"] is None
 
-    with pytest.raises(ApiError) as irrelevant_policy:
-        await update_integration_access(
-            integration.id,
-            IntegrationAccessRequest.model_validate(
-                {"resources": {task_list_key: {"calendar.read": "ask"}}}
-            ),
-            db,
-        )
-    assert irrelevant_policy.value.code == "validation.invalidChoice"
-    assert irrelevant_policy.value.field == "resources"
-
     with pytest.raises(ApiError) as task_default:
         await update_integration_access(
             integration.id,
             IntegrationAccessRequest.model_validate(
-                {"resources": {}, "defaultResourceKey": task_list_key}
+                {"defaultResourceKey": task_list_key}
             ),
             db,
         )
@@ -1004,7 +888,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
             await update_integration_access(
                 integration.id,
                 IntegrationAccessRequest.model_validate(
-                    {"resources": {}, "defaultTaskListKey": invalid_key}
+                    {"defaultTaskListKey": invalid_key}
                 ),
                 db,
             )
@@ -1015,7 +899,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
         await update_integration_access(
             integration.id,
             IntegrationAccessRequest.model_validate(
-                {"resources": {}, "defaultResourceKey": f"calendar:{'c' * 32}"}
+                {"defaultResourceKey": f"calendar:{'c' * 32}"}
             ),
             db,
         )
@@ -1034,7 +918,6 @@ async def test_non_caldav_access_rejects_a_task_default(monkeypatch) -> None:
             integration.id,
             IntegrationAccessRequest.model_validate(
                 {
-                    "resources": {},
                     "defaultTaskListKey": f"tasklist:{'a' * 32}",
                 }
             ),
@@ -1043,42 +926,6 @@ async def test_non_caldav_access_rejects_a_task_default(monkeypatch) -> None:
 
     assert exc_info.value.code == "validation.invalidChoice"
     assert exc_info.value.field == "default_task_list_key"
-
-
-async def test_disallowed_action_mode_is_rejected_by_both_settings_apis(
-    monkeypatch,
-) -> None:
-    action = _restricted_resource_adapter(monkeypatch)
-    integration = _searxng()
-    integrations = IntegrationSettings(instances=[integration])
-    tools = ToolSettings()
-
-    async def load_settings(_db, settings_type, **_kwargs):
-        return integrations if settings_type is IntegrationSettings else tools
-
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
-
-    with pytest.raises(ApiError) as access_error:
-        await update_integration_access(
-            integration.id,
-            IntegrationAccessRequest.model_validate(
-                {"policies": {action.capability: "auto"}}
-            ),
-            AsyncMock(spec=AsyncSession),
-        )
-    with pytest.raises(ApiError) as settings_error:
-        await update_tool_settings(
-            ToolSettingsRequest.model_validate(
-                {
-                    "policies": {action.capability: "auto"},
-                    "webFetch": {"enabled": True, "defaultPolicy": "ask"},
-                }
-            ),
-            AsyncMock(spec=AsyncSession),
-        )
-
-    assert access_error.value.field == "policies"
-    assert settings_error.value.field == "policies"
 
 
 @pytest.mark.parametrize(
@@ -1094,9 +941,7 @@ async def test_integration_access_rejects_unknown_resources(
     _resource_adapter(monkeypatch)
     integration = _searxng()
     integrations = IntegrationSettings(instances=[integration])
-    monkeypatch.setattr(
-        SettingsStore, "load", AsyncMock(return_value=integrations)
-    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=integrations))
 
     with pytest.raises(ApiError) as exc_info:
         await update_integration_access(
@@ -1105,20 +950,83 @@ async def test_integration_access_rejects_unknown_resources(
             AsyncMock(spec=AsyncSession),
         )
 
-    assert getattr(exc_info.value, "code", None) == "validation.invalidChoice"
+    assert exc_info.value.code == "validation.invalidChoice"
 
 
-def test_integration_payload_marks_resource_policy_support(monkeypatch) -> None:
+async def test_personal_search_selection_uses_effective_provider_options(
+    monkeypatch,
+) -> None:
+    owner_id = uuid4()
+    personal_integration = _searxng()
+    personal_integrations = UserIntegrationSettings(instances=[personal_integration])
+    effective_integrations = IntegrationSettings(instances=[personal_integration])
+    tools = UserToolSettings()
+    save = AsyncMock()
+    monkeypatch.setattr(
+        integrations_route_module,
+        "_load_scoped_integrations",
+        AsyncMock(return_value=(personal_integrations, owner_id)),
+    )
+    monkeypatch.setattr(
+        integrations_route_module,
+        "load_effective_integrations",
+        AsyncMock(return_value=effective_integrations),
+    )
+    monkeypatch.setattr(
+        integrations_route_module,
+        "_load_scoped_tools",
+        AsyncMock(return_value=tools),
+    )
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db = AsyncMock(spec=AsyncSession)
+    provider_key = f"searxng:{personal_integration.id}"
+
+    result = await update_search_selection(
+        WebSearchToolSettings(
+            primary_provider=provider_key,
+            fallback_provider="no_key",
+        ),
+        db,
+        scope="personal",
+        user=SimpleNamespace(id=owner_id, is_admin=False),
+    )
+
+    assert result["primaryProvider"] == provider_key
+    assert result["fallbackProvider"] == "no_key"
+    assert {option["value"] for option in result["providerOptions"]} == {
+        "no_key",
+        provider_key,
+    }
+    assert tools.web_search.primary_provider == provider_key
+    save.assert_awaited_once_with(db, tools, user_id=owner_id)
+    db.commit.assert_awaited_once()
+
+    with pytest.raises(ApiError) as unavailable:
+        await update_search_selection(
+            WebSearchToolSettings(primary_provider=f"searxng:{uuid4()}"),
+            db,
+            scope="personal",
+            user=SimpleNamespace(id=owner_id, is_admin=False),
+        )
+    assert unavailable.value.code == "integration.providerUnavailable"
+    assert unavailable.value.field == "primary_provider"
+
+
+def test_integration_payload_marks_policy_support(monkeypatch) -> None:
     integration = _searxng()
-    assert search_settings_payload(IntegrationSettings(instances=[integration]))[
+    provider = search_settings_payload(IntegrationSettings(instances=[integration]))[
         "providers"
-    ][0]["supportsResourcePolicies"] is False
+    ][0]
+    assert provider["supportsIntegrationPolicies"] is False
+    assert provider["supportsResourcePolicies"] is False
 
     _resource_adapter(monkeypatch)
 
-    assert search_settings_payload(IntegrationSettings(instances=[integration]))[
+    provider = search_settings_payload(IntegrationSettings(instances=[integration]))[
         "providers"
-    ][0]["supportsResourcePolicies"] is True
+    ][0]
+    assert provider["supportsIntegrationPolicies"] is True
+    assert provider["supportsResourcePolicies"] is True
 
 
 def test_search_snippet_preserves_escaped_technical_syntax() -> None:
@@ -1591,6 +1499,7 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
         "username": "user",
     }
     assert first_payload["accounts"][0]["hasCredential"] is True
+    assert first_payload["accounts"][0]["supportsIntegrationPolicies"] is True
     assert first_payload["accounts"][0]["supportsResourcePolicies"] is True
     assert "secret" not in json.dumps(first_payload)
     assert "credentialId" not in json.dumps(first_payload)

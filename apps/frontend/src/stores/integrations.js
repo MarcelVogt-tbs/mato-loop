@@ -6,7 +6,17 @@ const emptySearch = () => ({
   enabled: true,
   effectiveEnabled: true,
   unavailableReason: null,
-  providers: []
+  providers: [],
+  primaryProvider: 'no_key',
+  fallbackProvider: null,
+  providerOptions: [
+    {
+      value: 'no_key',
+      name: 'Websuche ohne API-Key',
+      adapterType: 'ddgs',
+      integrationId: null
+    }
+  ]
 })
 
 const emptyCalendar = () => ({
@@ -208,6 +218,16 @@ export const useIntegrationStore = defineStore('integrations', {
       if (!contextIsCurrent(this, context)) return
       delete this.accessByIntegration[id]
       await this.fetchSearch()
+    },
+    async saveSearchSelection(primaryProvider, fallbackProvider) {
+      const context = scopeContext(this)
+      const { data } = await api.put('/integrations/search', {
+        primaryProvider,
+        fallbackProvider
+      }, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return null
+      this.search = data
+      return data
     },
     async testSearch(id) {
       const scope = this.scope

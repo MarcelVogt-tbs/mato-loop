@@ -912,7 +912,10 @@ async def _remember_resource_labels(
         if tools is None:
             instance_tools = await SettingsStore.load(context.db, ToolSettings)
             tools = UserToolSettings.model_validate(
-                instance_tools.model_dump(exclude={"personal_settings_enabled"})
+                {
+                    **instance_tools.model_dump(exclude={"personal_settings_enabled"}),
+                    "personal_tool_defaults_enabled": False,
+                }
             )
     key = str(integration_id)
     if tools.resource_labels.get(key, {}) != labels:

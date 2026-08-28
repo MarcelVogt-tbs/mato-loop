@@ -57,7 +57,10 @@ async def _load_tools(
         return personal
     instance = await SettingsStore.load(db, ToolSettings)
     return UserToolSettings.model_validate(
-        instance.model_dump(exclude={"personal_settings_enabled"})
+        {
+            **instance.model_dump(exclude={"personal_settings_enabled"}),
+            "personal_tool_defaults_enabled": False,
+        }
     )
 
 

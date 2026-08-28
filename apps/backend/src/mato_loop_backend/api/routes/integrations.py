@@ -10,10 +10,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, model_
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tools import (
-    resolve_tool_execution_policy,
-    tool_registry,
-)
+from mato_loop_backend.agent.tools import resolve_tool_execution_policy, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import ExecutionClient, ExecutionClientError
@@ -40,9 +37,11 @@ from mato_loop_backend.integrations import (
     SearchIntegrationService,
     bookstack_error_code,
     caldav_error_code,
+    effective_search_providers,
     load_bookstack_resources,
     load_caldav_resources,
     mealie_error_code,
+    search_provider_options,
     search_with_provider,
 )
 from mato_loop_backend.integrations.bookstack_client import BookStackError
@@ -78,6 +77,8 @@ from mato_loop_backend.settings import (
     ToolSettings,
     UserIntegrationSettings,
     UserToolSettings,
+    WebSearchToolSettings,
+    load_effective_integrations,
 )
 
 router = APIRouter(prefix="/integrations", dependencies=[Depends(require_user)])
@@ -147,7 +148,10 @@ async def _load_scoped_tools(
         return personal
     instance = await SettingsStore.load(db, ToolSettings)
     return UserToolSettings.model_validate(
-        instance.model_dump(exclude={"personal_settings_enabled"})
+        {
+            **instance.model_dump(exclude={"personal_settings_enabled"}),
+            "personal_tool_defaults_enabled": False,
+        }
     )
 
 
@@ -501,7 +505,7 @@ async def _integration_resources(
 def _access_payload(
     instance: IntegrationInstance,
     resources: tuple,
-    tools: ToolSettings,
+    tools: ToolSettingsDocument,
 ) -> dict:
     adapter = integration_adapter(instance.integration_type, instance.adapter_type)
     if adapter is None:
@@ -607,11 +611,15 @@ def _access_payload(
     return payload
 
 
-def search_settings_payload(settings: IntegrationSettings) -> dict:
+def search_settings_payload(
+    settings: IntegrationSettingsDocument,
+    tools: ToolSettingsDocument | None = None,
+    provider_settings: IntegrationSettings | None = None,
+) -> dict:
     providers = [
         instance for instance in settings.instances if instance.integration_type == "search"
     ]
-    return {
+    payload = {
         **(
             {
                 "personalIntegrationsEnabled": _personal_settings_payload(settings)[
@@ -630,6 +638,17 @@ def search_settings_payload(settings: IntegrationSettings) -> dict:
         "unavailableReason": None,
         "providers": [_provider_payload(provider) for provider in providers],
     }
+    if tools is not None:
+        available_settings = provider_settings or settings
+        primary, fallback = effective_search_providers(tools, available_settings)
+        payload.update(
+            {
+                "primaryProvider": primary,
+                "fallbackProvider": fallback,
+                "providerOptions": search_provider_options(available_settings),
+            }
+        )
+    return payload
 
 
 def calendar_settings_payload(settings: IntegrationSettings) -> dict:
@@ -877,8 +896,46 @@ async def get_search_integrations(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
-    return search_settings_payload(settings)
+    settings, owner_id = await _load_scoped_integrations(db, scope, user)
+    tools = await _load_scoped_tools(db, owner_id)
+    available_settings = (
+        await load_effective_integrations(db, owner_id)
+        if owner_id is not None
+        else settings
+    )
+    return search_settings_payload(settings, tools, available_settings)
+
+
+@router.put("/search")
+async def update_search_selection(
+    payload: WebSearchToolSettings,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, for_update=True, mutation=True
+    )
+    available_settings = (
+        await load_effective_integrations(db, owner_id)
+        if owner_id is not None
+        else settings
+    )
+    available = {
+        str(option["value"]) for option in search_provider_options(available_settings)
+    }
+    if payload.primary_provider not in available:
+        raise ApiError(409, "integration.providerUnavailable", field="primary_provider")
+    if (
+        payload.fallback_provider is not None
+        and payload.fallback_provider not in available
+    ):
+        raise ApiError(409, "integration.providerUnavailable", field="fallback_provider")
+    tools = await _load_scoped_tools(db, owner_id, for_update=True)
+    tools.web_search = payload
+    await SettingsStore.save(db, tools, user_id=owner_id)
+    await db.commit()
+    return search_settings_payload(settings, tools, available_settings)
 
 
 @router.get("/git")

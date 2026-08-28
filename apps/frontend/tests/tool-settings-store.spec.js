@@ -30,7 +30,23 @@ describe('tool settings store', () => {
           id: 'filesystem',
           label: 'Dateisystem',
           icon: 'folder',
-          tools: []
+          tools: [
+            {
+              name: 'read',
+              source: { type: 'builtin' },
+              actions: [{ capability: 'filesystem.read', configurable: true }]
+            },
+            {
+              name: 'update_user_profile',
+              source: { type: 'builtin' },
+              actions: [{ capability: 'settings.user_profile.update', configurable: true }]
+            },
+            {
+              name: 'calendar_query_events',
+              source: { type: 'integration' },
+              actions: [{ capability: 'calendar.read', configurable: true }]
+            }
+          ]
         }
       ],
       policies: {
@@ -38,14 +54,6 @@ describe('tool settings store', () => {
         'settings.user_profile.update': 'auto'
       },
       shellPrefixes: { read: [['cat']], write: [['git', 'status']] },
-      webSearch: {
-        primaryProvider: 'searxng:integration-id',
-        fallbackProvider: 'no_key',
-        providerOptions: [
-          { value: 'no_key', name: 'Websuche ohne API-Key', adapterType: 'ddgs', integrationId: null },
-          { value: 'searxng:integration-id', name: 'Intern', adapterType: 'searxng', integrationId: 'integration-id' }
-        ]
-      },
       webFetch: {
         enabled: true,
         userAgent: 'ConfiguredBrowser/1.0',
@@ -75,16 +83,11 @@ describe('tool settings store', () => {
         'media.analyze.video': 'auto',
         'settings.user_profile.update': 'auto'
       }),
-      webSearch: {
-        primaryProvider: 'searxng:integration-id',
-        fallbackProvider: 'no_key'
-      },
       webFetch: response.webFetch,
       shellPrefixes: response.shellPrefixes
     }), { params: { scope: 'instance' } })
-    expect(store.webSearch).toEqual(response.webSearch)
     expect(store.webFetch).toEqual(response.webFetch)
-    expect(store.groups).toEqual(response.groups)
+    expect(store.groups[0].tools.map((tool) => tool.name)).toEqual(['read', 'update_user_profile'])
     expect(store.policies).toEqual({
       'filesystem.read': 'ask',
       'settings.user_profile.update': 'auto'
@@ -103,13 +106,6 @@ describe('tool settings store', () => {
     api.put.mockResolvedValue({
       data: {
         ...legacyResponse,
-        webSearch: {
-          primaryProvider: 'no_key',
-          fallbackProvider: null,
-          providerOptions: [
-            { value: 'no_key', name: 'Websuche ohne API-Key', adapterType: 'ddgs', integrationId: null }
-          ]
-        },
         generateImage: { policy: 'disabled', timeoutSeconds: 300 },
         editImage: { policy: 'ask', timeoutSeconds: 300 },
         generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
@@ -127,7 +123,6 @@ describe('tool settings store', () => {
     expect(api.put).toHaveBeenCalledWith('/tools/settings', {
       policies: { 'media.generate.image': 'ask' },
       shellPrefixes: { read: [], write: [] },
-      webSearch: { primaryProvider: 'no_key', fallbackProvider: null },
       webFetch: {
         ...legacyResponse.webFetch,
         userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
@@ -153,17 +148,60 @@ describe('tool settings store', () => {
     expect(store.loadFailed).toBe(true)
   })
 
-  it('loads personal effective settings and resets them with personal scope', async () => {
+  it('loads the narrow tool availability contract for chat', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        webFetch: { enabled: false, defaultPolicy: 'ask' },
+        transcribeAudio: { policy: 'ask' }
+      }
+    })
+    const store = useToolSettingsStore()
+
+    await store.fetchAvailability()
+
+    expect(api.get).toHaveBeenCalledWith('/tools/availability')
+    expect(store.webFetch).toEqual(expect.objectContaining({ enabled: false, defaultPolicy: 'ask' }))
+    expect(store.transcribeAudio).toEqual({ policy: 'ask', timeoutSeconds: 300 })
+    expect(store.loaded).toBe(true)
+  })
+
+  it('keeps integration tools out of the tool settings payload', async () => {
+    api.get.mockResolvedValue({
+      data: {
+        groups: [{
+          id: 'calendar',
+          tools: [
+            {
+              name: 'session_read',
+              source: { type: 'builtin' },
+              actions: [{ capability: 'session.read', configurable: true }]
+            },
+            {
+              name: 'calendar_query_events',
+              source: { type: 'integration' },
+              actions: [{ capability: 'calendar.read', configurable: true }]
+            }
+          ]
+        }],
+        policies: { 'session.read': 'ask', 'calendar.read': 'auto' }
+      }
+    })
+    const store = useToolSettingsStore()
+
+    await store.fetchSettings()
+
+    expect(store.groups[0].tools.map((tool) => tool.name)).toEqual(['session_read'])
+    expect(store.policies).toEqual({ 'session.read': 'ask' })
+  })
+
+  it('loads personal settings through the gate and resets the personal document', async () => {
     const instance = {
-      personalSettingsEnabled: true,
       groups: [],
       policies: {},
       webFetch: { enabled: true, defaultPolicy: 'ask', allowedPrivateOrigins: [] }
     }
     api.get.mockImplementation((url) => Promise.resolve({
-      data: url === '/tools/personal-settings'
-        ? { enabled: true }
-        : { ...instance, webFetch: { ...instance.webFetch, enabled: false } }
+      data: url === '/tools/personal-settings' ? { enabled: true } : instance
     }))
     api.delete.mockResolvedValue({ data: instance })
     const store = useToolSettingsStore()
@@ -174,32 +212,6 @@ describe('tool settings store', () => {
 
     expect(api.get).toHaveBeenCalledWith('/tools/personal-settings')
     expect(api.get).toHaveBeenCalledWith('/tools/settings', { params: { scope: 'personal' } })
-    expect(api.get).not.toHaveBeenCalledWith('/tools/settings', { params: { scope: 'instance' } })
     expect(api.delete).toHaveBeenCalledWith('/tools/settings', { params: { scope: 'personal' } })
-  })
-
-  it('discards a late response from the previous scope', async () => {
-    const requests = []
-    api.get.mockImplementation((url, config) => new Promise((resolve) => {
-      requests.push({ url, scope: config?.params?.scope, resolve })
-    }))
-    const store = useToolSettingsStore()
-
-    const instanceLoad = store.fetchSettings()
-    store.selectScope('personal')
-    const personalLoad = store.fetchSettings()
-    requests[1].resolve({
-      data: { enabled: true }
-    })
-    await vi.waitFor(() => expect(requests).toHaveLength(3))
-    requests[2].resolve({ data: { webFetch: { enabled: false } } })
-    await personalLoad
-    requests[0].resolve({ data: { webFetch: { enabled: true, maxResponseMiB: 12 } } })
-    await instanceLoad
-
-    expect(store.scope).toBe('personal')
-    expect(store.webFetch.enabled).toBe(false)
-    expect(store.webFetch.maxResponseMiB).toBe(64)
-    expect(store.loading).toBe(false)
   })
 })

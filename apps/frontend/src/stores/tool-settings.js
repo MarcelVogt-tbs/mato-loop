@@ -9,19 +9,6 @@ const defaultWebFetch = () => ({
   defaultPolicy: 'auto_public',
   allowedPrivateOrigins: []
 })
-const defaultWebSearch = () => ({
-  primaryProvider: 'no_key',
-  fallbackProvider: null,
-  providerOptions: [
-    {
-      value: 'no_key',
-      name: 'Websuche ohne API-Key',
-      adapterType: 'ddgs',
-      integrationId: null
-    }
-  ]
-})
-
 const defaultMediaPolicy = () => ({ policy: 'disabled', timeoutSeconds: 300 })
 const defaultImageEditPolicy = () => ({ policy: 'ask', timeoutSeconds: 300 })
 const defaultVideoAnalysisPolicy = () => ({ policy: 'ask', timeoutSeconds: 1800 })
@@ -33,7 +20,6 @@ function settingsPayload(state) {
     groups: state.groups,
     policies: state.policies,
     shellPrefixes: state.shellPrefixes,
-    webSearch: state.webSearch,
     webFetch: state.webFetch,
     generateImage: state.generateImage,
     editImage: state.editImage,
@@ -54,7 +40,6 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     groups: [],
     policies: {},
     shellPrefixes: defaultShellPrefixes(),
-    webSearch: defaultWebSearch(),
     webFetch: defaultWebFetch(),
     generateImage: defaultMediaPolicy(),
     editImage: defaultImageEditPolicy(),
@@ -88,11 +73,11 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       this.loading = true
       this.loadFailed = false
       try {
-        let policy = null
+        let gate = null
         if (scope === 'personal') {
-          policy = (await api.get('/tools/personal-settings')).data
+          gate = (await api.get('/tools/personal-settings')).data
           if (this.scope !== selectedScope || this.loadVersion !== loadVersion) return
-          this.personalSettingsEnabled = policy.enabled !== false
+          this.personalSettingsEnabled = gate.enabled !== false
           if (!this.personalSettingsEnabled) {
             this.assignSettings({})
             this.loaded = true
@@ -102,7 +87,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         const { data } = await api.get('/tools/settings', scopeConfig(scope))
         if (this.scope !== selectedScope || this.loadVersion !== loadVersion) return
         this.assignSettings(data)
-        if (policy) this.personalSettingsEnabled = policy.enabled !== false
+        if (gate) this.personalSettingsEnabled = gate.enabled !== false
         this.loaded = true
         return settingsPayload(this)
       } catch (error) {
@@ -114,6 +99,23 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         if (this.scope === selectedScope && this.loadVersion === loadVersion) {
           this.loading = false
         }
+      }
+    },
+    async fetchAvailability() {
+      const loadVersion = ++this.loadVersion
+      this.loading = true
+      this.loadFailed = false
+      try {
+        const { data } = await api.get('/tools/availability')
+        if (this.loadVersion !== loadVersion) return
+        this.webFetch = { ...defaultWebFetch(), ...data?.webFetch }
+        this.transcribeAudio = { ...defaultMediaPolicy(), ...data?.transcribeAudio }
+        this.loaded = true
+      } catch (error) {
+        if (this.loadVersion === loadVersion) this.loadFailed = true
+        throw error
+      } finally {
+        if (this.loadVersion === loadVersion) this.loading = false
       }
     },
     async saveSettings(settings) {
@@ -137,14 +139,6 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         const payload = {
           policies,
           shellPrefixes: settings.shellPrefixes || this.shellPrefixes,
-          webSearch: {
-            primaryProvider: settings.webSearch
-              ? settings.webSearch.primaryProvider
-              : this.webSearch.primaryProvider,
-            fallbackProvider: settings.webSearch
-              ? settings.webSearch.fallbackProvider
-              : this.webSearch.fallbackProvider
-          },
           webFetch: settings.webFetch || this.webFetch,
           generateImage: { ...this.generateImage, ...settings.generateImage },
           editImage: { ...this.editImage, ...settings.editImage },
@@ -189,13 +183,24 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       if ('personalSettingsEnabled' in (data || {})) {
         this.personalSettingsEnabled = data.personalSettingsEnabled !== false
       }
-      this.groups = Array.isArray(data?.groups) ? data.groups : []
-      this.policies = { ...(data?.policies || {}) }
+      this.groups = (Array.isArray(data?.groups) ? data.groups : [])
+        .map((group) => ({
+          ...group,
+          tools: (group.tools || []).filter((tool) => tool.source?.type === 'builtin')
+        }))
+        .filter((group) => group.tools.length)
+      const builtinCapabilities = new Set(this.groups.flatMap((group) => (
+        group.tools.flatMap((tool) => (
+          (tool.actions || []).filter((action) => action.configurable).map((action) => action.capability)
+        ))
+      )))
+      this.policies = Object.fromEntries(
+        Object.entries(data?.policies || {}).filter(([capability]) => builtinCapabilities.has(capability))
+      )
       this.shellPrefixes = {
         read: Array.isArray(data?.shellPrefixes?.read) ? data.shellPrefixes.read.map((item) => [...item]) : [],
         write: Array.isArray(data?.shellPrefixes?.write) ? data.shellPrefixes.write.map((item) => [...item]) : []
       }
-      this.webSearch = { ...defaultWebSearch(), ...data?.webSearch }
       this.webFetch = { ...defaultWebFetch(), ...data?.webFetch }
       for (const field of ['generateImage', 'generateSpeech', 'generateAudio', 'transcribeAudio']) {
         this[field] = { ...defaultMediaPolicy(), ...data?.[field] }

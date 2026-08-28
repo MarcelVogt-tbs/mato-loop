@@ -14,6 +14,12 @@ const searchResponse = {
   enabled: true,
   effectiveEnabled: true,
   unavailableReason: null,
+  primaryProvider: 'searxng:integration-id',
+  fallbackProvider: 'no_key',
+  providerOptions: [
+    { value: 'no_key', name: 'Websuche ohne API-Key', adapterType: 'ddgs', integrationId: null },
+    { value: 'searxng:integration-id', name: 'Intern', adapterType: 'searxng', integrationId: 'integration-id' }
+  ],
   providers: [
     {
       id: 'integration-id',
@@ -21,6 +27,7 @@ const searchResponse = {
       integrationType: 'search',
       providerType: 'searxng',
       enabled: true,
+      supportsIntegrationPolicies: false,
       supportsResourcePolicies: false,
       config: { baseUrl: 'https://search.example.com' }
     }
@@ -37,6 +44,7 @@ const calendarResponse = {
       providerType: 'caldav',
       enabled: true,
       hasCredential: true,
+      supportsIntegrationPolicies: true,
       supportsResourcePolicies: true,
       config: { baseUrl: 'https://calendar.example.com', username: 'mato' }
     }
@@ -53,6 +61,7 @@ const knowledgeResponse = {
       providerType: 'bookstack',
       enabled: true,
       hasCredential: true,
+      supportsIntegrationPolicies: true,
       supportsResourcePolicies: true,
       config: { baseUrl: 'https://wiki.example.com' }
     }
@@ -69,6 +78,7 @@ const recipesResponse = {
       providerType: 'mealie',
       enabled: true,
       hasCredential: true,
+      supportsIntegrationPolicies: true,
       supportsResourcePolicies: false,
       config: { baseUrl: 'http://mealie.example.com' }
     }
@@ -229,7 +239,8 @@ describe('integration store', () => {
 
     expect(api.get).toHaveBeenCalledWith('/integrations/search', { params: { scope: 'instance' } })
     expect(store.search.providers.map((item) => item.providerType)).toEqual(['searxng'])
-    expect(store.search.providerOptions).toBeUndefined()
+    expect(store.search.primaryProvider).toBe('searxng:integration-id')
+    expect(store.search.providerOptions).toHaveLength(2)
     expect(store.loaded).toBe(true)
     expect(store.loadFailed).toBe(false)
   })
@@ -263,6 +274,20 @@ describe('integration store', () => {
       '/integrations/search/providers', payload, { params: { scope: 'instance' } }
     )
     expect(store.search.providers).toHaveLength(1)
+  })
+
+  it('saves search provider selection in the current integration scope', async () => {
+    api.put.mockResolvedValue({ data: searchResponse })
+    const store = useIntegrationStore()
+    store.selectScope('personal')
+
+    await store.saveSearchSelection('searxng:integration-id', 'no_key')
+
+    expect(api.put).toHaveBeenCalledWith('/integrations/search', {
+      primaryProvider: 'searxng:integration-id',
+      fallbackProvider: 'no_key'
+    }, { params: { scope: 'personal' } })
+    expect(store.search).toEqual(searchResponse)
   })
 
   it('loads and dispatches calendar account operations', async () => {

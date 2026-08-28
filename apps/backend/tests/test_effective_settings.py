@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.integrations import _load_scoped_integrations
-from mato_loop_backend.api.routes.tool_settings import _load_scoped_tools
 from mato_loop_backend.settings import (
     AiSettings,
     IntegrationAdapterAvailability,
@@ -36,7 +35,6 @@ def test_personal_settings_models_and_instance_flags_have_safe_defaults() -> Non
         integrations.availability_for("new-adapter")
         == IntegrationAdapterAvailability.FULL
     )
-    assert ToolSettings().personal_settings_enabled is True
     assert UserAiSettings.settings_scope == SettingsScope.USER
     assert UserIntegrationSettings.settings_scope == SettingsScope.USER
     assert UserToolSettings.settings_scope == SettingsScope.USER
@@ -235,6 +233,12 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
     )
     personal = UserToolSettings(
         policies={"personal": "auto"},
+        web_search={"primaryProvider": "searxng:personal"},
+        default_calendar={
+            "integrationId": uuid4(),
+            "calendarKey": "calendar:" + "a" * 32,
+        },
+        resource_labels={"personal": {"calendar:test": "Privat"}},
         web_fetch=WebFetchSettings(
             enabled=True,
             user_agent="Personal Agent",
@@ -254,17 +258,42 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
     assert effective.web_fetch.user_agent == "Instance Agent"
     assert effective.web_fetch.max_response_mib == 7
     assert effective.web_fetch.allowed_private_origins == ["https://internal.example"]
+    assert effective.web_search.primary_provider == "searxng:personal"
+    assert effective.default_calendar == personal.default_calendar
+    assert effective.resource_labels == personal.resource_labels
 
 
-async def test_scoped_management_enforces_admin_and_personal_gates(monkeypatch) -> None:
+async def test_effective_tools_keeps_personal_integration_defaults_when_tool_snapshot_is_off(
+    monkeypatch,
+) -> None:
+    integration_id = uuid4()
+    instance = ToolSettings(
+        personal_settings_enabled=False,
+        policies={"filesystem.delete": "ask"},
+        integration_policies={str(integration_id): {"mail.read": "ask"}},
+    )
+    personal = UserToolSettings(
+        personal_tool_defaults_enabled=False,
+        policies={"filesystem.delete": "auto"},
+        integration_policies={str(integration_id): {"mail.read": "disabled"}},
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
+
+    effective = await load_effective_tools(AsyncMock(spec=AsyncSession), uuid4())
+
+    assert effective.policies == instance.policies
+    assert effective.integration_policies == personal.integration_policies
+
+
+async def test_scoped_integration_management_enforces_admin_and_personal_gates(monkeypatch) -> None:
     user = type("User", (), {"id": uuid4(), "is_admin": False})()
     integrations = IntegrationSettings(
         adapter_availability={"git": "instance_only"},
     )
-    tools = ToolSettings(personal_settings_enabled=False)
 
     async def load(_db, settings_type, **_kwargs):
-        return integrations if settings_type is IntegrationSettings else tools
+        return integrations
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
     db = AsyncMock(spec=AsyncSession)
@@ -275,31 +304,10 @@ async def test_scoped_management_enforces_admin_and_personal_gates(monkeypatch) 
         )
     with pytest.raises(ApiError, match="auth.adminRequired"):
         await _load_scoped_integrations(db, "instance", user)
-    with pytest.raises(ApiError, match="auth.adminRequired"):
-        await _load_scoped_tools(db, "instance", user)
     with pytest.raises(ApiError, match="integration.personalAdapterDisabled"):
         await _load_scoped_integrations(
             db, "personal", user, adapter_type="git"
         )
-    with pytest.raises(ApiError, match="tool.personalSettingsDisabled"):
-        await _load_scoped_tools(db, "personal", user, mutation=True)
-
-
-async def test_personal_tool_scope_starts_from_instance_snapshot(monkeypatch) -> None:
-    user = type("User", (), {"id": uuid4(), "is_admin": False})()
-    instance = ToolSettings(
-        policies={"filesystem.delete": "disabled"},
-        personal_settings_enabled=True,
-    )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
-
-    personal, owner_id = await _load_scoped_tools(
-        AsyncMock(spec=AsyncSession), "personal", user, for_update=True
-    )
-
-    assert isinstance(personal, UserToolSettings)
-    assert personal.policies == instance.policies
-    assert owner_id == user.id
 
 
 async def test_settings_store_can_load_absent_optional_row_and_delete_scope() -> None:

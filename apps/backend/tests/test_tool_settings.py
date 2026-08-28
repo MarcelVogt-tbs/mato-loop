@@ -6,25 +6,42 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tools import tool_registry
+from mato_loop_backend.agent.tools import resolve_tool_execution_policy, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.tool_settings import (
+    PersonalSettingsEnabledRequest,
     ToolSettingsRequest,
     get_personal_tool_settings,
+    get_tool_availability,
     get_tool_settings,
+    reset_personal_tool_settings,
+    set_personal_tool_settings_enabled,
     update_tool_settings,
 )
 from mato_loop_backend.settings import (
-    IntegrationInstance,
+    AgentProfilePermissions,
     IntegrationSettings,
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    UserToolSettings,
 )
 
 
 def _db() -> AsyncMock:
     return AsyncMock(spec=AsyncSession)
+
+
+async def test_nonadmin_cannot_read_instance_tool_settings(monkeypatch) -> None:
+    load = AsyncMock(return_value=ToolSettings())
+    monkeypatch.setattr(SettingsStore, "load", load)
+
+    with pytest.raises(ApiError, match="auth.adminRequired"):
+        await get_tool_settings(
+            _db(), scope="instance", user=SimpleNamespace(id=uuid4(), is_admin=False)
+        )
+
+    load.assert_awaited_once()
 
 
 def test_legacy_duckduckgo_provider_is_migrated_to_no_key_search() -> None:
@@ -65,21 +82,172 @@ def test_root_specific_write_policies_keep_shared_tools_available(
     assert ("move_path" in tools) is available
 
 
+@pytest.mark.parametrize(
+    ("baseline", "profile", "expected"),
+    [
+        (ToolExecutionPolicy.ASK, ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO),
+        (ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK),
+        (ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.DISABLED),
+        (ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO, ToolExecutionPolicy.DISABLED),
+    ],
+)
+def test_agent_profile_policy_controls_available_global_capability(
+    baseline: ToolExecutionPolicy,
+    profile: ToolExecutionPolicy,
+    expected: ToolExecutionPolicy,
+) -> None:
+    settings = ToolSettings(policies={"filesystem.read": baseline})
+    settings._agent_permissions = AgentProfilePermissions(
+        policies={"filesystem.read": profile}
+    )
+
+    result = resolve_tool_execution_policy(
+        settings, "filesystem.read", ToolExecutionPolicy.AUTO
+    )
+
+    assert result.policy == expected
+
+
+def test_agent_profile_missing_capability_inherits_live_default() -> None:
+    settings = ToolSettings(policies={"filesystem.read": ToolExecutionPolicy.AUTO})
+    settings._agent_permissions = AgentProfilePermissions()
+
+    assert (
+        resolve_tool_execution_policy(settings, "filesystem.read").policy
+        == ToolExecutionPolicy.AUTO
+    )
+
+
+def test_agent_profile_overrides_scoped_defaults_but_not_hard_limits() -> None:
+    integration_id = uuid4()
+    settings = ToolSettings(
+        policies={"calendar.write": ToolExecutionPolicy.ASK},
+        integration_policies={
+            str(integration_id): {"calendar.write": ToolExecutionPolicy.DISABLED}
+        },
+    )
+    settings._agent_permissions = AgentProfilePermissions(
+        integration_policies={
+            str(integration_id): {"calendar.write": ToolExecutionPolicy.AUTO}
+        }
+    )
+
+    assert (
+        resolve_tool_execution_policy(
+            settings, "calendar.write", integration_id=integration_id
+        ).policy
+        == ToolExecutionPolicy.AUTO
+    )
+
+    settings.policies["calendar.write"] = ToolExecutionPolicy.DISABLED
+    assert (
+        resolve_tool_execution_policy(
+            settings, "calendar.write", integration_id=integration_id
+        ).policy
+        == ToolExecutionPolicy.DISABLED
+    )
+
+
+def test_agent_profile_inherits_live_resource_default() -> None:
+    integration_id = uuid4()
+    resource_key = "calendar:work"
+    settings = ToolSettings(
+        policies={"calendar.read": ToolExecutionPolicy.ASK},
+        resource_policies={
+            str(integration_id): {
+                resource_key: {"calendar.read": ToolExecutionPolicy.DISABLED}
+            }
+        },
+    )
+    settings._agent_permissions = AgentProfilePermissions()
+
+    assert (
+        resolve_tool_execution_policy(
+            settings,
+            "calendar.read",
+            integration_id=integration_id,
+            resource_key=resource_key,
+        ).policy
+        == ToolExecutionPolicy.DISABLED
+    )
+
+    settings.resource_policies[str(integration_id)][resource_key][
+        "calendar.read"
+    ] = ToolExecutionPolicy.AUTO
+    assert (
+        resolve_tool_execution_policy(
+            settings,
+            "calendar.read",
+            integration_id=integration_id,
+            resource_key=resource_key,
+        ).policy
+        == ToolExecutionPolicy.AUTO
+    )
+
+
+def test_unavailable_agent_profile_fails_closed() -> None:
+    settings = ToolSettings(policies={"filesystem.read": ToolExecutionPolicy.AUTO})
+    settings._agent_profile_unavailable = True
+
+    assert (
+        resolve_tool_execution_policy(settings, "filesystem.read").policy
+        == ToolExecutionPolicy.DISABLED
+    )
+
+
+def test_agent_profile_scoped_capability_is_offered_and_resolved_for_its_target() -> None:
+    integration_id = uuid4()
+    settings = ToolSettings(policies={"mail.read": ToolExecutionPolicy.AUTO})
+    settings._agent_permissions = AgentProfilePermissions(
+        policies={"mail.read": ToolExecutionPolicy.DISABLED},
+        integration_policies={str(integration_id): {"mail.read": ToolExecutionPolicy.ASK}},
+    )
+
+    assert (
+        resolve_tool_execution_policy(settings, "mail.read").policy
+        == ToolExecutionPolicy.DISABLED
+    )
+    assert (
+        resolve_tool_execution_policy(
+            settings, "mail.read", include_scoped=True
+        ).policy
+        == ToolExecutionPolicy.ASK
+    )
+    assert (
+        resolve_tool_execution_policy(
+            settings, "mail.read", integration_id=integration_id
+        ).policy
+        == ToolExecutionPolicy.ASK
+    )
+    assert (
+        resolve_tool_execution_policy(
+            settings, "mail.read", integration_id=uuid4()
+        ).policy
+        == ToolExecutionPolicy.DISABLED
+    )
+
+
+def test_agent_profile_leaves_non_configurable_capability_at_baseline() -> None:
+    settings = ToolSettings(policies={"network.fetch": ToolExecutionPolicy.ASK})
+    settings._agent_permissions = AgentProfilePermissions()
+
+    assert (
+        resolve_tool_execution_policy(settings, "network.fetch").policy
+        == ToolExecutionPolicy.ASK
+    )
+
+
 async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
     settings = ToolSettings()
-    integrations = IntegrationSettings()
-
-    async def load_settings(_db, settings_type, **_kwargs):
-        return integrations if settings_type is IntegrationSettings else settings
-
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
 
     result = await get_tool_settings(_db())
+
+    assert result["personalSettingsEnabled"] is True
 
     assert {
         key: result[key]
         for key in (
-            "webSearch",
             "webFetch",
             "generateImage",
             "editImage",
@@ -90,18 +258,6 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
             "updateAgentIdentity",
         )
     } == {
-        "webSearch": {
-            "primaryProvider": "no_key",
-            "fallbackProvider": None,
-            "providerOptions": [
-                {
-                    "value": "no_key",
-                    "name": "Websuche ohne API-Key",
-                    "adapterType": "ddgs",
-                    "integrationId": None,
-                }
-            ],
-        },
         "webFetch": {
             "enabled": True,
             "userAgent": (
@@ -166,6 +322,11 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "agent",
         "coding",
     ]
+    assert {
+        tool["source"]["type"]
+        for group in result["groups"]
+        for tool in group["tools"]
+    } == {"builtin"}
     session_tools = next(group for group in result["groups"] if group["id"] == "sessions")
     discovery = {
         tool["name"]: tool["actions"][0]["capability"]
@@ -178,68 +339,81 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
     }
 
 
-async def test_nonadmin_cannot_read_instance_private_tool_origins(monkeypatch) -> None:
-    settings = ToolSettings(
-        web_fetch={"allowed_private_origins": ["https://private.example"]}
-    )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    user = SimpleNamespace(id=uuid4(), is_admin=False)
-
-    with pytest.raises(ApiError, match="auth.adminRequired"):
-        await get_tool_settings(_db(), scope="instance", user=user)
-
-
-async def test_personal_tool_policy_read_exposes_only_gate(monkeypatch) -> None:
-    settings = ToolSettings(
-        personal_settings_enabled=False,
-        web_fetch={"allowed_private_origins": ["https://private.example"]},
-    )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-
-    result = await get_personal_tool_settings(
-        SimpleNamespace(id=uuid4(), is_admin=False), _db()
-    )
-
-    assert result == {"enabled": False}
-
-
-async def test_personal_effective_tools_redact_instance_private_origins(
-    monkeypatch,
-) -> None:
-    settings = ToolSettings(
-        web_fetch={"allowed_private_origins": ["https://private.example"]}
-    )
+async def test_tool_availability_exposes_only_transcription_policy(monkeypatch) -> None:
+    settings = ToolSettings(transcribe_audio={"policy": "ask"})
     monkeypatch.setattr(
         "mato_loop_backend.api.routes.tool_settings.load_effective_tools",
         AsyncMock(return_value=settings),
     )
+
+    result = await get_tool_availability(
+        SimpleNamespace(id=uuid4(), is_admin=False), _db()
+    )
+
+    assert result == {
+        "webFetch": {"enabled": True, "defaultPolicy": "auto_public"},
+        "transcribeAudio": {"policy": "ask"},
+    }
+
+
+async def test_personal_tool_settings_gate_and_redact_private_origins(monkeypatch) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    instance = ToolSettings(
+        personal_settings_enabled=False,
+        web_fetch={"allowed_private_origins": ["https://private.example"]},
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+
+    assert await get_personal_tool_settings(user, _db()) == {"enabled": False}
+    with pytest.raises(ApiError, match="tool.personalSettingsDisabled"):
+        await get_tool_settings(_db(), scope="personal", user=user)
+
+    instance.personal_settings_enabled = True
     monkeypatch.setattr(
-        "mato_loop_backend.api.routes.tool_settings.load_effective_integrations",
-        AsyncMock(return_value=IntegrationSettings()),
+        "mato_loop_backend.api.routes.tool_settings.load_effective_tools",
+        AsyncMock(return_value=instance),
     )
-
-    result = await get_tool_settings(
-        _db(), scope="personal", user=SimpleNamespace(id=uuid4(), is_admin=False)
-    )
-
+    result = await get_tool_settings(_db(), scope="personal", user=user)
     assert result["webFetch"]["allowedPrivateOrigins"] == []
+
+
+async def test_personal_tool_settings_can_be_enabled_and_reset(monkeypatch) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=True)
+    integration_id = uuid4()
+    instance = ToolSettings(personal_settings_enabled=False)
+    personal = UserToolSettings(
+        policies={"filesystem.delete": "auto"},
+        integration_policies={str(integration_id): {"mail.read": "disabled"}},
+    )
+    load = AsyncMock(return_value=instance)
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
+    monkeypatch.setattr(SettingsStore, "save", save)
+    monkeypatch.setattr(
+        "mato_loop_backend.api.routes.tool_settings.load_effective_tools",
+        AsyncMock(return_value=instance),
+    )
+    db = _db()
+
+    assert await set_personal_tool_settings_enabled(
+        PersonalSettingsEnabledRequest(enabled=True), db, user
+    ) == {"enabled": True}
+    result = await reset_personal_tool_settings(db, user=user)
+
+    assert result["personalSettingsEnabled"] is True
+    assert personal.personal_tool_defaults_enabled is False
+    assert personal.integration_policies[str(integration_id)] == {
+        "mail.read": "disabled"
+    }
+    save.assert_any_await(db, personal, user_id=user.id)
+    assert db.commit.await_count == 2
 
 
 async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch) -> None:
     save = AsyncMock()
     existing = ToolSettings()
-    integration = IntegrationInstance(
-        name="Intern",
-        integration_type="search",
-        adapter_type="searxng",
-        config={"base_url": "https://search.example.com"},
-    )
-    integrations = IntegrationSettings(instances=[integration])
-
-    async def load_settings(_db, settings_type, **_kwargs):
-        return integrations if settings_type is IntegrationSettings else existing
-
-    load = AsyncMock(side_effect=load_settings)
+    load = AsyncMock(return_value=existing)
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(SettingsStore, "save", save)
     db = _db()
@@ -249,10 +423,6 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
             "shellPrefixes": {
                 "read": [["cat"]],
                 "write": [["git", "status"]],
-            },
-            "webSearch": {
-                "primaryProvider": f"searxng:{integration.id}",
-                "fallbackProvider": "no_key",
             },
             "webFetch": {
                 "enabled": True,
@@ -291,16 +461,12 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     assert load.await_args_list[0].kwargs == {}
     assert load.await_args_list[1].args[1] is ToolSettings
     assert load.await_args_list[1].kwargs == {"for_update": True}
-    assert load.await_args_list[2].args[1] is IntegrationSettings
-    assert load.await_args_list[2].kwargs == {"for_update": True}
     assert saved is existing
     assert saved.settings_key == "tools"
     assert saved.web_fetch.allowed_private_origins == result["webFetch"][
         "allowedPrivateOrigins"
     ]
     assert saved.web_fetch.user_agent == "ConfiguredBrowser/1.0"
-    assert saved.web_search.primary_provider == f"searxng:{integration.id}"
-    assert saved.web_search.fallback_provider == "no_key"
     assert saved.shell_prefixes.read == [["cat"]]
     assert saved.shell_prefixes.write == [["git", "status"]]
     assert result["shellPrefixes"] == {
@@ -346,35 +512,6 @@ def test_tool_settings_reject_non_origin_urls(origin: str) -> None:
                 }
             }
         )
-
-
-async def test_tool_settings_reject_an_unavailable_search_provider(monkeypatch) -> None:
-    integrations = IntegrationSettings()
-    settings = ToolSettings()
-
-    async def load_settings(_db, settings_type, **_kwargs):
-        return integrations if settings_type is IntegrationSettings else settings
-
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
-    payload = ToolSettingsRequest.model_validate(
-        {
-            "webSearch": {
-                "primaryProvider": "searxng:00000000-0000-0000-0000-000000000000"
-            },
-            "webFetch": {
-                "enabled": True,
-                "defaultPolicy": "ask",
-                "allowedPrivateOrigins": [],
-            },
-        }
-    )
-
-    with pytest.raises(ApiError) as exc_info:
-        await update_tool_settings(payload, _db())
-
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.code == "integration.providerUnavailable"
-    assert exc_info.value.field == "primary_provider"
 
 
 @pytest.mark.parametrize("timeout", [9, 3_601, 30.5])

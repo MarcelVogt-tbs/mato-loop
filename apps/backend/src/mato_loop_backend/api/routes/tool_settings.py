@@ -8,10 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.tools import tool_execution_policy, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.integrations import (
-    normalize_search_tool_settings,
-    search_provider_options,
-)
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
@@ -24,10 +20,9 @@ from mato_loop_backend.settings import (
     ToolSettings,
     UserToolSettings,
     WebFetchSettings,
-    WebSearchToolSettings,
-    load_effective_integrations,
     load_effective_tools,
 )
+from mato_loop_backend.settings.effective import personal_tool_settings_snapshot
 
 router = APIRouter(prefix="/tools", dependencies=[Depends(require_user)])
 SettingsApiScope = Literal["instance", "personal"]
@@ -58,10 +53,8 @@ async def _load_scoped_tools(
     personal = await SettingsStore.load_optional(
         db, UserToolSettings, user_id=user.id, for_update=for_update
     )
-    if personal is None:
-        personal = UserToolSettings.model_validate(
-            instance.model_dump(exclude={"personal_settings_enabled"})
-        )
+    if personal is None or (mutation and not personal.personal_tool_defaults_enabled):
+        personal = personal_tool_settings_snapshot(instance, personal)
     return personal, user.id
 
 
@@ -71,9 +64,6 @@ class ToolSettingsRequest(BaseModel):
     policies: dict[str, ToolExecutionPolicy] | None = None
     shell_prefixes: ShellPrefixSettings | None = Field(
         default=None, validation_alias=AliasChoices("shellPrefixes", "shell_prefixes")
-    )
-    web_search: WebSearchToolSettings | None = Field(
-        default=None, validation_alias=AliasChoices("webSearch", "web_search")
     )
     web_fetch: WebFetchSettings = Field(
         validation_alias=AliasChoices("webFetch", "web_fetch")
@@ -110,15 +100,10 @@ class PersonalSettingsEnabledRequest(BaseModel):
 
 def tool_settings_payload(
     settings: ToolSettings,
-    integrations: IntegrationSettings | None = None,
     *,
     include_private_origins: bool = True,
 ) -> dict:
-    integration_settings = integrations or IntegrationSettings()
-    effective_settings = settings.model_copy(deep=True)
-    normalize_search_tool_settings(effective_settings, integration_settings)
-    provider_options = search_provider_options(integration_settings)
-    groups = tool_registry.catalog(settings, integration_settings)
+    groups = tool_registry.catalog(settings, IntegrationSettings())
     policies = {
         action["capability"]: action["policy"]
         for group in groups
@@ -131,11 +116,6 @@ def tool_settings_payload(
         "groups": groups,
         "policies": policies,
         "shellPrefixes": settings.shell_prefixes.model_dump(),
-        "webSearch": {
-            "primaryProvider": effective_settings.web_search.primary_provider,
-            "fallbackProvider": effective_settings.web_search.fallback_provider,
-            "providerOptions": provider_options,
-        },
         "webFetch": {
             "enabled": settings.web_fetch.enabled,
             "userAgent": settings.web_fetch.user_agent,
@@ -205,13 +185,10 @@ async def get_tool_settings(
         settings = await load_effective_tools(db, user.id)
         if not settings.personal_settings_enabled:
             raise ApiError(409, "tool.personalSettingsDisabled")
-        integrations = await load_effective_integrations(db, user.id)
     else:
         settings, _owner_id = await _load_scoped_tools(db, scope, user)
-        integrations = await SettingsStore.load(db, IntegrationSettings)
     return tool_settings_payload(
         settings,
-        integrations,
         include_private_origins=user is None or getattr(user, "is_admin", False),
     )
 
@@ -225,6 +202,23 @@ async def get_personal_tool_settings(
     return {"enabled": settings.personal_settings_enabled}
 
 
+@router.get("/availability")
+async def get_tool_availability(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await load_effective_tools(db, user.id)
+    return {
+        "webFetch": {
+            "enabled": settings.web_fetch.enabled,
+            "defaultPolicy": settings.web_fetch.default_policy.value,
+        },
+        "transcribeAudio": {
+            "policy": settings.transcribe_audio.policy.value,
+        },
+    }
+
+
 @router.put("/settings")
 async def update_tool_settings(
     payload: ToolSettingsRequest,
@@ -235,27 +229,6 @@ async def update_tool_settings(
     settings, owner_id = await _load_scoped_tools(
         db, scope, user, for_update=True, mutation=True
     )
-    integrations = (
-        await load_effective_integrations(db, owner_id)
-        if owner_id is not None
-        else await SettingsStore.load(db, IntegrationSettings, for_update=True)
-    )
-    if payload.web_search is not None:
-        available = {
-            str(option["value"]) for option in search_provider_options(integrations)
-        }
-        if payload.web_search.primary_provider not in available:
-            raise ApiError(
-                409, "integration.providerUnavailable", field="primary_provider"
-            )
-        if (
-            payload.web_search.fallback_provider is not None
-            and payload.web_search.fallback_provider not in available
-        ):
-            raise ApiError(
-                409, "integration.providerUnavailable", field="fallback_provider"
-            )
-        settings.web_search = payload.web_search
     if payload.shell_prefixes is not None:
         settings.shell_prefixes = payload.shell_prefixes
     if owner_id is None:
@@ -299,7 +272,7 @@ async def update_tool_settings(
         else:
             settings.policies.setdefault(capability, policy)
     if payload.policies is not None:
-        groups = tool_registry.catalog(settings, integrations)
+        groups = tool_registry.catalog(settings, IntegrationSettings())
         configurable = {
             action["capability"]
             for group in groups
@@ -348,7 +321,6 @@ async def update_tool_settings(
     )
     return tool_settings_payload(
         response_settings,
-        integrations,
         include_private_origins=user is None or getattr(user, "is_admin", False),
     )
 
@@ -366,11 +338,15 @@ async def reset_personal_tool_settings(
     instance = await SettingsStore.load(db, ToolSettings)
     if not instance.personal_settings_enabled:
         raise ApiError(409, "tool.personalSettingsDisabled")
-    await SettingsStore.delete(db, UserToolSettings, user_id=user.id)
+    personal = await SettingsStore.load_optional(
+        db, UserToolSettings, user_id=user.id, for_update=True
+    )
+    if personal is not None:
+        personal.personal_tool_defaults_enabled = False
+        await SettingsStore.save(db, personal, user_id=user.id)
     await db.commit()
     return tool_settings_payload(
         await load_effective_tools(db, user.id),
-        await load_effective_integrations(db, user.id),
         include_private_origins=getattr(user, "is_admin", False),
     )
 

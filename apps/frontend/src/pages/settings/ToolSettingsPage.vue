@@ -4,7 +4,7 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Tools</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Werkzeuge des Agents gruppiert und global steuern.
+          Eingebaute Werkzeuge gruppiert und global steuern.
         </p>
       </div>
       <div class="row items-center q-gutter-sm">
@@ -97,13 +97,6 @@
                 <div class="col">
                   <div class="row items-center q-gutter-sm">
                     <div class="text-subtitle2 text-weight-bold">{{ tool.label }}</div>
-                    <q-chip
-                      v-if="tool.source?.type !== 'builtin'"
-                      dense
-                      outline
-                      color="primary"
-                      label="Integration"
-                    />
                   </div>
                   <div class="text-caption app-muted">
                     {{ TOOL_DESCRIPTIONS[tool.name] || tool.name }}
@@ -170,36 +163,6 @@
                 :rules="[shellPrefixRule]"
                 lazy-rules
               />
-            </div>
-
-            <div v-else-if="tool.name === 'web_search'" class="tool-settings-detail q-gutter-md">
-              <q-select
-                v-model="form.webSearch.primaryProvider"
-                outlined
-                emit-value
-                map-options
-                label="Primärprovider"
-                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-                :options="primaryProviderOptions"
-                @update:model-value="ensureDistinctProviders"
-              />
-              <q-select
-                v-model="form.webSearch.fallbackProvider"
-                outlined
-                emit-value
-                map-options
-                clearable
-                label="Fallback-Provider"
-                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-                :options="fallbackProviderOptions"
-                hint="Wird nur bei temporären Fehlern des Primärproviders verwendet."
-                persistent-hint
-              />
-              <q-banner rounded class="app-surface-tonal">
-                <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
-                Suchbegriffe werden an den gewählten Dienst übertragen. Zusätzliche Provider
-                werden unter Integrationen konfiguriert.
-              </q-banner>
             </div>
 
             <div v-else-if="tool.name === 'webfetch'" class="tool-settings-detail q-gutter-md">
@@ -385,7 +348,7 @@ const tools = useToolSettingsStore()
 const auth = useAuthStore()
 const formRef = ref(null)
 const gateLoading = ref(false)
-const MEDIA_POLICY_OPTIONS = [
+const POLICY_OPTIONS = [
   { label: 'Deaktiviert', value: 'disabled' },
   { label: 'Nachfragen', value: 'ask' },
   { label: 'Automatisch', value: 'auto' }
@@ -466,68 +429,6 @@ const TOOL_DESCRIPTIONS = {
   memory_write: 'Erstellt oder aktualisiert persistente Memories.',
   update_agent_identity: 'Ändert Name oder Persona-Anweisungen des Agents.',
   update_user_profile: 'Ändert gepflegte Angaben im persönlichen Profil.',
-  calendar_list_accounts: 'Listet die konfigurierten CalDAV-Konten auf.',
-  calendar_list_calendars: 'Listet Kalender eines CalDAV-Kontos auf.',
-  calendar_query_events: 'Liest Termine aus einem ausgewählten Kalender.',
-  calendar_create_event: 'Erstellt einen Termin in einem ausgewählten Kalender.',
-  calendar_update_event: 'Ändert einen zuvor gelesenen Termin.',
-  calendar_delete_event: 'Löscht einen zuvor gelesenen Termin.',
-  tasks_list_accounts: 'Listet die konfigurierten CalDAV-Konten für Aufgaben auf.',
-  tasks_list_lists: 'Listet Aufgabenlisten eines CalDAV-Kontos auf.',
-  tasks_query: 'Liest Aufgaben aus einer ausgewählten Aufgabenliste.',
-  tasks_create: 'Erstellt eine Aufgabe in einer ausgewählten Aufgabenliste.',
-  tasks_create_many: 'Erstellt bis zu 50 fehlende Aufgaben gesammelt und überspringt gleichnamige offene Aufgaben.',
-  tasks_update: 'Ändert eine zuvor gelesene Aufgabe.',
-  tasks_set_completed: 'Markiert eine zuvor gelesene Aufgabe als erledigt oder offen.',
-  tasks_delete: 'Löscht eine zuvor gelesene Aufgabe.',
-  mail_list_accounts: 'Listet die aktiven IMAP-/SMTP-Konten auf.',
-  mail_list_folders: 'Listet die Ordner eines Mail-Kontos auf.',
-  mail_search: 'Listet oder durchsucht E-Mails in einem ausgewählten Ordner.',
-  mail_get_message: 'Liest Inhalt und Anhangsmetadaten einer zuvor gefundenen E-Mail.',
-  mail_create_draft: 'Speichert einen neuen Textentwurf auf dem Mailserver.',
-  mail_update_draft: 'Ersetzt einen zuvor gelesenen Entwurf.',
-  mail_delete_draft: 'Löscht einen zuvor gelesenen Entwurf.',
-  mail_send_draft: 'Sendet einen zuvor gelesenen Entwurf genau einmal.',
-  mail_send_message: 'Sendet eine neue Text-E-Mail genau einmal.',
-  mail_delete_message: 'Löscht eine zuvor gelesene E-Mail ohne globales Expunge.',
-  mealie_list_accounts: 'Listet die konfigurierten Mealie-Konten auf.',
-  recipes_search: 'Sucht gespeicherte Rezepte in einem Mealie-Konto.',
-  recipe_get: 'Liest Zutaten und Zubereitung eines zuvor gefundenen Rezepts.',
-  meal_plan_get: 'Liest den Mealie-Essensplan für einen Zeitraum.',
-  meal_plan_add: 'Erstellt einen Rezept- oder Freitext-Eintrag im Mealie-Essensplan.',
-  meal_plan_update: 'Ändert einen zuvor gelesenen Mealie-Essensplan-Eintrag.',
-  meal_plan_delete: 'Löscht einen zuvor gelesenen Mealie-Essensplan-Eintrag.',
-  knowledge_list_accounts: 'Listet die konfigurierten BookStack-Wissensdatenbanken auf.',
-  knowledge_list_books: 'Listet die Bücher einer Wissensdatenbank samt Regalzuordnung auf.',
-  knowledge_search:
-    'Durchsucht Bücher, Kapitel und Seiten einer Wissensdatenbank mit mehreren Suchbegriffen gleichzeitig.',
-  knowledge_read_book: 'Listet Kapitel, Seiten und Regalzuordnung eines ausgewählten Buchs auf.',
-  knowledge_read_page: 'Liest den Markdown-Inhalt einer zuvor gefundenen Seite.',
-  knowledge_create_page: 'Erstellt eine Markdown-Seite in einem ausgewählten Buch.',
-  knowledge_update_page:
-    'Ersetzt Titel oder Inhalt einer zuvor gelesenen Seite; der gespeicherte Stand kann anschließend erneut gelesen werden.',
-  knowledge_delete_page: 'Löscht eine zuvor gelesene Seite.',
-  knowledge_create_book: 'Erstellt ein neues Buch und ordnet es optional Regalen zu.',
-  knowledge_update_book: 'Ändert Name oder Beschreibung eines Buchs; die Regalzuordnung wird über Regale geändert.',
-  knowledge_delete_book: 'Löscht ein Buch samt aller Kapitel und Seiten.',
-  knowledge_create_chapter: 'Erstellt ein Kapitel in einem ausgewählten Buch.',
-  knowledge_update_chapter: 'Ändert Name oder Beschreibung eines zuvor gelesenen Kapitels.',
-  knowledge_delete_chapter: 'Löscht ein zuvor gelesenes Kapitel samt Seiten.',
-  knowledge_list_shelves: 'Listet die Regale einer Wissensdatenbank auf.',
-  knowledge_read_shelf: 'Zeigt ein Regal samt zugeordneter Bücher an.',
-  knowledge_create_shelf: 'Erstellt ein neues Regal in einer Wissensdatenbank.',
-  knowledge_update_shelf: 'Ändert Name, Beschreibung oder Bücher eines Regals; Bücher können einzeln hinzugefügt oder entfernt werden.',
-  knowledge_delete_shelf: 'Löscht ein Regal, ohne die enthaltenen Bücher zu löschen.',
-  knowledge_list_attachments: 'Listet die Anhänge einer zuvor gelesenen Seite auf.',
-  knowledge_create_attachment:
-    'Hängt eine Datei oder einen Link an eine Seite: Download aus dem Internet, Datei aus Sessiondateien oder von einem Computer oder reiner Verweis.',
-  knowledge_delete_attachment: 'Löscht einen zuvor aufgelisteten Anhang einer Seite.',
-  git_clone: 'Klont ein Git-Repository auf den zugewiesenen Computer.',
-  git_status: 'Zeigt den Zustand des Git-Arbeitsverzeichnisses an.',
-  git_diff: 'Zeigt Änderungen im Git-Arbeitsverzeichnis an.',
-  git_log: 'Zeigt den Commit-Verlauf eines Git-Repositorys an.',
-  git_add: 'Merkt Änderungen für den nächsten Git-Commit vor.',
-  git_commit: 'Erstellt einen Git-Commit aus den vorgemerkten Änderungen.',
   list_automations: 'Listet die eigenen Automationen kompakt auf.',
   get_automation: 'Liest die vollständige Definition einer Automation.',
   create_automation: 'Erstellt eine Automation mit Zeitplänen und aktuellem Laufzeitkontext.',
@@ -537,11 +438,6 @@ const TOOL_DESCRIPTIONS = {
 }
 const form = reactive({
   policies: {},
-  webSearch: {
-    primaryProvider: 'no_key',
-    fallbackProvider: null,
-    providerOptions: []
-  },
   enabled: true,
   userAgent: DEFAULT_WEBFETCH_USER_AGENT,
   maxResponseMiB: 64,
@@ -561,10 +457,6 @@ const personalBlocked = computed(() => (
 
 function assignForm(settings) {
   form.policies = { ...settings.policies }
-  form.webSearch = {
-    ...settings.webSearch,
-    providerOptions: [...settings.webSearch.providerOptions]
-  }
   Object.assign(form, settings.webFetch, {
     allowedPrivateOrigins: [...settings.webFetch.allowedPrivateOrigins]
   })
@@ -589,21 +481,6 @@ function parseShellPrefixes(value) {
   ).values()]
 }
 
-const primaryProviderOptions = computed(() => form.webSearch.providerOptions.map((provider) => ({
-  label: provider.integrationId ? `${provider.name} · SearXNG` : provider.name,
-  value: provider.value
-})))
-const fallbackProviderOptions = computed(() => [
-  { label: 'Kein Fallback', value: null },
-  ...primaryProviderOptions.value.filter((provider) => provider.value !== form.webSearch.primaryProvider)
-])
-
-function ensureDistinctProviders() {
-  if (form.webSearch.fallbackProvider === form.webSearch.primaryProvider) {
-    form.webSearch.fallbackProvider = null
-  }
-}
-
 function configurableActions(tool) {
   if (tool.name === 'session_browse') return []
   return (tool.actions || []).filter((action) => action.configurable)
@@ -614,8 +491,8 @@ function fixedActions(tool) {
 }
 
 function actionPolicyOptions(action) {
-  const allowed = action.allowedPolicies || MEDIA_POLICY_OPTIONS.map(({ value }) => value)
-  return MEDIA_POLICY_OPTIONS.filter(({ value }) => allowed.includes(value))
+  const allowed = action.allowedPolicies || POLICY_OPTIONS.map(({ value }) => value)
+  return POLICY_OPTIONS.filter(({ value }) => allowed.includes(value))
 }
 
 function actionLabel(tool, action) {
@@ -689,10 +566,6 @@ async function save() {
     shellPrefixes: {
       read: parseShellPrefixes(shellPrefixText.read),
       write: parseShellPrefixes(shellPrefixText.write)
-    },
-    webSearch: {
-      primaryProvider: form.webSearch.primaryProvider,
-      fallbackProvider: form.webSearch.fallbackProvider
     },
     webFetch: {
       enabled: form.enabled,

@@ -127,6 +127,48 @@
       </template>
     </q-banner>
 
+    <q-card v-if="showInstances" flat class="app-surface q-mb-md">
+      <q-card-section>
+        <div class="text-subtitle1 text-weight-bold">Suchprovider</div>
+        <div class="text-body2 app-muted q-mt-xs">
+          Primären Dienst und optionalen Fallback für die Websuche auswählen.
+        </div>
+      </q-card-section>
+      <q-separator />
+      <q-card-section class="row q-col-gutter-md">
+        <div class="col-12 col-md-6">
+          <q-select
+            :model-value="integrations.search.primaryProvider"
+            outlined
+            emit-value
+            map-options
+            label="Primärprovider"
+            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+            :options="searchProviderOptions"
+            :loading="searchSelectionSaving"
+            :disable="integrations.loading || searchSelectionSaving"
+            @update:model-value="setPrimarySearchProvider"
+          />
+        </div>
+        <div class="col-12 col-md-6">
+          <q-select
+            :model-value="integrations.search.fallbackProvider"
+            outlined
+            emit-value
+            map-options
+            clearable
+            label="Fallback-Provider"
+            hint="Wird nur bei temporären Fehlern des Primärproviders verwendet."
+            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+            :options="fallbackSearchProviderOptions"
+            :loading="searchSelectionSaving"
+            :disable="integrations.loading || searchSelectionSaving"
+            @update:model-value="setFallbackSearchProvider"
+          />
+        </div>
+      </q-card-section>
+    </q-card>
+
     <q-card v-show="showInstances" flat class="app-surface integration-list-card">
       <q-list separator>
         <q-item v-if="integrations.loaded && !configuredIntegrations.length && !integrations.loading" class="q-py-lg">
@@ -175,7 +217,7 @@
           <q-item-section side top>
             <div class="row items-center no-wrap q-gutter-xs">
               <q-btn
-                v-if="integration.supportsResourcePolicies || integration.supportsIntegrationPolicies"
+                v-if="integration.supportsIntegrationPolicies || integration.supportsResourcePolicies"
                 flat
                 dense
                 no-caps
@@ -256,6 +298,7 @@ const dialogOpen = ref(false)
 const selectedIntegration = ref(null)
 const testingId = ref(null)
 const removingId = ref(null)
+const searchSelectionSaving = ref(false)
 const section = ref('instances')
 const showAccessPage = computed(() => route.name === 'settings-integration-access')
 const showInstances = computed(() => !auth.isAdmin || section.value === 'instances')
@@ -267,6 +310,13 @@ const recipeAccounts = computed(() => integrations.recipes.accounts)
 const gitInstances = computed(() => integrations.git.instances)
 const openScadInstances = computed(() => integrations.openscad.instances)
 const codingInstances = computed(() => integrations.coding.instances)
+const searchProviderOptions = computed(() => integrations.search.providerOptions.map((provider) => ({
+  label: provider.integrationId ? `${provider.name} · SearXNG` : provider.name,
+  value: provider.value
+})))
+const fallbackSearchProviderOptions = computed(() => searchProviderOptions.value.filter(
+  (provider) => provider.value !== integrations.search.primaryProvider
+))
 const configuredIntegrations = computed(
   () => [
     ...searchProviders.value,
@@ -311,6 +361,31 @@ async function changeScope(scope) {
   dialogOpen.value = false
   integrations.selectScope(scope)
   await reload()
+}
+
+async function saveSearchSelection(primaryProvider, fallbackProvider) {
+  searchSelectionSaving.value = true
+  try {
+    await integrations.saveSearchSelection(primaryProvider, fallbackProvider)
+    $q.notify({ type: 'positive', message: 'Suchprovider gespeichert' })
+  } catch {
+    // The central API interceptor displays the error as a toast.
+  } finally {
+    searchSelectionSaving.value = false
+  }
+}
+
+async function setPrimarySearchProvider(primaryProvider) {
+  await saveSearchSelection(
+    primaryProvider,
+    integrations.search.fallbackProvider === primaryProvider
+      ? null
+      : integrations.search.fallbackProvider
+  )
+}
+
+async function setFallbackSearchProvider(fallbackProvider) {
+  await saveSearchSelection(integrations.search.primaryProvider, fallbackProvider)
 }
 
 function openCreateDialog() {
