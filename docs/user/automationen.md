@@ -46,7 +46,7 @@ Wenn die Ausgabe-Session als erforderlich markiert ist, kann sie nur zusammen mi
 
 ## Agent-Tools und Freigaben
 
-Der Agent kann Automationen anzeigen, erstellen, bearbeiten, starten und löschen. Diese Aktionen verwenden die Richtlinien unter **Einstellungen > Tools**:
+Der Agent kann Automationen anzeigen, erstellen, bearbeiten, starten und löschen. Diese Aktionen verwenden die wirksamen Vorgaben unter **Einstellungen > Tools** und mögliche Abweichungen des gewählten Profils unter **Einstellungen > Agenten**:
 
 - Automation lesen
 - Automation erstellen

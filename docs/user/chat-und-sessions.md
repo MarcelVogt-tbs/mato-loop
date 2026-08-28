@@ -12,12 +12,13 @@ Für jede Session können Sie festlegen:
 
 | Einstellung | Bedeutung |
 | --- | --- |
+| Agent | Persona, Aufgabenanweisungen und optionale Tool-Abweichungen für private und öffentliche Modelle |
 | Modell | Verwendetes aktives Chatmodell |
 | Memory | Voll, nur lesen oder deaktiviert |
 | Websuche | Erzwingen, verfügbar oder deaktiviert |
 | Computer | Optional verbundener Computer für lokale Funktionen |
 
-Vom Modell ausgelöste Dateiaktionen werden durch die beiden Dateirichtlinien des gewählten Computers beschränkt. Zwei feste Schalter aktivieren oder blockieren Shell-Aktionen im Home-Verzeichnis und außerhalb davon; beide sind standardmäßig aktiviert. `process.execute` bleibt eine getrennte Tool-Richtlinie. Einen getrennten Agent-Modus gibt es nicht. Shell-Befehle werden konservativ als Lesen oder Schreiben klassifiziert. Tokenbasierte Präfixregeln und Session-Freigaben können Rückfragen reduzieren; Session-Freigaben bleiben an Klasse, Computer und absoluten Arbeitsordner gebunden und überstimmen keine harte Grenze.
+Das ausgewählte Agentenprofil gilt für die Session. Beim Start eines Laufs wählt das Vertrauenslevel des Modells dessen private oder öffentliche Abweichungen. Nicht gesetzte Werte übernehmen immer die aktuell wirksamen Vorgaben aus **Tools** und **Integrationen**; Profile sind keine vollständigen Richtlinienkopien. Ein Profilwechsel ist während eines aktiven Laufs gesperrt. **Default** ist das feste Profil für neue Sessions und übernimmt alle Vorgaben ohne eigene Tool-Abweichungen. Vom Modell ausgelöste Dateiaktionen werden zusätzlich durch die beiden Dateirichtlinien des gewählten Computers beschränkt. Zwei feste Schalter aktivieren oder blockieren Shell-Aktionen im Home-Verzeichnis und außerhalb davon; beide sind standardmäßig aktiviert. `process.execute` bleibt eine getrennte Tool-Richtlinie. Einen pauschalen Lesen-/Schreiben-Modus gibt es nicht. Shell-Befehle werden konservativ als Lesen oder Schreiben klassifiziert. Tokenbasierte Präfixregeln und Session-Freigaben können Rückfragen reduzieren; Session-Freigaben bleiben an Agentenprofil, Vertrauenslevel, Klasse, Computer und absoluten Arbeitsordner gebunden und überstimmen keine harte Grenze.
 
 Eine neue Session besitzt nur internen Session-Speicher und noch keinen Workspace. Die Computerauswahl und der absolute aktuelle Ordner unter **Control Center > Dateien** sind veränderbare Session-Vorgaben. Beim Start eines Laufs speichert MatoLoop davon eine unveränderliche Momentaufnahme. Änderungen gelten erst für den nächsten Lauf. Ist kein Computer gewählt oder der gewählte Computer offline, bleiben Chat und Backend-Tools verfügbar; Computer-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Computer und wiederholt keine fehlgeschlagene lokale Operation automatisch.
 

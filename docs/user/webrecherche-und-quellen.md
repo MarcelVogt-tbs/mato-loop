@@ -12,7 +12,7 @@ Die Auswahl des tatsächlichen Suchproviders erfolgt durch MatoLoop und kann vom
 
 ## Suchprovider
 
-Ohne weitere Einrichtung verwendet MatoLoop eine eingebaute Suche ohne API-Schlüssel. Zusätzliche SearXNG-Instanzen werden unter **Einstellungen > Integrationen** verwaltet. Primär- und optionaler Fallback-Provider werden unter **Einstellungen > Tools** ausgewählt.
+Ohne weitere Einrichtung verwendet MatoLoop eine eingebaute Suche ohne API-Schlüssel. Zusätzliche SearXNG-Instanzen sowie Primär- und optionaler Fallback-Provider werden unter **Einstellungen > Integrationen** verwaltet.
 
 Der Fallback wird nur bei vorübergehenden Fehlern des primären Providers verwendet.
 

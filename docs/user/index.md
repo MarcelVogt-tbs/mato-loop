@@ -13,7 +13,7 @@ MatoLoop ist eine selbst gehostete Arbeitsumgebung für KI-gestützte Chats und 
 
 ## Administration
 
-Die Einstellungen erreichen Sie über das Benutzermenü unten in der Navigation. Dort verwalten Sie Provider, Modelle, Tools, Integrationen, Automationen, Personalisierung und Memory. Ihr eigenes Konto öffnen Sie direkt über **Konto** im Benutzermenü. Administratoren verwalten zusätzlich Benutzer und die gemeinsamen Instanzeinstellungen.
+Die Einstellungen erreichen Sie über das Benutzermenü unten in der Navigation. Dort verwalten Sie Provider, **Standardmodelle**, Agentenprofile, Tools, Integrationen, Automationen, Personalisierung und Memory. Ihr eigenes Konto öffnen Sie direkt über **Konto** im Benutzermenü. Administratoren verwalten zusätzlich Benutzer und die gemeinsamen Instanzeinstellungen.
 
 Persönliche Sessions, Dateien, Arbeitsbereiche, Erinnerungen und Zugangsdaten sind nach Benutzer getrennt. Gemeinsame Provider, Modelle und Integrationen der Instanz stehen dagegen absichtlich allen Benutzern nach den festgelegten Richtlinien zur Verfügung.
 

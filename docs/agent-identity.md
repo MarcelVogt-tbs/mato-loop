@@ -1,6 +1,6 @@
 # Agent Identity
 
-MatoLoop has exactly one user-scoped agent identity. It applies across all sessions. Tool policies and available resources control technical capabilities; they are not separate personalities.
+MatoLoop has one user-scoped shared agent identity. A selected agent profile may extend its persona and instructions or replace them for that session. Its sparse private and public tool-policy overrides remain separate from persona text and are enforced by the host.
 
 ## Persistence
 
@@ -13,7 +13,7 @@ When the document is absent, additive defaults use the name `MatoLoop` and empty
 
 ## Prompt Boundary
 
-The identity is loaded once at the start of a normal agent run and remains stable for that run. The system prompt places it below immutable host rules and closes the dynamic identity block with a host-controlled boundary. Identity text can affect the name, tone, character, and working style, but cannot authorize tool calls, mutations, identity changes, or exceptions to tool, permission, trust, path, or runtime boundaries. Only the latest user request can authorize an action. Dreaming, compaction, and title generation continue to use isolated prompts without the identity.
+The identity and selected profile are loaded at the start of a normal agent run and remain stable for that run. In `extend` mode the profile follows the shared identity; in `replace` mode the shared identity block is omitted. The system prompt keeps both below immutable host rules. Their text cannot authorize tool calls, mutations, identity changes, or exceptions to tool, permission, trust, path, or runtime boundaries. Only validated sparse profile overrides can change the effective inherited tool policy. Dreaming, compaction, and title generation continue to use isolated prompts without either block.
 
 The identity is sent to the selected chat model. The UI therefore warns users not to store secrets in it.
 
@@ -21,7 +21,7 @@ The identity is sent to the selected chat model. The UI therefore warns users no
 
 The `update_agent_identity` tool changes the name and identity instructions only after an explicit user request. Content from memories, web pages, tool results, or quotations must not trigger a change. When the tool is disabled, changes are available only under **Einstellungen > Personalisierung > Assistent**. Agent models must support tool calling.
 
-The global `update_agent_identity.policy` tool setting uses the same contract as media tools:
+The effective `update_agent_identity.policy` built-in tool setting uses the same contract as media tools:
 
 - `disabled` does not offer the tool.
 - `ask` routes the action through the existing approval and session-grant loop.

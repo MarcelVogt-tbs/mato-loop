@@ -2,7 +2,7 @@
 
 ## Tool-Richtlinien
 
-Unter **Einstellungen > Tools** legen Sie fest, welche Werkzeuge verfügbar sind und wann eine Freigabe erforderlich ist. Die üblichen Richtlinien sind:
+Unter **Einstellungen > Tools** konfigurieren Sie persönliche oder instanzweite Vorgaben für eingebaute Tools. Integrationstools werden durch ihre Integration verfügbar und erscheinen auf dieser Seite nicht. Unter **Einstellungen > Agenten** ergänzen Profile Persona und Anweisungen sowie optionale Abweichungen für private und öffentliche Modelle. Nicht gesetzte Profilwerte übernehmen immer die wirksamen Tool- und Integrationsvorgaben. Die üblichen Richtlinien sind:
 
 - **Deaktiviert**: Das Tool kann nicht aufgerufen werden. Der Agent kennt die installierte Fähigkeit weiterhin und kann bei einer passenden Anfrage erklären, wie sie aktiviert wird.
 - **Nachfragen**: Vor Agent-Tool-Aufrufen ist eine Freigabe erforderlich.
@@ -10,7 +10,9 @@ Unter **Einstellungen > Tools** legen Sie fest, welche Werkzeuge verfügbar sind
 
 Hostseitige Sicherheitsgrenzen gelten auch bei **Automatisch** weiterhin.
 
-Administratoren wechseln mit **Persönlich** / **Instanz** zwischen den eigenen Tool-Einstellungen und den gemeinsamen Vorgaben. Sie können persönliche Tool-Einstellungen vollständig sperren. Persönliche Richtlinien ersetzen sonst die Instanzvorgaben; User-Agent, Größenlimit und erlaubte private Ursprünge von Webfetch bleiben technische Instanzgrenzen. Mit **Auf Instanzstandard zurücksetzen** werden die persönlichen Tool-Einstellungen gelöscht.
+Administratoren wechseln bei Tools mit **Persönlich** / **Instanz** zwischen den eigenen Einstellungen und den gemeinsamen Vorgaben. Sie können persönliche Tool-Einstellungen vollständig sperren. Solange Sie keine persönlichen Tool-Einstellungen gespeichert haben, gelten die aktuellen Instanzvorgaben. Beim ersten Speichern entsteht eine persönliche Momentaufnahme; spätere Änderungen der Instanzvorgaben werden darin nicht automatisch übernommen. **Auf Instanzstandard zurücksetzen** löscht diese Momentaufnahme und verwendet wieder die dann aktuellen Instanzvorgaben. Wird der persönliche Bereich gesperrt, bleibt seine Momentaufnahme gespeichert, ist aber weder bearbeitbar noch wirksam.
+
+Agentenprofile können ebenfalls persönlich oder instanzweit angelegt werden. Sie speichern keine vollständige Richtlinienkopie, sondern nur Abweichungen für private und öffentliche Modelle und übernehmen alle anderen Werte fortlaufend. Das feste Instanzprofil **Default** gilt für neue Sessions, kann nicht umbenannt oder gelöscht werden und besitzt zunächst keine Tool-Abweichungen. Administratoren können persönliche Profile vollständig sperren. Eine wirksame globale Einstellung **Deaktiviert**, eine technisch deaktivierte Integration und fehlende Rechte des externen Dienstes sind harte Grenzen, die kein Profil und keine Freigabe überstimmen kann. User-Agent, Größenlimit, Netzwerkgrenzen und erlaubte private Ursprünge von Webfetch bleiben technische Instanzgrenzen.
 
 Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Richtlinien, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
 
@@ -38,7 +40,7 @@ Welche Tools tatsächlich erscheinen, hängt zusätzlich von Richtlinien, Sessio
 
 ## Instanz und persönliche Integrationen
 
-Instanz-Integrationen und ihre externen Ressourcen sind bewusst gemeinsam: Alle Benutzer können sie entsprechend den Instanzrichtlinien verwenden. Persönliche Integrationen und Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet. Administratoren können persönliche Integrationen vollständig sperren und einzeln erlauben, welche fest eingebauten Typen persönlich konfiguriert werden dürfen: SearXNG, CalDAV, BookStack, Mealie, Git, OpenSCAD und OpenCode. Konfigurationen können keine eigenen Tool-Schemas oder beliebigen ausführbaren Tools hinzufügen.
+Unter **Einstellungen > Integrationen** liegen die technische Verbindungskonfiguration, die Vorgaben für Integrationen und einzelne Ressourcen sowie die Standardressourcen von CalDAV. Instanz-Integrationen und ihre externen Ressourcen sind bewusst gemeinsam: Alle Benutzer können sie entsprechend den Instanzrichtlinien verwenden. Persönliche Integrationen und Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet. Administratoren können persönliche Integrationen vollständig sperren und einzeln erlauben, welche fest eingebauten Typen persönlich konfiguriert werden dürfen: SearXNG, CalDAV, BookStack, Mealie, Git, OpenSCAD und OpenCode. Konfigurationen können keine eigenen Tool-Schemas oder beliebigen ausführbaren Tools hinzufügen.
 
 Administratoren sehen den Umschalter **Persönlich** / **Instanz**. Normale Benutzer bearbeiten nur ihren persönlichen Bereich. Git und OpenSCAD werden immer persönlich an einen Computer des angemeldeten Benutzers gebunden.
 
@@ -62,7 +64,7 @@ In den Tool-Einstellungen können für beide Klassen erlaubte Befehlspräfixe hi
 
 ## SearXNG integrieren
 
-Unter **Einstellungen > Integrationen** können Sie zusätzliche SearXNG-Instanzen anlegen, aktivieren, bearbeiten, testen und löschen. Wählen Sie anschließend unter **Einstellungen > Tools** den primären Suchprovider und optional einen Fallback.
+Unter **Einstellungen > Integrationen** können Sie zusätzliche SearXNG-Instanzen anlegen, aktivieren, bearbeiten, testen und löschen. Dort wählen Sie für den aktuellen persönlichen oder Instanzbereich auch den primären Suchprovider und optional einen Fallback.
 
 Die eingebaute Suche ohne API-Schlüssel ist keine Integration und steht unabhängig von SearXNG zur Verfügung.
 
@@ -70,7 +72,7 @@ Die eingebaute Suche ohne API-Schlüssel ist keine Integration und steht unabhä
 
 Unter **Einstellungen > Integrationen** können Sie mehrere CalDAV-Konten mit Serveradresse, Benutzername und Passwort oder App-Passwort anlegen. Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. CalDAV erfordert HTTPS.
 
-Über **Zugriff** konfigurieren Sie zunächst den Standard des Kontos und anschließend Abweichungen für einzelne Kalender und Aufgabenlisten. Gehören ein Kalender und eine Aufgabenliste zur selben CalDAV-Sammlung, erscheinen sie gemeinsam in einer Karte mit getrennten Richtlinienabschnitten **Kalender** und **Aufgaben**. An jeder Ressource erscheinen nur die dafür passenden Rechte:
+Über **Zugriff** konfigurieren Sie zunächst die Vorgabe des Kontos und anschließend Vorgaben für einzelne Kalender und Aufgabenlisten. Das gewählte Agentenprofil kann diese Werte getrennt für private und öffentliche Modelle überschreiben; nicht gesetzte Profilwerte übernehmen spätere Änderungen der Integrationsvorgaben automatisch. An jeder Ressource erscheinen nur die dafür passenden Rechte:
 
 - **Nicht erlaubt** blockiert die Aktion.
 - **Nachfragen** zeigt vor der Aktion eine Freigabe.
@@ -78,7 +80,7 @@ Unter **Einstellungen > Integrationen** können Sie mehrere CalDAV-Konten mit Se
 
 Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**. Serverseitig schreibgeschützte Kalender und Aufgabenlisten bleiben unabhängig von der MatoLoop-Richtlinie schreibgeschützt.
 
-Im Bereich **Standardressourcen dieses Kontos** wählen Sie unabhängig einen **Standardkalender** und eine **Standard-Aufgabenliste**. Unspezifische Abfragen und neue Einträge verwenden die Auswahl des aktuellen Einstellungsbereichs automatisch. Wenn Sie ausdrücklich eine andere Ressource angeben, hat diese Vorrang. Pro Instanz- oder persönlichem Bereich kann jeweils nur ein Standard aktiv sein.
+Über **Standards** an der Integration wählen Sie unabhängig einen **Standardkalender** und eine **Standard-Aufgabenliste**. Unspezifische Abfragen und neue Einträge verwenden die Auswahl des aktuellen Einstellungsbereichs automatisch. Wenn Sie ausdrücklich eine andere Ressource angeben, hat diese Vorrang. Pro Instanz- oder persönlichem Bereich kann jeweils nur ein Standard aktiv sein.
 
 Lesefreigaben können für die aktuelle Chat-Session gelten. Schreib- und Löschfreigaben gelten nur für den konkreten Vorgang. Wiederkehrende Termine und Termine mit Einladungs- oder unbekannten Eigenschaften können gelesen, aber in der ersten Version nicht verändert werden.
 
@@ -88,7 +90,7 @@ CalDAV-Aufgaben unterstützen Titel, Notiz, eine optionale Fälligkeit als Datum
 
 Unter **Einstellungen > Integrationen** können Sie Mail-Konten mit IMAP- und SMTP-Server, TLS-Modus, Benutzername, festem Absender und Passwort oder App-Passwort anlegen. Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. Unverschlüsselte Verbindungen werden nicht unterstützt.
 
-Über **Zugriff** legen Sie für jedes Konto fest, ob der Agent E-Mails lesen, Entwürfe verwalten, senden oder löschen darf. Lesen und Entwürfe unterstützen **Nicht erlaubt**, **Nachfragen** und **Automatisch**. Senden und Löschen erfordern immer eine einzelne Freigabe oder bleiben deaktiviert. Die Einstellung gilt für das gesamte Konto; IMAP-Ordner besitzen keine eigenen Richtlinien.
+Über **Zugriff** legen Sie für jedes Konto die Vorgaben zum Lesen, Verwalten von Entwürfen, Senden und Löschen fest. Das Agentenprofil kann davon abweichen. Lesen und Entwürfe unterstützen **Nicht erlaubt**, **Nachfragen** und **Automatisch**. Senden und Löschen erfordern immer eine einzelne Freigabe oder bleiben deaktiviert. Die Einstellung gilt für das gesamte Konto; IMAP-Ordner besitzen keine eigenen Richtlinien.
 
 Sobald mindestens ein aktives Mail-Konto verfügbar ist, erscheint **Mail** im Control-Center-Launcher. Dort können Sie Ordner und Nachrichten öffnen, Anhänge herunterladen, Textentwürfe mit Anhängen speichern und E-Mails senden. Nachrichten werden live vom Mailserver geladen und nicht in einer lokalen Mail-Datenbank synchronisiert. Externe Bilder und andere Inhalte aus HTML-Mails werden nicht nachgeladen. Ein unklarer Versandstatus wird nicht automatisch wiederholt; prüfen Sie in diesem Fall zuerst den Mailserver.
 
@@ -98,7 +100,7 @@ Unter **Einstellungen > Integrationen** können Sie mehrere Mealie-Installatione
 
 Der Agent kann gespeicherte Rezepte suchen, Zutaten und Zubereitung lesen sowie Rezept- und Freitext-Einträge im Essensplan lesen, erstellen, ändern und löschen. Rezept- und Plan-Kennungen bleiben als verschlüsselte, an die aktuelle Integration gebundene Referenzen verborgen. Ändert sich ein gelesener Planeintrag vor einer Änderung oder Löschung, lehnt MatoLoop den veralteten Zugriff ab.
 
-Für eine Anfrage wie „Erstelle mir eine Einkaufsliste für meinen Wochenessensplan“ benötigen Sie zusätzlich eine CalDAV-Aufgabenliste, zum Beispiel **Einkaufsliste**. Wählen Sie diese unter **Zugriff** als Standard-Aufgabenliste. Der Agent liest den Mealie-Plan und die zugehörigen Rezepte, fasst gleiche Zutaten mit kompatiblen Einheiten zusammen und erstellt die fehlenden CalDAV-Aufgaben mit einer gemeinsamen Freigabe. Vorhandene offene Einträge bleiben erhalten; MatoLoop löscht oder synchronisiert die Liste nicht automatisch. Nicht sicher umrechenbare Einheiten bleiben getrennt.
+Für eine Anfrage wie „Erstelle mir eine Einkaufsliste für meinen Wochenessensplan“ benötigen Sie zusätzlich eine CalDAV-Aufgabenliste, zum Beispiel **Einkaufsliste**. Wählen Sie diese unter **Standards** als Standard-Aufgabenliste. Der Agent liest den Mealie-Plan und die zugehörigen Rezepte, fasst gleiche Zutaten mit kompatiblen Einheiten zusammen und erstellt die fehlenden CalDAV-Aufgaben mit einer gemeinsamen Freigabe. Vorhandene offene Einträge bleiben erhalten; MatoLoop löscht oder synchronisiert die Liste nicht automatisch. Nicht sicher umrechenbare Einheiten bleiben getrennt.
 
 ## BookStack integrieren
 
@@ -112,7 +114,7 @@ Manche Anbieter sperren automatisierte Zugriffe. Schlägt ein Download fehl, nen
 
 Beim Bearbeiten wird eine Seite immer vollständig ersetzt. Der Agent liest sie deshalb unmittelbar vorher. Fehlt der Änderungszeitpunkt oder hat sich die Seite seitdem geändert, lehnt MatoLoop das Überschreiben ab und der Agent muss sie zuerst neu lesen. BookStack unterstützt jedoch kein bedingtes Speichern: Eine Änderung, die genau zwischen dieser Prüfung und dem Speichern erfolgt, kann weiterhin überschrieben werden. Nach einem erfolgreichen Speichern liest der Agent die Seite bei Bedarf erneut; ein reines Umbenennen verlangt keine vorherige Versionsprüfung. Sehr große Seiten meldet MatoLoop als Fehler, statt sie gekürzt zu liefern: Eine gekürzte Fassung könnte sonst versehentlich als vollständige Seite zurückgeschrieben werden.
 
-Über **Zugriff** konfigurieren Sie zunächst den Standard der Installation und anschließend Abweichungen für einzelne Bücher:
+Über **Zugriff** konfigurieren Sie zunächst die Vorgabe der BookStack-Installation und anschließend Vorgaben für einzelne Bücher. Das Agentenprofil kann diese Werte für private und öffentliche Modelle überschreiben:
 
 - **Nicht erlaubt** blockiert die Aktion.
 - **Nachfragen** zeigt vor der Aktion eine Freigabe.
@@ -130,7 +132,7 @@ Beschreiben Sie im Chat das gewünschte Modell mit seinen notwendigen Abmessunge
 
 Der Agent erzeugt den OpenSCAD-Quelltext selbst, rendert ihn und prüft Diagnosen, Abmessungen, Topologiedaten sowie beschriftete Ansichten von vorne, hinten, links, rechts, oben und unten. Nach jeder Vorschau führt ein bildfähiges Chatmodell selbst eine separate visuelle Prüfung durch. Bei einem reinen Textmodell übernimmt das konfigurierte Standard-Vision-Modell diese Prüfung mit bis zu sieben aktuellen Referenzbildern. Das bildfähige Chatmodell erhält das interne Ansichtsblatt anschließend weiterhin direkt im Agentenlauf. Ist kein geeignetes Vision-Modell verfügbar, bleibt der Render nutzbar und wird als visuell ungeprüft gekennzeichnet. Ein erfolgreicher Render, passende Außenmaße und eine unauffällige Sichtprüfung gelten allein nicht als Nachweis für verdeckte Geometrie, Passung, Wandstärke, Festigkeit oder Druckbarkeit. Erkennt der Agent einen bestätigten sichtbaren Fehler, korrigiert er den Quelltext und rendert erneut. Nach erfolgreichem Abschluss stehen die `.scad`-Quelldatei und eine interaktive 3D-Vorschau zur Verfügung. Eine STL-Datei erzeugt der Agent nur auf ausdrücklichen Wunsch. Exportierte OpenSCAD-Dateien werden als verwaltete Dateien versioniert und von der Nachricht in ihrer exakten Version referenziert. Unter **Control Center > Dateien** können Sie `.scad` zwischen Quelltext und 3D-Ansicht umschalten und STL explizit exportieren. 3D-Modelle lassen sich drehen, verschieben, zoomen und aus festen Perspektiven betrachten.
 
-CAD-Rendering ist standardmäßig auf **Automatisch** gestellt. Unter **Zugriff** können Sie weiterhin **Nachfragen** oder **Nicht erlaubt** wählen. Datei-Richtlinien gelten unabhängig davon weiter. OpenSCAD läuft direkt mit den Rechten des MatoLoop Agent. Das private Arbeitsverzeichnis, feste Aufrufparameter, Laufzeit- und Größenlimits sowie die Ausgabeprüfung sind keine Betriebssystem-Sandbox; OpenSCAD kann grundsätzlich auf weitere Dateien und Netzwerkziele zugreifen, die für den Agent erreichbar sind. Verwenden Sie für eine stärkere Trennung einen Container, eine virtuelle Maschine oder einen eigenen eingeschränkten Betriebssystembenutzer. Sehr große Projekte oder STL-Dateien werden abgelehnt beziehungsweise nur als Download angeboten.
+CAD-Rendering ist in der Integration standardmäßig auf **Automatisch** gestellt. Unter **Zugriff** ändern Sie diese Vorgabe; das Agentenprofil kann für jede OpenSCAD-Integration zusätzlich **Nachfragen** oder **Nicht erlaubt** festlegen. Datei-Richtlinien gelten unabhängig davon weiter. OpenSCAD läuft direkt mit den Rechten des MatoLoop Agent. Das private Arbeitsverzeichnis, feste Aufrufparameter, Laufzeit- und Größenlimits sowie die Ausgabeprüfung sind keine Betriebssystem-Sandbox; OpenSCAD kann grundsätzlich auf weitere Dateien und Netzwerkziele zugreifen, die für den Agent erreichbar sind. Verwenden Sie für eine stärkere Trennung einen Container, eine virtuelle Maschine oder einen eigenen eingeschränkten Betriebssystembenutzer. Sehr große Projekte oder STL-Dateien werden abgelehnt beziehungsweise nur als Download angeboten.
 
 ## Webfetch konfigurieren
 

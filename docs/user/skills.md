@@ -8,7 +8,7 @@ Bei einer passenden Anfrage kann der Agent automatisch genau einen Skill aus Ihr
 
 Ist Webrecherche für die Session verpflichtend, darf der Agent zunächst einen eindeutig passenden Skill laden. Die vorgeschriebene Suche bleibt trotzdem erforderlich und folgt im nächsten Schritt.
 
-Unter **Einstellungen > Tools** gelten getrennte Richtlinien für **Skills laden** und **Skills speichern**:
+Unter **Einstellungen > Tools** gelten Vorgaben für **Skills laden** und **Skills speichern**. Das gewählte Profil kann für private und öffentliche Modelle jeweils davon abweichen:
 
 - **Nicht erlaubt** deaktiviert die Aktion.
 - **Nachfragen** zeigt vor der Aktion eine Freigabe.
