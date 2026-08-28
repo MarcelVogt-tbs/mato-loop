@@ -233,6 +233,11 @@ def _summary(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _report(payload: dict[str, Any]) -> str:
     summary = payload["summary"]
+    prompt_cache_key = (
+        "chat session ID"
+        if payload["model"]["providerAdapter"] == "openai-codex"
+        else "not sent (provider-managed cache)"
+    )
     lines = [
         "# MatoLoop Natural Session Cache Evaluation",
         "",
@@ -241,7 +246,7 @@ def _report(payload: dict[str, Any]) -> str:
         f"Trust: `{payload['model']['trustLevel']}`",
         f"Pseudonymization: `{str(payload['model']['pseudonymization']).lower()}`",
         f"Reasoning effort: `{payload['model']['reasoningEffort']}`",
-        "Prompt cache key: `session_id`",
+        f"Prompt cache key: `{prompt_cache_key}`",
         f"Title model: `{payload['model']['titleModelId'] or payload['model']['modelId']}`",
         f"Sequence: `{' -> '.join(payload['sequence'])}`",
         f"Evaluator elapsed: {payload['elapsedSeconds']:.3f} s",

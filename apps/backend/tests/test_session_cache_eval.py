@@ -58,25 +58,27 @@ def test_report_includes_cache_reads_and_writes() -> None:
         "elapsedSeconds": 0.2,
     }
     summary = _summary([record])
-    report = _report(
-        {
-            "model": {
-                "modelId": "openai-codex/gpt-5.6-sol",
-                "providerAdapter": "openai-codex",
-                "trustLevel": "public",
-                "pseudonymization": False,
-                "reasoningEffort": "model_default",
-                "titleModelId": None,
-            },
-            "sequence": ["A1"],
-            "elapsedSeconds": 0.2,
-            "recordedAgentRunSeconds": 0.2,
-            "records": [record],
-            "summary": summary,
-            "diagnostic": None,
-        }
-    )
+    payload = {
+        "model": {
+            "modelId": "openai-codex/gpt-5.6-sol",
+            "providerAdapter": "openai-codex",
+            "trustLevel": "public",
+            "pseudonymization": False,
+            "reasoningEffort": "model_default",
+            "titleModelId": None,
+        },
+        "sequence": ["A1"],
+        "elapsedSeconds": 0.2,
+        "recordedAgentRunSeconds": 0.2,
+        "records": [record],
+        "summary": summary,
+        "diagnostic": None,
+    }
+    report = _report(payload)
 
     assert summary["phases"]["new_session"]["cacheWriteInputTokens"]["median"] == 1_024
-    assert "Prompt cache key: `session_id`" in report
+    assert "Prompt cache key: `chat session ID`" in report
     assert "0 / 1024 / 1200" in report
+
+    payload["model"]["providerAdapter"] = "lemonade"
+    assert "Prompt cache key: `not sent (provider-managed cache)`" in _report(payload)
