@@ -261,6 +261,7 @@ async def test_replace_deletes_existing_schedules_before_inserting_replacements(
     )
 
     assert schedule_snapshots == [[], [("0 8 * * *", "UTC")]]
+    db.refresh.assert_awaited_once_with(automation, attribute_names=["updated_at"])
 
 
 def test_runtime_snapshot_contains_only_validated_session_binding() -> None:

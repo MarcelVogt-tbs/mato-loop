@@ -391,6 +391,7 @@ class AutomationService:
             automation, schedules, now=now or datetime.now(UTC)
         )
         await db.flush()
+        await db.refresh(automation, attribute_names=["updated_at"])
         return automation
 
     @staticmethod
