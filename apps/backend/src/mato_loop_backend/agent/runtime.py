@@ -1144,8 +1144,6 @@ class AgentRuntime:
         )
         if not isinstance(selected_execution_agent, ExecutionAgent):
             selected_execution_agent = None
-        if not ai_settings.enabled:
-            raise AgentRunError("provider.disabled")
         model_id = run.model_config_id or chat_session.model_config_id or ai_settings.default_model_id
         model = _model_for_id(ai_settings, model_id)
         if model is None:
@@ -1251,8 +1249,6 @@ class AgentRuntime:
             await _publish_run_phase(run.id, "preparing_context")
             await db.refresh(chat_session)
             ai_settings = await load_effective_ai(db, chat_session.user_id)
-            if not ai_settings.enabled:
-                raise AgentRunError("provider.disabled")
             runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
             instance_limits = await SettingsStore.load(db, InstanceLimits)
             memory_settings = await SettingsStore.load(

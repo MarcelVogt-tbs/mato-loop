@@ -863,8 +863,6 @@ def dreaming_availability(
         return False, "memory.disabled"
     if automatic and not memory.automatic_dreaming_enabled:
         return False, "memory.dreamingDisabled"
-    if not ai.enabled:
-        return False, "provider.disabled"
     model, provider = _model_and_provider(ai)
     if model is None or provider is None:
         return False, "memory.dreamingModelUnavailable"

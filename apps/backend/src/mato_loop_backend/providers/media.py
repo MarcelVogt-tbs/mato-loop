@@ -109,8 +109,7 @@ def _media_target(
         else None
     )
     if (
-        not settings.enabled
-        or model is None
+        model is None
         or provider is None
         or not model.enabled
         or not provider.enabled

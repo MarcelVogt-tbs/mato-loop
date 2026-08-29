@@ -14,13 +14,6 @@
           :disable="scopeBusy"
           @update:model-value="changeScope"
         />
-        <q-toggle
-          :model-value="providers.enabled"
-          color="primary"
-          label="LLM-Laufzeit aktiv"
-          :disable="runtimeToggleLoading || personalBlocked"
-          @update:model-value="toggleRuntime"
-        />
         <q-btn
           color="primary"
           unelevated
@@ -94,7 +87,7 @@
                 color="primary"
                 label="Provider aktiv"
                 :aria-label="`${provider.name}: Provider aktiv`"
-                :disable="personalBlocked || !providers.enabled || providerToggleLoading[provider.id]"
+                :disable="personalBlocked || providerToggleLoading[provider.id]"
                 @click.stop
                 @update:model-value="toggleProvider(provider, $event)"
               />
@@ -229,7 +222,7 @@
                     color="primary"
                     label="Aktiv"
                     :aria-label="`${model.name || model.modelId}: Modell aktiv`"
-                    :disable="personalBlocked || !providers.enabled || !provider.enabled || !isModelPresent(model) || modelToggleLoading[model.id]"
+                    :disable="personalBlocked || !provider.enabled || !isModelPresent(model) || modelToggleLoading[model.id]"
                     @update:model-value="toggleModel(model, $event)"
                   />
                   <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${model.name || model.modelId}`">
@@ -315,7 +308,6 @@ const selectedProvider = ref(null)
 const selectedModelProvider = ref(null)
 const selectedModel = ref(null)
 const testingProviderId = ref(null)
-const runtimeToggleLoading = ref(false)
 const gateLoading = ref(false)
 const expandedProviders = reactive({})
 const syncing = reactive({})
@@ -331,7 +323,6 @@ const personalBlocked = computed(() => (
 ))
 const scopeBusy = computed(() => providers.loading
   || gateLoading.value
-  || runtimeToggleLoading.value
   || Object.values(syncing).some(Boolean)
   || Object.values(providerToggleLoading).some(Boolean)
   || Object.values(modelToggleLoading).some(Boolean))
@@ -382,7 +373,7 @@ function filteredModels(provider) {
 
 function activeModelCount(provider) {
   return providerModels(provider).filter((model) => (
-    isModelEffective(model, provider, providers.codex, providers.enabled)
+    isModelEffective(model, provider, providers.codex)
   )).length
 }
 
@@ -393,7 +384,6 @@ function providerIcon(provider) {
 }
 
 function providerStatus(provider) {
-  if (!providers.enabled) return { label: 'Laufzeit deaktiviert', color: 'grey-7' }
   if (!provider.enabled) return { label: 'Deaktiviert', color: 'grey-7' }
   if (provider.adapterType === 'openai-codex' && !providers.codex.authenticated) {
     return { label: 'Nicht verbunden', color: 'warning' }
@@ -414,13 +404,12 @@ function providerDescription(provider) {
 function canTest(provider) {
   return providerModels(provider).some((model) => (
     modelSupportsCapability(model, 'chat')
-    && isModelEffective(model, provider, providers.codex, providers.enabled)
+    && isModelEffective(model, provider, providers.codex)
   ))
 }
 
 function canTestModel(model, provider) {
-  return providers.enabled
-    && isModelPresent(model)
+  return isModelPresent(model)
     && isProviderEffective(provider, providers.codex)
     && modelSupportsCapability(model, 'chat')
 }
@@ -462,17 +451,6 @@ async function handleProviderUpdated(id) {
   expandedProviders[id] = true
   const provider = providers.providers.find((item) => item.id === id)
   if (provider && supportsDiscovery(provider)) await syncProviderModels(provider)
-}
-
-async function toggleRuntime(enabled) {
-  runtimeToggleLoading.value = true
-  try {
-    await providers.setAiEnabled(enabled)
-  } catch {
-    await providers.fetchAll().catch(() => {})
-  } finally {
-    runtimeToggleLoading.value = false
-  }
 }
 
 async function toggleProvider(provider, enabled) {

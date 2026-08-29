@@ -24,7 +24,6 @@ from mato_loop_backend.api.routes.providers import (
     get_personal_provider_policy,
     list_providers,
     save_openai_provider,
-    set_ai_enabled,
     set_default_model,
     set_default_models,
     set_model_enabled,
@@ -798,16 +797,6 @@ async def test_default_models_reject_unavailable_model_with_field(monkeypatch) -
     assert exc_info.value.field == "titleGenerationModelId"
 
 
-async def test_global_runtime_can_be_reenabled(monkeypatch) -> None:
-    settings = AiSettings(enabled=False)
-    _mock_settings(monkeypatch, settings)
-
-    result = await set_ai_enabled(EnabledRequest(enabled=True), _db())
-
-    assert settings.enabled is True
-    assert result["enabled"] is True
-
-
 async def test_disconnected_codex_model_cannot_be_default(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Codex", adapter_type="openai-codex")
     model = ModelConfig(provider_id=provider.id, model_id="openai-codex/test")
@@ -935,19 +924,24 @@ async def test_provider_delete_clears_default_without_selecting_another(monkeypa
 
 
 async def test_instance_provider_mutation_requires_admin(monkeypatch) -> None:
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=AiSettings()))
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=AiSettings(providers=[provider]))
+    )
     user = SimpleNamespace(id=uuid4(), is_admin=False)
 
     with pytest.raises(ApiError) as exc_info:
-        await set_ai_enabled(EnabledRequest(enabled=False), _db(), user=user)
+        await set_provider_enabled(
+            provider.id, EnabledRequest(enabled=False), _db(), user=user
+        )
 
     assert exc_info.value.code == "auth.adminRequired"
 
 
-async def test_personal_provider_policy_read_exposes_only_runtime_gates(
+async def test_personal_provider_policy_read_exposes_only_personal_gate(
     monkeypatch,
 ) -> None:
-    settings = AiSettings(enabled=False, personal_providers_enabled=False)
+    settings = AiSettings(personal_providers_enabled=False)
     settings.providers.append(
         LlmProviderConfig(
             name="Secret",
@@ -961,7 +955,7 @@ async def test_personal_provider_policy_read_exposes_only_runtime_gates(
         SimpleNamespace(id=uuid4(), is_admin=False), _db()
     )
 
-    assert result == {"enabled": False, "personalProvidersEnabled": False}
+    assert result == {"personalProvidersEnabled": False}
 
 
 @pytest.mark.parametrize("is_admin", [False, True])
@@ -1133,6 +1127,7 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
         ToolSettings(web_fetch=WebFetchSettings(enabled=False)),
     )
 
+    assert "enabled" not in payload
     assert payload["providers"][0]["modelsLastSyncedAt"] is None
     assert payload["providers"][0]["trustLevel"] == "private"
     assert payload["providers"][0]["pseudonymizationEnabled"] is True

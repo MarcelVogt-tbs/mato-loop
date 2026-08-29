@@ -109,7 +109,7 @@ def _latest_model_context(provider_data: Any) -> dict[str, int] | None:
 
 
 def model_available(ai: AiSettings, model_id: UUID | None) -> bool:
-    if not ai.enabled or model_id is None:
+    if model_id is None:
         return False
     model = next(
         (

@@ -10,7 +10,7 @@ Prüfen Sie, ob ein verbundener Computer und ein absoluter aktueller Ordner gew�
 
 ## Warum wird ein Modell nicht im Chat angeboten?
 
-Provider, globaler LLM-Betrieb und Modell müssen aktiviert sein. Das Modell muss außerdem verfügbar sein und die benötigte Chatfähigkeit besitzen.
+Provider und Modell müssen aktiviert sein. Das Modell muss außerdem verfügbar sein und die benötigte Chatfähigkeit besitzen.
 
 ## Warum kann ich kein Diktat starten?
 

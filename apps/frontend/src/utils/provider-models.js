@@ -28,14 +28,13 @@ export function isModelPresent(model) {
 
 export function isProviderEffective(provider, codex = {}) {
   if (!provider?.enabled) return false
-  if (provider.effectiveEnabled === false || provider.runtimeEnabled === false) return false
+  if (provider.effectiveEnabled === false) return false
   return provider.adapterType !== 'openai-codex'
     || provider.hasCredential === true
     || codex.authenticated === true
 }
 
-export function isModelEffective(model, provider, codex = {}, runtimeEnabled = true) {
-  if (!runtimeEnabled) return false
+export function isModelEffective(model, provider, codex = {}) {
   if (!model?.enabled || model.effectiveEnabled === false || !isModelPresent(model)) return false
   return isProviderEffective(provider, codex)
 }
@@ -68,7 +67,6 @@ export function selectedModelState(
   models,
   providers,
   codex = {},
-  runtimeEnabled = true,
   capability = 'chat'
 ) {
   if (!modelId) {
@@ -89,13 +87,12 @@ export function selectedModelState(
   }
 
   const provider = providers.find((item) => item.id === model.providerId)
-  if (isModelEffective(model, provider, codex, runtimeEnabled) && modelSupportsCapability(model, capability)) {
+  if (isModelEffective(model, provider, codex) && modelSupportsCapability(model, capability)) {
     return { available: true, label: modelOption(model, provider).label, message: '' }
   }
 
   let reason = 'Das Modell dieser Session ist derzeit nicht verfügbar.'
-  if (!runtimeEnabled) reason = 'Die Modell-Laufzeit ist global deaktiviert.'
-  else if (!isModelPresent(model)) reason = 'Das Modell dieser Session wurde beim Provider nicht mehr gefunden.'
+  if (!isModelPresent(model)) reason = 'Das Modell dieser Session wurde beim Provider nicht mehr gefunden.'
   else if (!model.enabled) reason = 'Das Modell dieser Session ist deaktiviert.'
   else if (!isProviderEffective(provider, codex)) reason = 'Der Provider dieses Modells ist deaktiviert oder nicht verbunden.'
   else if (!modelSupportsCapability(model, capability)) {

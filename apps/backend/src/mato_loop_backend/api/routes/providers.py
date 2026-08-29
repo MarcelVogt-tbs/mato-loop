@@ -350,7 +350,6 @@ def _settings_payload(
     tool_settings = tool_settings or ToolSettings()
     providers_by_id = {provider.id: provider for provider in settings.providers}
     return {
-        "enabled": settings.enabled,
         **(
             {"personalProvidersEnabled": settings.personal_providers_enabled}
             if isinstance(settings, AiSettings)
@@ -611,10 +610,7 @@ async def get_personal_provider_policy(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, bool]:
     settings = await SettingsStore.load(db, AiSettings)
-    return {
-        "enabled": settings.enabled,
-        "personalProvidersEnabled": settings.personal_providers_enabled,
-    }
+    return {"personalProvidersEnabled": settings.personal_providers_enabled}
 
 
 @router.post("/openai-compatible", status_code=status.HTTP_201_CREATED)
@@ -743,22 +739,6 @@ async def set_provider_policy(
             pseudonymization_enabled=payload.pseudonymization_enabled,
             memory_policy=payload.memory_policy,
         )
-    )
-    return await _settings_response(db, settings, owner_id)
-
-
-@router.patch("/enabled")
-async def set_ai_enabled(
-    payload: EnabledRequest,
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "instance",
-    user: Annotated[UserAccount | None, Depends(require_user)] = None,
-) -> dict:
-    settings, owner_id = await _load_scoped_ai(
-        db, scope, user, for_update=True, mutation=True
-    )
-    await ProviderSettingsService.set_ai_enabled(
-        db, settings, owner_id, payload.enabled
     )
     return await _settings_response(db, settings, owner_id)
 

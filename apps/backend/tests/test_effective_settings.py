@@ -40,6 +40,13 @@ def test_personal_settings_models_and_instance_flags_have_safe_defaults() -> Non
     assert UserToolSettings.settings_scope == SettingsScope.USER
 
 
+def test_ai_settings_discard_removed_global_enabled_flag() -> None:
+    for settings_type in (AiSettings, UserAiSettings):
+        settings = settings_type.model_validate({"enabled": False})
+
+        assert "enabled" not in settings.model_dump()
+
+
 def test_integration_settings_normalizes_legacy_availability() -> None:
     disabled = IntegrationSettings.model_validate(
         {
@@ -89,12 +96,15 @@ async def test_effective_ai_combines_providers_and_uses_only_effective_personal_
         title_generation_model_id=instance_model.id,
         title_vision_fallback_enabled=False,
     )
-    personal = UserAiSettings(
-        providers=[personal_provider],
-        models=[personal_model, unavailable_model],
-        default_model_id=personal_model.id,
-        compaction_model_id=unavailable_model.id,
-        title_vision_fallback_enabled=True,
+    personal = UserAiSettings.model_validate(
+        {
+            "enabled": False,
+            "providers": [personal_provider],
+            "models": [personal_model, unavailable_model],
+            "default_model_id": personal_model.id,
+            "compaction_model_id": unavailable_model.id,
+            "title_vision_fallback_enabled": True,
+        }
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))

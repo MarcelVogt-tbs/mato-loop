@@ -359,18 +359,6 @@ class ProviderSettingsService:
         await cls.save(db, settings, owner_id)
         await db.commit()
 
-    @classmethod
-    async def set_ai_enabled(
-        cls,
-        db: AsyncSession,
-        settings: AiSettingsDocument,
-        owner_id: UUID | None,
-        enabled: bool,
-    ) -> None:
-        settings.enabled = enabled
-        await cls.save(db, settings, owner_id)
-        await db.commit()
-
     @staticmethod
     async def set_personal_providers_enabled(
         db: AsyncSession, settings: AiSettings, enabled: bool

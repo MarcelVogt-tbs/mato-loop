@@ -25,8 +25,6 @@ function assignProviderPayload(store, payload) {
   store.audioGenerationModelId = payload.audioGenerationModelId ?? null
   store.audioTranscriptionModelId = payload.audioTranscriptionModelId ?? null
   store.skillCreationModelId = payload.skillCreationModelId ?? null
-  store.enabled = payload.enabled !== false
-  store.runtimeEnabled = payload.runtimeEnabled ?? store.enabled
   if ('personalProvidersEnabled' in payload) {
     store.personalProvidersEnabled = payload.personalProvidersEnabled !== false
   }
@@ -38,8 +36,6 @@ function scopeConfig(scope, config = {}) {
 
 function assignPersonalPolicy(store, policy) {
   store.personalProvidersEnabled = policy?.personalProvidersEnabled !== false
-  if ('enabled' in (policy || {})) store.enabled = policy.enabled !== false
-  store.runtimeEnabled = policy?.runtimeEnabled ?? store.enabled
 }
 
 function effectiveModelOptions(state, capability = 'chat', requiresTools = false) {
@@ -47,7 +43,7 @@ function effectiveModelOptions(state, capability = 'chat', requiresTools = false
   const providers = state.availableProviders || state.providers
   return models.flatMap((model) => {
     const provider = providers.find((item) => item.id === model.providerId)
-    return isModelEffective(model, provider, state.codex, state.runtimeEnabled)
+    return isModelEffective(model, provider, state.codex)
       && modelSupportsCapability(model, capability)
       && (
         capability === 'chat'
@@ -64,7 +60,7 @@ function effectiveVisionModelOptions(state) {
   const providers = state.availableProviders || state.providers
   return models.flatMap((model) => {
     const provider = providers.find((item) => item.id === model.providerId)
-    return isModelEffective(model, provider, state.codex, state.runtimeEnabled)
+    return isModelEffective(model, provider, state.codex)
       && modelSupportsCapability(model, 'chat')
       && (Array.isArray(model.inputModalities)
         ? model.inputModalities.includes('image')
@@ -84,7 +80,7 @@ function effectiveVideoModelOptions(state) {
     const supportsNativeVideo = inputModalities.includes('video')
       && provider?.adapterType === 'openai-compatible'
       && (provider.config?.apiType || provider.config?.api_type || 'chat_completions') === 'chat_completions'
-    return isModelEffective(model, provider, state.codex, state.runtimeEnabled)
+    return isModelEffective(model, provider, state.codex)
       && modelSupportsCapability(model, 'chat')
       && (supportsNativeVideo || supportsFrames)
       ? [modelOption(model, provider)]
@@ -127,8 +123,6 @@ export const useProviderStore = defineStore('providers', {
     audioGenerationModelId: null,
     audioTranscriptionModelId: null,
     skillCreationModelId: null,
-    enabled: true,
-    runtimeEnabled: true,
     scope: 'instance',
     personalProvidersEnabled: true,
     codex: {},
@@ -152,7 +146,6 @@ export const useProviderStore = defineStore('providers', {
         state.availableModels || state.models,
         state.availableProviders || state.providers,
         state.codex,
-        state.runtimeEnabled,
         capability
       )
       const models = state.availableModels || state.models
@@ -169,7 +162,6 @@ export const useProviderStore = defineStore('providers', {
       state.availableModels || state.models,
       state.availableProviders || state.providers,
       state.codex,
-      state.runtimeEnabled,
       capability
     )
   },
@@ -195,7 +187,7 @@ export const useProviderStore = defineStore('providers', {
         if (this.loadVersion !== loadVersion || this.scope !== scope) return
         if (policy) assignPersonalPolicy(this, policy)
         if (scope === 'personal' && !this.personalProvidersEnabled) {
-          assignProviderPayload(this, { enabled: this.enabled, providers: [], models: [] })
+          assignProviderPayload(this, { providers: [], models: [] })
           assignPersonalPolicy(this, policy)
           this.lastLoadComplete = true
           return
@@ -278,9 +270,6 @@ export const useProviderStore = defineStore('providers', {
         scopeConfig(this.scope)
       ))
     },
-    async setAiEnabled(enabled) {
-      await mutateAndRefresh(this, () => api.patch('/providers/enabled', { enabled }, scopeConfig(this.scope)))
-    },
     async setPersonalProvidersEnabled(enabled) {
       await api.patch('/providers/personal-enabled', { enabled }, scopeConfig('instance'))
       this.personalProvidersEnabled = enabled
@@ -345,7 +334,7 @@ export const useProviderStore = defineStore('providers', {
     async testProvider(id) {
       const provider = this.providers.find((item) => item.id === id)
       const model = this.models.find((item) => (
-        item.providerId === id && isModelEffective(item, provider, this.codex, this.enabled)
+        item.providerId === id && isModelEffective(item, provider, this.codex)
         && modelSupportsCapability(item, 'chat')
       ))
       if (!model) return null

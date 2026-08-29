@@ -62,7 +62,7 @@ async def load_effective_ai(db: AsyncSession, user_id: UUID) -> AiSettings:
     personal = await SettingsStore.load_optional(db, UserAiSettings, user_id=user_id)
     for provider in instance.providers:
         provider.owner_id = None
-    if not instance.personal_providers_enabled or personal is None or not personal.enabled:
+    if not instance.personal_providers_enabled or personal is None:
         return instance
 
     personal = personal.model_copy(deep=True)

@@ -834,15 +834,12 @@ class AiSettingsBase(SettingsDocument):
 class AiSettings(AiSettingsBase):
     settings_key = "ai"
 
-    enabled: bool = True
     personal_providers_enabled: bool = True
 
 
 class UserAiSettings(AiSettingsBase):
     settings_key = "ai"
     settings_scope = SettingsScope.USER
-
-    enabled: bool = True
 
 
 class IntegrationSettingsBase(SettingsDocument):

@@ -237,7 +237,7 @@ describe('provider store', () => {
     })
     await instanceLoad
     requests[0].resolve({
-      data: { enabled: true, runtimeEnabled: true, personalProvidersEnabled: false }
+      data: { personalProvidersEnabled: false }
     })
     await personalLoad
 
@@ -270,7 +270,6 @@ describe('provider store', () => {
     const store = useProviderStore()
     api.put.mockResolvedValue({
       data: {
-        enabled: true,
         providers: [{ id: 'p1', enabled: true }],
         models: [{ id: 'm1', webfetchPolicy: 'auto_public' }],
         defaultModelId: 'm1'
@@ -287,7 +286,6 @@ describe('provider store', () => {
     const store = useProviderStore()
     api.put.mockResolvedValue({
       data: {
-        enabled: true,
         providers: [{ id: 'p1', name: 'Lokal', enabled: true }],
         models: [
           { id: 'agent', providerId: 'p1', enabled: true },
@@ -424,25 +422,9 @@ describe('provider store', () => {
     ])
   })
 
-  it('can re-enable the global model runtime', async () => {
-    const store = useProviderStore()
-    store.enabled = false
-    api.patch.mockResolvedValue({ data: {} })
-    api.get.mockImplementation((url) => Promise.resolve({ data: url.endsWith('/codex/status')
-      ? { authenticated: false }
-      : { enabled: true, providers: [], models: [], defaultModelId: null } }))
-
-    await store.setAiEnabled(true)
-
-    expect(api.patch).toHaveBeenCalledWith(
-      '/providers/enabled', { enabled: true }, { params: { scope: 'instance' } }
-    )
-    expect(store.enabled).toBe(true)
-  })
-
   it('updates the common provider policy', async () => {
     const store = useProviderStore()
-    api.patch.mockResolvedValue({ data: { enabled: true, providers: [], models: [] } })
+    api.patch.mockResolvedValue({ data: { providers: [], models: [] } })
 
     await store.setProviderPolicy('p1', {
       trustLevel: 'private',
@@ -494,11 +476,10 @@ describe('provider store', () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/codex/status')) return Promise.resolve({ data: { authenticated: false } })
       if (url === '/providers/personal-policy') return Promise.resolve({
-        data: { enabled: true, runtimeEnabled: true, personalProvidersEnabled: true }
+        data: { personalProvidersEnabled: true }
       })
       return Promise.resolve({
         data: {
-          enabled: true,
           providers: [{ id: 'personal-provider', name: 'Persönlich', enabled: true }],
           models: [{ id: 'personal-model', providerId: 'personal-provider', enabled: true }],
           availableProviders: [
@@ -527,7 +508,6 @@ describe('provider store', () => {
   it('loads the backend effective catalog without scoped raw reads', async () => {
     api.get.mockResolvedValue({
       data: {
-        enabled: true,
         providers: [{ id: 'effective', name: 'Effektiv', enabled: true }],
         models: [{ id: 'effective-model', providerId: 'effective', enabled: true }]
       }

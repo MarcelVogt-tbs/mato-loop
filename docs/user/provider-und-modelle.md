@@ -2,7 +2,7 @@
 
 ## Provider verwalten
 
-Unter **Einstellungen > Provider** können Sie Provider hinzufügen, bearbeiten, aktivieren, testen und löschen. Der LLM-Schalter des gewählten Bereichs muss ebenfalls aktiviert sein.
+Unter **Einstellungen > Provider** können Sie Provider hinzufügen, bearbeiten, aktivieren, testen und löschen.
 
 Administratoren wechseln mit **Persönlich** / **Instanz** zwischen ihren eigenen und den gemeinsamen Einstellungen. Nur Administratoren dürfen die Instanz ändern und festlegen, ob persönliche Provider erlaubt sind. Normale Benutzer verwalten ausschließlich ihre persönliche Seite. Instanz-Provider und ihre Modelle stehen allen Benutzern zur Verfügung; persönliche Provider und ihre verschlüsselten Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet.
 
