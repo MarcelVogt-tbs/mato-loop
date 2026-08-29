@@ -2,9 +2,10 @@
   <q-btn-toggle
     v-if="isAdmin"
     :model-value="modelValue"
-    class="settings-scope-toggle"
+    class="settings-scope-toggle col-auto"
     unelevated
     no-caps
+    no-wrap
     color="grey-7"
     text-color="white"
     toggle-color="primary"

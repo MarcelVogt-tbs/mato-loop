@@ -8,7 +8,7 @@
           Externe Dienste für zusätzliche Agent-Funktionen verwalten.
         </p>
       </div>
-      <div v-if="showInstances" class="row items-center q-gutter-sm">
+      <div v-if="showInstances" class="settings-scope-actions row items-center col-auto">
         <SettingsScopeToggle
           :model-value="integrations.scope"
           :is-admin="auth.isAdmin"
@@ -16,9 +16,11 @@
           @update:model-value="changeScope"
         />
         <q-btn
+          class="col-auto"
           color="primary"
           unelevated
           no-caps
+          no-wrap
           icon="add"
           label="Integration hinzufügen"
           :disable="integrations.loading || integrations.catalogLoading || !canCreateIntegration"

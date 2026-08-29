@@ -7,7 +7,7 @@
           KI-Verbindungen und ihre verfügbaren Chat- und Medienmodelle verwalten.
         </p>
       </div>
-      <div class="provider-settings-actions">
+      <div class="settings-scope-actions row items-center col-auto">
         <SettingsScopeToggle
           :model-value="providers.scope"
           :is-admin="auth.isAdmin"
@@ -15,9 +15,11 @@
           @update:model-value="changeScope"
         />
         <q-btn
+          class="col-auto"
           color="primary"
           unelevated
           no-caps
+          no-wrap
           icon="add"
           label="Provider hinzufügen"
           :disable="personalBlocked"

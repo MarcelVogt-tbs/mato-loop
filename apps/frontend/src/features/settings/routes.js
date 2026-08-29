@@ -15,7 +15,7 @@ export const settingsRoutes = [
     path: 'agents',
     name: 'settings-agents',
     component: () => import('pages/settings/AgentProfileSettingsPage.vue'),
-    meta: { settingsLabel: 'Agents', settingsIcon: 'smart_toy' },
+    meta: { settingsLabel: 'Agenten', settingsIcon: 'smart_toy' },
     children: [
       {
         path: 'new',

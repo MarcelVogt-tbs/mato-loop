@@ -63,10 +63,24 @@
     width: auto;
   }
 
-  .provider-settings-actions {
+  .settings-section-header > .settings-scope-actions {
     width: 100%;
-    align-items: stretch;
-    flex-direction: column;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .settings-section-header .settings-scope-actions > .q-btn {
+    width: auto;
+  }
+
+  .settings-detail-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .settings-detail-toolbar .settings-scope-actions {
+    width: 100%;
+    justify-content: flex-end;
+    margin-top: 8px;
   }
 
   .provider-list-item {

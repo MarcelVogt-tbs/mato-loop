@@ -7,7 +7,7 @@
           Modelle für Agent-Läufe und automatische Hintergrundaufgaben festlegen.
         </p>
       </div>
-      <div class="row items-center q-gutter-sm">
+      <div class="settings-scope-actions row items-center col-auto">
         <SettingsScopeToggle
           :model-value="providers.scope"
           :is-admin="auth.isAdmin"
@@ -15,9 +15,11 @@
           @update:model-value="changeScope"
         />
         <q-btn
+          class="col-auto"
           color="primary"
           unelevated
           no-caps
+          no-wrap
           icon="save"
           label="Speichern"
           :loading="saving"

@@ -40,7 +40,7 @@
           </div>
         </q-card-section>
         <q-separator />
-        <q-card-section class="q-gutter-md">
+        <q-card-section>
           <q-input
             v-model="form.displayName"
             outlined
@@ -55,6 +55,7 @@
           </q-input>
           <q-input
             v-model="form.instructions"
+            class="q-mt-md"
             outlined
             autogrow
             type="textarea"
@@ -64,7 +65,7 @@
             label="Verhalten und Charakter"
             hint="Beschreibe Ton, Persönlichkeit, Arbeitsweise und allgemeine Präferenzen."
           />
-          <q-banner rounded class="app-surface-tonal">
+          <q-banner rounded class="app-surface-tonal q-mt-md">
             <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
             Die Persona wird bei normalen Agent-Anfragen an das ausgewählte Modell übertragen.
             Speichere hier keine Passwörter, API-Keys oder anderen Secrets.
