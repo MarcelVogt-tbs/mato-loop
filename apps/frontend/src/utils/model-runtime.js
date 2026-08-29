@@ -44,8 +44,6 @@ export const DEFAULT_MODEL_RUNTIME = Object.freeze({
   trustLevel: null,
   pseudonymizationEnabled: null,
   memoryPolicy: 'inherit',
-  webfetchPolicy: 'inherit',
-  effectiveWebfetchPolicy: null,
   reasoningSummary: false,
   reasoningEffort: null
 })
@@ -97,8 +95,6 @@ export function modelRuntimeForm(model) {
     trustLevel: modelValue(model, 'trustLevel', 'trust_level'),
     pseudonymizationEnabled: modelValue(model, 'pseudonymizationEnabled', 'pseudonymization_enabled'),
     memoryPolicy: modelValue(model, 'memoryPolicy', 'memory_policy'),
-    webfetchPolicy: modelValue(model, 'webfetchPolicy', 'webfetch_policy'),
-    effectiveWebfetchPolicy: modelValue(model, 'effectiveWebfetchPolicy', 'effective_webfetch_policy'),
     reasoningSummary: modelValue(model, 'reasoningSummary', 'reasoning_summary'),
     reasoningEffort: modelValue(model, 'reasoningEffort', 'reasoning_effort')
   }
@@ -124,7 +120,6 @@ export function modelRuntimePayload(form) {
     trust_level: form.trustLevel || null,
     pseudonymization_enabled: form.pseudonymizationEnabled ?? null,
     memory_policy: form.memoryPolicy || 'inherit',
-    webfetch_policy: form.webfetchPolicy || 'inherit',
     reasoning_summary: Boolean(form.reasoningSummary),
     reasoning_effort: form.reasoningEffort || null
   }

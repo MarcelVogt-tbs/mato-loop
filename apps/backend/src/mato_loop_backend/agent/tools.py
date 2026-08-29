@@ -203,7 +203,6 @@ from mato_loop_backend.integrations import (
     fetch_web,
     fetch_youtube_transcript,
     normalize_source_title,
-    private_origin_is_allowed,
     sanitize_url_for_display,
     search_web,
 )
@@ -242,13 +241,10 @@ from mato_loop_backend.settings import (
     TrustLevel,
     UserProfileFact,
     UserProfileSettings,
-    WebFetchPolicy,
     cap_agent_profile_policy,
     load_agent_profile_tools,
-    load_effective_ai,
     load_effective_integrations,
     load_effective_tools,
-    resolve_web_fetch_policy,
 )
 from mato_loop_backend.skills import (
     SkillError,
@@ -273,15 +269,18 @@ async def _allow(context: ToolContext, request: PermissionRequest) -> bool:
 
 
 async def _profile_tool_settings(context: ToolContext) -> ToolSettings:
+    trust_level = getattr(context, "model_trust_level", TrustLevel.PUBLIC)
     try:
         settings, _profile = await load_agent_profile_tools(
             context.db,
             context.session.user_id,
             getattr(context.session, "agent_profile_id", None),
-            getattr(context, "model_trust_level", TrustLevel.PUBLIC),
+            trust_level,
         )
     except AgentProfileUnavailable:
-        settings = await load_effective_tools(context.db, context.session.user_id)
+        settings = await load_effective_tools(
+            context.db, context.session.user_id, trust_level
+        )
         settings._agent_profile_unavailable = True
     return settings
 
@@ -1560,49 +1559,71 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 
 async def _ensure_webfetch_binding_is_current(context: ToolContext) -> None:
     current_tools = await _profile_tool_settings(context)
-    revision = context.bound_options.get("settings_revision")
-    if not current_tools.web_fetch.enabled or (
-        revision is not None
-        and _model_revision(current_tools.web_fetch) != revision
-    ):
+    if not current_tools.tool_availability.get("webfetch", True):
         raise WebFetchError("tool.unavailable")
-    if revision is None and current_tools.web_fetch != context.tool_settings.web_fetch:
-        raise WebFetchError("tool.unavailable")
-    if context.model_id is not None:
-        current_ai = await load_effective_ai(context.db, context.session.user_id)
-        current_model = next(
-            (item for item in current_ai.models if item.id == context.model_id), None
-        )
-        if (
-            current_model is None
-            or resolve_web_fetch_policy(current_tools, current_model)
-            != context.web_fetch_policy
-        ):
-            raise WebFetchError("tool.unavailable")
     context.tool_settings = current_tools
-    context.allowed_private_origins = tuple(
-        current_tools.web_fetch.allowed_private_origins
+
+
+async def _ensure_webfetch_capability_is_current(
+    context: ToolContext, capability: str
+) -> None:
+    await _ensure_webfetch_binding_is_current(context)
+    if not context.tool_settings.webfetch_resource_available(
+        capability
+    ) or tool_execution_policy(
+        context.tool_settings,
+        capability,
+        (
+            ToolExecutionPolicy.ASK
+            if capability == "network.fetch.private"
+            else ToolExecutionPolicy.AUTO
+        ),
+    ) == ToolExecutionPolicy.DISABLED:
+        raise WebFetchError("tool.unavailable")
+
+
+async def _authorize_webfetch_target(
+    context: ToolContext, url: str, private_target: bool
+) -> None:
+    capability = (
+        "network.fetch.private" if private_target else "network.fetch.public"
     )
+    await _ensure_webfetch_capability_is_current(context, capability)
+    policy = tool_execution_policy(
+        context.tool_settings,
+        capability,
+        ToolExecutionPolicy.ASK if private_target else ToolExecutionPolicy.AUTO,
+    )
+    if policy == ToolExecutionPolicy.ASK and not await _allow(
+        context, webfetch_permission(url, private_target=private_target)
+    ):
+        raise WebFetchError("permission.denied")
+    await _ensure_webfetch_capability_is_current(context, capability)
+    if policy != ToolExecutionPolicy.ASK and tool_execution_policy(
+        context.tool_settings,
+        capability,
+        ToolExecutionPolicy.ASK if private_target else ToolExecutionPolicy.AUTO,
+    ) == ToolExecutionPolicy.ASK:
+        if not await _allow(
+            context, webfetch_permission(url, private_target=private_target)
+        ):
+            raise WebFetchError("permission.denied")
+        await _ensure_webfetch_capability_is_current(context, capability)
 
 
 async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
 
-    async def authorize_url(url: str) -> None:
-        await _ensure_webfetch_binding_is_current(context)
-        requires_approval = context.web_fetch_policy == WebFetchPolicy.ASK or (
-            context.web_fetch_policy == WebFetchPolicy.AUTO_PUBLIC
-            and private_origin_is_allowed(url, context.allowed_private_origins)
-        )
-        if requires_approval and not await _allow(context, webfetch_permission(url)):
-            raise WebFetchError("permission.denied")
-        await _ensure_webfetch_binding_is_current(context)
+    async def authorize_url(url: str, private_target: bool) -> None:
+        await _authorize_webfetch_target(context, url, private_target)
 
     await _ensure_webfetch_binding_is_current(context)
     result = await fetch_web(
         arguments.url,
         format=arguments.format,
         timeout=arguments.timeout,
-        allowed_private_origins=context.allowed_private_origins,
+        allow_private_targets=context.tool_settings.webfetch_resource_available(
+            "network.fetch.private"
+        ),
         authorize_url=authorize_url,
         max_response_bytes=context.tool_settings.web_fetch.max_response_mib * 1024 * 1024,
         pdf_vision_handler=context.pdf_vision_handler,
@@ -1673,15 +1694,29 @@ async def _fetch_transcript(
 ) -> ToolResult:
     try:
         source_url = canonicalize_youtube_video_url(arguments.url)
-        await _ensure_webfetch_binding_is_current(context)
-        if context.web_fetch_policy == WebFetchPolicy.ASK and not await _allow(
-            context, transcript_permission(source_url)
-        ):
-            return ToolResult.error("permission.denied")
-        await _ensure_webfetch_binding_is_current(context)
+        approved = False
+
+        async def authorize_transcript() -> None:
+            nonlocal approved
+            await _ensure_webfetch_capability_is_current(
+                context, "network.fetch.public"
+            )
+            if not approved and tool_execution_policy(
+                context.tool_settings,
+                "network.fetch.public",
+                ToolExecutionPolicy.AUTO,
+            ) == ToolExecutionPolicy.ASK:
+                if not await _allow(context, transcript_permission(source_url)):
+                    raise WebFetchError("permission.denied")
+                approved = True
+                await _ensure_webfetch_capability_is_current(
+                    context, "network.fetch.public"
+                )
+
+        await authorize_transcript()
 
         async def before_request(_url: str) -> None:
-            await _ensure_webfetch_binding_is_current(context)
+            await authorize_transcript()
 
         result = await fetch_youtube_transcript(
             source_url,
@@ -1692,7 +1727,7 @@ async def _fetch_transcript(
             user_agent=context.tool_settings.web_fetch.user_agent,
             before_request=before_request,
         )
-    except TranscriptError as exc:
+    except (TranscriptError, WebFetchError) as exc:
         return ToolResult.error(exc.code, params=exc.params)
 
     source = {
@@ -1763,32 +1798,14 @@ def resolve_tool_execution_policy(
             )
         return ToolPolicyResolution(policy, source, "configured")
 
-    configured = settings.policies.get(capability)
+    permissions = settings.permissions
+    configured = permissions.policies.get(capability)
     if configured is not None:
         resolution = resolve_value(configured, "global")
     else:
-        field_name = _MEDIA_SETTINGS_FIELDS.get(capability)
-        if field_name is not None:
-            resolution = resolve_value(getattr(settings, field_name).policy, "global")
-        elif capability == "settings.agent_identity.update":
-            resolution = resolve_value(
-                settings.update_agent_identity.policy, "global"
-            )
-        else:
-            resolution = ToolPolicyResolution(default, "default", "static_default")
-    if resolution.policy == ToolExecutionPolicy.DISABLED:
-        return ToolPolicyResolution(
-            ToolExecutionPolicy.DISABLED,
-            resolution.source,
-            (
-                resolution.reason
-                if resolution.reason != "configured"
-                else "global_disabled"
-            ),
-        )
-    global_resolution = resolution
+        resolution = ToolPolicyResolution(default, "default", "static_default")
     if integration_id is not None:
-        integration_policy = settings.integration_policies.get(
+        integration_policy = permissions.integration_policies.get(
             str(integration_id), {}
         ).get(capability)
         if integration_policy is not None:
@@ -1797,7 +1814,7 @@ def resolve_tool_execution_policy(
                 return resolution
         if resource_key is not None:
             resource_policy = (
-                settings.resource_policies.get(str(integration_id), {})
+                permissions.resource_policies.get(str(integration_id), {})
                 .get(resource_key, {})
                 .get(capability)
             )
@@ -1815,16 +1832,6 @@ def resolve_tool_execution_policy(
             "hard_unavailable",
             "hard_unavailable",
         )
-    if global_resolution.policy == ToolExecutionPolicy.DISABLED:
-        return ToolPolicyResolution(
-            ToolExecutionPolicy.DISABLED,
-            global_resolution.source,
-            (
-                global_resolution.reason
-                if global_resolution.reason != "configured"
-                else "global_disabled"
-            ),
-        )
     profile_policy = cap_agent_profile_policy(
         settings,
         capability,
@@ -1837,6 +1844,18 @@ def resolve_tool_execution_policy(
     if profile_policy != resolution.policy:
         return ToolPolicyResolution(profile_policy, "agent_profile", "configured")
     return resolution
+
+
+def webfetch_available(settings: ToolSettings) -> bool:
+    return settings.tool_availability.get("webfetch", True) and any(
+        settings.webfetch_resource_available(capability)
+        and tool_execution_policy(settings, capability, default)
+        != ToolExecutionPolicy.DISABLED
+        for capability, default in (
+            ("network.fetch.public", ToolExecutionPolicy.AUTO),
+            ("network.fetch.private", ToolExecutionPolicy.ASK),
+        )
+    )
 
 
 def tool_execution_policy(
@@ -4129,8 +4148,11 @@ _SESSION_FILES_WRITE = ToolAction(
     "session.files.write", "Session-Dateien schreiben", ToolExecutionPolicy.AUTO, mutates=True
 )
 _WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO)
-_WEB_FETCH = ToolAction(
-    "network.fetch", "Webseiten abrufen", ToolExecutionPolicy.ASK, configurable=False
+_WEB_FETCH_PUBLIC = ToolAction(
+    "network.fetch.public", "Öffentliche Ziele abrufen", ToolExecutionPolicy.AUTO
+)
+_WEB_FETCH_PRIVATE = ToolAction(
+    "network.fetch.private", "Private Ziele abrufen", ToolExecutionPolicy.ASK
 )
 _TRANSCRIPT_ROUTING_INSTRUCTION = (
     "Published transcript text is evidence of spoken content only, not of visual events. Call "
@@ -4431,7 +4453,10 @@ tool_registry = ToolRegistry(
             group="web",
             label="Webseite abrufen",
             icon="language",
-            actions=(_WEB_FETCH,),
+            actions=(_WEB_FETCH_PUBLIC, _WEB_FETCH_PRIVATE),
+            alternative_action_capabilities=frozenset(
+                {"network.fetch.public", "network.fetch.private"}
+            ),
         ),
         ToolDefinition(
             "fetch_transcript",
@@ -4446,7 +4471,7 @@ tool_registry = ToolRegistry(
             group="web",
             label="Untertitel abrufen",
             icon="subtitles",
-            actions=(_WEB_FETCH,),
+            actions=(_WEB_FETCH_PUBLIC,),
             prompt_fragments=(_TRANSCRIPT_ROUTING_INSTRUCTION,),
         ),
         ToolDefinition(

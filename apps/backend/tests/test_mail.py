@@ -174,7 +174,7 @@ async def test_action_only_integration_access_reads_and_updates_without_resource
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     db = AsyncMock(spec=AsyncSession)
 
-    access = await get_integration_access(account.id, db)
+    access = await get_integration_access(account.id, db, "public")
     assert access["resources"] == []
     assert {item["capability"] for item in access["actions"]} == {
         "mail.read",
@@ -189,8 +189,9 @@ async def test_action_only_integration_access_reads_and_updates_without_resource
             policies={"mail.read": ToolExecutionPolicy.AUTO}, resources={}
         ),
         db,
+        "public",
     )
-    assert tools.integration_policies[str(account.id)] == {
+    assert tools.permissions.integration_policies[str(account.id)] == {
         "mail.read": ToolExecutionPolicy.AUTO
     }
     read = next(item for item in updated["actions"] if item["capability"] == "mail.read")

@@ -27,6 +27,7 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    TrustLevel,
     UserAgentProfilesSettings,
     load_effective_agent_profiles,
     load_effective_integrations,
@@ -50,6 +51,7 @@ class AgentProfileRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
+    persona: str = Field(default="", max_length=16_000)
     instructions: str = Field(min_length=1, max_length=16_000)
     persona_mode: AgentPersonaMode = AgentPersonaMode.EXTEND
     private_permissions: AgentProfilePermissions = Field(
@@ -59,7 +61,7 @@ class AgentProfileRequest(BaseModel):
         default_factory=AgentProfilePermissions
     )
 
-    @field_validator("name", "description", "instructions", mode="before")
+    @field_validator("name", "description", "persona", "instructions", mode="before")
     @classmethod
     def strip_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
@@ -125,13 +127,17 @@ async def _response(
         )
         for profile in effective.profiles
     ]
-    all_groups = tool_registry.catalog(tools, integrations)
-    groups = tool_registry.catalog(tools, IntegrationSettings())
+    public_tools = tools.model_copy(deep=True).select_trust(TrustLevel.PUBLIC)
+    private_tools = tools.model_copy(deep=True).select_trust(TrustLevel.PRIVATE)
+    all_groups = tool_registry.catalog(public_tools, integrations)
+    groups = tool_registry.catalog(public_tools, IntegrationSettings())
     policy_integration_ids = set(_catalog_integration_policies(all_groups))
     return {
         "defaultAgentProfileId": str(DEFAULT_AGENT_PROFILE_ID),
         "personalAgentsEnabled": effective.personal_agents_enabled,
         "groups": groups,
+        "publicGroups": groups,
+        "privateGroups": tool_registry.catalog(private_tools, IntegrationSettings()),
         "integrations": [
             {
                 "id": str(instance.id),
@@ -283,10 +289,10 @@ async def _profile_from_request(
         "publicPermissions",
         existing.public_permissions if existing is not None else None,
     )
-    return AgentProfile(
-        id=profile_id or uuid4(),
-        **payload.model_dump(),
-    )
+    values = payload.model_dump()
+    if existing is not None and "persona" not in payload.model_fields_set:
+        values["persona"] = existing.persona
+    return AgentProfile(id=profile_id or uuid4(), **values)
 
 
 def _ensure_unique_name(
@@ -296,7 +302,7 @@ def _ensure_unique_name(
     exclude_id: UUID | None = None,
 ) -> None:
     folded = name.strip().casefold()
-    if folded == "default" and exclude_id != DEFAULT_AGENT_PROFILE_ID:
+    if folded in {"allgemein", "default"} and exclude_id != DEFAULT_AGENT_PROFILE_ID:
         raise ApiError(409, "agentProfile.defaultProtected")
     if any(
         profile.id != exclude_id and profile.name.casefold() == folded
@@ -336,16 +342,24 @@ async def agent_profile_integration_metadata(
     if instance is None:
         raise ApiError(404, "integration.notFound")
     resources = await _integration_resources(db, instance)
-    tools = (
-        await SettingsStore.load(db, ToolSettings)
-        if scope == "instance"
-        else await load_effective_tools(db, user.id)
-    )
-    access = _access_payload(instance, resources, tools)
+    if scope == "instance":
+        base_tools = await SettingsStore.load(db, ToolSettings)
+        public_tools = base_tools.model_copy(deep=True).select_trust(TrustLevel.PUBLIC)
+        private_tools = base_tools.model_copy(deep=True).select_trust(TrustLevel.PRIVATE)
+    else:
+        public_tools = await load_effective_tools(db, user.id, TrustLevel.PUBLIC)
+        private_tools = await load_effective_tools(db, user.id, TrustLevel.PRIVATE)
+    access = _access_payload(instance, resources, public_tools)
+    private_access = _access_payload(instance, resources, private_tools)
     return {
         "integrationId": str(instance.id),
         "actions": access["actions"],
         "resources": access["resources"],
+        "public": {"actions": access["actions"], "resources": access["resources"]},
+        "private": {
+            "actions": private_access["actions"],
+            "resources": private_access["resources"],
+        },
     }
 
 
@@ -389,7 +403,7 @@ async def update_agent_profile(
     )
     if index is None:
         raise ApiError(404, "agentProfile.notFound")
-    if profile_id == DEFAULT_AGENT_PROFILE_ID and payload.name != "Default":
+    if profile_id == DEFAULT_AGENT_PROFILE_ID and payload.name != "Allgemein":
         raise ApiError(409, "agentProfile.defaultProtected", field="name")
     replacement = await _profile_from_request(
         db,

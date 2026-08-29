@@ -24,6 +24,8 @@ describe('agent profiles store', () => {
       data: {
         defaultAgentProfileId: 'global-1',
         personalAgentsEnabled: false,
+        privateGroups: [{ id: 'private-tools' }],
+        publicGroups: [{ id: 'public-tools' }],
         effectiveAgents: agents
       }
     })
@@ -35,6 +37,8 @@ describe('agent profiles store', () => {
     expect(store.agents).toEqual(agents)
     expect(store.personalAgentsEnabled).toBe(false)
     expect(store.defaultAgentProfileId).toBe('global-1')
+    expect(store.groupsByTrust.private).toEqual([{ id: 'private-tools' }])
+    expect(store.groupsByTrust.public).toEqual([{ id: 'public-tools' }])
     expect(store.scopedAgents).toEqual([agents[1]])
   })
 
@@ -42,6 +46,7 @@ describe('agent profiles store', () => {
     const payload = {
       name: 'Recherche',
       description: 'Prüft Quellen',
+      persona: 'Neugieriger, sachlicher Rechercheur.',
       instructions: 'Arbeite sorgfältig.',
       personaMode: 'extend',
       publicPermissions: { policies: { 'network.search': 'auto' } },

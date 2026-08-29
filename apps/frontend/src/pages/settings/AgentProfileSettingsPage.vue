@@ -5,25 +5,28 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Agenten</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Wiederverwendbare Agentenprofile mit Anweisungen und Tool-Rechten verwalten.
+          Wiederverwendbare Agentenprofile mit Anweisungen und Berechtigungen verwalten.
         </p>
       </div>
-      <div class="row items-center q-gutter-sm">
+      <div class="settings-scope-actions row items-center col-auto">
+        <q-toggle
+          class="col-auto"
+          v-if="auth.isAdmin && agents.scope === 'instance'"
+          :model-value="agents.personalAgentsEnabled"
+          label="Persönliche Agenten"
+          @update:model-value="setPersonalAgentsEnabled"
+        />
         <SettingsScopeToggle
           :model-value="agents.scope"
           :is-admin="auth.isAdmin"
           :disable="agents.loading || agents.saving"
           @update:model-value="changeScope"
         />
-        <q-toggle
-          v-if="auth.isAdmin && agents.scope === 'instance'"
-          :model-value="agents.personalAgentsEnabled"
-          label="Persönliche Agenten"
-          @update:model-value="setPersonalAgentsEnabled"
-        />
         <q-btn
+          class="col-auto"
           unelevated
           no-caps
+          no-wrap
           color="primary"
           icon="add"
           label="Agentenprofil erstellen"
@@ -65,7 +68,7 @@
               {{ agent.description || 'Keine Beschreibung' }}
             </q-item-label>
             <q-item-label caption class="q-mt-xs">
-              Persona {{ agent.personaMode === 'replace' ? 'ersetzen' : 'erweitern' }}
+              Gemeinsame Persona {{ agent.personaMode === 'replace' ? 'weglassen' : 'verwenden' }}
             </q-item-label>
           </q-item-section>
           <q-item-section side top>

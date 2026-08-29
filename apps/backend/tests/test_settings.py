@@ -21,13 +21,9 @@ from mato_loop_backend.settings.models import (
     ModelCapability,
     ModelConfig,
     ModelInputModality,
-    ModelWebFetchPolicy,
     ToolSettings,
     UserPreferences,
-    WebFetchPolicy,
-    WebFetchSettings,
 )
-from mato_loop_backend.settings.web_fetch import resolve_web_fetch_policy
 
 
 def test_missing_settings_fields_use_defaults() -> None:
@@ -43,7 +39,13 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert settings.protected_recent_turns == 2
     assert settings.max_compaction_requests == 3
     assert settings.historical_tool_output_tokens == 2_000
-    assert ToolSettings().web_fetch.default_policy == WebFetchPolicy.AUTO_PUBLIC
+    assert ToolSettings().resource_availability["webfetch"] == {
+        "network.fetch.public": True,
+        "network.fetch.private": False,
+    }
+    assert not ToolSettings(resource_availability={}).webfetch_resource_available(
+        "network.fetch.private"
+    )
     assert ToolSettings().default_calendar is None
     assert ToolSettings().default_task_list is None
     assert ToolSettings().resource_labels == {}
@@ -192,7 +194,6 @@ def test_model_runtime_uses_defaults_and_legacy_config_values() -> None:
     assert default_model.availability == "available"
     assert default_model.last_seen_at is None
     assert default_model.discovery_metadata == {}
-    assert default_model.webfetch_policy == ModelWebFetchPolicy.INHERIT
     assert default_model.supports_image_input is False
     assert legacy_model.context_window_tokens == 32_000
     assert legacy_model.max_output_tokens == 2_048
@@ -241,30 +242,6 @@ def test_model_config_discards_legacy_compression_model() -> None:
     assert "compression_model_id" not in model.model_dump()
 
 
-def test_model_webfetch_fields_accept_snake_and_camel_case() -> None:
-    provider_id = uuid4()
-
-    camel_model = ModelConfig.model_validate(
-        {
-            "provider_id": provider_id,
-            "model_id": "camel",
-            "webfetchPolicy": "auto_allowed",
-            "supportsImageInput": True,
-        }
-    )
-    snake_model = ModelConfig(
-        provider_id=provider_id,
-        model_id="snake",
-        webfetch_policy="disabled",
-        supports_image_input=True,
-    )
-
-    assert camel_model.webfetch_policy == ModelWebFetchPolicy.AUTO_ALLOWED
-    assert camel_model.supports_image_input is True
-    assert snake_model.webfetch_policy == ModelWebFetchPolicy.DISABLED
-    assert snake_model.supports_image_input is True
-
-
 def test_model_input_modalities_are_canonical_with_legacy_image_compatibility() -> None:
     provider_id = uuid4()
 
@@ -293,21 +270,6 @@ def test_model_input_modalities_are_canonical_with_legacy_image_compatibility() 
         ModelInputModality.VIDEO,
     }
     assert canonical.supports_image_input is False
-
-
-def test_effective_webfetch_policy_resolves_inheritance_override_and_hard_gate() -> None:
-    model = ModelConfig(provider_id=uuid4(), model_id="model")
-    settings = ToolSettings(
-        web_fetch=WebFetchSettings(default_policy=WebFetchPolicy.AUTO_PUBLIC)
-    )
-
-    assert resolve_web_fetch_policy(settings, model) == WebFetchPolicy.AUTO_PUBLIC
-
-    model.webfetch_policy = ModelWebFetchPolicy.AUTO_ALLOWED
-    assert resolve_web_fetch_policy(settings, model) == WebFetchPolicy.AUTO_ALLOWED
-
-    settings.web_fetch.enabled = False
-    assert resolve_web_fetch_policy(settings, model) == WebFetchPolicy.DISABLED
 
 
 def test_legacy_small_context_derives_a_safe_output_limit() -> None:

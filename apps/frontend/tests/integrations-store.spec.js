@@ -629,15 +629,15 @@ describe('integration store', () => {
     )
 
     expect(api.get).toHaveBeenCalledWith(
-      '/integrations/integration-id/access', { params: { scope: 'instance' } }
+      '/integrations/integration-id/access', { params: { scope: 'instance', trust: 'private' } }
     )
     expect(api.put).toHaveBeenCalledWith('/integrations/integration-id/access', {
       policies: { 'calendar.read': 'auto' },
       resources: { 'calendar:work': { 'calendar.read': 'auto' } },
       defaultResourceKey: 'calendar:work',
       defaultTaskListKey: null
-    }, { params: { scope: 'instance' } })
-    expect(store.accessByIntegration['integration-id']).toEqual(access)
+    }, { params: { scope: 'instance', trust: 'private' } })
+    expect(store.accessByIntegration['instance:private:integration-id']).toEqual(access)
   })
 
   it('keeps integration access on the selected personal scope', async () => {
@@ -650,12 +650,36 @@ describe('integration store', () => {
     await store.saveAccess('personal-id', { resources: {} })
 
     expect(api.get).toHaveBeenCalledWith(
-      '/integrations/personal-id/access', { params: { scope: 'personal' } }
+      '/integrations/personal-id/access', { params: { scope: 'personal', trust: 'private' } }
     )
     expect(api.put).toHaveBeenCalledWith(
       '/integrations/personal-id/access',
       { resources: {} },
-      { params: { scope: 'personal' } }
+      { params: { scope: 'personal', trust: 'private' } }
     )
+  })
+
+  it('isolates access responses by scope and trust and discards stale branches', async () => {
+    const requests = []
+    api.get.mockImplementation((_url, config) => new Promise((resolve) => {
+      requests.push({ params: config.params, resolve })
+    }))
+    const store = useIntegrationStore()
+
+    const privateLoad = store.fetchAccess('integration-id')
+    store.selectTrust('public')
+    const publicLoad = store.fetchAccess('integration-id')
+    requests[1].resolve({ data: { integrationId: 'integration-id', branch: 'public' } })
+    await publicLoad
+    requests[0].resolve({ data: { integrationId: 'integration-id', branch: 'private' } })
+    await privateLoad
+
+    expect(requests.map((request) => request.params)).toEqual([
+      { scope: 'instance', trust: 'private' },
+      { scope: 'instance', trust: 'public' }
+    ])
+    expect(store.accessByIntegration).toEqual({
+      'instance:public:integration-id': { integrationId: 'integration-id', branch: 'public' }
+    })
   })
 })

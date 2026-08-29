@@ -75,11 +75,14 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    TrustLevel,
     UserIntegrationSettings,
     UserToolSettings,
     WebSearchToolSettings,
     load_effective_integrations,
+    load_effective_tools,
 )
+from mato_loop_backend.settings.effective import personal_integration_tool_settings
 
 router = APIRouter(prefix="/integrations", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
@@ -147,12 +150,7 @@ async def _load_scoped_tools(
     if personal is not None:
         return personal
     instance = await SettingsStore.load(db, ToolSettings)
-    return UserToolSettings.model_validate(
-        {
-            **instance.model_dump(exclude={"personal_settings_enabled"}),
-            "personal_tool_defaults_enabled": False,
-        }
-    )
+    return personal_integration_tool_settings(instance)
 
 
 class SearchIntegrationRequest(BaseModel):
@@ -510,8 +508,10 @@ def _access_payload(
     adapter = integration_adapter(instance.integration_type, instance.adapter_type)
     if adapter is None:
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    integration_policies = tools.integration_policies.get(str(instance.id), {})
-    resource_policies = tools.resource_policies.get(str(instance.id), {})
+    integration_policies = tools.permissions.integration_policies.get(
+        str(instance.id), {}
+    )
+    resource_policies = tools.permissions.resource_policies.get(str(instance.id), {})
     resource_actions = tool_registry.integration_resource_actions(instance)
     if not resource_actions:
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
@@ -1714,6 +1714,7 @@ async def test_recipe_integration(
 async def get_integration_access(
     integration_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    trust: TrustLevel,
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
@@ -1725,7 +1726,11 @@ async def get_integration_access(
         db, scope, user, adapter_type=instance.adapter_type
     )
     resources = await _integration_resources(db, instance)
-    tools = await _load_scoped_tools(db, owner_id)
+    tools = (
+        await load_effective_tools(db, owner_id, trust)
+        if owner_id is not None
+        else (await _load_scoped_tools(db, owner_id)).select_trust(trust)
+    )
     return _access_payload(instance, resources, tools)
 
 
@@ -1734,6 +1739,7 @@ async def update_integration_access(
     integration_id: UUID,
     payload: IntegrationAccessRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    trust: TrustLevel,
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
@@ -1824,21 +1830,22 @@ async def update_integration_access(
     if current.model_dump(mode="json") != revision:
         raise ApiError(409, "integration.changed")
     tools = await _load_scoped_tools(db, owner_id, for_update=True)
+    tools.select_trust(trust)
     if payload.policies is not None:
         normalized_policies = dict(payload.policies)
         if normalized_policies:
-            tools.integration_policies[str(integration_id)] = normalized_policies
+            tools.permissions.integration_policies[str(integration_id)] = normalized_policies
         else:
-            tools.integration_policies.pop(str(integration_id), None)
+            tools.permissions.integration_policies.pop(str(integration_id), None)
     normalized = {
         resource_key: dict(policies)
         for resource_key, policies in payload.resources.items()
         if policies
     }
     if normalized:
-        tools.resource_policies[str(integration_id)] = normalized
+        tools.permissions.resource_policies[str(integration_id)] = normalized
     else:
-        tools.resource_policies.pop(str(integration_id), None)
+        tools.permissions.resource_policies.pop(str(integration_id), None)
     labels = {resource.key: resource.label for resource in resources}
     if labels:
         tools.resource_labels[str(integration_id)] = labels
@@ -1868,7 +1875,12 @@ async def update_integration_access(
             tools.default_task_list = None
     await SettingsStore.save(db, tools, user_id=owner_id)
     await db.commit()
-    return _access_payload(current, resources, tools)
+    response_tools = (
+        await load_effective_tools(db, owner_id, trust)
+        if owner_id is not None
+        else tools
+    )
+    return _access_payload(current, resources, response_tools)
 
 
 @router.get("/personal-settings")

@@ -71,7 +71,6 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     ToolExecutionPolicy,
     ToolSettings,
-    WebFetchPolicy,
 )
 from mato_loop_backend.workspace import RootFileError
 
@@ -903,9 +902,7 @@ def _attachment(**overrides) -> BookStackAttachment:
 def _download_context(instance: IntegrationInstance, revision: str) -> SimpleNamespace:
     context = _context(instance, revision)
     context.session = SimpleNamespace(user_id=uuid4())
-    context.web_fetch_policy = WebFetchPolicy.AUTO_PUBLIC
     context.tool_settings = ToolSettings()
-    context.allowed_private_origins = ()
     context.ask = AsyncMock(return_value=PermissionDecision.ALLOW)
     context.db = AsyncMock()
     context.db.scalar.return_value = Mock(
@@ -934,7 +931,7 @@ async def test_attachment_from_url_is_downloaded_and_uploaded(monkeypatch) -> No
 
     async def download_file(url, **_kwargs):
         assert url == "https://example.test/sheet.pdf"
-        await _kwargs["authorize_url"](url)
+        await _kwargs["authorize_url"](url, False)
         return DownloadedFile(
             final_url=url,
             content_type="application/pdf",
@@ -1013,7 +1010,7 @@ async def test_download_is_refused_when_current_web_access_is_disabled(monkeypat
     context = _download_context(instance, revision)
     context.db.scalar.return_value = Mock(
         data=ToolSettings.model_validate(
-            {"webFetch": {"enabled": False}}
+            {"toolAvailability": {"webfetch": False}}
         ).model_dump(mode="json")
     )
     arguments = KnowledgeCreateAttachmentArguments(
@@ -1154,7 +1151,6 @@ async def test_link_attachment_skips_any_download(monkeypatch) -> None:
 
     monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
     context = _download_context(instance, revision)
-    context.web_fetch_policy = WebFetchPolicy.DISABLED
     arguments = KnowledgeCreateAttachmentArguments(
         integration_id=instance.id,
         book_key="book:7",

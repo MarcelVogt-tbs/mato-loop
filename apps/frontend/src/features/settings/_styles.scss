@@ -203,13 +203,6 @@
   grid-column: 1 / -1;
 }
 
-.tool-origin-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 8px;
-}
-
 .tool-settings-detail {
   margin-top: 20px;
 }

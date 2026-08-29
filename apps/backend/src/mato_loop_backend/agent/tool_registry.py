@@ -53,7 +53,6 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
-    WebFetchPolicy,
     load_agent_profile_tools,
     load_effective_ai,
     load_effective_integrations,
@@ -179,8 +178,6 @@ class ToolContext:
     ask_handler: AskHandler
     question_handler: QuestionHandler | None = None
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
-    web_fetch_policy: WebFetchPolicy = WebFetchPolicy.DISABLED
-    allowed_private_origins: tuple[str, ...] = ()
     pdf_vision_handler: PdfVisionHandler | None = None
     video_analysis_handler: VideoAnalysisHandler | None = None
     video_analysis_target: VideoAnalysisTargetResolver | None = None
@@ -271,6 +268,8 @@ def _actions_enabled(
     tool_settings: ToolSettings,
     policy_resolver: PolicyResolver,
 ) -> bool:
+    if not tool_settings.tool_availability.get(definition.name, True):
+        return False
     enabled = {
         action.capability: policy_resolver(
             tool_settings,
@@ -280,6 +279,7 @@ def _actions_enabled(
             include_scoped=True,
         )
         != ToolExecutionPolicy.DISABLED
+        and tool_settings.webfetch_resource_available(action.capability)
         for action in definition.actions
     }
     alternatives = definition.alternative_action_capabilities
@@ -818,6 +818,9 @@ class ToolRegistry:
                     "allowedPolicies": [
                         policy.value for policy in action.allowed_policies
                     ],
+                    "available": tool_settings.resource_availability.get(
+                        definition.name, {}
+                    ).get(action.capability, True),
                 }
                 for action in definition.actions
             ]
@@ -836,6 +839,9 @@ class ToolRegistry:
                         ],
                     },
                     "actions": actions,
+                    "available": tool_settings.tool_availability.get(
+                        definition.name, True
+                    ),
                 }
             )
         group_metadata = {item["id"]: item for item in TOOL_GROUPS}
@@ -905,6 +911,9 @@ class ToolRegistry:
     ) -> ToolResult:
         definition = tool.definition
         context.bound_options = dict(tool.selected_options)
+
+        if not context.tool_settings.tool_availability.get(definition.name, True):
+            return ToolResult.error("tool.unavailable")
 
         async def integration_is_current(selected_id: str | None) -> bool:
             if selected_id is None:
@@ -984,11 +993,6 @@ class ToolRegistry:
             return next((item for item in resources if item.key == resource_key), None)
 
         if tool.source_id is not None and not await integration_is_current(tool.source_id):
-            return ToolResult.error("tool.unavailable")
-        if (
-            definition.requires_webfetch
-            and context.web_fetch_policy == WebFetchPolicy.DISABLED
-        ):
             return ToolResult.error("tool.unavailable")
         if definition.requires_memory and not context.memory_read_enabled:
             return ToolResult.error("tool.unavailable")

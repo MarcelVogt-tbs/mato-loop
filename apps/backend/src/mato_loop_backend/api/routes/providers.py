@@ -49,14 +49,11 @@ from mato_loop_backend.security import (
 )
 from mato_loop_backend.settings import (
     AiSettings,
-    ModelWebFetchPolicy,
     SettingsStore,
-    ToolSettings,
     effective_model_pseudonymization,
     effective_model_trust,
-    resolve_web_fetch_policy,
 )
-from mato_loop_backend.settings.effective import load_effective_ai, load_effective_tools
+from mato_loop_backend.settings.effective import load_effective_ai
 from mato_loop_backend.settings.models import (
     AiSettingsBase,
     LlmProviderConfig,
@@ -178,7 +175,6 @@ class ModelRuntimeRequest(ApiRequest):
         default_factory=lambda: {ModelInputModality.TEXT}
     )
     supports_image_input: bool = False
-    webfetch_policy: ModelWebFetchPolicy = ModelWebFetchPolicy.INHERIT
     reasoning_summary: bool = False
     reasoning_effort: ReasoningEffort | None = None
     trust_level: TrustLevel | None = None
@@ -343,11 +339,9 @@ async def _provider_sync_fingerprint(
 
 def _settings_payload(
     settings: AiSettingsBase,
-    tool_settings: ToolSettings | None = None,
     *,
     include_configuration: bool = True,
 ) -> dict[str, Any]:
-    tool_settings = tool_settings or ToolSettings()
     providers_by_id = {provider.id: provider for provider in settings.providers}
     return {
         **(
@@ -466,10 +460,6 @@ def _settings_payload(
                 "supportsStreaming": model.supports_streaming,
                 "inputModalities": sorted(item.value for item in model.input_modalities),
                 "supportsImageInput": model.supports_image_input,
-                "webfetchPolicy": model.webfetch_policy.value,
-                "effectiveWebfetchPolicy": resolve_web_fetch_policy(
-                    tool_settings, model
-                ).value,
                 "reasoningSummary": model.reasoning_summary,
                 "reasoningEffort": _model_reasoning_default(
                     providers_by_id[model.provider_id], model
@@ -499,14 +489,7 @@ async def _settings_response(
     *,
     include_configuration: bool = True,
 ) -> dict[str, Any]:
-    tool_settings = (
-        await load_effective_tools(db, user_id)
-        if user_id is not None
-        else await SettingsStore.load(db, ToolSettings)
-    )
-    return _settings_payload(
-        settings, tool_settings, include_configuration=include_configuration
-    )
+    return _settings_payload(settings, include_configuration=include_configuration)
 
 
 async def _save_openai_provider(

@@ -52,7 +52,6 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     ModelInputModality,
     ModelOrigin,
-    WebFetchSettings,
 )
 
 
@@ -518,7 +517,6 @@ async def test_manual_model_crud_toggles_and_default(monkeypatch) -> None:
                 "contextWindowTokens": 32_000,
                 "maxOutputTokens": 4_000,
                 "supportsImageInput": True,
-                "webfetchPolicy": "auto_allowed",
                 "reasoningEffort": "low",
             }
         ),
@@ -527,7 +525,6 @@ async def test_manual_model_crud_toggles_and_default(monkeypatch) -> None:
     model = settings.models[0]
     assert model.origin == ModelOrigin.MANUAL
     assert model.supports_image_input is True
-    assert model.webfetch_policy == "auto_allowed"
     assert model.reasoning_effort == "low"
     assert settings.default_model_id is None
 
@@ -986,9 +983,6 @@ async def test_normal_provider_read_is_effective_and_hides_configuration(
     monkeypatch.setattr(
         provider_routes, "load_effective_ai", AsyncMock(return_value=effective)
     )
-    monkeypatch.setattr(
-        provider_routes, "load_effective_tools", AsyncMock(return_value=ToolSettings())
-    )
 
     result = await list_providers(_db(), user=user)
 
@@ -1032,9 +1026,6 @@ async def test_personal_provider_read_includes_effective_selection_catalog(
     )
     load_effective = AsyncMock(return_value=effective)
     monkeypatch.setattr(provider_routes, "load_effective_ai", load_effective)
-    monkeypatch.setattr(
-        provider_routes, "load_effective_tools", AsyncMock(return_value=ToolSettings())
-    )
 
     result = await list_providers(db, scope="personal", user=user)
 
@@ -1118,14 +1109,10 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
             "provider_id": provider.id,
             "model_id": "Qwen/Qwen3.8-27B",
             "supportsImageInput": True,
-            "webfetchPolicy": "auto_public",
         }
     )
 
-    payload = _settings_payload(
-        AiSettings(providers=[provider], models=[model]),
-        ToolSettings(web_fetch=WebFetchSettings(enabled=False)),
-    )
+    payload = _settings_payload(AiSettings(providers=[provider], models=[model]))
 
     assert "enabled" not in payload
     assert payload["providers"][0]["modelsLastSyncedAt"] is None
@@ -1136,8 +1123,8 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
     assert payload["models"][0]["lastSeenAt"] is None
     assert payload["models"][0]["discoveryMetadata"] == {}
     assert payload["models"][0]["supportsImageInput"] is True
-    assert payload["models"][0]["webfetchPolicy"] == "auto_public"
-    assert payload["models"][0]["effectiveWebfetchPolicy"] == "disabled"
+    assert "webfetchPolicy" not in payload["models"][0]
+    assert "effectiveWebfetchPolicy" not in payload["models"][0]
     assert payload["models"][0]["trustLevel"] is None
     assert payload["models"][0]["effectiveTrustLevel"] == "private"
     assert payload["models"][0]["pseudonymizationEnabled"] is None

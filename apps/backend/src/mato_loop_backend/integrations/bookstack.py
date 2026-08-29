@@ -412,7 +412,7 @@ def _disabled_book_keys(context: Any, instance: IntegrationInstance) -> set[str]
 def _resource_keys(context: Any, instance: IntegrationInstance) -> set[str]:
     tool_settings = getattr(context, "tool_settings", None)
     profile_permissions = getattr(tool_settings, "_agent_permissions", None)
-    baseline = (getattr(tool_settings, "resource_policies", None) or {}).get(
+    baseline = tool_settings.permissions.resource_policies.get(
         str(instance.id), {}
     )
     overrides = (
@@ -1417,47 +1417,31 @@ async def knowledge_list_attachments(
 async def _download_attachment_source(
     url: str, context: Any
 ) -> tuple[str, bytes, str] | Any:
-    from mato_loop_backend.agent.permissions import (
-        PermissionDecision,
-        webfetch_permission,
-    )
     from mato_loop_backend.agent.tools import (
         ToolResult,
+        _authorize_webfetch_target,
         _ensure_webfetch_binding_is_current,
     )
     from mato_loop_backend.integrations.webfetch import (
         WebFetchError,
         download_file,
-        private_origin_is_allowed,
     )
-    from mato_loop_backend.settings import WebFetchPolicy
 
     try:
         await _ensure_webfetch_binding_is_current(context)
     except WebFetchError:
         return ToolResult.error("tool.unavailable")
-    policy = getattr(context, "web_fetch_policy", None)
-    if policy in (None, WebFetchPolicy.DISABLED):
-        return ToolResult.error("tool.unavailable")
     settings = context.tool_settings.web_fetch
-    origins = tuple(getattr(context, "allowed_private_origins", ()) or ())
 
-    async def authorize_url(target: str) -> None:
-        await _ensure_webfetch_binding_is_current(context)
-        needs_approval = policy == WebFetchPolicy.ASK or (
-            policy == WebFetchPolicy.AUTO_PUBLIC
-            and private_origin_is_allowed(target, context.allowed_private_origins)
-        )
-        if needs_approval and await context.ask(
-            webfetch_permission(target)
-        ) != PermissionDecision.ALLOW:
-            raise WebFetchError("permission.denied")
-        await _ensure_webfetch_binding_is_current(context)
+    async def authorize_url(target: str, private_target: bool) -> None:
+        await _authorize_webfetch_target(context, target, private_target)
 
     try:
         downloaded = await download_file(
             url,
-            allowed_private_origins=origins,
+            allow_private_targets=context.tool_settings.webfetch_resource_available(
+                "network.fetch.private"
+            ),
             authorize_url=authorize_url,
             max_response_bytes=min(
                 settings.max_response_mib * 1024 * 1024, MAX_ATTACHMENT_BYTES

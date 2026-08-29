@@ -68,7 +68,6 @@
               :model-value="form"
               :reasoning-summary-available="reasoningSummaryAvailable"
               :reasoning-summary-forced="provider?.adapterType === 'openai-codex'"
-              :effective-webfetch-policy="effectiveWebfetchPolicy"
               :provider-trust-level="provider?.trustLevel"
               :provider-pseudonymization-enabled="provider?.pseudonymizationEnabled"
             />
@@ -102,9 +101,7 @@ import { useQuasar } from 'quasar'
 import ModelRuntimeFields from 'components/ModelRuntimeFields.vue'
 import { modelRuntimeForm, modelRuntimePayload } from 'src/utils/model-runtime'
 import { MODEL_CAPABILITY_OPTIONS, modelSupportsCapability } from 'src/utils/provider-models'
-import { resolveWebfetchPolicy } from 'src/utils/webfetch'
 import { useProviderStore } from 'stores/providers'
-import { useToolSettingsStore } from 'stores/tool-settings'
 
 defineOptions({ name: 'ModelConfigDialog' })
 
@@ -116,7 +113,6 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'saved'])
 const $q = useQuasar()
 const providers = useProviderStore()
-const tools = useToolSettingsStore()
 const saving = ref(false)
 const form = reactive(defaultForm())
 const isDiscovered = computed(() => props.model?.origin === 'discovered')
@@ -135,12 +131,6 @@ const capabilityHint = computed(() => {
 const title = computed(() => props.model ? `${props.model.name || props.model.modelId} bearbeiten` : 'Modell hinzufügen')
 const reasoningSummaryAvailable = computed(() => props.provider?.adapterType === 'openai-codex'
   || ['responses'].includes(props.provider?.config?.apiType || props.provider?.config?.api_type))
-const effectiveWebfetchPolicy = computed(() => resolveWebfetchPolicy(
-  form.webfetchPolicy,
-  tools.loaded ? tools.webFetch : null,
-  form.effectiveWebfetchPolicy
-))
-
 function defaultForm() {
   return {
     modelId: '',
@@ -194,9 +184,6 @@ function close() {
 }
 
 watch(() => props.modelValue, (open) => {
-  if (open) {
-    initialize()
-    tools.fetchAvailability().catch(() => {})
-  }
+  if (open) initialize()
 })
 </script>

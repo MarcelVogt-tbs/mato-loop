@@ -82,6 +82,7 @@ from mato_loop_backend.agent.tools import (
     effective_tool_capabilities,
     resolve_tool_execution_policy,
     tool_registry,
+    webfetch_available,
 )
 from mato_loop_backend.agent.video_analysis import (
     NativeVideoResult,
@@ -168,14 +169,12 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     UserProfileSettings,
-    WebFetchPolicy,
     effective_model_pseudonymization,
     effective_model_trust,
     load_agent_profile,
     load_agent_profile_tools,
     load_effective_ai,
     load_effective_integrations,
-    resolve_web_fetch_policy,
 )
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
@@ -1266,7 +1265,7 @@ class AgentRuntime:
                 )
             except AgentProfileUnavailable as exc:
                 raise AgentRunError("agentProfile.selectedUnavailable") from exc
-            web_fetch_policy = resolve_web_fetch_policy(tool_settings, model)
+            web_fetch_enabled = webfetch_available(tool_settings)
             memory_state = memory_policy.effective_memory(
                 chat_session, memory_settings, provider, model
             )
@@ -1619,7 +1618,7 @@ class AgentRuntime:
             effective_toolset = (
                 tool_registry.effective(
                     integration_settings,
-                    webfetch_enabled=web_fetch_policy != WebFetchPolicy.DISABLED,
+                    webfetch_enabled=web_fetch_enabled,
                     web_search_enabled=(
                         chat_session.web_search_policy != WebSearchPolicy.DISABLED
                     ),
@@ -1678,7 +1677,7 @@ class AgentRuntime:
                     if hide_skill_catalog_tools
                     else set()
                 ),
-                webfetch_enabled=web_fetch_policy != WebFetchPolicy.DISABLED,
+                webfetch_enabled=web_fetch_enabled,
                 web_search_enabled=(
                     chat_session.web_search_policy != WebSearchPolicy.DISABLED
                 ),
@@ -2984,10 +2983,6 @@ class AgentRuntime:
                         ask_handler=ask,
                         question_handler=question,
                         tool_settings=tool_settings,
-                        web_fetch_policy=web_fetch_policy,
-                        allowed_private_origins=tuple(
-                            tool_settings.web_fetch.allowed_private_origins
-                        ),
                         pdf_vision_handler=(
                             extract_pdf_pages_with_vision
                             if vision_candidates

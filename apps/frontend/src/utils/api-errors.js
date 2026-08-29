@@ -7,7 +7,6 @@ const fieldLabels = {
   api_key: 'Der API-Schlüssel',
   audio: 'Die Audioauswahl',
   cron: 'Der Cron-Ausdruck',
-  allowedPrivateOrigins: 'Die Liste privater Origins',
   audience: 'Der Modellzugriff',
   base_url: 'Die Basis-URL',
   baseUrl: 'Die Basis-URL',

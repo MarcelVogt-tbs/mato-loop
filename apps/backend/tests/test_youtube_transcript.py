@@ -71,7 +71,7 @@ async def test_fetches_existing_language_without_translation(monkeypatch) -> Non
     }
 
     async def request(url, **kwargs):
-        await kwargs["authorize_url"](url)
+        await kwargs["authorize_url"](url, False)
         calls.append((url, kwargs))
         if url.endswith("watch?v=dQw4w9WgXcQ"):
             return _response(b'"INNERTUBE_API_KEY":"public_key_12345"', "text/html")
@@ -122,7 +122,7 @@ async def test_falls_back_to_original_track_and_rejects_foreign_caption_url(
     }
 
     async def request(url, **kwargs):
-        await kwargs["authorize_url"](url)
+        await kwargs["authorize_url"](url, False)
         if url.endswith("watch?v=dQw4w9WgXcQ"):
             return _response(b'"INNERTUBE_API_KEY":"public_key_12345"', "text/html")
         if "/youtubei/v1/player" in url:
@@ -169,7 +169,7 @@ async def test_prefers_exact_regional_language_and_removes_caption_format(
     }
 
     async def request(url, **kwargs):
-        await kwargs["authorize_url"](url)
+        await kwargs["authorize_url"](url, False)
         if url.endswith("watch?v=dQw4w9WgXcQ"):
             return _response(b'"INNERTUBE_API_KEY":"public_key_12345"', "text/html")
         if "/youtubei/v1/player" in url:
@@ -203,7 +203,7 @@ async def test_rejects_missing_playability_and_private_video(monkeypatch) -> Non
     }
 
     async def request(url, **kwargs):
-        await kwargs["authorize_url"](url)
+        await kwargs["authorize_url"](url, False)
         if url.endswith("watch?v=dQw4w9WgXcQ"):
             return _response(b'"INNERTUBE_API_KEY":"public_key_12345"', "text/html")
         return _response(json.dumps(player).encode(), "application/json")

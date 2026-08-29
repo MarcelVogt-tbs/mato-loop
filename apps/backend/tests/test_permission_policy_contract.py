@@ -65,6 +65,17 @@ def _db_with_grants(*grants: PermissionGrant) -> AsyncMock:
     return db
 
 
+def _tool_settings(data: dict) -> ToolSettings:
+    values = dict(data)
+    permissions = {
+        key: values.pop(key)
+        for key in ("policies", "integrationPolicies", "resourcePolicies")
+        if key in values
+    }
+    values["publicPermissions"] = permissions
+    return ToolSettings.model_validate(values)
+
+
 def _root_files(tmp_path, session: ChatSession) -> RootFileService:
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session.id)
@@ -316,7 +327,7 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
         if settings_type is IntegrationSettings:
             return IntegrationSettings()
         settings_loads += 1
-        return ToolSettings.model_validate(
+        return _tool_settings(
             {
                 "policies": {
                     "filesystem.delete": "ask" if settings_loads == 1 else "disabled"
@@ -354,7 +365,7 @@ async def test_skill_policy_revocation_while_waiting_stops_loading(
         if settings_type is IntegrationSettings:
             return IntegrationSettings()
         settings_loads += 1
-        return ToolSettings.model_validate(
+        return _tool_settings(
             {
                 "policies": {
                     "skills.load": "ask" if settings_loads == 1 else "disabled"
@@ -402,7 +413,7 @@ async def test_runtime_uses_bound_integration_resource_policy(
         policy_integration_id=integration_id,
         policy_resource_key="calendar:work",
     )
-    tools = ToolSettings.model_validate(
+    tools = _tool_settings(
         {
             "policies": {"network.search": "ask"},
             "resourcePolicies": {
@@ -482,7 +493,7 @@ async def test_runtime_discovery_uses_global_not_integration_policy(
     }
     if global_policy is not None:
         settings_data["policies"] = {"calendar.read": global_policy}
-    tools = ToolSettings.model_validate(settings_data)
+    tools = _tool_settings(settings_data)
 
     async def load_settings(_db, settings_type, **_kwargs):
         return (
@@ -530,7 +541,7 @@ async def test_runtime_ignores_override_after_resource_contract_removal(
         policy_integration_id=integration.id,
         policy_resource_key="calendar:work",
     )
-    tools = ToolSettings.model_validate(
+    tools = _tool_settings(
         {
             "policies": {"network.search": "ask"},
             "resourcePolicies": {
@@ -578,7 +589,7 @@ def test_integration_policy_precedence_allowed_modes_and_hard_limits() -> None:
             ToolExecutionPolicy.AUTO,
         ),
     )
-    settings = ToolSettings.model_validate(
+    settings = _tool_settings(
         {
             "policies": {action.capability: "ask"},
             "integrationPolicies": {
@@ -630,14 +641,18 @@ def test_integration_policy_precedence_allowed_modes_and_hard_limits() -> None:
         "hard_unavailable",
     )
 
-    settings.policies[action.capability] = ToolExecutionPolicy.DISABLED
-    assert resolve_tool_execution_policy(
+    settings.permissions.policies[action.capability] = ToolExecutionPolicy.DISABLED
+    overridden_disabled = resolve_tool_execution_policy(
         settings,
         action.capability,
         action.default_policy,
         integration_id=integration_id,
         resource_key="project:main",
-    ).reason == "global_disabled"
+    )
+    assert (overridden_disabled.policy, overridden_disabled.source) == (
+        ToolExecutionPolicy.ASK,
+        "resource",
+    )
 
     restricted = ToolAction(
         "tasks.delete",
@@ -645,7 +660,7 @@ def test_integration_policy_precedence_allowed_modes_and_hard_limits() -> None:
         ToolExecutionPolicy.ASK,
         allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
     )
-    settings.policies[restricted.capability] = ToolExecutionPolicy.AUTO
+    settings.permissions.policies[restricted.capability] = ToolExecutionPolicy.AUTO
     failed_closed = resolve_tool_execution_policy(
         settings,
         restricted.capability,
@@ -657,8 +672,8 @@ def test_integration_policy_precedence_allowed_modes_and_hard_limits() -> None:
         "policy_not_allowed",
     )
 
-    settings.policies[action.capability] = ToolExecutionPolicy.ASK
-    settings.integration_policies[str(integration_id)] = {
+    settings.permissions.policies[action.capability] = ToolExecutionPolicy.ASK
+    settings.permissions.integration_policies[str(integration_id)] = {
         action.capability: "invalid"  # type: ignore[dict-item]
     }
     invalid = resolve_tool_execution_policy(
@@ -1059,7 +1074,7 @@ def test_webfetch_permission_hashes_the_full_canonical_url_and_redacts_summary()
     equivalent = webfetch_permission("https://example.com/path?token=secret")
     other_query = webfetch_permission("https://example.com/path?token=other")
 
-    assert first.capability == "network.fetch"
+    assert first.capability == "network.fetch.public"
     assert first.resource_type == "url"
     assert first.resource_scope == equivalent.resource_scope
     assert first.resource_scope != other_query.resource_scope

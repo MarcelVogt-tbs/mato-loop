@@ -2,7 +2,7 @@
 
 ## Tool-Richtlinien
 
-Unter **Einstellungen > Tools** konfigurieren Sie persönliche oder instanzweite Vorgaben für eingebaute Tools. Integrationstools werden durch ihre Integration verfügbar und erscheinen auf dieser Seite nicht. Unter **Einstellungen > Agenten** ergänzen Profile Persona und Anweisungen sowie optionale Abweichungen für private und öffentliche Modelle. Nicht gesetzte Profilwerte übernehmen immer die wirksamen Tool- und Integrationsvorgaben. Die üblichen Richtlinien sind:
+Unter **Einstellungen > Tools > Richtlinien** konfigurieren Sie persönliche oder instanzweite Vorgaben für eingebaute Tools getrennt für private und öffentliche Modelle. Integrationstools werden durch ihre Integration verfügbar und erscheinen auf dieser Seite nicht. Unter **Einstellungen > Agenten** verwalten Profile eine optionale eigene Persona, getrennte Aufgabenanweisungen und optionale Abweichungen für private und öffentliche Modelle. Die Persona-Auswahl bestimmt, ob die gemeinsame Assistenten-Persona ergänzt oder für dieses Profil weggelassen wird. Nicht gesetzte Profilwerte übernehmen immer die wirksamen Tool- und Integrationsvorgaben. Die üblichen Richtlinien sind:
 
 - **Deaktiviert**: Das Tool kann nicht aufgerufen werden. Der Agent kennt die installierte Fähigkeit weiterhin und kann bei einer passenden Anfrage erklären, wie sie aktiviert wird.
 - **Nachfragen**: Vor Agent-Tool-Aufrufen ist eine Freigabe erforderlich.
@@ -10,9 +10,11 @@ Unter **Einstellungen > Tools** konfigurieren Sie persönliche oder instanzweite
 
 Hostseitige Sicherheitsgrenzen gelten auch bei **Automatisch** weiterhin.
 
-Administratoren wechseln bei Tools mit **Persönlich** / **Instanz** zwischen den eigenen Einstellungen und den gemeinsamen Vorgaben. Sie können persönliche Tool-Einstellungen vollständig sperren. Solange Sie keine persönlichen Tool-Einstellungen gespeichert haben, gelten die aktuellen Instanzvorgaben. Beim ersten Speichern entsteht eine persönliche Momentaufnahme; spätere Änderungen der Instanzvorgaben werden darin nicht automatisch übernommen. **Auf Instanzstandard zurücksetzen** löscht diese Momentaufnahme und verwendet wieder die dann aktuellen Instanzvorgaben. Wird der persönliche Bereich gesperrt, bleibt seine Momentaufnahme gespeichert, ist aber weder bearbeitbar noch wirksam.
+Administratoren wechseln bei Tools mit **Persönlich** / **Instanz** zwischen den eigenen Einstellungen und den gemeinsamen Vorgaben. **Private Modelle** / **Öffentliche Modelle** wählt davon unabhängig den Richtlinienzweig. Administratoren können persönliche Tool-Einstellungen vollständig sperren. Solange Sie keine persönlichen Tool-Einstellungen gespeichert haben, gelten die aktuellen Instanzvorgaben. Beim ersten Speichern entsteht eine persönliche Momentaufnahme; spätere Änderungen der Instanzvorgaben werden darin nicht automatisch übernommen. **Auf Instanzstandard zurücksetzen** verwirft die persönlichen Tool-Vorgaben und verwendet wieder die dann aktuellen Instanzvorgaben. Wird der persönliche Bereich gesperrt, bleiben die Einstellungen gespeichert, sind aber weder bearbeitbar noch wirksam.
 
-Agentenprofile können ebenfalls persönlich oder instanzweit angelegt werden. Sie speichern keine vollständige Richtlinienkopie, sondern nur Abweichungen für private und öffentliche Modelle und übernehmen alle anderen Werte fortlaufend. Das feste Instanzprofil **Default** gilt für neue Sessions, kann nicht umbenannt oder gelöscht werden und besitzt zunächst keine Tool-Abweichungen. Administratoren können persönliche Profile vollständig sperren. Eine wirksame globale Einstellung **Deaktiviert**, eine technisch deaktivierte Integration und fehlende Rechte des externen Dienstes sind harte Grenzen, die kein Profil und keine Freigabe überstimmen kann. User-Agent, Größenlimit, Netzwerkgrenzen und erlaubte private Ursprünge von Webfetch bleiben technische Instanzgrenzen.
+Agentenprofile können ebenfalls persönlich oder instanzweit angelegt werden. Sie speichern keine vollständige Richtlinienkopie, sondern nur Abweichungen für private und öffentliche Modelle und übernehmen die jeweils passende Tool- und Integrationsbaseline fortlaufend. Das feste Instanzprofil **Allgemein** gilt für neue Sessions, kann nicht umbenannt oder gelöscht werden und besitzt zunächst keine Tool-Abweichungen. Administratoren können persönliche Profile vollständig sperren. Ein technisch deaktiviertes Tool, eine technisch deaktivierte Ressource, eine technisch deaktivierte Integration und fehlende Rechte des externen Dienstes sind harte Grenzen, die kein Profil und keine Freigabe überstimmen kann. Der Webfetch-User-Agent, das Größenlimit und weitere Netzwerkgrenzen bleiben ebenfalls technische Instanzgrenzen.
+
+Unter **Einstellungen > Tools > Verfügbare Tools** legen Administratoren ohne persönlichen oder instanzweiten Scope fest, welche eingebauten Tools und festen Ressourcen technisch verfügbar sind. Bei Webfetch sind **Öffentliche Adressen** und **Private Adressen** getrennte feste Ressourcen. Technisch deaktivierte Richtlinienwerte bleiben gespeichert und werden wieder wirksam, sobald die zugehörige Verfügbarkeit eingeschaltet wird.
 
 Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Richtlinien, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
 
@@ -40,7 +42,7 @@ Welche Tools tatsächlich erscheinen, hängt zusätzlich von Richtlinien, Sessio
 
 ## Instanz und persönliche Integrationen
 
-Unter **Einstellungen > Integrationen** liegen die technische Verbindungskonfiguration, die Vorgaben für Integrationen und einzelne Ressourcen sowie die Standardressourcen von CalDAV. Instanz-Integrationen und ihre externen Ressourcen sind bewusst gemeinsam: Alle Benutzer können sie entsprechend den Instanzrichtlinien verwenden. Persönliche Integrationen und Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet. Administratoren können persönliche Integrationen vollständig sperren und einzeln erlauben, welche fest eingebauten Typen persönlich konfiguriert werden dürfen: SearXNG, CalDAV, BookStack, Mealie, Git, OpenSCAD und OpenCode. Konfigurationen können keine eigenen Tool-Schemas oder beliebigen ausführbaren Tools hinzufügen.
+Unter **Einstellungen > Integrationen** liegen die technische Verbindungskonfiguration, die Vorgaben für Integrationen und einzelne Ressourcen sowie die Standardressourcen von CalDAV. Die Zugriffsrichtlinien werden getrennt für private und öffentliche Modelle gepflegt; Standardkalender und Standard-Aufgabenliste bleiben davon unabhängig. Instanz-Integrationen und ihre externen Ressourcen sind bewusst gemeinsam: Alle Benutzer können sie entsprechend den Instanzrichtlinien verwenden. Persönliche Integrationen und Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet. Administratoren können persönliche Integrationen vollständig sperren und einzeln erlauben, welche fest eingebauten Typen persönlich konfiguriert werden dürfen: SearXNG, CalDAV, BookStack, Mealie, Git, OpenSCAD und OpenCode. Konfigurationen können keine eigenen Tool-Schemas oder beliebigen ausführbaren Tools hinzufügen.
 
 Administratoren sehen den Umschalter **Persönlich** / **Instanz**. Normale Benutzer bearbeiten nur ihren persönlichen Bereich. Git und OpenSCAD werden immer persönlich an einen Computer des angemeldeten Benutzers gebunden.
 
@@ -72,7 +74,7 @@ Die eingebaute Suche ohne API-Schlüssel ist keine Integration und steht unabhä
 
 Unter **Einstellungen > Integrationen** können Sie mehrere CalDAV-Konten mit Serveradresse, Benutzername und Passwort oder App-Passwort anlegen. Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. CalDAV erfordert HTTPS.
 
-Über **Zugriff** konfigurieren Sie zunächst die Vorgabe des Kontos und anschließend Vorgaben für einzelne Kalender und Aufgabenlisten. Das gewählte Agentenprofil kann diese Werte getrennt für private und öffentliche Modelle überschreiben; nicht gesetzte Profilwerte übernehmen spätere Änderungen der Integrationsvorgaben automatisch. An jeder Ressource erscheinen nur die dafür passenden Rechte:
+Über **Zugriff** konfigurieren Sie für **Private Modelle** oder **Öffentliche Modelle** zunächst die passende Vorgabe des Kontos und anschließend Vorgaben für einzelne Kalender und Aufgabenlisten. Das gewählte Agentenprofil kann den jeweiligen Zweig überschreiben; nicht gesetzte Profilwerte übernehmen spätere Änderungen der passenden Integrationsvorgabe automatisch. An jeder Ressource erscheinen nur die dafür passenden Rechte:
 
 - **Nicht erlaubt** blockiert die Aktion.
 - **Nachfragen** zeigt vor der Aktion eine Freigabe.
@@ -80,7 +82,7 @@ Unter **Einstellungen > Integrationen** können Sie mehrere CalDAV-Konten mit Se
 
 Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**. Serverseitig schreibgeschützte Kalender und Aufgabenlisten bleiben unabhängig von der MatoLoop-Richtlinie schreibgeschützt.
 
-Über **Standards** an der Integration wählen Sie unabhängig einen **Standardkalender** und eine **Standard-Aufgabenliste**. Unspezifische Abfragen und neue Einträge verwenden die Auswahl des aktuellen Einstellungsbereichs automatisch. Wenn Sie ausdrücklich eine andere Ressource angeben, hat diese Vorrang. Pro Instanz- oder persönlichem Bereich kann jeweils nur ein Standard aktiv sein.
+Im Bereich **Standardressourcen dieses Kontos** wählen Sie unabhängig von der Modellklasse einen **Standardkalender** und eine **Standard-Aufgabenliste**. Unspezifische Abfragen und neue Einträge verwenden die Auswahl des aktuellen Einstellungsbereichs automatisch. Wenn Sie ausdrücklich eine andere Ressource angeben, hat diese Vorrang. Pro Instanz- oder persönlichem Bereich kann jeweils nur ein Standard aktiv sein.
 
 Lesefreigaben können für die aktuelle Chat-Session gelten. Schreib- und Löschfreigaben gelten nur für den konkreten Vorgang. Wiederkehrende Termine und Termine mit Einladungs- oder unbekannten Eigenschaften können gelesen, aber in der ersten Version nicht verändert werden.
 
@@ -90,7 +92,7 @@ CalDAV-Aufgaben unterstützen Titel, Notiz, eine optionale Fälligkeit als Datum
 
 Unter **Einstellungen > Integrationen** können Sie Mail-Konten mit IMAP- und SMTP-Server, TLS-Modus, Benutzername, festem Absender und Passwort oder App-Passwort anlegen. Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. Unverschlüsselte Verbindungen werden nicht unterstützt.
 
-Über **Zugriff** legen Sie für jedes Konto die Vorgaben zum Lesen, Verwalten von Entwürfen, Senden und Löschen fest. Das Agentenprofil kann davon abweichen. Lesen und Entwürfe unterstützen **Nicht erlaubt**, **Nachfragen** und **Automatisch**. Senden und Löschen erfordern immer eine einzelne Freigabe oder bleiben deaktiviert. Die Einstellung gilt für das gesamte Konto; IMAP-Ordner besitzen keine eigenen Richtlinien.
+Über **Zugriff** legen Sie für jedes Konto getrennte Vorgaben für private und öffentliche Modelle zum Lesen, Verwalten von Entwürfen, Senden und Löschen fest. Das Agentenprofil kann vom passenden Zweig abweichen. Lesen und Entwürfe unterstützen **Nicht erlaubt**, **Nachfragen** und **Automatisch**. Senden und Löschen erfordern immer eine einzelne Freigabe oder bleiben deaktiviert. Die Einstellung gilt für das gesamte Konto; IMAP-Ordner besitzen keine eigenen Richtlinien.
 
 Sobald mindestens ein aktives Mail-Konto verfügbar ist, erscheint **Mail** im Control-Center-Launcher. Dort können Sie Ordner und Nachrichten öffnen, Anhänge herunterladen, Textentwürfe mit Anhängen speichern und E-Mails senden. Nachrichten werden live vom Mailserver geladen und nicht in einer lokalen Mail-Datenbank synchronisiert. Externe Bilder und andere Inhalte aus HTML-Mails werden nicht nachgeladen. Ein unklarer Versandstatus wird nicht automatisch wiederholt; prüfen Sie in diesem Fall zuerst den Mailserver.
 
@@ -114,7 +116,7 @@ Manche Anbieter sperren automatisierte Zugriffe. Schlägt ein Download fehl, nen
 
 Beim Bearbeiten wird eine Seite immer vollständig ersetzt. Der Agent liest sie deshalb unmittelbar vorher. Fehlt der Änderungszeitpunkt oder hat sich die Seite seitdem geändert, lehnt MatoLoop das Überschreiben ab und der Agent muss sie zuerst neu lesen. BookStack unterstützt jedoch kein bedingtes Speichern: Eine Änderung, die genau zwischen dieser Prüfung und dem Speichern erfolgt, kann weiterhin überschrieben werden. Nach einem erfolgreichen Speichern liest der Agent die Seite bei Bedarf erneut; ein reines Umbenennen verlangt keine vorherige Versionsprüfung. Sehr große Seiten meldet MatoLoop als Fehler, statt sie gekürzt zu liefern: Eine gekürzte Fassung könnte sonst versehentlich als vollständige Seite zurückgeschrieben werden.
 
-Über **Zugriff** konfigurieren Sie zunächst die Vorgabe der BookStack-Installation und anschließend Vorgaben für einzelne Bücher. Das Agentenprofil kann diese Werte für private und öffentliche Modelle überschreiben:
+Über **Zugriff** konfigurieren Sie getrennt für private und öffentliche Modelle zunächst die Vorgabe der BookStack-Installation und anschließend Vorgaben für einzelne Bücher. Das Agentenprofil kann den jeweils passenden Zweig überschreiben:
 
 - **Nicht erlaubt** blockiert die Aktion.
 - **Nachfragen** zeigt vor der Aktion eine Freigabe.
@@ -136,4 +138,6 @@ CAD-Rendering ist in der Integration standardmäßig auf **Automatisch** gestell
 
 ## Webfetch konfigurieren
 
-Webfetch besitzt einen eigenen globalen Schalter, eine Freigaberichtlinie, eine Liste erlaubter privater Ursprünge, einen User-Agent und eine maximale Antwortgröße. Modellbezogene Einstellungen können die Richtlinie einschränken oder überschreiben; globale Netzwerkgrenzen bleiben wirksam.
+Administratoren schalten Webfetch und seine festen Ressourcen **Öffentliche Adressen** und **Private Adressen** unter **Einstellungen > Tools > Verfügbare Tools** ein oder aus. Dort konfigurieren sie außerdem den technischen User-Agent und die maximale Antwortgröße.
+
+Die Ausführungsrichtlinien für öffentliche und private Adressen erscheinen unter **Richtlinien** als normale Action-Zeilen und werden für private und öffentliche Modelle getrennt gespeichert. Modelle besitzen keinen eigenen Webfetch-Override. Technische Verfügbarkeit und hostseitige Netzwerkgrenzen können durch keine Richtlinie oder Freigabe überstimmt werden.

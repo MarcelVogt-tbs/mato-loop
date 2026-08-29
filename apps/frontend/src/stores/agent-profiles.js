@@ -8,6 +8,7 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
     agents: [],
     defaultAgentProfileId: null,
     groups: [],
+    groupsByTrust: { private: [], public: [] },
     integrations: [],
     integrationMetadata: {},
     integrationMetadataLoading: {},
@@ -51,7 +52,13 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
           : await api.get('/agent-profiles')
         this.agents = Array.isArray(data?.effectiveAgents) ? data.effectiveAgents : []
         this.defaultAgentProfileId = data?.defaultAgentProfileId || null
-        this.groups = Array.isArray(data?.groups) ? data.groups : []
+        this.groups = Array.isArray(data?.groups)
+          ? data.groups
+          : data?.privateGroups || []
+        this.groupsByTrust = {
+          private: data?.privateGroups || this.groups,
+          public: data?.publicGroups || this.groups
+        }
         this.integrations = Array.isArray(data?.integrations) ? data.integrations : []
         this.personalAgentsEnabled = data?.personalAgentsEnabled !== false
         this.loaded = true

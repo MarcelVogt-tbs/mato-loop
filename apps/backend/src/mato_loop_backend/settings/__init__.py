@@ -26,7 +26,6 @@ from mato_loop_backend.settings.models import (
     MediaToolSettings,
     MemorySettings,
     ModelCapability,
-    ModelWebFetchPolicy,
     PolicyToolSettings,
     ReasoningEffort,
     SettingsScope,
@@ -43,7 +42,6 @@ from mato_loop_backend.settings.models import (
     UserProfileFact,
     UserProfileSettings,
     UserToolSettings,
-    WebFetchPolicy,
     WebFetchSettings,
     WebSearchToolSettings,
     cap_agent_profile_policy,
@@ -52,7 +50,6 @@ from mato_loop_backend.settings.models import (
     effective_model_trust,
 )
 from mato_loop_backend.settings.store import SettingsStore
-from mato_loop_backend.settings.web_fetch import resolve_web_fetch_policy
 
 __all__ = [
     "AgentIdentitySettings",
@@ -74,7 +71,6 @@ __all__ = [
     "MediaToolSettings",
     "MemorySettings",
     "ModelCapability",
-    "ModelWebFetchPolicy",
     "PolicyToolSettings",
     "ReasoningEffort",
     "SettingsScope",
@@ -92,7 +88,6 @@ __all__ = [
     "UserToolSettings",
     "UserProfileFact",
     "UserProfileSettings",
-    "WebFetchPolicy",
     "WebFetchSettings",
     "WebSearchToolSettings",
     "effective_model_pseudonymization",
@@ -105,5 +100,4 @@ __all__ = [
     "load_effective_agent_profiles",
     "load_effective_integrations",
     "load_effective_tools",
-    "resolve_web_fetch_policy",
 ]

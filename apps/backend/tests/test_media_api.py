@@ -95,8 +95,12 @@ async def test_direct_transcription_returns_structured_timeout(monkeypatch) -> N
     assert exc_info.value.params == {"timeoutSeconds": 480, "retryable": True}
 
 
-async def test_direct_transcription_rejects_disabled_policy(monkeypatch) -> None:
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=ToolSettings()))
+async def test_direct_transcription_rejects_unavailable_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=ToolSettings(tool_availability={"transcribe_audio": False})),
+    )
     transcribe = AsyncMock()
     monkeypatch.setattr(MediaService, "transcribe_audio", transcribe)
 

@@ -462,7 +462,7 @@ async def test_revoked_personal_adapters_block_external_clients(monkeypatch) -> 
             openscad.id, user, db, scope="personal"
         ),
         get_integration_access(
-            search.id, db, scope="personal", user=user
+            search.id, db, "public", scope="personal", user=user
         ),
     )
 
@@ -523,11 +523,13 @@ async def test_integration_access_inherits_and_overrides_global_policy(
     integrations = IntegrationSettings(instances=[integration])
     tools = ToolSettings.model_validate(
         {
-            "policies": {"network.search": "ask"},
-            "resourcePolicies": {
-                str(integration.id): {
-                    "calendar:private": {"network.search": "auto"}
-                }
+            "publicPermissions": {
+                "policies": {"network.search": "ask"},
+                "resourcePolicies": {
+                    str(integration.id): {
+                        "calendar:private": {"network.search": "auto"}
+                    }
+                },
             },
         }
     )
@@ -537,7 +539,9 @@ async def test_integration_access_inherits_and_overrides_global_policy(
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
 
-    result = await get_integration_access(integration.id, AsyncMock(spec=AsyncSession))
+    result = await get_integration_access(
+        integration.id, AsyncMock(spec=AsyncSession), "public"
+    )
 
     resources = {item["key"]: item for item in result["resources"]}
     assert resources["calendar:private"]["policies"] == {"network.search": "auto"}
@@ -577,9 +581,11 @@ async def test_integration_access_reports_integration_policy_and_hard_limits(
     integrations = IntegrationSettings(instances=[integration])
     tools = ToolSettings.model_validate(
         {
-            "policies": {"network.search": "ask"},
-            "integrationPolicies": {
-                str(integration.id): {"network.search": "auto"}
+            "publicPermissions": {
+                "policies": {"network.search": "ask"},
+                "integrationPolicies": {
+                    str(integration.id): {"network.search": "auto"}
+                },
             },
         }
     )
@@ -589,7 +595,9 @@ async def test_integration_access_reports_integration_policy_and_hard_limits(
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
 
-    result = await get_integration_access(integration.id, AsyncMock(spec=AsyncSession))
+    result = await get_integration_access(
+        integration.id, AsyncMock(spec=AsyncSession), "public"
+    )
 
     action = result["actions"][0]
     assert action["allowedPolicies"] == ["disabled", "ask", "auto"]
@@ -645,7 +653,7 @@ async def test_resource_discovery_cannot_invent_adapter_capabilities(
 
     with pytest.raises(ApiError) as exc_info:
         await get_integration_access(
-            integration.id, AsyncMock(spec=AsyncSession)
+            integration.id, AsyncMock(spec=AsyncSession), "public"
         )
 
     assert exc_info.value.code == "integration.resourceDiscoveryFailed"
@@ -660,13 +668,15 @@ async def test_integration_access_replaces_only_its_resource_overrides(
     integrations = IntegrationSettings(instances=[integration])
     tools = ToolSettings.model_validate(
         {
-            "integrationPolicies": {
-                str(integration.id): {"network.search": "ask"}
-            },
-            "resourcePolicies": {
-                str(other_id): {
-                    "calendar:other": {"network.search": "disabled"}
-                }
+            "publicPermissions": {
+                "integrationPolicies": {
+                    str(integration.id): {"network.search": "ask"}
+                },
+                "resourcePolicies": {
+                    str(other_id): {
+                        "calendar:other": {"network.search": "disabled"}
+                    }
+                },
             },
         }
     )
@@ -686,17 +696,18 @@ async def test_integration_access_replaces_only_its_resource_overrides(
             {"resources": {"calendar:work": {"network.search": "auto"}}}
         ),
         db,
+        "public",
     )
 
-    assert tools.resource_policies[str(integration.id)] == {
+    assert tools.permissions.resource_policies[str(integration.id)] == {
         "calendar:work": {"network.search": ToolExecutionPolicy.AUTO}
     }
     assert tools.resource_labels[str(integration.id)] == {
         "calendar:private": "Privat",
         "calendar:work": "Arbeit",
     }
-    assert str(other_id) in tools.resource_policies
-    assert tools.integration_policies[str(integration.id)] == {
+    assert str(other_id) in tools.permissions.resource_policies
+    assert tools.permissions.integration_policies[str(integration.id)] == {
         "network.search": ToolExecutionPolicy.ASK
     }
     assert result["resources"][1]["effectivePolicies"] == {
@@ -765,11 +776,13 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
                 "integrationId": str(integration.id),
                 "taskListKey": task_list_key,
             },
-            "integrationPolicies": {
-                str(integration.id): {"calendar.read": "ask"}
-            },
-            "resourcePolicies": {
-                str(integration.id): {key: {"calendar.read": "auto"}}
+            "publicPermissions": {
+                "integrationPolicies": {
+                    str(integration.id): {"calendar.read": "ask"}
+                },
+                "resourcePolicies": {
+                    str(integration.id): {key: {"calendar.read": "auto"}}
+                },
             },
         }
     )
@@ -781,7 +794,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     db = AsyncMock(spec=AsyncSession)
 
-    access = await get_integration_access(integration.id, db)
+    access = await get_integration_access(integration.id, db, "public")
     access_resources = {resource["key"]: resource for resource in access["resources"]}
     assert access["defaultResourceKey"] == key
     assert access["defaultTaskListKey"] == task_list_key
@@ -792,15 +805,16 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
         integration.id,
         IntegrationAccessRequest(),
         db,
+        "public",
     )
     assert tools.default_calendar.calendar_key == key
     assert tools.default_task_list.task_list_key == task_list_key
     assert preserved["defaultResourceKey"] == key
     assert preserved["defaultTaskListKey"] == task_list_key
-    assert tools.integration_policies[str(integration.id)] == {
+    assert tools.permissions.integration_policies[str(integration.id)] == {
         "calendar.read": ToolExecutionPolicy.ASK
     }
-    assert str(integration.id) not in tools.resource_policies
+    assert str(integration.id) not in tools.permissions.resource_policies
 
     tools.default_task_list = DefaultTaskListSettings(
         integration_id=other_id,
@@ -812,6 +826,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
             {"defaultTaskListKey": None}
         ),
         db,
+        "public",
     )
     assert tools.default_task_list.integration_id == other_id
     assert unchanged["defaultTaskListKey"] is None
@@ -822,6 +837,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
             {"defaultTaskListKey": task_list_key}
         ),
         db,
+        "public",
     )
     assert tools.default_task_list.integration_id == integration.id
     assert tools.default_task_list.task_list_key == task_list_key
@@ -855,6 +871,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
             {"defaultTaskListKey": other_task_list_key}
         ),
         db,
+        "public",
     )
     assert tools.default_task_list.task_list_key == other_task_list_key
     assert replaced["defaultResourceKey"] == key
@@ -866,6 +883,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
             {"defaultTaskListKey": None}
         ),
         db,
+        "public",
     )
     assert tools.default_task_list is None
     assert tools.default_calendar.calendar_key == key
@@ -879,6 +897,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
                 {"defaultResourceKey": task_list_key}
             ),
             db,
+            "public",
         )
     assert task_default.value.code == "validation.invalidChoice"
     assert task_default.value.field == "default_resource_key"
@@ -891,6 +910,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
                     {"defaultTaskListKey": invalid_key}
                 ),
                 db,
+                "public",
             )
         assert exc_info.value.code == "validation.invalidChoice"
         assert exc_info.value.field == "default_task_list_key"
@@ -902,6 +922,7 @@ async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
                 {"defaultResourceKey": f"calendar:{'c' * 32}"}
             ),
             db,
+            "public",
         )
     assert stale_calendar.value.code == "validation.invalidChoice"
     assert stale_calendar.value.field == "default_resource_key"
@@ -922,6 +943,7 @@ async def test_non_caldav_access_rejects_a_task_default(monkeypatch) -> None:
                 }
             ),
             AsyncMock(spec=AsyncSession),
+            "public",
         )
 
     assert exc_info.value.code == "validation.invalidChoice"
@@ -948,6 +970,7 @@ async def test_integration_access_rejects_unknown_resources(
             integration.id,
             IntegrationAccessRequest.model_validate({"resources": resources}),
             AsyncMock(spec=AsyncSession),
+            "public",
         )
 
     assert exc_info.value.code == "validation.invalidChoice"
@@ -1300,10 +1323,12 @@ async def test_deleting_selected_fallback_removes_it_from_tool_settings(monkeypa
                 "primaryProvider": "no_key",
                 "fallbackProvider": f"searxng:{integration.id}",
             },
-            "resourcePolicies": {
-                str(integration.id): {
-                    "calendar:work": {"network.search": "ask"}
-                }
+            "publicPermissions": {
+                "resourcePolicies": {
+                    str(integration.id): {
+                        "calendar:work": {"network.search": "ask"}
+                    }
+                },
             },
         }
     )
@@ -1320,7 +1345,7 @@ async def test_deleting_selected_fallback_removes_it_from_tool_settings(monkeypa
 
     assert tools.web_search.primary_provider == "no_key"
     assert tools.web_search.fallback_provider is None
-    assert str(integration.id) not in tools.resource_policies
+    assert str(integration.id) not in tools.permissions.resource_policies
     assert any(call.args[1] is tools for call in save.await_args_list)
 
 
@@ -1329,10 +1354,12 @@ async def test_changing_connection_clears_its_resource_policies(monkeypatch) -> 
     settings = IntegrationSettings(instances=[integration])
     tools = ToolSettings.model_validate(
         {
-            "resourcePolicies": {
-                str(integration.id): {
-                    "calendar:work": {"network.search": "auto"}
-                }
+            "publicPermissions": {
+                "resourcePolicies": {
+                    str(integration.id): {
+                        "calendar:work": {"network.search": "auto"}
+                    }
+                },
             }
         }
     )
@@ -1353,7 +1380,7 @@ async def test_changing_connection_clears_its_resource_policies(monkeypatch) -> 
         AsyncMock(spec=AsyncSession),
     )
 
-    assert str(integration.id) not in tools.resource_policies
+    assert str(integration.id) not in tools.permissions.resource_policies
 
 
 async def test_search_uses_fallback_only_for_temporary_errors(monkeypatch) -> None:
@@ -1468,11 +1495,11 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
         db,
     )
     second = settings.instances[1]
-    tools.integration_policies = {
+    tools.permissions.integration_policies = {
         str(first.id): {"calendar.read": ToolExecutionPolicy.AUTO},
         str(second.id): {"calendar.read": ToolExecutionPolicy.ASK},
     }
-    tools.resource_policies = {
+    tools.permissions.resource_policies = {
         str(first.id): {
             f"calendar:{'a' * 32}": {"calendar.write": ToolExecutionPolicy.ASK}
         },
@@ -1511,12 +1538,12 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     )
 
     assert first.credential_id == credential_ids[2]
-    assert str(first.id) in tools.integration_policies
-    assert str(first.id) in tools.resource_policies
+    assert str(first.id) in tools.permissions.integration_policies
+    assert str(first.id) in tools.permissions.resource_policies
     assert tools.default_calendar.integration_id == first.id
     assert tools.default_task_list.integration_id == first.id
-    assert str(second.id) in tools.integration_policies
-    assert str(second.id) in tools.resource_policies
+    assert str(second.id) in tools.permissions.integration_policies
+    assert str(second.id) in tools.permissions.resource_policies
     assert store_credential.await_args_list[-1].args == (db,)
     assert store_credential.await_args_list[-1].kwargs == {
         "owner_id": None,
@@ -1535,11 +1562,11 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
         db,
     )
 
-    assert str(first.id) not in tools.integration_policies
-    assert str(first.id) not in tools.resource_policies
+    assert str(first.id) not in tools.permissions.integration_policies
+    assert str(first.id) not in tools.permissions.resource_policies
     assert str(first.id) not in tools.resource_labels
-    assert str(second.id) in tools.integration_policies
-    assert str(second.id) in tools.resource_policies
+    assert str(second.id) in tools.permissions.integration_policies
+    assert str(second.id) in tools.permissions.resource_policies
     assert str(second.id) in tools.resource_labels
     assert tools.default_calendar is None
     assert tools.default_task_list is None

@@ -62,6 +62,7 @@ from mato_loop_backend.providers import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
+    AgentProfileUnavailable,
     AiSettings,
     IntegrationInstance,
     IntegrationSettings,
@@ -72,7 +73,6 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
     UserProfileSettings,
-    WebFetchPolicy,
 )
 from mato_loop_backend.skills import SkillDraft
 from mato_loop_backend.workspace import FileRoot, RootFileService
@@ -183,14 +183,21 @@ def _context(
     call: ToolCall,
     *,
     decision=PermissionDecision.ALLOW,
-    web_fetch_policy=WebFetchPolicy.DISABLED,
-    allowed_private_origins=(),
+    web_fetch_policy=ToolExecutionPolicy.DISABLED,
+    allow_private_targets=False,
+    private_fetch_policy=ToolExecutionPolicy.ASK,
 ) -> ToolContext:
     session = _session()
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session.id)
     tool_settings = ToolSettings()
-    tool_settings.web_fetch.allowed_private_origins = list(allowed_private_origins)
+    tool_settings.public_permissions.policies["network.fetch.public"] = web_fetch_policy
+    tool_settings.public_permissions.policies["network.fetch.private"] = (
+        private_fetch_policy
+    )
+    tool_settings.resource_availability["webfetch"]["network.fetch.private"] = bool(
+        allow_private_targets
+    )
     context = ToolContext(
         db=AsyncMock(spec=AsyncSession),
         run_id=uuid4(),
@@ -203,14 +210,42 @@ def _context(
         integration_settings=IntegrationSettings(),
         ask_handler=AsyncMock(return_value=decision),
         tool_settings=tool_settings,
-        web_fetch_policy=web_fetch_policy,
-        allowed_private_origins=allowed_private_origins,
     )
-    if web_fetch_policy != WebFetchPolicy.DISABLED:
-        context.db.scalar.return_value = Mock(
-            data=tool_settings.model_dump(mode="json")
-        )
+    context.db.scalar.return_value = Mock(data=tool_settings.model_dump(mode="json"))
     return context
+
+
+def _tool_settings(data: dict) -> ToolSettings:
+    values = dict(data)
+    permissions = {
+        key: values.pop(key)
+        for key in ("policies", "integrationPolicies", "resourcePolicies")
+        if key in values
+    }
+    if permissions:
+        values["publicPermissions"] = permissions
+    return ToolSettings.model_validate(values)
+
+
+async def test_missing_profile_reload_keeps_private_trust(monkeypatch, tmp_path) -> None:
+    call = ToolCall("fetch", "webfetch", {"url": "https://example.com"})
+    context = _context(tmp_path, call)
+    context.model_trust_level = TrustLevel.PRIVATE
+    fallback = ToolSettings()
+    monkeypatch.setattr(
+        tools_module,
+        "load_agent_profile_tools",
+        AsyncMock(side_effect=AgentProfileUnavailable),
+    )
+    load_fallback = AsyncMock(return_value=fallback)
+    monkeypatch.setattr(tools_module, "load_effective_tools", load_fallback)
+
+    result = await tools_module._profile_tool_settings(context)
+
+    load_fallback.assert_awaited_once_with(
+        context.db, context.session.user_id, TrustLevel.PRIVATE
+    )
+    assert result._agent_profile_unavailable is True
 
 
 def _shared_integration(name: str) -> IntegrationInstance:
@@ -795,7 +830,7 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
     )
     integration_settings = IntegrationSettings(instances=[integration])
     effective = ToolRegistry([]).effective(integration_settings)
-    settings = ToolSettings.model_validate(
+    settings = _tool_settings(
         {
             "resourcePolicies": {
                 str(integration.id): {
@@ -1212,7 +1247,7 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
 def test_policy_disabled_integration_tool_points_to_integration_settings(monkeypatch) -> None:
     _shared_adapter(monkeypatch, AsyncMock())
     integrations = IntegrationSettings(instances=[_shared_integration("Tasks")])
-    settings = ToolSettings.model_validate(
+    settings = _tool_settings(
         {"policies": {"tasks.read": "disabled"}}
     )
     effective = tool_registry.effective(
@@ -1244,7 +1279,7 @@ def test_policy_disabled_integration_tool_points_to_integration_settings(monkeyp
 
 
 def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:
-    settings = ToolSettings.model_validate(
+    settings = _tool_settings(
         {"policies": {"filesystem.delete": "disabled"}}
     )
 
@@ -1339,7 +1374,7 @@ async def test_web_search_rejects_changed_bound_provider_configuration(
         config={"base_url": "https://search.example.com"},
     )
     integrations = IntegrationSettings(instances=[integration])
-    tool_settings = ToolSettings.model_validate(
+    tool_settings = _tool_settings(
         {"webSearch": {"primaryProvider": f"searxng:{integration.id}"}}
     )
     effective = tool_registry.effective(
@@ -1407,7 +1442,7 @@ async def test_missing_workspace_returns_structured_error_without_approval(tmp_p
 
 
 async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> None:
-    tool_settings = ToolSettings.model_validate(
+    tool_settings = _tool_settings(
         {"updateAgentIdentity": {"policy": "ask"}}
     )
     identity = AgentIdentitySettings()
@@ -1448,8 +1483,8 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
 
 
 async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) -> None:
-    tool_settings = ToolSettings.model_validate(
-        {"updateAgentIdentity": {"policy": "auto"}}
+    tool_settings = _tool_settings(
+        {"policies": {"settings.agent_identity.update": "auto"}}
     )
 
     async def load_settings(_db, settings_type, **_kwargs):
@@ -1477,7 +1512,7 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
 async def test_update_user_profile_uses_ask_policy_and_preserves_other_scope(
     monkeypatch, tmp_path
 ) -> None:
-    tool_settings = ToolSettings.model_validate(
+    tool_settings = _tool_settings(
         {"policies": {"settings.user_profile.update": "ask"}}
     )
     profile = UserProfileSettings(
@@ -1524,7 +1559,7 @@ async def test_update_user_profile_uses_ask_policy_and_preserves_other_scope(
 async def test_update_user_profile_both_models_auto_skips_approval(
     monkeypatch, tmp_path
 ) -> None:
-    tool_settings = ToolSettings.model_validate(
+    tool_settings = _tool_settings(
         {"policies": {"settings.user_profile.update": "auto"}}
     )
 
@@ -1836,8 +1871,8 @@ async def test_load_skill_auto_to_ask_policy_transition_blocks(
         "load",
         AsyncMock(
             side_effect=[
-                ToolSettings.model_validate({"policies": {"skills.load": "auto"}}),
-                ToolSettings.model_validate({"policies": {"skills.load": "ask"}}),
+                _tool_settings({"policies": {"skills.load": "auto"}}),
+                _tool_settings({"policies": {"skills.load": "ask"}}),
             ]
         ),
     )
@@ -1864,7 +1899,7 @@ async def test_load_skill_ask_policy_uses_the_user_skill_collection(
         description="Use when an API must be queried.",
         instructions="Call the available API tool.",
     )
-    settings = ToolSettings.model_validate(
+    settings = _tool_settings(
         {"policies": {"skills.load": "ask"}}
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
@@ -1888,8 +1923,8 @@ async def test_load_skill_ask_policy_uses_the_user_skill_collection(
 async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
     monkeypatch, tmp_path
 ) -> None:
-    tool_settings = ToolSettings.model_validate(
-        {"updateAgentIdentity": {"policy": "disabled"}}
+    tool_settings = _tool_settings(
+        {"policies": {"settings.agent_identity.update": "disabled"}}
     )
     capabilities = set()
     assert "update_agent_identity" not in {
@@ -1917,7 +1952,7 @@ async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
 async def test_disabled_user_profile_tool_is_not_offered_or_executed(
     monkeypatch, tmp_path
 ) -> None:
-    tool_settings = ToolSettings.model_validate(
+    tool_settings = _tool_settings(
         {"policies": {"settings.user_profile.update": "disabled"}}
     )
     effective = tool_registry.effective(
@@ -3343,10 +3378,10 @@ def test_tool_schemas_remove_annotative_titles_recursively() -> None:
 @pytest.mark.parametrize(
     ("policy", "allowed_origins", "expected_asks"),
     [
-        (WebFetchPolicy.ASK, (), 1),
-        (WebFetchPolicy.AUTO_PUBLIC, (), 0),
-        (WebFetchPolicy.AUTO_PUBLIC, ("https://example.com",), 1),
-        (WebFetchPolicy.AUTO_ALLOWED, ("https://example.com",), 0),
+        (ToolExecutionPolicy.ASK, (), 1),
+        (ToolExecutionPolicy.AUTO, (), 0),
+        (ToolExecutionPolicy.AUTO, ("https://example.com",), 1),
+        (ToolExecutionPolicy.AUTO, ("https://example.com",), 0),
     ],
 )
 async def test_webfetch_applies_the_effective_policy(
@@ -3356,7 +3391,9 @@ async def test_webfetch_applies_the_effective_policy(
 
     async def fake_fetch(url, **kwargs):
         fetch_kwargs.update(kwargs)
-        await kwargs["authorize_url"]("https://example.com/page?token=secret")
+        await kwargs["authorize_url"](
+            "https://example.com/page?token=secret", bool(allowed_origins)
+        )
         return WebFetchResult(
             final_url=url,
             content_type="text/plain",
@@ -3376,7 +3413,12 @@ async def test_webfetch_applies_the_effective_policy(
         tmp_path,
         call,
         web_fetch_policy=policy,
-        allowed_private_origins=allowed_origins,
+        allow_private_targets=bool(allowed_origins),
+        private_fetch_policy=(
+            ToolExecutionPolicy.AUTO
+            if allowed_origins and expected_asks == 0
+            else ToolExecutionPolicy.ASK
+        ),
     )
     context.tool_settings.web_fetch.user_agent = "ConfiguredBrowser/1.0"
     context.db.scalar.return_value.data = context.tool_settings.model_dump(mode="json")
@@ -3415,14 +3457,14 @@ async def test_webfetch_applies_the_effective_policy(
     assert fetch_kwargs["user_agent"] == "ConfiguredBrowser/1.0"
     if expected_asks:
         request = context.ask_handler.await_args.args[0]
-        assert request.capability == "network.fetch"
+        assert request.capability in {"network.fetch.public", "network.fetch.private"}
         assert request.resource_type == "url"
         assert "secret" not in request.summary
 
 
 @pytest.mark.parametrize(
     ("policy", "expected_asks"),
-    [(WebFetchPolicy.ASK, 1), (WebFetchPolicy.AUTO_PUBLIC, 0)],
+    [(ToolExecutionPolicy.ASK, 1), (ToolExecutionPolicy.AUTO, 0)],
 )
 async def test_fetch_transcript_uses_one_video_approval_and_returns_evidence(
     tmp_path, monkeypatch, policy, expected_asks
@@ -3481,12 +3523,89 @@ async def test_fetch_transcript_uses_one_video_approval_and_returns_evidence(
     assert calls[0][0] == "https://youtu.be/dQw4w9WgXcQ"
 
 
+async def test_fetch_transcript_rechecks_public_availability_before_each_request(
+    tmp_path, monkeypatch
+) -> None:
+    continued = False
+
+    async def fake_fetch(url, **kwargs):
+        nonlocal continued
+        await kwargs["before_request"](url)
+        continued = True
+        raise AssertionError("Disabled transcript fetch must not continue")
+
+    enabled = ToolSettings()
+    disabled = ToolSettings(
+        resource_availability={
+            "webfetch": {
+                "network.fetch.public": False,
+                "network.fetch.private": False,
+            }
+        }
+    )
+    monkeypatch.setattr(tools_module, "fetch_youtube_transcript", fake_fetch)
+    monkeypatch.setattr(
+        tools_module,
+        "_profile_tool_settings",
+        AsyncMock(side_effect=[enabled, disabled]),
+    )
+    call = ToolCall(
+        id="transcript",
+        name="fetch_transcript",
+        arguments={"url": "https://youtu.be/dQw4w9WgXcQ"},
+    )
+
+    result = await tool_registry.execute(call, _context(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+    assert continued is False
+
+
+async def test_fetch_transcript_requests_approval_when_policy_becomes_ask(
+    tmp_path, monkeypatch
+) -> None:
+    async def fake_fetch(url, **kwargs):
+        await kwargs["before_request"](url)
+        return TranscriptResult(
+            source_url=url,
+            title=None,
+            language="de",
+            language_fallback=False,
+            track_type="manual",
+            content="Hallo",
+        )
+
+    automatic = ToolSettings(
+        public_permissions={"policies": {"network.fetch.public": "auto"}}
+    )
+    ask = ToolSettings(
+        public_permissions={"policies": {"network.fetch.public": "ask"}}
+    )
+    monkeypatch.setattr(tools_module, "fetch_youtube_transcript", fake_fetch)
+    monkeypatch.setattr(
+        tools_module,
+        "_profile_tool_settings",
+        AsyncMock(side_effect=[automatic, ask, ask]),
+    )
+    call = ToolCall(
+        id="transcript",
+        name="fetch_transcript",
+        arguments={"url": "https://youtu.be/dQw4w9WgXcQ"},
+    )
+    context = _context(tmp_path, call)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.is_error is False
+    context.ask_handler.assert_awaited_once()
+
+
 async def test_webfetch_denial_stops_before_the_fetch_continues(tmp_path, monkeypatch) -> None:
     continued = False
 
     async def fake_fetch(url, **kwargs):
         nonlocal continued
-        await kwargs["authorize_url"](url)
+        await kwargs["authorize_url"](url, False)
         continued = True
         raise AssertionError("The request must not continue after denial")
 
@@ -3496,7 +3615,7 @@ async def test_webfetch_denial_stops_before_the_fetch_continues(tmp_path, monkey
         tmp_path,
         call,
         decision=PermissionDecision.DENY,
-        web_fetch_policy=WebFetchPolicy.ASK,
+        web_fetch_policy=ToolExecutionPolicy.ASK,
     )
 
     result = await tool_registry.execute(call, context)
@@ -3512,7 +3631,7 @@ async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) ->
         webfetch_enabled=True,
         tool_settings=settings,
     )
-    disabled = ToolSettings.model_validate({"webFetch": {"enabled": False}})
+    disabled = ToolSettings(tool_availability={"webfetch": False})
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=disabled))
     monkeypatch.setattr(
         SettingsStore, "load_optional", AsyncMock(return_value=None)
@@ -3525,7 +3644,7 @@ async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) ->
     context = _context(
         tmp_path,
         call,
-        web_fetch_policy=WebFetchPolicy.AUTO_PUBLIC,
+        web_fetch_policy=ToolExecutionPolicy.AUTO,
     )
 
     result = await effective.execute(call, context)
@@ -3560,7 +3679,7 @@ async def test_webfetch_source_ids_distinguish_redacted_query_values(
                 _context(
                     tmp_path,
                     call,
-                    web_fetch_policy=WebFetchPolicy.AUTO_PUBLIC,
+                    web_fetch_policy=ToolExecutionPolicy.AUTO,
                 ),
             )
         )
@@ -3578,7 +3697,7 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
     image = b"\x89PNG\r\n\x1a\ncontent"
 
     async def fake_fetch(url, **kwargs):
-        await kwargs["authorize_url"](url)
+        await kwargs["authorize_url"](url, False)
         return WebFetchResult(
             final_url=url,
             content_type="image/png",
@@ -3593,7 +3712,7 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
     context = _context(
         tmp_path,
         call,
-        web_fetch_policy=WebFetchPolicy.AUTO_PUBLIC,
+        web_fetch_policy=ToolExecutionPolicy.AUTO,
     )
 
     result = await tool_registry.execute(call, context)
@@ -3651,7 +3770,7 @@ async def test_webfetch_returns_pdf_text_and_selected_page_images(
 
     result = await tool_registry.execute(
         call,
-        _context(tmp_path, call, web_fetch_policy=WebFetchPolicy.AUTO_PUBLIC),
+        _context(tmp_path, call, web_fetch_policy=ToolExecutionPolicy.AUTO),
     )
 
     payload = json.loads(result.content)
@@ -3685,7 +3804,7 @@ async def test_webfetch_returns_stable_integration_errors(tmp_path, monkeypatch)
     context = _context(
         tmp_path,
         call,
-        web_fetch_policy=WebFetchPolicy.AUTO_PUBLIC,
+        web_fetch_policy=ToolExecutionPolicy.AUTO,
     )
 
     result = await tool_registry.execute(call, context)

@@ -24,7 +24,9 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    TrustLevel,
     UserToolSettings,
+    WebFetchSettings,
 )
 
 
@@ -38,7 +40,7 @@ async def test_nonadmin_cannot_read_instance_tool_settings(monkeypatch) -> None:
 
     with pytest.raises(ApiError, match="auth.adminRequired"):
         await get_tool_settings(
-            _db(), scope="instance", user=SimpleNamespace(id=uuid4(), is_admin=False)
+            _db(), TrustLevel.PUBLIC, scope="instance", user=SimpleNamespace(id=uuid4(), is_admin=False)
         )
 
     load.assert_awaited_once()
@@ -66,9 +68,11 @@ def test_root_specific_write_policies_keep_shared_tools_available(
     available: bool,
 ) -> None:
     settings = ToolSettings(
-        policies={
-            "session.files.write": session_policy,
-            "filesystem.write": workspace_policy,
+        public_permissions={
+            "policies": {
+                "session.files.write": session_policy,
+                "filesystem.write": workspace_policy,
+            }
         }
     )
 
@@ -88,7 +92,7 @@ def test_root_specific_write_policies_keep_shared_tools_available(
         (ToolExecutionPolicy.ASK, ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO),
         (ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK),
         (ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.DISABLED),
-        (ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO, ToolExecutionPolicy.DISABLED),
+        (ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO),
     ],
 )
 def test_agent_profile_policy_controls_available_global_capability(
@@ -96,7 +100,7 @@ def test_agent_profile_policy_controls_available_global_capability(
     profile: ToolExecutionPolicy,
     expected: ToolExecutionPolicy,
 ) -> None:
-    settings = ToolSettings(policies={"filesystem.read": baseline})
+    settings = ToolSettings(public_permissions={"policies": {"filesystem.read": baseline}})
     settings._agent_permissions = AgentProfilePermissions(
         policies={"filesystem.read": profile}
     )
@@ -109,7 +113,9 @@ def test_agent_profile_policy_controls_available_global_capability(
 
 
 def test_agent_profile_missing_capability_inherits_live_default() -> None:
-    settings = ToolSettings(policies={"filesystem.read": ToolExecutionPolicy.AUTO})
+    settings = ToolSettings(
+        public_permissions={"policies": {"filesystem.read": ToolExecutionPolicy.AUTO}}
+    )
     settings._agent_permissions = AgentProfilePermissions()
 
     assert (
@@ -121,9 +127,11 @@ def test_agent_profile_missing_capability_inherits_live_default() -> None:
 def test_agent_profile_overrides_scoped_defaults_but_not_hard_limits() -> None:
     integration_id = uuid4()
     settings = ToolSettings(
-        policies={"calendar.write": ToolExecutionPolicy.ASK},
-        integration_policies={
-            str(integration_id): {"calendar.write": ToolExecutionPolicy.DISABLED}
+        public_permissions={
+            "policies": {"calendar.write": ToolExecutionPolicy.ASK},
+            "integrationPolicies": {
+                str(integration_id): {"calendar.write": ToolExecutionPolicy.DISABLED}
+            },
         },
     )
     settings._agent_permissions = AgentProfilePermissions(
@@ -139,12 +147,12 @@ def test_agent_profile_overrides_scoped_defaults_but_not_hard_limits() -> None:
         == ToolExecutionPolicy.AUTO
     )
 
-    settings.policies["calendar.write"] = ToolExecutionPolicy.DISABLED
+    settings.permissions.policies["calendar.write"] = ToolExecutionPolicy.DISABLED
     assert (
         resolve_tool_execution_policy(
             settings, "calendar.write", integration_id=integration_id
         ).policy
-        == ToolExecutionPolicy.DISABLED
+        == ToolExecutionPolicy.AUTO
     )
 
 
@@ -152,11 +160,13 @@ def test_agent_profile_inherits_live_resource_default() -> None:
     integration_id = uuid4()
     resource_key = "calendar:work"
     settings = ToolSettings(
-        policies={"calendar.read": ToolExecutionPolicy.ASK},
-        resource_policies={
-            str(integration_id): {
-                resource_key: {"calendar.read": ToolExecutionPolicy.DISABLED}
-            }
+        public_permissions={
+            "policies": {"calendar.read": ToolExecutionPolicy.ASK},
+            "resourcePolicies": {
+                str(integration_id): {
+                    resource_key: {"calendar.read": ToolExecutionPolicy.DISABLED}
+                }
+            },
         },
     )
     settings._agent_permissions = AgentProfilePermissions()
@@ -171,7 +181,7 @@ def test_agent_profile_inherits_live_resource_default() -> None:
         == ToolExecutionPolicy.DISABLED
     )
 
-    settings.resource_policies[str(integration_id)][resource_key][
+    settings.permissions.resource_policies[str(integration_id)][resource_key][
         "calendar.read"
     ] = ToolExecutionPolicy.AUTO
     assert (
@@ -186,7 +196,9 @@ def test_agent_profile_inherits_live_resource_default() -> None:
 
 
 def test_unavailable_agent_profile_fails_closed() -> None:
-    settings = ToolSettings(policies={"filesystem.read": ToolExecutionPolicy.AUTO})
+    settings = ToolSettings(
+        public_permissions={"policies": {"filesystem.read": ToolExecutionPolicy.AUTO}}
+    )
     settings._agent_profile_unavailable = True
 
     assert (
@@ -197,7 +209,9 @@ def test_unavailable_agent_profile_fails_closed() -> None:
 
 def test_agent_profile_scoped_capability_is_offered_and_resolved_for_its_target() -> None:
     integration_id = uuid4()
-    settings = ToolSettings(policies={"mail.read": ToolExecutionPolicy.AUTO})
+    settings = ToolSettings(
+        public_permissions={"policies": {"mail.read": ToolExecutionPolicy.AUTO}}
+    )
     settings._agent_permissions = AgentProfilePermissions(
         policies={"mail.read": ToolExecutionPolicy.DISABLED},
         integration_policies={str(integration_id): {"mail.read": ToolExecutionPolicy.ASK}},
@@ -227,13 +241,17 @@ def test_agent_profile_scoped_capability_is_offered_and_resolved_for_its_target(
     )
 
 
-def test_agent_profile_leaves_non_configurable_capability_at_baseline() -> None:
-    settings = ToolSettings(policies={"network.fetch": ToolExecutionPolicy.ASK})
-    settings._agent_permissions = AgentProfilePermissions()
+def test_agent_profile_can_override_webfetch_capability() -> None:
+    settings = ToolSettings(
+        public_permissions={"policies": {"network.fetch.public": "disabled"}}
+    )
+    settings._agent_permissions = AgentProfilePermissions(
+        policies={"network.fetch.public": "auto"}
+    )
 
     assert (
-        resolve_tool_execution_policy(settings, "network.fetch").policy
-        == ToolExecutionPolicy.ASK
+        resolve_tool_execution_policy(settings, "network.fetch.public").policy
+        == ToolExecutionPolicy.AUTO
     )
 
 
@@ -241,7 +259,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
     settings = ToolSettings()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
 
-    result = await get_tool_settings(_db())
+    result = await get_tool_settings(_db(), TrustLevel.PUBLIC)
 
     assert result["personalSettingsEnabled"] is True
 
@@ -259,14 +277,11 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         )
     } == {
         "webFetch": {
-            "enabled": True,
             "userAgent": (
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
             ),
             "maxResponseMiB": 64,
-            "defaultPolicy": "auto_public",
-            "allowedPrivateOrigins": [],
         },
         "generateImage": {"policy": "disabled", "timeoutSeconds": 300},
         "editImage": {"policy": "ask", "timeoutSeconds": 300},
@@ -282,6 +297,8 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "filesystem.write": "ask",
         "filesystem.delete": "ask",
         "network.search": "auto",
+        "network.fetch.public": "auto",
+        "network.fetch.private": "ask",
         "media.generate.image": "disabled",
         "media.edit.image": "ask",
         "media.generate.speech": "disabled",
@@ -327,6 +344,19 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         for group in result["groups"]
         for tool in group["tools"]
     } == {"builtin"}
+    webfetch = next(
+        tool
+        for group in result["groups"]
+        for tool in group["tools"]
+        if tool["name"] == "webfetch"
+    )
+    assert {
+        action["capability"]: action["available"]
+        for action in webfetch["actions"]
+    } == {
+        "network.fetch.public": True,
+        "network.fetch.private": False,
+    }
     session_tools = next(group for group in result["groups"] if group["id"] == "sessions")
     discovery = {
         tool["name"]: tool["actions"][0]["capability"]
@@ -339,7 +369,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
     }
 
 
-async def test_tool_availability_exposes_only_transcription_policy(monkeypatch) -> None:
+async def test_tool_availability_exposes_hard_caps(monkeypatch) -> None:
     settings = ToolSettings(transcribe_audio={"policy": "ask"})
     monkeypatch.setattr(
         "mato_loop_backend.api.routes.tool_settings.load_effective_tools",
@@ -351,30 +381,34 @@ async def test_tool_availability_exposes_only_transcription_policy(monkeypatch) 
     )
 
     assert result == {
-        "webFetch": {"enabled": True, "defaultPolicy": "auto_public"},
-        "transcribeAudio": {"policy": "ask"},
+        "tools": {},
+        "resources": {
+            "webfetch": {
+                "network.fetch.public": True,
+                "network.fetch.private": False,
+            }
+        },
     }
 
 
-async def test_personal_tool_settings_gate_and_redact_private_origins(monkeypatch) -> None:
+async def test_personal_tool_settings_gate(monkeypatch) -> None:
     user = SimpleNamespace(id=uuid4(), is_admin=False)
-    instance = ToolSettings(
-        personal_settings_enabled=False,
-        web_fetch={"allowed_private_origins": ["https://private.example"]},
-    )
+    instance = ToolSettings(personal_settings_enabled=False)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
 
     assert await get_personal_tool_settings(user, _db()) == {"enabled": False}
     with pytest.raises(ApiError, match="tool.personalSettingsDisabled"):
-        await get_tool_settings(_db(), scope="personal", user=user)
+        await get_tool_settings(_db(), TrustLevel.PUBLIC, scope="personal", user=user)
 
     instance.personal_settings_enabled = True
     monkeypatch.setattr(
         "mato_loop_backend.api.routes.tool_settings.load_effective_tools",
         AsyncMock(return_value=instance),
     )
-    result = await get_tool_settings(_db(), scope="personal", user=user)
-    assert result["webFetch"]["allowedPrivateOrigins"] == []
+    result = await get_tool_settings(
+        _db(), TrustLevel.PUBLIC, scope="personal", user=user
+    )
+    assert result["webFetch"]["maxResponseMiB"] == 64
 
 
 async def test_personal_tool_settings_can_be_enabled_and_reset(monkeypatch) -> None:
@@ -382,8 +416,12 @@ async def test_personal_tool_settings_can_be_enabled_and_reset(monkeypatch) -> N
     integration_id = uuid4()
     instance = ToolSettings(personal_settings_enabled=False)
     personal = UserToolSettings(
-        policies={"filesystem.delete": "auto"},
-        integration_policies={str(integration_id): {"mail.read": "disabled"}},
+        public_permissions={
+            "policies": {"filesystem.delete": "auto"},
+            "integrationPolicies": {
+                str(integration_id): {"mail.read": "disabled"}
+            },
+        },
     )
     load = AsyncMock(return_value=instance)
     save = AsyncMock()
@@ -403,14 +441,14 @@ async def test_personal_tool_settings_can_be_enabled_and_reset(monkeypatch) -> N
 
     assert result["personalSettingsEnabled"] is True
     assert personal.personal_tool_defaults_enabled is False
-    assert personal.integration_policies[str(integration_id)] == {
+    assert personal.public_permissions.integration_policies[str(integration_id)] == {
         "mail.read": "disabled"
     }
     save.assert_any_await(db, personal, user_id=user.id)
     assert db.commit.await_count == 2
 
 
-async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch) -> None:
+async def test_put_tool_settings_saves_only_selected_branch(monkeypatch) -> None:
     save = AsyncMock()
     existing = ToolSettings()
     load = AsyncMock(return_value=existing)
@@ -424,17 +462,6 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
                 "read": [["cat"]],
                 "write": [["git", "status"]],
             },
-            "webFetch": {
-                "enabled": True,
-                "userAgent": "ConfiguredBrowser/1.0",
-                "maxResponseMiB": 96,
-                "defaultPolicy": "auto_allowed",
-                "allowedPrivateOrigins": [
-                    "HTTPS://Example.COM:443/",
-                    "http://127.0.0.1:8080",
-                    "https://example.com",
-                ],
-            },
             "generateImage": {"policy": "ask", "timeoutSeconds": 600},
             "editImage": {"policy": "ask", "timeoutSeconds": 450},
             "generateSpeech": {"policy": "auto", "timeoutSeconds": 120},
@@ -444,18 +471,9 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
         }
     )
 
-    result = await update_tool_settings(payload, db)
+    result = await update_tool_settings(payload, db, TrustLevel.PUBLIC)
 
-    assert result["webFetch"] == {
-        "enabled": True,
-        "userAgent": "ConfiguredBrowser/1.0",
-        "maxResponseMiB": 96,
-        "defaultPolicy": "auto_allowed",
-        "allowedPrivateOrigins": [
-            "https://example.com",
-            "http://127.0.0.1:8080",
-        ],
-    }
+    assert result["webFetch"]["maxResponseMiB"] == 64
     saved = save.await_args.args[1]
     assert load.await_args_list[0].args[1] is ToolSettings
     assert load.await_args_list[0].kwargs == {}
@@ -463,55 +481,27 @@ async def test_put_tool_settings_canonicalizes_and_persists_origins(monkeypatch)
     assert load.await_args_list[1].kwargs == {"for_update": True}
     assert saved is existing
     assert saved.settings_key == "tools"
-    assert saved.web_fetch.allowed_private_origins == result["webFetch"][
-        "allowedPrivateOrigins"
-    ]
-    assert saved.web_fetch.user_agent == "ConfiguredBrowser/1.0"
     assert saved.shell_prefixes.read == [["cat"]]
     assert saved.shell_prefixes.write == [["git", "status"]]
     assert result["shellPrefixes"] == {
         "read": [["cat"]],
         "write": [["git", "status"]],
     }
-    assert saved.generate_image.policy == "ask"
+    assert saved.generate_image.policy == "disabled"
     assert saved.generate_image.timeout_seconds == 600
     assert saved.edit_image.policy == "ask"
     assert saved.edit_image.timeout_seconds == 450
-    assert saved.generate_speech.policy == "auto"
+    assert saved.generate_speech.policy == "disabled"
     assert saved.generate_speech.timeout_seconds == 120
     assert saved.generate_audio.policy == "disabled"
     assert saved.generate_audio.timeout_seconds == 900
-    assert saved.transcribe_audio.policy == "ask"
+    assert saved.transcribe_audio.policy == "disabled"
     assert saved.transcribe_audio.timeout_seconds == 180
-    assert saved.update_agent_identity.policy == "auto"
-    assert saved.policies["filesystem.delete"] == "ask"
-    assert saved.policies["media.generate.image"] == "ask"
-    assert saved.policies["media.edit.image"] == "ask"
+    assert saved.update_agent_identity.policy == "ask"
+    assert saved.public_permissions.policies["filesystem.delete"] == "ask"
+    assert saved.private_permissions.policies == {}
     assert result["policies"]["filesystem.delete"] == "ask"
     db.commit.assert_awaited_once()
-
-
-@pytest.mark.parametrize(
-    "origin",
-    [
-        "ftp://example.com",
-        "https://user:secret@example.com",
-        "https://example.com/private",
-        "https://example.com?token=secret",
-        "https://example.com#fragment",
-    ],
-)
-def test_tool_settings_reject_non_origin_urls(origin: str) -> None:
-    with pytest.raises(ValidationError):
-        ToolSettingsRequest.model_validate(
-            {
-                "webFetch": {
-                    "enabled": True,
-                    "defaultPolicy": "ask",
-                    "allowedPrivateOrigins": [origin],
-                }
-            }
-        )
 
 
 @pytest.mark.parametrize("timeout", [9, 3_601, 30.5])
@@ -519,11 +509,6 @@ def test_tool_settings_reject_invalid_media_timeout(timeout: float) -> None:
     with pytest.raises(ValidationError):
         ToolSettingsRequest.model_validate(
             {
-                "webFetch": {
-                    "enabled": True,
-                    "defaultPolicy": "ask",
-                    "allowedPrivateOrigins": [],
-                },
                 "generateImage": {"policy": "ask", "timeoutSeconds": timeout},
             }
         )
@@ -532,16 +517,7 @@ def test_tool_settings_reject_invalid_media_timeout(timeout: float) -> None:
 @pytest.mark.parametrize("limit", [0, 257, 1.5])
 def test_tool_settings_reject_invalid_webfetch_limit(limit: float) -> None:
     with pytest.raises(ValidationError):
-        ToolSettingsRequest.model_validate(
-            {
-                "webFetch": {
-                    "enabled": True,
-                    "maxResponseMiB": limit,
-                    "defaultPolicy": "ask",
-                    "allowedPrivateOrigins": [],
-                }
-            }
-        )
+        WebFetchSettings.model_validate({"maxResponseMiB": limit})
 
 
 @pytest.mark.parametrize(
@@ -550,13 +526,9 @@ def test_tool_settings_reject_invalid_webfetch_limit(limit: float) -> None:
 )
 def test_tool_settings_reject_invalid_webfetch_user_agent(user_agent: str) -> None:
     with pytest.raises(ValidationError):
-        ToolSettingsRequest.model_validate(
-            {
-                "webFetch": {
-                    "enabled": True,
-                    "userAgent": user_agent,
-                    "defaultPolicy": "ask",
-                    "allowedPrivateOrigins": [],
-                }
-            }
-        )
+        WebFetchSettings.model_validate({"userAgent": user_agent})
+
+
+def test_removed_webfetch_settings_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        WebFetchSettings.model_validate({"enabled": True})

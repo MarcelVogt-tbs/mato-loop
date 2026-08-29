@@ -1254,6 +1254,7 @@ def test_agent_profile_extends_or_replaces_shared_identity() -> None:
     )
     profile = AgentProfile(
         name="Research",
+        persona="Profile persona marker",
         instructions="Agent task marker",
         persona_mode=AgentPersonaMode.EXTEND,
     )
@@ -1270,9 +1271,25 @@ def test_agent_profile_extends_or_replaces_shared_identity() -> None:
     )
 
     assert "Shared persona marker" in extended
+    assert "Profile persona marker" in extended
     assert "Agent task marker" in extended
+    assert extended.index("Shared persona marker") < extended.index(
+        "Profile persona marker"
+    ) < extended.index("Agent task marker")
     assert "Shared persona marker" not in replaced
+    assert "Profile persona marker" in replaced
     assert "Agent task marker" in replaced
+
+    without_persona = general_system_prompt(
+        _session(),
+        agent_identity=identity,
+        agent_profile=profile.model_copy(
+            update={"persona": "", "persona_mode": AgentPersonaMode.REPLACE}
+        ),
+    )
+    assert "Shared persona marker" not in without_persona
+    assert "Profile persona marker" not in without_persona
+    assert "Agent task marker" in without_persona
 
 
 def test_compaction_prompt_preserves_opaque_values_verbatim() -> None:

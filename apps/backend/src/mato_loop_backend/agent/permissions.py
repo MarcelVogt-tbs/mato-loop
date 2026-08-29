@@ -463,10 +463,12 @@ def memory_write_permission(
     )
 
 
-def webfetch_permission(url: str) -> PermissionRequest:
+def webfetch_permission(url: str, *, private_target: bool = False) -> PermissionRequest:
     canonical_url = canonicalize_url(url)
     return PermissionRequest(
-        capability="network.fetch",
+        capability=(
+            "network.fetch.private" if private_target else "network.fetch.public"
+        ),
         resource_type="url",
         resource_scope=hashlib.sha256(canonical_url.encode("utf-8")).hexdigest(),
         action_kind="webfetch",
@@ -480,7 +482,7 @@ def webfetch_permission(url: str) -> PermissionRequest:
 def transcript_permission(url: str) -> PermissionRequest:
     canonical_url = canonicalize_youtube_video_url(url)
     return PermissionRequest(
-        capability="network.fetch",
+        capability="network.fetch.public",
         resource_type="url",
         resource_scope=hashlib.sha256(canonical_url.encode("utf-8")).hexdigest(),
         action_kind="fetch_transcript",

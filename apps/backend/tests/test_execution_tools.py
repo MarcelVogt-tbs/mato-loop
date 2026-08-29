@@ -290,7 +290,7 @@ def test_configured_shell_prefixes_are_class_specific(tmp_path) -> None:
     )
     request = _shell_permission(client, prefixes=[["git", "status"]])
     assert _tool_policy(settings, IntegrationSettings(), request) == ToolExecutionPolicy.AUTO
-    settings.policies["shell.write"] = ToolExecutionPolicy.DISABLED
+    settings.permissions.policies["shell.write"] = ToolExecutionPolicy.DISABLED
     assert _tool_policy(settings, IntegrationSettings(), request) == ToolExecutionPolicy.DISABLED
 
 

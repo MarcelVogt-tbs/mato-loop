@@ -55,8 +55,6 @@ describe('model runtime configuration', () => {
       trustLevel: null,
       pseudonymizationEnabled: false,
       memoryPolicy: 'deny',
-      webfetchPolicy: 'auto_public',
-      effectiveWebfetchPolicy: 'disabled',
       reasoningSummary: false,
       reasoningEffort: 'low'
     })).toEqual({
@@ -75,8 +73,6 @@ describe('model runtime configuration', () => {
       trustLevel: null,
       pseudonymizationEnabled: false,
       memoryPolicy: 'deny',
-      webfetchPolicy: 'auto_public',
-      effectiveWebfetchPolicy: 'disabled',
       reasoningSummary: false,
       reasoningEffort: 'low'
     })
@@ -97,7 +93,6 @@ describe('model runtime configuration', () => {
       trustLevel: 'private',
       pseudonymizationEnabled: null,
       memoryPolicy: 'allow',
-      webfetchPolicy: 'auto_allowed',
       reasoningSummary: false,
       reasoningEffort: 'high'
     })).toEqual({
@@ -114,7 +109,6 @@ describe('model runtime configuration', () => {
       trust_level: 'private',
       pseudonymization_enabled: null,
       memory_policy: 'allow',
-      webfetch_policy: 'auto_allowed',
       reasoning_summary: false,
       reasoning_effort: 'high'
     })

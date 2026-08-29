@@ -21,6 +21,7 @@ from mato_loop_backend.settings import (
     UserIntegrationSettings,
     UserToolSettings,
 )
+from mato_loop_backend.settings.effective import personal_integration_tool_settings
 
 
 class IntegrationSettingsError(RuntimeError):
@@ -31,6 +32,18 @@ class IntegrationSettingsError(RuntimeError):
 
 IntegrationSettingsDocument = IntegrationSettings | UserIntegrationSettings
 ToolSettingsDocument = ToolSettings | UserToolSettings
+
+
+def _clear_integration_policies(
+    tools: ToolSettingsDocument, integration_id: UUID | str, *, resources: bool = True
+) -> bool:
+    key = str(integration_id)
+    changed = False
+    for permissions in (tools.private_permissions, tools.public_permissions):
+        changed = permissions.integration_policies.pop(key, None) is not None or changed
+        if resources:
+            changed = permissions.resource_policies.pop(key, None) is not None or changed
+    return changed
 
 
 async def _load_integrations(
@@ -56,12 +69,7 @@ async def _load_tools(
     if personal is not None:
         return personal
     instance = await SettingsStore.load(db, ToolSettings)
-    return UserToolSettings.model_validate(
-        {
-            **instance.model_dump(exclude={"personal_settings_enabled"}),
-            "personal_tool_defaults_enabled": False,
-        }
-    )
+    return personal_integration_tool_settings(instance)
 
 
 async def _save_settings(
@@ -229,7 +237,7 @@ class GitIntegrationService:
             raise IntegrationSettingsError("integration.changed")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
         tools = await _load_tools(db, settings_owner_id, for_update=True)
-        tools.integration_policies.pop(str(integration_id), None)
+        _clear_integration_policies(tools, integration_id)
         await _save_settings(db, tools, settings_owner_id)
         await _save_settings(db, settings, settings_owner_id)
         await db.commit()
@@ -377,7 +385,7 @@ class OpenScadIntegrationService:
             raise IntegrationSettingsError("integration.changed")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
         tools = await _load_tools(db, settings_owner_id, for_update=True)
-        tools.integration_policies.pop(str(integration_id), None)
+        _clear_integration_policies(tools, integration_id)
         await _save_settings(db, tools, settings_owner_id)
         await _save_settings(db, settings, settings_owner_id)
         await db.commit()
@@ -401,10 +409,9 @@ class SearchIntegrationService:
             )
             if remove_resource_policies is not None:
                 changed = (
-                    tool_settings.resource_policies.pop(
-                        str(remove_resource_policies), None
+                    _clear_integration_policies(
+                        tool_settings, remove_resource_policies, resources=True
                     )
-                    is not None
                     or changed
                 )
                 changed = (
@@ -524,8 +531,7 @@ class CalDavIntegrationService:
         if clear_policies is not None:
             tools = await _load_tools(db, owner_id, for_update=True)
             integration_id = str(clear_policies)
-            changed = tools.integration_policies.pop(integration_id, None) is not None
-            changed = tools.resource_policies.pop(integration_id, None) is not None or changed
+            changed = _clear_integration_policies(tools, integration_id)
             changed = tools.resource_labels.pop(integration_id, None) is not None or changed
             if (
                 tools.default_calendar is not None
@@ -716,7 +722,7 @@ class MailIntegrationService:
         if clear_policies is not None:
             tools = await _load_tools(db, owner_id, for_update=True)
             key = str(clear_policies)
-            if tools.integration_policies.pop(key, None) is not None:
+            if _clear_integration_policies(tools, key, resources=False):
                 await _save_settings(db, tools, owner_id)
         await _save_settings(db, settings, owner_id)
         await db.commit()
@@ -828,8 +834,7 @@ class BookStackIntegrationService:
         if clear_policies is not None:
             tools = await _load_tools(db, owner_id, for_update=True)
             integration_id = str(clear_policies)
-            changed = tools.integration_policies.pop(integration_id, None) is not None
-            changed = tools.resource_policies.pop(integration_id, None) is not None or changed
+            changed = _clear_integration_policies(tools, integration_id)
             changed = tools.resource_labels.pop(integration_id, None) is not None or changed
             if changed:
                 await _save_settings(db, tools, owner_id)
@@ -966,8 +971,7 @@ class MealieIntegrationService:
         if clear_policies is not None:
             tools = await _load_tools(db, owner_id, for_update=True)
             integration_id = str(clear_policies)
-            changed = tools.integration_policies.pop(integration_id, None) is not None
-            changed = tools.resource_policies.pop(integration_id, None) is not None or changed
+            changed = _clear_integration_policies(tools, integration_id)
             changed = tools.resource_labels.pop(integration_id, None) is not None or changed
             if changed:
                 await _save_settings(db, tools, owner_id)

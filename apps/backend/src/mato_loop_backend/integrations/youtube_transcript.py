@@ -124,8 +124,10 @@ def _stage_authorizer(
     path: str,
     video_id: str,
     before_request: Callable[[str], Awaitable[None]] | None,
-) -> Callable[[str], Awaitable[None]]:
-    async def authorize(value: str) -> None:
+) -> Callable[[str, bool], Awaitable[None]]:
+    async def authorize(value: str, private_target: bool) -> None:
+        if private_target:
+            raise _error("responseInvalid")
         _internal_url(value, path=path, video_id=video_id)
         if before_request is not None:
             await before_request(value)

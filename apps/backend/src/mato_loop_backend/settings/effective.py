@@ -7,6 +7,7 @@ from mato_loop_backend.models import ExecutionAgent
 from mato_loop_backend.settings.models import (
     DEFAULT_AGENT_PROFILE_ID,
     AgentProfile,
+    AgentProfilePermissions,
     AgentProfilesSettings,
     AiSettings,
     IntegrationAdapterAvailability,
@@ -36,9 +37,7 @@ _AI_DEFAULT_FIELDS = (
 )
 
 _BUILTIN_TOOL_FIELDS = (
-    "policies",
     "shell_prefixes",
-    "web_fetch",
     "generate_image",
     "edit_image",
     "generate_speech",
@@ -48,8 +47,6 @@ _BUILTIN_TOOL_FIELDS = (
     "update_agent_identity",
 )
 _INTEGRATION_TOOL_FIELDS = (
-    "integration_policies",
-    "resource_policies",
     "resource_labels",
     "default_calendar",
     "default_task_list",
@@ -149,11 +146,31 @@ async def load_effective_integrations(
     return instance
 
 
-async def load_effective_tools(db: AsyncSession, user_id: UUID) -> ToolSettings:
+def _merge_permissions(
+    baseline: AgentProfilePermissions,
+    override: AgentProfilePermissions,
+    *,
+    include_policies: bool = True,
+) -> AgentProfilePermissions:
+    data = baseline.model_dump()
+    if include_policies:
+        data["policies"].update(override.policies)
+    for integration_id, policies in override.integration_policies.items():
+        data["integration_policies"].setdefault(integration_id, {}).update(policies)
+    for integration_id, resources in override.resource_policies.items():
+        target = data["resource_policies"].setdefault(integration_id, {})
+        for resource_key, policies in resources.items():
+            target.setdefault(resource_key, {}).update(policies)
+    return AgentProfilePermissions.model_validate(data)
+
+
+async def load_effective_tools(
+    db: AsyncSession, user_id: UUID, trust_level: TrustLevel = TrustLevel.PUBLIC
+) -> ToolSettings:
     instance = (await SettingsStore.load(db, ToolSettings)).model_copy(deep=True)
     personal = await SettingsStore.load_optional(db, UserToolSettings, user_id=user_id)
     if personal is None:
-        return instance
+        return instance.select_trust(trust_level)
 
     data = instance.model_dump()
     personal_data = personal.model_dump()
@@ -162,13 +179,23 @@ async def load_effective_tools(db: AsyncSession, user_id: UUID) -> ToolSettings:
     if instance.personal_settings_enabled and personal.personal_tool_defaults_enabled:
         for field in _BUILTIN_TOOL_FIELDS:
             data[field] = personal_data[field]
+    for field in ("private_permissions", "public_permissions"):
+        data[field] = _merge_permissions(
+            getattr(instance, field),
+            getattr(personal, field),
+            include_policies=(
+                instance.personal_settings_enabled
+                and personal.personal_tool_defaults_enabled
+            ),
+        ).model_dump()
     effective = ToolSettings.model_validate(data)
+    effective.tool_availability = dict(instance.tool_availability)
+    effective.resource_availability = {
+        key: dict(value) for key, value in instance.resource_availability.items()
+    }
     effective.web_fetch.user_agent = instance.web_fetch.user_agent
     effective.web_fetch.max_response_mib = instance.web_fetch.max_response_mib
-    effective.web_fetch.allowed_private_origins = list(
-        instance.web_fetch.allowed_private_origins
-    )
-    return effective
+    return effective.select_trust(trust_level)
 
 
 def personal_tool_settings_snapshot(
@@ -183,8 +210,20 @@ def personal_tool_settings_snapshot(
     instance_data = instance.model_dump()
     for field in _BUILTIN_TOOL_FIELDS:
         data[field] = instance_data[field]
+    if personal is None:
+        data["private_permissions"] = AgentProfilePermissions().model_dump()
+        data["public_permissions"] = AgentProfilePermissions().model_dump()
     data["personal_tool_defaults_enabled"] = True
     return UserToolSettings.model_validate(data)
+
+
+def personal_integration_tool_settings(instance: ToolSettings) -> UserToolSettings:
+    return UserToolSettings.model_validate(
+        {
+            **instance.model_dump(include=set(_INTEGRATION_TOOL_FIELDS)),
+            "personal_tool_defaults_enabled": False,
+        }
+    )
 
 
 class AgentProfileUnavailable(Exception):
@@ -232,7 +271,7 @@ async def load_agent_profile_tools(
     profile_id: UUID | None,
     trust_level: TrustLevel,
 ) -> tuple[ToolSettings, AgentProfile | None]:
-    tools = await load_effective_tools(db, user_id)
+    tools = await load_effective_tools(db, user_id, trust_level)
     if profile_id is None:
         return tools, None
     profile = await load_agent_profile(db, user_id, profile_id)

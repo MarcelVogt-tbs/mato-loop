@@ -61,7 +61,6 @@ from mato_loop_backend.integrations.webfetch import (
     canonicalize_url,
     fetch_web,
     normalize_source_title,
-    private_origin_is_allowed,
     request_web_bytes,
     sanitize_url_for_display,
 )
@@ -125,7 +124,6 @@ __all__ = [
     "normalize_source_title",
     "load_bookstack_resources",
     "load_caldav_resources",
-    "private_origin_is_allowed",
     "request_web_bytes",
     "open_code_client",
     "sanitize_url_for_display",

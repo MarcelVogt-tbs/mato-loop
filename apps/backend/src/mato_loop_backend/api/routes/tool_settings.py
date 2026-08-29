@@ -18,6 +18,7 @@ from mato_loop_backend.settings import (
     ShellPrefixSettings,
     ToolExecutionPolicy,
     ToolSettings,
+    TrustLevel,
     UserToolSettings,
     WebFetchSettings,
     load_effective_tools,
@@ -65,9 +66,6 @@ class ToolSettingsRequest(BaseModel):
     shell_prefixes: ShellPrefixSettings | None = Field(
         default=None, validation_alias=AliasChoices("shellPrefixes", "shell_prefixes")
     )
-    web_fetch: WebFetchSettings = Field(
-        validation_alias=AliasChoices("webFetch", "web_fetch")
-    )
     generate_image: MediaToolSettings | None = Field(
         default=None, validation_alias=AliasChoices("generateImage", "generate_image")
     )
@@ -98,10 +96,22 @@ class PersonalSettingsEnabledRequest(BaseModel):
     enabled: bool
 
 
+class ToolConfigurationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_availability: dict[str, bool] = Field(
+        validation_alias=AliasChoices("toolAvailability", "tool_availability")
+    )
+    resource_availability: dict[str, dict[str, bool]] = Field(
+        validation_alias=AliasChoices("resourceAvailability", "resource_availability")
+    )
+    web_fetch: WebFetchSettings = Field(
+        validation_alias=AliasChoices("webFetch", "web_fetch")
+    )
+
+
 def tool_settings_payload(
     settings: ToolSettings,
-    *,
-    include_private_origins: bool = True,
 ) -> dict:
     groups = tool_registry.catalog(settings, IntegrationSettings())
     policies = {
@@ -117,15 +127,8 @@ def tool_settings_payload(
         "policies": policies,
         "shellPrefixes": settings.shell_prefixes.model_dump(),
         "webFetch": {
-            "enabled": settings.web_fetch.enabled,
             "userAgent": settings.web_fetch.user_agent,
             "maxResponseMiB": settings.web_fetch.max_response_mib,
-            "defaultPolicy": settings.web_fetch.default_policy.value,
-            "allowedPrivateOrigins": (
-                settings.web_fetch.allowed_private_origins
-                if include_private_origins
-                else []
-            ),
         },
         "generateImage": {
             "policy": tool_execution_policy(
@@ -173,24 +176,50 @@ def tool_settings_payload(
     }
 
 
+def tool_configuration_payload(settings: ToolSettings) -> dict:
+    groups = tool_registry.catalog(settings, IntegrationSettings())
+    for group in groups:
+        for tool in group["tools"]:
+            tool["available"] = settings.tool_availability.get(tool["name"], True)
+            if tool["name"] == "webfetch":
+                tool["resources"] = [
+                    {
+                        "key": capability,
+                        "label": label,
+                        "available": settings.resource_availability.get(
+                            "webfetch", {}
+                        ).get(capability, default),
+                    }
+                    for capability, label, default in (
+                        ("network.fetch.public", "Öffentliche Ziele", True),
+                        ("network.fetch.private", "Private Ziele", False),
+                    )
+                ]
+    return {
+        "groups": groups,
+        "toolAvailability": settings.tool_availability,
+        "resourceAvailability": settings.resource_availability,
+        "webFetch": settings.web_fetch.model_dump(mode="json", by_alias=True),
+    }
+
+
 @router.get("/settings")
 async def get_tool_settings(
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    trust: TrustLevel,
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
     if scope == "personal":
         if user is None:
             raise ApiError(401, "auth.notAuthenticated")
-        settings = await load_effective_tools(db, user.id)
+        settings = await load_effective_tools(db, user.id, trust)
         if not settings.personal_settings_enabled:
             raise ApiError(409, "tool.personalSettingsDisabled")
     else:
         settings, _owner_id = await _load_scoped_tools(db, scope, user)
-    return tool_settings_payload(
-        settings,
-        include_private_origins=user is None or getattr(user, "is_admin", False),
-    )
+        settings.select_trust(trust)
+    return tool_settings_payload(settings)
 
 
 @router.get("/personal-settings")
@@ -209,68 +238,84 @@ async def get_tool_availability(
 ) -> dict:
     settings = await load_effective_tools(db, user.id)
     return {
-        "webFetch": {
-            "enabled": settings.web_fetch.enabled,
-            "defaultPolicy": settings.web_fetch.default_policy.value,
-        },
-        "transcribeAudio": {
-            "policy": settings.transcribe_audio.policy.value,
-        },
+        "tools": settings.tool_availability,
+        "resources": settings.resource_availability,
     }
+
+
+@router.get("/configuration")
+async def get_tool_configuration(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    if not user.is_admin:
+        raise ApiError(403, "auth.adminRequired")
+    return tool_configuration_payload(await SettingsStore.load(db, ToolSettings))
+
+
+@router.put("/configuration")
+async def update_tool_configuration(
+    payload: ToolConfigurationRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    if not user.is_admin:
+        raise ApiError(403, "auth.adminRequired")
+    settings = await SettingsStore.load(db, ToolSettings, for_update=True)
+    known_tools = {
+        tool["name"]
+        for group in tool_registry.catalog(settings, IntegrationSettings())
+        for tool in group["tools"]
+    }
+    if set(payload.tool_availability) - known_tools:
+        raise ApiError(422, "validation.invalidChoice", field="toolAvailability")
+    expected_resources = {
+        "webfetch": {"network.fetch.public", "network.fetch.private"}
+    }
+    if set(payload.resource_availability) != set(expected_resources) or any(
+        set(resources) != expected_resources[tool_name]
+        for tool_name, resources in payload.resource_availability.items()
+    ):
+        raise ApiError(422, "validation.invalidChoice", field="resourceAvailability")
+    settings.tool_availability = dict(payload.tool_availability)
+    settings.resource_availability = {
+        key: dict(value) for key, value in payload.resource_availability.items()
+    }
+    settings.web_fetch = payload.web_fetch
+    await SettingsStore.save(db, settings)
+    await db.commit()
+    return tool_configuration_payload(settings)
 
 
 @router.put("/settings")
 async def update_tool_settings(
     payload: ToolSettingsRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    trust: TrustLevel,
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
     settings, owner_id = await _load_scoped_tools(
         db, scope, user, for_update=True, mutation=True
     )
+    settings.select_trust(trust)
     if payload.shell_prefixes is not None:
         settings.shell_prefixes = payload.shell_prefixes
-    if owner_id is None:
-        settings.web_fetch = payload.web_fetch
-    else:
-        settings.web_fetch.enabled = payload.web_fetch.enabled
-        settings.web_fetch.default_policy = payload.web_fetch.default_policy
-    for field_name in (
-        "generate_image",
-        "edit_image",
-        "generate_speech",
-        "generate_audio",
-        "transcribe_audio",
-        "analyze_video",
-        "update_agent_identity",
-    ):
+    policy_fields = {
+        "media.generate.image": "generate_image",
+        "media.edit.image": "edit_image",
+        "media.generate.speech": "generate_speech",
+        "media.generate.audio": "generate_audio",
+        "media.transcribe.audio": "transcribe_audio",
+        "media.analyze.video": "analyze_video",
+        "settings.agent_identity.update": "update_agent_identity",
+    }
+    for capability, field_name in policy_fields.items():
         value = getattr(payload, field_name)
         if value is not None:
-            setattr(settings, field_name, value)
-    legacy_policies = {
-        "media.generate.image": settings.generate_image.policy,
-        "media.edit.image": settings.edit_image.policy,
-        "media.generate.speech": settings.generate_speech.policy,
-        "media.generate.audio": settings.generate_audio.policy,
-        "media.transcribe.audio": settings.transcribe_audio.policy,
-        "media.analyze.video": settings.analyze_video.policy,
-        "settings.agent_identity.update": settings.update_agent_identity.policy,
-    }
-    for capability, policy in legacy_policies.items():
-        field_name = {
-            "media.generate.image": "generate_image",
-            "media.edit.image": "edit_image",
-            "media.generate.speech": "generate_speech",
-            "media.generate.audio": "generate_audio",
-            "media.transcribe.audio": "transcribe_audio",
-            "media.analyze.video": "analyze_video",
-            "settings.agent_identity.update": "update_agent_identity",
-        }[capability]
-        if getattr(payload, field_name) is not None:
-            settings.policies[capability] = policy
-        else:
-            settings.policies.setdefault(capability, policy)
+            settings.permissions.policies[capability] = value.policy
+            if isinstance(value, MediaToolSettings):
+                getattr(settings, field_name).timeout_seconds = value.timeout_seconds
     if payload.policies is not None:
         groups = tool_registry.catalog(settings, IntegrationSettings())
         configurable = {
@@ -301,28 +346,15 @@ async def update_tool_settings(
             for capability, policy in payload.policies.items()
         ):
             raise ApiError(422, "validation.invalidChoice", field="policies")
-        settings.policies.update(payload.policies)
-    for capability, field_name in {
-        "media.generate.image": "generate_image",
-        "media.edit.image": "edit_image",
-        "media.generate.speech": "generate_speech",
-        "media.generate.audio": "generate_audio",
-        "media.transcribe.audio": "transcribe_audio",
-        "media.analyze.video": "analyze_video",
-        "settings.agent_identity.update": "update_agent_identity",
-    }.items():
-        getattr(settings, field_name).policy = tool_execution_policy(
-            settings, capability, getattr(settings, field_name).policy
-        )
+        settings.permissions.policies = dict(payload.policies)
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()
     response_settings = (
-        await load_effective_tools(db, owner_id) if owner_id is not None else settings
+        await load_effective_tools(db, owner_id, trust)
+        if owner_id is not None
+        else settings
     )
-    return tool_settings_payload(
-        response_settings,
-        include_private_origins=user is None or getattr(user, "is_admin", False),
-    )
+    return tool_settings_payload(response_settings)
 
 
 @router.delete("/settings")
@@ -345,10 +377,7 @@ async def reset_personal_tool_settings(
         personal.personal_tool_defaults_enabled = False
         await SettingsStore.save(db, personal, user_id=user.id)
     await db.commit()
-    return tool_settings_payload(
-        await load_effective_tools(db, user.id),
-        include_private_origins=getattr(user, "is_admin", False),
-    )
+    return tool_settings_payload(await load_effective_tools(db, user.id))
 
 
 @router.patch("/personal-enabled")

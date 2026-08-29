@@ -28,7 +28,7 @@ Manuell eingetragene und automatisch erkannte Modelle können gelöscht werden. 
 
 ## Laufzeiteinstellungen
 
-Je Modell können unter anderem Kontextfenster, Ausgabelimit, Streaming, Tool-Unterstützung, Bildunterstützung, Datenfreigabe, Memory-Policy, Webfetch und Reasoning-Zusammenfassungen konfiguriert werden. MatoLoop bietet den Reasoning-Aufwand im Chat nur für ausdrücklich unterstützte Modelle an und berücksichtigt deren verfügbare Stufen und Providerformat. Qwen3.8-27B unterstützt **Aus**, **Niedrig**, **Mittel** und **Sehr hoch**; MatoLoop verwendet **Mittel** als Standard. Codex übernimmt die unterstützten Stufen einschließlich **Maximum** und **Ultra** sowie den Standardwert aus dem synchronisierten Modellkatalog.
+Je Modell können unter anderem Kontextfenster, Ausgabelimit, Streaming, Tool-Unterstützung, Bildunterstützung, Datenfreigabe, Memory-Policy und Reasoning-Zusammenfassungen konfiguriert werden. Webfetch folgt stattdessen den Tool-Richtlinien für die effektive private oder öffentliche Modellklasse. MatoLoop bietet den Reasoning-Aufwand im Chat nur für ausdrücklich unterstützte Modelle an und berücksichtigt deren verfügbare Stufen und Providerformat. Qwen3.8-27B unterstützt **Aus**, **Niedrig**, **Mittel** und **Sehr hoch**; MatoLoop verwendet **Mittel** als Standard. Codex übernimmt die unterstützten Stufen einschließlich **Maximum** und **Ultra** sowie den Standardwert aus dem synchronisierten Modellkatalog.
 
 ## Standardmodelle
 

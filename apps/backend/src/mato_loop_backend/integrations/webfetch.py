@@ -286,26 +286,6 @@ def normalize_source_title(value: object, *, max_length: int = 300) -> str | Non
     return title[:max_length]
 
 
-def private_origin_is_allowed(
-    value: str, allowed_private_origins: tuple[str, ...] | list[str]
-) -> bool:
-    url, host, port = _parse_url(canonicalize_url(value))
-    return (url.scheme, host, port) in _allowed_origins(allowed_private_origins)
-
-
-def _allowed_origins(values: tuple[str, ...] | list[str]) -> set[tuple[str, str, int]]:
-    if isinstance(values, (str, bytes)):
-        raise _error("invalidOrigin")
-    origins: set[tuple[str, str, int]] = set()
-    try:
-        for value in values:
-            url, host, port = _parse_url(value, origin=True)
-            origins.add((url.scheme, host, port))
-    except TypeError as exc:
-        raise _error("invalidOrigin") from exc
-    return origins
-
-
 def _normalized_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     address = ipaddress.ip_address(value.split("%", 1)[0])
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
@@ -371,15 +351,14 @@ async def _resolve_addresses(
 
 async def _validate_target(
     value: str,
-    allowed_origins: set[tuple[str, str, int]],
+    allow_private_targets: bool,
 ) -> _Target:
     url, host, port = _parse_url(value)
     if url.path == "/":
         url = url.with_path("/", keep_query=True)
     addresses = await _resolve_addresses(host, port)
-    private_allowed = (url.scheme, host, port) in allowed_origins
     for address in addresses:
-        _validate_address(address, private_allowed=private_allowed)
+        _validate_address(address, private_allowed=allow_private_targets)
     return _Target(url=url, host=host, port=port, addresses=addresses)
 
 
@@ -823,8 +802,8 @@ async def _build_result(
 async def _follow_redirects(
     url: str,
     timeout: float,
-    origins: set[tuple[str, str, int]],
-    authorize_url: Callable[[str], Awaitable[None]] | None,
+    allow_private_targets: bool,
+    authorize_url: Callable[[str, bool], Awaitable[None]] | None,
     max_response_bytes: int,
     user_agent: str,
     accept: str,
@@ -838,11 +817,28 @@ async def _follow_redirects(
     current_url = url
     for redirect_count in range(MAX_REDIRECTS + 1):
         current_url = canonicalize_url(current_url)
-        if authorize_url is not None:
-            await authorize_url(current_url)
         started = loop.time()
         async with asyncio.timeout(max(remaining, 0.001)):
-            target = await _validate_target(current_url, origins)
+            target = await _validate_target(current_url, allow_private_targets)
+        remaining -= loop.time() - started
+        private_target = _target_is_private(target)
+        if authorize_url is not None:
+            await authorize_url(current_url, private_target)
+            started = loop.time()
+            async with asyncio.timeout(max(remaining, 0.001)):
+                target = await _validate_target(current_url, allow_private_targets)
+            remaining -= loop.time() - started
+            if _target_is_private(target) != private_target:
+                private_target = _target_is_private(target)
+                await authorize_url(current_url, private_target)
+                started = loop.time()
+                async with asyncio.timeout(max(remaining, 0.001)):
+                    target = await _validate_target(current_url, allow_private_targets)
+                    if _target_is_private(target) != private_target:
+                        raise _error("addressBlocked")
+                remaining -= loop.time() - started
+        started = loop.time()
+        async with asyncio.timeout(max(remaining, 0.001)):
             response = await _request_once(
                 target,
                 remaining,
@@ -896,8 +892,8 @@ async def request_web_bytes(
     request_content_type: str | None = None,
     accept: str = "*/*",
     timeout: float = 30,
-    allowed_private_origins: tuple[str, ...] | list[str] = (),
-    authorize_url: Callable[[str], Awaitable[None]] | None = None,
+    allow_private_targets: bool = False,
+    authorize_url: Callable[[str, bool], Awaitable[None]] | None = None,
     max_response_bytes: int = MAX_RESPONSE_BYTES,
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
 ) -> WebFetchBytesResult:
@@ -916,12 +912,11 @@ async def request_web_bytes(
     _validate_header_value(accept)
     if request_content_type is not None:
         _validate_header_value(request_content_type)
-    origins = _allowed_origins(allowed_private_origins)
     try:
         target, response, _remaining = await _follow_redirects(
             url,
             timeout,
-            origins,
+            allow_private_targets,
             authorize_url,
             max_response_bytes,
             user_agent,
@@ -991,8 +986,8 @@ def _resolve_download_type(
 async def download_file(
     url: str,
     timeout: float = 30,
-    allowed_private_origins: tuple[str, ...] | list[str] = (),
-    authorize_url: Callable[[str], Awaitable[None]] | None = None,
+    allow_private_targets: bool = False,
+    authorize_url: Callable[[str, bool], Awaitable[None]] | None = None,
     max_response_bytes: int = MAX_RESPONSE_BYTES,
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
 ) -> DownloadedFile:
@@ -1002,12 +997,11 @@ async def download_file(
     keeps the payload untouched so it can be handed to another system.
     """
     _validate_fetch_limits(timeout, max_response_bytes)
-    origins = _allowed_origins(allowed_private_origins)
     try:
         target, response, _remaining = await _follow_redirects(
             url,
             timeout,
-            origins,
+            allow_private_targets,
             authorize_url,
             max_response_bytes,
             user_agent,
@@ -1040,8 +1034,8 @@ async def fetch_web(
     url: str,
     format: str = "markdown",
     timeout: float = 30,
-    allowed_private_origins: tuple[str, ...] | list[str] = (),
-    authorize_url: Callable[[str], Awaitable[None]] | None = None,
+    allow_private_targets: bool = False,
+    authorize_url: Callable[[str, bool], Awaitable[None]] | None = None,
     max_response_bytes: int = MAX_RESPONSE_BYTES,
     pdf_vision_handler: PdfVisionHandler | None = None,
     pdf_pages: tuple[int, ...] | list[int] = (),
@@ -1059,12 +1053,11 @@ async def fetch_web(
         raise ValueError("pdf_pages must contain at most eight positive integers")
     normalized_pdf_pages = tuple(sorted(set(pdf_pages)))
     _validate_fetch_limits(timeout, max_response_bytes)
-    origins = _allowed_origins(allowed_private_origins)
     try:
         target, response, remaining = await _follow_redirects(
             url,
             timeout,
-            origins,
+            allow_private_targets,
             authorize_url,
             max_response_bytes,
             user_agent,

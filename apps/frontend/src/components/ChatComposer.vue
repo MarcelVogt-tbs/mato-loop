@@ -496,7 +496,7 @@ const micUnavailableReason = computed(() => {
     return 'Die Diktateinstellungen werden geladen.'
   }
   if (toolSettings.loadFailed) return 'Die Diktateinstellungen konnten nicht geladen werden.'
-  if (toolSettings.transcribeAudio.policy === 'disabled') {
+  if (!toolSettings.transcribeAudioAvailable) {
     return 'Audiotranskription ist in den Tool-Einstellungen deaktiviert.'
   }
   if (!transcriptionModelAvailable.value) {

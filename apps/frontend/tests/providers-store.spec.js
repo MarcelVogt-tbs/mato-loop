@@ -271,14 +271,14 @@ describe('provider store', () => {
     api.put.mockResolvedValue({
       data: {
         providers: [{ id: 'p1', enabled: true }],
-        models: [{ id: 'm1', webfetchPolicy: 'auto_public' }],
+        models: [{ id: 'm1', name: 'Alpha' }],
         defaultModelId: 'm1'
       }
     })
 
     await store.updateModel('m1', { model_id: 'alpha' })
 
-    expect(store.models[0].webfetchPolicy).toBe('auto_public')
+    expect(store.models[0].name).toBe('Alpha')
     expect(api.get).not.toHaveBeenCalled()
   })
 

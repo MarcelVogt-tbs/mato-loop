@@ -1,6 +1,6 @@
 <template>
   <section :aria-busy="loading">
-    <q-toolbar class="q-px-none q-mb-md">
+    <q-toolbar class="settings-detail-toolbar q-px-none q-mb-md">
       <q-btn
         flat
         round
@@ -21,26 +21,38 @@
             : 'Standardwerte und Abweichungen für einzelne Ressourcen festlegen.' }}
         </div>
       </q-toolbar-title>
-      <q-btn
-        unelevated
-        no-caps
-        color="primary"
-        icon="save"
-        :round="$q.screen.lt.sm"
-        :label="$q.screen.gt.xs ? 'Speichern' : undefined"
-        aria-label="Zugriffsrichtlinien speichern"
-        :loading="saving"
-        :disable="adapterBlocked || loading || loadFailed || !access || !dirty"
-        @click="save"
-      />
+      <div class="settings-scope-actions row items-center col-auto">
+        <SettingsScopeToggle
+          :model-value="scope"
+          :is-admin="auth.isAdmin"
+          :disable="loading || saving"
+          @update:model-value="switchScope"
+        />
+        <q-btn
+          class="col-auto"
+          unelevated
+          no-caps
+          no-wrap
+          color="primary"
+          icon="save"
+          label="Speichern"
+          aria-label="Zugriffsrichtlinien speichern"
+          :loading="saving"
+          :disable="adapterBlocked || loading || loadFailed || !access || !dirty"
+          @click="save"
+        />
+      </div>
     </q-toolbar>
 
-    <div v-if="auth.isAdmin" class="row justify-end q-mb-md">
-      <SettingsScopeToggle
-        :model-value="scope"
-        :is-admin="auth.isAdmin"
+    <div class="row justify-end q-gutter-sm q-mb-md">
+      <q-btn-toggle
+        :model-value="integrations.trust"
+        no-caps
+        unelevated
+        toggle-color="primary"
+        :options="trustOptions"
         :disable="loading || saving"
-        @update:model-value="switchScope"
+        @update:model-value="switchTrust"
       />
     </div>
 
@@ -143,7 +155,7 @@
                 :label="actionLabel(action)"
                 :options="policyOptions(action, action.globalPolicy)"
                 :hint="`Wirksam: ${policyLabel(action.effectiveIntegrationPolicy)}`"
-                :disable="adapterBlocked || action.globalPolicy === 'disabled'"
+                :disable="adapterBlocked"
                 persistent-hint
               />
             </div>
@@ -185,7 +197,7 @@
                   :label="actionLabel(action)"
                   :options="policyOptions(action, action.effectiveIntegrationPolicy)"
                   :hint="effectiveHint(resource, action)"
-                  :disable="adapterBlocked || action.globalPolicy === 'disabled' || resource.hardUnavailableCapabilities.includes(action.capability)"
+                  :disable="adapterBlocked || resource.hardUnavailableCapabilities.includes(action.capability)"
                   persistent-hint
                 />
               </div>
@@ -251,6 +263,10 @@ const loadFailed = ref(false)
 const saving = ref(false)
 const savedPayload = ref('')
 let loadToken = 0
+const trustOptions = [
+  { label: 'Private Modelle', value: 'private', icon: 'lock' },
+  { label: 'Öffentliche Modelle', value: 'public', icon: 'public' }
+]
 
 const integrationId = computed(() => String(route.params.integrationId || ''))
 const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
@@ -323,7 +339,6 @@ function policyOptions(action, inheritedPolicy) {
 function effectiveHint(resource, action) {
   const unavailable = resource.hardUnavailableCapabilities.includes(action.capability)
   if (unavailable) return 'Vom Dienst nicht erlaubt'
-  if (action.globalPolicy === 'disabled') return 'Global nicht erlaubt'
   return `Wirksam: ${policyLabel(resource.effectivePolicies[action.capability])}`
 }
 
@@ -402,6 +417,11 @@ async function switchScope(value) {
   await integrations.fetchAll().catch(() => {})
 }
 
+async function switchTrust(value) {
+  if (value === integrations.trust || !await confirmDiscardedChanges()) return
+  integrations.selectTrust(value)
+}
+
 async function save() {
   if (!access.value || !dirty.value) return
   const id = integrationId.value
@@ -409,7 +429,7 @@ async function save() {
   saving.value = true
   try {
     const value = await integrations.saveAccess(id, payload)
-    if (integrationId.value !== id) return
+    if (integrationId.value !== id || !value) return
     assignAccess(value)
     $q.notify({ type: 'positive', message: 'Integrationseinstellungen gespeichert' })
   } finally {
@@ -427,7 +447,7 @@ async function confirmDiscardedChanges() {
   )
 }
 
-watch([integrationId, scope], load, { immediate: true })
+watch([integrationId, scope, () => integrations.trust], load, { immediate: true })
 onBeforeRouteUpdate(confirmDiscardedChanges)
 onBeforeRouteLeave(confirmDiscardedChanges)
 </script>

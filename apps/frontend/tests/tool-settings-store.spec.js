@@ -9,209 +9,215 @@ vi.mock('src/boot/axios', () => ({ api }))
 
 import { useToolSettingsStore } from '../src/stores/tool-settings'
 
+const settings = (policy = 'ask') => ({
+  groups: [{
+    id: 'web',
+    label: 'Web',
+    icon: 'language',
+    tools: [{
+      name: 'webfetch',
+      label: 'Webfetch',
+      source: { type: 'builtin' },
+      available: false,
+      actions: [
+        { capability: 'network.fetch.public', configurable: true },
+        { capability: 'network.fetch.private', configurable: true }
+      ]
+    }]
+  }],
+  policies: {
+    'network.fetch.public': policy,
+    'network.fetch.private': 'disabled'
+  },
+  shellPrefixes: { read: [['cat']], write: [] },
+  transcribeAudio: { policy: 'ask', timeoutSeconds: 180 }
+})
+
+const configuration = {
+  groups: [{
+    id: 'web',
+    label: 'Web',
+    icon: 'language',
+    tools: [{
+      name: 'webfetch',
+      label: 'Webfetch',
+      icon: 'language',
+      available: true,
+      resources: [
+        { key: 'network.fetch.public', label: 'Öffentliche Ziele', available: true },
+        { key: 'network.fetch.private', label: 'Private Ziele', available: false }
+      ]
+    }]
+  }],
+  toolAvailability: { webfetch: true },
+  resourceAvailability: {
+    webfetch: { 'network.fetch.public': true, 'network.fetch.private': false }
+  },
+  webFetch: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32 }
+}
+
 describe('tool settings store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
-  it('defaults public webfetch targets to automatic execution', () => {
+  it('loads and saves only the selected scope and trust branch', async () => {
+    api.get.mockResolvedValue({ data: settings() })
+    api.put.mockResolvedValue({ data: settings('auto') })
     const store = useToolSettingsStore()
+    store.selectScope('personal')
+    store.selectTrust('public')
+    api.get.mockImplementation((url) => Promise.resolve({
+      data: url === '/tools/personal-settings' ? { enabled: true } : settings()
+    }))
 
-    expect(store.webFetch.defaultPolicy).toBe('auto_public')
-    expect(store.editImage.policy).toBe('ask')
-    expect(store.analyzeVideo).toEqual({ policy: 'ask', timeoutSeconds: 1800 })
-  })
+    await store.fetchSettings()
+    await store.saveSettings({ policies: { 'network.fetch.public': 'auto' } })
 
-  it('loads and saves the complete tool settings contract without changing field names', async () => {
-    const response = {
-      groups: [
-        {
-          id: 'filesystem',
-          label: 'Dateisystem',
-          icon: 'folder',
-          tools: [
-            {
-              name: 'read',
-              source: { type: 'builtin' },
-              actions: [{ capability: 'filesystem.read', configurable: true }]
-            },
-            {
-              name: 'update_user_profile',
-              source: { type: 'builtin' },
-              actions: [{ capability: 'settings.user_profile.update', configurable: true }]
-            },
-            {
-              name: 'calendar_query_events',
-              source: { type: 'integration' },
-              actions: [{ capability: 'calendar.read', configurable: true }]
-            }
-          ]
+    expect(api.get).toHaveBeenCalledWith('/tools/settings', {
+      params: { scope: 'personal', trust: 'public' }
+    })
+    expect(api.put).toHaveBeenCalledWith(
+      '/tools/settings',
+      expect.objectContaining({
+        policies: {
+          'network.fetch.public': 'auto',
+          'network.fetch.private': 'disabled'
         }
-      ],
-      policies: {
-        'filesystem.read': 'ask',
-        'settings.user_profile.update': 'auto'
-      },
-      shellPrefixes: { read: [['cat']], write: [['git', 'status']] },
-      webFetch: {
-        enabled: true,
-        userAgent: 'ConfiguredBrowser/1.0',
-        maxResponseMiB: 96,
-        defaultPolicy: 'auto_allowed',
-        allowedPrivateOrigins: ['http://127.0.0.1:8080']
-      },
-      generateImage: { policy: 'ask', timeoutSeconds: 600 },
-      editImage: { policy: 'ask', timeoutSeconds: 450 },
-      generateSpeech: { policy: 'auto', timeoutSeconds: 120 },
-      generateAudio: { policy: 'disabled', timeoutSeconds: 900 },
-      transcribeAudio: { policy: 'ask', timeoutSeconds: 180 },
-      analyzeVideo: { policy: 'auto', timeoutSeconds: 1200 },
-      updateAgentIdentity: { policy: 'auto' }
-    }
-    api.get.mockResolvedValue({ data: response })
-    api.put.mockResolvedValue({ data: response })
-    const store = useToolSettingsStore()
-
-    await store.fetchSettings()
-    await store.saveSettings(response)
-
-    expect(api.get).toHaveBeenCalledWith('/tools/settings', { params: { scope: 'instance' } })
-    expect(api.put).toHaveBeenCalledWith('/tools/settings', expect.objectContaining({
-      policies: expect.objectContaining({
-        'filesystem.read': 'ask',
-        'media.analyze.video': 'auto',
-        'settings.user_profile.update': 'auto'
       }),
-      webFetch: response.webFetch,
-      shellPrefixes: response.shellPrefixes
-    }), { params: { scope: 'instance' } })
-    expect(store.webFetch).toEqual(response.webFetch)
-    expect(store.groups[0].tools.map((tool) => tool.name)).toEqual(['read', 'update_user_profile'])
-    expect(store.policies).toEqual({
-      'filesystem.read': 'ask',
-      'settings.user_profile.update': 'auto'
-    })
-    expect(store.shellPrefixes).toEqual(response.shellPrefixes)
-    expect(store.generateSpeech).toEqual({ policy: 'auto', timeoutSeconds: 120 })
-    expect(store.analyzeVideo).toEqual(response.analyzeVideo)
-    expect(store.loaded).toBe(true)
+      { params: { scope: 'personal', trust: 'public' } }
+    )
+    expect(store.policies['network.fetch.public']).toBe('auto')
+    expect(store.groups[0].tools[0].available).toBe(false)
   })
 
-  it('uses disabled defaults for missing additive media settings and still sends them all', async () => {
-    const legacyResponse = {
-      webFetch: { enabled: true, defaultPolicy: 'ask', allowedPrivateOrigins: [] }
-    }
-    api.get.mockResolvedValue({ data: legacyResponse })
-    api.put.mockResolvedValue({
-      data: {
-        ...legacyResponse,
-        generateImage: { policy: 'disabled', timeoutSeconds: 300 },
-        editImage: { policy: 'ask', timeoutSeconds: 300 },
-        generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
-        generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
-        transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
-        analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 },
-        updateAgentIdentity: { policy: 'ask' }
-      }
-    })
+  it('discards a late response from the previous trust branch', async () => {
+    const requests = []
+    api.get.mockImplementation((url, config) => url === '/tools/availability'
+      ? Promise.resolve({ data: { tools: {}, resources: {} } })
+      : new Promise((resolve) => {
+      requests.push({ trust: config.params.trust, resolve })
+      }))
     const store = useToolSettingsStore()
 
-    await store.fetchSettings()
-    await store.saveSettings({ generateImage: { policy: 'ask' } })
+    const privateLoad = store.fetchSettings()
+    store.selectTrust('public')
+    const publicLoad = store.fetchSettings()
+    requests[1].resolve({ data: settings('auto') })
+    await publicLoad
+    requests[0].resolve({ data: settings('disabled') })
+    await privateLoad
 
-    expect(api.put).toHaveBeenCalledWith('/tools/settings', {
-      policies: { 'media.generate.image': 'ask' },
-      shellPrefixes: { read: [], write: [] },
-      webFetch: {
-        ...legacyResponse.webFetch,
-        userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-        maxResponseMiB: 64
-      },
-      generateImage: { policy: 'ask', timeoutSeconds: 300 },
-      editImage: { policy: 'ask', timeoutSeconds: 300 },
-      generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
-      generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
-      transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
-      analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 },
-      updateAgentIdentity: { policy: 'ask' }
-    }, { params: { scope: 'instance' } })
+    expect(store.trust).toBe('public')
+    expect(store.policies['network.fetch.public']).toBe('auto')
+    expect(store.loading).toBe(false)
   })
 
-  it('keeps saving disabled after a failed initial load', async () => {
-    api.get.mockRejectedValue(new Error('offline'))
+  it('does not apply a save after the selected branch changes', async () => {
+    let resolveSave
+    api.put.mockImplementation(() => new Promise((resolve) => { resolveSave = resolve }))
     const store = useToolSettingsStore()
+    store.assignSettings(settings('ask'))
+    store.loaded = true
 
-    await expect(store.fetchSettings()).rejects.toThrow('offline')
+    const save = store.saveSettings({ policies: { 'network.fetch.public': 'auto' } })
+    store.selectTrust('public')
+    resolveSave({ data: settings('auto') })
 
+    await expect(save).resolves.toBeUndefined()
+    expect(store.trust).toBe('public')
     expect(store.loaded).toBe(false)
-    expect(store.loadFailed).toBe(true)
   })
 
-  it('loads the narrow tool availability contract for chat', async () => {
-    api.get.mockResolvedValue({
-      data: {
-        webFetch: { enabled: false, defaultPolicy: 'ask' },
-        transcribeAudio: { policy: 'ask' }
+  it('loads and saves admin-only tool configuration without scope parameters', async () => {
+    api.get.mockResolvedValue({ data: configuration })
+    api.put.mockResolvedValue({ data: configuration })
+    const store = useToolSettingsStore()
+    const payload = {
+      toolAvailability: { webfetch: true },
+      resourceAvailability: {
+        webfetch: { 'network.fetch.public': true, 'network.fetch.private': false }
+      },
+      webFetch: configuration.webFetch
+    }
+
+    await store.fetchConfiguration()
+    await store.saveConfiguration(payload)
+
+    expect(api.get).toHaveBeenCalledWith('/tools/configuration')
+    expect(api.put).toHaveBeenCalledWith('/tools/configuration', payload)
+    expect(store.configurationGroups).toEqual(configuration.groups)
+    expect(store.configurationWebFetch).toEqual(configuration.webFetch)
+  })
+
+  it('updates the loaded policy catalog after availability changes', () => {
+    const store = useToolSettingsStore()
+    store.assignSettings({
+      ...settings(),
+      groups: [{
+        ...settings().groups[0],
+        tools: [{
+          ...settings().groups[0].tools[0],
+          available: true,
+          actions: settings().groups[0].tools[0].actions.map((action) => ({
+            ...action,
+            available: true
+          }))
+        }]
+      }]
+    })
+
+    store.assignConfiguration({
+      ...configuration,
+      toolAvailability: { webfetch: false },
+      resourceAvailability: {
+        webfetch: { 'network.fetch.public': false, 'network.fetch.private': false }
       }
     })
+
+    expect(store.groups[0].tools[0].available).toBe(false)
+    expect(store.groups[0].tools[0].actions.every((action) => action.available === false)).toBe(true)
+    expect(store.transcribeAudio.timeoutSeconds).toBe(180)
+  })
+
+  it('discards an older configuration response', async () => {
+    const requests = []
+    api.get.mockImplementation(() => new Promise((resolve) => requests.push(resolve)))
+    const store = useToolSettingsStore()
+
+    const first = store.fetchConfiguration()
+    const second = store.fetchConfiguration()
+    requests[1]({ data: configuration })
+    await second
+    requests[0]({ data: { ...configuration, groups: [] } })
+    await first
+
+    expect(store.configurationGroups).toEqual(configuration.groups)
+  })
+
+  it('keeps the narrow availability endpoint for dictation state', async () => {
+    api.get.mockResolvedValue({ data: { tools: { transcribe_audio: true }, resources: {} } })
     const store = useToolSettingsStore()
 
     await store.fetchAvailability()
 
     expect(api.get).toHaveBeenCalledWith('/tools/availability')
-    expect(store.webFetch).toEqual(expect.objectContaining({ enabled: false, defaultPolicy: 'ask' }))
-    expect(store.transcribeAudio).toEqual({ policy: 'ask', timeoutSeconds: 300 })
-    expect(store.loaded).toBe(true)
+    expect(store.transcribeAudioAvailable).toBe(true)
   })
 
-  it('keeps integration tools out of the tool settings payload', async () => {
-    api.get.mockResolvedValue({
-      data: {
-        groups: [{
-          id: 'calendar',
-          tools: [
-            {
-              name: 'session_read',
-              source: { type: 'builtin' },
-              actions: [{ capability: 'session.read', configurable: true }]
-            },
-            {
-              name: 'calendar_query_events',
-              source: { type: 'integration' },
-              actions: [{ capability: 'calendar.read', configurable: true }]
-            }
-          ]
-        }],
-        policies: { 'session.read': 'ask', 'calendar.read': 'auto' }
-      }
-    })
-    const store = useToolSettingsStore()
-
-    await store.fetchSettings()
-
-    expect(store.groups[0].tools.map((tool) => tool.name)).toEqual(['session_read'])
-    expect(store.policies).toEqual({ 'session.read': 'ask' })
-  })
-
-  it('loads personal settings through the gate and resets the personal document', async () => {
-    const instance = {
-      groups: [],
-      policies: {},
-      webFetch: { enabled: true, defaultPolicy: 'ask', allowedPrivateOrigins: [] }
-    }
-    api.get.mockImplementation((url) => Promise.resolve({
-      data: url === '/tools/personal-settings' ? { enabled: true } : instance
-    }))
-    api.delete.mockResolvedValue({ data: instance })
+  it('reloads the selected trust branch after resetting personal settings', async () => {
+    api.delete.mockResolvedValue({ data: {} })
+    api.get.mockResolvedValue({ data: settings() })
     const store = useToolSettingsStore()
     store.selectScope('personal')
+    store.selectTrust('public')
 
-    await store.fetchSettings()
     await store.resetPersonalSettings()
 
-    expect(api.get).toHaveBeenCalledWith('/tools/personal-settings')
-    expect(api.get).toHaveBeenCalledWith('/tools/settings', { params: { scope: 'personal' } })
     expect(api.delete).toHaveBeenCalledWith('/tools/settings', { params: { scope: 'personal' } })
+    expect(api.get).toHaveBeenCalledWith('/tools/settings', {
+      params: { scope: 'personal', trust: 'public' }
+    })
   })
 })

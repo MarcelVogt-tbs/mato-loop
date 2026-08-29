@@ -43,6 +43,12 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         generate_image={"policy": ToolExecutionPolicy.AUTO},
         transcribe_audio={"policy": ToolExecutionPolicy.AUTO},
         analyze_video={"policy": ToolExecutionPolicy.ASK},
+        public_permissions={
+            "policies": {
+                "media.generate.image": "auto",
+                "media.transcribe.audio": "auto",
+            }
+        },
     )
     capabilities = {
         "media.generate.image",

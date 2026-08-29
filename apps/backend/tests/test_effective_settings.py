@@ -22,6 +22,7 @@ from mato_loop_backend.settings import (
     load_effective_integrations,
     load_effective_tools,
 )
+from mato_loop_backend.settings.effective import personal_integration_tool_settings
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 
@@ -232,17 +233,14 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
     monkeypatch,
 ) -> None:
     instance = ToolSettings(
-        policies={"instance": "ask"},
+        public_permissions={"policies": {"instance": "ask"}},
         web_fetch=WebFetchSettings(
-            enabled=False,
             user_agent="Instance Agent",
             max_response_mib=7,
-            default_policy="ask",
-            allowed_private_origins=["https://internal.example"],
         ),
     )
     personal = UserToolSettings(
-        policies={"personal": "auto"},
+        public_permissions={"policies": {"personal": "auto"}},
         web_search={"primaryProvider": "searxng:personal"},
         default_calendar={
             "integrationId": uuid4(),
@@ -250,11 +248,8 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
         },
         resource_labels={"personal": {"calendar:test": "Privat"}},
         web_fetch=WebFetchSettings(
-            enabled=True,
             user_agent="Personal Agent",
             max_response_mib=99,
-            default_policy="auto_allowed",
-            allowed_private_origins=["https://personal.example"],
         ),
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
@@ -262,12 +257,9 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
 
     effective = await load_effective_tools(AsyncMock(spec=AsyncSession), uuid4())
 
-    assert effective.policies == {"personal": "auto"}
-    assert effective.web_fetch.enabled is True
-    assert effective.web_fetch.default_policy == "auto_allowed"
+    assert effective.permissions.policies == {"instance": "ask", "personal": "auto"}
     assert effective.web_fetch.user_agent == "Instance Agent"
     assert effective.web_fetch.max_response_mib == 7
-    assert effective.web_fetch.allowed_private_origins == ["https://internal.example"]
     assert effective.web_search.primary_provider == "searxng:personal"
     assert effective.default_calendar == personal.default_calendar
     assert effective.resource_labels == personal.resource_labels
@@ -279,21 +271,51 @@ async def test_effective_tools_keeps_personal_integration_defaults_when_tool_sna
     integration_id = uuid4()
     instance = ToolSettings(
         personal_settings_enabled=False,
-        policies={"filesystem.delete": "ask"},
-        integration_policies={str(integration_id): {"mail.read": "ask"}},
+        public_permissions={
+            "policies": {"filesystem.delete": "ask"},
+            "integrationPolicies": {str(integration_id): {"mail.read": "ask"}},
+        },
     )
     personal = UserToolSettings(
         personal_tool_defaults_enabled=False,
-        policies={"filesystem.delete": "auto"},
-        integration_policies={str(integration_id): {"mail.read": "disabled"}},
+        public_permissions={
+            "policies": {"filesystem.delete": "auto"},
+            "integrationPolicies": {
+                str(integration_id): {"mail.read": "disabled"}
+            },
+        },
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
 
     effective = await load_effective_tools(AsyncMock(spec=AsyncSession), uuid4())
 
-    assert effective.policies == instance.policies
-    assert effective.integration_policies == personal.integration_policies
+    assert effective.permissions.policies == instance.public_permissions.policies
+    assert (
+        effective.permissions.integration_policies
+        == personal.public_permissions.integration_policies
+    )
+
+
+def test_personal_integration_tool_settings_do_not_snapshot_policies() -> None:
+    instance = ToolSettings(
+        public_permissions={
+            "policies": {"filesystem.delete": "auto"},
+            "integrationPolicies": {"shared": {"mail.read": "ask"}},
+        },
+        private_permissions={
+            "integrationPolicies": {"shared": {"mail.read": "disabled"}}
+        },
+        web_search={"primaryProvider": "searxng:instance"},
+    )
+
+    personal = personal_integration_tool_settings(instance)
+
+    assert personal.personal_tool_defaults_enabled is False
+    assert personal.public_permissions.integration_policies == {}
+    assert personal.private_permissions.integration_policies == {}
+    assert personal.public_permissions.policies == {}
+    assert personal.web_search == instance.web_search
 
 
 async def test_scoped_integration_management_enforces_admin_and_personal_gates(monkeypatch) -> None:

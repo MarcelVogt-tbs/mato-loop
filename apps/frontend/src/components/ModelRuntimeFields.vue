@@ -116,27 +116,6 @@
           hint="Eingabearten, die das Modell nativ verarbeiten kann."
           @update:model-value="form.supportsImageInput = $event.includes('image')"
         />
-        <div class="model-runtime-wide">
-          <q-select
-            v-model="form.webfetchPolicy"
-            outlined
-            hide-bottom-space
-            emit-value
-            map-options
-            label="Webfetch-Override"
-            :options="WEBFETCH_POLICY_OPTIONS"
-            hint="Überschreibt die globale Standardpolicy nur für dieses Modell."
-          />
-          <div class="row items-center q-gutter-sm q-mt-sm">
-            <span class="text-caption app-muted">Effektiv:</span>
-            <q-chip dense square :color="effectivePolicyColor" text-color="white" icon="policy">
-              {{ form.supportsTools ? webfetchPolicyLabel(effectiveWebfetchPolicy) : 'Nicht verfügbar' }}
-            </q-chip>
-            <span v-if="!form.supportsTools && effectiveWebfetchPolicy !== 'disabled'" class="text-caption text-warning">
-              Ohne Tool-Unterstützung kann Webfetch nicht angeboten werden.
-            </span>
-          </div>
-        </div>
         <div v-if="reasoningSummaryAvailable" class="model-runtime-wide">
           <q-toggle
             :model-value="reasoningSummaryForced || form.reasoningSummary"
@@ -158,7 +137,6 @@
 
 <script setup>
 import { computed } from 'vue'
-import { WEBFETCH_POLICY_OPTIONS, webfetchPolicyLabel } from 'src/utils/webfetch'
 
 defineOptions({ name: 'ModelRuntimeFields' })
 
@@ -187,7 +165,6 @@ const inputModalityOptions = [
 const props = defineProps({
   reasoningSummaryAvailable: Boolean,
   reasoningSummaryForced: Boolean,
-  effectiveWebfetchPolicy: { type: String, default: null },
   providerTrustLevel: { type: String, default: 'public' },
   providerPseudonymizationEnabled: { type: Boolean, default: true }
 })
@@ -206,13 +183,6 @@ const contextWindowHint = computed(() => {
   }
   return `Manueller Override; Providerwert: ${form.value.discoveredContextWindowTokens.toLocaleString('de-DE')} Tokens.`
 })
-
-const effectivePolicyColor = computed(() => ({
-  disabled: 'grey-7',
-  ask: 'warning',
-  auto_public: 'primary',
-  auto_allowed: 'positive'
-})[form.value.supportsTools ? props.effectiveWebfetchPolicy : 'disabled'] || 'grey-7')
 
 function positiveIntegerRule(value) {
   return Number.isInteger(Number(value)) && Number(value) > 0 || 'Bitte gib eine positive ganze Zahl ein.'

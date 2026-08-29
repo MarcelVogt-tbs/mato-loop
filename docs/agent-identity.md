@@ -1,6 +1,6 @@
 # Agent Identity
 
-MatoLoop has one user-scoped shared agent identity. A selected agent profile may extend its persona and instructions or replace them for that session. Its sparse private and public tool-policy overrides remain separate from persona text and are enforced by the host.
+MatoLoop has one user-scoped shared agent identity. A selected agent profile may extend that persona or omit it for the session, add its own optional persona, and supply separate task instructions. Its sparse private and public tool-policy overrides remain separate from both prompt fields and are enforced by the host.
 
 ## Persistence
 

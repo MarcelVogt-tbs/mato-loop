@@ -11,9 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    HttpUrl,
     PrivateAttr,
-    TypeAdapter,
     computed_field,
     field_validator,
     model_validator,
@@ -93,13 +91,6 @@ class TrustLevel(StrEnum):
     PRIVATE = "private"
 
 
-class WebFetchPolicy(StrEnum):
-    DISABLED = "disabled"
-    ASK = "ask"
-    AUTO_PUBLIC = "auto_public"
-    AUTO_ALLOWED = "auto_allowed"
-
-
 class ToolExecutionPolicy(StrEnum):
     DISABLED = "disabled"
     ASK = "ask"
@@ -140,6 +131,7 @@ class AgentProfile(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
+    persona: str = Field(default="", max_length=16_000)
     instructions: str = Field(min_length=1, max_length=16_000)
     persona_mode: AgentPersonaMode = AgentPersonaMode.EXTEND
     private_permissions: AgentProfilePermissions = Field(
@@ -150,7 +142,7 @@ class AgentProfile(BaseModel):
     )
     owner_id: UUID | None = Field(default=None, exclude=True)
 
-    @field_validator("name", "description", "instructions", mode="before")
+    @field_validator("name", "description", "persona", "instructions", mode="before")
     @classmethod
     def normalize_text(cls, value: Any, info: Any) -> Any:
         if not isinstance(value, str):
@@ -164,7 +156,7 @@ class AgentProfile(BaseModel):
 def default_agent_profile() -> AgentProfile:
     return AgentProfile(
         id=DEFAULT_AGENT_PROFILE_ID,
-        name="Default",
+        name="Allgemein",
         description="Standardagent für Sessions ohne ausgewähltes Profil.",
         instructions="Follow the user's request and the shared persona.",
     )
@@ -183,10 +175,7 @@ def cap_agent_profile_policy(
     permissions = settings._agent_permissions
     if settings._agent_profile_unavailable:
         return ToolExecutionPolicy.DISABLED
-    if permissions is None or capability in {
-        "network.fetch",
-        "session.tool_result.read",
-    }:
+    if permissions is None or capability == "session.tool_result.read":
         return baseline
     profile_policy = permissions.policies.get(capability)
     if integration_id is not None:
@@ -228,14 +217,6 @@ class IntegrationAdapterAvailability(StrEnum):
     FULL = "full"
     INSTANCE_ONLY = "instance_only"
     DISABLED = "disabled"
-
-
-class ModelWebFetchPolicy(StrEnum):
-    INHERIT = "inherit"
-    DISABLED = "disabled"
-    ASK = "ask"
-    AUTO_PUBLIC = "auto_public"
-    AUTO_ALLOWED = "auto_allowed"
 
 
 class ModelOrigin(StrEnum):
@@ -320,10 +301,6 @@ class ModelConfig(BaseModel):
         validation_alias=AliasChoices(
             "pseudonymization_enabled", "pseudonymizationEnabled"
         ),
-    )
-    webfetch_policy: ModelWebFetchPolicy = Field(
-        default=ModelWebFetchPolicy.INHERIT,
-        validation_alias=AliasChoices("webfetch_policy", "webfetchPolicy"),
     )
     config: dict[str, Any] = Field(default_factory=dict)
     context_window_tokens: int = Field(
@@ -482,32 +459,9 @@ class IntegrationInstance(BaseModel):
     _execution_operations: frozenset[str] | None = PrivateAttr(default=None)
 
 
-_HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
-
-
-def canonicalize_http_origin(value: str) -> str:
-    if not isinstance(value, str):
-        raise ValueError("origin must be a string")
-    url = _HTTP_URL_ADAPTER.validate_python(value)
-    if url.username is not None or url.password is not None:
-        raise ValueError("origin must not contain credentials")
-    if url.query is not None or url.fragment is not None:
-        raise ValueError("origin must not contain query or fragment")
-    if url.path != "/":
-        raise ValueError("origin must not contain a path")
-
-    host = url.host
-    if host is None:
-        raise ValueError("origin must contain a host")
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    default_port = 80 if url.scheme == "http" else 443
-    port = f":{url.port}" if url.port is not None and url.port != default_port else ""
-    return f"{url.scheme}://{host}{port}"
-
-
 class WebFetchSettings(BaseModel):
-    enabled: bool = True
+    model_config = ConfigDict(extra="forbid")
+
     user_agent: str = Field(
         default=DEFAULT_WEBFETCH_USER_AGENT,
         min_length=1,
@@ -520,14 +474,6 @@ class WebFetchSettings(BaseModel):
         le=256,
         validation_alias=AliasChoices("max_response_mib", "maxResponseMiB"),
     )
-    default_policy: WebFetchPolicy = Field(
-        default=WebFetchPolicy.AUTO_PUBLIC,
-        validation_alias=AliasChoices("default_policy", "defaultPolicy"),
-    )
-    allowed_private_origins: list[str] = Field(
-        default_factory=list,
-        validation_alias=AliasChoices("allowed_private_origins", "allowedPrivateOrigins"),
-    )
 
     @field_validator("user_agent", mode="before")
     @classmethod
@@ -537,19 +483,6 @@ class WebFetchSettings(BaseModel):
         if any(not 32 <= ord(character) <= 126 for character in value):
             raise ValueError("user_agent must contain visible ASCII characters only")
         return value.strip()
-
-    @field_validator("allowed_private_origins", mode="before")
-    @classmethod
-    def validate_allowed_private_origins(cls, value: Any) -> Any:
-        if not isinstance(value, (list, tuple, set)):
-            return value
-        origins: list[str] = []
-        for item in value:
-            origin = canonicalize_http_origin(item)
-            if origin not in origins:
-                origins.append(origin)
-        return origins
-
 
 class WebSearchToolSettings(BaseModel):
     primary_provider: str = Field(
@@ -638,17 +571,28 @@ class DefaultTaskListSettings(BaseModel):
 class ToolSettingsBase(SettingsDocument):
     _agent_permissions: AgentProfilePermissions | None = PrivateAttr(default=None)
     _agent_profile_unavailable: bool = PrivateAttr(default=False)
+    _trust_level: TrustLevel = PrivateAttr(default=TrustLevel.PUBLIC)
 
-    policies: dict[str, ToolExecutionPolicy] = Field(default_factory=dict)
-    integration_policies: dict[str, dict[str, ToolExecutionPolicy]] = Field(
-        default_factory=dict,
-        validation_alias=AliasChoices("integration_policies", "integrationPolicies"),
+    private_permissions: AgentProfilePermissions = Field(
+        default_factory=AgentProfilePermissions,
+        validation_alias=AliasChoices("private_permissions", "privatePermissions"),
     )
-    resource_policies: dict[
-        str, dict[str, dict[str, ToolExecutionPolicy]]
-    ] = Field(
+    public_permissions: AgentProfilePermissions = Field(
+        default_factory=AgentProfilePermissions,
+        validation_alias=AliasChoices("public_permissions", "publicPermissions"),
+    )
+    tool_availability: dict[str, bool] = Field(
         default_factory=dict,
-        validation_alias=AliasChoices("resource_policies", "resourcePolicies"),
+        validation_alias=AliasChoices("tool_availability", "toolAvailability"),
+    )
+    resource_availability: dict[str, dict[str, bool]] = Field(
+        default_factory=lambda: {
+            "webfetch": {
+                "network.fetch.public": True,
+                "network.fetch.private": False,
+            }
+        },
+        validation_alias=AliasChoices("resource_availability", "resourceAvailability"),
     )
     resource_labels: dict[str, dict[str, str]] = Field(
         default_factory=dict,
@@ -704,6 +648,22 @@ class ToolSettingsBase(SettingsDocument):
         default_factory=PolicyToolSettings,
         validation_alias=AliasChoices("update_agent_identity", "updateAgentIdentity"),
     )
+
+    @property
+    def permissions(self) -> AgentProfilePermissions:
+        return (
+            self.private_permissions
+            if self._trust_level == TrustLevel.PRIVATE
+            else self.public_permissions
+        )
+
+    def select_trust(self, trust_level: TrustLevel) -> ToolSettingsBase:
+        self._trust_level = trust_level
+        return self
+
+    def webfetch_resource_available(self, capability: str) -> bool:
+        default = capability != "network.fetch.private"
+        return self.resource_availability.get("webfetch", {}).get(capability, default)
 
 
 class ToolSettings(ToolSettingsBase):

@@ -17,7 +17,6 @@ from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     InstanceLimits,
     SettingsStore,
-    ToolExecutionPolicy,
     load_effective_tools,
 )
 
@@ -47,7 +46,7 @@ async def create_transcription(
 ) -> dict[str, str]:
     settings = await load_effective_tools(db, user.id)
     instance_limits = await SettingsStore.load(db, InstanceLimits)
-    if settings.transcribe_audio.policy == ToolExecutionPolicy.DISABLED:
+    if not settings.tool_availability.get("transcribe_audio", True):
         await audio.close()
         raise ApiError(409, "tool.unavailable")
     try:

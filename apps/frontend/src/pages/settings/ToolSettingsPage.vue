@@ -2,343 +2,362 @@
   <section>
     <header class="settings-section-header">
       <div>
-        <h2 class="text-h6 text-weight-bold q-my-none">Tools</h2>
+        <div class="row items-center q-gutter-sm">
+          <h2 class="text-h6 text-weight-bold q-my-none">Tools</h2>
+          <q-badge v-if="activeDirty" color="warning" text-color="black" label="Ungespeichert" />
+        </div>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Eingebaute Werkzeuge gruppiert und global steuern.
+          Richtlinien und technische Verfügbarkeit eingebauter Werkzeuge verwalten.
         </p>
       </div>
-      <div class="row items-center q-gutter-sm">
-        <SettingsScopeToggle
-          :model-value="tools.scope"
-          :is-admin="auth.isAdmin"
-          :disable="tools.loading || tools.saving || gateLoading"
-          @update:model-value="changeScope"
-        />
+      <div class="settings-scope-actions row items-center col-auto">
         <q-btn
-          v-if="tools.scope === 'personal'"
+          class="col-auto"
+          v-if="tab === 'policies' && tools.scope === 'personal'"
           outline
           no-caps
+          no-wrap
           color="primary"
           icon="restart_alt"
           label="Auf Instanzstandard zurücksetzen"
-          :disable="personalBlocked || tools.loading || tools.saving"
+          :disable="personalBlocked || activeLoading || activeSaving"
           @click="resetPersonalSettings"
         />
+        <SettingsScopeToggle
+          v-if="tab === 'policies'"
+          :model-value="tools.scope"
+          :is-admin="auth.isAdmin"
+          :disable="activeLoading || activeSaving || gateLoading"
+          @update:model-value="changeScope"
+        />
         <q-btn
+          class="col-auto"
           color="primary"
           unelevated
           no-caps
+          no-wrap
           icon="save"
           label="Speichern"
-          :loading="tools.saving"
-          :disable="personalBlocked || tools.loading || !tools.loaded"
+          :loading="activeSaving"
+          :disable="activeLoading || !activeLoaded || !activeDirty || personalBlocked"
           @click="save"
         />
       </div>
     </header>
 
-    <q-card v-if="auth.isAdmin && tools.scope === 'instance'" flat class="app-surface-tonal q-mb-md">
-      <q-card-section class="row items-center justify-between q-gutter-md">
-        <div>
-          <div class="text-subtitle2 text-weight-bold">Persönliche Tool-Einstellungen</div>
-          <div class="text-caption app-muted">Erlaubt Benutzern eigene Tool-Richtlinien festzulegen.</div>
-        </div>
-        <q-toggle
-          :model-value="tools.personalSettingsEnabled"
-          color="primary"
-          label="Erlaubt"
-          :disable="gateLoading"
-          @update:model-value="togglePersonalSettings"
-        />
-      </q-card-section>
-    </q-card>
-
-    <q-banner v-if="tools.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
-      <template #avatar><q-icon name="person" color="primary" /></template>
-      {{ personalBlocked
-        ? 'Persönliche Tool-Einstellungen wurden für diese Instanz deaktiviert. Vorhandene Einstellungen bleiben gespeichert, können aber nicht bearbeitet werden.'
-        : 'Persönliche Tool-Richtlinien ersetzen die Instanzvorgaben. Technische Webfetch-Grenzen werden von der Instanz übernommen.' }}
-    </q-banner>
-
-    <q-form
-      ref="formRef"
-      :class="{ disabled: personalBlocked }"
-      :inert="personalBlocked"
-      @submit.prevent="save"
+    <q-tabs
+      :model-value="tab"
+      dense
+      no-caps
+      align="left"
+      active-color="primary"
+      indicator-color="primary"
+      class="q-mb-lg"
+      @update:model-value="changeTab"
     >
-      <q-banner v-if="tools.loadFailed" rounded class="bg-negative text-white q-mb-md">
-        <template #avatar><q-icon name="error_outline" /></template>
-        Die Tool-Einstellungen konnten nicht geladen werden.
-        <template #action>
-          <q-btn flat no-caps color="white" label="Erneut laden" @click="load" />
-        </template>
-      </q-banner>
+      <q-tab v-if="auth.isAdmin" name="configuration" icon="build" label="Verfügbare Tools" />
+      <q-tab name="policies" icon="policy" label="Policies" />
+    </q-tabs>
 
-      <q-card
-        v-for="group in tools.groups"
-        :key="group.id"
-        flat
-        class="app-surface tool-settings-card q-mb-md"
-      >
-        <q-card-section class="row items-center q-gutter-md">
-          <q-avatar color="primary" text-color="white" :icon="group.icon" />
-          <div>
-            <div class="text-subtitle1 text-weight-bold">{{ group.label }}</div>
-            <div class="text-body2 app-muted">Tools und Richtlinien dieser Gruppe.</div>
-          </div>
-        </q-card-section>
-        <q-separator />
-
-        <template v-for="(tool, toolIndex) in group.tools" :key="tool.name">
-          <q-card-section class="tool-settings-item">
-            <div class="row items-start q-col-gutter-md">
-              <div class="col-12 col-md row items-start no-wrap q-gutter-md">
-                <q-avatar color="primary" text-color="white" :icon="tool.icon" />
-                <div class="col">
-                  <div class="row items-center q-gutter-sm">
-                    <div class="text-subtitle2 text-weight-bold">{{ tool.label }}</div>
-                  </div>
-                  <div class="text-caption app-muted">
-                    {{ TOOL_DESCRIPTIONS[tool.name] || tool.name }}
-                  </div>
-                </div>
-              </div>
-
-              <div class="col-12 col-md-5 q-gutter-sm">
-                <q-select
-                  v-for="action in configurableActions(tool)"
-                  :key="action.capability"
-                  v-model="form.policies[action.capability]"
-                  outlined
-                  dense
-                  emit-value
-                  map-options
-                  :label="actionLabel(tool, action)"
-                  :options="actionPolicyOptions(action)"
-                  :hint="policyHint(form.policies[action.capability])"
-                />
-                <q-chip
-                  v-for="action in fixedActions(tool)"
-                  :key="action.capability"
-                  dense
-                  outline
-                  color="primary"
-                  :label="fixedActionLabel(tool, action)"
-                />
-              </div>
+    <q-tab-panels :model-value="tab" animated class="bg-transparent">
+      <q-tab-panel name="policies" class="q-pa-none">
+        <q-card v-if="auth.isAdmin && tools.scope === 'instance'" flat class="app-surface-tonal q-mb-md">
+          <q-card-section class="row items-center justify-between q-gutter-md">
+            <div>
+              <div class="text-subtitle2 text-weight-bold">Persönliche Tool-Einstellungen</div>
+              <div class="text-caption app-muted">Erlaubt Benutzern eigene Tool-Richtlinien festzulegen.</div>
             </div>
-
-            <q-banner
-              v-if="tool.actions?.some((action) => action.capability === 'process.execute') && form.policies['process.execute'] === 'auto'"
-              rounded
-              class="tool-settings-detail app-surface-tonal"
-            >
-              <template #avatar><q-icon name="warning_amber" color="warning" /></template>
-              Befehle werden ohne einzelne Freigabe mit den Rechten des Betriebssystembenutzers des Computers ausgeführt.
-            </q-banner>
-
-            <div v-if="tool.name === 'shell_run'" class="tool-settings-detail q-gutter-md">
-              <q-banner rounded class="app-surface-tonal">
-                <template #avatar><q-icon name="rule" color="primary" /></template>
-                Ein Präfix pro Zeile. Es wird tokenbasiert geprüft und gilt nur für die jeweilige
-                Klassifikation. Alle Teilbefehle müssen erlaubt sein.
-              </q-banner>
-              <q-input
-                v-model="shellPrefixText.read"
-                outlined
-                type="textarea"
-                autogrow
-                label="Erlaubte Präfixe für lesende Befehle"
-                hint="Beispiel: cat"
-                :rules="[shellPrefixRule]"
-                lazy-rules
-              />
-              <q-input
-                v-model="shellPrefixText.write"
-                outlined
-                type="textarea"
-                autogrow
-                label="Erlaubte Präfixe für schreibende Befehle"
-                hint="Beispiel: git status"
-                :rules="[shellPrefixRule]"
-                lazy-rules
-              />
-            </div>
-
-            <div v-else-if="tool.name === 'webfetch'" class="tool-settings-detail q-gutter-md">
-              <q-toggle v-model="form.enabled" color="primary" label="Global aktiv" />
-              <q-banner v-if="!form.enabled" rounded class="app-surface-tonal">
-                <template #avatar><q-icon name="block" color="warning" /></template>
-                Webfetch ist für alle Modelle deaktiviert. Modell-Overrides bleiben gespeichert.
-              </q-banner>
-              <q-select
-                v-model="form.defaultPolicy"
-                outlined
-                emit-value
-                map-options
-                label="Globale Standardpolicy"
-                :options="WEBFETCH_DEFAULT_POLICY_OPTIONS"
-                hint="Modelle mit „Globalen Standard übernehmen“ verwenden diese Policy."
-              />
-              <q-input
-                v-if="tools.scope === 'instance'"
-                v-model.trim="form.userAgent"
-                outlined
-                maxlength="512"
-                label="User-Agent"
-                hint="Browserkennung, die Webfetch bei HTTP-Anfragen sendet."
-                :rules="[userAgentRule]"
-                lazy-rules
-              />
-              <q-input
-                v-if="tools.scope === 'instance'"
-                v-model.number="form.maxResponseMiB"
-                outlined
-                type="number"
-                min="1"
-                max="256"
-                suffix="MiB"
-                label="Maximale Antwortgröße"
-                hint="Gilt gemeinsam für Webseiten, PDFs, Text und Bilder."
-                :rules="[responseLimitRule]"
-                lazy-rules
-              />
-              <q-banner v-if="form.defaultPolicy === 'auto_allowed'" rounded class="app-surface-tonal">
-                <template #avatar><q-icon name="warning_amber" color="warning" /></template>
-                Erlaubte private Origins können ohne einzelne Rückfrage abgerufen werden.
-              </q-banner>
-              <div v-if="tools.scope === 'instance'">
-                <div class="text-subtitle2">Erlaubte private Origins</div>
-                <div class="text-caption app-muted q-mb-sm">
-                  Nur vollständige Origins ohne Pfad oder Zugangsdaten. Gefährliche Adressen bleiben blockiert.
-                </div>
-                <div
-                  v-for="(_, index) in form.allowedPrivateOrigins"
-                  :key="index"
-                  class="tool-origin-row q-mb-sm"
-                >
-                  <q-input
-                    v-model="form.allowedPrivateOrigins[index]"
-                    outlined
-                    dense
-                    :label="`Private Origin ${index + 1}`"
-                    :rules="[originRule]"
-                    lazy-rules
-                  >
-                    <template #prepend><q-icon name="lan" /></template>
-                  </q-input>
-                  <q-btn
-                    flat
-                    round
-                    dense
-                    color="negative"
-                    icon="delete_outline"
-                    :aria-label="`Private Origin ${index + 1} entfernen`"
-                    @click="form.allowedPrivateOrigins.splice(index, 1)"
-                  />
-                </div>
-                <q-btn
-                  outline
-                  no-caps
-                  color="primary"
-                  icon="add"
-                  label="Origin hinzufügen"
-                  @click="form.allowedPrivateOrigins.push('')"
-                />
-              </div>
-            </div>
-
-            <div v-else-if="mediaToolsByName[tool.name]" class="tool-settings-detail q-gutter-md">
-              <q-input
-                v-model.number="form[mediaToolsByName[tool.name].field].timeoutSeconds"
-                outlined
-                type="number"
-                min="10"
-                max="3600"
-                step="10"
-                label="Zeitlimit"
-                suffix="Sekunden"
-                :rules="[timeoutRule]"
-                lazy-rules
-                hint="Nach dieser Dauer wird die Provider-Anfrage abgebrochen."
-                persistent-hint
-              />
-              <q-banner rounded class="app-surface-tonal">
-                <template #avatar>
-                  <q-icon
-                    :name="form.policies[mediaToolsByName[tool.name].capability] === 'auto'
-                      ? 'warning_amber'
-                      : mediaToolsByName[tool.name].warningIcon"
-                    :color="form.policies[mediaToolsByName[tool.name].capability] === 'auto'
-                      ? 'warning'
-                      : 'primary'"
-                  />
-                </template>
-                {{ mediaToolsByName[tool.name].warning }}
-                <span v-if="form.policies[mediaToolsByName[tool.name].capability] === 'auto'">
-                  Im Modus „Automatisch“ kann das Modell dies ohne einzelne Rückfrage auslösen.
-                </span>
-              </q-banner>
-            </div>
-
-            <q-banner
-              v-else-if="tool.name === 'update_agent_identity'"
-              rounded
-              class="tool-settings-detail app-surface-tonal"
-            >
-              <template #avatar>
-                <q-icon
-                  :name="form.policies['settings.agent_identity.update'] === 'auto'
-                    ? 'warning_amber'
-                    : 'manage_accounts'"
-                  :color="form.policies['settings.agent_identity.update'] === 'auto'
-                    ? 'warning'
-                    : 'primary'"
-                />
-              </template>
-              Das Tool darf nur ausdrückliche Wünsche des Nutzers übernehmen. Im Modus
-              „Automatisch“ wird die persistente Persona ohne einzelne Rückfrage geändert.
-            </q-banner>
-
-            <q-banner
-              v-else-if="tool.name === 'update_user_profile'"
-              rounded
-              class="tool-settings-detail app-surface-tonal"
-            >
-              <template #avatar>
-                <q-icon
-                  :name="form.policies['settings.user_profile.update'] === 'auto'
-                    ? 'warning_amber'
-                    : 'manage_accounts'"
-                  :color="form.policies['settings.user_profile.update'] === 'auto'
-                    ? 'warning'
-                    : 'primary'"
-                />
-              </template>
-              Das Tool darf nur ausdrückliche Wünsche des Nutzers übernehmen. Im Modus
-              „Automatisch“ wird das persönliche Profil ohne einzelne Rückfrage geändert.
-            </q-banner>
+            <q-toggle
+              :model-value="tools.personalSettingsEnabled"
+              color="primary"
+              label="Erlaubt"
+              :disable="gateLoading"
+              @update:model-value="togglePersonalSettings"
+            />
           </q-card-section>
-          <q-separator v-if="toolIndex < group.tools.length - 1" />
-        </template>
-        <q-inner-loading :showing="tools.loading" />
-      </q-card>
-    </q-form>
+        </q-card>
+
+        <q-banner v-if="tools.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
+          <template #avatar><q-icon name="person" color="primary" /></template>
+          {{ personalBlocked
+            ? 'Persönliche Tool-Einstellungen wurden für diese Instanz deaktiviert. Vorhandene Einstellungen bleiben gespeichert, können aber nicht bearbeitet werden.'
+            : 'Persönliche Tool-Richtlinien ersetzen die Instanzvorgaben. Technische Verfügbarkeit und Grenzen werden von der Instanz übernommen.' }}
+        </q-banner>
+
+        <q-card flat class="app-surface-tonal q-mb-md">
+          <q-card-section>
+            <q-btn-toggle
+              :model-value="tools.trust"
+              spread
+              no-caps
+              unelevated
+              toggle-color="primary"
+              :options="TRUST_OPTIONS"
+              :disable="tools.loading || tools.saving"
+              @update:model-value="changeTrust"
+            />
+          </q-card-section>
+        </q-card>
+
+        <q-banner rounded class="app-surface-tonal q-mb-md">
+          <template #avatar><q-icon name="info_outline" color="primary" /></template>
+          Technisch deaktivierte Tools und Ressourcen können keine Aktion ausführen. Ihre Richtlinien bleiben gespeichert.
+        </q-banner>
+
+        <q-form
+          ref="policyFormRef"
+          :class="{ disabled: personalBlocked }"
+          :inert="personalBlocked"
+          @submit.prevent="savePolicies"
+        >
+          <q-banner v-if="tools.loadFailed" rounded class="bg-negative text-white q-mb-md">
+            <template #avatar><q-icon name="error_outline" /></template>
+            Die Tool-Richtlinien konnten nicht geladen werden.
+            <template #action>
+              <q-btn flat no-caps color="white" label="Erneut laden" @click="loadPolicies" />
+            </template>
+          </q-banner>
+
+          <q-card
+            v-for="group in tools.groups"
+            :key="group.id"
+            flat
+            class="app-surface tool-settings-card q-mb-md"
+          >
+            <q-card-section class="row items-center q-gutter-md">
+              <q-avatar color="primary" text-color="white" :icon="group.icon" />
+              <div>
+                <div class="text-subtitle1 text-weight-bold">{{ group.label }}</div>
+                <div class="text-body2 app-muted">Tools und Richtlinien dieser Gruppe.</div>
+              </div>
+            </q-card-section>
+            <q-separator />
+
+            <template v-for="(tool, toolIndex) in group.tools" :key="tool.name">
+              <q-card-section>
+                <div class="row items-start q-col-gutter-md">
+                  <div class="col-12 col-md row items-start no-wrap q-gutter-md">
+                    <q-avatar color="primary" text-color="white" :icon="tool.icon" />
+                    <div class="col">
+                      <div class="row items-center q-gutter-sm">
+                        <div class="text-subtitle2 text-weight-bold">{{ tool.label }}</div>
+                        <q-chip
+                          v-if="tool.available === false"
+                          dense
+                          outline
+                          color="warning"
+                          label="Technisch deaktiviert"
+                        />
+                      </div>
+                      <div class="text-caption app-muted">
+                        {{ TOOL_DESCRIPTIONS[tool.name] || tool.name }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="col-12 col-md-5 q-gutter-sm">
+                    <q-select
+                      v-for="action in configurableActions(tool)"
+                      :key="action.capability"
+                      v-model="policyForm.policies[action.capability]"
+                      outlined
+                      dense
+                      emit-value
+                      map-options
+                      :label="actionLabel(tool, action)"
+                      :options="actionPolicyOptions(action)"
+                      :hint="actionHint(tool, action)"
+                      :disable="actionUnavailable(tool, action)"
+                      persistent-hint
+                    />
+                    <q-chip
+                      v-for="action in fixedActions(tool)"
+                      :key="action.capability"
+                      dense
+                      outline
+                      color="primary"
+                      :label="`Hostgesteuert · ${policyLabel(action.policy)}`"
+                    />
+                  </div>
+                </div>
+
+                <q-banner
+                  v-if="tool.actions?.some((action) => action.capability === 'process.execute') && policyForm.policies['process.execute'] === 'auto'"
+                  rounded
+                  class="tool-settings-detail app-surface-tonal"
+                >
+                  <template #avatar><q-icon name="warning_amber" color="warning" /></template>
+                  Befehle werden ohne einzelne Freigabe mit den Rechten des Betriebssystembenutzers des Computers ausgeführt.
+                </q-banner>
+
+                <div v-if="tool.name === 'shell_run'" class="tool-settings-detail q-gutter-md">
+                  <q-banner rounded class="app-surface-tonal">
+                    <template #avatar><q-icon name="rule" color="primary" /></template>
+                    Ein Präfix pro Zeile. Es wird tokenbasiert geprüft und gilt nur für die jeweilige
+                    Klassifikation. Alle Teilbefehle müssen erlaubt sein.
+                  </q-banner>
+                  <q-input
+                    v-model="shellPrefixText.read"
+                    outlined
+                    type="textarea"
+                    autogrow
+                    label="Erlaubte Präfixe für lesende Befehle"
+                    hint="Beispiel: cat"
+                    :rules="[shellPrefixRule]"
+                    lazy-rules
+                  />
+                  <q-input
+                    v-model="shellPrefixText.write"
+                    outlined
+                    type="textarea"
+                    autogrow
+                    label="Erlaubte Präfixe für schreibende Befehle"
+                    hint="Beispiel: git status"
+                    :rules="[shellPrefixRule]"
+                    lazy-rules
+                  />
+                </div>
+
+                <div v-else-if="mediaToolsByName[tool.name]" class="tool-settings-detail q-gutter-md">
+                  <q-input
+                    v-model.number="policyForm[mediaToolsByName[tool.name].field].timeoutSeconds"
+                    outlined
+                    type="number"
+                    min="10"
+                    max="3600"
+                    step="10"
+                    label="Zeitlimit"
+                    suffix="Sekunden"
+                    :rules="[timeoutRule]"
+                    lazy-rules
+                    hint="Nach dieser Dauer wird die Provider-Anfrage abgebrochen."
+                    persistent-hint
+                  />
+                  <q-banner rounded class="app-surface-tonal">
+                    <template #avatar>
+                      <q-icon
+                        :name="policyForm.policies[mediaToolsByName[tool.name].capability] === 'auto'
+                          ? 'warning_amber'
+                          : mediaToolsByName[tool.name].warningIcon"
+                        :color="policyForm.policies[mediaToolsByName[tool.name].capability] === 'auto'
+                          ? 'warning'
+                          : 'primary'"
+                      />
+                    </template>
+                    {{ mediaToolsByName[tool.name].warning }}
+                    <span v-if="policyForm.policies[mediaToolsByName[tool.name].capability] === 'auto'">
+                      Im Modus „Automatisch“ kann das Modell dies ohne einzelne Rückfrage auslösen.
+                    </span>
+                  </q-banner>
+                </div>
+              </q-card-section>
+              <q-separator v-if="toolIndex < group.tools.length - 1" />
+            </template>
+            <q-inner-loading :showing="tools.loading" />
+          </q-card>
+        </q-form>
+      </q-tab-panel>
+
+      <q-tab-panel v-if="auth.isAdmin" name="configuration" class="q-pa-none">
+        <q-banner v-if="tools.configurationLoadFailed" rounded class="bg-negative text-white q-mb-md">
+          <template #avatar><q-icon name="error_outline" /></template>
+          Die verfügbaren Tools konnten nicht geladen werden.
+          <template #action>
+            <q-btn flat no-caps color="white" label="Erneut laden" @click="loadConfiguration" />
+          </template>
+        </q-banner>
+
+        <q-banner rounded class="app-surface-tonal q-mb-md">
+          <template #avatar><q-icon name="admin_panel_settings" color="primary" /></template>
+          Diese technischen Instanzgrenzen gelten für persönliche und instanzweite Richtlinien sowie für private und öffentliche Modelle.
+        </q-banner>
+
+        <q-form ref="configurationFormRef" @submit.prevent="saveConfiguration">
+          <q-card
+            v-for="group in configurationForm.groups"
+            :key="group.id"
+            flat
+            class="app-surface tool-settings-card q-mb-md"
+          >
+            <q-card-section class="row items-center q-gutter-md">
+              <q-avatar color="primary" text-color="white" :icon="group.icon" />
+              <div class="text-subtitle1 text-weight-bold">{{ group.label }}</div>
+            </q-card-section>
+            <q-separator />
+            <template v-for="(tool, toolIndex) in group.tools" :key="tool.name">
+              <q-card-section>
+                <div class="row items-center q-col-gutter-md">
+                  <div class="col-12 col-sm row items-center no-wrap q-gutter-md">
+                    <q-avatar color="primary" text-color="white" :icon="tool.icon" />
+                    <div>
+                      <div class="text-subtitle2 text-weight-bold">{{ tool.label }}</div>
+                      <div class="text-caption app-muted">{{ TOOL_DESCRIPTIONS[tool.name] || tool.name }}</div>
+                    </div>
+                  </div>
+                  <div class="col-12 col-sm-auto">
+                    <q-toggle v-model="tool.available" color="primary" label="Verfügbar" />
+                  </div>
+                </div>
+
+                <q-list v-if="tool.resources.length" bordered separator class="q-mt-md rounded-borders">
+                  <q-item v-for="resource in tool.resources" :key="resource.key" tag="label">
+                    <q-item-section avatar><q-icon name="lan" color="primary" /></q-item-section>
+                    <q-item-section>
+                      <q-item-label>{{ configurationResourceLabel(resource) }}</q-item-label>
+                      <q-item-label caption>Feste Ressource dieses Tools</q-item-label>
+                    </q-item-section>
+                    <q-item-section side>
+                      <q-toggle v-model="resource.available" color="primary" />
+                    </q-item-section>
+                  </q-item>
+                </q-list>
+
+                <div v-if="tool.name === 'webfetch'" class="tool-settings-detail row q-col-gutter-md">
+                  <div class="col-12 col-md-8">
+                    <q-input
+                      v-model.trim="configurationForm.webFetch.userAgent"
+                      outlined
+                      maxlength="512"
+                      label="User-Agent"
+                      hint="Browserkennung, die Webfetch bei HTTP-Anfragen sendet."
+                      :rules="[userAgentRule]"
+                      lazy-rules
+                    />
+                  </div>
+                  <div class="col-12 col-md-4">
+                    <q-input
+                      v-model.number="configurationForm.webFetch.maxResponseMiB"
+                      outlined
+                      type="number"
+                      min="1"
+                      max="256"
+                      suffix="MiB"
+                      label="Maximale Antwortgröße"
+                      hint="Gilt gemeinsam für alle unterstützten Inhalte."
+                      :rules="[responseLimitRule]"
+                      lazy-rules
+                    />
+                  </div>
+                </div>
+              </q-card-section>
+              <q-separator v-if="toolIndex < group.tools.length - 1" />
+            </template>
+            <q-inner-loading :showing="tools.configurationLoading" />
+          </q-card>
+        </q-form>
+      </q-tab-panel>
+    </q-tab-panels>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import { onBeforeRouteLeave } from 'vue-router'
 import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useAuthStore } from 'stores/auth'
 import { useToolSettingsStore } from 'stores/tool-settings'
-import {
-  DEFAULT_WEBFETCH_USER_AGENT,
-  WEBFETCH_DEFAULT_POLICY_OPTIONS,
-  normalizePrivateOrigin
-} from 'src/utils/webfetch'
 
 defineOptions({ name: 'ToolSettingsPage' })
 
@@ -346,56 +365,29 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const tools = useToolSettingsStore()
 const auth = useAuthStore()
-const formRef = ref(null)
+const policyFormRef = ref(null)
+const configurationFormRef = ref(null)
 const gateLoading = ref(false)
+const tab = ref('policies')
+const savedPolicyPayload = ref('')
+const savedConfigurationPayload = ref('')
+const clone = (value) => JSON.parse(JSON.stringify(value))
 const POLICY_OPTIONS = [
   { label: 'Deaktiviert', value: 'disabled' },
   { label: 'Nachfragen', value: 'ask' },
   { label: 'Automatisch', value: 'auto' }
 ]
+const TRUST_OPTIONS = [
+  { label: 'Private Modelle', value: 'private', icon: 'lock' },
+  { label: 'Öffentliche Modelle', value: 'public', icon: 'public' }
+]
 const mediaTools = [
-  {
-    name: 'generate_image',
-    field: 'generateImage',
-    capability: 'media.generate.image',
-    warningIcon: 'cloud_upload',
-    warning: 'Prompts werden an den konfigurierten Mediendienst übertragen; die Erzeugung kann länger dauern.'
-  },
-  {
-    name: 'edit_image',
-    field: 'editImage',
-    capability: 'media.edit.image',
-    warningIcon: 'privacy_tip',
-    warning: 'Ausgewählte Bilder und der Bearbeitungsprompt werden an den konfigurierten Mediendienst übertragen.'
-  },
-  {
-    name: 'generate_speech',
-    field: 'generateSpeech',
-    capability: 'media.generate.speech',
-    warningIcon: 'cloud_upload',
-    warning: 'Text wird an den konfigurierten Mediendienst übertragen; lange Texte erhöhen Laufzeit und Datenmenge.'
-  },
-  {
-    name: 'generate_audio',
-    field: 'generateAudio',
-    capability: 'media.generate.audio',
-    warningIcon: 'schedule',
-    warning: 'Die Audioerzeugung kann viel Laufzeit und Rechenleistung beanspruchen und externe Datenübertragung auslösen.'
-  },
-  {
-    name: 'transcribe_audio',
-    field: 'transcribeAudio',
-    capability: 'media.transcribe.audio',
-    warningIcon: 'privacy_tip',
-    warning: 'Audioaufnahmen können an den konfigurierten Transkriptionsdienst übertragen werden.'
-  },
-  {
-    name: 'analyze_video',
-    field: 'analyzeVideo',
-    capability: 'media.analyze.video',
-    warningIcon: 'privacy_tip',
-    warning: 'Videobilder und Tonspuren können an die konfigurierten Analyse- und Transkriptionsmodelle übertragen werden.'
-  }
+  { name: 'generate_image', field: 'generateImage', capability: 'media.generate.image', warningIcon: 'cloud_upload', warning: 'Prompts werden an den konfigurierten Mediendienst übertragen; die Erzeugung kann länger dauern.' },
+  { name: 'edit_image', field: 'editImage', capability: 'media.edit.image', warningIcon: 'privacy_tip', warning: 'Ausgewählte Bilder und der Bearbeitungsprompt werden an den konfigurierten Mediendienst übertragen.' },
+  { name: 'generate_speech', field: 'generateSpeech', capability: 'media.generate.speech', warningIcon: 'cloud_upload', warning: 'Text wird an den konfigurierten Mediendienst übertragen; lange Texte erhöhen Laufzeit und Datenmenge.' },
+  { name: 'generate_audio', field: 'generateAudio', capability: 'media.generate.audio', warningIcon: 'schedule', warning: 'Die Audioerzeugung kann viel Laufzeit und Rechenleistung beanspruchen und externe Datenübertragung auslösen.' },
+  { name: 'transcribe_audio', field: 'transcribeAudio', capability: 'media.transcribe.audio', warningIcon: 'privacy_tip', warning: 'Audioaufnahmen können an den konfigurierten Transkriptionsdienst übertragen werden.' },
+  { name: 'analyze_video', field: 'analyzeVideo', capability: 'media.analyze.video', warningIcon: 'privacy_tip', warning: 'Videobilder und Tonspuren können an die konfigurierten Analyse- und Transkriptionsmodelle übertragen werden.' }
 ]
 const mediaToolsByName = Object.fromEntries(mediaTools.map((item) => [item.name, item]))
 const TOOL_DESCRIPTIONS = {
@@ -411,38 +403,33 @@ const TOOL_DESCRIPTIONS = {
   create_directory: 'Legt ein neues Verzeichnis an.',
   delete_path: 'Löscht Dateien oder Verzeichnisse.',
   copy_path: 'Kopiert Dateien oder Verzeichnisse zwischen erlaubten Bereichen.',
-  move_path: 'Verschiebt Dateien oder Verzeichnisse zwischen erlaubten Bereichen.',
+  move_path: 'Verschiebt Dateien oder Verzeichnisse.',
   web_search: 'Sucht über den hostseitig gewählten Provider im Web.',
   webfetch: 'Ruft geprüfte HTTP(S)-Inhalte ab.',
-  fetch_transcript: 'Ruft veröffentlichte Untertitel unterstützter Video-URLs mit der Webzugriffsrichtlinie ab.',
+  fetch_transcript: 'Ruft veröffentlichte Untertitel unterstützter Video-URLs ab.',
   generate_image: 'Erzeugt Bilder aus einer textlichen Beschreibung.',
   edit_image: 'Bearbeitet Bildanhänge, ohne die Originale zu verändern.',
   generate_speech: 'Erzeugt gesprochene WAV-Audiodateien aus Text.',
   generate_audio: 'Erzeugt Audio oder Musik aus einem Prompt.',
   transcribe_audio: 'Transkribiert WAV-Anhänge aus der aktuellen Session.',
-  analyze_video: 'Analysiert MP4- und WebM-Videos aus Sessiondateien oder von einem Computer.',
-  session_read: 'Liest Nachrichten aus der aktuellen oder einer anderen Session.',
-  session_tool_result_read: 'Liest ein persistiertes Tool-Ergebnis der aktuellen Session.',
-  session_browse: 'Listet letzte Sessions auf. Nutzt dieselbe Richtlinie wie die Session-Suche.',
+  analyze_video: 'Analysiert MP4- und WebM-Videos.',
+  session_read: 'Liest Nachrichten aus Sessions.',
+  session_tool_result_read: 'Liest ein persistiertes Tool-Ergebnis.',
+  session_browse: 'Listet letzte Sessions auf.',
   session_search: 'Durchsucht Titel und Inhalte vorhandener Sessions.',
   memory_retrieve: 'Liest passende persistente Memories.',
   memory_write: 'Erstellt oder aktualisiert persistente Memories.',
   update_agent_identity: 'Ändert Name oder Persona-Anweisungen des Agents.',
   update_user_profile: 'Ändert gepflegte Angaben im persönlichen Profil.',
-  list_automations: 'Listet die eigenen Automationen kompakt auf.',
-  get_automation: 'Liest die vollständige Definition einer Automation.',
-  create_automation: 'Erstellt eine Automation mit Zeitplänen und aktuellem Laufzeitkontext.',
-  edit_automation: 'Ersetzt die Definition einer Automation an einer exakten Revision.',
-  run_automation: 'Startet einen manuellen Lauf einer Automation.',
-  delete_automation: 'Löscht eine Automation samt Laufhistorie dauerhaft.'
+  list_automations: 'Listet vorhandene Automationen auf.',
+  get_automation: 'Liest die Details einer Automation.',
+  create_automation: 'Erstellt eine neue geplante oder einmalige Automation.',
+  edit_automation: 'Ändert eine vorhandene Automation.',
+  run_automation: 'Startet eine Automation sofort.',
+  delete_automation: 'Löscht eine Automation samt Verlauf.'
 }
-const form = reactive({
+const policyForm = reactive({
   policies: {},
-  enabled: true,
-  userAgent: DEFAULT_WEBFETCH_USER_AGENT,
-  maxResponseMiB: 64,
-  defaultPolicy: 'auto_public',
-  allowedPrivateOrigins: [],
   generateImage: { policy: 'disabled', timeoutSeconds: 300 },
   editImage: { policy: 'ask', timeoutSeconds: 300 },
   generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
@@ -451,26 +438,18 @@ const form = reactive({
   analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 }
 })
 const shellPrefixText = reactive({ read: '', write: '' })
-const personalBlocked = computed(() => (
-  tools.scope === 'personal' && !tools.personalSettingsEnabled
-))
-
-function assignForm(settings) {
-  form.policies = { ...settings.policies }
-  Object.assign(form, settings.webFetch, {
-    allowedPrivateOrigins: [...settings.webFetch.allowedPrivateOrigins]
-  })
-  for (const { field, capability } of mediaTools) {
-    form[field] = { ...settings[field] }
-    form.policies[capability] ??= settings[field].policy
-  }
-  form.policies['settings.agent_identity.update'] ??= settings.updateAgentIdentity.policy
-  for (const classification of ['read', 'write']) {
-    shellPrefixText[classification] = settings.shellPrefixes[classification]
-      .map((prefix) => prefix.join(' '))
-      .join('\n')
-  }
-}
+const configurationForm = reactive({ groups: [], webFetch: { userAgent: '', maxResponseMiB: 64 } })
+const personalBlocked = computed(() => tab.value === 'policies'
+  && tools.scope === 'personal'
+  && !tools.personalSettingsEnabled)
+const policyDirty = computed(() => Boolean(savedPolicyPayload.value)
+  && JSON.stringify(policyRequestPayload()) !== savedPolicyPayload.value)
+const configurationDirty = computed(() => Boolean(savedConfigurationPayload.value)
+  && JSON.stringify(configurationRequestPayload()) !== savedConfigurationPayload.value)
+const activeDirty = computed(() => tab.value === 'policies' ? policyDirty.value : configurationDirty.value)
+const activeLoading = computed(() => tab.value === 'policies' ? tools.loading : tools.configurationLoading)
+const activeSaving = computed(() => tab.value === 'policies' ? tools.saving : tools.configurationSaving)
+const activeLoaded = computed(() => tab.value === 'policies' ? tools.loaded : tools.configurationLoaded)
 
 function parseShellPrefixes(value) {
   return [...new Map(
@@ -479,6 +458,55 @@ function parseShellPrefixes(value) {
       .filter((prefix) => prefix.length)
       .map((prefix) => [JSON.stringify(prefix), prefix])
   ).values()]
+}
+
+function policyRequestPayload() {
+  const payload = {
+    policies: { ...policyForm.policies },
+    shellPrefixes: {
+      read: parseShellPrefixes(shellPrefixText.read),
+      write: parseShellPrefixes(shellPrefixText.write)
+    }
+  }
+  for (const { field, capability } of mediaTools) {
+    payload[field] = { ...policyForm[field], policy: policyForm.policies[capability] }
+  }
+  payload.updateAgentIdentity = { policy: policyForm.policies['settings.agent_identity.update'] }
+  return payload
+}
+
+function configurationRequestPayload() {
+  const tools = configurationForm.groups.flatMap((group) => group.tools)
+  return {
+    toolAvailability: Object.fromEntries(tools.map((tool) => [tool.name, tool.available])),
+    resourceAvailability: Object.fromEntries(tools
+      .filter((tool) => tool.resources.length)
+      .map((tool) => [tool.name, Object.fromEntries(
+        tool.resources.map((resource) => [resource.key, resource.available])
+      )])),
+    webFetch: { ...configurationForm.webFetch }
+  }
+}
+
+function assignPolicyForm(settings) {
+  policyForm.policies = { ...settings.policies }
+  for (const { field, capability } of mediaTools) {
+    policyForm[field] = { ...settings[field] }
+    policyForm.policies[capability] ??= settings[field].policy
+  }
+  policyForm.policies['settings.agent_identity.update'] ??= settings.updateAgentIdentity.policy
+  for (const classification of ['read', 'write']) {
+    shellPrefixText[classification] = settings.shellPrefixes[classification]
+      .map((prefix) => prefix.join(' '))
+      .join('\n')
+  }
+  savedPolicyPayload.value = JSON.stringify(policyRequestPayload())
+}
+
+function assignConfigurationForm() {
+  configurationForm.groups = clone(tools.configurationGroups)
+  configurationForm.webFetch = { ...tools.configurationWebFetch }
+  savedConfigurationPayload.value = JSON.stringify(configurationRequestPayload())
 }
 
 function configurableActions(tool) {
@@ -496,22 +524,28 @@ function actionPolicyOptions(action) {
 }
 
 function actionLabel(tool, action) {
-  return configurableActions(tool).length > 1
-    ? `${action.label}: Richtlinie`
-    : 'Ausführungsrichtlinie'
+  return configurableActions(tool).length > 1 ? `${action.label}: Richtlinie` : 'Ausführungsrichtlinie'
 }
 
-function fixedActionLabel(tool, action) {
-  if (['webfetch', 'fetch_transcript'].includes(tool.name)) return 'Spezialrichtlinie'
-  return `Hostgesteuert · ${policyLabel(action.policy)}`
+function actionUnavailable(tool, action) {
+  return tool.available === false || action.available === false
+}
+
+function actionHint(tool, action) {
+  if (tool.available === false) return 'Das Tool wurde unter „Verfügbare Tools“ deaktiviert. Die Richtlinie bleibt gespeichert.'
+  if (action.available === false) return 'Diese feste Ressource wurde technisch deaktiviert. Die Richtlinie bleibt gespeichert.'
+  return policyHint(policyForm.policies[action.capability])
+}
+
+function configurationResourceLabel(resource) {
+  return {
+    'network.fetch.public': 'Öffentliche Adressen',
+    'network.fetch.private': 'Private Adressen'
+  }[resource.key] || resource.label
 }
 
 function policyLabel(policy) {
-  return {
-    disabled: 'Deaktiviert',
-    ask: 'Nachfragen',
-    auto: 'Automatisch'
-  }[policy] || policy
+  return { disabled: 'Deaktiviert', ask: 'Nachfragen', auto: 'Automatisch' }[policy] || policy
 }
 
 function policyHint(policy) {
@@ -543,11 +577,6 @@ function userAgentRule(value) {
   return valid || 'Der User-Agent muss aus 1 bis 512 sichtbaren ASCII-Zeichen bestehen.'
 }
 
-function originRule(value) {
-  const result = normalizePrivateOrigin(value)
-  return result.valid || result.message
-}
-
 function shellPrefixRule(value) {
   const prefixes = parseShellPrefixes(value)
   return (prefixes.length <= 100 && prefixes.every((prefix) => (
@@ -557,66 +586,70 @@ function shellPrefixRule(value) {
 }
 
 async function save() {
-  if (!tools.loaded || !await formRef.value?.validate()) return
-  const allowedPrivateOrigins = [...new Set(
-    form.allowedPrivateOrigins.map((origin) => normalizePrivateOrigin(origin).value)
-  )]
-  const saved = await tools.saveSettings({
-    policies: { ...form.policies },
-    shellPrefixes: {
-      read: parseShellPrefixes(shellPrefixText.read),
-      write: parseShellPrefixes(shellPrefixText.write)
-    },
-    webFetch: {
-      enabled: form.enabled,
-      userAgent: form.userAgent,
-      maxResponseMiB: form.maxResponseMiB,
-      defaultPolicy: form.defaultPolicy,
-      allowedPrivateOrigins
-    },
-    generateImage: {
-      ...form.generateImage,
-      policy: form.policies['media.generate.image']
-    },
-    editImage: {
-      ...form.editImage,
-      policy: form.policies['media.edit.image']
-    },
-    generateSpeech: {
-      ...form.generateSpeech,
-      policy: form.policies['media.generate.speech']
-    },
-    generateAudio: {
-      ...form.generateAudio,
-      policy: form.policies['media.generate.audio']
-    },
-    transcribeAudio: {
-      ...form.transcribeAudio,
-      policy: form.policies['media.transcribe.audio']
-    },
-    analyzeVideo: {
-      ...form.analyzeVideo,
-      policy: form.policies['media.analyze.video']
-    },
-    updateAgentIdentity: {
-      policy: form.policies['settings.agent_identity.update']
-    }
-  })
-  assignForm(saved)
-  $q.notify({ type: 'positive', message: 'Tool-Einstellungen gespeichert' })
+  if (tab.value === 'policies') await savePolicies()
+  else await saveConfiguration()
 }
 
-async function load() {
+async function savePolicies() {
+  if (!tools.loaded || !policyDirty.value || !await policyFormRef.value?.validate()) return
+  const saved = await tools.saveSettings(policyRequestPayload())
+  if (!saved) return
+  assignPolicyForm(saved)
+  $q.notify({ type: 'positive', message: 'Tool-Richtlinien gespeichert' })
+}
+
+async function saveConfiguration() {
+  if (!tools.configurationLoaded
+    || !configurationDirty.value
+    || !await configurationFormRef.value?.validate()) return
+  const saved = await tools.saveConfiguration(configurationRequestPayload())
+  if (!saved) return
+  assignConfigurationForm()
+  $q.notify({ type: 'positive', message: 'Verfügbare Tools gespeichert' })
+}
+
+async function loadPolicies() {
   try {
-    assignForm(await tools.fetchSettings())
+    const settings = await tools.fetchSettings()
+    if (settings) assignPolicyForm(settings)
+  } catch {
+    // The central Axios interceptor displays the error message.
+  }
+}
+
+async function loadConfiguration() {
+  try {
+    const configuration = await tools.fetchConfiguration()
+    if (configuration) assignConfigurationForm()
   } catch {
     // The central Axios interceptor displays the error message.
   }
 }
 
 async function changeScope(scope) {
+  if (scope === tools.scope) {
+    if (!savedPolicyPayload.value) await loadPolicies()
+    return
+  }
+  if (!await confirmDiscardedChanges()) return
+  savedPolicyPayload.value = ''
   tools.selectScope(scope)
-  await load()
+  await loadPolicies()
+}
+
+async function changeTrust(trust) {
+  if (trust === tools.trust || !await confirmDiscardedChanges()) return
+  savedPolicyPayload.value = ''
+  tools.selectTrust(trust)
+  await loadPolicies()
+}
+
+async function changeTab(next) {
+  if (next === tab.value || !await confirmDiscardedChanges()) return
+  tab.value = next
+  if (next === 'policies') assignPolicyForm(tools)
+  else if (tools.configurationLoaded) assignConfigurationForm()
+  else await loadConfiguration()
 }
 
 async function togglePersonalSettings(enabled) {
@@ -631,13 +664,26 @@ async function togglePersonalSettings(enabled) {
 async function resetPersonalSettings() {
   const accepted = await confirm(
     'Deine persönlichen Tool-Einstellungen löschen und wieder die Instanzvorgaben verwenden?',
-    'Tool-Einstellungen zurücksetzen?',
+    'Tool-Richtlinien zurücksetzen?',
     { okLabel: 'Zurücksetzen' }
   )
   if (!accepted) return
-  assignForm(await tools.resetPersonalSettings())
-  $q.notify({ type: 'positive', message: 'Tool-Einstellungen zurückgesetzt' })
+  const settings = await tools.resetPersonalSettings()
+  if (!settings) return
+  assignPolicyForm(settings)
+  $q.notify({ type: 'positive', message: 'Tool-Richtlinien zurückgesetzt' })
+}
+
+async function confirmDiscardedChanges() {
+  if (activeSaving.value) return false
+  if (!activeDirty.value) return true
+  return confirm(
+    'Sollen die ungespeicherten Änderungen verworfen werden?',
+    'Änderungen verwerfen?',
+    { okLabel: 'Verwerfen' }
+  )
 }
 
 onMounted(() => changeScope('personal'))
+onBeforeRouteLeave(confirmDiscardedChanges)
 </script>
