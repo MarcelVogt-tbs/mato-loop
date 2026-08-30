@@ -1,3 +1,4 @@
+import base64
 import json
 import unittest
 
@@ -100,6 +101,89 @@ class ProtocolTests(unittest.TestCase):
         render.arguments["source"]["path"] = "project"
         with self.assertRaises(ValidationError):
             validate_arguments(render)
+
+    def test_terminal_arguments_are_strict_and_bounded(self) -> None:
+        def arguments(operation: str, values: dict):
+            return validate_arguments(
+                Request.model_validate(
+                    {
+                        "type": "request",
+                        "id": REQUEST_ID,
+                        "operation": operation,
+                        "arguments": values,
+                    }
+                )
+            )
+
+        opened = arguments("terminal.open", {"rows": 24, "columns": 80})
+        self.assertEqual((opened.rows, opened.columns), (24, 80))
+        read = arguments(
+            "terminal.read",
+            {"terminalId": AGENT_ID, "maxBytes": 65_536, "waitSeconds": 30},
+        )
+        self.assertEqual(read.max_bytes, 65_536)
+        written = arguments(
+            "terminal.write",
+            {"terminalId": AGENT_ID, "data": base64.b64encode(b"\x00\xff").decode()},
+        )
+        self.assertEqual(written.terminal_id, AGENT_ID)
+
+        invalid = [
+            ("terminal.open", {"rows": 0, "columns": 80}),
+            ("terminal.read", {"terminalId": AGENT_ID, "maxBytes": 65_537}),
+            ("terminal.read", {"terminalId": AGENT_ID, "waitSeconds": 31}),
+            ("terminal.write", {"terminalId": AGENT_ID, "data": "not base64"}),
+            (
+                "terminal.write",
+                {"terminalId": AGENT_ID, "data": base64.b64encode(b"x" * 65_537).decode()},
+            ),
+            ("terminal.close", {"terminalId": "not-a-uuid"}),
+        ]
+        for operation, values in invalid:
+            with (
+                self.subTest(operation=operation, values=list(values)),
+                self.assertRaises(ValidationError),
+            ):
+                arguments(operation, values)
+
+    def test_terminal_run_requires_exactly_one_execution_form(self) -> None:
+        base = {
+            "terminalId": AGENT_ID,
+            "currentDirectory": "/workspace",
+            "rows": 24,
+            "columns": 80,
+            "timeoutSeconds": 5,
+        }
+
+        command = Request.model_validate(
+            {
+                "type": "request",
+                "id": REQUEST_ID,
+                "operation": "terminal.run",
+                "arguments": {**base, "command": "pwd", "expectedInspectionRevision": "a" * 64},
+            }
+        )
+        self.assertEqual(validate_arguments(command).command, "pwd")
+        program = command.model_copy(
+            update={"arguments": {**base, "program": "python", "args": ["--version"]}}
+        )
+        self.assertEqual(validate_arguments(program).args, ["--version"])
+
+        for values in (
+            {
+                **{key: value for key, value in base.items() if key != "rows"},
+                "command": "pwd",
+            },
+            {**base, "columns": 1001, "command": "pwd"},
+            {**base, "command": "pwd", "program": "python"},
+            {**base, "command": "pwd", "args": []},
+            {**base, "command": "pwd", "args": ["extra"]},
+            {**base, "program": "python", "expectedInspectionRevision": "a" * 64},
+            {**base, "program": "python", "currentDirectory": "relative"},
+        ):
+            command.arguments = values
+            with self.subTest(values=list(values)), self.assertRaises(ValidationError):
+                validate_arguments(command)
 
 
 if __name__ == "__main__":

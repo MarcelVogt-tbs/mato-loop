@@ -525,12 +525,15 @@ import { useAutomationStore } from 'stores/automations'
 import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
 import { useSearchStore } from 'stores/search'
 import { useProjectStore } from 'stores/projects'
 import { useWorkspaceStore } from 'stores/workspace'
+import { useTerminalStore } from 'stores/terminal'
 import { useConfirm } from 'src/composables/confirm'
+import { terminalControlCenterState } from 'src/control-center/manifest'
 import { notifyError } from 'src/utils/notifications'
 import { sessionSidebarStatus } from 'src/utils/session-groups'
 import { searchShortcutAction } from 'src/utils/search-shortcut'
@@ -548,6 +551,8 @@ const auth = useAuthStore()
 const identity = useAgentIdentityStore()
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()
+const executionAgents = useExecutionAgentStore()
+const terminal = useTerminalStore()
 const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()
 const approvals = useApprovalStore()
@@ -583,7 +588,9 @@ const showFloatingControlCenter = computed(() => route.name === 'chat' && !contr
 const showFloatingControls = computed(() => (
   showFloatingNavigation.value || showFloatingControlCenter.value
 ))
-const attentionCount = computed(() => approvals.pending.length + questions.pending.length)
+const attentionCount = computed(() => (
+  approvals.pending.length + questions.pending.length + (terminal.pendingProposal ? 1 : 0)
+))
 const notificationBadgeCount = computed(() => attentionCount.value || notifications.unreadCount)
 const notificationBadgeLabel = computed(() => notificationBadgeCount.value > 99
   ? '99+'
@@ -602,6 +609,7 @@ const navigationLabel = computed(() => {
   if (!attentionCount.value && !notifications.unreadCount) return 'Navigation öffnen'
   return `Navigation öffnen, ${notificationBellLabel.value.replace('Benachrichtigungen öffnen, ', '')}`
 })
+const terminalContextState = computed(() => terminalControlCenterState(chat.current, executionAgents))
 const renameDialogOpen = ref(false)
 const renameSessionId = ref(null)
 const renameTitle = ref('')
@@ -1114,6 +1122,37 @@ watch(
 )
 
 watch(
+  () => [
+    chat.current?.id || null,
+    chat.current?.preferredExecutionAgentId || null,
+    terminalContextState.value.agent?.connected === true,
+    terminalContextState.value.available,
+    controlCenter.tabs.some((tab) => tab.appId === 'terminal'),
+    route.name === 'chat'
+  ],
+  ([sessionId, agentId, connected, supported, tabPresent, onChatRoute]) => {
+    terminal.syncContext({ sessionId, agentId, connected, supported, tabPresent, onChatRoute })
+  },
+  { immediate: true }
+)
+
+watch(
+  [
+    () => chat.current?.messages,
+    () => chat.processOutputs,
+    () => terminal.attached,
+    () => terminal.commandRunning,
+    () => terminal.mode
+  ],
+  ([messages, processOutputs]) => terminal.syncAgentOutput(messages, processOutputs),
+  { deep: true }
+)
+
+function closeTerminalForPageExit() {
+  terminal.close()
+}
+
+watch(
   selectedProjectId,
   (projectId, previousProjectId) => {
     if (projectId) {
@@ -1136,6 +1175,7 @@ onMounted(async () => {
   window.visualViewport?.addEventListener('scroll', updateVisualViewport)
   window.addEventListener('resize', updateVisualViewport)
   window.addEventListener('keydown', handleSearchShortcut)
+  window.addEventListener('beforeunload', closeTerminalForPageExit)
   document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
   window.addEventListener('matoloop:service-worker-ready', refreshPushState)
   window.navigator.serviceWorker?.addEventListener('message', handlePushMessage)
@@ -1156,6 +1196,8 @@ onBeforeUnmount(() => {
   window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
   window.removeEventListener('resize', updateVisualViewport)
   window.removeEventListener('keydown', handleSearchShortcut)
+  window.removeEventListener('beforeunload', closeTerminalForPageExit)
+  terminal.close()
   document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)
   window.removeEventListener('matoloop:service-worker-ready', refreshPushState)
   window.navigator.serviceWorker?.removeEventListener('message', handlePushMessage)

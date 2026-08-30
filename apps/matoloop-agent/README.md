@@ -1,6 +1,6 @@
 # MatoLoop Agent
 
-Standalone Linux agent for bounded filesystem, process, transfer, Git, OpenSCAD, and session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
+Standalone Linux agent for bounded filesystem, process, POSIX terminal, transfer, Git, OpenSCAD, and session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
 ## Configuration
 
@@ -15,6 +15,8 @@ Standalone Linux agent for bounded filesystem, process, transfer, Git, OpenSCAD,
 ```
 
 `homeDirectory` is mandatory and canonicalized at startup. The configuration file's parent directory is the agent data directory for credentials, transfers, Git state, and cache data. Native installations read `${XDG_DATA_HOME:-~/.local/share}/matoloop-agent/config.json` by default. `MATOLOOP_AGENT_CONFIG` or `--config` selects another file, including `/data/config.json`.
+
+Terminal support requires POSIX PTYs and a configured `shellExecutable`. If either is unavailable, the agent omits every `terminal.*` operation from its advertisement.
 
 Run `matoloop-agent pair` to enter the backend WebSocket URL, agent ID, and one-time pairing token. Non-interactive pairing uses `MATOLOOP_AGENT_BACKEND_URL`, `MATOLOOP_AGENT_ID`, and `MATOLOOP_AGENT_PAIRING_TOKEN`. `ws://` requires `allowInsecure: true`.
 
@@ -70,5 +72,7 @@ uv run python -m unittest discover -s tests -v
 The authenticated WebSocket sends strict `hello`, `request`, `cancel`, `response`, and `event` messages with `protocolVersion: 1`. Hello advertises `agentId`, `agentVersion`, `computerName`, `platform`, canonical `homeDirectory`, and operations.
 
 Filesystem operations use normalized absolute POSIX paths and traverse from an open `/` descriptor with `O_NOFOLLOW` on every component. Copy and move use absolute source and destination paths. Process, shell, and Git repository working directories are absolute; Git pathspecs remain relative. `shell.inspect` returns absolute targets and an inspection revision without root metadata.
+
+The fixed terminal operations are `terminal.open`, `terminal.read`, `terminal.write`, `terminal.resize`, `terminal.close`, and `terminal.run`. Interactive shells and one-shot terminal runs execute with the agent operating-system user's rights. PTYs are live process state and are not persistent terminal sessions.
 
 File size, transfer size, response size, entry count, timeout, cache, and atomic mutation protections remain enforced. The agent is not an operating-system sandbox; deploy it under an appropriate container, VM, operating-system user, and network policy.

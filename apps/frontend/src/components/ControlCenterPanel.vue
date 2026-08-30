@@ -75,6 +75,9 @@
           :name="tab.appId"
           :icon="content(tab.appId).icon"
           :label="content(tab.appId).label"
+          :alert="tab.appId === 'terminal' && terminal.pendingProposal ? 'warning' : false"
+          :alert-icon="tab.appId === 'terminal' ? 'priority_high' : undefined"
+          :aria-label="tabAriaLabel(tab.appId)"
           class="control-center__tab"
           :class="{
             'control-center__tab--dragging': draggedIntegrationId === tab.appId,
@@ -169,26 +172,34 @@
 
 <script setup>
 import { computed, nextTick, ref } from 'vue'
+import { Notify } from 'quasar'
 import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import { useApprovalStore } from 'stores/approvals'
 import { useControlCenterStore } from 'stores/control-center'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
 import { useMailStore } from 'stores/mail'
 import { useChatStore } from 'stores/chat'
 import { useProjectStore } from 'stores/projects'
 import { useWorkspaceStore } from 'stores/workspace'
+import { useTerminalStore } from 'stores/terminal'
 import { useConfirm } from 'src/composables/confirm'
 import {
   controlCenterContentsById,
   controlCenterGlobalSections,
   controlCenterIntegrations
 } from 'src/control-center/apps'
-import { codingControlCenterAvailable, mailControlCenterAvailable } from 'src/control-center/manifest'
+import {
+  codingControlCenterAvailable,
+  mailControlCenterAvailable,
+  terminalControlCenterState
+} from 'src/control-center/manifest'
 import {
   formatMetricInteger,
   modelContextPercentage
 } from 'src/utils/resource-metrics'
+import { terminalTabLabel } from 'src/utils/terminal-output'
 
 defineOptions({ name: 'ControlCenterPanel' })
 
@@ -202,6 +213,8 @@ const notifications = useInAppNotificationStore()
 const mail = useMailStore()
 const chat = useChatStore()
 const projects = useProjectStore()
+const executionAgents = useExecutionAgentStore()
+const terminal = useTerminalStore()
 const draggedIntegrationId = ref(null)
 const dropTarget = ref(null)
 const closedIntegrations = computed(() => controlCenterIntegrations.filter(
@@ -213,6 +226,7 @@ const activeProject = computed(() => projects.items.find(
 const launcherIntegrations = computed(() => closedIntegrations.value.filter((item) => (
   (item.id !== 'mail' || mailControlCenterAvailable(mail))
   && (item.id !== 'coding' || codingControlCenterAvailable(activeProject.value))
+  && (item.id !== 'terminal' || terminalControlCenterState(chat.current, executionAgents).available)
 )))
 const requestCount = computed(() => {
   const count = chat.current?.userRequestCount
@@ -231,6 +245,10 @@ const contextDescription = computed(() => {
 
 function content(contentId) {
   return controlCenterContentsById.get(contentId)
+}
+
+function tabAriaLabel(appId) {
+  return terminalTabLabel(content(appId).label, appId === 'terminal' && terminal.pendingProposal)
 }
 
 function badge(appId) {
@@ -267,11 +285,21 @@ async function closePanel() {
 async function removeIntegration(appId) {
   const item = content(appId)
   if (!item) return
+  if (appId === 'terminal' && terminal.removalBlocked) {
+    Notify.create({
+      type: 'warning',
+      message: 'Das Terminal kann während eines wartenden oder laufenden Befehls nicht entfernt werden.'
+    })
+    return
+  }
   const unsavedHint = appId === 'files' && workspace.editorDirty
     ? ' Ungespeicherte Änderungen gehen verloren.'
     : ''
+  const terminalHint = appId === 'terminal'
+    ? ' Die laufende Shell und ihr sichtbarer Verlauf gehen verloren.'
+    : ''
   const accepted = await confirm(
-    `„${item.label}“ wird aus dieser Session entfernt.${unsavedHint} Gespeicherte Daten werden nicht gelöscht. Die Integration kann später erneut hinzugefügt werden.`,
+    `„${item.label}“ wird aus dieser Session entfernt.${unsavedHint}${terminalHint} Gespeicherte Daten werden nicht gelöscht. Die Integration kann später erneut hinzugefügt werden.`,
     'Integration aus Session entfernen?',
     { okLabel: 'Entfernen', okColor: 'negative' }
   )
@@ -282,6 +310,7 @@ async function removeIntegration(appId) {
   }
   try {
     await controlCenter.removeIntegration(appId)
+    if (appId === 'terminal') terminal.close()
   } catch {
     // The central API interceptor displays the error and the store restores server state.
   }

@@ -59,7 +59,7 @@ def disconnect_error_code(operation: str, dispatched: bool) -> str:
         return "executionAgent.unavailable"
     if operation in _MUTATING_FILESYSTEM_OPERATIONS:
         return "executionAgent.outcomeUnknown"
-    if operation.startswith(("process.", "shell.")):
+    if operation.startswith(("process.", "shell.")) or operation == "terminal.run":
         return "process.outcomeUnknown"
     return "executionAgent.unavailable"
 

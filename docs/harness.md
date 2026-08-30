@@ -58,6 +58,8 @@ Every execution receives host context containing at least run ID, current sessio
 
 Model arguments cannot bypass registry selection, `Context.ask`, capability boundaries, or resource matchers. The tool performs effects only after an allowing result.
 
+This permission sequence also governs commands shown in Control Center Terminal Auto mode. Terminal Confirm mode is a separate direct-user authorization path: the attached user may edit, execute, or deny the proposed call, no reusable grant is created, and ordinary process, directory, and shell-policy matchers do not authorize that command. Session, run, owner, agent, current-directory, configured process-alias, and shell-inspection bindings are still revalidated before execution.
+
 Agent profiles are persistent instance- or user-scoped settings. Every session stores a profile ID; the reserved instance profile `Allgemein` is selected for new sessions and cannot be renamed or deleted. A profile stores an optional persona, separate task instructions, a persona mode, and sparse capability, integration, and resource overrides for private and public models. `Allgemein` starts with an empty profile persona and empty override maps, so it uses the shared persona and live-inherits the effective Tool and Integration defaults. The persona mode includes or omits the shared persona; a non-empty profile persona then contributes only role, tone, character, and working style, while task instructions remain a separate prompt block in either mode. The runtime applies the selected profile consistently to schema binding and authorization. Instance administrators may disable personal profiles. Session grants created from `ask` bind to the selected profile and frozen trust level, so neither switching profiles nor switching between private and public models reuses the grant. Technical availability, disabled integrations, and remote resource ACLs remain hard boundaries for every profile.
 
 ## Typed Resource Matchers
@@ -73,6 +75,7 @@ A permission consists of a capability and typed resource matcher. Security decis
 - Approval display title, summary, and risk are metadata, not matching inputs.
 - Integration-operation matchers compare the exact integration UUID, canonical binding-revision hash, optional opaque resource key, and host-generated operation key. Remote labels and URLs are never matcher inputs.
 - Shell matchers use the host-generated `shell.read` or `shell.write` class and semantic token prefixes. Persistent allowlists are class-specific. Session grants compare token sequences and bind them to the same agent and absolute current directory. Disabled capabilities, hard shell-zone switches, and filesystem `deny` are evaluated before grants.
+- Terminal Confirm commands do not use a resource matcher or persistent grant. The user's terminal decision applies only to the bound pending call.
 - Image-edit matchers retain direct attachment provenance separately from a bounded host-controlled authorization lineage. Descendants inherit lineage roots; unrelated images, sessions, targets, and trust levels do not match.
 
 Selecting a model is the release decision for integration data already authorized by ownership, integration access, tool policy, and approvals. Public models do not require a second session-wide private-data release.

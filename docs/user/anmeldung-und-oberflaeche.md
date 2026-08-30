@@ -30,7 +30,7 @@ Die schwebende Schaltfläche **Control Center** öffnet eine gemeinsame Arbeitsf
 
 Der Schließen-Button im Inhalts-Header klappt das gesamte Control Center zu, ohne eine Integration zu entfernen. **Integration aus Session entfernen** ist davon getrennt im Drei-Punkte-Menü untergebracht und erfordert eine Bestätigung. Gespeicherte Daten werden dabei nicht gelöscht; die Integration kann später erneut hinzugefügt werden.
 
-Die Glocke öffnet direkt **Benachrichtigungen**; dieser globale Bereich wird nicht als Session-Integration gespeichert. Dauerhafte Hinweise können einzeln oder gemeinsam als gelesen markiert werden. **Freigaben** zeigt offene Entscheidungen und Agent-Rückfragen aus allen Sessions; Entscheidungen sind dort möglich, Rückfragen öffnen ihre Session zur Beantwortung im Chat. Die gleichen Freigaben und Rückfragen bleiben zusätzlich im zugehörigen Chat sichtbar.
+Die Glocke öffnet direkt **Benachrichtigungen**; dieser globale Bereich wird nicht als Session-Integration gespeichert. Dauerhafte Hinweise können einzeln oder gemeinsam als gelesen markiert werden. **Freigaben** zeigt normale offene Entscheidungen und Agent-Rückfragen aus allen Sessions; Entscheidungen sind dort möglich, Rückfragen öffnen ihre Session zur Beantwortung im Chat. Die gleichen Freigaben und Rückfragen bleiben zusätzlich im zugehörigen Chat sichtbar. Bestätigungsvorschläge im verbundenen Terminal bleiben im Terminal-Tab.
 
 Normale Chat-Antworten erscheinen nicht zusätzlich als Benachrichtigung. Ergebnisse und Fehler von Automationsläufen erscheinen dagegen dauerhaft in dieser Zentrale.
 

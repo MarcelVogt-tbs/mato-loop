@@ -57,6 +57,12 @@ from .protocol import (
     ShellInspectArguments,
     StatArguments,
     SystemInfoArguments,
+    TerminalCloseArguments,
+    TerminalOpenArguments,
+    TerminalReadArguments,
+    TerminalResizeArguments,
+    TerminalRunArguments,
+    TerminalWriteArguments,
     UpsertArguments,
     Welcome,
     WriteArguments,
@@ -64,6 +70,7 @@ from .protocol import (
     validate_arguments,
 )
 from .search import FilesystemSearch
+from .terminal import TerminalManager
 from .transfer import TransferClient
 
 logger = logging.getLogger(__name__)
@@ -95,6 +102,7 @@ class MatoLoopAgent:
         self.filesystem = Filesystem(config)
         self.cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
         self.process = ProcessRunner(config, self.filesystem)
+        self.terminal = TerminalManager(config, self.process)
         self.git = GitRunner(config, self.filesystem)
         self.search = FilesystemSearch(self.filesystem)
         self.transfer = transfer_client or TransferClient(
@@ -109,6 +117,15 @@ class MatoLoopAgent:
             operations.remove("process.exec")
         if self.process.shell is None:
             operations.remove("shell.run")
+        if not self.terminal.available:
+            operations -= {
+                "terminal.open",
+                "terminal.read",
+                "terminal.write",
+                "terminal.resize",
+                "terminal.close",
+                "terminal.run",
+            }
         if self.search.executable is None:
             operations -= {"filesystem.glob", "filesystem.grep"}
         if self.git.executable is None:
@@ -374,6 +391,42 @@ class MatoLoopAgent:
             )
             result.setdefault("inspectionRevision", self.process._inspection_revision(result))
             return result
+        if isinstance(arguments, TerminalOpenArguments):
+            return await self.terminal.open(arguments.rows, arguments.columns)
+        if isinstance(arguments, TerminalReadArguments):
+            return await self.terminal.read(
+                arguments.terminal_id,
+                arguments.max_bytes,
+                arguments.wait_seconds,
+            )
+        if isinstance(arguments, TerminalWriteArguments):
+            return await self.terminal.write(arguments.terminal_id, arguments.data)
+        if isinstance(arguments, TerminalResizeArguments):
+            return await self.terminal.resize(
+                arguments.terminal_id,
+                arguments.rows,
+                arguments.columns,
+            )
+        if isinstance(arguments, TerminalCloseArguments):
+            return await self.terminal.close(arguments.terminal_id)
+        if isinstance(arguments, TerminalRunArguments):
+            if stream is None:
+
+                async def stream(_channel: str, _data: str) -> None:
+                    return None
+
+            return await self.terminal.run(
+                terminal_id=arguments.terminal_id,
+                current_directory=arguments.current_directory,
+                rows=arguments.rows,
+                columns=arguments.columns,
+                program=arguments.program,
+                args=arguments.args,
+                command=arguments.command,
+                timeout=arguments.timeout_seconds,
+                expected_inspection_revision=arguments.expected_inspection_revision,
+                stream=stream,
+            )
         if isinstance(arguments, OpenScadRenderArguments):
             if backend_id is None:
                 raise AgentError("cache.invalidDescriptor", "Backend identity is unavailable")
@@ -541,3 +594,4 @@ class MatoLoopAgent:
                 for task in tasks.values():
                     task.cancel()
                 await asyncio.gather(*tasks.values(), return_exceptions=True)
+                await self.terminal.close_all()

@@ -10,7 +10,7 @@ Wenn eine Aktion nicht automatisch erlaubt ist, pausiert der Agent und zeigt ein
 - zu speichernden Memory-Inhalt
 - technische Details
 
-Alle offenen Freigabeanfragen finden Sie außerdem im globalen Bereich **Freigaben** des Control Centers.
+Alle normalen offenen Freigabeanfragen finden Sie außerdem im globalen Bereich **Freigaben** des Control Centers. Bestätigungsvorschläge im verbundenen Terminal werden ausschließlich dort entschieden.
 Die globale Liste zeigt die Ursprungssession und erlaubt dieselben Entscheidungen wie die
 Karte im Chat. Sie bündelt auch offene Agent-Rückfragen, die zur Beantwortung ihre Session
 öffnen. Das Badge am Control Center und am Benutzermenü zeigt offene Aktionen an.

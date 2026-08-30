@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -128,6 +130,31 @@ class ProcessResult(ExecutionResult):
     stderr_bytes: int = Field(ge=0)
     stdout_truncated: bool
     stderr_truncated: bool
+
+
+class TerminalOpenResult(ExecutionResult):
+    terminal_id: UUID = Field(strict=False)
+
+
+class TerminalReadResult(ExecutionResult):
+    data: str = Field(max_length=87_384)
+    eof: bool
+    exit_code: int | None = None
+
+    @field_validator("data")
+    @classmethod
+    def validate_data(cls, value: str) -> str:
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("invalid terminal data") from exc
+        if len(decoded) > 65_536:
+            raise ValueError("terminal data exceeds requested maximum")
+        return value
+
+
+class TerminalControlResult(ExecutionResult):
+    pass
 
 
 class DirectoryResult(ExecutionResult):
@@ -262,6 +289,10 @@ _REMOTE_ERROR_CODES = {
     "root.stale": "executionAgent.unavailable",
     "root.unavailable": "executionAgent.unavailable",
     "root.unknown": "executionAgent.unavailable",
+    "terminal.closed": "terminal.disconnected",
+    "terminal.exists": "terminal.commandActive",
+    "terminal.limitReached": "terminal.unavailable",
+    "terminal.notFound": "terminal.disconnected",
 }
 
 _MANAGER_ERROR_CODES = frozenset(
@@ -393,10 +424,12 @@ class ExecutionClient:
             if code == "operation.cancelled":
                 mapped_code = (
                     "process.interrupted"
-                    if operation.startswith(("process.", "shell."))
+                    if operation.startswith(("process.", "shell.")) or operation == "terminal.run"
                     else "tool.executionInterrupted"
                 )
-            elif code == "operation.failed" and operation.startswith(("process.", "shell.")):
+            elif code == "operation.failed" and (
+                operation.startswith(("process.", "shell.")) or operation == "terminal.run"
+            ):
                 mapped_code = "process.failed"
             else:
                 mapped_code = _REMOTE_ERROR_CODES.get(
@@ -419,6 +452,9 @@ __all__ = [
     "ProcessResult",
     "ShellInspectResult",
     "SystemInfoResult",
+    "TerminalControlResult",
+    "TerminalOpenResult",
+    "TerminalReadResult",
     "WorkspaceDeleteResult",
     "WorkspaceExportResult",
     "WorkspaceGlobResult",

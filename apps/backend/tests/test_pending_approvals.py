@@ -67,6 +67,7 @@ async def test_pending_approvals_query_filters_owner_and_orders_oldest_first() -
     sql = str(statement)
     assert "LEFT OUTER JOIN chat_sessions ON chat_sessions.id = approval_requests.session_id" in sql
     assert "approval_requests.user_id =" in sql
+    assert "approval_requests.action_kind !=" in sql
     assert "ORDER BY approval_requests.created_at" in sql
     assert {"pending", user.id}.issubset(set(statement.compile().params.values()))
 

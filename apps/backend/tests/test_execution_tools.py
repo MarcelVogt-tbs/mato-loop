@@ -1,4 +1,5 @@
 import hashlib
+import json
 from io import BytesIO
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -29,6 +30,7 @@ from mato_loop_backend.execution import (
     transfer_tickets,
 )
 from mato_loop_backend.execution.protocol import ResponseMessage
+from mato_loop_backend.execution.terminals import TerminalDecision, terminal_coordinator
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import IntegrationSettings, ToolExecutionPolicy, ToolSettings
@@ -303,6 +305,8 @@ async def test_disabled_shell_zone_is_a_hard_boundary(tmp_path) -> None:
         user_id=context.session.user_id,
         alias="Computer",
         home_directory="/home/user",
+        home_filesystem_policy="auto",
+        external_filesystem_policy="ask",
         home_shell_enabled=False,
     )
 
@@ -360,3 +364,128 @@ async def test_shell_dispatches_with_inspection_classification(tmp_path) -> None
         "shellClassification": "read",
         "shellPrefixes": [["cat"]],
     }
+
+
+async def test_terminal_auto_keeps_policy_and_uses_terminal_run(tmp_path, monkeypatch) -> None:
+    call = ToolCall("process", "process_exec", {"program": "python", "args": ["-V"]})
+    client = FakeExecutionClient({}, {"process.exec", "terminal.run"})
+    context = _context(tmp_path, call, client)
+    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: "auto")
+    run = AsyncMock(
+        return_value=ProcessResult(
+            exit_code=0,
+            timed_out=False,
+            duration_ms=1,
+            stdout_bytes=0,
+            stderr_bytes=0,
+            stdout_truncated=False,
+            stderr_truncated=False,
+        )
+    )
+    monkeypatch.setattr(terminal_coordinator, "run", run)
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert not result.is_error
+    assert context.ask_handler.await_count == 2
+    assert run.await_args.kwargs["arguments"] == {"program": "python", "args": ["-V"]}
+
+
+async def test_terminal_confirm_reinspects_edited_shell_and_reports_execution(
+    tmp_path, monkeypatch
+) -> None:
+    call = ToolCall("shell", "shell_run", {"command": "cat README.md"})
+
+    def inspection(arguments):
+        edited = arguments["command"] == "cat pyproject.toml"
+        return ShellInspectResult(
+            targets=[],
+            analysis_complete=True,
+            classification="read",
+            read_only=True,
+            commands=[{"tokens": ["cat"], "prefix": ["cat"], "classification": "read"}],
+            inspection_revision=("b" if edited else "a") * 64,
+        )
+
+    client = FakeExecutionClient(
+        {"shell.inspect": inspection}, {"shell.inspect", "shell.run", "terminal.run"}
+    )
+    context = _context(tmp_path, call, client)
+    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: "confirm")
+    evaluate = AsyncMock(side_effect=AssertionError("confirm must bypass policy"))
+    monkeypatch.setattr(PermissionPolicy, "evaluate", evaluate)
+    propose = AsyncMock(return_value=TerminalDecision(True, "cat pyproject.toml"))
+    monkeypatch.setattr(terminal_coordinator, "propose", propose)
+    run = AsyncMock(
+        return_value=ProcessResult(
+            exit_code=0,
+            timed_out=False,
+            duration_ms=2,
+            stdout_bytes=4,
+            stderr_bytes=0,
+            stdout_truncated=False,
+            stderr_truncated=False,
+        )
+    )
+    monkeypatch.setattr(terminal_coordinator, "run", run)
+
+    result = await _tools(client.operations).execute(call, context)
+    payload = json.loads(result.content)
+
+    assert context.ask_handler.await_count == 0
+    assert evaluate.await_count == 0
+    assert [request[1]["command"] for request in client.requests] == ["cat pyproject.toml"]
+    assert run.await_args.kwargs["arguments"] == {
+        "command": "cat pyproject.toml",
+        "expectedInspectionRevision": "b" * 64,
+    }
+    assert payload["requestedArguments"] == {"command": "cat README.md"}
+    assert payload["executedArguments"] == {"command": "cat pyproject.toml"}
+    assert payload["userEdited"] is True
+
+
+async def test_terminal_confirm_process_uses_shlex_and_distinguishes_unavailable_from_denial(
+    tmp_path, monkeypatch
+) -> None:
+    call = ToolCall("process", "process_exec", {"program": "python", "args": ["one"]})
+    client = FakeExecutionClient({}, {"process.exec", "terminal.run"})
+    context = _context(tmp_path, call, client)
+    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: "confirm")
+    evaluate = AsyncMock(side_effect=AssertionError("confirm must bypass policy"))
+    monkeypatch.setattr(PermissionPolicy, "evaluate", evaluate)
+    propose = AsyncMock(return_value=TerminalDecision(True, "python 'two words'"))
+    monkeypatch.setattr(terminal_coordinator, "propose", propose)
+    run = AsyncMock(
+        return_value=ProcessResult(
+            exit_code=0,
+            timed_out=False,
+            duration_ms=1,
+            stdout_bytes=0,
+            stderr_bytes=0,
+            stdout_truncated=False,
+            stderr_truncated=False,
+        )
+    )
+    monkeypatch.setattr(terminal_coordinator, "run", run)
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert propose.await_args.kwargs["command_line"] == "python one"
+    assert run.await_args.kwargs["arguments"] == {
+        "program": "python",
+        "args": ["two words"],
+    }
+    assert json.loads(result.content)["userEdited"] is True
+    assert context.ask_handler.await_count == 0
+    assert evaluate.await_count == 0
+
+    context.user_denied = False
+    propose.return_value = TerminalDecision(False)
+    unavailable = await _tools(client.operations).execute(call, context)
+    assert json.loads(unavailable.content)["error"]["code"] == "terminal.disconnected"
+    assert context.user_denied is False
+
+    propose.return_value = TerminalDecision(False, explicit_denial=True)
+    denied = await _tools(client.operations).execute(call, context)
+    assert json.loads(denied.content)["error"]["code"] == "permission.userDenied"
+    assert context.user_denied is True

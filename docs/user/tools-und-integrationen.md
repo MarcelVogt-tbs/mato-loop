@@ -64,6 +64,14 @@ Jeder Computer besitzt zwei Dateirichtlinien mit **Automatisch**, **Nachfragen**
 
 In den Tool-Einstellungen können für beide Klassen erlaubte Befehlspräfixe hinterlegt werden, jeweils ein Präfix pro Zeile. Die Prüfung erfolgt tokenbasiert und alle Teilbefehle einer Pipeline oder Liste müssen passen. Eine Session-Freigabe gilt für die angezeigten Präfixe auf demselben Computer, in demselben absoluten Arbeitsordner und nur in derselben Klasse. Deaktivierte Tool-Richtlinien, ausgeschaltete Shell-Zonen und nicht erlaubte Pfade können dadurch nicht überstimmt werden. Für Git sollten die fest eingebauten Git-Tools statt Shell-Befehlen verwendet werden.
 
+## Terminal im Control Center
+
+**Terminal** ist eine eingebaute Control-Center-App und benötigt keine eigene Integration. Sie ist für eine aktive Session verfügbar, wenn ein ausgewählter und verbundener Computer die Terminalfunktionen unterstützt. Ohne Verbindung zum Chat-Agenten öffnet sie eine direkte Shell im Home-Verzeichnis dieses Computers. Diese Shell läuft mit den Rechten des MatoLoop Agent und umgeht Modell-Richtlinien und Grants; sie ist keine Sandbox.
+
+**Chat-Agent verbinden** wechselt zu einer getrennten Ansicht für Agent-Befehle und teilt weder Zustand noch Eingaben mit der persönlichen Shell. Im Modus **Auto** gelten die normalen Richtlinien und Freigaben. Die Ansicht ist schreibgeschützt; **Strg+C** bricht den Agentenlauf ab. Im Modus **Bestätigen** können Sie jeden vorgeschlagenen Befehl bearbeiten, ausführen oder ablehnen. Während eines bestätigten Befehls werden Terminaleingaben direkt an dessen Einmal-PTY weitergeleitet. Diese direkte Bestätigung erstellt keinen wiederverwendbaren Grant und ersetzt für den betreffenden Aufruf die normalen Tool-Richtlinien; Computer-, Session-, Lauf-, Arbeitsordner-, Programm-Alias- und Shell-Prüfungen bleiben gebunden.
+
+Solange ein Befehl wartet oder läuft, können Sie Modus, Verbindung und Terminal-Tab nicht ändern beziehungsweise entfernen. Das Zuklappen des Control Centers lässt die Shell weiterlaufen. Entfernen des Tabs, Sessionwechsel oder Neuladen der Seite beendet die Shell und verwirft den sichtbaren Terminalverlauf; ein Verbindungsverlust beendet mindestens die zugehörige Shell. Kanonische Tool-Ergebnisse und die Prüfspur einer Terminalbestätigung bleiben davon getrennt gespeichert. Terminalbestätigungen werden nur im verbundenen Terminal entschieden und erscheinen nicht unter **Freigaben**.
+
 ## SearXNG integrieren
 
 Unter **Einstellungen > Integrationen** können Sie zusätzliche SearXNG-Instanzen anlegen, aktivieren, bearbeiten, testen und löschen. Dort wählen Sie für den aktuellen persönlichen oder Instanzbereich auch den primären Suchprovider und optional einen Fallback.

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from uuid import uuid4
 
@@ -8,6 +9,8 @@ from pydantic import ValidationError
 from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
+    TerminalOpenResult,
+    TerminalReadResult,
     WorkspaceWriteResult,
 )
 from mato_loop_backend.execution.manager import (
@@ -122,7 +125,34 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "integration.openscad.render6",
         "integration.openscad.test",
         "shell.inspect",
+        "terminal.open",
+        "terminal.read",
+        "terminal.write",
+        "terminal.resize",
+        "terminal.close",
+        "terminal.run",
     }
+
+
+def test_terminal_results_use_typed_wire_fields() -> None:
+    terminal_id = uuid4()
+    opened = TerminalOpenResult.model_validate({"terminalId": str(terminal_id)})
+    read = TerminalReadResult.model_validate(
+        {"data": "aGVsbG8=", "eof": True, "exitCode": 0}
+    )
+
+    assert opened.terminal_id == terminal_id
+    with pytest.raises(ValidationError):
+        TerminalOpenResult.model_validate({"terminalId": "personal-1"})
+    assert read.data == "aGVsbG8="
+    assert read.eof is True
+    assert read.exit_code == 0
+    with pytest.raises(ValidationError):
+        TerminalReadResult.model_validate({"data": "not base64", "eof": False})
+    with pytest.raises(ValidationError):
+        TerminalReadResult.model_validate(
+            {"data": base64.b64encode(b"a" * 65_537).decode(), "eof": False}
+        )
 
 
 async def test_manager_correlates_events_and_response_and_ignores_unknown_operations() -> None:

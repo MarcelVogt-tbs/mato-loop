@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import posixpath
+import shlex
 from datetime import datetime
 from io import BytesIO
 from typing import Any, Literal
@@ -192,6 +193,7 @@ from mato_loop_backend.execution import (
     WorkspaceStatResult,
     WorkspaceWriteResult,
 )
+from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.filesystem_search import RootFileSearch
 from mato_loop_backend.integrations import (
     TranscriptError,
@@ -1357,27 +1359,60 @@ async def _execute_process(
     context: ToolContext, operation: str, arguments: dict[str, Any]
 ) -> ToolResult:
     client = _workspace_client(context)
-    if (
-        client.current_directory is None
-        or not await _directory_allowed(
-            context,
-            client.current_directory,
-            ask=True,
-        )
+    mode = terminal_coordinator.mode_for(
+        user_id=context.session.user_id,
+        session_id=context.session.id,
+        agent_id=client.agent_id,
+        current_directory=client.current_directory,
+    )
+    if client.current_directory is None:
+        return ToolResult.error("permission.denied")
+    if mode != "confirm" and not await _directory_allowed(
+        context, client.current_directory, ask=True
     ):
         return ToolResult.error("permission.denied")
-    if not await _allow(
-        context,
-        _process_permission(context, arguments),
-    ):
+    requested = {"program": arguments["program"], "args": arguments.get("args", [])}
+    executed = requested
+    if mode == "confirm":
+        decision = await terminal_coordinator.propose(
+            context.db,
+            user_id=context.session.user_id,
+            session_id=context.session.id,
+            run_id=context.run_id,
+            tool_call_id=context.tool_call.id,
+            tool="process_exec",
+            agent_id=client.agent_id,
+            current_directory=client.current_directory,
+            requested_arguments=requested,
+            command_line=shlex.join([requested["program"], *requested["args"]]),
+        )
+        if not decision.execute or decision.command_line is None:
+            if decision.explicit_denial:
+                context.user_denied = True
+                return ToolResult.error("permission.userDenied")
+            return ToolResult.error("terminal.disconnected")
+        tokens = shlex.split(decision.command_line)
+        executed = {"program": tokens[0], "args": tokens[1:]}
+    elif not await _allow(context, _process_permission(context, arguments)):
         return ToolResult.error("permission.denied")
     return await _run_process(
-        context, operation, {**arguments, "currentDirectory": client.current_directory}
+        context,
+        operation,
+        {**executed, "currentDirectory": client.current_directory},
+        requested_arguments=requested,
+        executed_arguments=executed,
+        terminal_mode=mode,
     )
 
 
 async def _run_process(
-    context: ToolContext, operation: str, arguments: dict[str, Any]
+    context: ToolContext,
+    operation: str,
+    arguments: dict[str, Any],
+    *,
+    requested_arguments: dict[str, Any],
+    executed_arguments: dict[str, Any],
+    terminal_mode: Literal["auto", "confirm"] | None,
 ) -> ToolResult:
     output = {"stdout": "", "stderr": ""}
 
@@ -1392,17 +1427,39 @@ async def _run_process(
             },
         )
 
-    result = await _workspace_client(context).request(
-        operation,
-        arguments,
-        ProcessResult,
-        timeout=3_610,
-        on_event=publish,
-    )
+    client = _workspace_client(context)
+    if terminal_mode is not None:
+        terminal_arguments = {
+            key: value
+            for key, value in arguments.items()
+            if key in {"command", "program", "args", "expectedInspectionRevision"}
+        }
+        result = await terminal_coordinator.run(
+            user_id=context.session.user_id,
+            session_id=context.session.id,
+            run_id=context.run_id,
+            tool_call_id=context.tool_call.id,
+            agent_id=client.agent_id,
+            current_directory=client.current_directory or "",
+            arguments=terminal_arguments,
+            confirm=terminal_mode == "confirm",
+            on_event=publish,
+        )
+    else:
+        result = await client.request(
+            operation,
+            arguments,
+            ProcessResult,
+            timeout=3_610,
+            on_event=publish,
+        )
     assert isinstance(result, ProcessResult)
     return ToolResult.json(
         {
             **result.model_dump(by_alias=True),
+            "requestedArguments": requested_arguments,
+            "executedArguments": executed_arguments,
+            "userEdited": requested_arguments != executed_arguments,
             "output": {
                 **output,
                 "truncated": result.stdout_truncated or result.stderr_truncated,
@@ -1423,64 +1480,98 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     client = _workspace_client(context)
     if client.current_directory is None:
         return ToolResult.error("permission.denied")
+    mode = terminal_coordinator.mode_for(
+        user_id=context.session.user_id,
+        session_id=context.session.id,
+        agent_id=client.agent_id,
+        current_directory=client.current_directory,
+    )
+    requested = {"command": arguments.command}
+    executed = requested
+    if mode == "confirm":
+        decision = await terminal_coordinator.propose(
+            context.db,
+            user_id=context.session.user_id,
+            session_id=context.session.id,
+            run_id=context.run_id,
+            tool_call_id=context.tool_call.id,
+            tool="shell_run",
+            agent_id=client.agent_id,
+            current_directory=client.current_directory,
+            requested_arguments=requested,
+            command_line=arguments.command,
+        )
+        if not decision.execute or decision.command_line is None:
+            if decision.explicit_denial:
+                context.user_denied = True
+                return ToolResult.error("permission.userDenied")
+            return ToolResult.error("terminal.disconnected")
+        executed = {"command": decision.command_line}
     inspection = await client.request(
         "shell.inspect",
-        {"command": arguments.command, "currentDirectory": client.current_directory},
+        {"command": executed["command"], "currentDirectory": client.current_directory},
         ShellInspectResult,
     )
     assert isinstance(inspection, ShellInspectResult)
-    prefixes = (
-        [command.prefix for command in inspection.commands if command.prefix is not None]
-        if inspection.commands and all(command.prefix is not None for command in inspection.commands)
-        else []
-    )
-    permission = PermissionRequest(
-        capability=f"shell.{inspection.classification}",
-        resource_type="shell_command",
-        resource_scope=shell_command_scope(
-            client.agent_id,
-            client.current_directory,
-            inspection.classification,
-            prefixes,
-            [target.path for target in inspection.targets],
-            inspection.analysis_complete,
-        ),
-        action_kind="shell_run",
-        risk_level="low" if inspection.classification == "read" else "high",
-        title=(
-            "Lesenden Shell-Befehl ausführen?"
-            if inspection.classification == "read"
-            else "Schreibenden Shell-Befehl ausführen?"
-        ),
-        summary=(
-            "Der Befehl wurde als rein lesend klassifiziert."
-            if inspection.classification == "read"
-            else "Der Befehl kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
-        ),
-        resource_display=client.current_directory,
-        approval_details={
-            "shellClassification": inspection.classification,
-            "shellPrefixes": prefixes,
-        },
-        display_items=(
-            PermissionDisplayItem(label="Shell-Befehl", value=arguments.command, format="code"),
-        ),
-        available_decisions=(
-            ("allow_once", "allow_session", "deny")
-            if prefixes
-            else ("allow_once", "deny")
-        ),
-    )
-    if not await _allow(context, permission):
-        return ToolResult.error("permission.denied")
+    if mode != "confirm":
+        prefixes = (
+            [command.prefix for command in inspection.commands if command.prefix is not None]
+            if inspection.commands
+            and all(command.prefix is not None for command in inspection.commands)
+            else []
+        )
+        permission = PermissionRequest(
+            capability=f"shell.{inspection.classification}",
+            resource_type="shell_command",
+            resource_scope=shell_command_scope(
+                client.agent_id,
+                client.current_directory,
+                inspection.classification,
+                prefixes,
+                [target.path for target in inspection.targets],
+                inspection.analysis_complete,
+            ),
+            action_kind="shell_run",
+            risk_level="low" if inspection.classification == "read" else "high",
+            title=(
+                "Lesenden Shell-Befehl ausführen?"
+                if inspection.classification == "read"
+                else "Schreibenden Shell-Befehl ausführen?"
+            ),
+            summary=(
+                "Der Befehl wurde als rein lesend klassifiziert."
+                if inspection.classification == "read"
+                else "Der Befehl kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
+            ),
+            resource_display=client.current_directory,
+            approval_details={
+                "shellClassification": inspection.classification,
+                "shellPrefixes": prefixes,
+            },
+            display_items=(
+                PermissionDisplayItem(
+                    label="Shell-Befehl", value=arguments.command, format="code"
+                ),
+            ),
+            available_decisions=(
+                ("allow_once", "allow_session", "deny")
+                if prefixes
+                else ("allow_once", "deny")
+            ),
+        )
+        if not await _allow(context, permission):
+            return ToolResult.error("permission.denied")
     return await _run_process(
         context,
         "shell.run",
         {
-            "command": arguments.command,
+            "command": executed["command"],
             "currentDirectory": client.current_directory,
             "expectedInspectionRevision": inspection.inspection_revision,
         },
+        requested_arguments=requested,
+        executed_arguments=executed,
+        terminal_mode=mode,
     )
 
 

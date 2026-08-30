@@ -43,6 +43,7 @@ async def pending_approvals(
             .outerjoin(ChatSession, ChatSession.id == ApprovalRequest.session_id)
             .where(ApprovalRequest.status == "pending")
             .where(ApprovalRequest.user_id == user.id)
+            .where(ApprovalRequest.action_kind != "terminal_command")
             .order_by(ApprovalRequest.created_at)
         )
     ).all()
@@ -69,6 +70,8 @@ async def decide_approval(
         raise ApiError(404, "approval.notFound")
     if approval.status != "pending":
         raise ApiError(409, "approval.alreadyDecided")
+    if approval.action_kind == "terminal_command":
+        raise ApiError(404, "approval.notFound")
     if payload.decision not in approval.available_decisions:
         raise ApiError(400, "approval.decisionUnavailable")
     if approval.request_type == "memory_change":

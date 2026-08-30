@@ -481,6 +481,54 @@ class ProcessRunner:
             return resolved
         return None
 
+    def execution_argv(
+        self,
+        *,
+        current_directory: str,
+        program: str | None,
+        args: list[str],
+        command: str | None,
+        expected_inspection_revision: str | None = None,
+    ) -> tuple[list[str], dict | None]:
+        inspection = None
+        if command is None:
+            executable_path = self.executables.get(program or "")
+            if executable_path is None:
+                raise AgentError("process.notAllowed", "Program alias is not configured")
+            return [os.fspath(executable_path), *args], inspection
+        if self.shell is None:
+            raise AgentError("process.notAllowed", "Shell execution is disabled")
+        if expected_inspection_revision is not None:
+            inspection = self.inspect_shell(command, current_directory)
+            actual_revision = inspection.get("inspectionRevision") or self._inspection_revision(
+                inspection
+            )
+            if actual_revision != expected_inspection_revision:
+                raise AgentError("process.inspectionChanged", "Shell inspection changed")
+        if inspection is not None and inspection.get("readOnly") is True:
+            commands = inspection.get("commands", [])
+            simple = not any(character in command for character in "();<>|&")
+            tokens = shlex.split(command, comments=True)
+            if simple and len(commands) == 1 and tokens == commands[0].get("tokens"):
+                current = self.filesystem.resolve_directory(current_directory)["path"]
+                executable = self._trusted_executable(tokens[0], current)
+                if executable is None:
+                    raise AgentError("process.inspectionChanged", "Shell inspection changed")
+                return [os.fspath(executable), *tokens[1:]], inspection
+        return [os.fspath(self.shell), "-c", command], inspection
+
+    @staticmethod
+    def execution_environment(home: str, inspection: dict | None) -> dict[str, str]:
+        return {
+            "HOME": home,
+            "LANG": os.environ.get("LANG", "C.UTF-8"),
+            "PATH": (
+                "/usr/bin:/bin"
+                if inspection is not None and inspection.get("readOnly") is True
+                else "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ),
+        }
+
     async def exec(
         self,
         *,
@@ -492,46 +540,15 @@ class ProcessRunner:
         stream: StreamCallback,
         expected_inspection_revision: str | None = None,
     ) -> dict:
-        inspection = None
-        if command is None:
-            executable_path = self.executables.get(program or "")
-            if executable_path is None:
-                raise AgentError("process.notAllowed", "Program alias is not configured")
-            argv = [os.fspath(executable_path), *args]
-        else:
-            if self.shell is None:
-                raise AgentError("process.notAllowed", "Shell execution is disabled")
-            if expected_inspection_revision is not None:
-                inspection = self.inspect_shell(command, current_directory)
-                actual_revision = inspection.get("inspectionRevision") or self._inspection_revision(
-                    inspection
-                )
-                if actual_revision != expected_inspection_revision:
-                    raise AgentError("process.inspectionChanged", "Shell inspection changed")
-            if inspection is not None and inspection.get("readOnly") is True:
-                commands = inspection.get("commands", [])
-                simple = not any(character in command for character in "();<>|&")
-                tokens = shlex.split(command, comments=True)
-                if simple and len(commands) == 1 and tokens == commands[0].get("tokens"):
-                    current = self.filesystem.resolve_directory(current_directory)["path"]
-                    executable = self._trusted_executable(tokens[0], current)
-                    if executable is None:
-                        raise AgentError("process.inspectionChanged", "Shell inspection changed")
-                    argv = [os.fspath(executable), *tokens[1:]]
-                else:
-                    argv = [os.fspath(self.shell), "-c", command]
-            else:
-                argv = [os.fspath(self.shell), "-c", command]
+        argv, inspection = self.execution_argv(
+            current_directory=current_directory,
+            program=program,
+            args=args,
+            command=command,
+            expected_inspection_revision=expected_inspection_revision,
+        )
         cwd, cwd_fd = self._cwd(current_directory)
-        environment = {
-            "HOME": cwd,
-            "LANG": os.environ.get("LANG", "C.UTF-8"),
-            "PATH": (
-                "/usr/bin:/bin"
-                if inspection is not None and inspection.get("readOnly") is True
-                else "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-            ),
-        }
+        environment = self.execution_environment(cwd, inspection)
         started = time.monotonic()
         try:
             process = await asyncio.create_subprocess_exec(

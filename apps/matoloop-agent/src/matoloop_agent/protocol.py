@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 
@@ -235,6 +237,68 @@ class ShellInspectArguments(HostDirectoryArguments):
     command: str = Field(min_length=1, max_length=256 * 1024)
 
 
+class TerminalOpenArguments(StrictModel):
+    rows: int = Field(ge=1, le=1000)
+    columns: int = Field(ge=1, le=1000)
+
+
+class TerminalIdArguments(StrictModel):
+    terminal_id: str = Field(alias="terminalId", pattern=UUID_PATTERN)
+
+
+class TerminalReadArguments(TerminalIdArguments):
+    max_bytes: int = Field(default=65_536, alias="maxBytes", ge=1, le=65_536)
+    wait_seconds: float = Field(default=0, alias="waitSeconds", ge=0, le=30)
+
+
+class TerminalWriteArguments(TerminalIdArguments):
+    data: str = Field(max_length=87_384)
+
+    @field_validator("data")
+    @classmethod
+    def bounded_base64(cls, value: str) -> str:
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("data must be valid base64") from exc
+        if len(decoded) > 65_536:
+            raise ValueError("decoded data exceeds 65536 bytes")
+        return value
+
+
+class TerminalResizeArguments(TerminalIdArguments):
+    rows: int = Field(ge=1, le=1000)
+    columns: int = Field(ge=1, le=1000)
+
+
+class TerminalCloseArguments(TerminalIdArguments):
+    pass
+
+
+class TerminalRunArguments(HostDirectoryArguments, TerminalIdArguments):
+    rows: int = Field(ge=1, le=1000)
+    columns: int = Field(ge=1, le=1000)
+    command: str | None = Field(default=None, min_length=1, max_length=256 * 1024)
+    program: str | None = Field(default=None, min_length=1, max_length=128)
+    args: list[Annotated[str, Field(max_length=65_536)]] = Field(
+        default_factory=list, max_length=256
+    )
+    timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
+    expected_inspection_revision: str | None = Field(
+        default=None, alias="expectedInspectionRevision", pattern=r"^[0-9a-f]{64}$"
+    )
+
+    @model_validator(mode="after")
+    def one_execution_form(self):
+        if (self.command is None) == (self.program is None):
+            raise ValueError("exactly one of command or program is required")
+        if self.command is not None and "args" in self.model_fields_set:
+            raise ValueError("args require program")
+        if self.program is not None and self.expected_inspection_revision is not None:
+            raise ValueError("expectedInspectionRevision requires command")
+        return self
+
+
 GitPath = Annotated[str, Field(min_length=1, max_length=1000, pattern=r"^[^\x00]+$")]
 
 
@@ -395,6 +459,12 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "process.exec": ProcessArguments,
     "shell.run": ShellArguments,
     "shell.inspect": ShellInspectArguments,
+    "terminal.open": TerminalOpenArguments,
+    "terminal.read": TerminalReadArguments,
+    "terminal.write": TerminalWriteArguments,
+    "terminal.resize": TerminalResizeArguments,
+    "terminal.close": TerminalCloseArguments,
+    "terminal.run": TerminalRunArguments,
     "integration.git.clone": GitCloneArguments,
     "integration.git.status": GitStatusArguments,
     "integration.git.diff": GitDiffArguments,
