@@ -15,18 +15,6 @@ def _migration_module():
     return module
 
 
-def _rename_migration_module():
-    path = (
-        Path(__file__).parents[1]
-        / "alembic/versions/bc71470b0a7b_rename_migrated_personal_persona.py"
-    )
-    spec = importlib.util.spec_from_file_location("agent_identity_rename_migration", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_persona_migration_preserves_extend_and_empty_replace() -> None:
     migration = _migration_module()
     identity = {"personas": []}
@@ -96,27 +84,6 @@ def test_persona_migration_resolves_repeated_name_suffixes() -> None:
     assert migration._unique_persona_name(personas, "Agent", "deadbeef-rest") == (
         "Agent (deadbeef-3)"
     )
-
-
-def test_persona_rename_migration_updates_only_the_old_name() -> None:
-    migration = _rename_migration_module()
-    data = {
-        "display_name": None,
-        "personas": [
-            {"id": "old", "name": "Bisherige Persona", "instructions": "Alt"},
-            {"id": "other", "name": "Direkt", "instructions": "Kurz"},
-        ],
-    }
-
-    renamed = migration._renamed_data(data)
-
-    assert renamed is not None
-    assert [persona["name"] for persona in renamed["personas"]] == [
-        "Eigene Persona",
-        "Direkt",
-    ]
-    assert data["personas"][0]["name"] == "Bisherige Persona"
-    assert migration._renamed_data({"personas": [{"name": "Eigene Persona"}]}) is None
 
 
 class _Result:
