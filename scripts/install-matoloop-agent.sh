@@ -59,6 +59,7 @@ usage() {
         "" \
         "Commands:" \
         "  install             Install from a checkout or managed clone" \
+        "  update              Update an installer-managed clone" \
         "  repair              Repair or reconfigure the installation" \
         "  status              Show the user service status" \
         "  uninstall [--yes]   Remove the managed installation" \
@@ -288,12 +289,13 @@ choose_action() {
         installed)
             printf 'A native MatoLoop Agent installation was found.\n'
             PS3="Selection: "
-            select choice in "Repair or reconfigure" "Show status" "Uninstall" "Exit"; do
+            select choice in "Update installer-managed clone" "Repair or reconfigure" "Show status" "Uninstall" "Exit"; do
                 case "$REPLY" in
-                    1) SELECTED_ACTION=repair; return ;;
-                    2) SELECTED_ACTION=status; return ;;
-                    3) SELECTED_ACTION=uninstall; return ;;
-                    4) SELECTED_ACTION=exit; return ;;
+                    1) SELECTED_ACTION=update; return ;;
+                    2) SELECTED_ACTION=repair; return ;;
+                    3) SELECTED_ACTION=status; return ;;
+                    4) SELECTED_ACTION=uninstall; return ;;
+                    5) SELECTED_ACTION=exit; return ;;
                 esac
             done
             ;;
@@ -424,6 +426,24 @@ prepare_source() {
     ACTIVE_SOURCE_STAGE=""
     SOURCE_CREATED=true
     save_state
+}
+
+update_managed_source() {
+    load_state
+    [[ "$SOURCE_ROOT" == "$DEFAULT_SOURCE_DIR" && -f "$SOURCE_ROOT/.git/matoloop-installer-managed" ]] ||
+        die "Automatic updates require a clone created by this installer. Update an existing checkout manually, then run repair."
+    [[ -z "$(git -C "$SOURCE_ROOT" status --porcelain)" ]] ||
+        die "The managed source has local changes. Resolve them before updating."
+    printf 'Updating managed source...\n'
+    git -C "$SOURCE_ROOT" pull --ff-only || die "Could not fast-forward the managed source."
+}
+
+update_agent() {
+    require_interactive
+    [[ "$(installation_state)" == installed ]] || die "A complete installation is required before updating."
+    update_managed_source
+    [[ -f "$SOURCE_ROOT/scripts/install-matoloop-agent.sh" ]] || die "The updated installer script is missing."
+    exec bash "$SOURCE_ROOT/scripts/install-matoloop-agent.sh" repair
 }
 
 write_agent_config() {
@@ -740,6 +760,14 @@ self_test() (
     [[ "$SOURCE_CREATED" == true ]]
     [[ -f "$PROJECT_ROOT/apps/matoloop-agent/pyproject.toml" ]]
     [[ -f "$PROJECT_ROOT/.git/matoloop-installer-managed" ]]
+    printf 'updated\n' > "$fixture/apps/matoloop-agent/pyproject.toml"
+    git -C "$fixture" add apps/matoloop-agent/pyproject.toml
+    git -C "$fixture" -c user.name=MatoLoop -c user.email=installer@example.invalid commit -qm update
+    update_managed_source
+    [[ "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" == "$(git -C "$fixture" rev-parse HEAD)" ]]
+    : > "$PROJECT_ROOT/local-change"
+    ! (update_managed_source >/dev/null 2>&1)
+    rm "$PROJECT_ROOT/local-change"
     printf 'Installer self-test passed.\n'
 )
 
@@ -752,6 +780,7 @@ main() {
     fi
     case "$action" in
         install|repair) [[ -z "$option" ]] || { usage >&2; exit 2; }; install_or_repair ;;
+        update) [[ -z "$option" ]] || { usage >&2; exit 2; }; update_agent ;;
         status) [[ -z "$option" ]] || { usage >&2; exit 2; }; show_status ;;
         uninstall)
             case "$option" in

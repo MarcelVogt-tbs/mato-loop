@@ -48,13 +48,19 @@ trusted local network. Path and URL prompts use Readline, so their prefilled val
 with the cursor, Home, and End keys.
 
 The user systemd service runs with the installing user's permissions. The installer can also
-repair an interrupted installation, show its status, or remove its managed state:
+update a clone it created, repair an interrupted installation, show its status, or remove its
+managed state:
 
 ```bash
+./scripts/install-matoloop-agent.sh update
 ./scripts/install-matoloop-agent.sh repair
 ./scripts/install-matoloop-agent.sh status
 ./scripts/install-matoloop-agent.sh uninstall
 ```
+
+Updates require a clean installer-managed clone and use a fast-forward-only Git pull before
+reinstalling dependencies and restarting the service. Existing development checkouts are never
+updated by the installer; update them manually and run `repair`.
 
 Uninstalling never removes an existing checkout, `uv`, shared system packages, or a pre-existing
 workspace. It removes a clone created by the installer; the interactive uninstall can separately
