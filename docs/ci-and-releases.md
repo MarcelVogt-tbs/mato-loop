@@ -82,7 +82,7 @@ Release-Note: Added: Add IMAP and SMTP integration.
 Release-Note: Security: Reject credentials in mail server URLs.
 ```
 
-The supported categories are `Added`, `Changed`, `Fixed`, and `Security`. The trailer is optional; commits without one and merge commits are omitted. CI rejects malformed trailers.
+The supported categories are `Added`, `Changed`, `Fixed`, and `Security`. Keep multiple trailers together in the final commit-message paragraph so Git recognizes all of them. The trailer is optional; commits without one and merge commits are omitted. CI rejects malformed trailers.
 
 Start a release explicitly from a clean, current `develop` checkout:
 

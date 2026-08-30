@@ -140,7 +140,7 @@ For UI changes, verify at least desktop and mobile in light and dark mode. For A
 
 - Pull requests run complete checks and image builds without registry or release secrets and never publish artifacts.
 - Feature branch pushes run tests only. The default branch `develop` publishes mutable `develop` images, immutable `sha-<12>` image tags, and short-lived native Linux amd64 MatoLoop Agent workflow artifacts. `main` has no mutable publication channel.
-- Add one `Release-Note: <category>: <text>` Git trailer at the end of a non-merge commit for each noteworthy change. Supported categories are `Added`, `Changed`, `Fixed`, and `Security`; use concise English text. Multiple trailers are allowed, and commits without a trailer are omitted from release notes.
+- Add one `Release-Note: <category>: <text>` Git trailer at the end of a non-merge commit for each noteworthy change. Supported categories are `Added`, `Changed`, `Fixed`, and `Security`; use concise English text. Multiple trailers must be contiguous in the final commit-message paragraph. Commits without a trailer are omitted from release notes.
 - Normal commits do not change `VERSION` or package version declarations. The release script updates every version declaration together.
 - The first release may use the already synchronized `VERSION` only while no local or remote `v*` release tag exists. Every later release version must be greater.
 - Start a release explicitly from a clean, current `develop` branch with `./scripts/release.sh X.Y.Z`; the script fast-forwards release-only `main` and pushes atomically. Do not create release tags manually.
