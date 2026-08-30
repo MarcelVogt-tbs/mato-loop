@@ -13,8 +13,10 @@ export function scrollChatToBottom(target) {
   target.scrollTop = chatBottomOffset(target)
 }
 
-export function chatShouldFollowBottom(atBottom, following, userScrolling) {
-  return atBottom && (following || userScrolling)
+export function chatShouldFollowBottom(following, userScrolledUp, userReachedBottom) {
+  if (userReachedBottom) return true
+  if (userScrolledUp) return false
+  return following
 }
 
 export function chatReadingAnchor(target, elements = []) {

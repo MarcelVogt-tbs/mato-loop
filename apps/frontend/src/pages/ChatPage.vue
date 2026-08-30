@@ -278,10 +278,18 @@
             unelevated
             icon="keyboard_arrow_down"
             class="chat-scroll-to-bottom__button"
-            aria-label="Zum neuesten Inhalt springen"
-            @click="scrollToBottom"
+            :aria-label="followButtonLabel"
+            @click="enableFollowMode"
           >
-            <q-tooltip>Zum neuesten Inhalt springen</q-tooltip>
+            <q-badge
+              v-if="hasNewContent"
+              floating
+              rounded
+              color="primary"
+              label="Neu"
+              aria-hidden="true"
+            />
+            <q-tooltip>{{ followButtonLabel }}</q-tooltip>
           </q-btn>
         </div>
       </transition>
@@ -445,6 +453,10 @@ const virtualScroll = ref(null)
 const composer = ref(null)
 const trustedImageOriginsBySession = ref(new Map())
 const followingBottom = ref(true)
+const hasNewContent = ref(false)
+const followButtonLabel = computed(() => hasNewContent.value
+  ? 'Neue Inhalte anzeigen und automatisches Mitscrollen aktivieren'
+  : 'Automatisches Mitscrollen aktivieren')
 const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
 const announcedRunStatus = ref('')
@@ -709,10 +721,12 @@ async function retryMessage(message) {
     { okLabel: 'Erneut versuchen', okColor: 'primary' }
   )
   if (!accepted) return
+  const sessionId = chat.current?.id
+  enableFollowMode()
   messageActionId.value = message.id
-  followingBottom.value = true
   try {
-    await chat.retryFailedMessage(message)
+    const result = await chat.retryFailedMessage(message)
+    if (!result || chat.current?.id !== sessionId) return
     await nextTick()
     scheduleFollowScroll()
   } finally {
@@ -842,12 +856,14 @@ async function loadBackgroundData() {
 }
 
 async function send(content) {
-  followingBottom.value = true
+  const sessionId = chat.current?.id
+  enableFollowMode()
   const request = chat.send(content)
-  await nextTick()
-  scheduleFollowScroll()
   try {
-    await request
+    const result = await request
+    if (!result || !sessionId || chat.current?.id !== sessionId) return
+    await nextTick()
+    scheduleFollowScroll()
   } finally {
     await nextTick()
     composer.value?.focus()
@@ -856,7 +872,6 @@ async function send(content) {
 
 async function flushQueuedMessage() {
   if (!chat.queuedSendReady) return
-  followingBottom.value = true
   const request = chat.drainOutbox()
   await nextTick()
   scheduleFollowScroll()
@@ -988,15 +1003,17 @@ function updateFollowState() {
   lastScrollTop = scrollTop
   if (virtualScrollRefreshInProgress) return
   const atBottom = chatBottomDistance(scrollTarget) <= bottomThreshold
-  if (userScrollActive && movedUp) {
-    followingBottom.value = false
-    cancelFollowScroll()
-  }
-  else if (chatShouldFollowBottom(atBottom, followingBottom.value, userScrollActive)) {
+  const shouldFollow = chatShouldFollowBottom(
+    followingBottom.value,
+    userScrollActive && movedUp,
+    userScrollActive && atBottom
+  )
+  if (shouldFollow && !followingBottom.value) {
     followingBottom.value = true
-    readingAnchor = null
+    hasNewContent.value = false
+    clearReadingAnchor()
   }
-  else if (userScrollActive) {
+  else if (!shouldFollow && followingBottom.value) {
     followingBottom.value = false
     cancelFollowScroll()
   }
@@ -1074,15 +1091,16 @@ function handleScrollAreaMouseUp() {
   scheduleUserScrollEnd()
 }
 
-function scrollToBottom() {
+function enableFollowMode() {
   touchActive = false
   userScrollActive = false
   clearTimeout(userScrollTimer)
   userScrollTimer = null
   followingBottom.value = true
+  hasNewContent.value = false
   clearReadingAnchor()
   cancelFollowScroll()
-  scheduleFollowScroll()
+  scheduleBottomScroll()
 }
 
 function followScrollNow() {
@@ -1092,10 +1110,15 @@ function followScrollNow() {
 }
 
 function scheduleFollowScroll() {
-  if (!followingBottom.value || userScrollActive || scrollFrame !== null) return
+  if (!followingBottom.value) return
+  scheduleBottomScroll()
+}
+
+function scheduleBottomScroll() {
+  if (userScrollActive || scrollFrame !== null) return
   scrollFrame = window.requestAnimationFrame(() => {
     scrollFrame = null
-    followScrollNow()
+    if (scrollTarget) scrollChatToBottom(scrollTarget)
   })
 }
 
@@ -1135,8 +1158,23 @@ watch(
   { flush: 'pre' }
 )
 watch(
-  () => Boolean(chat.streamContent),
-  (streaming) => {
+  [() => chat.current?.id, () => transcript.value.messages.at(-1)?.id],
+  ([sessionId, tailId], [previousSessionId, previousTailId]) => {
+    if (
+      !followingBottom.value
+      && sessionId === previousSessionId
+      && previousTailId
+      && tailId !== previousTailId
+      && transcript.value.messages.at(-1)?.role === 'assistant'
+    ) hasNewContent.value = true
+  }
+)
+watch(
+  () => chat.streamContent,
+  (content, previousContent) => {
+    const streaming = Boolean(content)
+    if (streaming && !followingBottom.value) hasNewContent.value = true
+    if (streaming === Boolean(previousContent)) return
     if (!followingBottom.value || userScrollActive) return
     cancelFollowScroll()
     if (streaming) {
@@ -1165,12 +1203,14 @@ watch(
   () => chat.current?.id,
   async (sessionId, previousSessionId) => {
     if (!sessionId || sessionId === previousSessionId) return
+    followingBottom.value = true
+    hasNewContent.value = false
     clearReadingAnchor()
+    cancelFollowScroll()
     if (routeMessageId.value) {
       followingBottom.value = false
       return
     }
-    followingBottom.value = true
     await nextTick()
     scheduleFollowScroll()
   }

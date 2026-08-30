@@ -30,10 +30,12 @@ describe('chat scroll geometry', () => {
     expect(target.scrollTop).toBe(1280)
   })
 
-  it('does not resume following after a programmatic scroll clamp', () => {
-    expect(chatShouldFollowBottom(true, false, false)).toBe(false)
-    expect(chatShouldFollowBottom(true, false, true)).toBe(true)
-    expect(chatShouldFollowBottom(true, true, false)).toBe(true)
+  it('follows explicit user movement without reacting to programmatic scrolls', () => {
+    expect(chatShouldFollowBottom(false, false, false)).toBe(false)
+    expect(chatShouldFollowBottom(false, false, true)).toBe(true)
+    expect(chatShouldFollowBottom(true, false, false)).toBe(true)
+    expect(chatShouldFollowBottom(true, true, false)).toBe(false)
+    expect(chatShouldFollowBottom(true, true, true)).toBe(true)
   })
 
   it('captures the first visible message with its viewport offset', () => {
