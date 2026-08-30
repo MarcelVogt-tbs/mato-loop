@@ -36,6 +36,14 @@ _AGENT_PROFILE_TOO_LARGE_BODY = json.dumps(
     ),
     separators=(",", ":"),
 ).encode("utf-8")
+_PERSONA_PROFILE_TOO_LARGE_BODY = json.dumps(
+    error_payload(
+        "validation.tooLong",
+        field="personaProfile",
+        params={"maxLength": AGENT_PROFILE_REQUEST_LIMIT},
+    ),
+    separators=(",", ":"),
+).encode("utf-8")
 
 
 class _RequestBodyTooLarge(Exception):
@@ -64,6 +72,12 @@ def _request_limit(scope: Scope) -> int | None:
         method in {"POST", "PUT"}
         and len(parts) in {3, 4}
         and parts[1:3] == ["api", "agent-profiles"]
+    ):
+        return AGENT_PROFILE_REQUEST_LIMIT
+    if (
+        method in {"POST", "PUT"}
+        and len(parts) in {4, 5}
+        and parts[1:4] == ["api", "agent-identity", "personas"]
     ):
         return AGENT_PROFILE_REQUEST_LIMIT
     if (
@@ -124,6 +138,8 @@ class MediaRequestBodyLimitMiddleware:
             error_body = _FILE_TOO_LARGE_BODY
         elif str(path).startswith("/api/agent-profiles"):
             error_body = _AGENT_PROFILE_TOO_LARGE_BODY
+        elif str(path).startswith("/api/agent-identity/personas"):
+            error_body = _PERSONA_PROFILE_TOO_LARGE_BODY
         elif _is_question_answer_path(path):
             error_body = _QUESTION_ANSWER_TOO_LARGE_BODY
         else:

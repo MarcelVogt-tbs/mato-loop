@@ -10,10 +10,10 @@
       class="q-mb-lg"
     >
       <q-tab name="profile" icon="person" label="Über mich" />
-      <q-tab name="assistant" icon="face" label="Assistent" />
+      <q-tab name="assistant" icon="face" label="Personas" />
     </q-tabs>
 
-    <q-tab-panels v-model="tab" animated class="bg-transparent">
+    <q-tab-panels v-model="tab" class="bg-transparent">
       <q-tab-panel name="profile" class="q-pa-none">
         <header class="settings-section-header">
           <div>
@@ -122,7 +122,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import AgentIdentitySettingsPage from 'pages/settings/AgentIdentitySettingsPage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import {
@@ -228,13 +228,16 @@ async function save() {
 async function confirmDiscardedChanges() {
   if (profile.saving) return false
   if (!dirty.value) return true
-  return confirm(
+  const accepted = await confirm(
     'Sollen die ungespeicherten Änderungen verworfen werden?',
     'Änderungen verwerfen?',
     { okLabel: 'Verwerfen' }
   )
+  if (accepted) assignDraft(profile.snapshot())
+  return accepted
 }
 
 onMounted(load)
+onBeforeRouteUpdate(confirmDiscardedChanges)
 onBeforeRouteLeave(confirmDiscardedChanges)
 </script>

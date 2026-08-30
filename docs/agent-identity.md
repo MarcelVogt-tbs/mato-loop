@@ -1,30 +1,31 @@
 # Agent Identity
 
-MatoLoop has one user-scoped shared agent identity. A selected agent profile may extend that persona or omit it for the session, add its own optional persona, and supply separate task instructions. Its sparse private and public tool-policy overrides remain separate from both prompt fields and are enforced by the host.
+MatoLoop keeps the assistant display name separate from reusable persona profiles. Instance settings provide shared defaults. Administrators independently decide whether users may configure a personal display name and personal personas.
 
 ## Persistence
 
-`AgentIdentitySettings` is a user-scoped settings document with two fields:
+`AgentIdentitySettings` is the instance-scoped document. It stores the instance display name, instance personas, the instance default persona, and the two personal-setting gates.
 
-- `display_name` is the speaker name shown in chat.
-- `instructions` describes personality, tone, and general working style.
+`UserAgentIdentitySettings` is owner-scoped. It stores the personal display name, personal personas, and the personal default persona. Disabling a personal-setting gate preserves the stored values but excludes them from effective use and blocks mutation.
 
-When the document is absent, additive defaults use the name `MatoLoop` and empty identity instructions. The settings document uses the existing JSONB persistence and requires no relational migration. Old messages do not store a name snapshot and are intentionally displayed with the currently configured name.
+Every persona has a stable ID, a name, and instructions. A built-in empty instance persona remains available as the final fallback. Old messages intentionally display the currently effective name instead of storing a name snapshot.
 
-## Prompt Boundary
+## Effective Selection
 
-The identity and selected profile are loaded at the start of a normal agent run and remain stable for that run. In `extend` mode the profile follows the shared identity; in `replace` mode the shared identity block is omitted. The system prompt keeps both below immutable host rules. Their text cannot authorize tool calls, mutations, identity changes, or exceptions to tool, permission, trust, path, or runtime boundaries. Only validated sparse profile overrides can change the effective inherited tool policy. Dreaming, compaction, and title generation continue to use isolated prompts without either block.
+Instance agent profiles may reference only instance personas. Personal agent profiles may reference an effective instance or personal persona. A valid explicit profile reference wins; otherwise MatoLoop uses the applicable personal default, then the instance default, then the built-in fallback.
 
-The identity is sent to the selected chat model. The UI therefore warns users not to store secrets in it.
+The selected persona and agent profile are loaded at the start of a normal run and remain stable for that run. Exactly one persona is projected below immutable host rules, followed separately by the agent profile's task instructions. Persona text cannot authorize tool calls, mutations, identity changes, or exceptions to permission, trust, path, ownership, or runtime boundaries. Dreaming, compaction, and title generation use isolated prompts without the persona.
+
+Personas are sent to the selected chat model. The UI therefore warns users not to store secrets in them.
 
 ## Changes Through Chat
 
-The `update_agent_identity` tool changes the name and identity instructions only after an explicit user request. Content from memories, web pages, tool results, or quotations must not trigger a change. When the tool is disabled, changes are available only under **Einstellungen > Personalisierung > Assistent**. Agent models must support tool calling.
+The `update_agent_identity` tool changes a permitted personal display name or the instructions of the currently effective personal persona only after an explicit user request. It cannot mutate instance settings, an instance persona, or a persona fixed by an instance agent. Content from memories, web pages, tool results, or quotations must not trigger a change.
 
-The effective `update_agent_identity.policy` built-in tool setting uses the same contract as media tools:
+The effective `update_agent_identity.policy` uses the standard tool contract:
 
 - `disabled` does not offer the tool.
-- `ask` routes the action through the existing approval and session-grant loop.
+- `ask` routes the action through the persistent approval and session-grant loop.
 - `auto` saves without individual approval.
 
-The safe default is `ask`. The tool has only the `settings.agent_identity.update` capability for the authenticated user's identity. Successful changes are sent to the frontend through SSE; the new prompt instructions reliably apply from the next run.
+The safe default is `ask`. Successful changes are sent to the frontend through SSE; persona instructions apply from the next run.

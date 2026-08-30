@@ -230,7 +230,6 @@ from mato_loop_backend.providers.media import (
     ResolvedMediaModel,
 )
 from mato_loop_backend.settings import (
-    AgentIdentitySettings,
     AgentProfileUnavailable,
     IntegrationSettings,
     ModelCapability,
@@ -239,10 +238,13 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
+    UserAgentIdentitySettings,
     UserProfileFact,
     UserProfileSettings,
     cap_agent_profile_policy,
+    load_agent_profile,
     load_agent_profile_tools,
+    load_effective_agent_identity,
     load_effective_integrations,
     load_effective_tools,
 )
@@ -1888,6 +1890,7 @@ def effective_tool_capabilities(
     media_capabilities: set[ModelCapability] | None = None,
     *,
     video_available: bool | None = None,
+    identity_update_available: bool | None = None,
 ) -> set[str]:
     capabilities = {
         capability
@@ -1914,7 +1917,8 @@ def effective_tool_capabilities(
     ):
         capabilities.add("media.analyze.video")
     if (
-        tool_execution_policy(
+        identity_update_available is not False
+        and tool_execution_policy(
             settings,
             "settings.agent_identity.update",
             settings.update_agent_identity.policy,
@@ -2021,6 +2025,31 @@ async def _update_agent_identity(
     )
     if policy == ToolExecutionPolicy.DISABLED:
         return ToolResult.error("tool.unavailable")
+    try:
+        profile = await load_agent_profile(
+            context.db,
+            context.session.user_id,
+            getattr(context.session, "agent_profile_id", None),
+        )
+    except AgentProfileUnavailable:
+        return ToolResult.error("tool.unavailable")
+    effective_identity = await load_effective_agent_identity(
+        context.db, context.session.user_id, profile
+    )
+    if (
+        arguments.instructions is not None
+        and context.agent_persona_id is not None
+        and effective_identity.persona.id != context.agent_persona_id
+    ):
+        return ToolResult.error("tool.unavailable")
+    approved_persona_id = (
+        effective_identity.persona.id if arguments.instructions is not None else None
+    )
+    if (
+        arguments.display_name is not None
+        and not effective_identity.personal_display_name_enabled
+    ) or (arguments.instructions is not None and not effective_identity.persona_editable):
+        return ToolResult.error("tool.unavailable")
     approval_received = False
     if policy == ToolExecutionPolicy.ASK:
         allowed = await _allow(
@@ -2029,6 +2058,11 @@ async def _update_agent_identity(
                 context.session.user_id,
                 changes_name=arguments.display_name is not None,
                 changes_instructions=arguments.instructions is not None,
+                persona_name=(
+                    effective_identity.persona.name
+                    if arguments.instructions is not None
+                    else None
+                ),
             ),
         )
         if not allowed:
@@ -2046,26 +2080,60 @@ async def _update_agent_identity(
     ):
         return ToolResult.error("tool.unavailable")
 
+    try:
+        profile = await load_agent_profile(
+            context.db,
+            context.session.user_id,
+            context.session.agent_profile_id,
+        )
+    except AgentProfileUnavailable:
+        return ToolResult.error("tool.unavailable")
+    effective_identity = await load_effective_agent_identity(
+        context.db,
+        context.session.user_id,
+        profile,
+        for_update=True,
+    )
+    if (
+        arguments.display_name is not None
+        and not effective_identity.personal_display_name_enabled
+    ) or (arguments.instructions is not None and not effective_identity.persona_editable):
+        return ToolResult.error("tool.unavailable")
+    if (
+        approved_persona_id is not None
+        and effective_identity.persona.id != approved_persona_id
+    ):
+        return ToolResult.error("tool.unavailable")
+
     current = await SettingsStore.load(
         context.db,
-        AgentIdentitySettings,
+        UserAgentIdentitySettings,
         user_id=context.session.user_id,
         for_update=True,
     )
-    values = current.model_dump()
     if arguments.display_name is not None:
-        values["display_name"] = arguments.display_name
+        current.display_name = arguments.display_name
     if arguments.instructions is not None:
-        values["instructions"] = arguments.instructions
-    identity = AgentIdentitySettings.model_validate(values)
-    await SettingsStore.save(context.db, identity, user_id=context.session.user_id)
+        persona = next(
+            (
+                item
+                for item in current.personas
+                if item.id == effective_identity.persona.id
+            ),
+            None,
+        )
+        if persona is None:
+            return ToolResult.error("tool.unavailable")
+        persona.instructions = arguments.instructions
+    await SettingsStore.save(context.db, current, user_id=context.session.user_id)
+    display_name = arguments.display_name or effective_identity.display_name
     identity_payload = {
-        "displayName": identity.display_name,
-        "instructions": identity.instructions,
+        "displayName": display_name,
     }
     return ToolResult.json(
         {
-            "displayName": identity.display_name,
+            "displayName": display_name,
+            "personaName": effective_identity.persona.name,
             "instructionsUpdated": arguments.instructions is not None,
             "effectiveFrom": "next_run",
         },
@@ -4014,8 +4082,13 @@ async def _coding_analyze(
     ):
         return ToolResult.error("permission.denied")
     try:
-        identity = await SettingsStore.load(
-            context.db, AgentIdentitySettings, user_id=context.session.user_id
+        profile = await load_agent_profile(
+            context.db,
+            context.session.user_id,
+            getattr(context.session, "agent_profile_id", None),
+        )
+        identity = await load_effective_agent_identity(
+            context.db, context.session.user_id, profile
         )
         result = await ProjectCodingService.analyze(
             context.db,
@@ -4023,7 +4096,7 @@ async def _coding_analyze(
             project,
             arguments.brief,
             arguments.title,
-            identity.instructions,
+            identity.persona.instructions,
             project.instructions,
         )
     except ProjectCodingError as exc:
@@ -4772,7 +4845,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "update_agent_identity",
-            "Update the shared agent name or persona instructions after an explicit user request. "
+            "Update the permitted personal agent name or active personal persona instructions after an explicit user request. "
             "Changes apply reliably from the next run.",
             UpdateAgentIdentityArguments,
             _update_agent_identity,

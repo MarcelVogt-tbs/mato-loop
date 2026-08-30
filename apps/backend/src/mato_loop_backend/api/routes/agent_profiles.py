@@ -19,7 +19,7 @@ from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     DEFAULT_AGENT_PROFILE_ID,
-    AgentPersonaMode,
+    AgentIdentitySettings,
     AgentProfile,
     AgentProfilePermissions,
     AgentProfilesSettings,
@@ -28,10 +28,12 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
+    UserAgentIdentitySettings,
     UserAgentProfilesSettings,
     load_effective_agent_profiles,
     load_effective_integrations,
     load_effective_tools,
+    resolve_agent_persona,
 )
 
 router = APIRouter(prefix="/agent-profiles", dependencies=[Depends(require_user)])
@@ -51,9 +53,8 @@ class AgentProfileRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
-    persona: str = Field(default="", max_length=16_000)
+    persona_id: UUID | None = None
     instructions: str = Field(min_length=1, max_length=16_000)
-    persona_mode: AgentPersonaMode = AgentPersonaMode.EXTEND
     private_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions
     )
@@ -61,7 +62,7 @@ class AgentProfileRequest(BaseModel):
         default_factory=AgentProfilePermissions
     )
 
-    @field_validator("name", "description", "persona", "instructions", mode="before")
+    @field_validator("name", "description", "instructions", mode="before")
     @classmethod
     def strip_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
@@ -80,16 +81,18 @@ async def _load_scoped(
     *,
     for_update: bool = False,
 ) -> tuple[AgentProfilesSettings | UserAgentProfilesSettings, UUID | None]:
-    instance = await SettingsStore.load(db, AgentProfilesSettings)
     if scope == "instance":
         if not user.is_admin:
             raise ApiError(403, "auth.adminRequired")
         return (
-            await SettingsStore.load(db, AgentProfilesSettings, for_update=True)
-            if for_update
-            else instance,
+            await SettingsStore.load(
+                db, AgentProfilesSettings, for_update=for_update
+            ),
             None,
         )
+    instance = await SettingsStore.load(
+        db, AgentProfilesSettings, for_update=for_update
+    )
     if not instance.personal_agents_enabled:
         raise ApiError(409, "agentProfile.personalDisabled")
     return (
@@ -100,8 +103,19 @@ async def _load_scoped(
     )
 
 
-def _profile_payload(profile: AgentProfile, scope: SettingsApiScope) -> dict:
-    return {**profile.model_dump(mode="json", by_alias=True), "scope": scope}
+def _profile_payload(
+    profile: AgentProfile,
+    scope: SettingsApiScope,
+    instance_identity: AgentIdentitySettings,
+    personal_identity: UserAgentIdentitySettings | None,
+) -> dict:
+    resolved = resolve_agent_persona(instance_identity, personal_identity, profile)
+    return {
+        **profile.model_dump(mode="json", by_alias=True),
+        "scope": scope,
+        "resolvedPersonaId": str(resolved.id),
+        "resolvedPersonaName": resolved.name,
+    }
 
 
 async def _response(
@@ -111,6 +125,10 @@ async def _response(
     scope: SettingsApiScope | None = None,
 ) -> dict:
     effective = await load_effective_agent_profiles(db, user.id)
+    instance_identity = await SettingsStore.load(db, AgentIdentitySettings)
+    personal_identity = await SettingsStore.load_optional(
+        db, UserAgentIdentitySettings, user_id=user.id
+    )
     integrations = (
         await SettingsStore.load(db, IntegrationSettings)
         if scope == "instance"
@@ -123,7 +141,10 @@ async def _response(
     )
     effective_profiles = [
         _profile_payload(
-            profile, "personal" if profile.owner_id == user.id else "instance"
+            profile,
+            "personal" if profile.owner_id == user.id else "instance",
+            instance_identity,
+            personal_identity,
         )
         for profile in effective.profiles
     ]
@@ -159,11 +180,42 @@ async def _response(
             for instance in integrations.instances
             if str(instance.id) in policy_integration_ids
         ],
+        "personas": [
+            {
+                **persona.model_dump(mode="json", by_alias=True),
+                "scope": "instance",
+                "effective": True,
+            }
+            for persona in instance_identity.personas
+        ]
+        + (
+            [
+                {
+                    **persona.model_dump(mode="json", by_alias=True),
+                    "scope": "personal",
+                    "effective": instance_identity.personal_personas_enabled,
+                }
+                for persona in personal_identity.personas
+            ]
+            if scope != "instance" and personal_identity is not None
+            else []
+        ),
+        "personalPersonasEnabled": instance_identity.personal_personas_enabled,
         "effectiveAgents": effective_profiles,
         "agents": (
             effective_profiles
             if settings is None or scope is None
-            else [_profile_payload(profile, scope) for profile in settings.profiles]
+            else [
+                _profile_payload(
+                    profile.model_copy(
+                        update={"owner_id": user.id if scope == "personal" else None}
+                    ),
+                    scope,
+                    instance_identity,
+                    personal_identity,
+                )
+                for profile in settings.profiles
+            ]
         ),
     }
 
@@ -259,6 +311,32 @@ async def _profile_from_request(
     profile_id: UUID | None = None,
     existing: AgentProfile | None = None,
 ) -> AgentProfile:
+    persona_id = (
+        existing.persona_id
+        if existing is not None and "persona_id" not in payload.model_fields_set
+        else payload.persona_id
+    )
+    if persona_id is not None and (
+        existing is None or persona_id != existing.persona_id
+    ):
+        identity = await SettingsStore.load(
+            db, AgentIdentitySettings, for_update=owner_id is not None
+        )
+        allowed_persona_ids = {persona.id for persona in identity.personas}
+        if owner_id is not None and identity.personal_personas_enabled:
+            personal_identity = await SettingsStore.load_optional(
+                db,
+                UserAgentIdentitySettings,
+                user_id=user.id,
+                for_update=True,
+            )
+            if personal_identity is not None:
+                allowed_persona_ids.update(
+                    persona.id for persona in personal_identity.personas
+                )
+        if persona_id not in allowed_persona_ids:
+            raise ApiError(422, "validation.invalidChoice", field="personaId")
+
     integrations = (
         await load_effective_integrations(db, user.id)
         if owner_id is not None
@@ -290,8 +368,7 @@ async def _profile_from_request(
         existing.public_permissions if existing is not None else None,
     )
     values = payload.model_dump()
-    if existing is not None and "persona" not in payload.model_fields_set:
-        values["persona"] = existing.persona
+    values["persona_id"] = persona_id
     return AgentProfile(id=profile_id or uuid4(), **values)
 
 

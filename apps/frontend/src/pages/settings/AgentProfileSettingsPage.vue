@@ -68,7 +68,7 @@
               {{ agent.description || 'Keine Beschreibung' }}
             </q-item-label>
             <q-item-label caption class="q-mt-xs">
-              Gemeinsame Persona {{ agent.personaMode === 'replace' ? 'weglassen' : 'verwenden' }}
+              Persona: {{ agent.resolvedPersonaName || 'Standard' }}
             </q-item-label>
           </q-item-section>
           <q-item-section side top>

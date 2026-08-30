@@ -38,7 +38,7 @@ def test_default_agent_inherits_tool_defaults() -> None:
 
     assert profile.id == DEFAULT_AGENT_PROFILE_ID
     assert profile.name == "Allgemein"
-    assert profile.persona == ""
+    assert profile.persona_id is None
     assert profile.private_permissions == AgentProfilePermissions()
     assert profile.public_permissions == AgentProfilePermissions()
 
@@ -288,22 +288,20 @@ def test_agent_profile_request_rejects_blank_trimmed_text() -> None:
     with pytest.raises(ValidationError):
         AgentProfileRequest(name="Agent", instructions="  ")
 
+    persona_id = uuid4()
     request = AgentProfileRequest(
-        name="Agent", persona="  Curious analyst  ", instructions="Task"
+        name="Agent", personaId=persona_id, instructions="Task"
     )
-    legacy = AgentProfileRequest(name="Agent", instructions="Task")
-    assert request.persona == "Curious analyst"
-    assert legacy.persona == ""
+    assert request.persona_id == persona_id
 
 
-async def test_legacy_agent_profile_update_preserves_persona(monkeypatch) -> None:
+async def test_legacy_agent_profile_update_preserves_persona_id(monkeypatch) -> None:
     async def load_settings(_db, settings_type, **_kwargs):
         return settings_type()
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
-    existing = AgentProfile(
-        name="Agent", persona="Curious analyst", instructions="Old task"
-    )
+    persona_id = uuid4()
+    existing = AgentProfile(name="Agent", persona_id=persona_id, instructions="Old task")
     user = UserAccount(
         id=uuid4(), username="admin", password_hash="hash", is_admin=True
     )
@@ -318,18 +316,18 @@ async def test_legacy_agent_profile_update_preserves_persona(monkeypatch) -> Non
         existing=existing,
     )
 
-    assert updated.persona == "Curious analyst"
+    assert updated.persona_id == persona_id
     assert updated.instructions == "New task"
 
     cleared = await _profile_from_request(
         AsyncMock(),
         user,
         None,
-        AgentProfileRequest(name="Agent", persona="", instructions="New task"),
+        AgentProfileRequest(name="Agent", personaId=None, instructions="New task"),
         profile_id=existing.id,
         existing=existing,
     )
-    assert cleared.persona == ""
+    assert cleared.persona_id is None
 
 
 async def test_agent_profile_integration_metadata_lists_actions_and_resources(

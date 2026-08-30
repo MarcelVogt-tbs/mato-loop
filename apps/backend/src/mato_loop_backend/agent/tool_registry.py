@@ -190,6 +190,7 @@ class ToolContext:
     bound_options: dict[str, Any] = field(default_factory=dict)
     model_id: UUID | None = None
     model_trust_level: TrustLevel = TrustLevel.PUBLIC
+    agent_persona_id: UUID | None = None
     bound_resource: IntegrationResource | None = None
     skill_state: RunSkillState = field(default_factory=RunSkillState)
     skill_draft_handler: SkillDraftHandler | None = None

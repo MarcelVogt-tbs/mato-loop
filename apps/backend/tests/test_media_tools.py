@@ -153,6 +153,15 @@ def test_media_schemas_follow_effective_capabilities() -> None:
     assert "transcribe_audio" not in names
 
 
+def test_identity_availability_does_not_hide_video_analysis() -> None:
+    capabilities = effective_tool_capabilities(
+        ToolSettings(), video_available=True, identity_update_available=False
+    )
+
+    assert "media.analyze.video" in capabilities
+    assert "settings.agent_identity.update" not in capabilities
+
+
 async def test_disabled_media_tool_is_rejected_before_provider(
     tmp_path, monkeypatch
 ) -> None:

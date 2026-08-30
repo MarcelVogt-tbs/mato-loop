@@ -581,14 +581,18 @@ def media_permission(
 
 
 def agent_identity_permission(
-    user_id: UUID, *, changes_name: bool, changes_instructions: bool
+    user_id: UUID,
+    *,
+    changes_name: bool,
+    changes_instructions: bool,
+    persona_name: str | None = None,
 ) -> PermissionRequest:
     if changes_name and changes_instructions:
-        summary = "Der Agent möchte seinen Namen und seine Persona-Anweisungen ändern."
+        summary = f"Der Agent möchte seinen Namen und die Persona „{persona_name}“ ändern."
     elif changes_name:
         summary = "Der Agent möchte seinen Namen ändern."
     else:
-        summary = "Der Agent möchte seine Persona-Anweisungen ändern."
+        summary = f"Der Agent möchte die Persona „{persona_name}“ ändern."
     return PermissionRequest(
         capability="settings.agent_identity.update",
         resource_type="agent_identity",

@@ -120,27 +120,28 @@
           <q-card flat class="app-surface q-mb-md">
             <q-card-section>
               <div class="text-subtitle1 text-weight-bold">Persona</div>
-              <div class="text-caption app-muted">Rolle, Ton, Charakter und allgemeine Arbeitsweise dieses Agenten.</div>
+              <div class="text-caption app-muted">Wiederverwendbares Verhalten und Charakter dieses Agenten.</div>
             </q-card-section>
             <q-separator />
             <q-card-section>
               <q-select
-                v-model="form.personaMode"
+                v-model="form.personaId"
                 outlined
                 emit-value
                 map-options
-                label="Gemeinsame Persona"
+                clearable
+                label="Persona"
                 :options="personaOptions"
+                hint="Ohne Auswahl gilt die Standard-Persona dieses Bereichs."
               />
-              <q-input
-                v-model="form.persona"
-                class="q-mt-md"
-                outlined
-                type="textarea"
-                autogrow
-                maxlength="16000"
-                label="Eigene Persona"
-                hint="Optional. Beschreibt Rolle, Ton und Arbeitsweise, nicht die konkrete Aufgabe."
+              <q-btn
+                flat
+                no-caps
+                color="primary"
+                icon="manage_accounts"
+                label="Personas verwalten"
+                class="q-mt-sm"
+                :to="{ name: 'settings-personalization', query: { tab: 'assistant', scope } }"
               />
             </q-card-section>
           </q-card>
@@ -386,9 +387,8 @@ const emptyPermissions = () => ({ policies: {}, integrationPolicies: {}, resourc
 const form = reactive({
   name: '',
   description: '',
-  persona: '',
+  personaId: null,
   instructions: '',
-  personaMode: 'extend',
   publicPermissions: emptyPermissions(),
   privatePermissions: emptyPermissions()
 })
@@ -396,13 +396,19 @@ const audiences = [
   { label: 'Private Modelle', value: 'private' },
   { label: 'Öffentliche Modelle', value: 'public' }
 ]
-const personaOptions = [
-  { label: 'Gemeinsame Persona verwenden', value: 'extend' },
-  { label: 'Gemeinsame Persona weglassen', value: 'replace' }
-]
+const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
+const personaOptions = computed(() => [
+  { label: 'Standard-Persona', value: null },
+  ...agents.personas
+    .filter((persona) => scope.value === 'personal' || persona.scope === 'instance')
+    .map((persona) => ({
+      label: `${persona.name} (${persona.scope === 'instance' ? 'Instanz' : 'Persönlich'})`,
+      value: persona.id,
+      disable: persona.effective === false
+    }))
+])
 const policyLabels = { disabled: 'Deaktiviert', ask: 'Nachfragen', auto: 'Automatisch' }
 const clone = (value) => JSON.parse(JSON.stringify(value))
-const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
 const isCreate = computed(() => route.name === 'settings-agent-create')
 const isDefault = computed(() => editingAgent.value?.id === agents.defaultAgentProfileId)
 const blocked = computed(() => scope.value === 'personal' && !agents.personalAgentsEnabled)
@@ -467,9 +473,8 @@ function requestPayload() {
   return {
     name: form.name.trim(),
     description: form.description.trim(),
-    persona: form.persona.trim(),
+    personaId: form.personaId,
     instructions: form.instructions.trim(),
-    personaMode: form.personaMode,
     publicPermissions: clone(form.publicPermissions),
     privatePermissions: clone(form.privatePermissions)
   }
@@ -479,9 +484,8 @@ function assignForm(agent = null) {
   Object.assign(form, {
     name: agent?.name || '',
     description: agent?.description || '',
-    persona: agent?.persona || '',
+    personaId: agent?.personaId || null,
     instructions: agent?.instructions || '',
-    personaMode: agent?.personaMode === 'replace' ? 'replace' : 'extend',
     publicPermissions: clone(agent?.publicPermissions || emptyPermissions()),
     privatePermissions: clone(agent?.privatePermissions || emptyPermissions())
   })

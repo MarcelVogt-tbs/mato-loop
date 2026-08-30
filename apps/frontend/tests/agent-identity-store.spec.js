@@ -2,12 +2,36 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
-  api: { get: vi.fn(), patch: vi.fn() }
+  api: {
+    delete: vi.fn(),
+    get: vi.fn(),
+    patch: vi.fn(),
+    post: vi.fn(),
+    put: vi.fn()
+  }
 }))
 
 vi.mock('src/boot/axios', () => ({ api }))
 
 import { useAgentIdentityStore } from '../src/stores/agent-identity'
+
+const settings = (values = {}) => ({
+  scope: 'personal',
+  configuredDisplayName: null,
+  effectiveDisplayName: 'MatoLoop',
+  personalDisplayNamesEnabled: true,
+  personalPersonasEnabled: true,
+  defaultPersonaId: null,
+  effectiveDefaultPersonaId: 'instance-default',
+  personas: [{
+    id: 'instance-default',
+    name: 'Standard',
+    instructions: '',
+    scope: 'instance',
+    effective: true
+  }],
+  ...values
+})
 
 describe('agent identity store', () => {
   beforeEach(() => {
@@ -15,10 +39,8 @@ describe('agent identity store', () => {
     vi.clearAllMocks()
   })
 
-  it('uses MatoLoop as a synchronous fallback and loads the configured identity', async () => {
-    api.get.mockResolvedValue({
-      data: { displayName: 'Ada', instructions: 'Antworte direkt.' }
-    })
+  it('uses MatoLoop as a synchronous fallback and loads the effective name', async () => {
+    api.get.mockResolvedValue({ data: { displayName: 'Ada' } })
     const identity = useAgentIdentityStore()
 
     expect(identity.displayName).toBe('MatoLoop')
@@ -26,36 +48,79 @@ describe('agent identity store', () => {
 
     expect(api.get).toHaveBeenCalledWith('/agent-identity', undefined)
     expect(identity.displayName).toBe('Ada')
-    expect(identity.instructions).toBe('Antworte direkt.')
     expect(identity.loaded).toBe(true)
   })
 
-  it('persists both editable fields and adopts the canonical response', async () => {
-    api.patch.mockResolvedValue({
-      data: { displayName: 'Ada', instructions: 'Sei freundlich.' }
+  it('loads scoped settings without replacing them with another scope', async () => {
+    api.get.mockResolvedValue({
+      data: settings({
+        configuredDisplayName: 'Ada',
+        effectiveDisplayName: 'Ada',
+        personas: [
+          ...settings().personas,
+          {
+            id: 'personal-one',
+            name: 'Direkt',
+            instructions: 'Antworte direkt.',
+            scope: 'personal',
+            effective: true
+          }
+        ]
+      })
     })
     const identity = useAgentIdentityStore()
 
-    await identity.saveIdentity({
-      displayName: ' Ada ',
-      instructions: ' Sei freundlich. '
-    })
+    await identity.fetchSettings('personal')
 
-    expect(api.patch).toHaveBeenCalledWith('/agent-identity', {
-      display_name: ' Ada ',
-      instructions: ' Sei freundlich. '
+    expect(api.get).toHaveBeenCalledWith('/agent-identity/settings', {
+      params: { scope: 'personal' }
     })
+    expect(identity.configuredDisplayName).toBe('Ada')
     expect(identity.displayName).toBe('Ada')
-    expect(identity.instructions).toBe('Sei freundlich.')
+    expect(identity.scopedPersonas.map((persona) => persona.id)).toEqual(['personal-one'])
   })
 
-  it('can apply an identity update received through SSE', () => {
+  it('persists scoped names and persona CRUD with exact payloads', async () => {
     const identity = useAgentIdentityStore()
+    api.patch.mockResolvedValue({
+      data: settings({ configuredDisplayName: 'Ada', effectiveDisplayName: 'Ada' })
+    })
 
-    identity.assignIdentity({ displayName: 'Kira', instructions: 'Bleib neugierig.' })
+    await identity.saveDisplayName('Ada')
 
-    expect(identity.displayName).toBe('Kira')
-    expect(identity.instructions).toBe('Bleib neugierig.')
+    expect(api.patch).toHaveBeenCalledWith(
+      '/agent-identity/settings/display-name',
+      { displayName: 'Ada' },
+      { params: { scope: 'personal' } }
+    )
+
+    api.post.mockResolvedValue({
+      data: settings({
+        personas: [
+          ...settings().personas,
+          {
+            id: 'personal-one',
+            name: 'Direkt',
+            instructions: 'Kurz.',
+            scope: 'personal',
+            effective: true
+          }
+        ]
+      })
+    })
+    await identity.createPersona({ name: 'Direkt', instructions: 'Kurz.' })
+    expect(api.post).toHaveBeenCalledWith(
+      '/agent-identity/personas',
+      { name: 'Direkt', instructions: 'Kurz.' },
+      { params: { scope: 'personal' } }
+    )
+
+    api.delete.mockResolvedValue({ data: settings() })
+    await identity.deletePersona('personal-one')
+    expect(api.delete).toHaveBeenCalledWith('/agent-identity/personas/personal-one', {
+      params: { scope: 'personal' }
+    })
+    expect(identity.personaById('personal-one')).toBeNull()
   })
 
   it('does not let an older fetch overwrite an SSE update', async () => {
@@ -64,11 +129,10 @@ describe('agent identity store', () => {
     const identity = useAgentIdentityStore()
 
     const loading = identity.fetchIdentity()
-    identity.assignIdentity({ displayName: 'Neu', instructions: 'Aktuell' })
-    resolveFetch({ data: { displayName: 'Alt', instructions: 'Veraltet' } })
+    identity.assignIdentity({ displayName: 'Neu' })
+    resolveFetch({ data: { displayName: 'Alt' } })
     await loading
 
     expect(identity.displayName).toBe('Neu')
-    expect(identity.instructions).toBe('Aktuell')
   })
 })

@@ -61,17 +61,19 @@ from mato_loop_backend.models import (
 from mato_loop_backend.providers import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
-    AgentIdentitySettings,
     AgentProfileUnavailable,
     AiSettings,
+    EffectiveAgentIdentity,
     IntegrationInstance,
     IntegrationSettings,
+    PersonaProfile,
     SettingsStore,
     SkillDefinition,
     SkillsSettings,
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
+    UserAgentIdentitySettings,
     UserProfileSettings,
 )
 from mato_loop_backend.skills import SkillDraft
@@ -1445,13 +1447,14 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
     tool_settings = _tool_settings(
         {"updateAgentIdentity": {"policy": "ask"}}
     )
-    identity = AgentIdentitySettings()
+    persona = PersonaProfile(name="Direkt", instructions="Alt")
+    identity = UserAgentIdentitySettings(personas=[persona])
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {
             ToolSettings: tool_settings,
             AiSettings: AiSettings(),
-            AgentIdentitySettings: identity,
+            UserAgentIdentitySettings: identity,
         }[settings_type]
 
     save = AsyncMock()
@@ -1466,11 +1469,25 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
         },
     )
     context = _context(tmp_path, call)
+    persona.owner_id = context.session.user_id
+    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
+    monkeypatch.setattr(
+        tools_module,
+        "load_effective_agent_identity",
+        AsyncMock(
+            return_value=EffectiveAgentIdentity(
+                display_name="MatoLoop",
+                persona=persona,
+                persona_editable=True,
+            )
+        ),
+    )
 
     result = await tool_registry.execute(call, context)
 
     assert json.loads(result.content) == {
         "displayName": "Ada",
+        "personaName": "Direkt",
         "instructionsUpdated": True,
         "effectiveFrom": "next_run",
     }
@@ -1480,18 +1497,22 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
     assert request.resource_type == "agent_identity"
     assert request.resource_scope == str(context.session.user_id)
     save.assert_awaited_once()
+    assert identity.display_name == "Ada"
+    assert identity.personas[0].instructions == "Antworte direkt."
 
 
 async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) -> None:
     tool_settings = _tool_settings(
         {"policies": {"settings.agent_identity.update": "auto"}}
     )
+    persona = PersonaProfile(name="Freundlich", instructions="Alt")
+    identity = UserAgentIdentitySettings(personas=[persona])
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {
             ToolSettings: tool_settings,
             AiSettings: AiSettings(),
-            AgentIdentitySettings: AgentIdentitySettings(),
+            UserAgentIdentitySettings: identity,
         }[settings_type]
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
@@ -1502,11 +1523,120 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
         arguments={"instructions": "Sei freundlich."},
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
+    persona.owner_id = context.session.user_id
+    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
+    monkeypatch.setattr(
+        tools_module,
+        "load_effective_agent_identity",
+        AsyncMock(
+            return_value=EffectiveAgentIdentity(
+                display_name="MatoLoop",
+                persona=persona,
+                persona_editable=True,
+            )
+        ),
+    )
 
     result = await tool_registry.execute(call, context)
 
     assert not result.is_error
     context.ask_handler.assert_not_awaited()
+
+
+async def test_update_agent_identity_rejects_changed_approved_persona(
+    monkeypatch, tmp_path
+) -> None:
+    tool_settings = _tool_settings({"updateAgentIdentity": {"policy": "ask"}})
+    first = PersonaProfile(name="Erste", instructions="Alt")
+    second = PersonaProfile(name="Zweite", instructions="Alt")
+    identity = UserAgentIdentitySettings(personas=[first, second])
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return {
+            ToolSettings: tool_settings,
+            AiSettings: AiSettings(),
+            UserAgentIdentitySettings: identity,
+        }[settings_type]
+
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(SettingsStore, "save", save)
+    context = _context(
+        tmp_path,
+        ToolCall(
+            id="identity-race",
+            name="update_agent_identity",
+            arguments={"instructions": "Neu"},
+        ),
+    )
+    for persona in (first, second):
+        persona.owner_id = context.session.user_id
+    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
+    monkeypatch.setattr(
+        tools_module,
+        "load_effective_agent_identity",
+        AsyncMock(
+            side_effect=[
+                EffectiveAgentIdentity(
+                    display_name="MatoLoop", persona=first, persona_editable=True
+                ),
+                EffectiveAgentIdentity(
+                    display_name="MatoLoop", persona=second, persona_editable=True
+                ),
+            ]
+        ),
+    )
+
+    result = await tool_registry.execute(context.tool_call, context)
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+    save.assert_not_awaited()
+
+
+async def test_update_agent_identity_rejects_persona_changed_since_run_start(
+    monkeypatch, tmp_path
+) -> None:
+    tool_settings = _tool_settings({"updateAgentIdentity": {"policy": "ask"}})
+    prompted = PersonaProfile(name="Prompt", instructions="Alt")
+    current = PersonaProfile(name="Aktuell", instructions="Alt")
+    context = _context(
+        tmp_path,
+        ToolCall(
+            id="identity-frozen",
+            name="update_agent_identity",
+            arguments={"instructions": "Neu"},
+        ),
+    )
+    context.agent_persona_id = prompted.id
+    current.owner_id = context.session.user_id
+    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
+    monkeypatch.setattr(
+        tools_module,
+        "load_effective_agent_identity",
+        AsyncMock(
+            return_value=EffectiveAgentIdentity(
+                display_name="MatoLoop", persona=current, persona_editable=True
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(
+            side_effect=lambda _db, settings_type, **_kwargs: {
+                ToolSettings: tool_settings,
+                AiSettings: AiSettings(),
+            }[settings_type]
+        ),
+    )
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+
+    result = await tool_registry.execute(context.tool_call, context)
+
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+    context.ask_handler.assert_not_awaited()
+    save.assert_not_awaited()
 
 
 async def test_update_user_profile_uses_ask_policy_and_preserves_other_scope(

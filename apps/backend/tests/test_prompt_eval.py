@@ -467,7 +467,7 @@ def test_prompt_slimming_system_variants_keep_security_contracts() -> None:
 def test_atomic_prompt_candidate_removes_only_targeted_paragraphs() -> None:
     paragraphs = (
         "Host security contract.",
-        'User-configured agent identity; JSON: {"displayName": "MatoLoop", "instructions": ""}',
+        'User-configured assistant identity; JSON: {"displayName": "MatoLoop"}',
         "Use a valid fenced `mermaid` block when useful.",
         "Tool budget: 32 calls.",
         "Research budget limit: 8 calls this turn.",

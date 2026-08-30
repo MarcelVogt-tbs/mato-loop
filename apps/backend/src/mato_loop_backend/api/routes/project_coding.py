@@ -31,7 +31,7 @@ from mato_loop_backend.project_coding import (
     ProjectCodingService,
 )
 from mato_loop_backend.security import require_user
-from mato_loop_backend.settings import AgentIdentitySettings, SettingsStore
+from mato_loop_backend.settings import load_effective_agent_identity
 
 router = APIRouter(prefix="/projects", dependencies=[Depends(require_user)])
 
@@ -677,7 +677,7 @@ async def analyze(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> CodingAnalysisResponse:
     project = await _owned_project(db, project_id, user.id)
-    identity = await SettingsStore.load(db, AgentIdentitySettings, user_id=user.id)
+    identity = await load_effective_agent_identity(db, user.id)
     result = await _call(
         ProjectCodingService.analyze(
             db,
@@ -685,7 +685,7 @@ async def analyze(
             project,
             payload.brief,
             payload.title,
-            identity.instructions,
+            identity.persona.instructions,
             project.instructions,
         )
     )

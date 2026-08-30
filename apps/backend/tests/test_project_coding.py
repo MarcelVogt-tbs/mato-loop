@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.agent.tools as tools_module
 import mato_loop_backend.project_coding as project_coding_module
 from mato_loop_backend.agent.permissions import PermissionDecision
 from mato_loop_backend.agent.tool_arguments import CodingAnalyzeArguments
@@ -26,7 +27,6 @@ from mato_loop_backend.project_coding import (
     _BoundCodingProject,
     _redact_permission_pattern,
 )
-from mato_loop_backend.settings import SettingsStore
 
 
 def _project(user_id, **values) -> Project:
@@ -470,10 +470,11 @@ async def test_coding_analyze_tool_uses_bound_project_and_permission(monkeypatch
         session=SimpleNamespace(id=uuid4(), user_id=user_id, project_id=project.id),
         ask=ask,
     )
+    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
     monkeypatch.setattr(
-        SettingsStore,
-        "load",
-        AsyncMock(return_value=SimpleNamespace(instructions="User rules")),
+        tools_module,
+        "load_effective_agent_identity",
+        AsyncMock(return_value=SimpleNamespace(persona=SimpleNamespace(instructions="User rules"))),
     )
     analyze = AsyncMock(return_value=CodingAnalysisResult("Findings", "remote-1"))
     monkeypatch.setattr(ProjectCodingService, "analyze", analyze)

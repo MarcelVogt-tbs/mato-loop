@@ -156,7 +156,6 @@ from mato_loop_backend.providers.media import MediaService, available_media_capa
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
-    AgentIdentitySettings,
     AgentProfileUnavailable,
     AgentRuntimeSettings,
     AiSettings,
@@ -173,6 +172,7 @@ from mato_loop_backend.settings import (
     effective_model_trust,
     load_agent_profile,
     load_agent_profile_tools,
+    load_effective_agent_identity,
     load_effective_ai,
     load_effective_integrations,
 )
@@ -1118,9 +1118,6 @@ class AgentRuntime:
         integration_settings = await load_effective_integrations(
             db, chat_session.user_id
         )
-        agent_identity = await SettingsStore.load(
-            db, AgentIdentitySettings, user_id=chat_session.user_id
-        )
         user_profile = await SettingsStore.load(
             db, UserProfileSettings, user_id=chat_session.user_id
         )
@@ -1164,6 +1161,9 @@ class AgentRuntime:
                 )
             except AgentProfileUnavailable as exc:
                 raise AgentRunError("agentProfile.selectedUnavailable") from exc
+        agent_identity = await load_effective_agent_identity(
+            db, chat_session.user_id, prompt_agent_profile
+        )
         user_profile_payload = user_profile_runtime_payload(
             user_profile, model_trust_level
         )
@@ -1594,6 +1594,10 @@ class AgentRuntime:
                 video_available=video_analysis_available(
                     ai_settings, active_model_id=model.id
                 ),
+                identity_update_available=(
+                    agent_identity.personal_display_name_enabled
+                    or agent_identity.persona_editable
+                ),
             )
             if project is not None and project.coding_integration_id is not None:
                 tool_capabilities.add("project.coding")
@@ -1699,6 +1703,7 @@ class AgentRuntime:
                 general_system_prompt,
                 chat_session,
                 agent_identity=agent_identity,
+                persona=agent_identity.persona,
                 agent_profile=prompt_agent_profile,
                 user_profile=user_profile_payload,
                 project_name=project_name,
@@ -3006,6 +3011,7 @@ class AgentRuntime:
                         excluded_memory_content_hashes=excluded_memory_content_hashes,
                         model_id=model.id,
                         model_trust_level=model_trust_level,
+                        agent_persona_id=agent_identity.persona.id,
                         skill_state=skill_state,
                         skill_draft_handler=generate_skill_draft,
                         approval_resolution=approval_resolution,

@@ -97,12 +97,35 @@ class ToolExecutionPolicy(StrEnum):
     AUTO = "auto"
 
 
-class AgentPersonaMode(StrEnum):
-    EXTEND = "extend"
-    REPLACE = "replace"
-
-
 DEFAULT_AGENT_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000001")
+DEFAULT_PERSONA_ID = UUID("00000000-0000-4000-8000-000000000002")
+
+
+class PersonaProfile(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=lambda value: _camel_case(value),
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    id: UUID = Field(default_factory=uuid4)
+    name: str = Field(min_length=1, max_length=80)
+    instructions: str = Field(default="", max_length=32_002)
+    owner_id: UUID | None = Field(default=None, exclude=True)
+
+    @field_validator("name", "instructions", mode="before")
+    @classmethod
+    def normalize_text(cls, value: Any, info: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if info.field_name == "name" and not cleaned:
+            raise ValueError("name must not be blank")
+        return cleaned
+
+
+def default_persona_profile() -> PersonaProfile:
+    return PersonaProfile(id=DEFAULT_PERSONA_ID, name="Standard")
 
 
 class AgentProfilePermissions(BaseModel):
@@ -131,9 +154,8 @@ class AgentProfile(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
-    persona: str = Field(default="", max_length=16_000)
+    persona_id: UUID | None = None
     instructions: str = Field(min_length=1, max_length=16_000)
-    persona_mode: AgentPersonaMode = AgentPersonaMode.EXTEND
     private_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions
     )
@@ -142,7 +164,7 @@ class AgentProfile(BaseModel):
     )
     owner_id: UUID | None = Field(default=None, exclude=True)
 
-    @field_validator("name", "description", "persona", "instructions", mode="before")
+    @field_validator("name", "description", "instructions", mode="before")
     @classmethod
     def normalize_text(cls, value: Any, info: Any) -> Any:
         if not isinstance(value, str):
@@ -158,7 +180,7 @@ def default_agent_profile() -> AgentProfile:
         id=DEFAULT_AGENT_PROFILE_ID,
         name="Allgemein",
         description="Standardagent für Sessions ohne ausgewähltes Profil.",
-        instructions="Follow the user's request and the shared persona.",
+        instructions="Follow the user's request and the selected persona.",
     )
 
 
@@ -952,20 +974,64 @@ class UserProfileSettings(SettingsDocument):
 
 class AgentIdentitySettings(SettingsDocument):
     settings_key = "agent-identity"
-    settings_scope = SettingsScope.USER
 
     display_name: str = Field(default="MatoLoop", min_length=1, max_length=80)
-    instructions: str = Field(default="", max_length=16_000)
+    personal_display_names_enabled: bool = True
+    personal_personas_enabled: bool = True
+    default_persona_id: UUID = DEFAULT_PERSONA_ID
+    personas: list[PersonaProfile] = Field(
+        default_factory=lambda: [default_persona_profile()], max_length=101
+    )
 
     @field_validator("display_name")
     @classmethod
     def validate_display_name(cls, value: str) -> str:
         return normalize_agent_display_name(value)
 
-    @field_validator("instructions")
+    @model_validator(mode="after")
+    def validate_personas(self) -> Self:
+        ids = [persona.id for persona in self.personas]
+        names = [persona.name.casefold() for persona in self.personas]
+        if len(ids) != len(set(ids)) or len(names) != len(set(names)):
+            raise ValueError("persona ids and names must be unique")
+        if self.default_persona_id not in ids:
+            raise ValueError("default_persona_id must reference an instance persona")
+        builtin = next(
+            (persona for persona in self.personas if persona.id == DEFAULT_PERSONA_ID),
+            None,
+        )
+        if builtin is None or builtin.instructions:
+            raise ValueError("the built-in empty persona must remain available")
+        return self
+
+
+class UserAgentIdentitySettings(SettingsDocument):
+    settings_key = "agent-identity"
+    settings_scope = SettingsScope.USER
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    default_persona_id: UUID | None = None
+    personas: list[PersonaProfile] = Field(default_factory=list, max_length=21)
+
+    @field_validator("display_name")
     @classmethod
-    def normalize_instructions(cls, value: str) -> str:
-        return value.strip()
+    def validate_display_name(cls, value: str | None) -> str | None:
+        return normalize_agent_display_name(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def validate_personas(self) -> Self:
+        ids = [persona.id for persona in self.personas]
+        names = [persona.name.casefold() for persona in self.personas]
+        if len(ids) != len(set(ids)) or len(names) != len(set(names)):
+            raise ValueError("persona ids and names must be unique")
+        return self
+
+
+class EffectiveAgentIdentity(BaseModel):
+    display_name: str
+    persona: PersonaProfile
+    personal_display_name_enabled: bool = True
+    persona_editable: bool = False
 
 
 class SkillDefinition(BaseModel):

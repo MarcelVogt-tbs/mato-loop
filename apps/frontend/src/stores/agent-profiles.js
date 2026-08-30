@@ -9,12 +9,14 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
     defaultAgentProfileId: null,
     groups: [],
     groupsByTrust: { private: [], public: [] },
+    personas: [],
     integrations: [],
     integrationMetadata: {},
     integrationMetadataLoading: {},
     integrationMetadataFailed: {},
     integrationMetadataGeneration: 0,
     personalAgentsEnabled: true,
+    personalPersonasEnabled: true,
     scope: 'personal',
     loaded: false,
     loadFailed: false,
@@ -60,7 +62,9 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
           public: data?.publicGroups || this.groups
         }
         this.integrations = Array.isArray(data?.integrations) ? data.integrations : []
+        this.personas = Array.isArray(data?.personas) ? data.personas : []
         this.personalAgentsEnabled = data?.personalAgentsEnabled !== false
+        this.personalPersonasEnabled = data?.personalPersonasEnabled !== false
         this.loaded = true
         return data
       } catch (error) {

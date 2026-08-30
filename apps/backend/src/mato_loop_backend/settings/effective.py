@@ -6,15 +6,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.models import ExecutionAgent
 from mato_loop_backend.settings.models import (
     DEFAULT_AGENT_PROFILE_ID,
+    AgentIdentitySettings,
     AgentProfile,
     AgentProfilePermissions,
     AgentProfilesSettings,
     AiSettings,
+    EffectiveAgentIdentity,
     IntegrationAdapterAvailability,
     IntegrationSettings,
     ModelAvailability,
+    PersonaProfile,
     ToolSettings,
     TrustLevel,
+    UserAgentIdentitySettings,
     UserAgentProfilesSettings,
     UserAiSettings,
     UserIntegrationSettings,
@@ -52,6 +56,84 @@ _INTEGRATION_TOOL_FIELDS = (
     "default_task_list",
     "web_search",
 )
+
+
+def resolve_agent_persona(
+    instance: AgentIdentitySettings,
+    personal: UserAgentIdentitySettings | None,
+    agent_profile: AgentProfile | None,
+) -> PersonaProfile:
+    instance_personas = {persona.id: persona for persona in instance.personas}
+    fallback = instance_personas[instance.default_persona_id]
+    selected_id = agent_profile.persona_id if agent_profile is not None else None
+
+    if agent_profile is not None and agent_profile.owner_id is None:
+        return instance_personas.get(selected_id, fallback)
+
+    if selected_id in instance_personas:
+        return instance_personas[selected_id]
+    if not instance.personal_personas_enabled or personal is None:
+        return fallback
+
+    personal_personas = {persona.id: persona for persona in personal.personas}
+    if selected_id in personal_personas:
+        return personal_personas[selected_id]
+    if personal.default_persona_id in personal_personas:
+        return personal_personas[personal.default_persona_id]
+    return instance_personas.get(personal.default_persona_id, fallback)
+
+
+async def load_effective_agent_identity(
+    db: AsyncSession,
+    user_id: UUID,
+    agent_profile: AgentProfile | None = None,
+    *,
+    for_update: bool = False,
+) -> EffectiveAgentIdentity:
+    instance = await SettingsStore.load(
+        db, AgentIdentitySettings, for_update=for_update
+    )
+    personal = await SettingsStore.load_optional(
+        db, UserAgentIdentitySettings, user_id=user_id, for_update=for_update
+    )
+    display_name = instance.display_name
+    if (
+        instance.personal_display_names_enabled
+        and personal is not None
+        and personal.display_name is not None
+    ):
+        display_name = personal.display_name
+
+    persona = resolve_agent_persona(instance, personal, agent_profile).model_copy(deep=True)
+    persona.owner_id = (
+        user_id
+        if personal is not None and any(item.id == persona.id for item in personal.personas)
+        else None
+    )
+    return EffectiveAgentIdentity(
+        display_name=display_name,
+        persona=persona,
+        personal_display_name_enabled=instance.personal_display_names_enabled,
+        persona_editable=persona.owner_id == user_id,
+    )
+
+
+async def load_effective_personas(
+    db: AsyncSession, user_id: UUID
+) -> list[PersonaProfile]:
+    instance = (await SettingsStore.load(db, AgentIdentitySettings)).model_copy(deep=True)
+    for persona in instance.personas:
+        persona.owner_id = None
+    if not instance.personal_personas_enabled:
+        return instance.personas
+    personal = await SettingsStore.load_optional(
+        db, UserAgentIdentitySettings, user_id=user_id
+    )
+    if personal is not None:
+        for persona in personal.model_copy(deep=True).personas:
+            persona.owner_id = user_id
+            instance.personas.append(persona)
+    return instance.personas
 
 
 async def load_effective_ai(db: AsyncSession, user_id: UUID) -> AiSettings:
